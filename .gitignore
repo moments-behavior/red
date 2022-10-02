@@ -1,0 +1,8 @@
+*.exe
+*.o
+release
+.vscode
+.vs
+Debug
+Release
+media

@@ -1,0 +1,9 @@
+[submodule "lib/imgui"]
+	path = lib/imgui
+	url = https://github.com/ocornut/imgui.git
+[submodule "lib/IconFontCppHeaders"]
+	path = lib/IconFontCppHeaders
+	url = https://github.com/juliettef/IconFontCppHeaders.git
+[submodule "lib/imgui-filebrowser"]
+	path = lib/imgui-filebrowser
+	url = https://github.com/AirGuanZ/imgui-filebrowser.git
