@@ -1,0 +1,21 @@
+
+// print image chunk of data 
+// int counter = 0;
+// for (int i = 0; i < 2200; i++) {
+//     for (int j = 0; j < 3208; j++) {
+//         for (int k = 0; k < 4; k++) {
+//             printf("%x ", pImage[counter]);
+//             counter++;
+//         }
+//         printf("  ");
+//     }
+//     printf("\n");
+// }
+
+
+
+// save frame to jpg 
+// std::string image_frame_name = std::to_string(frame_i) + ".jpg";
+// const char* output_file = image_frame_name.c_str();
+// stbi_write_jpg(output_file, 3208, 2200, 4, pImage, 3208 * 32);
+// frame_i++;
