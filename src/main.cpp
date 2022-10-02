@@ -134,9 +134,8 @@ int main(int, char**)
     ImVec4 clear_color = ImVec4(0.0f, 0.0f, 0.0f, 1.00f);
 
 
-    ImGui::FileBrowser file_dialog(ImGuiFileBrowserFlags_MultipleSelection);
-    file_dialog.SetTitle("title");
-    file_dialog.SetTypeFilters({ ".mp4" });
+    ImGui::FileBrowser file_dialog(ImGuiFileBrowserFlags_SelectDirectory);
+    file_dialog.SetTitle("Select work directory");
 
     
     double result = 0.0;
@@ -161,7 +160,7 @@ int main(int, char**)
         }
     }
     
-    std::vector<std::filesystem::path> input_files;
+    std::string root_dir;
     std::vector<std::string> input_file_names;
     std::vector<std::string> camera_names;
 
@@ -253,13 +252,20 @@ int main(int, char**)
 
         if (file_dialog.HasSelected())
         {
-            input_files = file_dialog.GetMultiSelected();
-            num_cams = input_files.size();
+            root_dir = file_dialog.GetSelected().string();
+
+            // load movies 
+            std::string movie_dir = root_dir + "/movies";
+            for (const auto & entry : std::filesystem::directory_iterator(movie_dir)){
+                input_file_names.push_back(entry.path());
+            }
+                
+            std::sort(input_file_names.begin(), input_file_names.end());
+            num_cams = input_file_names.size();
 
             // multiple threads for decoding for selected videos 
             for(unsigned int i = 0; i < num_cams; i++)
             {
-                input_file_names.push_back(input_files[i].string());
                 std::size_t cam_string_position = input_file_names[i].find("Cam");      // position of "Cam" in str
                 std::string cam_string = input_file_names[i].substr(cam_string_position);     // get from "Cam" to the end
                 camera_names.push_back(cam_string);
