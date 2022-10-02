@@ -29,7 +29,7 @@
 #include "decoder.h"
 #include "IconsForkAwesome.h"
 #include "implot.h"
-
+#include "LabelManager.h"
 
 #include <iostream>       // std::cout
 #include <thread>         // std::thread
@@ -107,11 +107,11 @@ int main(int, char**)
     ImGui_ImplOpenGL3_Init(glsl_version);
 
     // Load a nice font
-    io.Fonts->AddFontFromFileTTF("../fonts/Roboto-Regular.ttf", 15.0f);
+    io.Fonts->AddFontFromFileTTF("fonts/Roboto-Regular.ttf", 15.0f);
     // merge in icons from Font Awesome
     static const ImWchar icons_ranges[] = { ICON_MIN_FK, ICON_MAX_16_FK, 0 };
     ImFontConfig icons_config; icons_config.MergeMode = true; icons_config.PixelSnapH = true;
-    io.Fonts->AddFontFromFileTTF("../fonts/forkawesome-webfont.ttf", 15.0f, &icons_config, icons_ranges);
+    io.Fonts->AddFontFromFileTTF("fonts/forkawesome-webfont.ttf", 15.0f, &icons_config, icons_ranges);
     // use FONT_ICON_FILE_NAME_FAR if you want regular instead of solid
 
     int MAX_VIEWS = 4;
@@ -195,6 +195,9 @@ int main(int, char**)
     bool video_loaded = false;
 
 
+    LabelManager *label_manager = nullptr;
+
+
     // Main loop
     while (!glfwWindowShouldClose(window))
     {
@@ -216,8 +219,31 @@ int main(int, char**)
                 if (ImGui::BeginMenu("File"))
                 {
                     if (ImGui::MenuItem("Open")) { file_dialog.Open(); };
+
+
+
                     ImGui::EndMenu();
                 }
+                
+                if (video_loaded){
+                    if (ImGui::BeginMenu("Label"))
+                    {
+                        if (ImGui::MenuItem("Load Calibration")) 
+                        {
+                            std::vector<std::string> cameraParamsPaths;
+
+                            for(int cam=0; cam<num_cams; cam++){
+                                cameraParamsPaths.push_back(root_dir + "/calibration/" + camera_names[cam] + ".yaml");                               
+                            }
+                            label_manager = new LabelManager(cameraParamsPaths);
+                        };
+
+
+                        ImGui::EndMenu();
+
+                    }
+                }
+
                 ImGui::EndMenuBar();
             }
 
@@ -244,7 +270,7 @@ int main(int, char**)
                 ImGui::Text("Proportion heads: %.3f", (float)num_heads / (num_heads + num_tails));
             }
             ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
-            ImGui::Text("Frame number %d ", display_buffer[0][read_head].frame_number); 
+            ImGui::Text("Frame number %d ", display_buffer[0][read_head].frame_number);             
         }
         ImGui::End();
         
@@ -267,8 +293,9 @@ int main(int, char**)
             for(unsigned int i = 0; i < num_cams; i++)
             {
                 std::size_t cam_string_position = input_file_names[i].find("Cam");      // position of "Cam" in str
-                std::string cam_string = input_file_names[i].substr(cam_string_position);     // get from "Cam" to the end
+                std::string cam_string = input_file_names[i].substr(cam_string_position, 4);     // get from "Cam" to the end
                 camera_names.push_back(cam_string);
+                std::cout << "camera names: " << cam_string << std::endl;
                 decoder_threads.push_back(std::thread(&decoder_process, input_file_names[i].c_str(), gpu_index, display_buffer[i], decoding_flag, size_of_buffer, stop_flag, &seek_context[i], total_num_frame, estimated_num_frames));
             }
 
@@ -293,7 +320,7 @@ int main(int, char**)
 
 
         // show frames in the buffer if selected
-        if (video_loaded && (!play_video))
+        if (video_loaded)
         {
             static int selected = 0;
             static int select_corr_head = 0;

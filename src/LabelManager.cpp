@@ -1,10 +1,9 @@
 #include "LabelManager.h"
 
 
-LabelManager::LabelManager(std::vector<std::string> intrinsicsPaths,
-            std::vector<std::string>  extrinsicsPaths)
+LabelManager::LabelManager(std::vector<std::string> cameraParamsPaths)
 {
-    for (const auto& path : intrinsicsPaths) {
+    for (const auto& path : cameraParamsPaths) {
         CameraIntrinics cameraIntrinics;
         readIntrinsics(path, cameraIntrinics);
         m_cameraIntrinsicsList.push_back(cameraIntrinics);

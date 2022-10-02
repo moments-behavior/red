@@ -18,7 +18,7 @@ class LabelManager
             cv::Mat fundamentalMatrix;
         } CameraExtrinsics;
 
-        LabelManager(std::vector<std::string> intrinsicsPaths, std::vector<std::string> extrinsicsPaths);
+        LabelManager(std::vector<std::string> cameraParamsPaths);
     
     private: 
         void readIntrinsics(const std::string& path, CameraIntrinics& cameraIntrinics);
