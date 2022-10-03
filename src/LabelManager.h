@@ -1,6 +1,9 @@
 #pragma once
+#include <iostream>
 #include <opencv2/core.hpp>
 #include <opencv2/calib3d.hpp>
+#include "FrameData2D.h"
+
 
 class LabelManager
 {
@@ -19,11 +22,16 @@ class LabelManager
         } CameraExtrinsics;
 
         LabelManager(std::vector<std::string> cameraParamsPaths);
-    
+        void setSkel(std::string skelName);
+
     private: 
         void readIntrinsics(const std::string& path, CameraIntrinics& cameraIntrinics);
         void readExtrinsincs(const std::string& path, CameraExtrinsics& cameraExtrinsics);
 
         std::vector<CameraIntrinics> m_cameraIntrinsicsList;
         std::vector<CameraExtrinsics> m_cameraExtrinsicsList;
+        std::vector<FrameData2D*> m_frameData2DList;
+
+        SkelEnum skelEnum;
+        int numCams;
 };

@@ -196,7 +196,7 @@ int main(int, char**)
 
 
     LabelManager *label_manager = nullptr;
-
+    
 
     // Main loop
     while (!glfwWindowShouldClose(window))
@@ -237,6 +237,14 @@ int main(int, char**)
                             }
                             label_manager = new LabelManager(cameraParamsPaths);
                         };
+
+
+                        if (ImGui::MenuItem("Load Skeleton")) 
+                        {
+                            
+                            label_manager->setSkel("CalibrationFourCorners");
+                        };
+
 
 
                         ImGui::EndMenu();
