@@ -41,4 +41,6 @@ class LabelManager
 
         SkelEnum skelEnum;
         int numCams;
+        int nNodes;
+        int nEdges;
 };

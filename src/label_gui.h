@@ -8,14 +8,14 @@ static void plot_keypoints(LabelManager* labelMgr, int cam_idx, uint64_t current
         for (int node=0; node<labelMgr->nNodes; node++)
         {
             // plot node if it is labeled
-            if (cam->activeFrameData->g.isLabeled[node])
+            if (labelMgr[cam_idx]->activeFrameData->g.isLabeled[node])
             {
                 
                 ImVec4 nodeColor;
                 nodeColor.w = 1.0f;
-                nodeColor.x = cam->frameData->nodeColors.at(cam->frameData->nodeColorIdx[node])[0];
-                nodeColor.y = cam->frameData->nodeColors.at(cam->frameData->nodeColorIdx[node])[1];
-                nodeColor.z = cam->frameData->nodeColors.at(cam->frameData->nodeColorIdx[node])[2];
+                nodeColor.x = labelMgr->frameData[cam_idx]->nodeColors.at(cam->frameData->nodeColorIdx[node])[0];
+                nodeColor.y = labelMgr->frameData[cam_idx]->nodeColors.at(cam->frameData->nodeColorIdx[node])[1];
+                nodeColor.z = labelMgr->frameData[cam_idx]->nodeColors.at(cam->frameData->nodeColorIdx[node])[2];
 
                 ImPlot::DragPoint(this_draw_id, cam->activeFrameData->g.px[node], cam->activeFrameData->g.py[node], nodeColor);
                 this_draw_id++;
