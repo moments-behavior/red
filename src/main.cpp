@@ -193,7 +193,8 @@ int main(int, char**)
 
     bool slider_just_changed = false;
     bool video_loaded = false;
-
+    bool plot_keypoints_flag = false;
+    int current_frame_num;
 
     LabelManager *label_manager = nullptr;
     
@@ -201,6 +202,10 @@ int main(int, char**)
     // Main loop
     while (!glfwWindowShouldClose(window))
     {
+        // todo: increment this draw_id after each ImGui and ImPlot draw request (e.g. with ImPlot::DragPoint)
+        int draw_id = 0;
+        int* draw_id_ptr = &draw_id;
+
 
         // Poll and handle events (inputs, window resize, etc.)
         glfwPollEvents();
@@ -243,6 +248,7 @@ int main(int, char**)
                         {
                             
                             label_manager->setSkel("CalibrationFourCorners");
+                            plot_keypoints_flag = true;
                         };
 
 
@@ -416,6 +422,19 @@ int main(int, char**)
                     ImPlot::EndPlot();
                 }
 
+
+                if (plot_keypoints_flag){
+                    if(!play_video)
+                        current_frame_num = display_buffer[0][select_corr_head].frame_number)
+                    }
+                    else(
+                        current_frame_num = to_display_frame_number; 
+                    )
+
+                    label_manager.set_active_skel2D(i, current_frame_num);
+                    plot_keypoints(labelMgr, cams[i], current_frame_num, draw_id_ptr);
+                }
+                    
 
                 ImGui::EndChild();
 

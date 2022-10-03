@@ -23,6 +23,8 @@ class LabelManager
 
         LabelManager(std::vector<std::string> cameraParamsPaths);
         void setSkel(std::string skelName);
+        void set_active_skel2D(int cam_idx, uint64_t current_frame);
+
 
     private: 
         void readIntrinsics(const std::string& path, CameraIntrinics& cameraIntrinics);
@@ -31,6 +33,11 @@ class LabelManager
         std::vector<CameraIntrinics> m_cameraIntrinsicsList;
         std::vector<CameraExtrinsics> m_cameraExtrinsicsList;
         std::vector<FrameData2D*> m_frameData2DList;
+        std::vector<FrameData2D*> m_activeFrameData2DList;
+
+
+        std::vector<std::map<uint, FrameData2D*>> frameDataMapList;
+        std::vector<std::map<uint, FrameData2D*>::iterator> frameDataMapIterList;
 
         SkelEnum skelEnum;
         int numCams;
