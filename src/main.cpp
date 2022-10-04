@@ -34,6 +34,8 @@
 #include <iostream>       // std::cout
 #include <thread>         // std::thread
 #include <imfilebrowser.h>
+#include "label_gui.h"
+
 
 #if defined(_MSC_VER) && (_MSC_VER >= 1900) && !defined(IMGUI_DISABLE_WIN32_FUNCTIONS)
 #pragma comment(lib, "legacy_stdio_definitions")
@@ -194,7 +196,7 @@ int main(int, char**)
     bool slider_just_changed = false;
     bool video_loaded = false;
     bool plot_keypoints_flag = false;
-    int current_frame_num;
+    int current_frame_num = 0;
 
     LabelManager *label_manager = nullptr;
     
@@ -395,6 +397,7 @@ int main(int, char**)
                 };
             }
             ImGui::Text("Frame number selected: %d", display_buffer[0][select_corr_head].frame_number);
+            current_frame_num = display_buffer[0][select_corr_head].frame_number;
             ImGui::End();
         }
 
@@ -424,15 +427,8 @@ int main(int, char**)
 
 
                 if (plot_keypoints_flag){
-                    if(!play_video)
-                        current_frame_num = display_buffer[0][select_corr_head].frame_number)
-                    }
-                    else(
-                        current_frame_num = to_display_frame_number; 
-                    )
-
-                    label_manager.set_active_skel2D(i, current_frame_num);
-                    plot_keypoints(labelMgr, cams[i], current_frame_num, draw_id_ptr);
+                    label_manager->set_active_skel2D(j, current_frame_num);
+                    // plot_keypoints(label_manager, j, current_frame_num, draw_id_ptr);
                 }
                     
 
@@ -553,6 +549,7 @@ int main(int, char**)
 
             read_head = (read_head + 1) % size_of_buffer;
             slider_frame_number = to_display_frame_number;
+            current_frame_num = to_display_frame_number;
         }
         
         if (just_seeked) {
