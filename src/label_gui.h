@@ -786,7 +786,6 @@ static void keypoint_button(Camera* cam, int i, uint64_t current_frame, std::map
 
 
 static void reprojection(LabelManager* labelMgr, std::vector<Camera*> cams, uint64_t current_frame){
-
     // check if any nodes qualify for reprojection
     bool isReadyForReproject = false;
     for (int j=0; j<labelMgr->nNodes; j++)

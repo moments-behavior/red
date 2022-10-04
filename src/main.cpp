@@ -394,6 +394,9 @@ int main(int, char**)
             toggle_play_status = false;
         }
 
+        if (plot_keypoints_flag){
+            set_active_skel3D(labelMgr, current_frame_num);
+        }
 
         // Render a video frame
         if (video_loaded){        
@@ -418,9 +421,10 @@ int main(int, char**)
                         
                     }
 
-                    if ((!play_video) && plot_keypoints_flag)
+                    if (plot_keypoints_flag)
                     {
                         labeling_one_view(cams[j], current_frame_num);
+                        keypoint_button(cams[j], j, current_frame_num, cams[j]->frameDataMapIter, labelMgr, draw_id_ptr);
                     }
     
                     ImPlot::EndPlot();
