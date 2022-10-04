@@ -4,8 +4,9 @@
 #include <iostream>
 #include <vector>
 #include <tuple>
-#include "utils.h"
+#include "util.h"
 
+using namespace util;
 
 struct keyPoints{
     std::vector<double> x;

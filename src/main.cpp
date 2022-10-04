@@ -30,7 +30,7 @@
 #include "IconsForkAwesome.h"
 #include "implot.h"
 #include "LabelManager.h"
-
+#include "label_gui.h"
 #include <iostream>       // std::cout
 #include <thread>         // std::thread
 #include <imfilebrowser.h>
@@ -194,10 +194,14 @@ int main(int, char**)
     bool slider_just_changed = false;
     bool video_loaded = false;
     bool plot_keypoints_flag = false;
-    int current_frame_num;
+    int current_frame_num = 0;
 
-    LabelManager *label_manager = nullptr;
-    
+    std::vector<Camera*> cams;
+    SkelEnum skelEnum = SkelEnum::CalibrationFourCorners;
+
+
+    LabelManager *labelMgr = nullptr;
+
 
     // Main loop
     while (!glfwWindowShouldClose(window))
@@ -225,39 +229,22 @@ int main(int, char**)
                 {
                     if (ImGui::MenuItem("Open")) { file_dialog.Open(); };
 
-
+                    if (video_loaded){
+                        if (ImGui::MenuItem("Label")) { 
+                            
+                            for(int i=0; i<num_cams; i++)
+                            {
+                                Camera* cam = new Camera(i, i, root_dir, skelEnum);
+                                cams.push_back(cam);
+                            }
+                            labelMgr = new LabelManager(cams);
+                            plot_keypoints_flag = true;
+                        };
+                    }
 
                     ImGui::EndMenu();
                 }
                 
-                if (video_loaded){
-                    if (ImGui::BeginMenu("Label"))
-                    {
-                        if (ImGui::MenuItem("Load Calibration")) 
-                        {
-                            std::vector<std::string> cameraParamsPaths;
-
-                            for(int cam=0; cam<num_cams; cam++){
-                                cameraParamsPaths.push_back(root_dir + "/calibration/" + camera_names[cam] + ".yaml");                               
-                            }
-                            label_manager = new LabelManager(cameraParamsPaths);
-                        };
-
-
-                        if (ImGui::MenuItem("Load Skeleton")) 
-                        {
-                            
-                            label_manager->setSkel("CalibrationFourCorners");
-                            plot_keypoints_flag = true;
-                        };
-
-
-
-                        ImGui::EndMenu();
-
-                    }
-                }
-
                 ImGui::EndMenuBar();
             }
 
@@ -330,6 +317,7 @@ int main(int, char**)
                 glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 3208, 2200, 0, GL_RGBA, GL_UNSIGNED_BYTE, display_buffer[j][read_head].frame);
                 unbind_texture();
             }
+            current_frame_num = to_display_frame_number;
         }
 
 
@@ -395,6 +383,8 @@ int main(int, char**)
                 };
             }
             ImGui::Text("Frame number selected: %d", display_buffer[0][select_corr_head].frame_number);
+            current_frame_num = display_buffer[0][select_corr_head].frame_number;
+
             ImGui::End();
         }
 
@@ -419,22 +409,22 @@ int main(int, char**)
                 //ImGui::Image((void*)(intptr_t)image_texture[j], avail_size);
                 if (ImPlot::BeginPlot("##no_plot_name", avail_size)){
                     ImPlot::PlotImage("##no_image_name", (void*)(intptr_t)image_texture[j], ImVec2(0,0), ImVec2(3208, 2200));
+
+                    // labeling 
+                    if (plot_keypoints_flag){
+                        std::cout << "current_frame_num: " << current_frame_num << std::endl;
+                        set_active_skel2D(cams[j], current_frame_num);
+                        plot_keypoints(labelMgr, cams[j], current_frame_num, draw_id_ptr);
+                        
+                    }
+
+                    if ((!play_video) && plot_keypoints_flag)
+                    {
+                        labeling_one_view(cams[j], current_frame_num);
+                    }
+    
                     ImPlot::EndPlot();
                 }
-
-
-                if (plot_keypoints_flag){
-                    if(!play_video)
-                        current_frame_num = display_buffer[0][select_corr_head].frame_number)
-                    }
-                    else(
-                        current_frame_num = to_display_frame_number; 
-                    )
-
-                    label_manager.set_active_skel2D(i, current_frame_num);
-                    plot_keypoints(labelMgr, cams[i], current_frame_num, draw_id_ptr);
-                }
-                    
 
                 ImGui::EndChild();
 
@@ -518,6 +508,95 @@ int main(int, char**)
                 ImGui::EndGroup();
                 ImGui::End();
             }
+
+
+            if (plot_keypoints_flag)
+            {
+            
+
+                ImGui::Begin("Labeling Tool");
+
+                for (int i=0; i<labelMgr->nCams; i++)
+                {
+                    for (int j=0; j<labelMgr->nNodes; j++)
+                    {
+                        if (j > 0) ImGui::SameLine();
+
+                        ImGui::PushID(j);
+
+                        if (labelMgr->isLabeled[i][j])
+                        {
+                            ImGui::PushStyleColor(ImGuiCol_Button, (ImVec4)ImColor::HSV(j / (float)cams[i]->frameData->nNodes, 0.6f, 0.6f));
+                            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, (ImVec4)ImColor::HSV(j / (float)cams[i]->frameData->nNodes, 0.7f, 0.7f));
+                            ImGui::PushStyleColor(ImGuiCol_ButtonActive, (ImVec4)ImColor::HSV(j / (float)cams[i]->frameData->nNodes, 0.8f, 0.8f));
+                        }
+                        else
+                        {
+                            ImGui::PushStyleColor(ImGuiCol_Button, (ImVec4)ImColor::HSV(0.2f, 0.2f, 0.2f));
+                            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, (ImVec4)ImColor::HSV(0.2f, 0.2f, 0.2f));
+                            ImGui::PushStyleColor(ImGuiCol_ButtonActive, (ImVec4)ImColor::HSV(0.2f, 0.2f, 0.2f));
+                        }
+                        
+                        ImGui::Button(cams[i]->frameData->nodeNames[j].c_str());
+                        ImGui::PopStyleColor(3);
+                        ImGui::PopID();
+                    }
+                }
+
+                
+
+                static bool triangulate = false;
+                ImGui::Checkbox("triangulate", &triangulate);
+                if (triangulate)
+                {
+                    reprojection(labelMgr, cams, current_frame_num);
+                }
+
+                if (ImGui::Button("Reproject") || ImGui::IsKeyPressed(ImGuiKey_S, false))
+                {
+                    reprojection(labelMgr, cams, current_frame_num);
+                }
+
+                if (ImGui::IsKeyPressed(ImGuiKey_X, false))
+                {
+                    reprojection_overweight_activeKP(labelMgr, cams, current_frame_num);
+                }
+
+                if (ImGui::Button("Save Labeled Data"))
+                {
+                    for (int i=0; i<labelMgr->nCams; i++)
+                    {
+                        cams[i]->SaveSkelMap();
+                    }
+                    
+                    labelMgr->SaveWorldKeyPoints();
+                }
+
+                if (ImGui::Button("Load Camera Skels"))
+                {
+                    labelMgr->LoadCameraSkels();
+                    cout << "loaded 2D skeletons from each camera results directory" << endl;
+                    labelMgr->LoadWorldSkels();
+                    cout << "loaded 3d skeletons from world results directory" << endl;
+
+                }
+
+                ImGui::NewLine();
+                
+
+                // ImGui::Text("A -> Previous Image");
+                // ImGui::Text("D -> Next Image");
+                // ImGui::Text("Q -> ActiveKeypoint++ (while hovering image)");
+                // ImGui::Text("E -> ActiveKeypoint-- (while hovering image)");
+                // ImGui::Text("T -> ActiveKeypoint set to last node");
+                // ImGui::Text("W -> Drop ActiveKeypoint (while hovering at desired image point)");
+                // ImGui::Text("S -> Reproject eligible keypoints");
+                ImGui::End();
+            }
+
+
+
+
         }
 
         // Rendering
@@ -558,7 +637,6 @@ int main(int, char**)
         if (just_seeked) {
             just_seeked = false; play_video = true; 
         }
-
 
 
     }
