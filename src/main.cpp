@@ -383,8 +383,10 @@ int main(int, char**)
                 };
             }
             ImGui::Text("Frame number selected: %d", display_buffer[0][select_corr_head].frame_number);
-            current_frame_num = display_buffer[0][select_corr_head].frame_number;
-
+            
+            if(!play_video){
+                current_frame_num = display_buffer[0][select_corr_head].frame_number;
+            }
             ImGui::End();
         }
 
