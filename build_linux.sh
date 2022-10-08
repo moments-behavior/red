@@ -42,7 +42,6 @@ g++ -Ofast -ffast-math -std=c++17 \
     `pkg-config --static --libs glfw3` \
     -L/home/jinyao/Build/nvidia/FFmpeg/build/lib -lavformat -lswscale -lswresample -lavutil -lavcodec \
     -I/home/jinyao/Build/nvidia/FFmpeg/build/include \
-    -I/usr/local/include/opencv4/opencv \
     -I/usr/local/include/opencv4 \
     -lopencv_sfm -lopencv_core -lopencv_bgsegm -lopencv_imgcodecs -lopencv_imgproc -lopencv_video -lopencv_highgui -lopencv_videoio -lopencv_calib3d
 
