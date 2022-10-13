@@ -146,7 +146,7 @@ int main(int, char**)
     int size_pic = 3208 * 2200 * 4 *  sizeof(unsigned char);
 
     // allocate display buffer
-    const int size_of_buffer = 32;
+    const int size_of_buffer = 64;
 
     // right now, allocate more than needed, maybe  switch to vector?, need to think about it  
     PictureBuffer display_buffer[MAX_VIEWS][size_of_buffer];
@@ -197,7 +197,7 @@ int main(int, char**)
     int current_frame_num = 0;
 
     std::vector<Camera*> cams;
-    SkelEnum skelEnum = SkelEnum::CalibrationFourCorners;
+    SkelEnum skelEnum = SkelEnum::Rat10Target2;
 
 
     LabelManager *labelMgr = nullptr;
