@@ -165,7 +165,7 @@ int main(int, char**)
     std::vector<std::string> camera_names;
 
 
-    int num_cams = 1;
+    int num_cams;
     std::vector<std::thread> decoder_threads;
     bool* decoding_flag = new bool(false);
     bool* stop_flag = new bool(false);
@@ -322,7 +322,7 @@ int main(int, char**)
 
 
         // show frames in the buffer if selected
-        if (video_loaded)
+        if (video_loaded && (!play_video))
         {
             static int selected = 0;
             static int select_corr_head = 0;
@@ -336,6 +336,7 @@ int main(int, char**)
                         sprintf(label, "Buffer %d", i);
                         if (ImGui::Selectable(label, selected == i)) {
                             // start from the lowest frame
+                            selected = i;
                             select_corr_head = (i + read_head) % size_of_buffer;
 
                             // if not playing the video, then show what's in the buffer
@@ -385,6 +386,7 @@ int main(int, char**)
             ImGui::Text("Frame number selected: %d", display_buffer[0][select_corr_head].frame_number);
             
             if(!play_video){
+                select_corr_head = (selected + read_head) % size_of_buffer;
                 current_frame_num = display_buffer[0][select_corr_head].frame_number;
             }
             ImGui::End();
