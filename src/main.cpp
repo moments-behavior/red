@@ -34,6 +34,7 @@
 #include <iostream>       // std::cout
 #include <thread>         // std::thread
 #include <imfilebrowser.h>
+#include "yolo_detection.h"
 
 #if defined(_MSC_VER) && (_MSC_VER >= 1900) && !defined(IMGUI_DISABLE_WIN32_FUNCTIONS)
 #pragma comment(lib, "legacy_stdio_definitions")
@@ -100,7 +101,6 @@ int main(int, char**)
         style.WindowRounding = 0.0f;
         style.Colors[ImGuiCol_WindowBg].w = 1.0f;
     }
-
 
     // Setup Platform/Renderer backends
     ImGui_ImplGlfw_InitForOpenGL(window, true);
@@ -198,10 +198,10 @@ int main(int, char**)
 
     std::vector<Camera*> cams;
     SkelEnum skelEnum = SkelEnum::Rat10Target2;
-
-
     LabelManager *labelMgr = nullptr;
-
+    
+    yolo_param yolo_detector = yolo_param();
+    std::vector<cv::dnn::Net> nets;
 
     // Main loop
     while (!glfwWindowShouldClose(window))
@@ -238,10 +238,26 @@ int main(int, char**)
                                 cams.push_back(cam);
                             }
                             labelMgr = new LabelManager(cams);
-                            plot_keypoints_flag = true;
-                        };
+                            plot_keypoints_flag = true;};
                     }
+                    ImGui::EndMenu();
+                }
 
+                if (ImGui::BeginMenu("Detection")){
+                    
+                    if (ImGui::MenuItem("YOLOv5")) { 
+                        std::string yolov5 = root_dir + "/yolo_models/yolov5s.onnx";
+                        std::cout << "Load trained yolo models..." << std::endl;
+                        // std::string yolov5 = "/home/jinyao/tracking/yolov5/yolov5s.onnx";
+                        
+                        for(int i=0; i<num_cams; i++){
+                            cv::dnn::Net net = cv::dnn::readNet(yolov5);
+                            net.setPreferableBackend(cv::dnn::DNN_BACKEND_CUDA);
+                            net.setPreferableTarget(cv::dnn::DNN_TARGET_CUDA);
+                            nets.push_back(net); 
+                        }
+                    }
+                        
                     ImGui::EndMenu();
                 }
                 
@@ -323,7 +339,7 @@ int main(int, char**)
 
         // show frames in the buffer if selected
         if (video_loaded && (!play_video))
-        {
+        {   
             static int selected = 0;
             static int select_corr_head = 0;
             ImGui::SetNextWindowSize(ImVec2(500, 440), ImGuiCond_FirstUseEver);
@@ -340,13 +356,12 @@ int main(int, char**)
                             select_corr_head = (i + read_head) % size_of_buffer;
 
                             // if not playing the video, then show what's in the buffer
-                            if (!play_video) {
-                                for(int j=0; j<num_cams; j++){
-                                    bind_texture(&image_texture[j]);
-                                    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 3208, 2200, 0, GL_RGBA, GL_UNSIGNED_BYTE, display_buffer[j][select_corr_head].frame);
-                                    unbind_texture();
-                                }
+                            for(int j=0; j<num_cams; j++){
+                                bind_texture(&image_texture[j]);
+                                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 3208, 2200, 0, GL_RGBA, GL_UNSIGNED_BYTE, display_buffer[j][select_corr_head].frame);
+                                unbind_texture();
                             }
+                            
                         }
                     }
                 }
@@ -373,22 +388,20 @@ int main(int, char**)
                         selected++;
                         select_corr_head = (selected + read_head) % size_of_buffer;
 
-                        if (!play_video) {
-                            for(int j=0; j<num_cams; j++){
-                                bind_texture(&image_texture[j]);
-                                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 3208, 2200, 0, GL_RGBA, GL_UNSIGNED_BYTE, display_buffer[j][select_corr_head].frame);
-                                unbind_texture();
-                            }
+                        for(int j=0; j<num_cams; j++){
+                            bind_texture(&image_texture[j]);
+                            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 3208, 2200, 0, GL_RGBA, GL_UNSIGNED_BYTE, display_buffer[j][select_corr_head].frame);
+                            unbind_texture();
+                        
                         }
                     }
                 };
             }
             ImGui::Text("Frame number selected: %d", display_buffer[0][select_corr_head].frame_number);
             
-            if(!play_video){
-                select_corr_head = (selected + read_head) % size_of_buffer;
-                current_frame_num = display_buffer[0][select_corr_head].frame_number;
-            }
+            select_corr_head = (selected + read_head) % size_of_buffer;
+            current_frame_num = display_buffer[0][select_corr_head].frame_number;
+            
             ImGui::End();
         }
 
@@ -419,7 +432,6 @@ int main(int, char**)
 
                     // labeling 
                     if (plot_keypoints_flag){
-                        std::cout << "current_frame_num: " << current_frame_num << std::endl;
                         set_active_skel2D(cams[j], current_frame_num);
                         plot_keypoints(labelMgr, cams[j], current_frame_num, draw_id_ptr);
                         
