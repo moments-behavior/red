@@ -25,7 +25,7 @@ DIR_IMPLOT="lib/implot"
 
 
 
-g++ -Ofast -ffast-math -std=c++17 \
+g++ -O2 -mssse3 -ffast-math -std=c++17 \
     release/ColorSpace.o \
     -o release/*.o \
     -Ilib/nvcodec \

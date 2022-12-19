@@ -43,6 +43,34 @@
 simplelogger::Logger *logger = simplelogger::LoggerFactory::CreateConsoleLogger();
 
 
+static void draw_cv_contours(std::vector<cv::Rect> boxes)
+{
+    int n = boxes.size();
+    if (n == 0)
+    {
+        return;
+    }
+
+    double x[n];
+    double y[n];
+
+    for (int i=0; i<boxes.size(); i++)
+    {
+        //cout << "Camera #" << cam_num << " Box info " << boxes[i].x << "," << boxes[i].y << "," << boxes[i].width << "," << boxes[i].height << endl;
+        
+        x[i] = (double)boxes[i].x + (boxes[i].width/2);
+        y[i] = (double)2200 - ((double)boxes[i].y + (boxes[i].height/2));
+
+    }
+
+    ImVec4 fill_color = ImVec4(0.8, 0.0, 0.8, 0.3);
+    ImVec4 outline_color = ImVec4(1.0, 1.0, 1.0, 1.0);
+
+    ImPlot::SetNextMarkerStyle(ImPlotMarker_Square,20, fill_color, 3, outline_color);
+    ImPlot::PlotScatter("now", &x[0], &y[0], n);
+}
+
+
 int main(int, char**)
 {
 
@@ -200,8 +228,30 @@ int main(int, char**)
     SkelEnum skelEnum = SkelEnum::Rat10Target2;
     LabelManager *labelMgr = nullptr;
     
-    yolo_param yolo_detector = yolo_param();
+    
+    // for yolo detection
+    bool yolo_detection = false;
     std::vector<cv::dnn::Net> nets;
+    std::vector<std::thread> yolo_threads;
+    std::unique_lock<std::mutex> display_thread_locks[4];
+    std::vector<std::mutex> g_mutexes(4);
+    std::vector<std::condition_variable> g_cvs(4);
+    std::vector<bool*> g_ready;
+    
+    for(int i=0; i<4; i++){
+        bool* g_temp = new bool(false);
+        g_ready.push_back(g_temp);
+    }
+
+    std::vector<string> class_list;
+    std::vector<std::vector<cv::Rect>> yolo_boxes(4);
+
+    unsigned char* yolo_input_frame[4];
+    unsigned char* yolo_input_frame_rgba[4];
+    for(int i=0; i<4; i++){
+        yolo_input_frame[i] = (unsigned char*)malloc(3208 * 2200 * 3 * sizeof(uint8_t) + 4); 
+    }
+
 
     // Main loop
     while (!glfwWindowShouldClose(window))
@@ -256,6 +306,23 @@ int main(int, char**)
                             net.setPreferableTarget(cv::dnn::DNN_TARGET_CUDA);
                             nets.push_back(net); 
                         }
+
+                        yolo_param yolo_setting = yolo_param();
+                        std::ifstream ifs("/home/jinyao/tracking/darknet/data/coco.names");
+                        std::string line;
+                        while (getline(ifs, line))
+                        {
+                            class_list.push_back(line);
+                        }
+                        yolo_setting.size_class_list = class_list.size();
+
+                        // int i=0;
+                        // yolo_detect_thread(std::ref(g_mutexes[i]), std::ref(g_cvs[i]), g_ready[i], &nets[i], yolo_input_frame_rgba[i], yolo_input_frame[i], yolo_setting, &yolo_boxes[i]);
+                        // // start thread
+                        for(int i=0; i<num_cams; i++){
+                            yolo_threads.push_back(std::thread(&yolo_detect_thread, std::ref(g_mutexes[i]), std::ref(g_cvs[i]), g_ready[i], &nets[i], yolo_input_frame_rgba[i], yolo_input_frame[i], yolo_setting, &yolo_boxes[i], stop_flag));
+                        }
+                        yolo_detection=true;
                     }
                         
                     ImGui::EndMenu();
@@ -287,7 +354,8 @@ int main(int, char**)
                 ImGui::Text("Proportion heads: %.3f", (float)num_heads / (num_heads + num_tails));
             }
             ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
-            ImGui::Text("Frame number %d ", display_buffer[0][read_head].frame_number);             
+            ImGui::Text("Frame number %d ", display_buffer[0][read_head].frame_number);   
+            
         }
         ImGui::End();
         
@@ -328,6 +396,17 @@ int main(int, char**)
                     //std::cout << display_buffer[read_head].frame_number << ", " << to_display_frame_number << std::endl;
                     std::this_thread::sleep_for(std::chrono::milliseconds(1));
                 }
+
+
+                // sync yolo detection 
+                if(yolo_detection){
+                    display_thread_locks[j] = std::unique_lock<std::mutex> (g_mutexes[j]);
+                    yolo_input_frame_rgba[j]  = display_buffer[j][read_head].frame;
+                    *g_ready[j] = true;
+                    display_thread_locks[j].unlock();
+                    g_cvs[j].notify_one();
+                }
+
 
                 bind_texture(&image_texture[j]);
                 glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 3208, 2200, 0, GL_RGBA, GL_UNSIGNED_BYTE, display_buffer[j][read_head].frame);
@@ -436,6 +515,12 @@ int main(int, char**)
                         plot_keypoints(labelMgr, cams[j], current_frame_num, draw_id_ptr);
                         
                     }
+
+
+                    if (yolo_detection){
+                        draw_cv_contours(yolo_boxes.at(j));
+                    }
+
 
                     if (plot_keypoints_flag)
                     {
@@ -673,6 +758,9 @@ int main(int, char**)
     *stop_flag = true;
     // wait for threads to join
     for (auto& t : decoder_threads)
+        t.join();
+
+    for (auto& t : yolo_threads)
         t.join();
 
     return 0;
