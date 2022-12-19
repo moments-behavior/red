@@ -43,6 +43,12 @@
 simplelogger::Logger *logger = simplelogger::LoggerFactory::CreateConsoleLogger();
 
 
+std::vector<cv::dnn::Net> nets;
+std::vector<std::mutex> g_mutexes(4);
+std::vector<std::condition_variable> g_cvs(4);
+std::vector<bool> g_ready;
+std::vector<std::vector<cv::Rect>> yolo_boxes(4);
+
 static void draw_cv_contours(std::vector<cv::Rect> boxes)
 {
     int n = boxes.size();
@@ -68,6 +74,102 @@ static void draw_cv_contours(std::vector<cv::Rect> boxes)
 
     ImPlot::SetNextMarkerStyle(ImPlotMarker_Square,20, fill_color, 3, outline_color);
     ImPlot::PlotScatter("now", &x[0], &y[0], n);
+}
+
+
+void track_ball_fast(cv::dnn::Net net, unsigned char* img_rgba, unsigned char* img_rgb, yolo_param post_setting, int cam_idx)
+{
+
+    std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
+    
+    // optimize cpu color conversion 
+    rgba_to_rgb_cpu(img_rgba, img_rgb, 2200, 3208);
+    std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
+    cout << "Time difference = " << std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count() << "[µs]" << std::endl;
+    
+    cv::Mat image = cv::Mat(3208 * 2200 * 3, 1, CV_8U, img_rgb).reshape(3, 2200);
+    cv::Mat blob;
+
+    double x_factor = image.cols / 640.0;
+    double y_factor = image.rows / 640.0;
+
+    cv::dnn::blobFromImage(image, blob, 1./255.,  cv::Size(640, 640),  cv::Scalar(), true, false);
+
+    net.setInput(blob);
+
+    // Runs the forward pass to get output of the output layers
+    vector<cv::Mat> outs;
+    // net.forward(outs, getOutputsNames(net));
+    net.forward(outs, net.getUnconnectedOutLayersNames());
+    
+
+    vector<int> classIds;
+    vector<float> confidences;
+    vector<cv::Rect> boxes;
+    const int rows = 25200;
+    float *data = (float *)outs[0].data;
+    for (int i = 0; i < rows; ++i)
+    {
+        float confidence = data[4];
+            if (confidence > post_setting.conf_threshold)
+            {
+             float *classes_scores = data + 5;
+            // Create a 1x85 Mat and store class scores of 80 classes.
+            cv::Mat scores(1, post_setting.size_class_list, CV_32FC1, classes_scores);
+            // Perform minMaxLoc and acquire the index of best class  score.
+            cv::Point class_id;
+            double max_class_score;
+            minMaxLoc(scores, 0, &max_class_score, 0, &class_id);
+            if (max_class_score > post_setting.conf_threshold && class_id.x==32)
+            {
+                float cx = data[0];
+                float cy = data[1];
+                float w = data[2];
+                float h = data[3];
+                int left = int((cx - 0.5 * w) * x_factor);
+                int top = int((cy - 0.5 * h) * y_factor);
+                int width = int(w * x_factor);
+                int height = int(h * y_factor);
+                confidences.push_back((float)confidence);
+                boxes.push_back(cv::Rect(left, top, width, height));
+            }
+        }
+        data += 85;
+    }
+
+    // Perform non maximum suppression to eliminate redundant overlapping boxes with
+    // lower confidences
+    vector<int> indices;
+    vector<cv::Rect> final_boxes;
+    cv::dnn::NMSBoxes(boxes, confidences, post_setting.conf_threshold, post_setting.nma_threshold, indices);
+    for (size_t i = 0; i < indices.size(); ++i)
+    {
+        int idx = indices[i];
+        cv::Rect box = boxes[idx];
+        final_boxes.push_back(box);
+        //cv::rectangle(image, cv::Point(box.x, box.y), cv::Point(box.x + box.width, box.y + box.height), 
+          //             cv::Scalar(255, 178, 50), 3);
+    }
+    yolo_boxes.at(cam_idx) = final_boxes;
+}
+
+
+void cv_thread(int cam_idx)
+{
+    while (true)
+    {
+        std::unique_lock<std::mutex> ul(g_mutexes.at(cam_idx));
+        g_cvs.at(cam_idx).wait(ul, [&]() {return g_ready.at(cam_idx);});
+
+        // cv::Mat image = cv::Mat(IMG_WIDTH * IMG_HEIGHT * 4, 1, CV_8U, curr_frame_on_host[cam_idx]).reshape(4, IMG_HEIGHT);
+        // track_ball(net[cam_idx], image, cam_idx);
+
+        track_ball_fast(nets[cam_idx], cam_idx);
+
+        g_ready.at(cam_idx) = false;
+        ul.unlock();
+        g_cvs.at(cam_idx).notify_one();
+    }
 }
 
 
@@ -231,20 +333,9 @@ int main(int, char**)
     
     // for yolo detection
     bool yolo_detection = false;
-    std::vector<cv::dnn::Net> nets;
     std::vector<std::thread> yolo_threads;
     std::unique_lock<std::mutex> display_thread_locks[4];
-    std::vector<std::mutex> g_mutexes(4);
-    std::vector<std::condition_variable> g_cvs(4);
-    std::vector<bool*> g_ready;
-    
-    for(int i=0; i<4; i++){
-        bool* g_temp = new bool(false);
-        g_ready.push_back(g_temp);
-    }
-
     std::vector<string> class_list;
-    std::vector<std::vector<cv::Rect>> yolo_boxes(4);
 
     unsigned char* yolo_input_frame[4];
     unsigned char* yolo_input_frame_rgba[4];
