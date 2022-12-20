@@ -9,6 +9,6 @@ struct yolo_param{
     float conf_threshold;
     float nma_threshold;
     int size_class_list;
-    yolo_param(): conf_threshold(0.5), nma_threshold(0.4) {}
+    yolo_param(): conf_threshold(0.25), nma_threshold(0.4) {}
 };
 

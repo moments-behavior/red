@@ -43,11 +43,13 @@
 simplelogger::Logger *logger = simplelogger::LoggerFactory::CreateConsoleLogger();
 
 
-std::vector<cv::dnn::Net> nets;
+cv::dnn::Net nets[4];
 std::vector<std::mutex> g_mutexes(4);
 std::vector<std::condition_variable> g_cvs(4);
-std::vector<bool> g_ready;
+std::vector<bool> g_ready(4);
 std::vector<std::vector<cv::Rect>> yolo_boxes(4);
+unsigned char* yolo_input_frame[4];
+unsigned char* yolo_input_frame_rgba[4];
 
 static void draw_cv_contours(std::vector<cv::Rect> boxes)
 {
@@ -77,24 +79,21 @@ static void draw_cv_contours(std::vector<cv::Rect> boxes)
 }
 
 
-void track_ball_fast(cv::dnn::Net net, unsigned char* img_rgba, unsigned char* img_rgb, yolo_param post_setting, int cam_idx)
+void track_ball_fast(cv::dnn::Net net, yolo_param post_setting, int cam_idx)
 {
 
-    std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
-    
     // optimize cpu color conversion 
-    rgba_to_rgb_cpu(img_rgba, img_rgb, 2200, 3208);
+    std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
+    rgba_to_rgb_cpu(yolo_input_frame_rgba[cam_idx], yolo_input_frame[cam_idx], 2200, 3208);
     std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
     cout << "Time difference = " << std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count() << "[µs]" << std::endl;
     
-    cv::Mat image = cv::Mat(3208 * 2200 * 3, 1, CV_8U, img_rgb).reshape(3, 2200);
+    cv::Mat image = cv::Mat(3208 * 2200 * 3, 1, CV_8U, yolo_input_frame[cam_idx]).reshape(3, 2200);
     cv::Mat blob;
 
     double x_factor = image.cols / 640.0;
     double y_factor = image.rows / 640.0;
-
     cv::dnn::blobFromImage(image, blob, 1./255.,  cv::Size(640, 640),  cv::Scalar(), true, false);
-
     net.setInput(blob);
 
     // Runs the forward pass to get output of the output layers
@@ -102,7 +101,6 @@ void track_ball_fast(cv::dnn::Net net, unsigned char* img_rgba, unsigned char* i
     // net.forward(outs, getOutputsNames(net));
     net.forward(outs, net.getUnconnectedOutLayersNames());
     
-
     vector<int> classIds;
     vector<float> confidences;
     vector<cv::Rect> boxes;
@@ -142,6 +140,8 @@ void track_ball_fast(cv::dnn::Net net, unsigned char* img_rgba, unsigned char* i
     vector<int> indices;
     vector<cv::Rect> final_boxes;
     cv::dnn::NMSBoxes(boxes, confidences, post_setting.conf_threshold, post_setting.nma_threshold, indices);
+    
+    std::cout << indices.size() << std::endl;
     for (size_t i = 0; i < indices.size(); ++i)
     {
         int idx = indices[i];
@@ -151,26 +151,27 @@ void track_ball_fast(cv::dnn::Net net, unsigned char* img_rgba, unsigned char* i
           //             cv::Scalar(255, 178, 50), 3);
     }
     yolo_boxes.at(cam_idx) = final_boxes;
+
 }
 
 
-void cv_thread(int cam_idx)
+void yolo_thread(int cam_idx, yolo_param post_setting)
 {
+    std::cout << "yolo thread started" << cam_idx << std::endl;
     while (true)
     {
         std::unique_lock<std::mutex> ul(g_mutexes.at(cam_idx));
         g_cvs.at(cam_idx).wait(ul, [&]() {return g_ready.at(cam_idx);});
-
         // cv::Mat image = cv::Mat(IMG_WIDTH * IMG_HEIGHT * 4, 1, CV_8U, curr_frame_on_host[cam_idx]).reshape(4, IMG_HEIGHT);
         // track_ball(net[cam_idx], image, cam_idx);
-
-        track_ball_fast(nets[cam_idx], cam_idx);
-
+        track_ball_fast(nets[cam_idx], post_setting, cam_idx);
         g_ready.at(cam_idx) = false;
         ul.unlock();
         g_cvs.at(cam_idx).notify_one();
     }
 }
+
+
 
 
 int main(int, char**)
@@ -337,8 +338,7 @@ int main(int, char**)
     std::unique_lock<std::mutex> display_thread_locks[4];
     std::vector<string> class_list;
 
-    unsigned char* yolo_input_frame[4];
-    unsigned char* yolo_input_frame_rgba[4];
+
     for(int i=0; i<4; i++){
         yolo_input_frame[i] = (unsigned char*)malloc(3208 * 2200 * 3 * sizeof(uint8_t) + 4); 
     }
@@ -391,12 +391,19 @@ int main(int, char**)
                         std::cout << "Load trained yolo models..." << std::endl;
                         // std::string yolov5 = "/home/jinyao/tracking/yolov5/yolov5s.onnx";
                         
-                        for(int i=0; i<num_cams; i++){
-                            cv::dnn::Net net = cv::dnn::readNet(yolov5);
-                            net.setPreferableBackend(cv::dnn::DNN_BACKEND_CUDA);
-                            net.setPreferableTarget(cv::dnn::DNN_TARGET_CUDA);
-                            nets.push_back(net); 
+                        // for(int i=0; i<num_cams; i++){
+                        //     cv::dnn::Net net = cv::dnn::readNet(yolov5);
+                        //     net.setPreferableBackend(cv::dnn::DNN_BACKEND_CUDA);
+                        //     net.setPreferableTarget(cv::dnn::DNN_TARGET_CUDA);
+                        //     nets.push_back(net); 
+                        // }
+
+                        for (int i=0; i<num_cams; i++) {
+                            nets[i] = cv::dnn::readNet(yolov5);
+                            nets[i].setPreferableBackend(cv::dnn::DNN_BACKEND_CUDA);
+                            nets[i].setPreferableTarget(cv::dnn::DNN_TARGET_CUDA);
                         }
+
 
                         yolo_param yolo_setting = yolo_param();
                         std::ifstream ifs("/home/jinyao/tracking/darknet/data/coco.names");
@@ -407,11 +414,9 @@ int main(int, char**)
                         }
                         yolo_setting.size_class_list = class_list.size();
 
-                        // int i=0;
-                        // yolo_detect_thread(std::ref(g_mutexes[i]), std::ref(g_cvs[i]), g_ready[i], &nets[i], yolo_input_frame_rgba[i], yolo_input_frame[i], yolo_setting, &yolo_boxes[i]);
                         // // start thread
                         for(int i=0; i<num_cams; i++){
-                            yolo_threads.push_back(std::thread(&yolo_detect_thread, std::ref(g_mutexes[i]), std::ref(g_cvs[i]), g_ready[i], &nets[i], yolo_input_frame_rgba[i], yolo_input_frame[i], yolo_setting, &yolo_boxes[i], stop_flag));
+                            yolo_threads.push_back(std::thread(&yolo_thread, i, yolo_setting));
                         }
                         yolo_detection=true;
                     }
@@ -446,7 +451,6 @@ int main(int, char**)
             }
             ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
             ImGui::Text("Frame number %d ", display_buffer[0][read_head].frame_number);   
-            
         }
         ImGui::End();
         
@@ -488,12 +492,11 @@ int main(int, char**)
                     std::this_thread::sleep_for(std::chrono::milliseconds(1));
                 }
 
-
                 // sync yolo detection 
                 if(yolo_detection){
                     display_thread_locks[j] = std::unique_lock<std::mutex> (g_mutexes[j]);
                     yolo_input_frame_rgba[j]  = display_buffer[j][read_head].frame;
-                    *g_ready[j] = true;
+                    g_ready[j] = true;
                     display_thread_locks[j].unlock();
                     g_cvs[j].notify_one();
                 }
