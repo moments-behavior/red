@@ -31,6 +31,8 @@ g++ -O2 -mssse3 -ffast-math -std=c++17 \
     -Ilib/nvcodec \
     -o release/streamer_example -I ./src/ src/*.cpp \
     -I/usr/local/cuda/include \
+    -I/home/jinyao/Build/Simd/src \
+    -L/home/jinyao/Build/Simd/build -lSimd \
     -I$DIR_IMPLOT \
     -I$DIR_IMGUI \
     -I$DIR_IMGUI/backends \

@@ -35,6 +35,8 @@
 #include <thread>         // std::thread
 #include <imfilebrowser.h>
 #include "yolo_detection.h"
+#include "Simd/SimdLib.hpp"
+
 
 #if defined(_MSC_VER) && (_MSC_VER >= 1900) && !defined(IMGUI_DISABLE_WIN32_FUNCTIONS)
 #pragma comment(lib, "legacy_stdio_definitions")
@@ -43,13 +45,16 @@
 simplelogger::Logger *logger = simplelogger::LoggerFactory::CreateConsoleLogger();
 
 
-cv::dnn::Net nets[4];
-std::vector<std::mutex> g_mutexes(4);
-std::vector<std::condition_variable> g_cvs(4);
-std::vector<bool> g_ready(4);
-std::vector<std::vector<cv::Rect>> yolo_boxes(4);
-unsigned char* yolo_input_frame[4];
-unsigned char* yolo_input_frame_rgba[4];
+#define MAX_VIEWS 7
+
+
+cv::dnn::Net nets[MAX_VIEWS];
+std::vector<std::mutex> g_mutexes(MAX_VIEWS);
+std::vector<std::condition_variable> g_cvs(MAX_VIEWS);
+std::vector<bool> g_ready(MAX_VIEWS);
+std::vector<std::vector<cv::Rect>> yolo_boxes(MAX_VIEWS);
+unsigned char* yolo_input_frame[MAX_VIEWS];
+unsigned char* yolo_input_frame_rgba[MAX_VIEWS];
 
 static void draw_cv_contours(std::vector<cv::Rect> boxes)
 {
@@ -79,16 +84,26 @@ static void draw_cv_contours(std::vector<cv::Rect> boxes)
 }
 
 
-void track_ball_fast(cv::dnn::Net net, yolo_param post_setting, int cam_idx)
+void track_ball_fast(cv::dnn::Net net, yolo_param post_setting, int cam_idx, int no_frame_proc)
 {
 
-    // optimize cpu color conversion 
     std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
-    rgba_to_rgb_cpu(yolo_input_frame_rgba[cam_idx], yolo_input_frame[cam_idx], 2200, 3208);
-    std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
-    cout << "Time difference = " << std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count() << "[µs]" << std::endl;
     
+    // int length_image = 3208 * 2200;
+    // rgba_to_rgb_cpu(yolo_input_frame_rgba[cam_idx], yolo_input_frame[cam_idx], length_image);
+    
+    // TODO: write a c writer for this function
+    SimdBgraToBgr(yolo_input_frame_rgba[cam_idx], 3208, 2200, 3208 * 4, yolo_input_frame[cam_idx], 3208 * 3);
+
     cv::Mat image = cv::Mat(3208 * 2200 * 3, 1, CV_8U, yolo_input_frame[cam_idx]).reshape(3, 2200);
+    
+    // if (no_frame_proc % 10 == 0)
+    // {
+    //     string image_frame_name = "/home/jinyao/Pictures/dev/cam" + std::to_string(cam_idx) + "_img" + std::to_string(no_frame_proc) + ".jpg";
+    //     const char* output_file = image_frame_name.c_str();
+    //     cv::imwrite(output_file, image);
+    // }
+
     cv::Mat blob;
 
     double x_factor = image.cols / 640.0;
@@ -141,7 +156,6 @@ void track_ball_fast(cv::dnn::Net net, yolo_param post_setting, int cam_idx)
     vector<cv::Rect> final_boxes;
     cv::dnn::NMSBoxes(boxes, confidences, post_setting.conf_threshold, post_setting.nma_threshold, indices);
     
-    std::cout << indices.size() << std::endl;
     for (size_t i = 0; i < indices.size(); ++i)
     {
         int idx = indices[i];
@@ -151,23 +165,25 @@ void track_ball_fast(cv::dnn::Net net, yolo_param post_setting, int cam_idx)
           //             cv::Scalar(255, 178, 50), 3);
     }
     yolo_boxes.at(cam_idx) = final_boxes;
-
+    std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
+    cout << "Time difference = " << std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count() << "[µs]" << std::endl;
 }
 
 
 void yolo_thread(int cam_idx, yolo_param post_setting)
 {
     std::cout << "yolo thread started" << cam_idx << std::endl;
+    int no_frame_proc = 0;
     while (true)
     {
         std::unique_lock<std::mutex> ul(g_mutexes.at(cam_idx));
         g_cvs.at(cam_idx).wait(ul, [&]() {return g_ready.at(cam_idx);});
         // cv::Mat image = cv::Mat(IMG_WIDTH * IMG_HEIGHT * 4, 1, CV_8U, curr_frame_on_host[cam_idx]).reshape(4, IMG_HEIGHT);
         // track_ball(net[cam_idx], image, cam_idx);
-        track_ball_fast(nets[cam_idx], post_setting, cam_idx);
+        track_ball_fast(nets[cam_idx], post_setting, cam_idx, no_frame_proc);
         g_ready.at(cam_idx) = false;
         ul.unlock();
-        g_cvs.at(cam_idx).notify_one();
+        no_frame_proc++;
     }
 }
 
@@ -245,7 +261,6 @@ int main(int, char**)
     io.Fonts->AddFontFromFileTTF("fonts/forkawesome-webfont.ttf", 15.0f, &icons_config, icons_ranges);
     // use FONT_ICON_FILE_NAME_FAR if you want regular instead of solid
 
-    int MAX_VIEWS = 4;
 
 
     // Create a OpenGL texture identifier
@@ -277,7 +292,7 @@ int main(int, char**)
     int size_pic = 3208 * 2200 * 4 *  sizeof(unsigned char);
 
     // allocate display buffer
-    const int size_of_buffer = 64;
+    const int size_of_buffer = 8;
 
     // right now, allocate more than needed, maybe  switch to vector?, need to think about it  
     PictureBuffer display_buffer[MAX_VIEWS][size_of_buffer];
@@ -339,8 +354,8 @@ int main(int, char**)
     std::vector<string> class_list;
 
 
-    for(int i=0; i<4; i++){
-        yolo_input_frame[i] = (unsigned char*)malloc(3208 * 2200 * 3 * sizeof(uint8_t) + 4); 
+    for(int i=0; i<MAX_VIEWS; i++){
+        yolo_input_frame[i] = (unsigned char*)malloc(3208 * 2200 * 3 * sizeof(uint8_t) + 4);
     }
 
 
