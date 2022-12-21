@@ -7,7 +7,6 @@ rm -f release/streamer_example;
 nvcc -c src/create_image_cuda.cu -arch=sm_80 -o release/create_image_cuda.o
 nvcc -c src/ColorSpace.cu -arch=sm_80 -o release/ColorSpace.o
 
-
 DIR_IMGUI="lib/imgui"
 DIR_IMPLOT="lib/implot"
 
