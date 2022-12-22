@@ -106,14 +106,14 @@ void track_ball_cpu(yolo_param post_setting, int cam_idx, int no_frame_proc)
     {
         std::lock_guard lk(g_preprocess_mutex);
         preprocess_counter++;
-        // std::cout << cam_idx << " ready, preprocess_couter now " << preprocess_counter << std::endl;
+        std::cout << cam_idx << " ready, preprocess_couter now " << preprocess_counter << std::endl;
     }
     g_preprocess_cv.notify_all();
     {
         std::unique_lock lk(g_preprocess_mutex);
         g_preprocess_cv.wait(lk, [&](){return g_detection_ready;});
         preprocess_counter--;
-        // std::cout << cam_idx << " back to thread, preprocess_couter now is" << preprocess_counter << std::endl;
+        std::cout << cam_idx << " back to thread, preprocess_couter now is" << preprocess_counter << std::endl;
         if(preprocess_counter==-MAX_VIEWS){g_detection_ready=false;preprocess_counter=0;}
         lk.unlock();
     }
@@ -180,14 +180,14 @@ void yolo_detection_thread(){
         std::unique_lock lk(g_preprocess_mutex);
         g_preprocess_cv.wait(lk, [&](){return preprocess_counter>=MAX_VIEWS;});
         
-        // std::cout << "detection thread working...\n";
+        std::cout << "detection thread working...\n";
         cv::Mat batch_blob;
         cv::dnn::blobFromImages(batch_frame, batch_blob, 1./255.,  cv::Size(640, 640),  cv::Scalar(), true, false);
         batch_net.setInput(batch_blob);
         batch_net.forward(batch_outs, batch_net.getUnconnectedOutLayersNames());
         g_detection_ready=true;
         preprocess_counter=0;
-        // std::cout << "detection resutls ready\n";
+        std::cout << "detection resutls ready\n";
 
         lk.unlock();
         g_preprocess_cv.notify_all();
@@ -201,18 +201,19 @@ void track_ball_fast(cv::dnn::Net net, yolo_param post_setting, int cam_idx, int
     // std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
     
     int length_image = 3208 * 2200;
-    // rgba_to_rgb_cpu(yolo_input_frame_rgba[cam_idx], yolo_input_frame[cam_idx], length_image);
+    rgba_to_bgr_cpu(yolo_input_frame_rgba[cam_idx], yolo_input_frame[cam_idx], length_image);
     
-    SimdBgraToBgr(yolo_input_frame_rgba[cam_idx], 3208, 2200, 3208 * 4, yolo_input_frame[cam_idx], 3208 * 3);
+    // rgba to rgb
+    // SimdBgraToBgr(yolo_input_frame_rgba[cam_idx], 3208, 2200, 3208 * 4, yolo_input_frame[cam_idx], 3208 * 3);
 
-    // int last_pixel_rgba = (length_image-1) * 4;
-    // int last_pixel_rgb = (length_image-1) * 3;
+    int last_pixel_rgba = (length_image-1) * 4;
+    int last_pixel_rgb = (length_image-1) * 3;
 
-	// printf("rgba image first pixel: %d %d %d %d \n", yolo_input_frame_rgba[cam_idx][0], yolo_input_frame_rgba[cam_idx][1], yolo_input_frame_rgba[cam_idx][2], yolo_input_frame_rgba[cam_idx][3]);
-	// printf("rgba image last pixel: %d %d %d %d \n", yolo_input_frame_rgba[cam_idx][last_pixel_rgba], yolo_input_frame_rgba[cam_idx][last_pixel_rgba+1], yolo_input_frame_rgba[cam_idx][last_pixel_rgba+2], yolo_input_frame_rgba[cam_idx][last_pixel_rgba+3]);
+	printf("original image first pixel: %d %d %d %d \n", yolo_input_frame_rgba[cam_idx][0], yolo_input_frame_rgba[cam_idx][1], yolo_input_frame_rgba[cam_idx][2], yolo_input_frame_rgba[cam_idx][3]);
+	printf("original image last pixel: %d %d %d %d \n", yolo_input_frame_rgba[cam_idx][last_pixel_rgba], yolo_input_frame_rgba[cam_idx][last_pixel_rgba+1], yolo_input_frame_rgba[cam_idx][last_pixel_rgba+2], yolo_input_frame_rgba[cam_idx][last_pixel_rgba+3]);
 
-    // printf("rgb image first pixel: %d %d %d \n", yolo_input_frame[cam_idx][0], yolo_input_frame[cam_idx][1], yolo_input_frame[cam_idx][2]);
-	// printf("rgb image last pixel: %d %d %d \n", yolo_input_frame[cam_idx][last_pixel_rgb], yolo_input_frame[cam_idx][last_pixel_rgb+1], yolo_input_frame[cam_idx][last_pixel_rgb+2]);
+    printf("image first pixel: %d %d %d \n", yolo_input_frame[cam_idx][0], yolo_input_frame[cam_idx][1], yolo_input_frame[cam_idx][2]);
+	printf("image last pixel: %d %d %d \n", yolo_input_frame[cam_idx][last_pixel_rgb], yolo_input_frame[cam_idx][last_pixel_rgb+1], yolo_input_frame[cam_idx][last_pixel_rgb+2]);
 
 
     cv::Mat image = cv::Mat(3208 * 2200 * 3, 1, CV_8U, yolo_input_frame[cam_idx]).reshape(3, 2200);
@@ -221,7 +222,7 @@ void track_ball_fast(cv::dnn::Net net, yolo_param post_setting, int cam_idx, int
     double y_factor = image.rows / 640.0;
 
     cv::Mat blob;
-    cv::dnn::blobFromImage(image, blob, 1./255.,  cv::Size(640, 640),  cv::Scalar(), true, false);
+    cv::dnn::blobFromImage(image, blob, 1./255.,  cv::Size(640, 640),  cv::Scalar(), false, false);
     net.setInput(blob);
     // Runs the forward pass to get output of the output layers
     vector<cv::Mat> outs;
@@ -293,7 +294,7 @@ void yolo_thread(int cam_idx, yolo_param post_setting)
         g_cvs.at(cam_idx).wait(ul, [&]() {return g_ready.at(cam_idx);});
         // cv::Mat image = cv::Mat(IMG_WIDTH * IMG_HEIGHT * 4, 1, CV_8U, curr_frame_on_host[cam_idx]).reshape(4, IMG_HEIGHT);
         // track_ball(net[cam_idx], image, cam_idx);
-        // std::cout << "yolo_thread " << cam_idx << std::endl;
+        std::cout << "yolo_thread " << cam_idx << std::endl;
         std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
         if(BATCH_DETECTION)
         {
@@ -641,11 +642,11 @@ int main(int, char**)
                 // sync yolo detection 
                 if(yolo_detection){
                     display_thread_locks[j] = std::unique_lock<std::mutex> (g_mutexes[j]);
-                    // std::cout << "gui thread aquire lock" << j << " ready\n";
+                    std::cout << "gui thread aquire lock" << j << " ready\n";
                     yolo_input_frame_rgba[j]  = display_buffer[j][read_head].frame;
                     g_ready[j] = true;
                     display_thread_locks[j].unlock();
-                    // std::cout << "back gui thread" << j << "\n";
+                    std::cout << "back gui thread" << j << "\n";
                     g_cvs[j].notify_one();
                 }
 
