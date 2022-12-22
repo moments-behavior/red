@@ -56,6 +56,7 @@ unsigned char* yolo_input_frame_rgba[MAX_VIEWS];
 
 cv::dnn::Net batch_net;
 vector<cv::Mat> batch_outs(MAX_VIEWS);
+vector<cv::Mat> batch_frame(MAX_VIEWS);
 bool g_detection_ready{false};
 int preprocess_counter(0);
 std::mutex g_preprocess_mutex;
@@ -94,10 +95,12 @@ void track_ball_cpu(yolo_param post_setting, int cam_idx, int no_frame_proc)
     std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
     int length_image = 3208 * 2200;
     SimdBgraToBgr(yolo_input_frame_rgba[cam_idx], 3208, 2200, 3208 * 4, yolo_input_frame[cam_idx], 3208 * 3);
-        
+
     double x_factor = 3208.0 / 640.0;
     double y_factor = 2200.0 / 640.0;
 
+
+    batch_frame[cam_idx] = cv::Mat(3208 * 2200 * 3, 1, CV_8U, yolo_input_frame[cam_idx]).reshape(3, 2200);
     
     {
         std::lock_guard lk(g_preprocess_mutex);
@@ -176,12 +179,13 @@ void yolo_detection_thread(){
         g_preprocess_cv.wait(lk, [&](){return preprocess_counter>=MAX_VIEWS;});
         
         std::cout << "detection thread working...\n";
-
-        cv::Mat batch_frame = cv::Mat(3208 * 2200 * 3 * MAX_VIEWS, 1, CV_8U, yolo_input_frame).reshape(3, 2200);
-        cv::Mat batch_blob = cv::dnn::blobFromImage(batch_frame, 1./255., cv::Size(640, 640), cv::Scalar(), true, false);
-        
+        cv::Mat batch_blob;
+        cv::dnn::blobFromImages(batch_frame, batch_blob, 1./255.,  cv::Size(640, 640),  cv::Scalar(), true, false);
+std::cout << "batch_blob size:" << batch_blob.size() << "\n";
         batch_net.setInput(batch_blob);
+        std::cout << "here0\n";
         batch_net.forward(batch_outs, batch_net.getUnconnectedOutLayersNames());
+std::cout << "here0\n";
         g_detection_ready=true;
         std::cout << "detection resutls ready\n";
 
