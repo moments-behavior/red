@@ -44,6 +44,7 @@
 simplelogger::Logger *logger = simplelogger::LoggerFactory::CreateConsoleLogger();
 
 
+#define BATCH_DETECTION 0
 #define MAX_VIEWS 4
 
 cv::dnn::Net nets[MAX_VIEWS];
@@ -113,12 +114,12 @@ void track_ball_cpu(yolo_param post_setting, int cam_idx, int no_frame_proc)
         g_preprocess_cv.wait(lk, [&](){return g_detection_ready;});
         preprocess_counter--;
         // std::cout << cam_idx << " back to thread, preprocess_couter now is" << preprocess_counter << std::endl;
-        if(preprocess_counter==0){g_detection_ready=false;}
+        if(preprocess_counter==-MAX_VIEWS){g_detection_ready=false;preprocess_counter=0;}
         lk.unlock();
     }
     
     float *data = (float *)batch_outs[0].data;
-
+    data += 25200*cam_idx*85;
 
     vector<int> classIds;
     vector<float> confidences;
@@ -185,6 +186,7 @@ void yolo_detection_thread(){
         batch_net.setInput(batch_blob);
         batch_net.forward(batch_outs, batch_net.getUnconnectedOutLayersNames());
         g_detection_ready=true;
+        preprocess_counter=0;
         // std::cout << "detection resutls ready\n";
 
         lk.unlock();
@@ -291,10 +293,12 @@ void yolo_thread(int cam_idx, yolo_param post_setting)
         g_cvs.at(cam_idx).wait(ul, [&]() {return g_ready.at(cam_idx);});
         // cv::Mat image = cv::Mat(IMG_WIDTH * IMG_HEIGHT * 4, 1, CV_8U, curr_frame_on_host[cam_idx]).reshape(4, IMG_HEIGHT);
         // track_ball(net[cam_idx], image, cam_idx);
+        // std::cout << "yolo_thread " << cam_idx << std::endl;
         std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
-        // track_ball_cpu(post_setting, cam_idx, no_frame_proc);
-        track_ball_fast(nets[cam_idx], post_setting, cam_idx, no_frame_proc);
-
+        if(BATCH_DETECTION)
+        {
+            track_ball_cpu(post_setting, cam_idx, no_frame_proc);}
+        else{track_ball_fast(nets[cam_idx], post_setting, cam_idx, no_frame_proc);}
         std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
         cout << "Time difference = " << std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count() << "[µs]" << std::endl;
 
@@ -519,9 +523,23 @@ int main(int, char**)
                 if (ImGui::BeginMenu("Detection")){
                     
                     if (ImGui::MenuItem("YOLOv5")) { 
-                        // std::string yolov5 = root_dir + "/yolo_models/yolov5s_batch4.onnx";
-                        std::cout << "Load trained yolo models..." << std::endl;
-                        std::string yolov5 = root_dir + "/yolo_models/yolov5s.onnx";
+
+                        if(BATCH_DETECTION){
+                            std::string yolov5 = root_dir + "/yolo_models/yolov5s_batch4.onnx";
+
+                            batch_net = cv::dnn::readNet(yolov5);
+                            batch_net.setPreferableBackend(cv::dnn::DNN_BACKEND_CUDA);
+                            batch_net.setPreferableTarget(cv::dnn::DNN_TARGET_CUDA);
+                        }
+                        else{
+                            std::string yolov5 = root_dir + "/yolo_models/yolov5s.onnx";
+                            for (int i=0; i<num_cams; i++) {
+                                nets[i] = cv::dnn::readNet(yolov5);
+                                nets[i].setPreferableBackend(cv::dnn::DNN_BACKEND_CUDA);
+                                nets[i].setPreferableTarget(cv::dnn::DNN_TARGET_CUDA);
+                            }
+
+                        }
                         
                         // for(int i=0; i<num_cams; i++){
                         //     cv::dnn::Net net = cv::dnn::readNet(yolov5);
@@ -530,16 +548,6 @@ int main(int, char**)
                         //     nets.push_back(net); 
                         // }
 
-                        for (int i=0; i<num_cams; i++) {
-                            nets[i] = cv::dnn::readNet(yolov5);
-                            nets[i].setPreferableBackend(cv::dnn::DNN_BACKEND_CUDA);
-                            nets[i].setPreferableTarget(cv::dnn::DNN_TARGET_CUDA);
-                        }
-
-                        // batch_net = cv::dnn::readNet(yolov5);
-                        // batch_net.setPreferableBackend(cv::dnn::DNN_BACKEND_CUDA);
-                        // batch_net.setPreferableTarget(cv::dnn::DNN_TARGET_CUDA);
-                        
                         
                         yolo_param yolo_setting = yolo_param();
                         std::ifstream ifs("/home/jinyao/tracking/darknet/data/coco.names");
@@ -555,7 +563,7 @@ int main(int, char**)
                             yolo_threads.push_back(std::thread(&yolo_thread, i, yolo_setting));
                         }
 
-                        // yolo_threads.push_back(std::thread(&yolo_detection_thread));
+                        if(BATCH_DETECTION){yolo_threads.push_back(std::thread(&yolo_detection_thread));}
                         yolo_detection=true;
                     }
                         
@@ -633,9 +641,11 @@ int main(int, char**)
                 // sync yolo detection 
                 if(yolo_detection){
                     display_thread_locks[j] = std::unique_lock<std::mutex> (g_mutexes[j]);
+                    // std::cout << "gui thread aquire lock" << j << " ready\n";
                     yolo_input_frame_rgba[j]  = display_buffer[j][read_head].frame;
                     g_ready[j] = true;
                     display_thread_locks[j].unlock();
+                    // std::cout << "back gui thread" << j << "\n";
                     g_cvs[j].notify_one();
                 }
 
