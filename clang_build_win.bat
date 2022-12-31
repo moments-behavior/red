@@ -1,5 +1,5 @@
-nvcc -c src/create_image_cuda.cu -arch=sm_80 -o release2/create_image_cuda.o
-nvcc -c src/ColorSpace.cu -arch=sm_80 -o release2/ColorSpace.o
+nvcc -c src/create_image_cuda.cu -arch=sm_80 -o release/create_image_cuda.o
+nvcc -c src/ColorSpace.cu -arch=sm_80 -o release/ColorSpace.o
 @set DIR_IMGUI=lib/imgui
 
 clang++.exe -g -std=c++17 src/main.cpp src/buffer_utils.cpp src/decoder.cpp src/FFmpegDemuxer.cpp src/NvDecoder.cpp %DIR_IMGUI%/imgui.cpp %DIR_IMGUI%/imgui_demo.cpp %DIR_IMGUI%/imgui_draw.cpp %DIR_IMGUI%/imgui_tables.cpp %DIR_IMGUI%/imgui_widgets.cpp %DIR_IMGUI%/backends/imgui_impl_glfw.cpp %DIR_IMGUI%/backends/imgui_impl_opengl3.cpp ^
