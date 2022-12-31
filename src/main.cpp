@@ -16,7 +16,6 @@
 #include <GLES2/gl2.h>
 #endif
 #include <GLFW/glfw3.h> // Will drag system OpenGL headers
-#include "shader_m.h"
 
 #include <cuda.h>
 #include "NvDecoder.h"
@@ -29,8 +28,6 @@
 #include "decoder.h"
 #include "IconsForkAwesome.h"
 #include "implot.h"
-#include "LabelManager.h"
-#include "label_gui.h"
 #include <iostream>       // std::cout
 #include <thread>         // std::thread
 #include <imfilebrowser.h>
@@ -196,12 +193,6 @@ int main(int, char**)
     bool plot_keypoints_flag = false;
     int current_frame_num = 0;
 
-    std::vector<Camera*> cams;
-    SkelEnum skelEnum = SkelEnum::Rat10Target2;
-
-
-    LabelManager *labelMgr = nullptr;
-
 
     // Main loop
     while (!glfwWindowShouldClose(window))
@@ -232,13 +223,6 @@ int main(int, char**)
                     if (video_loaded){
                         if (ImGui::MenuItem("Label")) { 
                             
-                            for(int i=0; i<num_cams; i++)
-                            {
-                                Camera* cam = new Camera(i, i, root_dir, skelEnum);
-                                cams.push_back(cam);
-                            }
-                            labelMgr = new LabelManager(cams);
-                            plot_keypoints_flag = true;
                         };
                     }
 
@@ -283,8 +267,9 @@ int main(int, char**)
 
             // load movies 
             std::string movie_dir = root_dir + "/movies";
+
             for (const auto & entry : std::filesystem::directory_iterator(movie_dir)){
-                input_file_names.push_back(entry.path());
+                input_file_names.push_back(entry.path().string());
             }
                 
             std::sort(input_file_names.begin(), input_file_names.end());
@@ -398,9 +383,6 @@ int main(int, char**)
             toggle_play_status = false;
         }
 
-        if (plot_keypoints_flag){
-            set_active_skel3D(labelMgr, current_frame_num);
-        }
 
         // Render a video frame
         if (video_loaded){        
@@ -415,22 +397,7 @@ int main(int, char**)
                 
                 //ImGui::Image((void*)(intptr_t)image_texture[j], avail_size);
                 if (ImPlot::BeginPlot("##no_plot_name", avail_size)){
-                    ImPlot::PlotImage("##no_image_name", (void*)(intptr_t)image_texture[j], ImVec2(0,0), ImVec2(3208, 2200));
-
-                    // labeling 
-                    if (plot_keypoints_flag){
-                        std::cout << "current_frame_num: " << current_frame_num << std::endl;
-                        set_active_skel2D(cams[j], current_frame_num);
-                        plot_keypoints(labelMgr, cams[j], current_frame_num, draw_id_ptr);
-                        
-                    }
-
-                    if (plot_keypoints_flag)
-                    {
-                        labeling_one_view(cams[j], current_frame_num);
-                        keypoint_button(cams[j], j, current_frame_num, cams[j]->frameDataMapIter, labelMgr, draw_id_ptr);
-                    }
-    
+                    ImPlot::PlotImage("##no_image_name", (void*)(intptr_t)image_texture[j], ImVec2(0,0), ImVec2(3208, 2200));    
                     ImPlot::EndPlot();
                 }
 
@@ -516,94 +483,6 @@ int main(int, char**)
                 ImGui::EndGroup();
                 ImGui::End();
             }
-
-
-            if (plot_keypoints_flag)
-            {
-            
-
-                ImGui::Begin("Labeling Tool");
-
-                for (int i=0; i<labelMgr->nCams; i++)
-                {
-                    for (int j=0; j<labelMgr->nNodes; j++)
-                    {
-                        if (j > 0) ImGui::SameLine();
-
-                        ImGui::PushID(j);
-
-                        if (labelMgr->isLabeled[i][j])
-                        {
-                            ImGui::PushStyleColor(ImGuiCol_Button, (ImVec4)ImColor::HSV(j / (float)cams[i]->frameData->nNodes, 0.6f, 0.6f));
-                            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, (ImVec4)ImColor::HSV(j / (float)cams[i]->frameData->nNodes, 0.7f, 0.7f));
-                            ImGui::PushStyleColor(ImGuiCol_ButtonActive, (ImVec4)ImColor::HSV(j / (float)cams[i]->frameData->nNodes, 0.8f, 0.8f));
-                        }
-                        else
-                        {
-                            ImGui::PushStyleColor(ImGuiCol_Button, (ImVec4)ImColor::HSV(0.2f, 0.2f, 0.2f));
-                            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, (ImVec4)ImColor::HSV(0.2f, 0.2f, 0.2f));
-                            ImGui::PushStyleColor(ImGuiCol_ButtonActive, (ImVec4)ImColor::HSV(0.2f, 0.2f, 0.2f));
-                        }
-                        
-                        ImGui::Button(cams[i]->frameData->nodeNames[j].c_str());
-                        ImGui::PopStyleColor(3);
-                        ImGui::PopID();
-                    }
-                }
-
-                
-
-                static bool triangulate = false;
-                ImGui::Checkbox("triangulate", &triangulate);
-                if (triangulate)
-                {
-                    reprojection(labelMgr, cams, current_frame_num);
-                }
-
-                if (ImGui::Button("Reproject") || ImGui::IsKeyPressed(ImGuiKey_S, false))
-                {
-                    reprojection(labelMgr, cams, current_frame_num);
-                }
-
-                if (ImGui::IsKeyPressed(ImGuiKey_X, false))
-                {
-                    reprojection_overweight_activeKP(labelMgr, cams, current_frame_num);
-                }
-
-                if (ImGui::Button("Save Labeled Data"))
-                {
-                    for (int i=0; i<labelMgr->nCams; i++)
-                    {
-                        cams[i]->SaveSkelMap();
-                    }
-                    
-                    labelMgr->SaveWorldKeyPoints();
-                }
-
-                if (ImGui::Button("Load Camera Skels"))
-                {
-                    labelMgr->LoadCameraSkels();
-                    cout << "loaded 2D skeletons from each camera results directory" << endl;
-                    labelMgr->LoadWorldSkels();
-                    cout << "loaded 3d skeletons from world results directory" << endl;
-
-                }
-
-                ImGui::NewLine();
-                
-
-                // ImGui::Text("A -> Previous Image");
-                // ImGui::Text("D -> Next Image");
-                // ImGui::Text("Q -> ActiveKeypoint++ (while hovering image)");
-                // ImGui::Text("E -> ActiveKeypoint-- (while hovering image)");
-                // ImGui::Text("T -> ActiveKeypoint set to last node");
-                // ImGui::Text("W -> Drop ActiveKeypoint (while hovering at desired image point)");
-                // ImGui::Text("S -> Reproject eligible keypoints");
-                ImGui::End();
-            }
-
-
-
 
         }
 
