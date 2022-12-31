@@ -1,6 +1,6 @@
 #include "buffer_utils.h"
 
-void GetImage(CUdeviceptr dpSrc, uint8_t* pDst, int nWidth, int nHeight)
+void get_image_from_gpu(CUdeviceptr dpSrc, uint8_t* pDst, int nWidth, int nHeight)
 {
     CUDA_MEMCPY2D m = { 0 };
     m.WidthInBytes = nWidth;

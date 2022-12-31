@@ -101,7 +101,7 @@ void decoder_process(const char *input_file_name, int gpu_id, PictureBuffer* dis
                 Nv12ToColor32<RGBA32>(pFrame, dec.GetWidth(), (uint8_t*)pTmpImage, 4 * dec.GetWidth(), dec.GetWidth(), dec.GetHeight(), iMatrix);
 
                 if (nFrame == 0) {
-                    GetImage(pTmpImage, display_buffer[buffer_head].frame, 4 * dec.GetWidth(), dec.GetHeight());
+                    get_image_from_gpu(pTmpImage, display_buffer[buffer_head].frame, 4 * dec.GetWidth(), dec.GetHeight());
                     display_buffer[buffer_head].available_to_write = false;
                     *decoding_flag = true;
                     display_buffer[buffer_head].frame_number = nFrame;
@@ -112,7 +112,7 @@ void decoder_process(const char *input_file_name, int gpu_id, PictureBuffer* dis
                         std::this_thread::sleep_for(std::chrono::milliseconds(1));
                     }
 
-                    GetImage(pTmpImage, display_buffer[buffer_head].frame, 4 * dec.GetWidth(), dec.GetHeight());
+                    get_image_from_gpu(pTmpImage, display_buffer[buffer_head].frame, 4 * dec.GetWidth(), dec.GetHeight());
                     display_buffer[buffer_head].available_to_write = false;
                     display_buffer[buffer_head].frame_number = nFrame;
                 }
