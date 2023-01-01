@@ -111,25 +111,14 @@ int main(int, char**)
     io.Fonts->AddFontFromFileTTF("fonts/forkawesome-webfont.ttf", 15.0f, &icons_config, icons_ranges);
     // use FONT_ICON_FILE_NAME_FAR if you want regular instead of solid
 
-    int MAX_VIEWS = 4;
-
-
     // Create a OpenGL texture identifier
-    GLuint image_texture[MAX_VIEWS];
-    for(int j=0; j<MAX_VIEWS; j++){
-        glGenTextures(1, &image_texture[j]);
-        glBindTexture(GL_TEXTURE_2D, image_texture[j]);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 3208, 2200, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-        // Setup filtering parameters for display
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE); // This is required on WebGL for non power-of-two textures
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE); // Same
-    }
-
+    int num_cams;
+    GLuint* image_texture;
+    PictureBuffer** display_buffer;
+    SeekInfo* seek_context;
+    
     // Our state
     ImVec4 clear_color = ImVec4(0.0f, 0.0f, 0.0f, 1.00f);
-
 
     ImGui::FileBrowser file_dialog(ImGuiFileBrowserFlags_SelectDirectory);
     file_dialog.SetTitle("Select work directory");
@@ -143,26 +132,14 @@ int main(int, char**)
     int size_pic = 3208 * 2200 * 4 *  sizeof(unsigned char);
 
     // allocate display buffer
-    const int size_of_buffer = 64;
+    const int size_of_buffer = 32;
 
-    // right now, allocate more than needed, maybe  switch to vector?, need to think about it  
-    PictureBuffer display_buffer[MAX_VIEWS][size_of_buffer];
-    for(int j=0; j<MAX_VIEWS; j++){
-        for (int i = 0; i < size_of_buffer; i++) {
-            display_buffer[j][i].frame = (unsigned char*)malloc(size_pic);
-            clear_buffer_with_constant_image(display_buffer[j][i].frame, 3208, 2200);
-
-            display_buffer[j][i].frame_number = 0;
-            display_buffer[j][i].available_to_write = true;
-        }
-    }
     
     std::string root_dir;
     std::vector<std::string> input_file_names;
     std::vector<std::string> camera_names;
 
 
-    int num_cams;
     std::vector<std::thread> decoder_threads;
     bool* decoding_flag = new bool(false);
     bool* stop_flag = new bool(false);
@@ -178,12 +155,6 @@ int main(int, char**)
 
     static bool show_app_layout = true;
 
-    SeekInfo seek_context[MAX_VIEWS];
-    for(int j=0; j<MAX_VIEWS; j++){
-        seek_context[j].use_seek=false;
-        seek_context[j].seek_frame=0;
-        seek_context[j].seek_done=false;
-    }
 
     int slider_frame_number = 0;
     bool just_seeked = false;
@@ -194,7 +165,6 @@ int main(int, char**)
     int current_frame_num = 0;
 
 
-    // Main loop
     while (!glfwWindowShouldClose(window))
     {
         // todo: increment this draw_id after each ImGui and ImPlot draw request (e.g. with ImPlot::DragPoint)
@@ -274,6 +244,44 @@ int main(int, char**)
                 
             std::sort(input_file_names.begin(), input_file_names.end());
             num_cams = input_file_names.size();
+
+
+            image_texture = (GLuint *) malloc(sizeof(GLuint) * num_cams);
+
+            for(int j=0; j<num_cams; j++){
+                glGenTextures(1, &image_texture[j]);
+                glBindTexture(GL_TEXTURE_2D, image_texture[j]);
+                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 3208, 2200, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+                // Setup filtering parameters for display
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE); // This is required on WebGL for non power-of-two textures
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE); // Same
+            }
+
+            seek_context = (SeekInfo *) malloc(sizeof(SeekInfo) * num_cams);
+            for(int j=0; j<num_cams; j++){
+                seek_context[j].use_seek=false;
+                seek_context[j].seek_frame=0;
+                seek_context[j].seek_done=false;
+            }
+
+            display_buffer = (PictureBuffer**)malloc(num_cams * sizeof(PictureBuffer*));
+            for (int j=0; j<num_cams; j++){
+                display_buffer[j] = (PictureBuffer*)malloc(size_of_buffer * sizeof(PictureBuffer));
+            }
+
+            for(int j=0; j<num_cams; j++){
+                for (int i = 0; i < size_of_buffer; i++) {
+                    display_buffer[j][i].frame = (unsigned char*)malloc(size_pic);
+                    clear_buffer_with_constant_image(display_buffer[j][i].frame, 3208, 2200);
+
+                    display_buffer[j][i].frame_number = 0;
+                    display_buffer[j][i].available_to_write = true;
+                }
+            }
+    
+
 
             // multiple threads for decoding for selected videos 
             for(unsigned int i = 0; i < num_cams; i++)
