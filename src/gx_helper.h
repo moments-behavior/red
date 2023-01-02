@@ -1,10 +1,15 @@
-#ifndef GL_HELPER
-#define GL_HELPER
+#ifndef GX_HELPER
+#define GX_HELPER
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <cstdio>
 #include <GL/glew.h>
 #include <cuda_gl_interop.h>
+#include "imgui.h"
+#include "implot.h"
+#include "IconsForkAwesome.h"
+
 
 typedef uint32_t u32;
 
@@ -14,8 +19,9 @@ typedef struct window_context
     u32 width;
     u32 height;
     GLFWwindow *render_target;
+    char *render_target_title;
+    char *glsl_version;
 } window_context;
-
 
 static void glfw_error_callback(int error, const char *description)
 {
@@ -30,15 +36,15 @@ static void glew_error_callback(GLenum glew_error)
     }
 }
 
-void gx_init(window_context *context, GLFWwindow *render_target){
-    context->render_target = render_target;    
+void gx_init(window_context *context, GLFWwindow *render_target)
+{
+    context->render_target = render_target;
     glfwMakeContextCurrent(render_target);
     glew_error_callback(glewInit());
     glfwSwapInterval(1); // Enable vsync
 }
 
-
-GLFWwindow* glfw_init_render_target(u32 marjor_version, u32 minor_version, u32 width, u32 height, const char *title)
+GLFWwindow *glfw_init_render_target(u32 marjor_version, u32 minor_version, u32 width, u32 height, const char *title, char *glsl_version)
 {
     // Setup window
     glfwSetErrorCallback(glfw_error_callback);
@@ -49,7 +55,9 @@ GLFWwindow* glfw_init_render_target(u32 marjor_version, u32 minor_version, u32 w
     }
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
-
+    // local_glsl_version = "#version 330";
+    strcpy(glsl_version, "#version 130");
+    
     // Create window with graphics context
     GLFWwindow *window = glfwCreateWindow(1920, 1080, title, NULL, NULL);
     if (!window)
@@ -61,6 +69,48 @@ GLFWwindow* glfw_init_render_target(u32 marjor_version, u32 minor_version, u32 w
 
     return window;
 }
+
+
+void gx_imgui_init(window_context *context)
+{
+ // ************* Dear Imgui ********************//
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImPlotContext *implotCtx = ImPlot::CreateContext();
+    
+    ImGuiIO &io = ImGui::GetIO();
+    (void)io;
+    // io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;       // Enable Keyboard Controls
+    // io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;      // Enable Gamepad Controls
+    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable; // Enable Docking
+    // io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;         // Enable Multi-Viewport / Platform Windows
+
+    // Setup Dear ImGui style
+    ImGui::StyleColorsClassic();
+
+    // When viewports are enabled we tweak WindowRounding/WindowBg so platform windows can look identical to regular ones.
+    ImGuiStyle &style = ImGui::GetStyle();
+    if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable)
+    {
+        style.WindowRounding = 0.0f;
+        style.Colors[ImGuiCol_WindowBg].w = 1.0f;
+    }
+
+    // Setup Platform/Renderer backends
+    ImGui_ImplGlfw_InitForOpenGL(context->render_target, true);
+    ImGui_ImplOpenGL3_Init(context->glsl_version);
+
+    // Load a nice font
+    io.Fonts->AddFontFromFileTTF("fonts/Roboto-Regular.ttf", 15.0f);
+    // merge in icons from Font Awesome
+    static const ImWchar icons_ranges[] = {ICON_MIN_FK, ICON_MAX_16_FK, 0};
+    ImFontConfig icons_config;
+    icons_config.MergeMode = true;
+    icons_config.PixelSnapH = true;
+    io.Fonts->AddFontFromFileTTF("fonts/forkawesome-webfont.ttf", 15.0f, &icons_config, icons_ranges);
+    // use FONT_ICON_FILE_NAME_FAR if you want regular instead of solid
+}
+
 
 static void create_texture(GLuint *texture)
 {

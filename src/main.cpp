@@ -22,7 +22,6 @@
 #include "Logger.h"
 #include "render.h"
 #include "decoder.h"
-#include "IconsForkAwesome.h"
 #include "implot.h"
 #include <iostream>       // std::cout
 #include <thread>         // std::thread
@@ -43,47 +42,11 @@ int main(int, char**)
         .swap_interval = 1, // use vsync
         .width = 1920, 
         .height = 1080,
+        .render_target_title = (char *) malloc(100), // window title
+        .glsl_version = (char *) malloc(100)
     };
 
     initialize_render_target(window_c);
-
-
-    // ************* Dear Imgui ********************//
-    IMGUI_CHECKVERSION();
-    ImGui::CreateContext();
-    ImPlotContext* implotCtx = ImPlot::CreateContext();
-
-    ImGuiIO& io = ImGui::GetIO(); (void)io;
-    // io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;       // Enable Keyboard Controls
-    // io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;      // Enable Gamepad Controls
-    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;           // Enable Docking
-    // io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;         // Enable Multi-Viewport / Platform Windows
-
-
-    // Setup Dear ImGui style
-    ImGui::StyleColorsClassic();
-
-    // When viewports are enabled we tweak WindowRounding/WindowBg so platform windows can look identical to regular ones.
-    ImGuiStyle& style = ImGui::GetStyle();
-    if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable)
-    {
-        style.WindowRounding = 0.0f;
-        style.Colors[ImGuiCol_WindowBg].w = 1.0f;
-    }
-
-
-    // Setup Platform/Renderer backends
-    ImGui_ImplGlfw_InitForOpenGL(window_c->render_target, true);
-    const char* glsl_version = "#version 130";
-    ImGui_ImplOpenGL3_Init(glsl_version);
-
-    // Load a nice font
-    io.Fonts->AddFontFromFileTTF("fonts/Roboto-Regular.ttf", 15.0f);
-    // merge in icons from Font Awesome
-    static const ImWchar icons_ranges[] = { ICON_MIN_FK, ICON_MAX_16_FK, 0 };
-    ImFontConfig icons_config; icons_config.MergeMode = true; icons_config.PixelSnapH = true;
-    io.Fonts->AddFontFromFileTTF("fonts/forkawesome-webfont.ttf", 15.0f, &icons_config, icons_ranges);
-    // use FONT_ICON_FILE_NAME_FAR if you want regular instead of solid
 
     // Create a OpenGL texture identifier
     int num_cams;
@@ -138,7 +101,7 @@ int main(int, char**)
     bool plot_keypoints_flag = false;
     int current_frame_num = 0;
 
-
+    ImGuiIO &io = ImGui::GetIO();
     while (!glfwWindowShouldClose(window_c->render_target))
     {
         // todo: increment this draw_id after each ImGui and ImPlot draw request (e.g. with ImPlot::DragPoint)
@@ -176,28 +139,6 @@ int main(int, char**)
                 ImGui::EndMenuBar();
             }
 
-            static float f = 0.0f;
-            static int counter = 0;
-            ImGui::Text("Flip a coin here!");
-            ImGui::SameLine();
-            if (ImGui::Button("Flip!")) {
-                result = ((double)rand() / (RAND_MAX));
-                if (result > 0.5) {
-                    num_heads++;
-                }
-                else {
-                    num_tails++;
-                }
-            }
-            if (result > 0.5) {
-                ImGui::Text("Heads!");
-            }
-            else {
-                ImGui::Text("Tails!");
-            }
-            if ((num_heads + num_tails) > 0) {
-                ImGui::Text("Proportion heads: %.3f", (float)num_heads / (num_heads + num_tails));
-            }
             ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
             // ImGui::Text("Frame number %d ", display_buffer[0][read_head].frame_number);             
         }
