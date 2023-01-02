@@ -199,7 +199,7 @@ int main(int, char**)
                 ImGui::Text("Proportion heads: %.3f", (float)num_heads / (num_heads + num_tails));
             }
             ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
-            ImGui::Text("Frame number %d ", display_buffer[0][read_head].frame_number);             
+            // ImGui::Text("Frame number %d ", display_buffer[0][read_head].frame_number);             
         }
         ImGui::End();
         
