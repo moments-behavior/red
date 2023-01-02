@@ -1,7 +1,3 @@
-// Example of streaming images computed on a GPU with CUDA to a PBO in
-// OpenGL, rendered with DearImgui. Structure follows basic OpenGL
-// example using the ImGui GLFW backend.
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <chrono>
@@ -24,7 +20,7 @@
 #include "AppDecUtils.h"
 #include "ColorSpace.h"
 #include "Logger.h"
-#include "gl_helper.h"
+#include "render.h"
 #include "decoder.h"
 #include "IconsForkAwesome.h"
 #include "implot.h"
@@ -42,39 +38,17 @@ simplelogger::Logger *logger = simplelogger::LoggerFactory::CreateConsoleLogger(
 int main(int, char**)
 {
 
-    // Setup window
-    glfwSetErrorCallback(glfw_error_callback);
-    if (!glfwInit())
-        return 1;
+    window_context *window_c = (window_context *)malloc(sizeof(window_context));
+    *window_c = (window_context) {
+        .swap_interval = 1, // use vsync
+        .width = 1920, 
+        .height = 1080,
+    };
 
-    // Decide GL+GLSL versions
-#if defined(__APPLE__)
-    // GL 3.2 + GLSL 150
-    const char* glsl_version = "#version 150";
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 2);
-    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);  // 3.2+ only
-    glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);            // Required on Mac
-#else
-    // GL 3.0 + GLSL 130
-    const char* glsl_version = "#version 130";
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
-#endif
-
-    // Create window with graphics context
-    GLFWwindow* window = glfwCreateWindow(1920, 1080, "Streamer Example", NULL, NULL);
-    if (window == NULL)
-        return 1;
-    glfwMakeContextCurrent(window);
-    glfwSwapInterval(1); // Enable vsync
-
-    // Initialize OpenGL functions with GLEW
-    glew_error_callback(glewInit());
+    initialize_render_target(window_c);
 
 
-
- // ************* Dear Imgui ********************//
+    // ************* Dear Imgui ********************//
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImPlotContext* implotCtx = ImPlot::CreateContext();
@@ -84,7 +58,6 @@ int main(int, char**)
     // io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;      // Enable Gamepad Controls
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;           // Enable Docking
     // io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;         // Enable Multi-Viewport / Platform Windows
-
 
 
     // Setup Dear ImGui style
@@ -100,7 +73,8 @@ int main(int, char**)
 
 
     // Setup Platform/Renderer backends
-    ImGui_ImplGlfw_InitForOpenGL(window, true);
+    ImGui_ImplGlfw_InitForOpenGL(window_c->render_target, true);
+    const char* glsl_version = "#version 130";
     ImGui_ImplOpenGL3_Init(glsl_version);
 
     // Load a nice font
@@ -165,7 +139,7 @@ int main(int, char**)
     int current_frame_num = 0;
 
 
-    while (!glfwWindowShouldClose(window))
+    while (!glfwWindowShouldClose(window_c->render_target))
     {
         // todo: increment this draw_id after each ImGui and ImPlot draw request (e.g. with ImPlot::DragPoint)
         int draw_id = 0;
@@ -497,7 +471,7 @@ int main(int, char**)
         // Rendering
         ImGui::Render();
         int display_w, display_h;
-        glfwGetFramebufferSize(window, &display_w, &display_h);
+        glfwGetFramebufferSize(window_c->render_target, &display_w, &display_h);
         glViewport(0, 0, display_w, display_h);
         glClearColor(clear_color.x * clear_color.w, clear_color.y * clear_color.w, clear_color.z * clear_color.w, clear_color.w);
         glClear(GL_COLOR_BUFFER_BIT);
@@ -515,7 +489,7 @@ int main(int, char**)
             glfwMakeContextCurrent(backup_current_context);
         }
 
-        glfwSwapBuffers(window);
+        glfwSwapBuffers(window_c->render_target);
  
         
         if(*decoding_flag && play_video && (!just_seeked) && (to_display_frame_number < (*total_num_frame-1))){
@@ -542,7 +516,7 @@ int main(int, char**)
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();
 
-    glfwDestroyWindow(window);
+    glfwDestroyWindow(window_c->render_target);
     glfwTerminate();
 
     *stop_flag = true;
