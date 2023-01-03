@@ -1,5 +1,49 @@
 #include "decoder.h"
 
+
+void get_image_from_gpu(CUdeviceptr dpSrc, uint8_t* pDst, int nWidth, int nHeight)
+{
+    CUDA_MEMCPY2D m = { 0 };
+    m.WidthInBytes = nWidth;
+    m.Height = nHeight;
+    m.srcMemoryType = CU_MEMORYTYPE_DEVICE;
+    m.srcDevice = (CUdeviceptr)dpSrc;
+    m.srcPitch = m.WidthInBytes;
+    m.dstMemoryType = CU_MEMORYTYPE_HOST;
+    m.dstDevice = (CUdeviceptr)(m.dstHost = pDst);
+    m.dstPitch = m.WidthInBytes;
+    cuMemcpy2D(&m);
+}
+
+void clear_buffer_with_constant_image(unsigned char* image_pt, int width, int height) 
+{
+    int counter = 0;
+    for (int i = 0; i < height; i++) {
+        for (int j = 0; j < width; j++) {
+            *(image_pt + counter) = 45;
+            *(image_pt + counter + 1) = 85;
+            *(image_pt + counter + 2) = 255;
+            *(image_pt + counter + 3) = 255;
+            counter += 4;
+        }
+    }
+}
+
+void print_one_display_buffer(unsigned char* image_pt, int width, int height, int channels)
+{
+    int counter = 0;
+    for (int i = 0; i < height; i++) {
+        for (int j = 0; j < width; j++) {
+            for (int k = 0; k < channels; k++) {
+                printf("%x ", *(image_pt + counter));
+                counter++;
+            }
+            printf("  ");
+        }
+        printf("\n");
+    }
+}
+
 void decoder_process(const char *input_file_name, int gpu_id, PictureBuffer* display_buffer, bool* decoding_flag, int size_of_buffer, bool* stop_flag, SeekInfo* seek_info, int* total_num_frame, int* estimated_num_frames)
 {
 
@@ -106,7 +150,7 @@ void decoder_process(const char *input_file_name, int gpu_id, PictureBuffer* dis
                 Nv12ToColor32<RGBA32>(pFrame, dec.GetWidth(), (uint8_t*)pTmpImage, 4 * dec.GetWidth(), dec.GetWidth(), dec.GetHeight(), iMatrix);
 
                 if (nFrame == 0) {
-                    GetImage(pTmpImage, display_buffer[buffer_head].frame, 4 * dec.GetWidth(), dec.GetHeight());
+                    get_image_from_gpu(pTmpImage, display_buffer[buffer_head].frame, 4 * dec.GetWidth(), dec.GetHeight());
                     display_buffer[buffer_head].available_to_write = false;
                     *decoding_flag = true;
                     display_buffer[buffer_head].frame_number = nFrame;
@@ -117,7 +161,7 @@ void decoder_process(const char *input_file_name, int gpu_id, PictureBuffer* dis
                         std::this_thread::sleep_for(std::chrono::milliseconds(1));
                     }
 
-                    GetImage(pTmpImage, display_buffer[buffer_head].frame, 4 * dec.GetWidth(), dec.GetHeight());
+                    get_image_from_gpu(pTmpImage, display_buffer[buffer_head].frame, 4 * dec.GetWidth(), dec.GetHeight());
                     display_buffer[buffer_head].available_to_write = false;
                     display_buffer[buffer_head].frame_number = nFrame;
                 }

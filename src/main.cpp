@@ -5,23 +5,15 @@
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
-#include <cuda_runtime.h>
-#include <cuda_gl_interop.h>
-#include "create_image_cuda.h"
 #if defined(IMGUI_IMPL_OPENGL_ES2)
 #include <GLES2/gl2.h>
 #endif
 #include <GLFW/glfw3.h> // Will drag system OpenGL headers
 
-#include <cuda.h>
 #include "NvDecoder.h"
 #include "NvCodecUtils.h"
-#include "FFmpegDemuxer.h"
-#include "AppDecUtils.h"
-#include "ColorSpace.h"
 #include "Logger.h"
 #include "render.h"
-#include "decoder.h"
 #include "implot.h"
 #include <iostream>       // std::cout
 #include <thread>         // std::thread
@@ -47,37 +39,26 @@ int main(int, char**)
     };
 
     initialize_render_target(window_c);
-
-    // Create a OpenGL texture identifier
+    
     int num_cams;
     GLuint* image_texture;
     PictureBuffer** display_buffer;
     SeekInfo* seek_context;
     
+    int size_pic = 3208 * 2200 * 4 *  sizeof(unsigned char);
+    const int size_of_buffer = 32;
+
     // Our state
     ImVec4 clear_color = ImVec4(0.0f, 0.0f, 0.0f, 1.00f);
 
     ImGui::FileBrowser file_dialog(ImGuiFileBrowserFlags_SelectDirectory);
-    file_dialog.SetTitle("Select work directory");
+    file_dialog.SetTitle("Select working directory");
 
-    
-    double result = 0.0;
-    unsigned long long num_heads = 0;
-    unsigned long long num_tails = 0;
-    
-    
-    int size_pic = 3208 * 2200 * 4 *  sizeof(unsigned char);
-
-    // allocate display buffer
-    const int size_of_buffer = 32;
-
-    
     std::string root_dir;
     std::vector<std::string> input_file_names;
     std::vector<std::string> camera_names;
-
-
     std::vector<std::thread> decoder_threads;
+
     bool* decoding_flag = new bool(false);
     bool* stop_flag = new bool(false);
     int* total_num_frame = new int(INT_MAX);
@@ -91,15 +72,13 @@ int main(int, char**)
     bool toggle_play_status = false;
 
     static bool show_app_layout = true;
-
-
     int slider_frame_number = 0;
     bool just_seeked = false;
-
     bool slider_just_changed = false;
     bool video_loaded = false;
     bool plot_keypoints_flag = false;
     int current_frame_num = 0;
+
 
     ImGuiIO &io = ImGui::GetIO();
     while (!glfwWindowShouldClose(window_c->render_target))
