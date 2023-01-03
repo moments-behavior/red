@@ -172,70 +172,6 @@ private:
 #endif
 
 /**
-* @brief Utility class to allocate buffer memory. Helps avoid I/O during the encode/decode loop in case of performance tests.
-*/
-class BufferedFileReader {
-public:
-    /**
-    * @brief Constructor function to allocate appropriate memory and copy file contents into it
-    */
-    BufferedFileReader(const char *szFileName, bool bPartial = false) {
-        struct _stat64 st;
-
-        if (_stat64(szFileName, &st) != 0) {
-            return;
-        }
-        
-        nSize = st.st_size;
-        while (nSize) {
-            try {
-                pBuf = new uint8_t[(size_t)nSize];
-                if (nSize != st.st_size) {
-                    LOG(WARNING) << "File is too large - only " << std::setprecision(4) << 100.0 * nSize / st.st_size << "% is loaded"; 
-                }
-                break;
-            } catch(std::bad_alloc) {
-                if (!bPartial) {
-                    LOG(ERROR) << "Failed to allocate memory in BufferedReader";
-                    return;
-                }
-                nSize = (uint32_t)(nSize * 0.9);
-            }
-        }
-
-        std::ifstream fpIn(szFileName, std::ifstream::in | std::ifstream::binary);
-        if (!fpIn)
-        {
-            LOG(ERROR) << "Unable to open input file: " << szFileName;
-            return;
-        }
-
-        std::streamsize nRead = fpIn.read(reinterpret_cast<char*>(pBuf), nSize).gcount();
-        fpIn.close();
-
-        assert(nRead == nSize);
-    }
-    ~BufferedFileReader() {
-        if (pBuf) {
-            delete[] pBuf;
-        }
-    }
-    bool GetBuffer(uint8_t **ppBuf, uint64_t *pnSize) {
-        if (!pBuf) {
-            return false;
-        }
-
-        *ppBuf = pBuf;
-        *pnSize = nSize;
-        return true;
-    }
-
-private:
-    uint8_t *pBuf = NULL;
-    uint64_t nSize = 0;
-};
-
-/**
 * @brief Template class to facilitate color space conversion
 */
 template<typename T>
@@ -413,14 +349,6 @@ private:
     size_t maxSize;
 };
 
-inline void CheckInputFile(const char *szInFilePath) {
-    std::ifstream fpIn(szInFilePath, std::ios::in | std::ios::binary);
-    if (fpIn.fail()) {
-        std::ostringstream err;
-        err << "Unable to open input file: " << szInFilePath << std::endl;
-        throw std::invalid_argument(err.str());
-    }
-}
 
 inline void ValidateResolution(int nWidth, int nHeight) {
     

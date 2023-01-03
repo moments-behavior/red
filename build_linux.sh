@@ -1,6 +1,6 @@
 #!/bin/bash
 mkdir -p release;
-rm -f release/streamer_example;
+rm -f release/redgui;
 #cp src/Roboto-Regular.ttf Roboto-Regular.ttf
 #cp src/fa-solid-900.ttf fa-solid-900.ttf
 
@@ -29,7 +29,7 @@ g++ -Ofast -ffast-math -std=c++17 \
     release/ColorSpace.o \
     -o release/*.o \
     -Ilib/nvcodec \
-    -o release/streamer_example -I ./src/ src/*.cpp \
+    -o release/redgui -I ./src/ src/*.cpp \
     -I/usr/local/cuda/include \
     -I$DIR_IMPLOT \
     -I$DIR_IMGUI \
@@ -45,4 +45,4 @@ g++ -Ofast -ffast-math -std=c++17 \
     -I/usr/local/include/opencv4 \
     -lopencv_sfm -lopencv_core -lopencv_bgsegm -lopencv_imgcodecs -lopencv_imgproc -lopencv_video -lopencv_highgui -lopencv_videoio -lopencv_calib3d
 
-./release/streamer_example
+./release/redgui

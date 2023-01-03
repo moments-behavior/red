@@ -13,7 +13,7 @@
 
 typedef uint32_t u32;
 
-typedef struct window_context
+typedef struct gx_context
 {
     u32 swap_interval;
     u32 width;
@@ -21,14 +21,14 @@ typedef struct window_context
     GLFWwindow *render_target;
     char *render_target_title;
     char *glsl_version;
-} window_context;
+} gx_context;
 
-static void glfw_error_callback(int error, const char *description)
+static void gx_glfw_error_callback(int error, const char *description)
 {
     fprintf(stderr, "Glfw Error %d: %s\n", error, description);
 }
 
-static void glew_error_callback(GLenum glew_error)
+static void gx_glew_error_callback(GLenum glew_error)
 {
     if (GLEW_OK != glew_error)
     {
@@ -36,18 +36,18 @@ static void glew_error_callback(GLenum glew_error)
     }
 }
 
-void gx_init(window_context *context, GLFWwindow *render_target)
+void gx_init(gx_context *context, GLFWwindow *render_target)
 {
     context->render_target = render_target;
     glfwMakeContextCurrent(render_target);
-    glew_error_callback(glewInit());
+    gx_glew_error_callback(glewInit());
     glfwSwapInterval(1); // Enable vsync
 }
 
-GLFWwindow *glfw_init_render_target(u32 marjor_version, u32 minor_version, u32 width, u32 height, const char *title, char *glsl_version)
+GLFWwindow *gx_glfw_init_render_target(u32 marjor_version, u32 minor_version, u32 width, u32 height, const char *title, char *glsl_version)
 {
     // Setup window
-    glfwSetErrorCallback(glfw_error_callback);
+    glfwSetErrorCallback(gx_glfw_error_callback);
     if (!glfwInit())
     {
         printf("Could not initialize glfw!");
@@ -71,7 +71,7 @@ GLFWwindow *glfw_init_render_target(u32 marjor_version, u32 minor_version, u32 w
 }
 
 
-void gx_imgui_init(window_context *context)
+void gx_imgui_init(gx_context *context)
 {
  // ************* Dear Imgui ********************//
     IMGUI_CHECKVERSION();

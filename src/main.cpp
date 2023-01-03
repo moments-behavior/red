@@ -29,8 +29,8 @@ simplelogger::Logger *logger = simplelogger::LoggerFactory::CreateConsoleLogger(
 int main(int, char**)
 {
 
-    window_context *window_c = (window_context *)malloc(sizeof(window_context));
-    *window_c = (window_context) {
+    gx_context *window = (gx_context *)malloc(sizeof(gx_context));
+    *window = (gx_context) {
         .swap_interval = 1, // use vsync
         .width = 1920, 
         .height = 1080,
@@ -38,17 +38,10 @@ int main(int, char**)
         .glsl_version = (char *) malloc(100)
     };
 
-    initialize_render_target(window_c);
-    
-    int num_cams;
-    GLuint* image_texture;
-    PictureBuffer** display_buffer;
-    SeekInfo* seek_context;
-    
-    int size_pic = 3208 * 2200 * 4 *  sizeof(unsigned char);
-    const int size_of_buffer = 32;
+    render_initialize_target(window);
 
-    // Our state
+    render_scene *scene = (render_scene *)malloc(sizeof(render_scene));
+
     ImVec4 clear_color = ImVec4(0.0f, 0.0f, 0.0f, 1.00f);
 
     ImGui::FileBrowser file_dialog(ImGuiFileBrowserFlags_SelectDirectory);
@@ -57,21 +50,23 @@ int main(int, char**)
     std::string root_dir;
     std::vector<std::string> input_file_names;
     std::vector<std::string> camera_names;
+    
     std::vector<std::thread> decoder_threads;
-
-    bool* decoding_flag = new bool(false);
-    bool* stop_flag = new bool(false);
-    int* total_num_frame = new int(INT_MAX);
-    int* estimated_num_frames = new int(0);
-
-    int gpu_index = 0;
+    DecoderContext *dc_context = (DecoderContext *)malloc(sizeof(DecoderContext));
+    *dc_context = (DecoderContext) {
+        .decoding_flag = false,
+        .stop_flag = false,
+        .total_num_frame = int(INT_MAX),
+        .estimated_num_frames = 0,
+        .gpu_index = 0
+    };
+    
     int to_display_frame_number = 0;
     int read_head = 0;
 
     bool play_video = false;
     bool toggle_play_status = false;
 
-    static bool show_app_layout = true;
     int slider_frame_number = 0;
     bool just_seeked = false;
     bool slider_just_changed = false;
@@ -81,7 +76,7 @@ int main(int, char**)
 
 
     ImGuiIO &io = ImGui::GetIO();
-    while (!glfwWindowShouldClose(window_c->render_target))
+    while (!glfwWindowShouldClose(window->render_target))
     {
         // todo: increment this draw_id after each ImGui and ImPlot draw request (e.g. with ImPlot::DragPoint)
         int draw_id = 0;
@@ -137,54 +132,17 @@ int main(int, char**)
             }
                 
             std::sort(input_file_names.begin(), input_file_names.end());
-            num_cams = input_file_names.size();
-
-
-            image_texture = (GLuint *) malloc(sizeof(GLuint) * num_cams);
-
-            for(int j=0; j<num_cams; j++){
-                glGenTextures(1, &image_texture[j]);
-                glBindTexture(GL_TEXTURE_2D, image_texture[j]);
-                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 3208, 2200, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-                // Setup filtering parameters for display
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE); // This is required on WebGL for non power-of-two textures
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE); // Same
-            }
-
-            seek_context = (SeekInfo *) malloc(sizeof(SeekInfo) * num_cams);
-            for(int j=0; j<num_cams; j++){
-                seek_context[j].use_seek=false;
-                seek_context[j].seek_frame=0;
-                seek_context[j].seek_done=false;
-            }
-
-            display_buffer = (PictureBuffer**)malloc(num_cams * sizeof(PictureBuffer*));
-            for (int j=0; j<num_cams; j++){
-                display_buffer[j] = (PictureBuffer*)malloc(size_of_buffer * sizeof(PictureBuffer));
-            }
-
-            for(int j=0; j<num_cams; j++){
-                for (int i = 0; i < size_of_buffer; i++) {
-                    display_buffer[j][i].frame = (unsigned char*)malloc(size_pic);
-                    clear_buffer_with_constant_image(display_buffer[j][i].frame, 3208, 2200);
-
-                    display_buffer[j][i].frame_number = 0;
-                    display_buffer[j][i].available_to_write = true;
-                }
-            }
-    
-
+            scene->image_width = 3208; scene->image_height = 2200;
+            render_allocate_scene_memory(scene, 3208, 2200, input_file_names.size(), 32);
 
             // multiple threads for decoding for selected videos 
-            for(unsigned int i = 0; i < num_cams; i++)
+            for(u32 i = 0; i < scene->num_cams; i++)
             {
                 std::size_t cam_string_position = input_file_names[i].find("Cam");      // position of "Cam" in str
                 std::string cam_string = input_file_names[i].substr(cam_string_position, 4);     // get from "Cam" to the end
                 camera_names.push_back(cam_string);
                 std::cout << "camera names: " << cam_string << std::endl;
-                decoder_threads.push_back(std::thread(&decoder_process, input_file_names[i].c_str(), gpu_index, display_buffer[i], decoding_flag, size_of_buffer, stop_flag, &seek_context[i], total_num_frame, estimated_num_frames));
+                decoder_threads.push_back(std::thread(&decoder_process, input_file_names[i].c_str(), dc_context, scene->display_buffer[i], scene->size_of_buffer, &scene->seek_context[i]));
             }
 
             video_loaded = true;
@@ -192,16 +150,16 @@ int main(int, char**)
         }
         
         
-        if (*decoding_flag && play_video) {
-            for(int j=0; j<num_cams; j++){
+        if (dc_context->decoding_flag && play_video) {
+            for(u32 j=0; j<scene->num_cams; j++){
                 // if the current frame is ready, upload for display, otherwise wait for the frame to get ready 
-                while (display_buffer[j][read_head].frame_number != to_display_frame_number) {
+                while (scene->display_buffer[j][read_head].frame_number != to_display_frame_number) {
                     //std::cout << display_buffer[read_head].frame_number << ", " << to_display_frame_number << std::endl;
                     std::this_thread::sleep_for(std::chrono::milliseconds(1));
                 }
 
-                bind_texture(&image_texture[j]);
-                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 3208, 2200, 0, GL_RGBA, GL_UNSIGNED_BYTE, display_buffer[j][read_head].frame);
+                bind_texture(&scene->image_texture[j]);
+                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 3208, 2200, 0, GL_RGBA, GL_UNSIGNED_BYTE, scene->display_buffer[j][read_head].frame);
                 unbind_texture();
             }
             current_frame_num = to_display_frame_number;
@@ -217,20 +175,20 @@ int main(int, char**)
             if (ImGui::Begin("Frames in the buffer", NULL, ImGuiWindowFlags_MenuBar))
             {
                 {
-                    for (int i = 0; i < size_of_buffer; i++)
+                    for (uint i = 0; i < scene->size_of_buffer; i++)
                     {
                         char label[128];
                         sprintf(label, "Buffer %d", i);
                         if (ImGui::Selectable(label, selected == i)) {
                             // start from the lowest frame
                             selected = i;
-                            select_corr_head = (i + read_head) % size_of_buffer;
+                            select_corr_head = (i + read_head) % scene->size_of_buffer;
 
                             // if not playing the video, then show what's in the buffer
                             if (!play_video) {
-                                for(int j=0; j<num_cams; j++){
-                                    bind_texture(&image_texture[j]);
-                                    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 3208, 2200, 0, GL_RGBA, GL_UNSIGNED_BYTE, display_buffer[j][select_corr_head].frame);
+                                for(int j=0; j<scene->num_cams; j++){
+                                    bind_texture(&scene->image_texture[j]);
+                                    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 3208, 2200, 0, GL_RGBA, GL_UNSIGNED_BYTE, scene->display_buffer[j][select_corr_head].frame);
                                     unbind_texture();
                                 }
                             }
@@ -243,11 +201,11 @@ int main(int, char**)
                 if (ImGui::Button(ICON_FK_MINUS) || ImGui::IsKeyPressed(ImGuiKey_LeftBracket, true)) {
                     if (selected > 0) {
                         selected--;
-                        select_corr_head = (selected + read_head) % size_of_buffer;
+                        select_corr_head = (selected + read_head) % scene->size_of_buffer;
 
-                        for(int j=0; j<num_cams; j++){
-                            bind_texture(&image_texture[j]);
-                            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 3208, 2200, 0, GL_RGBA, GL_UNSIGNED_BYTE, display_buffer[j][select_corr_head].frame);
+                        for(int j=0; j<scene->num_cams; j++){
+                            bind_texture(&scene->image_texture[j]);
+                            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 3208, 2200, 0, GL_RGBA, GL_UNSIGNED_BYTE, scene->display_buffer[j][select_corr_head].frame);
                             unbind_texture();
                         }
                         
@@ -256,25 +214,25 @@ int main(int, char**)
                 
                 ImGui::SameLine();
                 if (ImGui::Button(ICON_FK_PLUS) || ImGui::IsKeyPressed(ImGuiKey_RightBracket, true)) {
-                    if (selected < (size_of_buffer - 1)) {
+                    if (selected < (scene->size_of_buffer - 1)) {
                         selected++;
-                        select_corr_head = (selected + read_head) % size_of_buffer;
+                        select_corr_head = (selected + read_head) % scene->size_of_buffer;
 
                         if (!play_video) {
-                            for(int j=0; j<num_cams; j++){
-                                bind_texture(&image_texture[j]);
-                                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 3208, 2200, 0, GL_RGBA, GL_UNSIGNED_BYTE, display_buffer[j][select_corr_head].frame);
+                            for(u32 j=0; j<scene->num_cams; j++){
+                                bind_texture(&scene->image_texture[j]);
+                                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 3208, 2200, 0, GL_RGBA, GL_UNSIGNED_BYTE, scene->display_buffer[j][select_corr_head].frame);
                                 unbind_texture();
                             }
                         }
                     }
                 };
             }
-            ImGui::Text("Frame number selected: %d", display_buffer[0][select_corr_head].frame_number);
+            ImGui::Text("Frame number selected: %d", scene->display_buffer[0][select_corr_head].frame_number);
             
             if(!play_video){
-                select_corr_head = (selected + read_head) % size_of_buffer;
-                current_frame_num = display_buffer[0][select_corr_head].frame_number;
+                select_corr_head = (selected + read_head) % scene->size_of_buffer;
+                current_frame_num = scene->display_buffer[0][select_corr_head].frame_number;
             }
             ImGui::End();
         }
@@ -288,7 +246,7 @@ int main(int, char**)
 
         // Render a video frame
         if (video_loaded){        
-            for(int j=0; j<num_cams; j++)
+            for(int j=0; j<scene->num_cams; j++)
             {
                 ImGui::Begin(camera_names[j].c_str());           
                 ImGui::BeginGroup();
@@ -299,33 +257,33 @@ int main(int, char**)
                 
                 //ImGui::Image((void*)(intptr_t)image_texture[j], avail_size);
                 if (ImPlot::BeginPlot("##no_plot_name", avail_size)){
-                    ImPlot::PlotImage("##no_image_name", (void*)(intptr_t)image_texture[j], ImVec2(0,0), ImVec2(3208, 2200));    
+                    ImPlot::PlotImage("##no_image_name", (void*)(intptr_t)scene->image_texture[j], ImVec2(0,0), ImVec2(3208, 2200));    
                     ImPlot::EndPlot();
                 }
 
                 ImGui::EndChild();
 
-                if (to_display_frame_number == (*total_num_frame - 1)) {
+                if (to_display_frame_number == (dc_context->total_num_frame - 1)) {
                     if (ImGui::Button(ICON_FK_REPEAT)) {
                         // seek to zero
-                        for(int i=0; i<num_cams; i++){
-                            seek_context[i].seek_frame = 0;
-                            seek_context[i].use_seek = true;
+                        for(int i=0; i<scene->num_cams; i++){
+                            scene->seek_context[i].seek_frame = 0;
+                            scene->seek_context[i].use_seek = true;
                         }
 
 
-                        for(int i=0; i<num_cams; i++){
+                        for(int i=0; i<scene->num_cams; i++){
                             // synchronize seeking
-                            while (!(seek_context[i].seek_done)) {
+                            while (!(scene->seek_context[i].seek_done)) {
                                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
                             }
                         }
                         
-                        for(int i=0; i<num_cams; i++){
-                            seek_context[i].seek_done = false;
+                        for(int i=0; i<scene->num_cams; i++){
+                            scene->seek_context[i].seek_done = false;
                         }
 
-                        to_display_frame_number = seek_context[0].seek_frame;
+                        to_display_frame_number = scene->seek_context[0].seek_frame;
                         read_head = 0;
                         just_seeked = true;
                     }
@@ -351,31 +309,31 @@ int main(int, char**)
                 ImGui::PopButtonRepeat();
                 ImGui::SameLine();
 
-                slider_just_changed = ImGui::SliderInt("##frame count", &slider_frame_number, 0, *estimated_num_frames);
+                slider_just_changed = ImGui::SliderInt("##frame count", &slider_frame_number, 0, dc_context->estimated_num_frames);
                 
                 if (slider_just_changed){
                     std::cout << "main, seeking: " << slider_frame_number << std::endl;
                     
-                    for(int i=0; i<num_cams; i++){
-                        seek_context[i].seek_frame = (uint64_t)slider_frame_number;
-                        seek_context[i].use_seek = true;
+                    for(int i=0; i<scene->num_cams; i++){
+                        scene->seek_context[i].seek_frame = (uint64_t)slider_frame_number;
+                        scene->seek_context[i].use_seek = true;
                     }
 
 
-                    for(int i=0; i<num_cams; i++){
+                    for(int i=0; i<scene->num_cams; i++){
                         // synchronize seeking
-                        while (!(seek_context[i].seek_done)) {
+                        while (!(scene->seek_context[i].seek_done)) {
                             std::this_thread::sleep_for(std::chrono::milliseconds(1));
                             std::cout << "Seeking Cam" << i << std::endl;
                         }
                         
                     }
                     
-                    for(int i=0; i<num_cams; i++){
-                        seek_context[i].seek_done = false;
+                    for(int i=0; i<scene->num_cams; i++){
+                        scene->seek_context[i].seek_done = false;
                     }
 
-                    to_display_frame_number = seek_context[0].seek_frame;
+                    to_display_frame_number = scene->seek_context[0].seek_frame;
                     read_head = 0;
                     just_seeked = true;
                     
@@ -391,7 +349,7 @@ int main(int, char**)
         // Rendering
         ImGui::Render();
         int display_w, display_h;
-        glfwGetFramebufferSize(window_c->render_target, &display_w, &display_h);
+        glfwGetFramebufferSize(window->render_target, &display_w, &display_h);
         glViewport(0, 0, display_w, display_h);
         glClearColor(clear_color.x * clear_color.w, clear_color.y * clear_color.w, clear_color.z * clear_color.w, clear_color.w);
         glClear(GL_COLOR_BUFFER_BIT);
@@ -409,17 +367,17 @@ int main(int, char**)
             glfwMakeContextCurrent(backup_current_context);
         }
 
-        glfwSwapBuffers(window_c->render_target);
+        glfwSwapBuffers(window->render_target);
  
         
-        if(*decoding_flag && play_video && (!just_seeked) && (to_display_frame_number < (*total_num_frame-1))){
+        if(dc_context->decoding_flag && play_video && (!just_seeked) && (to_display_frame_number < (dc_context->total_num_frame-1))){
             to_display_frame_number++;
 
-            for(int j=0; j<num_cams; j++){
-                display_buffer[j][read_head].available_to_write = true;
+            for(int j=0; j<scene->num_cams; j++){
+                scene->display_buffer[j][read_head].available_to_write = true;
             }
 
-            read_head = (read_head + 1) % size_of_buffer;
+            read_head = (read_head + 1) % scene->size_of_buffer;
             slider_frame_number = to_display_frame_number;
         }
         
@@ -436,10 +394,10 @@ int main(int, char**)
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();
 
-    glfwDestroyWindow(window_c->render_target);
+    glfwDestroyWindow(window->render_target);
     glfwTerminate();
 
-    *stop_flag = true;
+    dc_context->stop_flag = true;
     // wait for threads to join
     for (auto& t : decoder_threads)
         t.join();
