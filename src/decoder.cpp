@@ -1,8 +1,8 @@
 #include "decoder.h"
 
-void decoder_get_image_from_gpu(CUdeviceptr dpSrc, uint8_t* pDst, int nWidth, int nHeight)
+void decoder_get_image_from_gpu(CUdeviceptr dpSrc, uint8_t *pDst, int nWidth, int nHeight)
 {
-    CUDA_MEMCPY2D m = { 0 };
+    CUDA_MEMCPY2D m = {0};
     m.WidthInBytes = nWidth;
     m.Height = nHeight;
     m.srcMemoryType = CU_MEMORYTYPE_DEVICE;
@@ -14,11 +14,13 @@ void decoder_get_image_from_gpu(CUdeviceptr dpSrc, uint8_t* pDst, int nWidth, in
     cuMemcpy2D(&m);
 }
 
-void decoder_clear_buffer_with_constant_image(unsigned char* image_pt, int width, int height) 
+void decoder_clear_buffer_with_constant_image(unsigned char *image_pt, int width, int height)
 {
     int counter = 0;
-    for (int i = 0; i < height; i++) {
-        for (int j = 0; j < width; j++) {
+    for (int i = 0; i < height; i++)
+    {
+        for (int j = 0; j < width; j++)
+        {
             *(image_pt + counter) = 45;
             *(image_pt + counter + 1) = 85;
             *(image_pt + counter + 2) = 255;
@@ -28,12 +30,15 @@ void decoder_clear_buffer_with_constant_image(unsigned char* image_pt, int width
     }
 }
 
-void decoder_print_one_display_buffer(unsigned char* image_pt, int width, int height, int channels)
+void decoder_print_one_display_buffer(unsigned char *image_pt, int width, int height, int channels)
 {
     int counter = 0;
-    for (int i = 0; i < height; i++) {
-        for (int j = 0; j < width; j++) {
-            for (int k = 0; k < channels; k++) {
+    for (int i = 0; i < height; i++)
+    {
+        for (int j = 0; j < width; j++)
+        {
+            for (int k = 0; k < channels; k++)
+            {
                 printf("%x ", *(image_pt + counter));
                 counter++;
             }
@@ -43,23 +48,23 @@ void decoder_print_one_display_buffer(unsigned char* image_pt, int width, int he
     }
 }
 
-
-inline void decoder_check_input_files(const char *sz_in_file_path) {
+inline void decoder_check_input_files(const char *sz_in_file_path)
+{
     std::ifstream fpIn(sz_in_file_path, std::ios::in | std::ios::binary);
-    if (fpIn.fail()) {
+    if (fpIn.fail())
+    {
         std::ostringstream err;
         err << "Unable to open input file: " << sz_in_file_path << std::endl;
         throw std::invalid_argument(err.str());
     }
 }
 
-
-void decoder_process(const char *input_file_name, DecoderContext* dc_context, PictureBuffer* display_buffer, int size_of_buffer, SeekInfo* seek_info) 
+void decoder_process(const char *input_file_name, DecoderContext *dc_context, PictureBuffer *display_buffer, int size_of_buffer, SeekInfo *seek_info)
 {
 
     decoder_check_input_files(input_file_name);
     std::cout << input_file_name << std::endl;
-    
+
     CUdeviceptr pTmpImage = 0;
     ck(cuInit(0));
     CUcontext cuContext = NULL;
@@ -69,7 +74,6 @@ void decoder_process(const char *input_file_name, DecoderContext* dc_context, Pi
     size_t nVideoBytes = 0;
     PacketData pktinfo;
 
-
     FFmpegDemuxer demuxer(input_file_name, m);
     NvDecoder dec(cuContext, true, FFmpeg2NvCodecId(demuxer.GetVideoCodec()));
     int nWidth = 0, nHeight = 0;
@@ -77,97 +81,103 @@ void decoder_process(const char *input_file_name, DecoderContext* dc_context, Pi
     int nFrameReturned = 0, nFrame = 0, iMatrix = 0;
     uint8_t *pVideo = nullptr;
     uint8_t *pFrame;
-    
-    int buffer_head=0;
+
+    int buffer_head = 0;
 
     bool seek_success_flag;
     bool demux_success;
-
 
     double video_length = demuxer.GetDuration();
     double frame_rate = demuxer.GetFramerate();
     dc_context->estimated_num_frames = int(video_length * frame_rate);
     std::cout << "estimated_num_frames:" << dc_context->estimated_num_frames << std::endl;
 
-
-    do{
+    do
+    {
 
         // todo: need to make seek_context thread safe
-        if (seek_info->use_seek) {
+        if (seek_info->use_seek)
+        {
 
-            //demuxer.Flush();
+            // demuxer.Flush();
             std::cout << "target_frame_number:" << seek_info->seek_frame << std::endl;
-            
-            // assume every 10s is a keyframe, double check if your video is like that 
+
+            // assume every 10s is a keyframe, double check if your video is like that
             seek_info->seek_frame = demuxer.FindClosestKeyFrame(seek_info->seek_frame, 10);
             std::cout << "seeking to: " << seek_info->seek_frame << std::endl;
             SeekContext s = SeekContext(seek_info->seek_frame);
 
             seek_success_flag = demuxer.Seek(s, pVideo, nVideoBytes, pktinfo);
-            std::cout << "seek_success_flag: "  << seek_success_flag << std::endl;
+            std::cout << "seek_success_flag: " << seek_success_flag << std::endl;
 
-            // reset the display buffer after seeking  
-            for (int i = 0; i < size_of_buffer; i++) {
-                decoder_clear_buffer_with_constant_image(display_buffer[i].frame, 3208, 2200); 
+            // reset the display buffer after seeking
+            for (int i = 0; i < size_of_buffer; i++)
+            {
+                decoder_clear_buffer_with_constant_image(display_buffer[i].frame, 3208, 2200);
                 display_buffer[i].available_to_write = true;
             }
-            //nFrameReturned = dec.Decode(pVideo, nVideoBytes, CUVID_PKT_DISCONTINUITY, pktinfo.pts);
+            // nFrameReturned = dec.Decode(pVideo, nVideoBytes, CUVID_PKT_DISCONTINUITY, pktinfo.pts);
             nFrameReturned = dec.Decode(NULL, 0, CUVID_PKT_DISCONTINUITY);
             std::cout << "nFrameReturned right after seeking: " << nFrameReturned << std::endl;
-           
-            for (int i = 0; i < nFrameReturned; i++) {
+
+            for (int i = 0; i < nFrameReturned; i++)
+            {
                 // decode frame and conversion
                 pFrame = dec.GetFrame();
             }
 
             dec.Decode(pVideo, nVideoBytes);
 
-            //dec.setReconfigParams(NULL, NULL);
+            // dec.setReconfigParams(NULL, NULL);
             buffer_head = 0;
             nFrame = seek_info->seek_frame;
             seek_info->use_seek = false;
             seek_info->seek_done = true;
-               
         }
-        else {
+        else
+        {
             demux_success = demuxer.Demux(pVideo, nVideoBytes, pktinfo);
 
-            if (!demux_success) 
+            if (!demux_success)
             {
                 // end of stream
                 nFrameReturned = dec.Decode(NULL, 0, CUVID_PKT_DISCONTINUITY);
-                dc_context->total_num_frame = nFrame + nFrameReturned; 
+                dc_context->total_num_frame = nFrame + nFrameReturned;
             }
-            else {
+            else
+            {
                 nFrameReturned = dec.Decode(pVideo, nVideoBytes);
             }
-            
 
             if (!nFrame && nFrameReturned)
             {
                 LOG(INFO) << dec.GetVideoInfo();
                 // Get output frame size from decoder
-                nWidth = dec.GetWidth(); nHeight = dec.GetHeight();
+                nWidth = dec.GetWidth();
+                nHeight = dec.GetHeight();
                 int size_in_bytes = nWidth * nHeight * 4;
                 cuMemAlloc(&pTmpImage, size_in_bytes);
             }
 
-
-            for (int i = 0; i < nFrameReturned; i++) {
+            for (int i = 0; i < nFrameReturned; i++)
+            {
                 // decode frame and conversion
                 pFrame = dec.GetFrame();
                 iMatrix = dec.GetVideoFormatInfo().video_signal_description.matrix_coefficients;
-                Nv12ToColor32<RGBA32>(pFrame, dec.GetWidth(), (uint8_t*)pTmpImage, 4 * dec.GetWidth(), dec.GetWidth(), dec.GetHeight(), iMatrix);
+                Nv12ToColor32<RGBA32>(pFrame, dec.GetWidth(), (uint8_t *)pTmpImage, 4 * dec.GetWidth(), dec.GetWidth(), dec.GetHeight(), iMatrix);
 
-                if (nFrame == 0) {
+                if (nFrame == 0)
+                {
                     decoder_get_image_from_gpu(pTmpImage, display_buffer[buffer_head].frame, 4 * dec.GetWidth(), dec.GetHeight());
                     display_buffer[buffer_head].available_to_write = false;
                     dc_context->decoding_flag = true;
                     display_buffer[buffer_head].frame_number = nFrame;
                 }
-                else {
-                    while (!display_buffer[buffer_head].available_to_write && !(dc_context->stop_flag) && !(seek_info->use_seek)) {
-                        // if the next frame hasn't been displayed, the queue is full, sleep  
+                else
+                {
+                    while (!display_buffer[buffer_head].available_to_write && !(dc_context->stop_flag) && !(seek_info->use_seek))
+                    {
+                        // if the next frame hasn't been displayed, the queue is full, sleep
                         std::this_thread::sleep_for(std::chrono::milliseconds(1));
                     }
 
@@ -178,12 +188,12 @@ void decoder_process(const char *input_file_name, DecoderContext* dc_context, Pi
                 nFrame = nFrame + 1;
                 buffer_head = (buffer_head + 1) % size_of_buffer;
 
-                // for debugging purpose 
-                if (!demux_success){
+                // for debugging purpose
+                if (!demux_success)
+                {
                     std::cout << "total_num_frame: " << dc_context->total_num_frame << std::endl;
                 }
             }
-                      
         }
     } while (!(dc_context->stop_flag));
 }

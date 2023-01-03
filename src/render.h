@@ -3,29 +3,30 @@
 #include "gx_helper.h"
 #include "decoder.h"
 
-struct render_scene {
+struct render_scene
+{
     u32 num_cams;
     u32 image_width;
     u32 image_height;
     u32 size_of_buffer;
-    GLuint* image_texture;
-    PictureBuffer** display_buffer;
-    SeekInfo* seek_context;
+    GLuint *image_texture;
+    PictureBuffer **display_buffer;
+    SeekInfo *seek_context;
 };
 
-
-void render_initialize_target(gx_context *context) {
-    GLFWwindow *render_target = gx_glfw_init_render_target(3, 3, context->width, context->height, "RED Labeling Tool", context->glsl_version); 
+void render_initialize_target(gx_context *context)
+{
+    GLFWwindow *render_target = gx_glfw_init_render_target(3, 3, context->width, context->height, "RED Labeling Tool", context->glsl_version);
     gx_init(context, render_target);
     gx_imgui_init(context);
 }
 
+static void render_allocate_scene_memory(render_scene *scene, u32 image_width, u32 image_height, u32 num_cams, u32 size_of_buffer)
+{
 
-static void render_allocate_scene_memory(render_scene* scene, u32 image_width, u32 image_height, u32 num_cams, u32 size_of_buffer){
-    
     scene->num_cams = num_cams;
     scene->image_width = image_width;
-    scene->image_height = image_height; 
+    scene->image_height = image_height;
     scene->image_texture = (GLuint *)malloc(sizeof(GLuint) * num_cams);
     scene->size_of_buffer = size_of_buffer;
 
@@ -54,7 +55,7 @@ static void render_allocate_scene_memory(render_scene* scene, u32 image_width, u
     {
         scene->display_buffer[j] = (PictureBuffer *)malloc(size_of_buffer * sizeof(PictureBuffer));
     }
-    
+
     unsigned int size_pic = image_width * image_height * 4 * sizeof(unsigned char);
     for (u32 j = 0; j < num_cams; j++)
     {
