@@ -176,7 +176,7 @@ int main(int, char **)
             if (ImGui::Begin("Frames in the buffer", NULL, ImGuiWindowFlags_MenuBar))
             {
                 {
-                    for (uint i = 0; i < scene->size_of_buffer; i++)
+                    for (u32 i = 0; i < scene->size_of_buffer; i++)
                     {
                         char label[128];
                         sprintf(label, "Buffer %d", i);
