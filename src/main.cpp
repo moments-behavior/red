@@ -10,7 +10,7 @@
 #include <iostream> // std::cout
 #include <thread>   // std::thread
 #include <imfilebrowser.h>
-
+#include <camera.h>
 #if defined(_MSC_VER) && (_MSC_VER >= 1900) && !defined(IMGUI_DISABLE_WIN32_FUNCTIONS)
 #pragma comment(lib, "legacy_stdio_definitions")
 #endif
@@ -40,6 +40,7 @@ int main(int, char **)
     std::string root_dir;
     std::vector<std::string> input_file_names;
     std::vector<std::string> camera_names;
+    std::vector<CameraParams> camera_params;
 
     std::vector<std::thread> decoder_threads;
     DecoderContext *dc_context = (DecoderContext *)malloc(sizeof(DecoderContext));
@@ -66,10 +67,6 @@ int main(int, char **)
     ImGuiIO &io = ImGui::GetIO();
     while (!glfwWindowShouldClose(window->render_target))
     {
-        // todo: increment this draw_id after each ImGui and ImPlot draw request (e.g. with ImPlot::DragPoint)
-        int draw_id = 0;
-        int *draw_id_ptr = &draw_id;
-
         // Poll and handle events (inputs, window resize, etc.)
         glfwPollEvents();
 
@@ -93,7 +90,14 @@ int main(int, char **)
                     if (video_loaded)
                     {
                         if (ImGui::MenuItem("Label"))
-                        {
+                        {   
+                            std::string cam_file = root_dir + "/calibration/calibration.csv";
+                            for (u32 i = 0; i < scene->num_cams; i++)
+                            {
+                                CameraParams cam = camera_load_params_from_csv(cam_file, i);
+                                camera_params.push_back(cam);
+                            }
+                            plot_keypoints_flag = true;
                         };
                     }
 
@@ -264,6 +268,16 @@ int main(int, char **)
                 if (ImPlot::BeginPlot("##no_plot_name", avail_size))
                 {
                     ImPlot::PlotImage("##no_image_name", (void *)(intptr_t)scene->image_texture[j], ImVec2(0, 0), ImVec2(3208, 2200));
+                    
+                    if(plot_keypoints_flag){
+                        // plot arena for testing camera parameters 
+                        float arena_x[100]; float arena_y[100]; 
+                        camera_arena_projection_points(&camera_params.at(j), arena_x, arena_y, 100);
+                        ImPlot::SetNextMarkerStyle(ImPlotMarker_Circle, 6.0, ImVec4(1.0, 1.0, 1.0,1.0));
+                        ImPlot::SetNextLineStyle(ImVec4(1.0, 1.0, 1.0,1.0), 3.0);
+                        std::string name = "perimeter " + camera_names[j];
+                        ImPlot::PlotLine(name.c_str(), arena_x, arena_y, 100);                        
+                    }
                     ImPlot::EndPlot();
                 }
 
