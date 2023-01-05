@@ -38,7 +38,7 @@ void camera_arena_projection_points(CameraParams* cvp, float* arena_x, float* ar
 
     for (int i=0; i<=n-1; i++)
     {
-        float angle = (3.14159265358979323846 * 2) * (float(i) / 100.0f);
+        float angle = (3.14159265358979323846 * 2) * (float(i) / float(n-1));
         x.push_back(sin(angle) * radius);
         y.push_back(cos(angle) * radius);
         z.push_back(0.0f);
@@ -61,7 +61,7 @@ void camera_arena_projection_points(CameraParams* cvp, float* arena_x, float* ar
 
     for (int i = 0; i < n; i++){
         arena_x[i] = img_pts.at(i).x;
-        arena_y[i] = img_pts.at(i).y;
+        arena_y[i] = 2200 - img_pts.at(i).y;
     }
 }
 
