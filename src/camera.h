@@ -9,7 +9,7 @@ struct Camera {
     cv::Mat rvec;
     cv::Mat tvec;
     cv::Mat projectionMat;
-}
+};
 
 // bool load_camera_params_from_csv(vector<Camera> cvp, string csv_filename)
 // {
