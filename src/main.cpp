@@ -1,17 +1,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <chrono>
-#include <GL/glew.h>
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
-#if defined(IMGUI_IMPL_OPENGL_ES2)
-#include <GLES2/gl2.h>
-#endif
-#include <GLFW/glfw3.h> // Will drag system OpenGL headers
-
-#include "NvDecoder.h"
-#include "NvCodecUtils.h"
 #include "Logger.h"
 #include "render.h"
 #include "implot.h"
@@ -160,9 +152,7 @@ int main(int, char **)
                     std::this_thread::sleep_for(std::chrono::milliseconds(1));
                 }
 
-                bind_texture(&scene->image_texture[j]);
-                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 3208, 2200, 0, GL_RGBA, GL_UNSIGNED_BYTE, scene->display_buffer[j][read_head].frame);
-                unbind_texture();
+                upload_texture(&scene->image_texture[j], scene->display_buffer[j][read_head].frame, 3208, 2200);
             }
             current_frame_num = to_display_frame_number;
         }
@@ -191,9 +181,7 @@ int main(int, char **)
                             {
                                 for (int j = 0; j < scene->num_cams; j++)
                                 {
-                                    bind_texture(&scene->image_texture[j]);
-                                    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 3208, 2200, 0, GL_RGBA, GL_UNSIGNED_BYTE, scene->display_buffer[j][select_corr_head].frame);
-                                    unbind_texture();
+                                    upload_texture(&scene->image_texture[j], scene->display_buffer[j][read_head].frame, 3208, 2200);
                                 }
                             }
                         }
@@ -211,9 +199,7 @@ int main(int, char **)
 
                         for (int j = 0; j < scene->num_cams; j++)
                         {
-                            bind_texture(&scene->image_texture[j]);
-                            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 3208, 2200, 0, GL_RGBA, GL_UNSIGNED_BYTE, scene->display_buffer[j][select_corr_head].frame);
-                            unbind_texture();
+                            upload_texture(&scene->image_texture[j], scene->display_buffer[j][read_head].frame, 3208, 2200);
                         }
                     }
                 };
@@ -230,9 +216,7 @@ int main(int, char **)
                         {
                             for (u32 j = 0; j < scene->num_cams; j++)
                             {
-                                bind_texture(&scene->image_texture[j]);
-                                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 3208, 2200, 0, GL_RGBA, GL_UNSIGNED_BYTE, scene->display_buffer[j][select_corr_head].frame);
-                                unbind_texture();
+                                upload_texture(&scene->image_texture[j], scene->display_buffer[j][read_head].frame, 3208, 2200);
                             }
                         }
                     }
@@ -257,15 +241,25 @@ int main(int, char **)
         // Render a video frame
         if (video_loaded)
         {
+             
             for (int j = 0; j < scene->num_cams; j++)
             {
+                // layout
+                ImGui::SetNextWindowSize(ImVec2(500, 400), ImGuiCond_FirstUseEver);
+                ImVec2 window_pos;
+                if(j % 2 == 0){
+                    window_pos.y = 200.0; window_pos.x = (j/2.0) * 500;}
+                else{
+                    window_pos.y = 600.0; window_pos.x = (j-1)/2.0 * 500;}
+
+                ImGui::SetNextWindowPos(window_pos, ImGuiCond_FirstUseEver);
                 ImGui::Begin(camera_names[j].c_str());
                 ImGui::BeginGroup();
 
                 std::string scene_name = "scene view" + std::to_string(j);
                 ImGui::BeginChild(scene_name.c_str(), ImVec2(0, -ImGui::GetFrameHeightWithSpacing())); // Leave room for 1 line below
-                ImVec2 avail_size = ImGui::GetContentRegionAvail();
 
+                ImVec2 avail_size = ImGui::GetContentRegionAvail();
                 // ImGui::Image((void*)(intptr_t)image_texture[j], avail_size);
                 if (ImPlot::BeginPlot("##no_plot_name", avail_size))
                 {

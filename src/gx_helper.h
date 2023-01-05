@@ -9,7 +9,7 @@
 #include "imgui.h"
 #include "implot.h"
 #include "IconsForkAwesome.h"
-
+#include <GLFW/glfw3.h>
 
 typedef uint32_t u32;
 
@@ -178,5 +178,12 @@ static void upload_image_pbo_to_texture()
     // buffer stored in CPU memory
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 3208, 2200, 0, GL_RGBA, GL_UNSIGNED_BYTE, 0);
 }
+
+static void upload_texture(GLuint *image_texture, unsigned char* frame, unsigned int width, unsigned int height)
+{
+    bind_texture(image_texture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 3208, 2200, 0, GL_RGBA, GL_UNSIGNED_BYTE, frame);
+    unbind_texture();
+}; 
 
 #endif

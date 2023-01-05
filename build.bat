@@ -1,3 +1,6 @@
+del "C:/Users/yaoyao/src/red-refactor/release/imgui.init"
+del "C:/Users/yaoyao/src/red-refactor/release/regui.exe"
+
 nvcc -c src/create_image_cuda.cu -arch=sm_80 -o release/create_image_cuda.o
 nvcc -c src/ColorSpace.cu -arch=sm_80 -o release/ColorSpace.o
 @set DIR_IMGUI=lib/imgui

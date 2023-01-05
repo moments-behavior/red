@@ -10,3 +10,4 @@ media
 imgui.ini
 data
 src/fonts
+.clangd
