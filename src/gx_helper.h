@@ -2,7 +2,6 @@
 #define GX_HELPER
 #include <stdio.h>
 #include <stdlib.h>
-#include <stdint.h>
 #include <cstdio>
 #include <GL/glew.h>
 #include <cuda_gl_interop.h>
@@ -10,8 +9,7 @@
 #include "implot.h"
 #include "IconsForkAwesome.h"
 #include <GLFW/glfw3.h>
-
-typedef uint32_t u32;
+#include "types.h"
 
 typedef struct gx_context
 {

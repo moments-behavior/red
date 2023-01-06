@@ -53,9 +53,9 @@ enum SeekCriteria {
     BY_NUMBER = 0,
     /* Seek frame by timestamp.
      */
-     BY_TIMESTAMP = 1,
+    BY_TIMESTAMP = 1,
 
-     SEEK_CRITERIA_NUM_ELEMS
+    SEEK_CRITERIA_NUM_ELEMS
 };
 
 struct SeekContext {

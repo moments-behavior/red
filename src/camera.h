@@ -1,6 +1,6 @@
 #ifndef RED_CAMERA
 #define RED_CAMERA
-#include <string.h>
+#include <string>
 #include <opencv2/core.hpp>
 #include <iostream>
 #include <vector>
@@ -65,7 +65,7 @@ void camera_arena_projection_points(CameraParams* cvp, float* arena_x, float* ar
     }
 }
 
-CameraParams camera_load_params_from_csv(std::string csv_filename, int camNum)
+CameraParams camera_load_params_from_csv(std::string csv_filename, int cam_idx)
 {
     std::cout << csv_filename << std::endl;
     CameraParams cvp;
@@ -89,7 +89,7 @@ CameraParams camera_load_params_from_csv(std::string csv_filename, int camNum)
         while ((pos = line.find(delimeter)) != std::string::npos)
         {
             token = line.substr(0, pos);
-            if (lineNum == camNum)
+            if (lineNum == cam_idx)
             {
                 csvCamValues.push_back(stof(token));
             }

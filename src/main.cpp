@@ -11,6 +11,8 @@
 #include <thread>   // std::thread
 #include <imfilebrowser.h>
 #include <camera.h>
+#include "skeleton.h"
+
 #if defined(_MSC_VER) && (_MSC_VER >= 1900) && !defined(IMGUI_DISABLE_WIN32_FUNCTIONS)
 #pragma comment(lib, "legacy_stdio_definitions")
 #endif
@@ -19,7 +21,6 @@ simplelogger::Logger *logger = simplelogger::LoggerFactory::CreateConsoleLogger(
 
 int main(int, char **)
 {
-
     gx_context *window = (gx_context *)malloc(sizeof(gx_context));
     *window = (gx_context){
         .swap_interval = 1, // use vsync
@@ -32,16 +33,10 @@ int main(int, char **)
 
     render_scene *scene = (render_scene *)malloc(sizeof(render_scene));
 
-    ImVec4 clear_color = ImVec4(0.0f, 0.0f, 0.0f, 1.00f);
-
-    ImGui::FileBrowser file_dialog(ImGuiFileBrowserFlags_SelectDirectory);
-    file_dialog.SetTitle("Select working directory");
-
     std::string root_dir;
     std::vector<std::string> input_file_names;
     std::vector<std::string> camera_names;
     std::vector<CameraParams> camera_params;
-
     std::vector<std::thread> decoder_threads;
     DecoderContext *dc_context = (DecoderContext *)malloc(sizeof(DecoderContext));
     *dc_context = (DecoderContext){
@@ -53,10 +48,8 @@ int main(int, char **)
 
     int to_display_frame_number = 0;
     int read_head = 0;
-
     bool play_video = false;
     bool toggle_play_status = false;
-
     int slider_frame_number = 0;
     bool just_seeked = false;
     bool slider_just_changed = false;
@@ -64,7 +57,15 @@ int main(int, char **)
     bool plot_keypoints_flag = false;
     int current_frame_num = 0;
 
+    SkeletonContext *skeleton;
+
+    ImGui::FileBrowser file_dialog(ImGuiFileBrowserFlags_SelectDirectory);
+    file_dialog.SetTitle("Select working directory");
+    ImVec4 clear_color = ImVec4(0.0f, 0.0f, 0.0f, 1.00f);
     ImGuiIO &io = ImGui::GetIO();
+
+
+
     while (!glfwWindowShouldClose(window->render_target))
     {
         // Poll and handle events (inputs, window resize, etc.)
@@ -99,14 +100,28 @@ int main(int, char **)
                             }
                             plot_keypoints_flag = true;
                         };
+
                     }
 
+                    ImGui::EndMenu();
+                }
+
+                if (ImGui::BeginMenu("Skeleton"))
+                {
+                    skeleton = new SkeletonContext;
+                    std::map<std::string, skeleton_primitive> skeleton_all = skeleton_get_all();
+                    for (auto & element : skeleton_all) {
+                        if(ImGui::MenuItem(element.first.c_str())){
+                            skeleton_initialize(skeleton, element.second);
+                        };
+                    };
                     ImGui::EndMenu();
                 }
 
                 ImGui::EndMenuBar();
             }
 
+           
             ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
             // ImGui::Text("Frame number %d ", display_buffer[0][read_head].frame_number);
         }
