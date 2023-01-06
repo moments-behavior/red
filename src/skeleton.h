@@ -5,6 +5,13 @@
 #include "types.h"
 #include <map>
 
+struct KeyPoints{
+    u32 frame_num;
+    triple_d* keypoints3d;
+    tuple_d** keypoints2d;
+    u32 active_id; 
+};
+
 struct SkeletonContext {
     int num_nodes;
     int num_edges;

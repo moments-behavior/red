@@ -12,6 +12,7 @@
 #include <imfilebrowser.h>
 #include <camera.h>
 #include "skeleton.h"
+#include "gui.h"
 
 #if defined(_MSC_VER) && (_MSC_VER >= 1900) && !defined(IMGUI_DISABLE_WIN32_FUNCTIONS)
 #pragma comment(lib, "legacy_stdio_definitions")
@@ -46,6 +47,7 @@ int main(int, char **)
         .estimated_num_frames = 0,
         .gpu_index = 0};
 
+    // gui states, todo: bundle this later
     int to_display_frame_number = 0;
     int read_head = 0;
     bool play_video = false;
@@ -57,14 +59,15 @@ int main(int, char **)
     bool plot_keypoints_flag = false;
     int current_frame_num = 0;
 
+    // for labeling 
     SkeletonContext *skeleton;
+    KeyPoints keypoints; 
 
+    // others
     ImGui::FileBrowser file_dialog(ImGuiFileBrowserFlags_SelectDirectory);
     file_dialog.SetTitle("Select working directory");
     ImVec4 clear_color = ImVec4(0.0f, 0.0f, 0.0f, 1.00f);
     ImGuiIO &io = ImGui::GetIO();
-
-
 
     while (!glfwWindowShouldClose(window->render_target))
     {
@@ -115,6 +118,14 @@ int main(int, char **)
                             skeleton_initialize(skeleton, element.second);
                         };
                     };
+
+                    // allocate memory for storing keypoints
+                    keypoints.active_id = 0;
+                    keypoints.keypoints3d = (triple_d *)malloc(sizeof(triple_d) * skeleton->num_nodes); 
+                    keypoints.keypoints2d = (tuple_d **)malloc(sizeof(tuple_d*) * scene->num_cams);
+                    for (u32 j=0; j < scene->num_cams; j ++){
+                        keypoints.keypoints2d[j] = (tuple_d *)malloc(sizeof(tuple_d) * skeleton->num_nodes);
+                    }
                     ImGui::EndMenu();
                 }
 
@@ -291,7 +302,9 @@ int main(int, char **)
                         ImPlot::SetNextMarkerStyle(ImPlotMarker_Circle, 6.0, ImVec4(1.0, 1.0, 1.0,1.0));
                         ImPlot::SetNextLineStyle(ImVec4(1.0, 1.0, 1.0,1.0), 3.0);
                         std::string name = "perimeter " + camera_names[j];
-                        ImPlot::PlotLine(name.c_str(), arena_x, arena_y, 100);                        
+                        ImPlot::PlotLine(name.c_str(), arena_x, arena_y, 100);    
+
+                        gui_label_one_view(keypoints.keypoints2d[j], keypoints.active_id, skeleton);                   
                     }
                     ImPlot::EndPlot();
                 }
