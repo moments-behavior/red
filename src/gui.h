@@ -78,10 +78,10 @@ static void reprojection(KeyPoints *keypoints, SkeletonContext *skeleton, std::v
                 {
                     cv::Mat point = (cv::Mat_<float>(2, 1) << keypoints->keypoints2d[view_idx][node].position.x, (float)2200 - keypoints->keypoints2d[view_idx][node].position.y);
                     cv::Mat pointUndistort;
-                    cv::undistortPoints(point, pointUndistort, camera_params[view_idx].K, camera_params[view_idx].distCoeffs, cv::noArray(), camera_params[view_idx].K);
+                    cv::undistortPoints(point, pointUndistort, camera_params[view_idx].k, camera_params[view_idx].dist_coeffs, cv::noArray(), camera_params[view_idx].k);
                     
                     sfmPoints2d.push_back(pointUndistort.reshape(1, 2));
-                    projection_matrices.push_back(camera_params[view_idx].projectionMat);
+                    projection_matrices.push_back(camera_params[view_idx].projection_mat);
                 }
             }
 
@@ -92,7 +92,7 @@ static void reprojection(KeyPoints *keypoints, SkeletonContext *skeleton, std::v
             for (u32 view_idx = 0; view_idx < num_cams; view_idx++)
             {
                 cv::Mat imagePts;
-                cv::projectPoints(output, camera_params[view_idx].rvec, camera_params[view_idx].tvec, camera_params[view_idx].K, camera_params[view_idx].distCoeffs, imagePts);
+                cv::projectPoints(output, camera_params[view_idx].rvec, camera_params[view_idx].tvec, camera_params[view_idx].k, camera_params[view_idx].dist_coeffs, imagePts);
                 double x = imagePts.at<float>(0, 0);
                 double y = float(2200) - imagePts.at<float>(0, 1);
                 keypoints->keypoints2d[view_idx][node].position.x = x;
@@ -131,7 +131,7 @@ void gui_arena_projection_points(CameraParams* cvp, float* arena_x, float* arena
     }
 
     std::vector<cv::Point2f> img_pts;
-    cv::projectPoints(inPts, cvp->rvec, cvp->tvec, cvp->K, cvp->distCoeffs, img_pts);
+    cv::projectPoints(inPts, cvp->rvec, cvp->tvec, cvp->k, cvp->dist_coeffs, img_pts);
 
     for (int i = 0; i < n; i++){
         arena_x[i] = img_pts.at(i).x;

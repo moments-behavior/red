@@ -10,57 +10,24 @@
 
 
 struct CameraParams {
-    cv::Mat K;
-    cv::Mat distCoeffs;
+    cv::Mat k;
+    cv::Mat dist_coeffs;
     cv::Mat r;
     cv::Mat rvec;
     cv::Mat tvec;
-    cv::Mat projectionMat;
+    cv::Mat projection_mat;
 };
 
 void camera_print_parameters(CameraParams* cvp){
-    std::cout << "K = " << std::endl << cv::format(cvp->K, cv::Formatter::FMT_PYTHON) << std::endl << std::endl;
-    std::cout << " distCoeffs  = " << std::endl << cv::format(cvp->distCoeffs, cv::Formatter::FMT_PYTHON) << std::endl << std::endl;
+    std::cout << "k = " << std::endl << cv::format(cvp->k, cv::Formatter::FMT_PYTHON) << std::endl << std::endl;
+    std::cout << "dist_coeffs  = " << std::endl << cv::format(cvp->dist_coeffs, cv::Formatter::FMT_PYTHON) << std::endl << std::endl;
     std::cout << "r = " << std::endl << cv::format(cvp->r, cv::Formatter::FMT_PYTHON) << std::endl << std::endl;
     std::cout << "tvec = " << std::endl << cv::format(cvp->tvec, cv::Formatter::FMT_PYTHON) << std::endl << std::endl;
     std::cout << "rvec = " << std::endl << cv::format(cvp->rvec, cv::Formatter::FMT_PYTHON) << std::endl << std::endl;
-    std::cout << "projectionMat = " << std::endl << cv::format(cvp->projectionMat, cv::Formatter::FMT_PYTHON) << std::endl << std::endl;
+    std::cout << "projection_mat = " << std::endl << cv::format(cvp->projection_mat, cv::Formatter::FMT_PYTHON) << std::endl << std::endl;
 }
 
-void camera_arena_projection_points(CameraParams* cvp, float* arena_x, float* arena_y, int n)
-{
-    std::vector<float> x;
-    std::vector<float> y;
-    std::vector<float> z;
 
-    float radius = 1473.0f;
-    std::vector<cv::Point3f> inPts;
-
-    for (int i=0; i<=n; i++)
-    {
-        float angle = (3.14159265358979323846 * 2) * (float(i) / float(n-1));
-        x.push_back(sin(angle) * radius);
-        y.push_back(cos(angle) * radius);
-        z.push_back(0.0f);
-    }
-
-    for (int i=0; i<n; i++)
-    {
-        cv::Point3f p;
-        p.x = x[i];
-        p.y = y[i];
-        p.z = z[i];
-        inPts.push_back(p);
-    }
-
-    std::vector<cv::Point2f> img_pts;
-    cv::projectPoints(inPts, cvp->rvec, cvp->tvec, cvp->K, cvp->distCoeffs, img_pts);
-
-    for (int i = 0; i < n; i++){
-        arena_x[i] = img_pts.at(i).x;
-        arena_y[i] = 2200 - img_pts.at(i).y;
-    }
-}
 
 CameraParams camera_load_params_from_csv(std::string csv_filename, int cam_idx)
 {
@@ -117,12 +84,12 @@ CameraParams camera_load_params_from_csv(std::string csv_filename, int cam_idx)
         d.push_back(csvCamValues[i]);
     }
 
-    cvp.K = cv::Mat_<float>(k, true).reshape(0, 3);
-    cvp.distCoeffs = cv::Mat_<float>(d, true);
+    cvp.k = cv::Mat_<float>(k, true).reshape(0, 3);
+    cvp.dist_coeffs = cv::Mat_<float>(d, true);
     cvp.r = cv::Mat_<float>(r_m, true).reshape(0, 3);
     cvp.tvec = cv::Mat_<float>(t, true);
     cv::Rodrigues(cvp.r, cvp.rvec);
-    cv::sfm::projectionFromKRt(cvp.K, cvp.r, cvp.tvec, cvp.projectionMat);
+    cv::sfm::projectionFromKRt(cvp.k, cvp.r, cvp.tvec, cvp.projection_mat);
     return cvp;
 }
 
