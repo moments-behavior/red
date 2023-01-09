@@ -26,16 +26,15 @@ struct SkeletonContext {
     std::vector<std::string> node_names;
 };
 
-enum skeleton_primitive { 
+enum SkeletonPrimitive { 
     CalibrationFourCorners=0,
     Rat10Target2=1
-
 };
 
 
-std::map<std::string, skeleton_primitive> skeleton_get_all()
+std::map<std::string, SkeletonPrimitive> skeleton_get_all()
 {
-    std::map<std::string, skeleton_primitive> skeleton_all = {
+    std::map<std::string, SkeletonPrimitive> skeleton_all = {
         {"CalibrationFourCorners", CalibrationFourCorners},
         {"Rat10Target2", Rat10Target2}
     };
@@ -43,7 +42,7 @@ std::map<std::string, skeleton_primitive> skeleton_get_all()
 }
 
 
-void skeleton_initialize(SkeletonContext* skeleton, skeleton_primitive skeleton_type)
+void skeleton_initialize(SkeletonContext* skeleton, SkeletonPrimitive skeleton_type)
 {
     switch (skeleton_type){
         case CalibrationFourCorners:

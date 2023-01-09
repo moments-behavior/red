@@ -36,16 +36,13 @@ void camera_arena_projection_points(CameraParams* cvp, float* arena_x, float* ar
     float radius = 1473.0f;
     std::vector<cv::Point3f> inPts;
 
-    for (int i=0; i<=n-1; i++)
+    for (int i=0; i<=n; i++)
     {
         float angle = (3.14159265358979323846 * 2) * (float(i) / float(n-1));
         x.push_back(sin(angle) * radius);
         y.push_back(cos(angle) * radius);
         z.push_back(0.0f);
     }
-    x.push_back(sin(0.0) * radius);
-    y.push_back(cos(0.0) * radius);
-    z.push_back(0.0f);
 
     for (int i=0; i<n; i++)
     {

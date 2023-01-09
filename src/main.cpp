@@ -97,7 +97,7 @@ int main(int, char **)
                     if (ImGui::BeginMenu("Skeleton"))
                     {
                         skeleton = new SkeletonContext;
-                        std::map<std::string, skeleton_primitive> skeleton_all = skeleton_get_all();
+                        std::map<std::string, SkeletonPrimitive> skeleton_all = skeleton_get_all();
                         for (auto & element : skeleton_all) {
                             if(ImGui::MenuItem(element.first.c_str()))
                             {
@@ -299,13 +299,7 @@ int main(int, char **)
                     
                     if(plot_keypoints_flag){
                         // plot arena for testing camera parameters 
-                        float arena_x[100]; float arena_y[100]; 
-                        camera_arena_projection_points(&camera_params.at(j), arena_x, arena_y, 100);
-                        ImPlot::SetNextMarkerStyle(ImPlotMarker_Circle, 6.0, ImVec4(1.0, 1.0, 1.0,1.0));
-                        ImPlot::SetNextLineStyle(ImVec4(1.0, 1.0, 1.0,1.0), 3.0);
-                        std::string name = "perimeter " + camera_names[j];
-                        ImPlot::PlotLine(name.c_str(), arena_x, arena_y, 100);    
-
+                        gui_plot_perimeter(&camera_params[j]);
                         gui_label_one_view(&keypoints, skeleton, j);
                         gui_plot_keypoints(&keypoints, skeleton, j);
                                            
@@ -403,6 +397,52 @@ int main(int, char **)
                 ImGui::End();
             }
         }
+
+        if (plot_keypoints_flag)
+        {
+            if (ImGui::Begin("Labeling Tool"))
+            {
+                for (int i=0; i<scene->num_cams; i++)
+                {
+                    for (int j=0; j<skeleton->num_nodes; j++)
+                    {
+                        if (j > 0) ImGui::SameLine();
+
+                        ImGui::PushID(j);
+
+                        if (keypoints.keypoints2d[i][j].is_labeled)
+                        {
+                            ImGui::PushStyleColor(ImGuiCol_Button, (ImVec4)ImColor::HSV(j / (float)skeleton->num_nodes, 0.6f, 0.6f));
+                            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, (ImVec4)ImColor::HSV(j / (float)skeleton->num_nodes, 0.7f, 0.7f));
+                            ImGui::PushStyleColor(ImGuiCol_ButtonActive, (ImVec4)ImColor::HSV(j / (float)skeleton->num_nodes, 0.8f, 0.8f));
+                        }
+                        else
+                        {
+                            ImGui::PushStyleColor(ImGuiCol_Button, (ImVec4)ImColor::HSV(0.2f, 0.2f, 0.2f));
+                            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, (ImVec4)ImColor::HSV(0.2f, 0.2f, 0.2f));
+                            ImGui::PushStyleColor(ImGuiCol_ButtonActive, (ImVec4)ImColor::HSV(0.2f, 0.2f, 0.2f));
+                        }
+                        
+                        ImGui::Button(skeleton->node_names[j].c_str());
+                        ImGui::PopStyleColor(3);
+                        ImGui::PopID();
+                    }
+                }
+
+                
+
+                static bool triangulate = false;
+                ImGui::Checkbox("triangulate", &triangulate);
+                if (triangulate)
+                {
+                    
+                    reprojection(&keypoints, skeleton, camera_params, scene->num_cams);
+                }
+            }
+            ImGui::End();
+        }
+
+
 
         // Rendering
         ImGui::Render();
