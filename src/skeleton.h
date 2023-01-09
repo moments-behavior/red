@@ -5,11 +5,17 @@
 #include "types.h"
 #include <map>
 
+
+struct KeyPoints2D{
+    tuple_d position; 
+    bool is_labeled;
+};
+
 struct KeyPoints{
     u32 frame_num;
     triple_d* keypoints3d;
-    tuple_d** keypoints2d;
-    u32 active_id; 
+    KeyPoints2D** keypoints2d; 
+    u32* active_id; 
 };
 
 struct SkeletonContext {

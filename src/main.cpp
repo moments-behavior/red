@@ -90,43 +90,45 @@ int main(int, char **)
                     {
                         file_dialog.Open();
                     };
-
-                    if (video_loaded)
-                    {
-                        if (ImGui::MenuItem("Label"))
-                        {   
-                            std::string cam_file = root_dir + "/calibration/calibration.csv";
-                            for (u32 i = 0; i < scene->num_cams; i++)
-                            {
-                                CameraParams cam = camera_load_params_from_csv(cam_file, i);
-                                camera_params.push_back(cam);
-                            }
-                            plot_keypoints_flag = true;
-                        };
-
-                    }
-
                     ImGui::EndMenu();
                 }
 
-                if (ImGui::BeginMenu("Skeleton"))
-                {
-                    skeleton = new SkeletonContext;
-                    std::map<std::string, skeleton_primitive> skeleton_all = skeleton_get_all();
-                    for (auto & element : skeleton_all) {
-                        if(ImGui::MenuItem(element.first.c_str())){
-                            skeleton_initialize(skeleton, element.second);
-                        };
-                    };
+                if(video_loaded){
+                    if (ImGui::BeginMenu("Skeleton"))
+                    {
+                        skeleton = new SkeletonContext;
+                        std::map<std::string, skeleton_primitive> skeleton_all = skeleton_get_all();
+                        for (auto & element : skeleton_all) {
+                            if(ImGui::MenuItem(element.first.c_str()))
+                            {
+                                std::string cam_file = root_dir + "/calibration/calibration.csv";
+                                for (u32 i = 0; i < scene->num_cams; i++)
+                                {
+                                    CameraParams cam = camera_load_params_from_csv(cam_file, i);
+                                    camera_params.push_back(cam);
+                                }
 
-                    // allocate memory for storing keypoints
-                    keypoints.active_id = 0;
-                    keypoints.keypoints3d = (triple_d *)malloc(sizeof(triple_d) * skeleton->num_nodes); 
-                    keypoints.keypoints2d = (tuple_d **)malloc(sizeof(tuple_d*) * scene->num_cams);
-                    for (u32 j=0; j < scene->num_cams; j ++){
-                        keypoints.keypoints2d[j] = (tuple_d *)malloc(sizeof(tuple_d) * skeleton->num_nodes);
+                                skeleton_initialize(skeleton, element.second);
+
+                                // allocate memory for storing keypoints
+                                keypoints.active_id = (u32 *) malloc(sizeof(u32) * scene->num_cams);
+                                keypoints.keypoints3d = (triple_d *)malloc(sizeof(triple_d) * skeleton->num_nodes); 
+                                keypoints.keypoints2d = (KeyPoints2D **)malloc(sizeof(KeyPoints2D*) * scene->num_cams);
+                                for (u32 j=0; j < scene->num_cams; j++){
+                                    keypoints.keypoints2d[j] = (KeyPoints2D *)malloc(sizeof(KeyPoints2D) * skeleton->num_nodes);
+                                }
+                                for (u32 j=0; j < scene->num_cams; j++){
+                                    keypoints.active_id[j] = 0;
+                                    for (u32 k=0; k < skeleton->num_nodes; k++){
+                                        keypoints.keypoints2d[j][k].is_labeled = false;
+                                    }
+                                }
+                                plot_keypoints_flag = true;
+
+                            };
+                        };
+                        ImGui::EndMenu();
                     }
-                    ImGui::EndMenu();
                 }
 
                 ImGui::EndMenuBar();
@@ -304,7 +306,9 @@ int main(int, char **)
                         std::string name = "perimeter " + camera_names[j];
                         ImPlot::PlotLine(name.c_str(), arena_x, arena_y, 100);    
 
-                        gui_label_one_view(keypoints.keypoints2d[j], keypoints.active_id, skeleton);                   
+                        gui_label_one_view(&keypoints, skeleton, j);
+                        gui_plot_keypoints(&keypoints, skeleton, j);
+                                           
                     }
                     ImPlot::EndPlot();
                 }
