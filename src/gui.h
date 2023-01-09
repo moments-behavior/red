@@ -29,7 +29,6 @@ static void gui_label_one_view(KeyPoints *keypoints, SkeletonContext *skeleton, 
 
 static void gui_plot_keypoints(KeyPoints *keypoints, SkeletonContext *skeleton, int view_idx)
 {
-    // plot node if it is labeled
     for (u32 node=0; node < skeleton->num_nodes; node++){
         if (keypoints->keypoints2d[view_idx][node].is_labeled){
             ImVec4 node_color; 
@@ -43,7 +42,6 @@ static void gui_plot_keypoints(KeyPoints *keypoints, SkeletonContext *skeleton, 
         }
     }
 
-    // plot edges if it is labeled
     for (u32 edge=0; edge < skeleton->num_edges; edge++)
     {
         auto[a,b] = skeleton->edges[edge];
