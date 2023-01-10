@@ -11,21 +11,6 @@ struct ProjectContext{
 };
 
 
-static void gui_label_one_view(KeyPoints *keypoints, SkeletonContext *skeleton, int view_idx)
-{   
-    if (ImPlot::IsPlotHovered())
-    {
-        if (ImGui::IsKeyPressed(ImGuiKey_W, false)){
-            // labeling sequentially each view
-            ImPlotPoint mouse = ImPlot::GetPlotMousePos();
-            keypoints->keypoints2d[view_idx][keypoints->active_id[view_idx]].position = {mouse.x,  mouse.y};
-            keypoints->keypoints2d[view_idx][keypoints->active_id[view_idx]].is_labeled = true;
-            if(keypoints->active_id[view_idx] < (skeleton->num_nodes - 1)) { keypoints->active_id[view_idx]++; }
-        }
-    }
-}
-
-
 static void gui_plot_keypoints(KeyPoints *keypoints, SkeletonContext *skeleton, int view_idx)
 {
     for (u32 node=0; node < skeleton->num_nodes; node++){
@@ -88,6 +73,9 @@ static void reprojection(KeyPoints *keypoints, SkeletonContext *skeleton, std::v
             cv::sfm::triangulatePoints(sfmPoints2d, projection_matrices, output);
             output.convertTo(output, CV_32F);
 
+            keypoints->keypoints3d->x = output.at<float>(0);
+            keypoints->keypoints3d->y = output.at<float>(1);
+            keypoints->keypoints3d->z = output.at<float>(2);
 
             for (u32 view_idx = 0; view_idx < num_cams; view_idx++)
             {

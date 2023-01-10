@@ -12,7 +12,6 @@ struct KeyPoints2D{
 };
 
 struct KeyPoints{
-    u32 frame_num;
     triple_d* keypoints3d;
     KeyPoints2D** keypoints2d; 
     u32* active_id; 
@@ -98,5 +97,23 @@ void skeleton_initialize(SkeletonContext* skeleton, SkeletonPrimitive skeleton_t
 
     }
 };
+
+
+void allocate_keypoints(KeyPoints *keypoints, render_scene *scene, SkeletonContext* skeleton)
+{
+    // allocate memory for storing keypoints
+    keypoints->active_id = (u32 *)malloc(sizeof(u32) * scene->num_cams);
+    keypoints->keypoints3d = (triple_d *)malloc(sizeof(triple_d) * skeleton->num_nodes); 
+    keypoints->keypoints2d = (KeyPoints2D **)malloc(sizeof(KeyPoints2D*) * scene->num_cams);
+    for (u32 j=0; j < scene->num_cams; j++){
+        keypoints->keypoints2d[j] = (KeyPoints2D *)malloc(sizeof(KeyPoints2D) * skeleton->num_nodes);
+    }
+    for (u32 j=0; j < scene->num_cams; j++){
+        keypoints->active_id[j] = 0;
+        for (u32 k=0; k < skeleton->num_nodes; k++){
+            keypoints->keypoints2d[j][k].is_labeled = false;
+        }
+    }
+}
 
 #endif
