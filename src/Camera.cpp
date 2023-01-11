@@ -30,7 +30,7 @@ Camera::Camera(int index, int camNum, std::string rootDir, SkelEnum skelEnum)
     this->isWindowHovered = false;
     this->LoadCameraParamsFromCSV();
     this->frameData = new FrameData2D(skelEnum);
-    this->get_circle_pts();
+    // this->get_circle_pts();
 }
 
 

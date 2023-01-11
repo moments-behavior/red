@@ -52,6 +52,8 @@ std::vector<std::mutex> g_mutexes(MAX_VIEWS);
 std::vector<std::condition_variable> g_cvs(MAX_VIEWS);
 std::vector<bool> g_ready(MAX_VIEWS);
 std::vector<std::vector<cv::Rect>> yolo_boxes(MAX_VIEWS);
+std::vector<std::vector<std::string>> yolo_labels(MAX_VIEWS);
+std::vector<std::vector<int>> yolo_classid(MAX_VIEWS);
 unsigned char* yolo_input_frame[MAX_VIEWS];
 unsigned char* yolo_input_frame_rgba[MAX_VIEWS];
 
@@ -63,31 +65,22 @@ int preprocess_counter(0);
 std::mutex g_preprocess_mutex;
 std::condition_variable g_preprocess_cv;
 
-static void draw_cv_contours(std::vector<cv::Rect> boxes)
+static void draw_cv_contours(std::vector<cv::Rect> boxes, std::vector<string> labels, std::vector<int> class_ids)
 {
-    int n = boxes.size();
-    if (n == 0)
-    {
-        return;
-    }
-
-    double x[n];
-    double y[n];
-
     for (int i=0; i<boxes.size(); i++)
     {
-        //cout << "Camera #" << cam_num << " Box info " << boxes[i].x << "," << boxes[i].y << "," << boxes[i].width << "," << boxes[i].height << endl;
+        // cout << "Camera #"  << " Box info " << boxes[i].x << "," << boxes[i].y << "," << boxes[i].width << "," << boxes[i].height << endl;
+        // std::cout << labels[i] << endl;
+        double x[5] = {boxes[i].x, boxes[i].x, boxes[i].x + boxes[i].width, boxes[i].x + boxes[i].width, boxes[i].x};
+        double y[5] = {(double)2200 - boxes[i].y, (double)2200 - boxes[i].y - boxes[i].height, (double)2200 - boxes[i].y - boxes[i].height, (double)2200 - boxes[i].y, (double)2200 - boxes[i].y};
         
-        x[i] = (double)boxes[i].x + (boxes[i].width/2);
-        y[i] = (double)2200 - ((double)boxes[i].y + (boxes[i].height/2));
+        if(class_ids[i] == 0){
+            ImPlot::SetNextLineStyle(ImVec4(1.0, 0.0, 1.0,1.0), 3.0);
+        } else{
+            ImPlot::SetNextLineStyle(ImVec4(0.5, 1.0, 1.0,1.0), 3.0);}
 
+        ImPlot::PlotLine(labels[i].c_str(), &x[0], &y[0], 5); 
     }
-
-    ImVec4 fill_color = ImVec4(0.8, 0.0, 0.8, 0.3);
-    ImVec4 outline_color = ImVec4(1.0, 1.0, 1.0, 1.0);
-
-    ImPlot::SetNextMarkerStyle(ImPlotMarker_Square,20, fill_color, 3, outline_color);
-    ImPlot::PlotScatter("now", &x[0], &y[0], n);
 }
 
 
@@ -119,7 +112,7 @@ void track_ball_cpu(yolo_param post_setting, int cam_idx, int no_frame_proc)
     }
     
     float *data = (float *)batch_outs[0].data;
-    data += 25200*cam_idx*85;
+    data += 25200*cam_idx*7;
 
     vector<int> classIds;
     vector<float> confidences;
@@ -132,13 +125,13 @@ void track_ball_cpu(yolo_param post_setting, int cam_idx, int no_frame_proc)
         if (confidence > post_setting.conf_threshold)
         {
             float *classes_scores = data + 5;
-            // Create a 1x85 Mat and store class scores of 80 classes.
+            // Create a 1x7 Mat and store class scores of 80 classes.
             cv::Mat scores(1, post_setting.size_class_list, CV_32FC1, classes_scores);
             // Perform minMaxLoc and acquire the index of best class  score.
             cv::Point class_id;
             double max_class_score;
             minMaxLoc(scores, 0, &max_class_score, 0, &class_id);
-            if (max_class_score > post_setting.conf_threshold && class_id.x==32)
+            if (max_class_score > post_setting.conf_threshold)
             {
                 float cx = data[0];
                 float cy = data[1];
@@ -152,7 +145,7 @@ void track_ball_cpu(yolo_param post_setting, int cam_idx, int no_frame_proc)
                 boxes.push_back(cv::Rect(left, top, width, height));
             }
         }
-        data += 85;
+        data += 7;
     }
 
     // Perform non maximum suppression to eliminate redundant overlapping boxes with
@@ -222,7 +215,7 @@ void track_ball_fast(cv::dnn::Net net, yolo_param post_setting, int cam_idx, int
     double y_factor = image.rows / 640.0;
 
     cv::Mat blob;
-    cv::dnn::blobFromImage(image, blob, 1./255.,  cv::Size(640, 640),  cv::Scalar(), false, false);
+    cv::dnn::blobFromImage(image, blob, 1./255.,  cv::Size(640, 640),  cv::Scalar(), true, false);
     net.setInput(blob);
     // Runs the forward pass to get output of the output layers
     vector<cv::Mat> outs;
@@ -246,7 +239,7 @@ void track_ball_fast(cv::dnn::Net net, yolo_param post_setting, int cam_idx, int
             cv::Point class_id;
             double max_class_score;
             minMaxLoc(scores, 0, &max_class_score, 0, &class_id);
-            if (max_class_score > post_setting.conf_threshold && class_id.x==32)
+            if (max_class_score > post_setting.conf_threshold)
             {
                 float cx = data[0];
                 float cy = data[1];
@@ -257,16 +250,19 @@ void track_ball_fast(cv::dnn::Net net, yolo_param post_setting, int cam_idx, int
                 int width = int(w * x_factor);
                 int height = int(h * y_factor);
                 confidences.push_back((float)confidence);
+                classIds.push_back(class_id.x);
                 boxes.push_back(cv::Rect(left, top, width, height));
             }
         }
-        data += 85;
+        data += 7;
     }
 
     // Perform non maximum suppression to eliminate redundant overlapping boxes with
     // lower confidences
     vector<int> indices;
     vector<cv::Rect> final_boxes;
+    vector<string> final_labels;
+    vector<int> final_class_ids;
     cv::dnn::NMSBoxes(boxes, confidences, post_setting.conf_threshold, post_setting.nma_threshold, indices);
     
     for (size_t i = 0; i < indices.size(); ++i)
@@ -274,10 +270,17 @@ void track_ball_fast(cv::dnn::Net net, yolo_param post_setting, int cam_idx, int
         int idx = indices[i];
         cv::Rect box = boxes[idx];
         final_boxes.push_back(box);
+        std::stringstream stream;
+        stream << " " << std::fixed << std::setprecision(2) << confidences[idx];
+        std::string s = post_setting.class_names[classIds[idx]] + stream.str();
+        final_labels.push_back(s);
         //cv::rectangle(image, cv::Point(box.x, box.y), cv::Point(box.x + box.width, box.y + box.height), 
           //             cv::Scalar(255, 178, 50), 3);
+        final_class_ids.push_back((int)classIds[idx]);
     }
     yolo_boxes.at(cam_idx) = final_boxes;
+    yolo_labels.at(cam_idx) = final_labels;
+    yolo_classid.at(cam_idx) = final_class_ids;
     // std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
     // cout << "Time difference = " << std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count() << "[µs]" << std::endl;
 }
@@ -296,10 +299,11 @@ void yolo_thread(int cam_idx, yolo_param post_setting)
         // track_ball(net[cam_idx], image, cam_idx);
         std::cout << "yolo_thread " << cam_idx << std::endl;
         std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
-        if(BATCH_DETECTION)
-        {
-            track_ball_cpu(post_setting, cam_idx, no_frame_proc);}
-        else{track_ball_fast(nets[cam_idx], post_setting, cam_idx, no_frame_proc);}
+        if(BATCH_DETECTION){   
+            track_ball_cpu(post_setting, cam_idx, no_frame_proc);
+        } else{
+            track_ball_fast(nets[cam_idx], post_setting, cam_idx, no_frame_proc);
+        }
         std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
         cout << "Time difference = " << std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count() << "[µs]" << std::endl;
 
@@ -533,7 +537,7 @@ int main(int, char**)
                             batch_net.setPreferableTarget(cv::dnn::DNN_TARGET_CUDA);
                         }
                         else{
-                            std::string yolov5 = root_dir + "/yolo_models/yolov5s.onnx";
+                            std::string yolov5 = root_dir + "/yolo_models/best.onnx";
                             for (int i=0; i<num_cams; i++) {
                                 nets[i] = cv::dnn::readNet(yolov5);
                                 nets[i].setPreferableBackend(cv::dnn::DNN_BACKEND_CUDA);
@@ -551,13 +555,14 @@ int main(int, char**)
 
                         
                         yolo_param yolo_setting = yolo_param();
-                        std::ifstream ifs("/home/jinyao/tracking/darknet/data/coco.names");
+                        std::ifstream ifs("/home/jinyao/dev/clips0/yolo_models/label.names");
                         std::string line;
                         while (getline(ifs, line))
                         {
                             class_list.push_back(line);
                         }
                         yolo_setting.size_class_list = class_list.size();
+                        yolo_setting.class_names = class_list;
 
                         // // start thread
                         for(int i=0; i<num_cams; i++){
@@ -761,7 +766,7 @@ int main(int, char**)
 
 
                     if (yolo_detection){
-                        draw_cv_contours(yolo_boxes.at(j));
+                        draw_cv_contours(yolo_boxes.at(j), yolo_labels.at(j), yolo_classid.at(j));
                     }
 
 
@@ -849,7 +854,6 @@ int main(int, char**)
                     to_display_frame_number = seek_context[0].seek_frame;
                     read_head = 0;
                     just_seeked = true;
-                    
                           
                 }
 

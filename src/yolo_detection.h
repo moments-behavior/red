@@ -9,6 +9,7 @@ struct yolo_param{
     float conf_threshold;
     float nma_threshold;
     int size_class_list;
-    yolo_param(): conf_threshold(0.1), nma_threshold(0.2) {}
+    std::vector<string> class_names;
+    yolo_param(): conf_threshold(0.50), nma_threshold(0.45) {}
 };
 

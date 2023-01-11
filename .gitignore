@@ -6,5 +6,6 @@ release
 Debug
 Release
 media
-
+.clangd
+data/
 imgui.ini
