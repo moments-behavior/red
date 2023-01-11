@@ -432,8 +432,6 @@ int main(int, char **)
                         }
                     }
 
-                    
-
                     static bool triangulate = false;
                     ImGui::Checkbox("triangulate", &triangulate);
                     if (triangulate)
