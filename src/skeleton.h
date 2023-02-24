@@ -23,6 +23,7 @@ struct SkeletonContext {
     std::vector<triple_f> node_colors; 
     std::vector<tuple_i> edges;
     std::vector<std::string> node_names;
+    std::string name;
 };
 
 enum SkeletonPrimitive { 
@@ -48,14 +49,13 @@ void skeleton_initialize(SkeletonContext* skeleton, SkeletonPrimitive skeleton_t
             skeleton->num_nodes = 4;
             skeleton->num_edges = 4;
              
-            skeleton->node_names = {"TopLeft", "TopRight", "BottomRight", "BottomLeft"};
+            skeleton->node_names = {"TopLeft", "BottomLeft", "BottomRight", "TopRight"};
 
-            skeleton->node_colors = {
-                {1.0f, 0.0f, 1.0f},
-                {1.0f, 0.0f, 1.0f},
-                {1.0f, 0.0f, 1.0f},
-                {1.0f, 0.0f, 1.0f}};
-            
+            for (int i = 0; i < 4; i++) {
+                ImVec4 color = (ImVec4)ImColor::HSV(i / (float)skeleton->num_nodes, 0.8f, 0.8f);
+                skeleton->node_colors.push_back({color.x, color.y, color.z});
+            }
+
             skeleton->edges ={
                 {0, 1},
                 {1, 2},

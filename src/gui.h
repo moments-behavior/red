@@ -3,6 +3,7 @@
 #include "render.h"
 #include "skeleton.h"
 #include <imfilebrowser.h>
+#include <fstream>
 
 struct ProjectContext{
     std::string root_dir;
@@ -91,6 +92,45 @@ static void reprojection(KeyPoints *keypoints, SkeletonContext *skeleton, std::v
 
     }
 }
+
+std::string current_date_time() {
+    time_t     now = time(0);
+    struct tm  tstruct;
+    char       buf[80];
+    tstruct = *localtime(&now);
+    strftime(buf, sizeof(buf), "%Y-%m-%d_%X", &tstruct);
+    return buf;
+}
+
+
+void save_keypoints(std::map<u32, KeyPoints*> keypoints_map, SkeletonContext* skeleton, std::string root_dir)
+{
+    std::string now = current_date_time();
+    std::string filename = root_dir + "/labeled_data/worldKeyPoints/keypoints_" + now;
+    std::ofstream output_file(filename);
+
+    output_file << skeleton->name << ",\n";
+
+    std::map<u32, KeyPoints*>::iterator it = keypoints_map.begin();
+    while (it != keypoints_map.end())
+    {
+        uint frame = it->first;
+        KeyPoints* keypoints = it->second;
+        // write frame number
+        output_file << frame << ",";
+        // fore each labeled keypoint, write idx, xpos, ypos, zpos
+        for (uint i = 0; i < skeleton->num_nodes; i++)
+        {
+            output_file << i << "," << keypoints->keypoints3d->x << "," << keypoints->keypoints3d->y << "," << keypoints->keypoints3d->z << ",";
+        }
+        output_file << "\n";
+        it++;
+    }
+
+    output_file.close();
+    std::cout << filename << " created"  << std::endl; 
+}
+
 
 void gui_arena_projection_points(CameraParams* cvp, float* arena_x, float* arena_y, int n)
 {

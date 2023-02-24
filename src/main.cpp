@@ -107,10 +107,9 @@ int main(int, char **)
                                     CameraParams cam = camera_load_params_from_csv(cam_file, i);
                                     camera_params.push_back(cam);
                                 }
-
+                                skeleton->name = element.first;
                                 skeleton_initialize(skeleton, element.second);
                                 plot_keypoints_flag = true;
-
                             };
                         };
                         ImGui::EndMenu();
@@ -284,7 +283,7 @@ int main(int, char **)
                     
                     if(plot_keypoints_flag){
                         // plot arena for testing camera parameters 
-                        gui_plot_perimeter(&camera_params[j]);
+                        // gui_plot_perimeter(&camera_params[j]);
                         
                         // labeling 
                         if (ImPlot::IsPlotHovered()){
@@ -436,9 +435,15 @@ int main(int, char **)
                     ImGui::Checkbox("triangulate", &triangulate);
                     if (triangulate)
                     {
-                        
                         reprojection(keypoints_map.at(to_display_frame_number), skeleton, camera_params, scene->num_cams);
                     }
+
+                    if (ImGui::Button("Save Labeled Data"))
+                    {
+                        save_keypoints(keypoints_map, skeleton, root_dir);
+                    }
+
+
                 }
                 ImGui::End();
             }
