@@ -74,9 +74,9 @@ static void reprojection(KeyPoints *keypoints, SkeletonContext *skeleton, std::v
             cv::sfm::triangulatePoints(sfmPoints2d, projection_matrices, output);
             output.convertTo(output, CV_32F);
 
-            keypoints->keypoints3d->x = output.at<float>(0);
-            keypoints->keypoints3d->y = output.at<float>(1);
-            keypoints->keypoints3d->z = output.at<float>(2);
+            keypoints->keypoints3d[node].x = output.at<float>(0);
+            keypoints->keypoints3d[node].y = output.at<float>(1);
+            keypoints->keypoints3d[node].z = output.at<float>(2);
 
             for (u32 view_idx = 0; view_idx < num_cams; view_idx++)
             {
@@ -121,7 +121,7 @@ void save_keypoints(std::map<u32, KeyPoints*> keypoints_map, SkeletonContext* sk
         // fore each labeled keypoint, write idx, xpos, ypos, zpos
         for (uint i = 0; i < skeleton->num_nodes; i++)
         {
-            output_file << i << "," << keypoints->keypoints3d->x << "," << keypoints->keypoints3d->y << "," << keypoints->keypoints3d->z << ",";
+            output_file << i << "," << keypoints->keypoints3d[i].x << "," << keypoints->keypoints3d[i].y << "," << keypoints->keypoints3d[i].z << ",";
         }
         output_file << "\n";
         it++;
