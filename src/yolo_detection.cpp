@@ -1,8 +1,9 @@
 #include "yolo_detection.h"
 #include "simd_acc.h"
 #include <iomanip>
+#include <thread> 
 
-void yolo_process(std::string onnx_file, unsigned char* display_frame, yolo_param* post_setting, std::vector<cv::Rect>& yolo_boxes, std::vector<std::string>& yolo_labels, std::vector<int>& yolo_classes)
+void yolo_process(std::string onnx_file, unsigned char* display_frame, yolo_param* post_setting, std::vector<cv::Rect>& yolo_boxes, std::vector<std::string>& yolo_labels, std::vector<int>& yolo_classes, yolo_sync* sync)
 {
     // load models 
     cv::dnn::Net yolo_net;
@@ -15,18 +16,22 @@ void yolo_process(std::string onnx_file, unsigned char* display_frame, yolo_para
     unsigned char* yolo_input_frame = (unsigned char*)malloc(3208 * 2200 * 3 * sizeof(uint8_t) + 4);
     while (true)
     {
+        while (!sync->new_frame) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+
         int length_image = 3208 * 2200;
+        std::cout << "here?" << std::endl;
         rgba_to_bgr_cpu(display_frame, yolo_input_frame, length_image);
+
         // SimdBgraToBgr(yolo_input_frame_rgba[cam_idx], 3208, 2200, 3208 * 4, yolo_input_frame[cam_idx], 3208 * 3);
 
         cv::Mat image = cv::Mat(3208 * 2200 * 3, 1, CV_8U, yolo_input_frame).reshape(3, 2200);
         double x_factor = image.cols / 640.0;
         double y_factor = image.rows / 640.0;
         cv::Mat blob;
-
         cv::dnn::blobFromImage(image, blob, 1./255.,  cv::Size(640, 640),  cv::Scalar(), true, false);
         yolo_net.setInput(blob);
-        // Runs the forward pass to get output of the output layers
         std::vector<cv::Mat> outs;
         yolo_net.forward(outs, yolo_net.getUnconnectedOutLayersNames());
 
@@ -66,8 +71,6 @@ void yolo_process(std::string onnx_file, unsigned char* display_frame, yolo_para
             data += 7;
         }
 
-        // Perform non maximum suppression to eliminate redundant overlapping boxes with
-        // lower confidences
         std::vector<int> indices;
         std::vector<cv::Rect> final_boxes;
         std::vector<std::string> final_labels;
@@ -88,6 +91,8 @@ void yolo_process(std::string onnx_file, unsigned char* display_frame, yolo_para
         yolo_boxes = final_boxes;
         yolo_labels = final_labels;
         yolo_classes = final_class_ids;
+        sync->new_frame = false;
+        sync->detect_ready = true;
     }
 }
 

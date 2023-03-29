@@ -7,8 +7,8 @@
 #include "Logger.h"
 #include "render.h"
 #include "implot.h"
-#include <iostream> // std::cout
-#include <thread>   // std::thread
+#include <iostream>
+#include <thread>
 #include <imfilebrowser.h>
 #include <camera.h>
 #include "skeleton.h"
@@ -26,8 +26,6 @@ static void draw_cv_contours(std::vector<cv::Rect> boxes, std::vector<std::strin
 {
     for (int i=0; i<boxes.size(); i++)
     {
-        // cout << "Camera #"  << " Box info " << boxes[i].x << "," << boxes[i].y << "," << boxes[i].width << "," << boxes[i].height << endl;
-        // std::cout << labels[i] << endl;
         double x[5] = {(double)boxes[i].x, (double)boxes[i].x, (double)boxes[i].x + boxes[i].width, (double)boxes[i].x + boxes[i].width, (double)boxes[i].x};
         double y[5] = {(double)2200 - boxes[i].y, (double)2200 - boxes[i].y - boxes[i].height, (double)2200 - boxes[i].y - boxes[i].height, (double)2200 - boxes[i].y, (double)2200 - boxes[i].y};
         
@@ -96,6 +94,8 @@ int main(int, char **)
     std::vector<std::vector<cv::Rect>> yolo_boxes;
     std::vector<std::vector<std::string>> yolo_labels;
     std::vector<std::vector<int>> yolo_classid;
+    std::vector<unsigned char*> yolo_input_frames;
+    yolo_sync* detection_sync;
 
     while (!glfwWindowShouldClose(window->render_target))
     {
@@ -156,19 +156,27 @@ int main(int, char **)
                             yolo_setting->size_class_list = class_list.size();
                             yolo_setting->class_names = class_list;
 
-                            for(int i = 0; i< scene->num_cams; i++) {
+                            detection_sync = (yolo_sync*)malloc(sizeof(yolo_sync) * scene->num_cams);
+                            for(int i = 0; i < scene->num_cams; i++) {
+                                detection_sync->detect_ready = false;
+                                detection_sync->new_frame = false;
+                            }
+
+                            for(int i = 0; i < scene->num_cams; i++) {
                                 std::vector<cv::Rect> yolo_box_per_cam;
                                 yolo_boxes.push_back(yolo_box_per_cam);
                                 std::vector<std::string> yolo_label_per_cam;
                                 yolo_labels.push_back(yolo_label_per_cam);
                                 std::vector<int> yolo_classid_per_cam;
                                 yolo_classid.push_back(yolo_classid_per_cam);
+                                unsigned char* yolo_input_per_cam = scene->display_buffer[i][read_head].frame;
+                                yolo_input_frames.push_back(yolo_input_per_cam);
                             }
 
-                            for(int i = 0; i< scene->num_cams; i++) {
-                                yolo_threads.push_back(std::thread(&yolo_process, yolov5_onnx, scene->display_buffer[i]->frame, yolo_setting, std::ref(yolo_boxes[i]), std::ref(yolo_labels[i]), std::ref(yolo_classid[i])));
+                            for (int i = 0; i< scene->num_cams; i++) {
+                                yolo_threads.push_back(std::thread(&yolo_process, yolov5_onnx, yolo_input_frames[i], yolo_setting, std::ref(yolo_boxes[i]), std::ref(yolo_labels[i]), std::ref(yolo_classid[i]), &detection_sync[i]));
                             }
-                            yolo_detection=true;
+                            yolo_detection = true;
                         }     
                         ImGui::EndMenu();
                     }
@@ -227,7 +235,19 @@ int main(int, char **)
                     std::this_thread::sleep_for(std::chrono::milliseconds(1));
                 }
 
+                if (yolo_detection) {
+                    std::cout << "here? main" << std::endl;
+                    yolo_input_frames[j] = scene->display_buffer[j][read_head].frame;
+                    detection_sync[j].new_frame = true;
+                    while (!detection_sync[j].detect_ready) {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                    }
+                    detection_sync[j].detect_ready = false;
+                }
+
+                // todo: need to use pbo to accelerate this 
                 upload_texture(&scene->image_texture[j], scene->display_buffer[j][read_head].frame, 3208, 2200);
+
             }
             current_frame_num = to_display_frame_number;
         }
