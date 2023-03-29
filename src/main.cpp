@@ -13,12 +13,32 @@
 #include <camera.h>
 #include "skeleton.h"
 #include "gui.h"
+#include "yolo_detection.h"
+
 
 #if defined(_MSC_VER) && (_MSC_VER >= 1900) && !defined(IMGUI_DISABLE_WIN32_FUNCTIONS)
 #pragma comment(lib, "legacy_stdio_definitions")
 #endif
 
 simplelogger::Logger *logger = simplelogger::LoggerFactory::CreateConsoleLogger();
+
+static void draw_cv_contours(std::vector<cv::Rect> boxes, std::vector<std::string> labels, std::vector<int> class_ids)
+{
+    for (int i=0; i<boxes.size(); i++)
+    {
+        // cout << "Camera #"  << " Box info " << boxes[i].x << "," << boxes[i].y << "," << boxes[i].width << "," << boxes[i].height << endl;
+        // std::cout << labels[i] << endl;
+        double x[5] = {(double)boxes[i].x, (double)boxes[i].x, (double)boxes[i].x + boxes[i].width, (double)boxes[i].x + boxes[i].width, (double)boxes[i].x};
+        double y[5] = {(double)2200 - boxes[i].y, (double)2200 - boxes[i].y - boxes[i].height, (double)2200 - boxes[i].y - boxes[i].height, (double)2200 - boxes[i].y, (double)2200 - boxes[i].y};
+        
+        if(class_ids[i] == 0){
+            ImPlot::SetNextLineStyle(ImVec4(1.0, 0.0, 1.0,1.0), 3.0);
+        } else{
+            ImPlot::SetNextLineStyle(ImVec4(0.5, 1.0, 1.0,1.0), 3.0);}
+
+        ImPlot::PlotLine(labels[i].c_str(), &x[0], &y[0], 5); 
+    }
+}
 
 int main(int, char **)
 {
@@ -65,9 +85,17 @@ int main(int, char **)
 
     // others
     ImGui::FileBrowser file_dialog(ImGuiFileBrowserFlags_SelectDirectory);
+    file_dialog.SetPwd("/home/jinyao/dev");
     file_dialog.SetTitle("Select working directory");
     ImVec4 clear_color = ImVec4(0.0f, 0.0f, 0.0f, 1.00f);
     ImGuiIO &io = ImGui::GetIO();
+
+    bool yolo_detection = false;
+    std::vector<std::string> class_list;
+    std::vector<std::thread> yolo_threads;
+    std::vector<std::vector<cv::Rect>> yolo_boxes;
+    std::vector<std::vector<std::string>> yolo_labels;
+    std::vector<std::vector<int>> yolo_classid;
 
     while (!glfwWindowShouldClose(window->render_target))
     {
@@ -114,6 +142,37 @@ int main(int, char **)
                         };
                         ImGui::EndMenu();
                     }
+
+                    if (ImGui::BeginMenu("Detection")) {
+                        if (ImGui::MenuItem("YOLOv5")) { 
+                            std::string yolov5_onnx = "/home/jinyao/dev/clips0/yolo_models/best.onnx";
+                            yolo_param* yolo_setting = new yolo_param();
+                            std::ifstream ifs("/home/jinyao/dev/clips0/yolo_models/label.names");
+                            std::string line;
+                            while (getline(ifs, line))
+                            {
+                                class_list.push_back(line);
+                            }
+                            yolo_setting->size_class_list = class_list.size();
+                            yolo_setting->class_names = class_list;
+
+                            for(int i = 0; i< scene->num_cams; i++) {
+                                std::vector<cv::Rect> yolo_box_per_cam;
+                                yolo_boxes.push_back(yolo_box_per_cam);
+                                std::vector<std::string> yolo_label_per_cam;
+                                yolo_labels.push_back(yolo_label_per_cam);
+                                std::vector<int> yolo_classid_per_cam;
+                                yolo_classid.push_back(yolo_classid_per_cam);
+                            }
+
+                            for(int i = 0; i< scene->num_cams; i++) {
+                                yolo_threads.push_back(std::thread(&yolo_process, yolov5_onnx, scene->display_buffer[i]->frame, yolo_setting, std::ref(yolo_boxes[i]), std::ref(yolo_labels[i]), std::ref(yolo_classid[i])));
+                            }
+                            yolo_detection=true;
+                        }     
+                        ImGui::EndMenu();
+                    }
+
                 }
 
                 ImGui::EndMenuBar();
@@ -281,6 +340,10 @@ int main(int, char **)
                 {
                     ImPlot::PlotImage("##no_image_name", (void *)(intptr_t)scene->image_texture[j], ImVec2(0, 0), ImVec2(3208, 2200));
                     
+                    if (yolo_detection){
+                        draw_cv_contours(yolo_boxes.at(j), yolo_labels.at(j), yolo_classid.at(j));
+                    }
+
                     if(plot_keypoints_flag){
                         // plot arena for testing camera parameters 
                         // gui_plot_perimeter(&camera_params[j]);
