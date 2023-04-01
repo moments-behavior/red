@@ -14,7 +14,7 @@
 #include "skeleton.h"
 #include "gui.h"
 #include "yolo_detection.h"
-
+#include "global.h"
 
 #if defined(_MSC_VER) && (_MSC_VER >= 1900) && !defined(IMGUI_DISABLE_WIN32_FUNCTIONS)
 #pragma comment(lib, "legacy_stdio_definitions")
@@ -22,21 +22,13 @@
 
 simplelogger::Logger *logger = simplelogger::LoggerFactory::CreateConsoleLogger();
 
-static void draw_cv_contours(std::vector<cv::Rect> boxes, std::vector<std::string> labels, std::vector<int> class_ids)
-{
-    for (int i=0; i<boxes.size(); i++)
-    {
-        double x[5] = {(double)boxes[i].x, (double)boxes[i].x, (double)boxes[i].x + boxes[i].width, (double)boxes[i].x + boxes[i].width, (double)boxes[i].x};
-        double y[5] = {(double)2200 - boxes[i].y, (double)2200 - boxes[i].y - boxes[i].height, (double)2200 - boxes[i].y - boxes[i].height, (double)2200 - boxes[i].y, (double)2200 - boxes[i].y};
-        
-        if(class_ids[i] == 0){
-            ImPlot::SetNextLineStyle(ImVec4(1.0, 0.0, 1.0,1.0), 3.0);
-        } else{
-            ImPlot::SetNextLineStyle(ImVec4(0.5, 1.0, 1.0,1.0), 3.0);}
-
-        ImPlot::PlotLine(labels[i].c_str(), &x[0], &y[0], 5); 
-    }
-}
+std::vector<std::mutex> g_mutexes(MAX_VIEWS);
+std::vector<std::condition_variable> g_cvs(MAX_VIEWS);
+std::vector<bool> g_ready(MAX_VIEWS);
+std::vector<std::vector<cv::Rect>> yolo_boxes(MAX_VIEWS);
+std::vector<std::vector<std::string>> yolo_labels(MAX_VIEWS);
+std::vector<std::vector<int>> yolo_classid(MAX_VIEWS);
+std::vector<unsigned char*> yolo_input_frames_rgba(MAX_VIEWS);
 
 int main(int, char **)
 {
@@ -89,13 +81,8 @@ int main(int, char **)
     ImGuiIO &io = ImGui::GetIO();
 
     bool yolo_detection = false;
-    std::vector<std::string> class_list;
     std::vector<std::thread> yolo_threads;
-    std::vector<std::vector<cv::Rect>> yolo_boxes;
-    std::vector<std::vector<std::string>> yolo_labels;
-    std::vector<std::vector<int>> yolo_classid;
-    std::vector<unsigned char*> yolo_input_frames;
-    yolo_sync* detection_sync;
+    yolo_param yolo_setting = yolo_param();
 
     while (!glfwWindowShouldClose(window->render_target))
     {
@@ -146,35 +133,11 @@ int main(int, char **)
                     if (ImGui::BeginMenu("Detection")) {
                         if (ImGui::MenuItem("YOLOv5")) { 
                             std::string yolov5_onnx = "/home/jinyao/dev/clips0/yolo_models/best.onnx";
-                            yolo_param* yolo_setting = new yolo_param();
-                            std::ifstream ifs("/home/jinyao/dev/clips0/yolo_models/label.names");
-                            std::string line;
-                            while (getline(ifs, line))
-                            {
-                                class_list.push_back(line);
-                            }
-                            yolo_setting->size_class_list = class_list.size();
-                            yolo_setting->class_names = class_list;
-
-                            detection_sync = (yolo_sync*)malloc(sizeof(yolo_sync) * scene->num_cams);
-                            for(int i = 0; i < scene->num_cams; i++) {
-                                detection_sync->detect_ready = false;
-                                detection_sync->new_frame = false;
-                            }
-
-                            for(int i = 0; i < scene->num_cams; i++) {
-                                std::vector<cv::Rect> yolo_box_per_cam;
-                                yolo_boxes.push_back(yolo_box_per_cam);
-                                std::vector<std::string> yolo_label_per_cam;
-                                yolo_labels.push_back(yolo_label_per_cam);
-                                std::vector<int> yolo_classid_per_cam;
-                                yolo_classid.push_back(yolo_classid_per_cam);
-                                unsigned char* yolo_input_per_cam = scene->display_buffer[i][read_head].frame;
-                                yolo_input_frames.push_back(yolo_input_per_cam);
-                            }
+                            std::string yolov5_labelname = "/home/jinyao/dev/clips0/yolo_models/label.names";
+                            read_yolo_labels(yolov5_labelname, &yolo_setting);
 
                             for (int i = 0; i< scene->num_cams; i++) {
-                                yolo_threads.push_back(std::thread(&yolo_process, yolov5_onnx, yolo_input_frames[i], yolo_setting, std::ref(yolo_boxes[i]), std::ref(yolo_labels[i]), std::ref(yolo_classid[i]), &detection_sync[i]));
+                                yolo_threads.push_back(std::thread(&yolo_process, yolov5_onnx, &yolo_setting, i));
                             }
                             yolo_detection = true;
                         }     
@@ -235,16 +198,15 @@ int main(int, char **)
                     std::this_thread::sleep_for(std::chrono::milliseconds(1));
                 }
 
-                if (yolo_detection) {
-                    std::cout << "here? main" << std::endl;
-                    yolo_input_frames[j] = scene->display_buffer[j][read_head].frame;
-                    detection_sync[j].new_frame = true;
-                    while (!detection_sync[j].detect_ready) {
-                        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                    }
-                    detection_sync[j].detect_ready = false;
+                // sync yolo detection 
+                if (yolo_detection)
+                {
+                    std::unique_lock<std::mutex> lck(g_mutexes[j]);
+                    yolo_input_frames_rgba[j] = scene->display_buffer[j][read_head].frame;
+                    g_ready[j] = true;
+                    g_cvs[j].notify_one();
                 }
-
+                
                 // todo: need to use pbo to accelerate this 
                 upload_texture(&scene->image_texture[j], scene->display_buffer[j][read_head].frame, 3208, 2200);
 

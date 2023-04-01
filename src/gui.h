@@ -11,6 +11,21 @@ struct ProjectContext{
     std::vector<std::string> camera_names;
 };
 
+static void draw_cv_contours(std::vector<cv::Rect> boxes, std::vector<std::string> labels, std::vector<int> class_ids)
+{
+    for (int i=0; i<boxes.size(); i++)
+    {
+        double x[5] = {(double)boxes[i].x, (double)boxes[i].x, (double)boxes[i].x + boxes[i].width, (double)boxes[i].x + boxes[i].width, (double)boxes[i].x};
+        double y[5] = {(double)2200 - boxes[i].y, (double)2200 - boxes[i].y - boxes[i].height, (double)2200 - boxes[i].y - boxes[i].height, (double)2200 - boxes[i].y, (double)2200 - boxes[i].y};
+        
+        if(class_ids[i] == 0){
+            ImPlot::SetNextLineStyle(ImVec4(1.0, 0.0, 1.0,1.0), 3.0);
+        } else{
+            ImPlot::SetNextLineStyle(ImVec4(0.5, 1.0, 1.0,1.0), 3.0);}
+
+        ImPlot::PlotLine(labels[i].c_str(), &x[0], &y[0], 5); 
+    }
+}
 
 static void gui_plot_keypoints(KeyPoints *keypoints, SkeletonContext *skeleton, int view_idx)
 {
