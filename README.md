@@ -1,5 +1,5 @@
 # Red Labeling App
-This is based on Dear ImGui examples using GLFW, and just adds the minimum for rendering the result of a CUDA computation with PBO.
+3D labeling tool for multiple cameras
 
 # Building 
 ## Build opencv with dnn support 
