@@ -116,10 +116,14 @@ int main(int, char **)
                         for (auto & element : skeleton_map) {
                             if(ImGui::MenuItem(element.first.c_str()))
                             {
-                                std::string cam_file = root_dir + "/calibration/calibration.csv";
+                                // std::string cam_file = root_dir + "/calibration/calibration.csv";
                                 for (u32 i = 0; i < scene->num_cams; i++)
                                 {
-                                    CameraParams cam = camera_load_params_from_csv(cam_file, i);
+                                    // legacy loading from old formats
+                                    // CameraParams cam = camera_load_params_from_csv(cam_file, i);
+                                    // camera_params.push_back(cam);
+                                    std::string cam_file = root_dir + "/calibration/Cam" + std::to_string(i) + ".yaml";
+                                    CameraParams cam = camera_load_params_from_yaml(cam_file);
                                     camera_params.push_back(cam);
                                 }
                                 skeleton->name = element.first;

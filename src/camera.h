@@ -18,6 +18,7 @@ struct CameraParams {
     cv::Mat projection_mat;
 };
 
+
 void camera_print_parameters(CameraParams* cvp){
     std::cout << "k = " << std::endl << cv::format(cvp->k, cv::Formatter::FMT_PYTHON) << std::endl << std::endl;
     std::cout << "dist_coeffs  = " << std::endl << cv::format(cvp->dist_coeffs, cv::Formatter::FMT_PYTHON) << std::endl << std::endl;
@@ -27,6 +28,24 @@ void camera_print_parameters(CameraParams* cvp){
     std::cout << "projection_mat = " << std::endl << cv::format(cvp->projection_mat, cv::Formatter::FMT_PYTHON) << std::endl << std::endl;
 }
 
+
+CameraParams camera_load_params_from_yaml(std::string calibration_file) 
+{
+    CameraParams camera_params;
+    cv::FileStorage fs(calibration_file, cv::FileStorage::READ);
+    if (!fs.isOpened())
+    {
+        std::cout << "Could not open the calibration file: \"" << calibration_file << "\"" << std::endl;
+    }
+    fs["camera_matrix"] >> camera_params.k;
+    fs["distortion_coefficients"] >> camera_params.dist_coeffs;
+    fs["tc_ext"] >> camera_params.tvec;
+    fs["rc_ext"] >> camera_params.r;
+    fs.release();
+    cv::Rodrigues(camera_params.r, camera_params.rvec);
+    cv::sfm::projectionFromKRt(camera_params.k, camera_params.r, camera_params.tvec, camera_params.projection_mat);
+    return camera_params;
+}
 
 
 CameraParams camera_load_params_from_csv(std::string csv_filename, int cam_idx)
