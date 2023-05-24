@@ -40,8 +40,8 @@ g++ -Ofast -mssse3 -ffast-math -std=c++17 \
     -lGLEW -lGLU -lGL \
     -lpthread \
     `pkg-config --static --libs glfw3` \
-    -I/home/user/nvidia/ffmpeg/build/include/ \
-    -L/home/user/nvidia/ffmpeg/build/lib/ -lavformat -lswscale -lswresample -lavutil -lavcodec \
+    -I$HOME/nvidia/ffmpeg/build/include/ \
+    -L$HOME/nvidia/ffmpeg/build/lib/ -lavformat -lswscale -lswresample -lavutil -lavcodec \
     -I/usr/local/include/opencv4 \
     -lopencv_sfm -lopencv_core -lopencv_bgsegm -lopencv_imgcodecs -lopencv_imgproc -lopencv_video -lopencv_highgui -lopencv_videoio -lopencv_calib3d -lopencv_dnn
 
