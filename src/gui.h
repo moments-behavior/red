@@ -146,6 +146,58 @@ void save_keypoints(std::map<u32, KeyPoints*> keypoints_map, SkeletonContext* sk
     std::cout << filename << " created"  << std::endl; 
 }
 
+void world_coordinates_projection_points(CameraParams* cvp, double* axis_x_values, double* axis_y_values, float scale)
+{
+    std::vector<cv::Point3f> world_coordinates;
+    world_coordinates.push_back(cv::Point3f(0.0f, 0.0f, 0.0f));
+    world_coordinates.push_back(cv::Point3f(scale * 1.0f, 0.0f, 0.0f));
+    world_coordinates.push_back(cv::Point3f(0.0f, scale * 1.0f, 0.0f));
+    world_coordinates.push_back(cv::Point3f(0.0f, 0.0f, scale * 1.0f));
+
+    std::vector<cv::Point2f> img_pts;
+    cv::projectPoints(world_coordinates, cvp->rvec, cvp->tvec, cvp->k, cvp->dist_coeffs, img_pts);
+    
+    for (int i = 0; i < 4; i++){
+        axis_x_values[i] = img_pts.at(i).x;
+        axis_y_values[i] = 2200 - img_pts.at(i).y;
+    }
+}
+
+static void gui_plot_world_coordinates(CameraParams* cvp, int cam_id)
+{
+    double axis_x_values[4]; double axis_y_values[4]; 
+    world_coordinates_projection_points(cvp, axis_x_values, axis_y_values, 50);
+    ImPlot::SetNextMarkerStyle(ImPlotMarker_Circle, 6.0, ImVec4(1.0, 1.0, 1.0,1.0));
+    ImPlot::SetNextLineStyle(ImVec4(1.0, 1.0, 1.0,1.0), 3.0);
+    std::string name = "World Origin";
+    
+    float one_axis_x[2];
+    float one_axis_y[2];
+
+    std::vector<triple_f> node_colors = {
+        {1.0f, 1.0f, 1.0f},
+        {1.0f, 0.0f, 0.0f},
+        {0.0f, 1.0f, 0.0f},
+        {0.0f, 0.0f, 1.0f}};
+                
+    for (u32 edge=0; edge < 3; edge++)
+    {
+        double xs[2] {axis_x_values[0], axis_x_values[edge+1]};
+        double ys[2] {axis_y_values[0], axis_y_values[edge+1]};
+        
+        ImVec4 my_color; 
+        my_color.w = 1.0f; 
+        my_color.x = node_colors[edge+1].x;
+        my_color.y = node_colors[edge+1].y;
+        my_color.z = node_colors[edge+1].z;
+
+        ImPlot::SetNextMarkerStyle(ImPlotMarker_Circle, 6.0, my_color);
+        ImPlot::SetNextLineStyle(my_color, 3.0);
+        ImPlot::PlotLine("##line", xs, ys, 2, ImPlotLineFlags_Segments);
+    }
+    
+}
+
 
 void gui_arena_projection_points(CameraParams* cvp, float* arena_x, float* arena_y, int n)
 {

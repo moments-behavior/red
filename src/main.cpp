@@ -83,6 +83,7 @@ int main(int, char **)
     bool yolo_detection = false;
     std::vector<std::thread> yolo_threads;
     yolo_param yolo_setting = yolo_param();
+    bool show_world_coordinates = false;
 
     while (!glfwWindowShouldClose(window->render_target))
     {
@@ -260,7 +261,7 @@ int main(int, char **)
 
                         for (int j = 0; j < scene->num_cams; j++)
                         {
-                            upload_texture(&scene->image_texture[j], scene->display_buffer[j][read_head].frame, 3208, 2200);
+                            upload_texture(&scene->image_texture[j], scene->display_buffer[j][select_corr_head].frame, 3208, 2200);
                         }
                     }
                 };
@@ -277,14 +278,14 @@ int main(int, char **)
                         {
                             for (u32 j = 0; j < scene->num_cams; j++)
                             {
-                                upload_texture(&scene->image_texture[j], scene->display_buffer[j][read_head].frame, 3208, 2200);
+                                upload_texture(&scene->image_texture[j], scene->display_buffer[j][select_corr_head].frame, 3208, 2200);
                             }
                         }
                     }
                 };
             }
             ImGui::Text("Frame number selected: %d", scene->display_buffer[0][select_corr_head].frame_number);
-
+            
             if (!play_video)
             {
                 select_corr_head = (selected + read_head) % scene->size_of_buffer;
@@ -333,26 +334,27 @@ int main(int, char **)
                     if(plot_keypoints_flag){
                         // plot arena for testing camera parameters 
                         // gui_plot_perimeter(&camera_params[j]);
-                        
+                        gui_plot_world_coordinates(&camera_params[j], j);
+
                         // labeling 
                         if (ImPlot::IsPlotHovered()){
                             if (ImGui::IsKeyPressed(ImGuiKey_W, false)){
-                                if (keypoints_map.find(to_display_frame_number)==keypoints_map.end()){
+                                if (keypoints_map.find(current_frame_num)==keypoints_map.end()){
                                     // not found
                                     KeyPoints* keypoints = (KeyPoints *)malloc(sizeof(KeyPoints));
                                     allocate_keypoints(keypoints, scene, skeleton);
-                                    keypoints_map[to_display_frame_number] = keypoints; 
+                                    keypoints_map[current_frame_num] = keypoints; 
                                 }
                                 
                                 // labeling sequentially each view
                                 ImPlotPoint mouse = ImPlot::GetPlotMousePos();
-                                keypoints_map[to_display_frame_number]->keypoints2d[j][keypoints_map[to_display_frame_number]->active_id[j]].position = {mouse.x,  mouse.y};
-                                keypoints_map[to_display_frame_number]->keypoints2d[j][keypoints_map[to_display_frame_number]->active_id[j]].is_labeled = true;
-                                if(keypoints_map[to_display_frame_number]->active_id[j] < (skeleton->num_nodes - 1)) { keypoints_map[to_display_frame_number]->active_id[j]++; }
+                                keypoints_map[current_frame_num]->keypoints2d[j][keypoints_map[current_frame_num]->active_id[j]].position = {mouse.x,  mouse.y};
+                                keypoints_map[current_frame_num]->keypoints2d[j][keypoints_map[current_frame_num]->active_id[j]].is_labeled = true;
+                                if(keypoints_map[current_frame_num]->active_id[j] < (skeleton->num_nodes - 1)) { keypoints_map[current_frame_num]->active_id[j]++; }
                             }
                         }
-                        if (!(keypoints_map.find(to_display_frame_number)==keypoints_map.end())){
-                            gui_plot_keypoints(keypoints_map.at(to_display_frame_number), skeleton, j);}
+                        if (!(keypoints_map.find(current_frame_num)==keypoints_map.end())){
+                            gui_plot_keypoints(keypoints_map.at(current_frame_num), skeleton, j);}
                     }
                     ImPlot::EndPlot();
                 }
@@ -451,7 +453,7 @@ int main(int, char **)
         if (plot_keypoints_flag)
         {
 
-            if (!(keypoints_map.find(to_display_frame_number)==keypoints_map.end())){
+            if (!(keypoints_map.find(current_frame_num)==keypoints_map.end())){
                 if (ImGui::Begin("Labeling Tool"))
                 {
                     for (int i=0; i<scene->num_cams; i++)
@@ -461,7 +463,7 @@ int main(int, char **)
                             if (j > 0) ImGui::SameLine();
 
                             ImGui::PushID(j);
-                            if (keypoints_map.at(to_display_frame_number)->keypoints2d[i][j].is_labeled)
+                            if (keypoints_map.at(current_frame_num)->keypoints2d[i][j].is_labeled)
                             {
                                 ImGui::PushStyleColor(ImGuiCol_Button, (ImVec4)ImColor::HSV(j / (float)skeleton->num_nodes, 0.6f, 0.6f));
                                 ImGui::PushStyleColor(ImGuiCol_ButtonHovered, (ImVec4)ImColor::HSV(j / (float)skeleton->num_nodes, 0.7f, 0.7f));
@@ -484,7 +486,7 @@ int main(int, char **)
                     ImGui::Checkbox("triangulate", &triangulate);
                     if (triangulate)
                     {
-                        reprojection(keypoints_map.at(to_display_frame_number), skeleton, camera_params, scene->num_cams);
+                        reprojection(keypoints_map.at(current_frame_num), skeleton, camera_params, scene->num_cams);
                     }
 
                     if (ImGui::Button("Save Labeled Data"))
