@@ -118,13 +118,23 @@ std::string current_date_time() {
 }
 
 
-void save_keypoints(std::map<u32, KeyPoints*> keypoints_map, SkeletonContext* skeleton, std::string root_dir)
+void save_keypoints(std::map<u32, KeyPoints*> keypoints_map, SkeletonContext* skeleton, std::string root_dir, int num_cameras)
 {
     std::string now = current_date_time();
     std::string filename = root_dir + "/labeled_data/worldKeyPoints/keypoints_" + now;
     std::ofstream output_file(filename);
+    std::vector<std::ofstream> output2d_files;
+
+    for (uint i = 0; i < num_cameras; i++) {
+        std::string filename_cam = root_dir + "/labeled_data/Cam" + std::to_string(i) + "/Cam" + std::to_string(i) + "_" + now;
+        std::ofstream output_file_cam(filename_cam);
+        output2d_files.push_back(std::move(output_file_cam));
+    }
 
     output_file << skeleton->name << ",\n";
+    for (uint i = 0; i < num_cameras; i++) {
+        output2d_files[i] << skeleton->name << ",\n";
+    }
 
     std::map<u32, KeyPoints*>::iterator it = keypoints_map.begin();
     while (it != keypoints_map.end())
@@ -139,11 +149,24 @@ void save_keypoints(std::map<u32, KeyPoints*> keypoints_map, SkeletonContext* sk
             output_file << i << "," << keypoints->keypoints3d[i].x << "," << keypoints->keypoints3d[i].y << "," << keypoints->keypoints3d[i].z << ",";
         }
         output_file << "\n";
+
+        for (int cam = 0; cam < num_cameras; cam++) {
+            output2d_files[cam] << frame << ",";
+            for (int node = 0; node < skeleton->num_nodes; node++) {
+                output2d_files[cam] << node << "," << keypoints->keypoints2d[cam][node].position.x << "," << keypoints->keypoints2d[cam][node].position.y << ",";
+            }
+        }
+
         it++;
     }
 
     output_file.close();
     std::cout << filename << " created"  << std::endl; 
+
+    for (uint i = 0; i < num_cameras; i++) {
+        output2d_files[i].close();
+    }
+
 }
 
 void world_coordinates_projection_points(CameraParams* cvp, double* axis_x_values, double* axis_y_values, float scale)

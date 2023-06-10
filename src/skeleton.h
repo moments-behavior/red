@@ -105,14 +105,24 @@ void allocate_keypoints(KeyPoints *keypoints, render_scene *scene, SkeletonConte
     keypoints->active_id = (u32 *)malloc(sizeof(u32) * scene->num_cams);
     keypoints->keypoints3d = (triple_d *)malloc(sizeof(triple_d) * skeleton->num_nodes); 
     keypoints->keypoints2d = (KeyPoints2D **)malloc(sizeof(KeyPoints2D*) * scene->num_cams);
-    for (u32 j=0; j < scene->num_cams; j++){
+    for (u32 j=0; j < scene->num_cams; j++) {
         keypoints->keypoints2d[j] = (KeyPoints2D *)malloc(sizeof(KeyPoints2D) * skeleton->num_nodes);
     }
-    for (u32 j=0; j < scene->num_cams; j++){
+    
+    // initialize to big number 
+    for (u32 j=0; j < scene->num_cams; j++) {
         keypoints->active_id[j] = 0;
         for (u32 k=0; k < skeleton->num_nodes; k++){
             keypoints->keypoints2d[j][k].is_labeled = false;
+            keypoints->keypoints2d[j][k].position.x = 1E7;
+            keypoints->keypoints2d[j][k].position.y = 1E7;
         }
+    }
+
+    for (u32 k=0; k < skeleton->num_nodes; k++) {
+        keypoints->keypoints3d[k].x = 1E7;
+        keypoints->keypoints3d[k].y = 1E7;
+        keypoints->keypoints3d[k].z = 1E7;
     }
 }
 

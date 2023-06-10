@@ -71,7 +71,7 @@ int main(int, char **)
 
     // for labeling 
     SkeletonContext *skeleton;
-    std::map<u32, KeyPoints*> keypoints_map; 
+    std::map<u32, KeyPoints*> keypoints_map;
 
     // others
     ImGui::FileBrowser file_dialog(ImGuiFileBrowserFlags_SelectDirectory);
@@ -491,7 +491,7 @@ int main(int, char **)
 
                     if (ImGui::Button("Save Labeled Data"))
                     {
-                        save_keypoints(keypoints_map, skeleton, root_dir);
+                        save_keypoints(keypoints_map, skeleton, root_dir, scene->num_cams);
                     }
 
 
