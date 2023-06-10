@@ -182,7 +182,9 @@ int main(int, char **)
             for (u32 i = 0; i < scene->num_cams; i++)
             {
                 std::size_t cam_string_position = input_file_names[i].find("Cam");           // position of "Cam" in str
-                std::string cam_string = input_file_names[i].substr(cam_string_position, 4); // get from "Cam" to the end
+                std::size_t cam_string_mp4_position = input_file_names[i].find("mp4");
+                std::size_t length_of_substr = cam_string_mp4_position - cam_string_position - 1;
+                std::string cam_string = input_file_names[i].substr(cam_string_position, length_of_substr); // get from "Cam" to the end
                 camera_names.push_back(cam_string);
                 std::cout << "camera names: " << cam_string << std::endl;
                 decoder_threads.push_back(std::thread(&decoder_process, input_file_names[i].c_str(), dc_context, scene->display_buffer[i], scene->size_of_buffer, &scene->seek_context[i]));
