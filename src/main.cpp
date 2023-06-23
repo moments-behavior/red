@@ -488,7 +488,7 @@ int main(int, char **)
                         }
                     }
 
-                    if (ImGui::Button("triangulate"))
+                    if (ImGui::Button("Triangulate"))
                     {
                         reprojection(keypoints_map.at(current_frame_num), skeleton, camera_params, scene->num_cams);
                     }
@@ -496,6 +496,11 @@ int main(int, char **)
                     if (ImGui::Button("Save Labeled Data"))
                     {
                         save_keypoints(keypoints_map, skeleton, root_dir, scene->num_cams);
+                    }
+
+                    if (ImGui::Button("Load Labeled Data"))
+                    {
+                        load_keypoints(keypoints_map, skeleton, root_dir, scene);
                     }
 
                 }

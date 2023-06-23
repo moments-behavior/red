@@ -4,6 +4,7 @@
 #include "skeleton.h"
 #include <imfilebrowser.h>
 #include <fstream>
+#include <filesystem>
 
 struct ProjectContext{
     std::string root_dir;
@@ -166,6 +167,103 @@ void save_keypoints(std::map<u32, KeyPoints*> keypoints_map, SkeletonContext* sk
     for (uint i = 0; i < num_cameras; i++) {
         output2d_files[i].close();
     }
+}
+
+
+void load_2d_keypoints(std::map<u32, KeyPoints*> keypoints_map, SkeletonContext* skeleton, std::string root_dir) {
+
+}
+
+
+
+void load_keypoints(std::map<u32, KeyPoints*> keypoints_map, SkeletonContext* skeleton, std::string root_dir, render_scene *scene) {
+    std::string label3d_dir = root_dir + "/labeled_data/worldKeyPoints/";
+    std::vector<std::string> filenames;
+
+    for (const auto & entry : std::filesystem::directory_iterator(label3d_dir))
+    {
+        filenames.push_back(entry.path());
+    }
+
+    if (filenames.size() == 0)
+    {
+        std::cout << "Failed loading, no files in labeled_data_dir" << std::endl;
+        return;
+    };
+
+    sort(filenames.begin(), filenames.end());
+    std::string mostRecentFile = filenames.back();
+    std::cout << "mostRecentFile: " << mostRecentFile << std::endl;
+
+    std::ifstream fin;
+    fin.open(mostRecentFile);
+    if (fin.fail()) throw mostRecentFile;  
+    std::string line;
+    std::string delimeter = ",";
+    size_t pos = 0;
+    std::string token;
+
+    int lineNum = 0;
+    while(!fin.eof()) {
+        fin >> line;
+        while ((pos = line.find(delimeter)) != std::string::npos)
+        {
+            token = line.substr(0, pos);
+            if (lineNum == 0)
+            {
+                if (token.compare(skeleton->name) != 0) {
+                    std::cout << "Failed loading, skeleton doesn't match." << std::endl;
+                    return;
+                }                       
+                line.erase(0, pos + delimeter.length());
+            }
+            else
+            {
+                uint frame_num = stoul(token);
+                if (keypoints_map.find(frame_num)==keypoints_map.end()) {
+                    KeyPoints* keypoints = (KeyPoints *)malloc(sizeof(KeyPoints));
+                    allocate_keypoints(keypoints, scene, skeleton);
+                    keypoints_map[frame_num] = keypoints; 
+                }
+                line.erase(0, pos + delimeter.length());
+
+                while ((pos = line.find(delimeter)) != std::string::npos)
+                {
+                    token = line.substr(0, pos);
+                    int node = stoi(token);   // get the node index
+                    line.erase(0, pos + delimeter.length());
+
+                    pos = line.find(delimeter);
+                    token = line.substr(0, pos);
+                    double x = stod(token);
+                    line.erase(0, pos + delimeter.length());
+
+                    pos = line.find(delimeter);
+                    token = line.substr(0, pos);
+                    double y = stod(token);
+                    line.erase(0, pos + delimeter.length());
+
+                    pos = line.find(delimeter);
+                    token = line.substr(0, pos);
+                    double z = stod(token);
+                    line.erase(0, pos + delimeter.length());
+
+                    keypoints_map[frame_num]->keypoints3d[node].x = x;
+                    keypoints_map[frame_num]->keypoints3d[node].y = y;
+                    keypoints_map[frame_num]->keypoints3d[node].z = z;
+
+                    std::cout << "frame: " << frame_num << "  node: " << node << "  x: " << keypoints_map[frame_num]->keypoints3d[node].x \
+                     << "  y: " << keypoints_map[frame_num]->keypoints3d[node].y << "  z: " << keypoints_map[frame_num]->keypoints3d[node].z << std::endl;
+                }
+            }
+        }
+        lineNum++;
+    }
+    fin.close();
+
+    // for (int i=0; i<scene->num_cams; i++) {
+    //     load_2d_keypoints();
+    // }
 }
 
 void world_coordinates_projection_points(CameraParams* cvp, double* axis_x_values, double* axis_y_values, float scale)
