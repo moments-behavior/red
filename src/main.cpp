@@ -124,6 +124,7 @@ int main(int, char **)
                                     // CameraParams cam = camera_load_params_from_csv(cam_file, i);
                                     // camera_params.push_back(cam);
                                     std::string cam_file = root_dir + "/calibration/Cam" + std::to_string(i) + ".yaml";
+                                    std::cout << cam_file << std::endl;
                                     CameraParams cam = camera_load_params_from_yaml(cam_file);
                                     camera_params.push_back(cam);
                                 }
@@ -455,7 +456,6 @@ int main(int, char **)
         if (plot_keypoints_flag)
         {
 
-            if (!(keypoints_map.find(current_frame_num)==keypoints_map.end())){
                 if (ImGui::Begin("Labeling Tool"))
                 {
                     for (int i=0; i<scene->num_cams; i++)
@@ -465,28 +465,30 @@ int main(int, char **)
                             if (j > 0) ImGui::SameLine();
 
                             ImGui::PushID(j);
-                            if (keypoints_map.at(current_frame_num)->keypoints2d[i][j].is_labeled)
-                            {
-                                ImGui::PushStyleColor(ImGuiCol_Button, (ImVec4)ImColor::HSV(j / (float)skeleton->num_nodes, 0.6f, 0.6f));
-                                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, (ImVec4)ImColor::HSV(j / (float)skeleton->num_nodes, 0.7f, 0.7f));
-                                ImGui::PushStyleColor(ImGuiCol_ButtonActive, (ImVec4)ImColor::HSV(j / (float)skeleton->num_nodes, 0.8f, 0.8f));
-                            }
-                            else
-                            {
+
+                            if (!(keypoints_map.find(current_frame_num)==keypoints_map.end())) {
+                                if (keypoints_map.at(current_frame_num)->keypoints2d[i][j].is_labeled)
+                                {
+                                    ImGui::PushStyleColor(ImGuiCol_Button, (ImVec4)ImColor::HSV(j / (float)skeleton->num_nodes, 0.6f, 0.6f));
+                                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, (ImVec4)ImColor::HSV(j / (float)skeleton->num_nodes, 0.7f, 0.7f));
+                                    ImGui::PushStyleColor(ImGuiCol_ButtonActive, (ImVec4)ImColor::HSV(j / (float)skeleton->num_nodes, 0.8f, 0.8f));
+                                } else {
+                                    ImGui::PushStyleColor(ImGuiCol_Button, (ImVec4)ImColor::HSV(0.2f, 0.2f, 0.2f));
+                                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, (ImVec4)ImColor::HSV(0.2f, 0.2f, 0.2f));
+                                    ImGui::PushStyleColor(ImGuiCol_ButtonActive, (ImVec4)ImColor::HSV(0.2f, 0.2f, 0.2f));
+                                }
+                            } else {
                                 ImGui::PushStyleColor(ImGuiCol_Button, (ImVec4)ImColor::HSV(0.2f, 0.2f, 0.2f));
                                 ImGui::PushStyleColor(ImGuiCol_ButtonHovered, (ImVec4)ImColor::HSV(0.2f, 0.2f, 0.2f));
                                 ImGui::PushStyleColor(ImGuiCol_ButtonActive, (ImVec4)ImColor::HSV(0.2f, 0.2f, 0.2f));
                             }
-                            
                             ImGui::Button(skeleton->node_names[j].c_str());
                             ImGui::PopStyleColor(3);
                             ImGui::PopID();
                         }
                     }
 
-                    static bool triangulate = false;
-                    ImGui::Checkbox("triangulate", &triangulate);
-                    if (triangulate)
+                    if (ImGui::Button("triangulate"))
                     {
                         reprojection(keypoints_map.at(current_frame_num), skeleton, camera_params, scene->num_cams);
                     }
@@ -496,10 +498,9 @@ int main(int, char **)
                         save_keypoints(keypoints_map, skeleton, root_dir, scene->num_cams);
                     }
 
-
                 }
                 ImGui::End();
-            }
+
         }
 
 

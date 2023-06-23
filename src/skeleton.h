@@ -27,16 +27,19 @@ struct SkeletonContext {
 };
 
 enum SkeletonPrimitive { 
-    CalibrationFourCorners=0,
-    Rat10Target2=1
+    Rat7Target=0,
+    Rat10Target2=1,
+    RatTarget=2,
+    CalibrationFourCorners=3
 };
-
 
 std::map<std::string, SkeletonPrimitive> skeleton_get_all()
 {
     std::map<std::string, SkeletonPrimitive> skeleton_all = {
-        {"CalibrationFourCorners", CalibrationFourCorners},
-        {"Rat10Target2", Rat10Target2}
+        {"Rat7Target", Rat7Target},
+        {"Rat10Target2", Rat10Target2},
+        {"RatTarget", RatTarget},
+        {"CalibrationFourCorners", CalibrationFourCorners}
     };
     return skeleton_all;
 }
@@ -46,12 +49,12 @@ void skeleton_initialize(SkeletonContext* skeleton, SkeletonPrimitive skeleton_t
 {
     switch (skeleton_type){
         case CalibrationFourCorners:
-            skeleton->num_nodes = 4;
-            skeleton->num_edges = 4;
+            skeleton->num_nodes = 3;
+            skeleton->num_edges = 2;
              
-            skeleton->node_names = {"TopLeft", "BottomLeft", "BottomRight", "TopRight"};
+            skeleton->node_names = {"BottomLeft", "BottomRight", "TopLeft"};
 
-            for (int i = 0; i < 4; i++) {
+            for (int i = 0; i < skeleton->num_nodes; i++) {
                 ImVec4 color = (ImVec4)ImColor::HSV(i / (float)skeleton->num_nodes, 0.8f, 0.8f);
                 skeleton->node_colors.push_back({color.x, color.y, color.z});
             }
@@ -59,29 +62,57 @@ void skeleton_initialize(SkeletonContext* skeleton, SkeletonPrimitive skeleton_t
             skeleton->edges ={
                 {0, 1},
                 {1, 2},
-                {2, 3},
-                {3, 0}};
+                };
             break;
+
+
+        case Rat7Target:
+            skeleton->num_nodes = 9;
+            skeleton->num_edges = 8;
+            skeleton->node_names = {"Snout", "EarL", "EarR", "Neck", "SpineF", "SpineM", "SpineL", "TailBase", "Target"};
+
+            for (int i = 0; i < skeleton->num_nodes; i++) {
+                ImVec4 color = (ImVec4)ImColor::HSV(i / (float)skeleton->num_nodes, 1.0f, 1.0f);
+                skeleton->node_colors.push_back({color.x, color.y, color.z});
+            }
+
+            skeleton->edges ={
+                {0, 1},
+                {0, 2},
+                {1, 3},
+                {2, 3},
+                {3, 4},
+                {4, 5},
+                {5, 6},
+                {6, 7} 
+                };
+            break;
+
+        case RatTarget:
+            skeleton->num_nodes = 2;
+            skeleton->num_edges = 1;
+            skeleton->node_names = {"Snout", "Target"};
+
+            for (int i = 0; i < skeleton->num_nodes; i++) {
+                ImVec4 color = (ImVec4)ImColor::HSV(i / (float)skeleton->num_nodes, 1.0f, 1.0f);
+                skeleton->node_colors.push_back({color.x, color.y, color.z});
+            }
+            skeleton->edges ={
+                {0, 1}
+            };
+
+            break;
+
 
         case Rat10Target2:
                 skeleton->num_nodes = 12;
                 skeleton->num_edges = 10;
                 skeleton->node_names = {"Snout", "EarL", "EarR", "Neck", "SpineL", "TailBase", "HandL", "HandR", "FootL", "FootR", "Target1", "Target2"};
 
-                skeleton->node_colors = {
-                    {0.8f, 0.8f, 1.0f},
-                    {0.8f, 0.8f, 1.0f},
-                    {0.8f, 0.8f, 1.0f},
-                    {0.5f, 0.5f, 0.5f},
-                    {0.5f, 0.5f, 0.5f},
-                    {1.0f, 1.0f, 0.0f},
-                    {1.0f, 0.0f, 0.0f},
-                    {0.0f, 1.0f, 0.0f},
-                    {1.0f, 0.0f, 1.0f},
-                    {0.0f, 1.0f, 1.0f},
-                    {0.3f, 0.3f, 0.1f},
-                    {0.3f, 0.3f, 0.1f}
-                    };
+                for (int i = 0; i < skeleton->num_nodes; i++) {
+                    ImVec4 color = (ImVec4)ImColor::HSV(i / (float)skeleton->num_nodes, 1.0f, 1.0f);
+                    skeleton->node_colors.push_back({color.x, color.y, color.z});
+                }
                 
                 skeleton->edges ={
                     {0, 1},
@@ -94,7 +125,7 @@ void skeleton_initialize(SkeletonContext* skeleton, SkeletonPrimitive skeleton_t
                     {3, 7},
                     {4, 8},
                     {4, 9}};
-
+        
     }
 };
 

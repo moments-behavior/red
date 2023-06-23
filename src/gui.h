@@ -166,7 +166,6 @@ void save_keypoints(std::map<u32, KeyPoints*> keypoints_map, SkeletonContext* sk
     for (uint i = 0; i < num_cameras; i++) {
         output2d_files[i].close();
     }
-
 }
 
 void world_coordinates_projection_points(CameraParams* cvp, double* axis_x_values, double* axis_y_values, float scale)
