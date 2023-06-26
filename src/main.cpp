@@ -20,7 +20,7 @@
 #pragma comment(lib, "legacy_stdio_definitions")
 #endif
 
-#define label_buffer_size 128 
+#define label_buffer_size 32 
 
 simplelogger::Logger *logger = simplelogger::LoggerFactory::CreateConsoleLogger();
 
@@ -74,6 +74,7 @@ int main(int, char **)
     // for labeling 
     SkeletonContext *skeleton;
     std::map<u32, KeyPoints*> keypoints_map;
+    bool keypoints_find;
 
     // others
     ImGui::FileBrowser file_dialog(ImGuiFileBrowserFlags_SelectDirectory);
@@ -305,6 +306,15 @@ int main(int, char **)
             toggle_play_status = false;
         }
 
+
+        if (plot_keypoints_flag) {
+            if (keypoints_map.find(current_frame_num)==keypoints_map.end()) {
+                keypoints_find = false;
+            } else {
+                keypoints_find = true;
+            }
+        }
+
         // Render a video frame
         if (video_loaded)
         {
@@ -343,39 +353,47 @@ int main(int, char **)
 
                         // labeling 
                         if (ImPlot::IsPlotHovered()){
-                            if (ImGui::IsKeyPressed(ImGuiKey_W, false)){
-                                if (keypoints_map.find(current_frame_num)==keypoints_map.end()){
+                            
+                            if (ImGui::IsKeyPressed(ImGuiKey_C, false)) {
+                                // create keypoints
+                                if (!keypoints_find){
                                     // not found
                                     KeyPoints* keypoints = (KeyPoints *)malloc(sizeof(KeyPoints));
                                     allocate_keypoints(keypoints, scene, skeleton);
                                     keypoints_map[current_frame_num] = keypoints; 
                                 }
-                                
-                                // labeling sequentially each view
-                                ImPlotPoint mouse = ImPlot::GetPlotMousePos();
-                                keypoints_map[current_frame_num]->keypoints2d[j][keypoints_map[current_frame_num]->active_id[j]].position = {mouse.x,  mouse.y};
-                                keypoints_map[current_frame_num]->keypoints2d[j][keypoints_map[current_frame_num]->active_id[j]].is_labeled = true;
-                                if(keypoints_map[current_frame_num]->active_id[j] < (skeleton->num_nodes - 1)) { keypoints_map[current_frame_num]->active_id[j]++; }
                             }
 
-                            if (keypoints_map.find(current_frame_num)!=keypoints_map.end()) {
+                            if (keypoints_find) {
+
                                 u32* kp = &(keypoints_map[current_frame_num]->active_id[j]);
+                                if (ImGui::IsKeyPressed(ImGuiKey_W, false)){
+                                    // labeling sequentially each view
+                                    ImPlotPoint mouse = ImPlot::GetPlotMousePos();
+                                    keypoints_map[current_frame_num]->keypoints2d[j][*kp].position = {mouse.x,  mouse.y};
+                                    keypoints_map[current_frame_num]->keypoints2d[j][*kp].is_labeled = true;
+                                    if(*kp < (skeleton->num_nodes - 1)) {(*kp)++;}
+                                }
+
                                 // Use "Q" and "E" keys to scroll through and set active keypoint to label
                                 if (ImGui::IsKeyPressed(ImGuiKey_Q, false))
                                 {
-                                    if (*kp <= 0) { *kp = 0; }
+                                    if (*kp <= 0) {*kp = 0;}
                                     else (*kp)--;
                                 }
-                                else if (ImGui::IsKeyPressed(ImGuiKey_E, false))
+
+                                if (ImGui::IsKeyPressed(ImGuiKey_E, false))
                                 {
-                                    if (*kp >= skeleton->num_nodes-1) { *kp = skeleton->num_nodes-1; }
+                                    if (*kp >= skeleton->num_nodes-1) {*kp = skeleton->num_nodes-1;}
                                     else (*kp)++;
                                 }
-                                else if (ImGui::IsKeyPressed(ImGuiKey_T, false))   // skip to the last keypoint
+                                
+                                if (ImGui::IsKeyPressed(ImGuiKey_T, false))   // skip to the last keypoint
                                 {
                                     *kp = skeleton->num_nodes-1;
                                 }
-                                else if (ImGui::IsKeyPressed(ImGuiKey_Delete, false))  // delete the active keypoint
+                                
+                                if (ImGui::IsKeyPressed(ImGuiKey_D, false))  // delete the active keypoint
                                 {
                                     keypoints_map[current_frame_num]->keypoints2d[j][*kp].position.x = 1E7;
                                     keypoints_map[current_frame_num]->keypoints2d[j][*kp].position.y = 1E7;
@@ -385,7 +403,7 @@ int main(int, char **)
                             }
                         }
 
-                        if (!(keypoints_map.find(current_frame_num)==keypoints_map.end())){
+                        if (keypoints_find){
                             gui_plot_keypoints(keypoints_map.at(current_frame_num), skeleton, j);}
                     }
                     ImPlot::EndPlot();
@@ -495,7 +513,7 @@ int main(int, char **)
 
                             ImGui::PushID(j);
 
-                            if (!(keypoints_map.find(current_frame_num)==keypoints_map.end())) {
+                            if (keypoints_find) {
                                 if (keypoints_map.at(current_frame_num)->keypoints2d[i][j].is_labeled)
                                 {
                                     ImGui::PushStyleColor(ImGuiCol_Button, (ImVec4)ImColor::HSV(j / (float)skeleton->num_nodes, 0.6f, 0.6f));
@@ -533,13 +551,15 @@ int main(int, char **)
                     }
 
                     ImGui::NewLine();
-
                     ImGui::Text("[ -> Previous Image");
                     ImGui::Text("] -> Next Image");
-                    ImGui::Text("Q -> ActiveKeypoint++ (while hovering image)");
-                    ImGui::Text("E -> ActiveKeypoint-- (while hovering image)");
-                    ImGui::Text("T -> ActiveKeypoint set to last node");
-                    ImGui::Text("W -> Drop ActiveKeypoint (while hovering at desired image point)");
+                    ImGui::Text("While hovering image...");
+                    ImGui::Text("C -> Create keypoints on frame");
+                    ImGui::Text("Q -> Active keypoint++ ");
+                    ImGui::Text("E -> Active keypoint--");
+                    ImGui::Text("D -> Delete active keypoint");
+                    ImGui::Text("T -> Active keypoint set to last node");
+                    ImGui::Text("W -> Drop active keypoint");
                 }
                 ImGui::End();
         }
