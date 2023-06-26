@@ -20,6 +20,8 @@
 #pragma comment(lib, "legacy_stdio_definitions")
 #endif
 
+#define label_buffer_size 128 
+
 simplelogger::Logger *logger = simplelogger::LoggerFactory::CreateConsoleLogger();
 
 std::vector<std::mutex> g_mutexes(MAX_VIEWS);
@@ -177,7 +179,7 @@ int main(int, char **)
             std::sort(input_file_names.begin(), input_file_names.end());
             scene->image_width = 3208;
             scene->image_height = 2200;
-            render_allocate_scene_memory(scene, 3208, 2200, input_file_names.size(), 32);
+            render_allocate_scene_memory(scene, 3208, 2200, input_file_names.size(), label_buffer_size);
 
             // multiple threads for decoding for selected videos
             for (u32 i = 0; i < scene->num_cams; i++)
@@ -355,7 +357,34 @@ int main(int, char **)
                                 keypoints_map[current_frame_num]->keypoints2d[j][keypoints_map[current_frame_num]->active_id[j]].is_labeled = true;
                                 if(keypoints_map[current_frame_num]->active_id[j] < (skeleton->num_nodes - 1)) { keypoints_map[current_frame_num]->active_id[j]++; }
                             }
+
+                            if (keypoints_map.find(current_frame_num)!=keypoints_map.end()) {
+                                u32* kp = &(keypoints_map[current_frame_num]->active_id[j]);
+                                // Use "Q" and "E" keys to scroll through and set active keypoint to label
+                                if (ImGui::IsKeyPressed(ImGuiKey_Q, false))
+                                {
+                                    if (*kp <= 0) { *kp = 0; }
+                                    else (*kp)--;
+                                }
+                                else if (ImGui::IsKeyPressed(ImGuiKey_E, false))
+                                {
+                                    if (*kp >= skeleton->num_nodes-1) { *kp = skeleton->num_nodes-1; }
+                                    else (*kp)++;
+                                }
+                                else if (ImGui::IsKeyPressed(ImGuiKey_T, false))   // skip to the last keypoint
+                                {
+                                    *kp = skeleton->num_nodes-1;
+                                }
+                                else if (ImGui::IsKeyPressed(ImGuiKey_Delete, false))  // delete the active keypoint
+                                {
+                                    keypoints_map[current_frame_num]->keypoints2d[j][*kp].position.x = 1E7;
+                                    keypoints_map[current_frame_num]->keypoints2d[j][*kp].position.y = 1E7;
+                                    keypoints_map[current_frame_num]->keypoints2d[j][*kp].is_labeled = false;
+                                    std::cout << skeleton->node_names.at(*kp) << " deleted on " << j << std:: endl;
+                                }
+                            }
                         }
+
                         if (!(keypoints_map.find(current_frame_num)==keypoints_map.end())){
                             gui_plot_keypoints(keypoints_map.at(current_frame_num), skeleton, j);}
                     }
@@ -503,9 +532,16 @@ int main(int, char **)
                         load_keypoints(keypoints_map, skeleton, root_dir, scene);
                     }
 
+                    ImGui::NewLine();
+
+                    ImGui::Text("[ -> Previous Image");
+                    ImGui::Text("] -> Next Image");
+                    ImGui::Text("Q -> ActiveKeypoint++ (while hovering image)");
+                    ImGui::Text("E -> ActiveKeypoint-- (while hovering image)");
+                    ImGui::Text("T -> ActiveKeypoint set to last node");
+                    ImGui::Text("W -> Drop ActiveKeypoint (while hovering at desired image point)");
                 }
                 ImGui::End();
-
         }
 
 
