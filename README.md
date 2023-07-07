@@ -3,7 +3,8 @@
 
 # Building 
 ## Build opencv with dnn support 
-1. Download and upzip `opencv-4.6.0.zip` and `opencv_contrib-4.6.0.zip`. 
+1. Download and upzip `opencv-4.6.0.zip` and `opencv_contrib-4.6.0.zip`.
+
 2. Install Ceres Solver with instruction from https://docs.opencv.org/4.x/db/db8/tutorial_sfm_installation.html
 
 If you want to build with opencv sfm, please follow instruction from: https://docs.opencv.org/4.x/db/db8/tutorial_sfm_installation.html. 
@@ -14,7 +15,9 @@ Ceres is optional, but if you want to enable the solver, make sure you are build
 git checkout facb199f3eda902360f9e1d5271372b7e54febe1
 ```
 otherwise you will have build issue, and have to turn off Ceres. 
+
 3. Install cudnn follow instruction from cudnn website. The version I am currently using is `cudnn-linux-x86_64-8.7.0.84_cuda11-archive/`. 
+
 4. Build opencv using 
 
 ```
