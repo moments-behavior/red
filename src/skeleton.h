@@ -27,10 +27,11 @@ struct SkeletonContext {
 };
 
 enum SkeletonPrimitive { 
-    Rat7Target=0,
-    Rat10Target2=1,
-    RatTarget=2,
-    CalibrationFourCorners=3
+    Rat7Target,
+    Rat10Target2,
+    RatTarget,
+    Rat3Target,
+    CalibrationFourCorners
 };
 
 std::map<std::string, SkeletonPrimitive> skeleton_get_all()
@@ -39,6 +40,7 @@ std::map<std::string, SkeletonPrimitive> skeleton_get_all()
         {"Rat7Target", Rat7Target},
         {"Rat10Target2", Rat10Target2},
         {"RatTarget", RatTarget},
+        {"Rat3Target", Rat3Target},
         {"CalibrationFourCorners", CalibrationFourCorners}
     };
     return skeleton_all;
@@ -101,6 +103,21 @@ void skeleton_initialize(SkeletonContext* skeleton, SkeletonPrimitive skeleton_t
                 {0, 1}
             };
 
+            break;
+
+        case Rat3Target:
+            skeleton->num_nodes = 4;
+            skeleton->num_edges = 2;
+            skeleton->node_names = {"Snout", "EarL", "EarR", "Target"};
+
+            for (int i = 0; i < skeleton->num_nodes; i++) {
+                ImVec4 color = (ImVec4)ImColor::HSV(i / (float)skeleton->num_nodes, 1.0f, 1.0f);
+                skeleton->node_colors.push_back({color.x, color.y, color.z});
+            }
+            skeleton->edges ={
+                {0, 1},
+                {0, 2}
+            };
             break;
 
 
