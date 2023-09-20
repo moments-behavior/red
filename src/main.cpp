@@ -15,6 +15,8 @@
 #include "gui.h"
 #include "yolo_detection.h"
 #include "global.h"
+#include "utils.h"
+
 
 #if defined(_MSC_VER) && (_MSC_VER >= 1900) && !defined(IMGUI_DISABLE_WIN32_FUNCTIONS)
 #pragma comment(lib, "legacy_stdio_definitions")
@@ -78,7 +80,12 @@ int main(int, char **)
 
     // others
     ImGui::FileBrowser file_dialog(ImGuiFileBrowserFlags_SelectDirectory);
-    file_dialog.SetPwd("/home/jinyao/dev");
+    std::filesystem::path cwd = std::filesystem::current_path();
+    std::string delimiter = "/";
+    std::vector<std::string> tokenized_path = string_split (cwd, delimiter);
+    std::string start_folder_name = "/home/" + tokenized_path[2] + "/dev";
+
+    file_dialog.SetPwd(start_folder_name);
     file_dialog.SetTitle("Select working directory");
     ImVec4 clear_color = ImVec4(0.0f, 0.0f, 0.0f, 1.00f);
     ImGuiIO &io = ImGui::GetIO();
@@ -141,8 +148,8 @@ int main(int, char **)
 
                     if (ImGui::BeginMenu("Detection")) {
                         if (ImGui::MenuItem("YOLOv5")) { 
-                            std::string yolov5_onnx = "/home/jinyao/dev/clips0/yolo_models/best.onnx";
-                            std::string yolov5_labelname = "/home/jinyao/dev/clips0/yolo_models/label.names";
+                            std::string yolov5_onnx = root_dir + "/yolo_models/best.onnx";
+                            std::string yolov5_labelname = root_dir + "/yolo_models/label.names";
                             read_yolo_labels(yolov5_labelname, &yolo_setting);
 
                             for (int i = 0; i< scene->num_cams; i++) {
