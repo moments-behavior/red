@@ -345,7 +345,7 @@ int main(int, char **)
 
                 ImVec2 avail_size = ImGui::GetContentRegionAvail();
                 // ImGui::Image((void*)(intptr_t)image_texture[j], avail_size);
-                if (ImPlot::BeginPlot("##no_plot_name", avail_size))
+                if (ImPlot::BeginPlot("##no_plot_name", avail_size, ImPlotFlags_Equal | ImPlotAxisFlags_AutoFit | ImPlotFlags_Crosshairs))
                 {
                     ImPlot::PlotImage("##no_image_name", (void *)(intptr_t)scene->image_texture[j], ImVec2(0, 0), ImVec2(3208, 2200));
                     
@@ -570,6 +570,13 @@ int main(int, char **)
                     if (ImGui::Button("Load Labeled Data"))
                     {
                         load_keypoints(keypoints_map, skeleton, root_dir, scene);
+                    }
+
+                    if (ImGui::Button("Load 2d Keypoints Only"))
+                    {
+                        for (int i=0; i<scene->num_cams; i++) {
+                            load_2d_keypoints(keypoints_map, skeleton, root_dir, i, scene);
+                        }
                     }
 
                     ImGui::NewLine();

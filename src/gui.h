@@ -145,15 +145,25 @@ void save_keypoints(std::map<u32, KeyPoints*> keypoints_map, SkeletonContext* sk
         output_file << frame << ",";
         // fore each labeled keypoint, write idx, xpos, ypos, zpos
         for (uint i = 0; i < skeleton->num_nodes; i++)
-        {
-            output_file << i << "," << keypoints->keypoints3d[i].x << "," << keypoints->keypoints3d[i].y << "," << keypoints->keypoints3d[i].z << ",";
+        {   
+            if (i == skeleton->num_nodes - 1) {
+                // last keypoints
+                output_file << i << "," << keypoints->keypoints3d[i].x << "," << keypoints->keypoints3d[i].y << "," << keypoints->keypoints3d[i].z;
+            } else {
+                output_file << i << "," << keypoints->keypoints3d[i].x << "," << keypoints->keypoints3d[i].y << "," << keypoints->keypoints3d[i].z << ",";
+            }
         }
         output_file << "\n";
 
         for (int cam = 0; cam < num_cameras; cam++) {
             output2d_files[cam] << frame << ",";
             for (int node = 0; node < skeleton->num_nodes; node++) {
-                output2d_files[cam] << node << "," << keypoints->keypoints2d[cam][node].position.x << "," << keypoints->keypoints2d[cam][node].position.y << ",";
+                if (node == skeleton->num_nodes - 1) {
+                    // last keypoints
+                    output2d_files[cam] << node << "," << keypoints->keypoints2d[cam][node].position.x << "," << keypoints->keypoints2d[cam][node].position.y;
+                } else {
+                    output2d_files[cam] << node << "," << keypoints->keypoints2d[cam][node].position.x << "," << keypoints->keypoints2d[cam][node].position.y << ",";
+                }
             }
             output2d_files[cam] << "\n";
         }
@@ -170,7 +180,7 @@ void save_keypoints(std::map<u32, KeyPoints*> keypoints_map, SkeletonContext* sk
 }
 
 
-void load_2d_keypoints(std::map<u32, KeyPoints*>& keypoints_map, SkeletonContext* skeleton, std::string root_dir, int cam_idx) {
+void load_2d_keypoints(std::map<u32, KeyPoints*>& keypoints_map, SkeletonContext* skeleton, std::string root_dir, int cam_idx, render_scene *scene) {
     std::string labeled_data_dir = root_dir + "/labeled_data/Cam" + std::to_string(cam_idx);
     std::vector<std::string> filenames;
 
@@ -222,6 +232,11 @@ void load_2d_keypoints(std::map<u32, KeyPoints*>& keypoints_map, SkeletonContext
             else
             {
                 uint frame_num = stoul(token);
+                if (keypoints_map.find(frame_num)==keypoints_map.end()) {
+                    KeyPoints* keypoints = (KeyPoints *)malloc(sizeof(KeyPoints));
+                    allocate_keypoints(keypoints, scene, skeleton);
+                    keypoints_map[frame_num] = keypoints; 
+                }
                 line.erase(0, pos + delimeter.length());
 
                 while ((pos = line.find(delimeter)) != std::string::npos)
@@ -338,7 +353,7 @@ void load_keypoints(std::map<u32, KeyPoints*>& keypoints_map, SkeletonContext* s
     fin.close();
 
     for (int i=0; i<scene->num_cams; i++) {
-        load_2d_keypoints(keypoints_map, skeleton, root_dir, i);
+        load_2d_keypoints(keypoints_map, skeleton, root_dir, i, scene);
     }
 }
 
