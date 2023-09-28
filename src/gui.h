@@ -57,6 +57,31 @@ static void gui_plot_keypoints(KeyPoints *keypoints, SkeletonContext *skeleton, 
 
 }
 
+static void gui_plot_bbox_from_keypoints(KeyPoints *keypoints, SkeletonContext *skeleton, int view_idx)
+{
+    int top_left_idx = skeleton->num_nodes-2;
+    int bottom_right_idx = skeleton->num_nodes-1;
+    if (keypoints->keypoints2d[view_idx][top_left_idx].is_labeled && keypoints->keypoints2d[view_idx][bottom_right_idx].is_labeled) {
+        double xs[5] {keypoints->keypoints2d[view_idx][top_left_idx].position.x,
+                    keypoints->keypoints2d[view_idx][bottom_right_idx].position.x, 
+                    keypoints->keypoints2d[view_idx][bottom_right_idx].position.x,
+                    keypoints->keypoints2d[view_idx][top_left_idx].position.x,
+                    keypoints->keypoints2d[view_idx][top_left_idx].position.x
+                    };
+
+        double ys[5] {keypoints->keypoints2d[view_idx][top_left_idx].position.y,
+                    keypoints->keypoints2d[view_idx][top_left_idx].position.y,
+                    keypoints->keypoints2d[view_idx][bottom_right_idx].position.y,
+                    keypoints->keypoints2d[view_idx][bottom_right_idx].position.y,
+                    keypoints->keypoints2d[view_idx][top_left_idx].position.y
+                    };
+
+        ImPlot::SetNextLineStyle(ImVec4(0.5, 1.0, 1.0,1.0), 3.0);
+        ImPlot::PlotLine("##line", xs, ys, 5); 
+    }
+}
+
+
 static void reprojection(KeyPoints *keypoints, SkeletonContext *skeleton, std::vector<CameraParams> camera_params, int num_cams)
 {
    

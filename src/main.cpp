@@ -411,7 +411,12 @@ int main(int, char **)
                         }
 
                         if (keypoints_find){
-                            gui_plot_keypoints(keypoints_map.at(current_frame_num), skeleton, j);}
+                            gui_plot_keypoints(keypoints_map.at(current_frame_num), skeleton, j);
+                            // think more general solution of multiple sets of keypoints 
+                            if (skeleton->name == "Rat4Box") {
+                                gui_plot_bbox_from_keypoints(keypoints_map.at(current_frame_num), skeleton, j);
+                            }
+                        }
                     }
                     ImPlot::EndPlot();
                 }
