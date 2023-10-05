@@ -33,6 +33,7 @@ enum SkeletonPrimitive {
     Rat3Target,
     Rat4Target,
     Rat4Box,
+    Rat4Box3Ball,
     Table3Corners
 };
 
@@ -45,6 +46,7 @@ std::map<std::string, SkeletonPrimitive> skeleton_get_all()
         {"Rat3Target", Rat3Target},
         {"Rat4Target", Rat4Target},
         {"Rat4Box", Rat4Box},
+        {"Rat4Box3Ball", Rat4Box3Ball},
         {"Table3Corners", Table3Corners}
     };
     return skeleton_all;
@@ -144,6 +146,23 @@ void skeleton_initialize(SkeletonContext* skeleton, SkeletonPrimitive skeleton_t
             skeleton->num_nodes = 6;
             skeleton->num_edges = 3;
             skeleton->node_names = {"EarR", "EarL", "Snout", "Tail", "TopLeft", "BottomRight"};
+
+            for (int i = 0; i < skeleton->num_nodes; i++) {
+                ImVec4 color = (ImVec4)ImColor::HSV(i / (float)skeleton->num_nodes, 1.0f, 1.0f);
+                skeleton->node_colors.push_back({color.x, color.y, color.z});
+            }
+
+            skeleton->edges ={
+                {0, 2},
+                {1, 2},
+                {2, 3}
+                };
+            break;
+
+        case Rat4Box3Ball:
+            skeleton->num_nodes = 9;
+            skeleton->num_edges = 3;
+            skeleton->node_names = {"EarR", "EarL", "Snout", "Tail", "TopLeft", "BottomRight", "Ball0", "Ball1", "Ball2"};
 
             for (int i = 0; i < skeleton->num_nodes; i++) {
                 ImVec4 color = (ImVec4)ImColor::HSV(i / (float)skeleton->num_nodes, 1.0f, 1.0f);

@@ -57,10 +57,8 @@ static void gui_plot_keypoints(KeyPoints *keypoints, SkeletonContext *skeleton, 
 
 }
 
-static void gui_plot_bbox_from_keypoints(KeyPoints *keypoints, SkeletonContext *skeleton, int view_idx)
+static void gui_plot_bbox_from_keypoints(KeyPoints *keypoints, SkeletonContext *skeleton, int view_idx, int top_left_idx, int bottom_right_idx)
 {
-    int top_left_idx = skeleton->num_nodes-2;
-    int bottom_right_idx = skeleton->num_nodes-1;
     if (keypoints->keypoints2d[view_idx][top_left_idx].is_labeled && keypoints->keypoints2d[view_idx][bottom_right_idx].is_labeled) {
         double xs[5] {keypoints->keypoints2d[view_idx][top_left_idx].position.x,
                     keypoints->keypoints2d[view_idx][bottom_right_idx].position.x, 
