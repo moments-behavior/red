@@ -133,7 +133,7 @@ int main(int, char **)
                                     // legacy loading from old formats
                                     // CameraParams cam = camera_load_params_from_csv(cam_file, i);
                                     // camera_params.push_back(cam);
-                                    std::string cam_file = root_dir + "/calibration/Cam" + std::to_string(i) + ".yaml";
+                                    std::string cam_file = root_dir + "/calibration/" + camera_names[i] + ".yaml";
                                     std::cout << cam_file << std::endl;
                                     CameraParams cam = camera_load_params_from_yaml(cam_file);
                                     camera_params.push_back(cam);
