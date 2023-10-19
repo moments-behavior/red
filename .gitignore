@@ -11,3 +11,6 @@ imgui.ini
 data
 src/fonts
 .clangd
+
+.idea/
+cmake-build-debug/

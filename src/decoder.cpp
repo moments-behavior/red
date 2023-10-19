@@ -103,7 +103,7 @@ void decoder_process(const char *input_file_name, DecoderContext *dc_context, Pi
             std::cout << "target_frame_number:" << seek_info->seek_frame << std::endl;
 
             // assume every 10s is a keyframe, double check if your video is like that
-            seek_info->seek_frame = demuxer.FindClosestKeyFrame(seek_info->seek_frame, 10);
+            seek_info->seek_frame = demuxer.FindClosestKeyFrame(seek_info->seek_frame, dc_context->seek_interval);
             std::cout << "seeking to: " << seek_info->seek_frame << std::endl;
             SeekContext s = SeekContext(seek_info->seek_frame);
 

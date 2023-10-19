@@ -22,7 +22,7 @@
 #pragma comment(lib, "legacy_stdio_definitions")
 #endif
 
-#define label_buffer_size 64 
+#define label_buffer_size 8 
 
 simplelogger::Logger *logger = simplelogger::LoggerFactory::CreateConsoleLogger();
 
@@ -59,7 +59,8 @@ int main(int, char **)
         .stop_flag = false,
         .total_num_frame = int(INT_MAX),
         .estimated_num_frames = 0,
-        .gpu_index = 0};
+        .gpu_index = 0,
+        .seek_interval=10};
 
     // gui states, todo: bundle this later
     int to_display_frame_number = 0;
@@ -167,6 +168,9 @@ int main(int, char **)
 
             ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
             // ImGui::Text("Frame number %d ", display_buffer[0][read_head].frame_number);
+            if (video_loaded) {
+                ImGui::InputInt("Seek step (s)", &dc_context->seek_interval, 10);
+            }
         }
         ImGui::End();
 
@@ -331,11 +335,23 @@ int main(int, char **)
                 // layout
                 ImGui::SetNextWindowSize(ImVec2(500, 400), ImGuiCond_FirstUseEver);
                 ImVec2 window_pos;
-                if(j % 2 == 0){
-                    window_pos.y = 200.0; window_pos.x = (j/2.0) * 500;}
-                else{
-                    window_pos.y = 600.0; window_pos.x = (j-1)/2.0 * 500;}
 
+                if (scene->num_cams < 8) {
+                    if (j % 2 == 0) {
+                        window_pos.y = 200.0; window_pos.x = (j/2.0) * 500;}
+                    else{
+                        window_pos.y = 600.0; window_pos.x = (j-1)/2.0 * 500;}
+                } else {
+                    if (j % 4 == 0) {
+                        window_pos.y = 200.0; window_pos.x = (j/4.0) * 500;}
+                    else if (j % 4 == 1) {
+                        window_pos.y = 600.0; window_pos.x = (j-1)/4.0 * 500;}
+                    else if (j % 4 == 2) {
+                        window_pos.y = 1000.0; window_pos.x = (j-1)/4.0 * 500;}
+                    else {
+                        window_pos.y = 1400.0; window_pos.x = (j-1)/4.0 * 500;}
+                }
+                
                 ImGui::SetNextWindowPos(window_pos, ImGuiCond_FirstUseEver);
                 ImGui::Begin(camera_names[j].c_str());
                 ImGui::BeginGroup();

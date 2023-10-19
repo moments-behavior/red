@@ -29,6 +29,7 @@ struct DecoderContext
     int total_num_frame;
     int estimated_num_frames;
     int gpu_index;
+    int seek_interval;
 };
 
 void decoder_get_image_from_gpu(CUdeviceptr dpSrc, uint8_t *pDst, int nWidth, int nHeight);

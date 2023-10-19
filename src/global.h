@@ -1,7 +1,7 @@
 #ifndef RED_GLOBAL
 #define RED_GLOBAL
 
-#define MAX_VIEWS 16
+#define MAX_VIEWS 17
 extern std::vector<std::mutex> g_mutexes;
 extern std::vector<std::condition_variable> g_cvs;
 extern std::vector<bool> g_ready;
