@@ -187,7 +187,6 @@ void decoder_process(const char *input_file_name, DecoderContext *dc_context, Pi
                 }
                 nFrame = nFrame + 1;
                 buffer_head = (buffer_head + 1) % size_of_buffer;
-
                 // for debugging purpose
                 if (!demux_success)
                 {
