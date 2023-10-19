@@ -59,7 +59,7 @@ inline void decoder_check_input_files(const char *sz_in_file_path)
     }
 }
 
-void decoder_process(const char *input_file_name, DecoderContext *dc_context, PictureBuffer *display_buffer, int size_of_buffer, SeekInfo *seek_info)
+void decoder_process(const char *input_file_name, DecoderContext *dc_context, PictureBuffer *display_buffer, int size_of_buffer, SeekInfo *seek_info, bool use_cpu_buffer)
 {
 
     decoder_check_input_files(input_file_name);
@@ -91,6 +91,7 @@ void decoder_process(const char *input_file_name, DecoderContext *dc_context, Pi
     double frame_rate = demuxer.GetFramerate();
     dc_context->estimated_num_frames = int(video_length * frame_rate);
     std::cout << "estimated_num_frames:" << dc_context->estimated_num_frames << std::endl;
+    int size_in_bytes; 
 
     do
     {
@@ -113,7 +114,9 @@ void decoder_process(const char *input_file_name, DecoderContext *dc_context, Pi
             // reset the display buffer after seeking
             for (int i = 0; i < size_of_buffer; i++)
             {
-                decoder_clear_buffer_with_constant_image(display_buffer[i].frame, 3208, 2200);
+                if (use_cpu_buffer) {
+                    decoder_clear_buffer_with_constant_image(display_buffer[i].frame, 3208, 2200);
+                }
                 display_buffer[i].available_to_write = true;
             }
             // nFrameReturned = dec.Decode(pVideo, nVideoBytes, CUVID_PKT_DISCONTINUITY, pktinfo.pts);
@@ -155,7 +158,7 @@ void decoder_process(const char *input_file_name, DecoderContext *dc_context, Pi
                 // Get output frame size from decoder
                 nWidth = dec.GetWidth();
                 nHeight = dec.GetHeight();
-                int size_in_bytes = nWidth * nHeight * 4;
+                size_in_bytes = nWidth * nHeight * 4;
                 cuMemAlloc(&pTmpImage, size_in_bytes);
             }
 
@@ -168,7 +171,11 @@ void decoder_process(const char *input_file_name, DecoderContext *dc_context, Pi
 
                 if (nFrame == 0)
                 {
-                    decoder_get_image_from_gpu(pTmpImage, display_buffer[buffer_head].frame, 4 * dec.GetWidth(), dec.GetHeight());
+                    if (use_cpu_buffer) {
+                        decoder_get_image_from_gpu(pTmpImage, display_buffer[buffer_head].frame, 4 * dec.GetWidth(), dec.GetHeight());
+                    } else {
+                        cudaMemcpy(display_buffer[buffer_head].frame, (uint8_t *)pTmpImage, size_in_bytes, cudaMemcpyDeviceToDevice);
+                    }
                     display_buffer[buffer_head].available_to_write = false;
                     dc_context->decoding_flag = true;
                     display_buffer[buffer_head].frame_number = nFrame;
@@ -181,7 +188,11 @@ void decoder_process(const char *input_file_name, DecoderContext *dc_context, Pi
                         std::this_thread::sleep_for(std::chrono::milliseconds(1));
                     }
 
-                    decoder_get_image_from_gpu(pTmpImage, display_buffer[buffer_head].frame, 4 * dec.GetWidth(), dec.GetHeight());
+                    if (use_cpu_buffer) {
+                        decoder_get_image_from_gpu(pTmpImage, display_buffer[buffer_head].frame, 4 * dec.GetWidth(), dec.GetHeight());
+                    } else {
+                        cudaMemcpy(display_buffer[buffer_head].frame, (uint8_t *)pTmpImage, size_in_bytes, cudaMemcpyDeviceToDevice);
+                    }
                     display_buffer[buffer_head].available_to_write = false;
                     display_buffer[buffer_head].frame_number = nFrame;
                 }

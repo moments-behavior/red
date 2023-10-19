@@ -71,6 +71,7 @@ int main(int, char **)
     bool just_seeked = false;
     bool slider_just_changed = false;
     bool video_loaded = false;
+    bool cpu_buffer_toggle = true;
     bool plot_keypoints_flag = false;
     int current_frame_num = 0;
 
@@ -160,14 +161,14 @@ int main(int, char **)
                         }     
                         ImGui::EndMenu();
                     }
-
                 }
-
                 ImGui::EndMenuBar();
             }
 
             ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
             // ImGui::Text("Frame number %d ", display_buffer[0][read_head].frame_number);
+            ImGui::Checkbox("CPU Buffer", &cpu_buffer_toggle);
+            scene->use_cpu_buffer = cpu_buffer_toggle;
             if (video_loaded) {
                 ImGui::InputInt("Seek step (s)", &dc_context->seek_interval, 10);
             }
@@ -202,7 +203,7 @@ int main(int, char **)
                 std::string cam_string = input_file_names[i].substr(cam_string_position, length_of_substr); // get from "Cam" to the end
                 camera_names.push_back(cam_string);
                 std::cout << "camera names: " << cam_string << std::endl;
-                decoder_threads.push_back(std::thread(&decoder_process, input_file_names[i].c_str(), dc_context, scene->display_buffer[i], scene->size_of_buffer, &scene->seek_context[i]));
+                decoder_threads.push_back(std::thread(&decoder_process, input_file_names[i].c_str(), dc_context, scene->display_buffer[i], scene->size_of_buffer, &scene->seek_context[i], scene->use_cpu_buffer));
             }
 
             video_loaded = true;
@@ -230,7 +231,15 @@ int main(int, char **)
                 }
                 
                 // todo: need to use pbo to accelerate this 
-                upload_texture(&scene->image_texture[j], scene->display_buffer[j][read_head].frame, 3208, 2200);
+                if (scene->use_cpu_buffer) {
+                    upload_texture(&scene->image_texture[j], scene->display_buffer[j][read_head].frame, 3208, 2200);
+                } else {
+                    bind_pbo(&scene->pbo_cuda[j][read_head].pbo);
+                    bind_texture(&scene->image_texture[j]);
+                    upload_image_pbo_to_texture(scene->image_width, scene->image_height); // Needs no arguments because texture and PBO are bound
+                    unbind_pbo();
+                    unbind_texture();
+                }
 
             }
             current_frame_num = to_display_frame_number;
@@ -260,7 +269,15 @@ int main(int, char **)
                             {
                                 for (int j = 0; j < scene->num_cams; j++)
                                 {
-                                    upload_texture(&scene->image_texture[j], scene->display_buffer[j][read_head].frame, 3208, 2200);
+                                    if (scene->use_cpu_buffer) {
+                                        upload_texture(&scene->image_texture[j], scene->display_buffer[j][read_head].frame, 3208, 2200);
+                                    } else {
+                                        bind_pbo(&scene->pbo_cuda[j][read_head].pbo);
+                                        bind_texture(&scene->image_texture[j]);
+                                        upload_image_pbo_to_texture(scene->image_width, scene->image_height); // Needs no arguments because texture and PBO are bound
+                                        unbind_pbo();
+                                        unbind_texture();
+                                    }
                                 }
                             }
                         }
@@ -278,7 +295,15 @@ int main(int, char **)
 
                         for (int j = 0; j < scene->num_cams; j++)
                         {
-                            upload_texture(&scene->image_texture[j], scene->display_buffer[j][select_corr_head].frame, 3208, 2200);
+                            if (scene->use_cpu_buffer) {
+                                upload_texture(&scene->image_texture[j], scene->display_buffer[j][select_corr_head].frame, 3208, 2200);
+                            } else {
+                                bind_pbo(&scene->pbo_cuda[j][select_corr_head].pbo);
+                                bind_texture(&scene->image_texture[j]);
+                                upload_image_pbo_to_texture(scene->image_width, scene->image_height); // Needs no arguments because texture and PBO are bound
+                                unbind_pbo();
+                                unbind_texture();
+                            }
                         }
                     }
                 };
@@ -295,7 +320,16 @@ int main(int, char **)
                         {
                             for (u32 j = 0; j < scene->num_cams; j++)
                             {
-                                upload_texture(&scene->image_texture[j], scene->display_buffer[j][select_corr_head].frame, 3208, 2200);
+
+                                if (scene->use_cpu_buffer) {
+                                    upload_texture(&scene->image_texture[j], scene->display_buffer[j][select_corr_head].frame, 3208, 2200);
+                                } else {
+                                    bind_pbo(&scene->pbo_cuda[j][select_corr_head].pbo);
+                                    bind_texture(&scene->image_texture[j]);
+                                    upload_image_pbo_to_texture(scene->image_width, scene->image_height); // Needs no arguments because texture and PBO are bound
+                                    unbind_pbo();
+                                    unbind_texture();
+                                }
                             }
                         }
                     }

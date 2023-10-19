@@ -131,11 +131,11 @@ static void unbind_texture()
     glBindTexture(GL_TEXTURE_2D, 0);
 }
 
-static void create_pbo(GLuint *pbo)
+static void create_pbo(GLuint *pbo, int image_width, int img_height)
 {
     glGenBuffers(1, pbo);
     glBindBuffer(GL_PIXEL_UNPACK_BUFFER, *pbo);
-    glBufferData(GL_PIXEL_UNPACK_BUFFER, 3208 * 2200 * 4 * sizeof(unsigned char), 0, GL_STREAM_DRAW);
+    glBufferData(GL_PIXEL_UNPACK_BUFFER, image_width * img_height * 4 * sizeof(unsigned char), 0, GL_STREAM_DRAW);
     glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
 }
 
@@ -169,18 +169,18 @@ static void unmap_cuda_resource(cudaGraphicsResource_t *cuda_resource)
     cudaGraphicsUnmapResources(1, cuda_resource);
 }
 
-static void upload_image_pbo_to_texture()
+static void upload_image_pbo_to_texture(int image_width, int img_height)
 {
     // Assume PBO is bound before this, therefore the last
     // argument is an offset into the PBO, not a pointer to a
     // buffer stored in CPU memory
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 3208, 2200, 0, GL_RGBA, GL_UNSIGNED_BYTE, 0);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, image_width, img_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, 0);
 }
 
 static void upload_texture(GLuint *image_texture, unsigned char* frame, unsigned int width, unsigned int height)
 {
     bind_texture(image_texture);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 3208, 2200, 0, GL_RGBA, GL_UNSIGNED_BYTE, frame);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, frame);
     unbind_texture();
 }; 
 
