@@ -22,7 +22,7 @@
 #pragma comment(lib, "legacy_stdio_definitions")
 #endif
 
-#define label_buffer_size 8 
+#define label_buffer_size 32 
 
 simplelogger::Logger *logger = simplelogger::LoggerFactory::CreateConsoleLogger();
 
@@ -456,6 +456,15 @@ int main(int, char **)
                                     keypoints_map[current_frame_num]->keypoints2d[j][*kp].position.y = 1E7;
                                     keypoints_map[current_frame_num]->keypoints2d[j][*kp].is_labeled = false;
                                     std::cout << skeleton->node_names.at(*kp) << " deleted on " << j << std:: endl;
+                                }
+
+                                // delete all keypoint, memory leak here, need to handle it cleanly
+                                if (ImGui::IsKeyPressed(ImGuiKey_B, false)) 
+                                {
+                                    std::cout << "keypressed" << std::endl;
+                                    KeyPoints* keypoints = nullptr;
+                                    keypoints_map.erase(current_frame_num);
+                                    keypoints_find = false;
                                 }
                             }
                         }
