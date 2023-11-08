@@ -34,7 +34,9 @@ enum SkeletonPrimitive {
     Rat4Target,
     Rat4Box,
     Rat4Box3Ball,
-    Table3Corners
+    Table3Corners,
+    Rat22,
+    Rat20
 };
 
 std::map<std::string, SkeletonPrimitive> skeleton_get_all()
@@ -47,7 +49,9 @@ std::map<std::string, SkeletonPrimitive> skeleton_get_all()
         {"Rat4Target", Rat4Target},
         {"Rat4Box", Rat4Box},
         {"Rat4Box3Ball", Rat4Box3Ball},
-        {"Table3Corners", Table3Corners}
+        {"Table3Corners", Table3Corners},
+        {"Rat22", Rat22},
+        {"Rat20", Rat20}
     };
     return skeleton_all;
 }
@@ -177,27 +181,103 @@ void skeleton_initialize(SkeletonContext* skeleton, SkeletonPrimitive skeleton_t
             break;
 
         case Rat10Target2:
-                skeleton->num_nodes = 12;
-                skeleton->num_edges = 10;
-                skeleton->node_names = {"Snout", "EarL", "EarR", "Neck", "SpineL", "TailBase", "HandL", "HandR", "FootL", "FootR", "Target1", "Target2"};
+            skeleton->num_nodes = 12;
+            skeleton->num_edges = 10;
+            skeleton->node_names = {"Snout", "EarL", "EarR", "Neck", "SpineL", "TailBase", "HandL", "HandR", "FootL", "FootR", "Target1", "Target2"};
 
-                for (int i = 0; i < skeleton->num_nodes; i++) {
-                    ImVec4 color = (ImVec4)ImColor::HSV(i / (float)skeleton->num_nodes, 1.0f, 1.0f);
-                    skeleton->node_colors.push_back({color.x, color.y, color.z});
-                }
-                
-                skeleton->edges ={
-                    {0, 1},
-                    {0, 2},
-                    {0, 3},
-                    {1, 2},
-                    {3, 4},
-                    {4, 5},
-                    {3, 6},
-                    {3, 7},
-                    {4, 8},
-                    {4, 9}};
-        
+            for (int i = 0; i < skeleton->num_nodes; i++) {
+                ImVec4 color = (ImVec4)ImColor::HSV(i / (float)skeleton->num_nodes, 1.0f, 1.0f);
+                skeleton->node_colors.push_back({color.x, color.y, color.z});
+            }
+            
+            skeleton->edges ={
+                {0, 1},
+                {0, 2},
+                {0, 3},
+                {1, 2},
+                {3, 4},
+                {4, 5},
+                {3, 6},
+                {3, 7},
+                {4, 8},
+                {4, 9}};
+                break;
+
+        case Rat20:
+            skeleton->num_nodes = 20;
+            skeleton->num_edges = 20;
+            skeleton->node_names = {"Snout", "EarL", "EarR", "Neck", "SpineL", "TailBase",
+                                    "ShoulderL", "ElbowL", "WristL", "HandL",
+                                    "ShoulderR", "ElbowR", "WristR", "HandR",
+                                    "KneeL", "AnkleL", "FootL",
+                                    "KneeR", "AnkleR", "FootR"};
+
+            for (int i = 0; i < skeleton->num_nodes; i++) {
+                ImVec4 color = (ImVec4)ImColor::HSV(i / (float)skeleton->num_nodes, 1.0f, 1.0f);
+                skeleton->node_colors.push_back({color.x, color.y, color.z});
+            }
+            
+            skeleton->edges ={
+                {0, 1},
+                {0, 2},
+                {1, 3},
+                {2, 3},
+                {3, 4},
+                {4, 5},
+                {3, 6},
+                {6, 7},
+                {7, 8},
+                {8, 9},
+                {3, 10},
+                {10, 11},
+                {11, 12},
+                {12, 13},
+                {4, 14},
+                {14, 15},
+                {15, 16},
+                {4, 17},
+                {17, 18},
+                {18, 19}};
+                break;
+
+        case Rat22:
+            skeleton->num_nodes = 22;
+            skeleton->num_edges = 22;
+            skeleton->node_names = {"Snout", "EarL", "EarR", "Neck", "SpineL", "TailBase",
+                                    "ShoulderL", "ElbowL", "WristL", "HandL",
+                                    "ShoulderR", "ElbowR", "WristR", "HandR",
+                                    "HipL", "KneeL", "AnkleL", "FootL",
+                                    "HipR", "KneeR", "AnkleR", "FootR"};
+
+            for (int i = 0; i < skeleton->num_nodes; i++) {
+                ImVec4 color = (ImVec4)ImColor::HSV(i / (float)skeleton->num_nodes, 1.0f, 1.0f);
+                skeleton->node_colors.push_back({color.x, color.y, color.z});
+            }
+            
+            skeleton->edges ={
+                {0, 1},
+                {0, 2},
+                {1, 3},
+                {2, 3},
+                {3, 4},
+                {4, 5},
+                {3, 6},
+                {6, 7},
+                {7, 8},
+                {8, 9},
+                {3, 10},
+                {10, 11},
+                {11, 12},
+                {12, 13},
+                {4, 14},
+                {14, 15},
+                {15, 16},
+                {16, 17},
+                {4, 18},
+                {18, 19},
+                {19, 20},
+                {20, 21}};
+                break;
     }
 };
 
@@ -228,5 +308,11 @@ void allocate_keypoints(KeyPoints *keypoints, render_scene *scene, SkeletonConte
         keypoints->keypoints3d[k].z = 1E7;
     }
 }
+
+void deallocate_keypoints(KeyPoints *keypoints, render_scene *scene, SkeletonContext* skeleton)
+{
+    // clean delete
+}
+
 
 #endif

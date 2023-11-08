@@ -30,6 +30,7 @@ static void draw_cv_contours(std::vector<cv::Rect> boxes, std::vector<std::strin
 
 static void gui_plot_keypoints(KeyPoints *keypoints, SkeletonContext *skeleton, int view_idx)
 {
+    float pt_size = 6.0f;
     for (u32 node=0; node < skeleton->num_nodes; node++){
         if (keypoints->keypoints2d[view_idx][node].is_labeled){
             ImVec4 node_color; 
@@ -39,7 +40,7 @@ static void gui_plot_keypoints(KeyPoints *keypoints, SkeletonContext *skeleton, 
             node_color.z = skeleton->node_colors.at(node).z;
             
             int id = skeleton->num_nodes * view_idx + node;
-            ImPlot::DragPoint(id, &keypoints->keypoints2d[view_idx][node].position.x, &keypoints->keypoints2d[view_idx][node].position.y, node_color);
+            ImPlot::DragPoint(id, &keypoints->keypoints2d[view_idx][node].position.x, &keypoints->keypoints2d[view_idx][node].position.y, node_color, pt_size);
         }
     }
 
@@ -170,8 +171,8 @@ void save_keypoints(std::map<u32, KeyPoints*> keypoints_map, SkeletonContext* sk
         for (uint i = 0; i < skeleton->num_nodes; i++)
         {   
             if (i == skeleton->num_nodes - 1) {
-                // last keypoints
-                output_file << i << "," << keypoints->keypoints3d[i].x << "," << keypoints->keypoints3d[i].y << "," << keypoints->keypoints3d[i].z;
+                // last keypoints (RJ added extra "," at end of row)
+                output_file << i << "," << keypoints->keypoints3d[i].x << "," << keypoints->keypoints3d[i].y << "," << keypoints->keypoints3d[i].z << ",";
             } else {
                 output_file << i << "," << keypoints->keypoints3d[i].x << "," << keypoints->keypoints3d[i].y << "," << keypoints->keypoints3d[i].z << ",";
             }
@@ -182,8 +183,8 @@ void save_keypoints(std::map<u32, KeyPoints*> keypoints_map, SkeletonContext* sk
             output2d_files[cam] << frame << ",";
             for (int node = 0; node < skeleton->num_nodes; node++) {
                 if (node == skeleton->num_nodes - 1) {
-                    // last keypoints
-                    output2d_files[cam] << node << "," << keypoints->keypoints2d[cam][node].position.x << "," << keypoints->keypoints2d[cam][node].position.y;
+                    // last keypoints (RJ added extra "," at end of row)
+                    output2d_files[cam] << node << "," << keypoints->keypoints2d[cam][node].position.x << "," << keypoints->keypoints2d[cam][node].position.y << ",";
                 } else {
                     output2d_files[cam] << node << "," << keypoints->keypoints2d[cam][node].position.x << "," << keypoints->keypoints2d[cam][node].position.y << ",";
                 }

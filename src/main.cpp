@@ -22,7 +22,7 @@
 #pragma comment(lib, "legacy_stdio_definitions")
 #endif
 
-#define label_buffer_size 8 
+#define label_buffer_size 32 
 
 simplelogger::Logger *logger = simplelogger::LoggerFactory::CreateConsoleLogger();
 
@@ -85,7 +85,7 @@ int main(int, char **)
     std::filesystem::path cwd = std::filesystem::current_path();
     std::string delimiter = "/";
     std::vector<std::string> tokenized_path = string_split (cwd, delimiter);
-    std::string start_folder_name = "/home/" + tokenized_path[2] + "/dev";
+    std::string start_folder_name = "/home/" + tokenized_path[2] + "/Label";
 
     file_dialog.SetPwd(start_folder_name);
     file_dialog.SetTitle("Select working directory");
@@ -406,7 +406,7 @@ int main(int, char **)
                     if(plot_keypoints_flag){
                         // plot arena for testing camera parameters 
                         // gui_plot_perimeter(&camera_params[j]);
-                        gui_plot_world_coordinates(&camera_params[j], j);
+                        // gui_plot_world_coordinates(&camera_params[j], j);
 
                         // labeling 
                         if (ImPlot::IsPlotHovered()){
@@ -430,6 +430,13 @@ int main(int, char **)
                                     keypoints_map[current_frame_num]->keypoints2d[j][*kp].position = {mouse.x,  mouse.y};
                                     keypoints_map[current_frame_num]->keypoints2d[j][*kp].is_labeled = true;
                                     if(*kp < (skeleton->num_nodes - 1)) {(*kp)++;}
+                                }
+
+                                if (ImGui::IsKeyPressed(ImGuiKey_3, false)) {
+                                    for (int k=0; k<scene->num_cams; k++) {
+                                        keypoints_map[current_frame_num]->keypoints2d[k][*kp].position = {1E7,  1E7};
+                                        keypoints_map[current_frame_num]->keypoints2d[k][*kp].is_labeled = false;                                        
+                                    }
                                 }
 
                                 // Use "Q" and "E" keys to scroll through and set active keypoint to label
@@ -456,6 +463,15 @@ int main(int, char **)
                                     keypoints_map[current_frame_num]->keypoints2d[j][*kp].position.y = 1E7;
                                     keypoints_map[current_frame_num]->keypoints2d[j][*kp].is_labeled = false;
                                     std::cout << skeleton->node_names.at(*kp) << " deleted on " << j << std:: endl;
+                                }
+
+                                // delete all keypoint, memory leak here, need to handle it cleanly
+                                if (ImGui::IsKeyPressed(ImGuiKey_B, false)) 
+                                {
+                                    std::cout << "keypressed" << std::endl;
+                                    KeyPoints* keypoints = nullptr;
+                                    keypoints_map.erase(current_frame_num);
+                                    keypoints_find = false;
                                 }
                             }
                         }
@@ -613,6 +629,12 @@ int main(int, char **)
                     }
 
                     if (ImGui::Button("Triangulate"))
+                    {
+                        reprojection(keypoints_map.at(current_frame_num), skeleton, camera_params, scene->num_cams);
+                    }
+
+                    // added by RJ
+                    if (ImGui::IsKeyPressed(ImGuiKey_2, false))   // triangulate
                     {
                         reprojection(keypoints_map.at(current_frame_num), skeleton, camera_params, scene->num_cams);
                     }
