@@ -85,7 +85,7 @@ int main(int, char **)
     std::filesystem::path cwd = std::filesystem::current_path();
     std::string delimiter = "/";
     std::vector<std::string> tokenized_path = string_split (cwd, delimiter);
-    std::string start_folder_name = "/home/" + tokenized_path[2] + "/Label";
+    std::string start_folder_name = "/home/" + tokenized_path[2] + "/data";
 
     file_dialog.SetPwd(start_folder_name);
     file_dialog.SetTitle("Select working directory");
@@ -150,15 +150,25 @@ int main(int, char **)
 
                     if (ImGui::BeginMenu("Detection")) {
                         if (ImGui::MenuItem("YOLOv5")) { 
-                            std::string yolov5_onnx = root_dir + "/yolo_models/best.onnx";
-                            std::string yolov5_labelname = root_dir + "/yolo_models/label.names";
+                            std::string yolov5_onnx = root_dir + "/yolo/v5/best.onnx";
+                            std::string yolov5_labelname = root_dir + "/yolo/v5/label.names";
                             read_yolo_labels(yolov5_labelname, &yolo_setting);
 
                             for (int i = 0; i< scene->num_cams; i++) {
                                 yolo_threads.push_back(std::thread(&yolo_process, yolov5_onnx, &yolo_setting, i));
                             }
                             yolo_detection = true;
-                        }     
+                        }
+
+                        if (ImGui::MenuItem("YOLOv8Pose")) {
+                            std::string engine_file_path = root_dir + "/yolo/v8_pose/rat_pose.engine";
+                            for (int i = 0; i< scene->num_cams; i++) {
+                                yolo_threads.push_back(std::thread(&yolo_process_v8pose, engine_file_path, i));
+                            }
+                            yolo_detection = true;
+
+                        }
+
                         ImGui::EndMenu();
                     }
                 }

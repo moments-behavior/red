@@ -6,6 +6,7 @@ rm -f release/redgui;
 
 nvcc -c src/create_image_cuda.cu -arch=sm_80 -o release/create_image_cuda.o
 nvcc -c src/ColorSpace.cu -arch=sm_80 -o release/ColorSpace.o
+nvcc -c src/kernel.cu -arch=sm_80 -o release/kernel.o
 
 
 DIR_IMGUI="lib/imgui"
@@ -36,7 +37,7 @@ g++ -Ofast -mssse3 -ffast-math -std=c++17 \
     -I$DIR_IMGUI/backends \
     -Ilib/IconFontCppHeaders \
     -Ilib/imgui-filebrowser \
-    -L/usr/local/cuda/lib64/ -lcudart -lcuda -lnppicc -lnvcuvid \
+    -L/usr/local/cuda/lib64/ -lcudart -lcuda -lnvcuvid -lnppicc -lnppidei -lnvidia-encode -lnppc -lnppig -lnppial \
     -lGLEW -lGLU -lGL \
     -lpthread \
     `pkg-config --static --libs glfw3` \
@@ -44,6 +45,8 @@ g++ -Ofast -mssse3 -ffast-math -std=c++17 \
     -L$HOME/nvidia/ffmpeg/build/lib/ -lavformat -lswscale -lswresample -lavutil -lavcodec \
     -I/usr/local/include/opencv4 \
     -L/usr/local/lib \
-    -lopencv_sfm -lopencv_core -lopencv_bgsegm -lopencv_imgcodecs -lopencv_imgproc -lopencv_video -lopencv_highgui -lopencv_videoio -lopencv_calib3d -lopencv_dnn
+    -lopencv_sfm -lopencv_core -lopencv_bgsegm -lopencv_imgcodecs -lopencv_imgproc -lopencv_video -lopencv_highgui -lopencv_videoio -lopencv_calib3d -lopencv_dnn \
+    -I/home/user/build/TensorRT-8.6.1.6/include \
+    -L/home/user/build/TensorRT-8.6.1.6/lib/ -lnvinfer -lnvinfer_plugin
 
 ./release/redgui

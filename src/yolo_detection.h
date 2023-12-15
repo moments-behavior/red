@@ -9,6 +9,7 @@
 #include "global.h"
 #include <string>
 #include <fstream>
+#include "yolov8_pose.h"
 
 struct yolo_sync {
     bool new_frame;
@@ -32,4 +33,5 @@ struct yolo_results {
 
 void yolo_process(std::string onnx_file, yolo_param* post_setting, int camera_id);
 void read_yolo_labels(std::string label_names_file, yolo_param* post_setting);
+void yolo_process_v8pose(std::string engine_file, int camera_id);
 #endif
