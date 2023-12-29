@@ -68,7 +68,6 @@ int main(int, char **)
     bool play_video = false;
     bool toggle_play_status = false;
     int slider_frame_number = 0;
-    bool just_seeked = false;
     bool slider_just_changed = false;
     bool video_loaded = false;
     bool cpu_buffer_toggle = true;
@@ -176,7 +175,13 @@ int main(int, char **)
             }
 
             ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
-            // ImGui::Text("Frame number %d ", display_buffer[0][read_head].frame_number);
+
+            // if (video_loaded) {
+            //     ImGui::Text("Frame number %d ", scene->display_buffer[0][read_head].frame_number);
+            //     ImGui::Text("To Display frame number %d ", to_display_frame_number);
+            //     ImGui::Text("Readhead %d", read_head);
+            // }
+
             ImGui::Checkbox("CPU Buffer", &cpu_buffer_toggle);
             scene->use_cpu_buffer = cpu_buffer_toggle;
             if (video_loaded) {
@@ -227,7 +232,7 @@ int main(int, char **)
                 // if the current frame is ready, upload for display, otherwise wait for the frame to get ready
                 while (scene->display_buffer[j][read_head].frame_number != to_display_frame_number)
                 {
-                    // std::cout << display_buffer[read_head].frame_number << ", " << to_display_frame_number << std::endl;
+                    // std::cout << "main wait, " << read_head << ", " << scene->display_buffer[j][read_head].frame_number << ", " << to_display_frame_number << std::endl;
                     std::this_thread::sleep_for(std::chrono::milliseconds(1));
                 }
 
@@ -516,6 +521,7 @@ int main(int, char **)
                             while (!(scene->seek_context[i].seek_done))
                             {
                                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                                // std::cout << "Seeking Cam" << i << ", " << scene->seek_context[i].seek_done << std::endl;
                             }
                         }
 
@@ -526,7 +532,33 @@ int main(int, char **)
 
                         to_display_frame_number = scene->seek_context[0].seek_frame;
                         read_head = 0;
-                        just_seeked = true;
+                        play_video = true;
+                    
+                        // look at the seeked frame 
+                        {
+                            for (u32 j = 0; j < scene->num_cams; j++)
+                            {
+                                // if the current frame is ready, upload for display, otherwise wait for the frame to get ready
+                                while (scene->display_buffer[j][read_head].frame_number != to_display_frame_number)
+                                {
+                                    // std::cout << "main wait, " << read_head << ", " << scene->display_buffer[j][read_head].frame_number << ", " << to_display_frame_number << std::endl;
+                                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                                }
+                                
+                                // todo: need to use pbo to accelerate this 
+                                if (scene->use_cpu_buffer) {
+                                    upload_texture(&scene->image_texture[j], scene->display_buffer[j][read_head].frame, 3208, 2200);
+                                } else {
+                                    bind_pbo(&scene->pbo_cuda[j][read_head].pbo);
+                                    bind_texture(&scene->image_texture[j]);
+                                    upload_image_pbo_to_texture(scene->image_width, scene->image_height); // Needs no arguments because texture and PBO are bound
+                                    unbind_pbo();
+                                    unbind_texture();
+                                }
+                            }
+                            current_frame_num = to_display_frame_number;
+                        }
+                        slider_frame_number = to_display_frame_number;
                     }
                 }
                 else
@@ -569,7 +601,7 @@ int main(int, char **)
                         while (!(scene->seek_context[i].seek_done))
                         {
                             std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                            std::cout << "Seeking Cam" << i << std::endl;
+                            // std::cout << "Seeking Cam" << i << ", " << scene->seek_context[i].seek_done << std::endl;
                         }
                     }
 
@@ -578,9 +610,37 @@ int main(int, char **)
                         scene->seek_context[i].seek_done = false;
                     }
 
+                    // std::cout << "Main thread seeking done to frame: " << scene->seek_context[0].seek_frame << std::endl;
+
                     to_display_frame_number = scene->seek_context[0].seek_frame;
                     read_head = 0;
-                    just_seeked = true;
+                    play_video = true;
+
+                    // look at the seeked frame 
+                    {
+                        for (u32 j = 0; j < scene->num_cams; j++)
+                        {
+                            // if the current frame is ready, upload for display, otherwise wait for the frame to get ready
+                            while (scene->display_buffer[j][read_head].frame_number != to_display_frame_number)
+                            {
+                                // std::cout << "main wait, " << read_head << ", " << scene->display_buffer[j][read_head].frame_number << ", " << to_display_frame_number << std::endl;
+                                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                            }
+                            
+                            // todo: need to use pbo to accelerate this 
+                            if (scene->use_cpu_buffer) {
+                                upload_texture(&scene->image_texture[j], scene->display_buffer[j][read_head].frame, 3208, 2200);
+                            } else {
+                                bind_pbo(&scene->pbo_cuda[j][read_head].pbo);
+                                bind_texture(&scene->image_texture[j]);
+                                upload_image_pbo_to_texture(scene->image_width, scene->image_height); // Needs no arguments because texture and PBO are bound
+                                unbind_pbo();
+                                unbind_texture();
+                            }
+                        }
+                        current_frame_num = to_display_frame_number;
+                    }
+                    slider_frame_number = to_display_frame_number;
                 }
 
                 ImGui::EndGroup();
@@ -703,7 +763,8 @@ int main(int, char **)
 
         glfwSwapBuffers(window->render_target);
 
-        if (dc_context->decoding_flag && play_video && (!just_seeked) && (to_display_frame_number < (dc_context->total_num_frame - 1)))
+
+        if (dc_context->decoding_flag && play_video && (to_display_frame_number < (dc_context->total_num_frame - 1)))
         {
             to_display_frame_number++;
 
@@ -716,11 +777,6 @@ int main(int, char **)
             slider_frame_number = to_display_frame_number;
         }
 
-        if (just_seeked)
-        {
-            just_seeked = false;
-            play_video = true;
-        }
     }
 
     // Cleanup

@@ -109,7 +109,7 @@ void decoder_process(const char *input_file_name, DecoderContext *dc_context, Pi
             SeekContext s = SeekContext(seek_info->seek_frame);
 
             seek_success_flag = demuxer.Seek(s, pVideo, nVideoBytes, pktinfo);
-            std::cout << "seek_success_flag: " << seek_success_flag << std::endl;
+            // std::cout << "seek_success_flag: " << seek_success_flag << std::endl;
 
             // reset the display buffer after seeking
             for (int i = 0; i < size_of_buffer; i++)
@@ -121,7 +121,7 @@ void decoder_process(const char *input_file_name, DecoderContext *dc_context, Pi
             }
             // nFrameReturned = dec.Decode(pVideo, nVideoBytes, CUVID_PKT_DISCONTINUITY, pktinfo.pts);
             nFrameReturned = dec.Decode(NULL, 0, CUVID_PKT_DISCONTINUITY);
-            std::cout << "nFrameReturned right after seeking: " << nFrameReturned << std::endl;
+            // std::cout << "nFrameReturned right after seeking: " << nFrameReturned << std::endl;
 
             for (int i = 0; i < nFrameReturned; i++)
             {
@@ -129,13 +129,15 @@ void decoder_process(const char *input_file_name, DecoderContext *dc_context, Pi
                 pFrame = dec.GetFrame();
             }
 
-            dec.Decode(pVideo, nVideoBytes);
-
+            auto temp_nFrameReturned = dec.Decode(pVideo, nVideoBytes);
+            // std::cout << "not sure about this: " << temp_nFrameReturned << std::endl; 
             // dec.setReconfigParams(NULL, NULL);
             buffer_head = 0;
             nFrame = seek_info->seek_frame;
+            display_buffer[0].frame_number = -1;
             seek_info->use_seek = false;
             seek_info->seek_done = true;
+            // std::cout << "seek thread done " << temp_nFrameReturned << std::endl; 
         }
         else
         {
@@ -144,6 +146,7 @@ void decoder_process(const char *input_file_name, DecoderContext *dc_context, Pi
             if (!demux_success)
             {
                 // end of stream
+                std::cout << "Demux error..." << std::endl;
                 nFrameReturned = dec.Decode(NULL, 0, CUVID_PKT_DISCONTINUITY);
                 dc_context->total_num_frame = nFrame + nFrameReturned;
             }
@@ -185,6 +188,7 @@ void decoder_process(const char *input_file_name, DecoderContext *dc_context, Pi
                     while (!display_buffer[buffer_head].available_to_write && !(dc_context->stop_flag) && !(seek_info->use_seek))
                     {
                         // if the next frame hasn't been displayed, the queue is full, sleep
+                        // std::cout << "thread wait, " << display_buffer[buffer_head].available_to_write << ", " << buffer_head << ", " << display_buffer[buffer_head].frame_number << std::endl;
                         std::this_thread::sleep_for(std::chrono::milliseconds(1));
                     }
 

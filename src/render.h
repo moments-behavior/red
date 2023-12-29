@@ -83,7 +83,7 @@ static void render_allocate_scene_memory(render_scene *scene, u32 image_width, u
                 scene->display_buffer[j][i].frame = (unsigned char *)malloc(size_pic);
                 decoder_clear_buffer_with_constant_image(scene->display_buffer[j][i].frame, image_width, image_height);
             }
-            scene->display_buffer[j][i].frame_number = 0;
+            scene->display_buffer[j][i].frame_number = -1;
             scene->display_buffer[j][i].available_to_write = true;
         }
     }
