@@ -114,9 +114,9 @@ void decoder_process(const char *input_file_name, DecoderContext *dc_context, Pi
             // reset the display buffer after seeking
             for (int i = 0; i < size_of_buffer; i++)
             {
-                if (use_cpu_buffer) {
-                    decoder_clear_buffer_with_constant_image(display_buffer[i].frame, 3208, 2200);
-                }
+                // if (use_cpu_buffer) {
+                //     decoder_clear_buffer_with_constant_image(display_buffer[i].frame, 3208, 2200);
+                // }
                 display_buffer[i].available_to_write = true;
             }
             // nFrameReturned = dec.Decode(pVideo, nVideoBytes, CUVID_PKT_DISCONTINUITY, pktinfo.pts);

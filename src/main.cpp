@@ -64,15 +64,18 @@ int main(int, char **)
 
     // gui states, todo: bundle this later
     int to_display_frame_number = 0;
+    int pause_selected = 0;
     int read_head = 0;
     bool play_video = false;
     bool toggle_play_status = false;
     int slider_frame_number = 0;
+    bool just_seeked = false;
     bool slider_just_changed = false;
     bool video_loaded = false;
     bool cpu_buffer_toggle = true;
     bool plot_keypoints_flag = false;
     int current_frame_num = 0;
+    bool skeleton_chosen = false;
 
     // for labeling 
     SkeletonContext *skeleton;
@@ -123,27 +126,30 @@ int main(int, char **)
                 if(video_loaded){
                     if (ImGui::BeginMenu("Skeleton"))
                     {
-                        skeleton = new SkeletonContext;
-                        std::map<std::string, SkeletonPrimitive> skeleton_map = skeleton_get_all();
-                        for (auto & element : skeleton_map) {
-                            if(ImGui::MenuItem(element.first.c_str()))
-                            {
-                                // std::string cam_file = root_dir + "/calibration/calibration.csv";
-                                for (u32 i = 0; i < scene->num_cams; i++)
+                        if (!skeleton_chosen) {
+                            skeleton = new SkeletonContext;
+                            std::map<std::string, SkeletonPrimitive> skeleton_map = skeleton_get_all();
+                            for (auto & element : skeleton_map) {
+                                if(ImGui::MenuItem(element.first.c_str()))
                                 {
-                                    // legacy loading from old formats
-                                    // CameraParams cam = camera_load_params_from_csv(cam_file, i);
-                                    // camera_params.push_back(cam);
-                                    std::string cam_file = root_dir + "/calibration/" + camera_names[i] + ".yaml";
-                                    std::cout << cam_file << std::endl;
-                                    CameraParams cam = camera_load_params_from_yaml(cam_file);
-                                    camera_params.push_back(cam);
-                                }
-                                skeleton->name = element.first;
-                                skeleton_initialize(skeleton, element.second);
-                                plot_keypoints_flag = true;
+                                    // std::string cam_file = root_dir + "/calibration/calibration.csv";
+                                    for (u32 i = 0; i < scene->num_cams; i++)
+                                    {
+                                        // legacy loading from old formats
+                                        // CameraParams cam = camera_load_params_from_csv(cam_file, i);
+                                        // camera_params.push_back(cam);
+                                        std::string cam_file = root_dir + "/calibration/" + camera_names[i] + ".yaml";
+                                        std::cout << cam_file << std::endl;
+                                        CameraParams cam = camera_load_params_from_yaml(cam_file);
+                                        camera_params.push_back(cam);
+                                        skeleton_chosen = true;
+                                    }
+                                    skeleton->name = element.first;
+                                    skeleton_initialize(skeleton, element.second);
+                                    plot_keypoints_flag = true;
+                                };
                             };
-                        };
+                        }
                         ImGui::EndMenu();
                     }
 
@@ -263,7 +269,6 @@ int main(int, char **)
         // show frames in the buffer if selected
         if (video_loaded && (!play_video))
         {
-            static int selected = 0;
             static int select_corr_head = 0;
             ImGui::SetNextWindowSize(ImVec2(500, 440), ImGuiCond_FirstUseEver);
             if (ImGui::Begin("Frames in the buffer", NULL, ImGuiWindowFlags_MenuBar))
@@ -273,28 +278,10 @@ int main(int, char **)
                     {
                         char label[128];
                         sprintf(label, "Buffer %d", i);
-                        if (ImGui::Selectable(label, selected == i))
+                        if (ImGui::Selectable(label, pause_selected == i))
                         {
                             // start from the lowest frame
-                            selected = i;
-                            select_corr_head = (i + read_head) % scene->size_of_buffer;
-
-                            // if not playing the video, then show what's in the buffer
-                            if (!play_video)
-                            {
-                                for (int j = 0; j < scene->num_cams; j++)
-                                {
-                                    if (scene->use_cpu_buffer) {
-                                        upload_texture(&scene->image_texture[j], scene->display_buffer[j][read_head].frame, 3208, 2200);
-                                    } else {
-                                        bind_pbo(&scene->pbo_cuda[j][read_head].pbo);
-                                        bind_texture(&scene->image_texture[j]);
-                                        upload_image_pbo_to_texture(scene->image_width, scene->image_height); // Needs no arguments because texture and PBO are bound
-                                        unbind_pbo();
-                                        unbind_texture();
-                                    }
-                                }
-                            }
+                            pause_selected = i;
                         }
                     }
                 }
@@ -303,61 +290,39 @@ int main(int, char **)
 
                 if (ImGui::Button(ICON_FK_MINUS) || ImGui::IsKeyPressed(ImGuiKey_LeftBracket, true))
                 {
-                    if (selected > 0)
+                    if (pause_selected > 0)
                     {
-                        selected--;
-                        select_corr_head = (selected + read_head) % scene->size_of_buffer;
-
-                        for (int j = 0; j < scene->num_cams; j++)
-                        {
-                            if (scene->use_cpu_buffer) {
-                                upload_texture(&scene->image_texture[j], scene->display_buffer[j][select_corr_head].frame, 3208, 2200);
-                            } else {
-                                bind_pbo(&scene->pbo_cuda[j][select_corr_head].pbo);
-                                bind_texture(&scene->image_texture[j]);
-                                upload_image_pbo_to_texture(scene->image_width, scene->image_height); // Needs no arguments because texture and PBO are bound
-                                unbind_pbo();
-                                unbind_texture();
-                            }
-                        }
+                        pause_selected--;
                     }
                 };
 
                 ImGui::SameLine();
                 if (ImGui::Button(ICON_FK_PLUS) || ImGui::IsKeyPressed(ImGuiKey_RightBracket, true))
                 {
-                    if (selected < (scene->size_of_buffer - 1))
+                    if (pause_selected < (scene->size_of_buffer - 1))
                     {
-                        selected++;
-                        select_corr_head = (selected + read_head) % scene->size_of_buffer;
-
-                        if (!play_video)
-                        {
-                            for (u32 j = 0; j < scene->num_cams; j++)
-                            {
-
-                                if (scene->use_cpu_buffer) {
-                                    upload_texture(&scene->image_texture[j], scene->display_buffer[j][select_corr_head].frame, 3208, 2200);
-                                } else {
-                                    bind_pbo(&scene->pbo_cuda[j][select_corr_head].pbo);
-                                    bind_texture(&scene->image_texture[j]);
-                                    upload_image_pbo_to_texture(scene->image_width, scene->image_height); // Needs no arguments because texture and PBO are bound
-                                    unbind_pbo();
-                                    unbind_texture();
-                                }
-                            }
-                        }
+                        pause_selected++;
                     }
                 };
             }
             ImGui::Text("Frame number selected: %d", scene->display_buffer[0][select_corr_head].frame_number);
-            
-            if (!play_video)
-            {
-                select_corr_head = (selected + read_head) % scene->size_of_buffer;
-                current_frame_num = scene->display_buffer[0][select_corr_head].frame_number;
-            }
             ImGui::End();
+
+            select_corr_head = (pause_selected + read_head) % scene->size_of_buffer;
+            current_frame_num = scene->display_buffer[0][select_corr_head].frame_number;
+        
+            for (int j = 0; j < scene->num_cams; j++)
+            {
+                if (scene->use_cpu_buffer) {
+                    upload_texture(&scene->image_texture[j], scene->display_buffer[j][select_corr_head].frame, 3208, 2200);
+                } else {
+                    bind_pbo(&scene->pbo_cuda[j][select_corr_head].pbo);
+                    bind_texture(&scene->image_texture[j]);
+                    upload_image_pbo_to_texture(scene->image_width, scene->image_height); // Needs no arguments because texture and PBO are bound
+                    unbind_pbo();
+                    unbind_texture();
+                }
+            }
         }
 
         if (toggle_play_status && play_video)
@@ -532,40 +497,18 @@ int main(int, char **)
 
                         to_display_frame_number = scene->seek_context[0].seek_frame;
                         read_head = 0;
-                        play_video = true;
-                    
-                        // look at the seeked frame 
-                        {
-                            for (u32 j = 0; j < scene->num_cams; j++)
-                            {
-                                // if the current frame is ready, upload for display, otherwise wait for the frame to get ready
-                                while (scene->display_buffer[j][read_head].frame_number != to_display_frame_number)
-                                {
-                                    // std::cout << "main wait, " << read_head << ", " << scene->display_buffer[j][read_head].frame_number << ", " << to_display_frame_number << std::endl;
-                                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                                }
-                                
-                                // todo: need to use pbo to accelerate this 
-                                if (scene->use_cpu_buffer) {
-                                    upload_texture(&scene->image_texture[j], scene->display_buffer[j][read_head].frame, 3208, 2200);
-                                } else {
-                                    bind_pbo(&scene->pbo_cuda[j][read_head].pbo);
-                                    bind_texture(&scene->image_texture[j]);
-                                    upload_image_pbo_to_texture(scene->image_width, scene->image_height); // Needs no arguments because texture and PBO are bound
-                                    unbind_pbo();
-                                    unbind_texture();
-                                }
-                            }
-                            current_frame_num = to_display_frame_number;
-                        }
+                        just_seeked = true;
                         slider_frame_number = to_display_frame_number;
                     }
                 }
                 else
                 {
-                    if (ImGui::Button(play_video ? ICON_FK_PAUSE : ICON_FK_PLAY))
+                    if (ImGui::Button(play_video ? ICON_FK_PAUSE : ICON_FK_PLAY)  ||  ImGui::IsKeyPressed(ImGuiKey_Space, true))
                     {
                         play_video = !play_video;
+                        if (!play_video) {
+                            pause_selected = 0;
+                        }
                     }
                 }
 
@@ -611,35 +554,9 @@ int main(int, char **)
                     }
 
                     // std::cout << "Main thread seeking done to frame: " << scene->seek_context[0].seek_frame << std::endl;
-
                     to_display_frame_number = scene->seek_context[0].seek_frame;
                     read_head = 0;
-                    play_video = true;
-
-                    // look at the seeked frame 
-                    {
-                        for (u32 j = 0; j < scene->num_cams; j++)
-                        {
-                            // if the current frame is ready, upload for display, otherwise wait for the frame to get ready
-                            while (scene->display_buffer[j][read_head].frame_number != to_display_frame_number)
-                            {
-                                // std::cout << "main wait, " << read_head << ", " << scene->display_buffer[j][read_head].frame_number << ", " << to_display_frame_number << std::endl;
-                                std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                            }
-                            
-                            // todo: need to use pbo to accelerate this 
-                            if (scene->use_cpu_buffer) {
-                                upload_texture(&scene->image_texture[j], scene->display_buffer[j][read_head].frame, 3208, 2200);
-                            } else {
-                                bind_pbo(&scene->pbo_cuda[j][read_head].pbo);
-                                bind_texture(&scene->image_texture[j]);
-                                upload_image_pbo_to_texture(scene->image_width, scene->image_height); // Needs no arguments because texture and PBO are bound
-                                unbind_pbo();
-                                unbind_texture();
-                            }
-                        }
-                        current_frame_num = to_display_frame_number;
-                    }
+                    just_seeked = true;
                     slider_frame_number = to_display_frame_number;
                 }
 
@@ -711,24 +628,24 @@ int main(int, char **)
 
                     if (ImGui::Button("Save Labeled Data"))
                     {
-                        save_keypoints(keypoints_map, skeleton, root_dir, scene->num_cams);
+                        save_keypoints(keypoints_map, skeleton, root_dir, scene->num_cams, camera_names);
                     }
 
                     if (ImGui::Button("Load Labeled Data"))
                     {
-                        load_keypoints(keypoints_map, skeleton, root_dir, scene);
+                        load_keypoints(keypoints_map, skeleton, root_dir, scene, camera_names);
                     }
 
                     if (ImGui::Button("Load 2d Keypoints Only"))
                     {
                         for (int i=0; i<scene->num_cams; i++) {
-                            load_2d_keypoints(keypoints_map, skeleton, root_dir, i, scene);
+                            load_2d_keypoints(keypoints_map, skeleton, root_dir, i, camera_names[i], scene);
                         }
                     }
 
                     ImGui::NewLine();
-                    ImGui::Text("[ -> Previous Image");
-                    ImGui::Text("] -> Next Image");
+                    ImGui::Text("[ -> Previous image, ] -> Next image");
+                    ImGui::Text("Space -> Toggle play and pause");
                     ImGui::Text("While hovering image...");
                     ImGui::Text("C -> Create keypoints on frame");
                     ImGui::Text("Q -> Active keypoint++ ");
@@ -763,20 +680,22 @@ int main(int, char **)
 
         glfwSwapBuffers(window->render_target);
 
-
-        if (dc_context->decoding_flag && play_video && (to_display_frame_number < (dc_context->total_num_frame - 1)))
-        {
-            to_display_frame_number++;
-
-            for (int j = 0; j < scene->num_cams; j++)
+        if (just_seeked) {
+            just_seeked = false;
+        } else {
+            if (dc_context->decoding_flag && play_video && (to_display_frame_number < (dc_context->total_num_frame - 1)))
             {
-                scene->display_buffer[j][read_head].available_to_write = true;
+                to_display_frame_number++;
+
+                for (int j = 0; j < scene->num_cams; j++)
+                {
+                    scene->display_buffer[j][read_head].available_to_write = true;
+                }
+
+                read_head = (read_head + 1) % scene->size_of_buffer;
+                slider_frame_number = to_display_frame_number;
             }
-
-            read_head = (read_head + 1) % scene->size_of_buffer;
-            slider_frame_number = to_display_frame_number;
         }
-
     }
 
     // Cleanup
