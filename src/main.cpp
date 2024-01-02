@@ -649,7 +649,11 @@ int main(int, char **)
                 }
                 
                 auto upper_it = keypoints_map.upper_bound(current_frame_num); 
-                ImGui::Text("Next labeled frame : %d", (*upper_it).first);
+                if (upper_it == keypoints_map.end()) {
+                    ImGui::Text("Number of labeled frame : %d", (*upper_it).first);
+                } else {
+                    ImGui::Text("Next labeled frame : %d", (*upper_it).first);
+                }
                 
                 static int seek_accurate_frame_num = 0;
                 if (ImGui::InputInt("Seek Accurate to: ", &seek_accurate_frame_num, 1, 100, ImGuiInputTextFlags_EnterReturnsTrue)) {
