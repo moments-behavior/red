@@ -76,12 +76,13 @@ int main(int, char **)
     bool plot_keypoints_flag = false;
     int current_frame_num = 0;
     bool skeleton_chosen = false;
-
+    
     // for labeling 
     SkeletonContext *skeleton;
     std::map<u32, KeyPoints*> keypoints_map;
     bool keypoints_find;
-
+    std::map<std::string, SkeletonPrimitive> skeleton_map;
+    
     // others
     ImGui::FileBrowser file_dialog(ImGuiFileBrowserFlags_SelectDirectory);
     std::filesystem::path cwd = std::filesystem::current_path();
@@ -128,27 +129,29 @@ int main(int, char **)
                     {
                         if (!skeleton_chosen) {
                             skeleton = new SkeletonContext;
-                            std::map<std::string, SkeletonPrimitive> skeleton_map = skeleton_get_all();
-                            for (auto & element : skeleton_map) {
-                                if(ImGui::MenuItem(element.first.c_str()))
+                            skeleton_map = skeleton_get_all();
+                        }
+
+                        for (auto & element : skeleton_map) {
+                            
+                            if(ImGui::MenuItem(element.first.c_str(), NULL, skeleton->name == element.first, !skeleton_chosen))
+                            {
+                                // std::string cam_file = root_dir + "/calibration/calibration.csv";
+                                for (u32 i = 0; i < scene->num_cams; i++)
                                 {
-                                    // std::string cam_file = root_dir + "/calibration/calibration.csv";
-                                    for (u32 i = 0; i < scene->num_cams; i++)
-                                    {
-                                        // legacy loading from old formats
-                                        // CameraParams cam = camera_load_params_from_csv(cam_file, i);
-                                        // camera_params.push_back(cam);
-                                        std::string cam_file = root_dir + "/calibration/" + camera_names[i] + ".yaml";
-                                        std::cout << cam_file << std::endl;
-                                        CameraParams cam = camera_load_params_from_yaml(cam_file);
-                                        camera_params.push_back(cam);
-                                        skeleton_chosen = true;
-                                    }
-                                    skeleton->name = element.first;
-                                    skeleton_initialize(skeleton, element.second);
-                                    plot_keypoints_flag = true;
-                                };
-                            };
+                                    // legacy loading from old formats
+                                    // CameraParams cam = camera_load_params_from_csv(cam_file, i);
+                                    // camera_params.push_back(cam);
+                                    std::string cam_file = root_dir + "/calibration/" + camera_names[i] + ".yaml";
+                                    std::cout << cam_file << std::endl;
+                                    CameraParams cam = camera_load_params_from_yaml(cam_file);
+                                    camera_params.push_back(cam);
+                                    skeleton_chosen = true;
+                                }
+                                skeleton->name = element.first;
+                                skeleton_initialize(skeleton, element.second);
+                                plot_keypoints_flag = true;
+                            }
                         }
                         ImGui::EndMenu();
                     }
@@ -343,7 +346,6 @@ int main(int, char **)
         // Render a video frame
         if (video_loaded)
         {
-             
             for (int j = 0; j < scene->num_cams; j++)
             {
                 // layout
