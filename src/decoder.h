@@ -13,6 +13,7 @@ struct SeekInfo
     bool use_seek;
     bool seek_done;
     uint64_t seek_frame;
+    bool seek_accurate;
 };
 
 struct PictureBuffer

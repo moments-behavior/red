@@ -76,11 +76,11 @@ int main(int, char **)
     bool plot_keypoints_flag = false;
     int current_frame_num = 0;
     bool skeleton_chosen = false;
-    
+
     // for labeling 
     SkeletonContext *skeleton;
     std::map<u32, KeyPoints*> keypoints_map;
-    bool keypoints_find;
+    bool keypoints_find = false;
     std::map<std::string, SkeletonPrimitive> skeleton_map;
     
     // others
@@ -193,8 +193,10 @@ int main(int, char **)
 
             ImGui::Checkbox("CPU Buffer", &cpu_buffer_toggle);
             scene->use_cpu_buffer = cpu_buffer_toggle;
-            if (video_loaded) {
-                ImGui::InputInt("Seek step (s)", &dc_context->seek_interval, 10);
+            if (video_loaded && !skeleton_chosen) {
+                if (ImGui::InputInt("Seek step (s)", &dc_context->seek_interval, 10, 100, ImGuiInputTextFlags_EnterReturnsTrue)) {
+                    std::cout << "Seek step: " << dc_context->seek_interval << std::endl;
+                }
             }
         }
         ImGui::End();
@@ -480,6 +482,7 @@ int main(int, char **)
                         {
                             scene->seek_context[i].seek_frame = 0;
                             scene->seek_context[i].use_seek = true;
+                            scene->seek_context[i].seek_accurate = false;
                         }
 
                         for (int i = 0; i < scene->num_cams; i++)
@@ -538,6 +541,7 @@ int main(int, char **)
                     {
                         scene->seek_context[i].seek_frame = (uint64_t)slider_frame_number;
                         scene->seek_context[i].use_seek = true;
+                        scene->seek_context[i].seek_accurate = false;
                     }
 
                     for (int i = 0; i < scene->num_cams; i++)
@@ -569,94 +573,124 @@ int main(int, char **)
 
         if (plot_keypoints_flag)
         {
-
-                if (ImGui::Begin("Labeling Tool"))
+            if (ImGui::Begin("Labeling Tool"))
+            {
+                for (int i=0; i<scene->num_cams; i++)
                 {
-                    for (int i=0; i<scene->num_cams; i++)
+                    for (int j=0; j<skeleton->num_nodes; j++)
                     {
-                        for (int j=0; j<skeleton->num_nodes; j++)
-                        {
-                            if (j > 0) ImGui::SameLine();
+                        if (j > 0) ImGui::SameLine();
 
-                            ImGui::PushID(j);
+                        ImGui::PushID(j);
 
-                            if (keypoints_find) {
-                                
-                                if (keypoints_map.at(current_frame_num)->keypoints2d[i][j].is_labeled)
-                                {
-                                    if (keypoints_map[current_frame_num]->active_id[i] == j) {
-                                        ImGui::PushStyleColor(ImGuiCol_Button, (ImVec4)ImColor::HSV(0.8, 0.9f, 0.9f));
-                                        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, (ImVec4)ImColor::HSV(0.8, 0.9f, 0.9f));
-                                        ImGui::PushStyleColor(ImGuiCol_ButtonActive, (ImVec4)ImColor::HSV(0.8, 0.9f, 0.9f));
-                                    } else {
-                                        ImGui::PushStyleColor(ImGuiCol_Button, (ImVec4)ImColor::HSV(j / (float)skeleton->num_nodes, 0.6f, 0.6f));
-                                        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, (ImVec4)ImColor::HSV(j / (float)skeleton->num_nodes, 0.7f, 0.7f));
-                                        ImGui::PushStyleColor(ImGuiCol_ButtonActive, (ImVec4)ImColor::HSV(j / (float)skeleton->num_nodes, 0.8f, 0.8f));
-                                    }
+                        if (keypoints_find) {
+                            
+                            if (keypoints_map.at(current_frame_num)->keypoints2d[i][j].is_labeled)
+                            {
+                                if (keypoints_map[current_frame_num]->active_id[i] == j) {
+                                    ImGui::PushStyleColor(ImGuiCol_Button, (ImVec4)ImColor::HSV(0.8, 0.9f, 0.9f));
+                                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, (ImVec4)ImColor::HSV(0.8, 0.9f, 0.9f));
+                                    ImGui::PushStyleColor(ImGuiCol_ButtonActive, (ImVec4)ImColor::HSV(0.8, 0.9f, 0.9f));
                                 } else {
-                                    if (keypoints_map[current_frame_num]->active_id[i] == j) {
-                                        ImGui::PushStyleColor(ImGuiCol_Button, (ImVec4)ImColor::HSV(0.8, 0.9f, 0.9f));
-                                        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, (ImVec4)ImColor::HSV(0.8, 0.9f, 0.9f));
-                                        ImGui::PushStyleColor(ImGuiCol_ButtonActive, (ImVec4)ImColor::HSV(0.8, 0.9f, 0.9f));
-                                    } else {
-                                        ImGui::PushStyleColor(ImGuiCol_Button, (ImVec4)ImColor::HSV(j / (float)skeleton->num_nodes, 0.3f, 0.3f));
-                                        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, (ImVec4)ImColor::HSV(j / (float)skeleton->num_nodes, 0.4f, 0.4f));
-                                        ImGui::PushStyleColor(ImGuiCol_ButtonActive, (ImVec4)ImColor::HSV(j / (float)skeleton->num_nodes, 0.5f, 0.5f));
-                                    }
+                                    ImGui::PushStyleColor(ImGuiCol_Button, (ImVec4)ImColor::HSV(j / (float)skeleton->num_nodes, 0.6f, 0.6f));
+                                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, (ImVec4)ImColor::HSV(j / (float)skeleton->num_nodes, 0.7f, 0.7f));
+                                    ImGui::PushStyleColor(ImGuiCol_ButtonActive, (ImVec4)ImColor::HSV(j / (float)skeleton->num_nodes, 0.8f, 0.8f));
                                 }
                             } else {
-                                ImGui::PushStyleColor(ImGuiCol_Button, (ImVec4)ImColor::HSV(0.2f, 0.2f, 0.2f));
-                                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, (ImVec4)ImColor::HSV(0.2f, 0.2f, 0.2f));
-                                ImGui::PushStyleColor(ImGuiCol_ButtonActive, (ImVec4)ImColor::HSV(0.2f, 0.2f, 0.2f));
+                                if (keypoints_map[current_frame_num]->active_id[i] == j) {
+                                    ImGui::PushStyleColor(ImGuiCol_Button, (ImVec4)ImColor::HSV(0.8, 0.9f, 0.9f));
+                                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, (ImVec4)ImColor::HSV(0.8, 0.9f, 0.9f));
+                                    ImGui::PushStyleColor(ImGuiCol_ButtonActive, (ImVec4)ImColor::HSV(0.8, 0.9f, 0.9f));
+                                } else {
+                                    ImGui::PushStyleColor(ImGuiCol_Button, (ImVec4)ImColor::HSV(j / (float)skeleton->num_nodes, 0.3f, 0.3f));
+                                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, (ImVec4)ImColor::HSV(j / (float)skeleton->num_nodes, 0.4f, 0.4f));
+                                    ImGui::PushStyleColor(ImGuiCol_ButtonActive, (ImVec4)ImColor::HSV(j / (float)skeleton->num_nodes, 0.5f, 0.5f));
+                                }
                             }
-                            if (ImGui::Button(skeleton->node_names[j].c_str())) {
-                                keypoints_map[current_frame_num]->active_id[i] = j;
-                            }
-                            ImGui::PopStyleColor(3);
-                            ImGui::PopID();
+                        } else {
+                            ImGui::PushStyleColor(ImGuiCol_Button, (ImVec4)ImColor::HSV(0.2f, 0.2f, 0.2f));
+                            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, (ImVec4)ImColor::HSV(0.2f, 0.2f, 0.2f));
+                            ImGui::PushStyleColor(ImGuiCol_ButtonActive, (ImVec4)ImColor::HSV(0.2f, 0.2f, 0.2f));
                         }
-                    }
-
-                    if (ImGui::Button("Triangulate"))
-                    {
-                        reprojection(keypoints_map.at(current_frame_num), skeleton, camera_params, scene->num_cams);
-                    }
-
-                    // added by RJ
-                    if (ImGui::IsKeyPressed(ImGuiKey_2, false))   // triangulate
-                    {
-                        reprojection(keypoints_map.at(current_frame_num), skeleton, camera_params, scene->num_cams);
-                    }
-
-                    if (ImGui::Button("Save Labeled Data"))
-                    {
-                        save_keypoints(keypoints_map, skeleton, root_dir, scene->num_cams, camera_names);
-                    }
-
-                    if (ImGui::Button("Load Labeled Data"))
-                    {
-                        load_keypoints(keypoints_map, skeleton, root_dir, scene, camera_names);
-                    }
-
-                    if (ImGui::Button("Load 2d Keypoints Only"))
-                    {
-                        for (int i=0; i<scene->num_cams; i++) {
-                            load_2d_keypoints(keypoints_map, skeleton, root_dir, i, camera_names[i], scene);
+                        if (ImGui::Button(skeleton->node_names[j].c_str())) {
+                            keypoints_map[current_frame_num]->active_id[i] = j;
                         }
+                        ImGui::PopStyleColor(3);
+                        ImGui::PopID();
                     }
-
-                    ImGui::NewLine();
-                    ImGui::Text("[ -> Previous image, ] -> Next image");
-                    ImGui::Text("Space -> Toggle play and pause");
-                    ImGui::Text("While hovering image...");
-                    ImGui::Text("C -> Create keypoints on frame");
-                    ImGui::Text("Q -> Active keypoint++ ");
-                    ImGui::Text("E -> Active keypoint--");
-                    ImGui::Text("D -> Delete active keypoint");
-                    ImGui::Text("T -> Active keypoint set to last node");
-                    ImGui::Text("W -> Drop active keypoint");
                 }
-                ImGui::End();
+
+                if (ImGui::Button("Triangulate"))
+                {
+                    reprojection(keypoints_map.at(current_frame_num), skeleton, camera_params, scene->num_cams);
+                }
+
+                // added by RJ
+                if (ImGui::IsKeyPressed(ImGuiKey_2, false))   // triangulate
+                {
+                    reprojection(keypoints_map.at(current_frame_num), skeleton, camera_params, scene->num_cams);
+                }
+
+                if (ImGui::Button("Save Labeled Data"))
+                {
+                    save_keypoints(keypoints_map, skeleton, root_dir, scene->num_cams, camera_names);
+                }
+
+                if (ImGui::Button("Load Labeled Data"))
+                {
+                    load_keypoints(keypoints_map, skeleton, root_dir, scene, camera_names);
+                }
+
+                if (ImGui::Button("Load 2d Keypoints Only"))
+                {
+                    for (int i=0; i<scene->num_cams; i++) {
+                        load_2d_keypoints(keypoints_map, skeleton, root_dir, i, camera_names[i], scene);
+                    }
+                }
+                
+                auto upper_it = keypoints_map.upper_bound(current_frame_num); 
+                ImGui::Text("Next labeled frame : %d", (*upper_it).first);
+                
+                static int seek_accurate_frame_num = 0;
+                if (ImGui::InputInt("Seek Accurate to: ", &seek_accurate_frame_num, 1, 100, ImGuiInputTextFlags_EnterReturnsTrue)) {
+                    std::cout << "Seek accurate to: " << seek_accurate_frame_num << std::endl;
+                    for (int i = 0; i < scene->num_cams; i++)
+                    {
+                        scene->seek_context[i].seek_frame = (uint64_t)seek_accurate_frame_num;
+                        scene->seek_context[i].use_seek = true;
+                        scene->seek_context[i].seek_accurate = true;
+                    }
+
+                    for (int i = 0; i < scene->num_cams; i++)
+                    {
+                        while (!(scene->seek_context[i].seek_done))
+                        {
+                            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                        }
+                    }
+
+                    for (int i = 0; i < scene->num_cams; i++)
+                    {
+                        scene->seek_context[i].seek_done = false;
+                    }
+                    to_display_frame_number = scene->seek_context[0].seek_frame;
+                    read_head = 0;
+                    just_seeked = true;
+                    slider_frame_number = to_display_frame_number;
+                }
+
+                ImGui::NewLine();
+                ImGui::Text("[ -> Previous image, ] -> Next image");
+                ImGui::Text("Space -> Toggle play and pause");
+                ImGui::Text("While hovering image...");
+                ImGui::Text("C -> Create keypoints on frame");
+                ImGui::Text("Q -> Active keypoint++ ");
+                ImGui::Text("E -> Active keypoint--");
+                ImGui::Text("D -> Delete active keypoint");
+                ImGui::Text("T -> Active keypoint set to last node");
+                ImGui::Text("W -> Drop active keypoint");
+            }
+            ImGui::End();
         }
 
 

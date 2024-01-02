@@ -92,7 +92,7 @@ void decoder_process(const char *input_file_name, DecoderContext *dc_context, Pi
     dc_context->estimated_num_frames = int(video_length * frame_rate);
     std::cout << "estimated_num_frames:" << dc_context->estimated_num_frames << std::endl;
     int size_in_bytes; 
-
+    bool skip_first_decode_after_seek = false;
     do
     {
 
@@ -104,9 +104,9 @@ void decoder_process(const char *input_file_name, DecoderContext *dc_context, Pi
             std::cout << "target_frame_number:" << seek_info->seek_frame << std::endl;
             
             // assume every 10s is a keyframe, double check if your video is like that
-            seek_info->seek_frame = demuxer.FindClosestKeyFrame(seek_info->seek_frame, dc_context->seek_interval);
-            std::cout << "seeking to: " << seek_info->seek_frame << std::endl;
-            SeekContext s = SeekContext(seek_info->seek_frame);
+            uint64_t key_frame_num = demuxer.FindClosestKeyFrame(seek_info->seek_frame, dc_context->seek_interval);
+            std::cout << "seeking to: " << key_frame_num << std::endl;
+            SeekContext s = SeekContext(key_frame_num);
 
             seek_success_flag = demuxer.Seek(s, pVideo, nVideoBytes, pktinfo);
             // std::cout << "seek_success_flag: " << seek_success_flag << std::endl;
@@ -131,6 +131,42 @@ void decoder_process(const char *input_file_name, DecoderContext *dc_context, Pi
 
             auto temp_nFrameReturned = dec.Decode(pVideo, nVideoBytes);
             // std::cout << "not sure about this: " << temp_nFrameReturned << std::endl; 
+
+            if (seek_info->seek_accurate) {
+                // seek acurate implementation
+                uint64_t curr_frame = key_frame_num - 1;
+                // keep decoding till the target frame
+                while (curr_frame != seek_info->seek_frame) {
+                    demux_success = demuxer.Demux(pVideo, nVideoBytes, pktinfo);
+                    if (!demux_success)
+                    {
+                        // end of stream
+                        std::cout << "Demux error..." << std::endl;
+                        nFrameReturned = dec.Decode(NULL, 0, CUVID_PKT_DISCONTINUITY);
+                        dc_context->total_num_frame = nFrame + nFrameReturned;
+                    }
+                    else
+                    {
+                        nFrameReturned = dec.Decode(pVideo, nVideoBytes);
+                    }
+                    while (nFrameReturned != 0)
+                    {
+                        curr_frame++;
+                        if (curr_frame == seek_info->seek_frame) {
+                            // reach the decoded frame 
+                            skip_first_decode_after_seek = true;
+                            goto jump;
+                        } else {
+                            dec.GetFrame();
+                        }
+                        nFrameReturned--;
+                    }
+                }
+                jump:; // break out of loop 
+            } else {
+                seek_info->seek_frame = key_frame_num;
+            }
+            
             // dec.setReconfigParams(NULL, NULL);
             buffer_head = 0;
             nFrame = seek_info->seek_frame;
@@ -141,18 +177,21 @@ void decoder_process(const char *input_file_name, DecoderContext *dc_context, Pi
         }
         else
         {
-            demux_success = demuxer.Demux(pVideo, nVideoBytes, pktinfo);
-
-            if (!demux_success)
-            {
-                // end of stream
-                std::cout << "Demux error..." << std::endl;
-                nFrameReturned = dec.Decode(NULL, 0, CUVID_PKT_DISCONTINUITY);
-                dc_context->total_num_frame = nFrame + nFrameReturned;
-            }
-            else
-            {
-                nFrameReturned = dec.Decode(pVideo, nVideoBytes);
+            if (!skip_first_decode_after_seek) {            
+                demux_success = demuxer.Demux(pVideo, nVideoBytes, pktinfo);
+                if (!demux_success)
+                {
+                    // end of stream
+                    std::cout << "Demux error..." << std::endl;
+                    nFrameReturned = dec.Decode(NULL, 0, CUVID_PKT_DISCONTINUITY);
+                    dc_context->total_num_frame = nFrame + nFrameReturned;
+                }
+                else
+                {
+                    nFrameReturned = dec.Decode(pVideo, nVideoBytes);
+                }
+            } else {
+                skip_first_decode_after_seek = false;
             }
 
             if (!nFrame && nFrameReturned)
