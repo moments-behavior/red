@@ -22,7 +22,7 @@
 #pragma comment(lib, "legacy_stdio_definitions")
 #endif
 
-#define label_buffer_size 32 
+#define label_buffer_size 256 
 
 simplelogger::Logger *logger = simplelogger::LoggerFactory::CreateConsoleLogger();
 
@@ -88,7 +88,7 @@ int main(int, char **)
     std::filesystem::path cwd = std::filesystem::current_path();
     std::string delimiter = "/";
     std::vector<std::string> tokenized_path = string_split (cwd, delimiter);
-    std::string start_folder_name = "/home/" + tokenized_path[2] + "/data";
+    std::string start_folder_name = "/home/" + tokenized_path[2] + "/Label";
 
     file_dialog.SetPwd(start_folder_name);
     file_dialog.SetTitle("Select working directory");
