@@ -210,6 +210,8 @@ public:
     int64_t FrameNumberFromTs(int64_t ts);
 
     int64_t FindClosestKeyFrame(int64_t frame_num, int key_frame_interval);
+    
+    int64_t FindClosestKeyFrameFNI(int64_t frame_num, int key_frame_interval);
 
     uint32_t GetVideoStreamIndex() const;
 

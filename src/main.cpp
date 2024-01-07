@@ -60,7 +60,7 @@ int main(int, char **)
         .total_num_frame = int(INT_MAX),
         .estimated_num_frames = 0,
         .gpu_index = 0,
-        .seek_interval=10};
+        .seek_interval=250};
 
     // gui states, todo: bundle this later
     int to_display_frame_number = 0;
@@ -88,7 +88,7 @@ int main(int, char **)
     std::filesystem::path cwd = std::filesystem::current_path();
     std::string delimiter = "/";
     std::vector<std::string> tokenized_path = string_split (cwd, delimiter);
-    std::string start_folder_name = "/home/" + tokenized_path[2] + "/Label";
+    std::string start_folder_name = "/home/" + tokenized_path[2] + "/data";
 
     file_dialog.SetPwd(start_folder_name);
     file_dialog.SetTitle("Select working directory");
@@ -194,7 +194,7 @@ int main(int, char **)
             ImGui::Checkbox("CPU Buffer", &cpu_buffer_toggle);
             scene->use_cpu_buffer = cpu_buffer_toggle;
             if (video_loaded && !skeleton_chosen) {
-                if (ImGui::InputInt("Seek step (s)", &dc_context->seek_interval, 10, 100, ImGuiInputTextFlags_EnterReturnsTrue)) {
+                if (ImGui::InputInt("Seek step", &dc_context->seek_interval, 10, 100, ImGuiInputTextFlags_EnterReturnsTrue)) {
                     std::cout << "Seek step: " << dc_context->seek_interval << std::endl;
                 }
             }

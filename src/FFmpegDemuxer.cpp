@@ -243,9 +243,19 @@ int64_t FFmpegDemuxer::FrameNumberFromTs(int64_t ts)
 }
 
 int64_t FFmpegDemuxer::FindClosestKeyFrame(int64_t frame_num, int key_frame_interval)
-{
+{  
+    // key_frame_interval is in second here
+    
     int key_frame_frequency = (int) (key_frame_interval* GetFramerate());
     int64_t key_frame_num = frame_num - (int64_t)(frame_num % key_frame_frequency);
+    return key_frame_num;
+}
+
+
+int64_t FFmpegDemuxer::FindClosestKeyFrameFNI(int64_t frame_num, int key_frame_interval)
+{
+    // key_frame_interval is in frame number
+    int64_t key_frame_num = frame_num - (int64_t)(frame_num % key_frame_interval);
     return key_frame_num;
 }
 
