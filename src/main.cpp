@@ -22,7 +22,7 @@
 #pragma comment(lib, "legacy_stdio_definitions")
 #endif
 
-#define label_buffer_size 256 
+#define label_buffer_size 128 
 
 simplelogger::Logger *logger = simplelogger::LoggerFactory::CreateConsoleLogger();
 
@@ -99,6 +99,8 @@ int main(int, char **)
     std::vector<std::thread> yolo_threads;
     yolo_param yolo_setting = yolo_param();
     bool show_world_coordinates = false;
+    std::string keypoints_root_folder;
+    bool change_keypoints_folder =false;
 
     while (!glfwWindowShouldClose(window->render_target))
     {
@@ -151,6 +153,7 @@ int main(int, char **)
                                 skeleton->name = element.first;
                                 skeleton_initialize(skeleton, element.second);
                                 plot_keypoints_flag = true;
+                                keypoints_root_folder = root_dir + "/labeled_data/";
                             }
                         }
                         ImGui::EndMenu();
@@ -205,34 +208,40 @@ int main(int, char **)
 
         if (file_dialog.HasSelected())
         {
-            root_dir = file_dialog.GetSelected().string();
+            if (change_keypoints_folder) {
+                keypoints_root_folder = file_dialog.GetSelected().string();
+                change_keypoints_folder = false;
+            } else {
+                root_dir = file_dialog.GetSelected().string();
 
-            // load movies
-            std::string movie_dir = root_dir + "/movies";
+                // load movies
+                std::string movie_dir = root_dir + "/movies";
 
-            for (const auto &entry : std::filesystem::directory_iterator(movie_dir))
-            {
-                input_file_names.push_back(entry.path().string());
+                for (const auto &entry : std::filesystem::directory_iterator(movie_dir))
+                {
+                    input_file_names.push_back(entry.path().string());
+                }
+
+                std::sort(input_file_names.begin(), input_file_names.end());
+                scene->image_width = 3208;
+                scene->image_height = 2200;
+                render_allocate_scene_memory(scene, 3208, 2200, input_file_names.size(), label_buffer_size);
+
+                // multiple threads for decoding for selected videos
+                for (u32 i = 0; i < scene->num_cams; i++)
+                {
+                    std::size_t cam_string_position = input_file_names[i].find("Cam");           // position of "Cam" in str
+                    std::size_t cam_string_mp4_position = input_file_names[i].find("mp4");
+                    std::size_t length_of_substr = cam_string_mp4_position - cam_string_position - 1;
+                    std::string cam_string = input_file_names[i].substr(cam_string_position, length_of_substr); // get from "Cam" to the end
+                    camera_names.push_back(cam_string);
+                    std::cout << "camera names: " << cam_string << std::endl;
+                    decoder_threads.push_back(std::thread(&decoder_process, input_file_names[i].c_str(), dc_context, scene->display_buffer[i], scene->size_of_buffer, &scene->seek_context[i], scene->use_cpu_buffer));
+                }
+
+                video_loaded = true;
             }
 
-            std::sort(input_file_names.begin(), input_file_names.end());
-            scene->image_width = 3208;
-            scene->image_height = 2200;
-            render_allocate_scene_memory(scene, 3208, 2200, input_file_names.size(), label_buffer_size);
-
-            // multiple threads for decoding for selected videos
-            for (u32 i = 0; i < scene->num_cams; i++)
-            {
-                std::size_t cam_string_position = input_file_names[i].find("Cam");           // position of "Cam" in str
-                std::size_t cam_string_mp4_position = input_file_names[i].find("mp4");
-                std::size_t length_of_substr = cam_string_mp4_position - cam_string_position - 1;
-                std::string cam_string = input_file_names[i].substr(cam_string_position, length_of_substr); // get from "Cam" to the end
-                camera_names.push_back(cam_string);
-                std::cout << "camera names: " << cam_string << std::endl;
-                decoder_threads.push_back(std::thread(&decoder_process, input_file_names[i].c_str(), dc_context, scene->display_buffer[i], scene->size_of_buffer, &scene->seek_context[i], scene->use_cpu_buffer));
-            }
-
-            video_loaded = true;
             file_dialog.ClearSelected();
         }
 
@@ -276,8 +285,9 @@ int main(int, char **)
         {
             static int select_corr_head = 0;
             ImGui::SetNextWindowSize(ImVec2(500, 440), ImGuiCond_FirstUseEver);
-            if (ImGui::Begin("Frames in the buffer", NULL, ImGuiWindowFlags_MenuBar))
+            if (ImGui::Begin("Frames in the buffer"))
             {
+                ImGui::Text("Frame number selected: %d", scene->display_buffer[0][select_corr_head].frame_number);
                 {
                     for (u32 i = 0; i < scene->size_of_buffer; i++)
                     {
@@ -310,7 +320,6 @@ int main(int, char **)
                     }
                 };
             }
-            ImGui::Text("Frame number selected: %d", scene->display_buffer[0][select_corr_head].frame_number);
             ImGui::End();
 
             select_corr_head = (pause_selected + read_head) % scene->size_of_buffer;
@@ -633,18 +642,26 @@ int main(int, char **)
 
                 if (ImGui::Button("Save Labeled Data"))
                 {
-                    save_keypoints(keypoints_map, skeleton, root_dir, scene->num_cams, camera_names);
+                    save_keypoints(keypoints_map, skeleton, keypoints_root_folder, scene->num_cams, camera_names);
                 }
 
                 if (ImGui::Button("Load Labeled Data"))
                 {
-                    load_keypoints(keypoints_map, skeleton, root_dir, scene, camera_names);
+                    load_keypoints(keypoints_map, skeleton, keypoints_root_folder, scene, camera_names);
+                }
+
+                // TODO: change folder
+                ImGui::Text(keypoints_root_folder.c_str());
+                ImGui::SameLine();
+                if (ImGui::Button("Update keypoints folder")) {
+                    change_keypoints_folder = true;
+                    file_dialog.Open();
                 }
 
                 if (ImGui::Button("Load 2d Keypoints Only"))
                 {
                     for (int i=0; i<scene->num_cams; i++) {
-                        load_2d_keypoints(keypoints_map, skeleton, root_dir, i, camera_names[i], scene);
+                        load_2d_keypoints(keypoints_map, skeleton, keypoints_root_folder, i, camera_names[i], scene);
                     }
                 }
                 
@@ -680,6 +697,7 @@ int main(int, char **)
                     to_display_frame_number = scene->seek_context[0].seek_frame;
                     read_head = 0;
                     just_seeked = true;
+                    pause_selected = 0;
                     slider_frame_number = to_display_frame_number;
                 }
 

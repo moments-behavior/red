@@ -145,12 +145,12 @@ std::string current_date_time() {
 void save_keypoints(std::map<u32, KeyPoints*> keypoints_map, SkeletonContext* skeleton, std::string root_dir, int num_cameras, std::vector<std::string>& camera_names)
 {
     std::string now = current_date_time();
-    std::string filename = root_dir + "/labeled_data/worldKeyPoints/keypoints_" + now;
+    std::string filename = root_dir + "/worldKeyPoints/keypoints_" + now;
     std::ofstream output_file(filename);
     std::vector<std::ofstream> output2d_files;
 
     for (uint i = 0; i < num_cameras; i++) {
-        std::string filename_cam = root_dir + "/labeled_data/" + camera_names[i] + "/" + camera_names[i] + "_" + now;
+        std::string filename_cam = root_dir + "/" + camera_names[i] + "/" + camera_names[i] + "_" + now;
         std::ofstream output_file_cam(filename_cam);
         output2d_files.push_back(std::move(output_file_cam));
     }
@@ -205,7 +205,7 @@ void save_keypoints(std::map<u32, KeyPoints*> keypoints_map, SkeletonContext* sk
 
 
 void load_2d_keypoints(std::map<u32, KeyPoints*>& keypoints_map, SkeletonContext* skeleton, std::string root_dir, int cam_idx, std::string camera_name, render_scene *scene) {
-    std::string labeled_data_dir = root_dir + "/labeled_data/" + camera_name;
+    std::string labeled_data_dir = root_dir  + "/" + camera_name;
     std::vector<std::string> filenames;
 
     for (const auto & entry : std::filesystem::directory_iterator(labeled_data_dir))
@@ -292,7 +292,7 @@ void load_2d_keypoints(std::map<u32, KeyPoints*>& keypoints_map, SkeletonContext
 }
 
 void load_keypoints(std::map<u32, KeyPoints*>& keypoints_map, SkeletonContext* skeleton, std::string root_dir, render_scene *scene, std::vector<std::string>& camera_names) {
-    std::string label3d_dir = root_dir + "/labeled_data/worldKeyPoints/";
+    std::string label3d_dir = root_dir + "/worldKeyPoints/";
     std::vector<std::string> filenames;
 
     for (const auto & entry : std::filesystem::directory_iterator(label3d_dir))
