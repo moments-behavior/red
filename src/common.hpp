@@ -1,9 +1,5 @@
-//
-// Created by ubuntu on 4/7/23.
-//
-
-#ifndef POSE_NORMAL_COMMON_HPP
-#define POSE_NORMAL_COMMON_HPP
+#ifndef YOLOv8_NORMAL_COMMON_HPP
+#define YOLOv8_NORMAL_COMMON_HPP
 #include "NvInfer.h"
 #include "opencv2/opencv.hpp"
 #include <sys/stat.h>
@@ -139,4 +135,5 @@ struct PreParam {
     float width  = 0;
 };
 }  // namespace pose
-#endif  // POSE_NORMAL_COMMON_HPP
+
+#endif  // YOLOv8_NORMAL_COMMON_HPP

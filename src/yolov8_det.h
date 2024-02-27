@@ -1,9 +1,5 @@
-//
-// Adapted from https://github.com/triple-Mu/YOLOv8-TensorRT
-//
-#ifndef POSE_NORMAL_YOLOv8_pose_HPP
-#define POSE_NORMAL_YOLOv8_pose_HPP
-
+#ifndef DETECT_END2END_YOLOV8_HPP
+#define DETECT_END2END_YOLOV8_HPP
 #include "NvInferPlugin.h"
 #include "common.hpp"
 #include "fstream"
@@ -11,29 +7,20 @@
 
 using namespace pose;
 
-class YOLOv8_pose
+class YOLOv8
 {
 public:
-    explicit YOLOv8_pose(const std::string &engine_file_path);
-
-    ~YOLOv8_pose();
+    explicit YOLOv8(const std::string &engine_file_path);
+    ~YOLOv8();
 
     void make_pipe(bool warmup = true);
-
     void copy_from_Mat(const cv::Mat &image);
-
     void copy_from_Mat(const cv::Mat &image, cv::Size &size);
-
     void preprocess_gpu(unsigned char *d_rgb);
-
     void letterbox(const cv::Mat &image, cv::Mat &out, cv::Size &size);
-
-    void copy_keypoints_gpu(float *d_points, const std::vector<Object> &objs);
-
     void infer();
-
-    void postprocess(std::vector<Object> &objs, float score_thres = 0.25f, float iou_thres = 0.65f, int topk = 100);
-
+    void postprocess(std::vector<Object> &objs);
+    
     int num_bindings;
     int num_inputs = 0;
     int num_outputs = 0;
@@ -58,4 +45,4 @@ private:
     Logger gLogger{nvinfer1::ILogger::Severity::kERROR};
 };
 
-#endif // POSE_NORMAL_YOLOv8_pose_HPP
+#endif // DETECT_END2END_YOLOV8_HPP

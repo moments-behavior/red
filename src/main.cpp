@@ -160,26 +160,35 @@ int main(int, char **)
                     }
 
                     if (ImGui::BeginMenu("Detection")) {
-                        if (ImGui::MenuItem("YOLOv5")) { 
-                            std::string yolov5_onnx = root_dir + "/yolo/v5/best.onnx";
-                            std::string yolov5_labelname = root_dir + "/yolo/v5/label.names";
-                            read_yolo_labels(yolov5_labelname, &yolo_setting);
+                        if (cpu_buffer_toggle) {
+                            if (ImGui::MenuItem("YOLOv5")) { 
+                                std::string yolov5_onnx = root_dir + "/yolo/v5/best.onnx";
+                                std::string yolov5_labelname = root_dir + "/yolo/v5/label.names";
+                                read_yolo_labels(yolov5_labelname, &yolo_setting);
 
-                            for (int i = 0; i< scene->num_cams; i++) {
-                                yolo_threads.push_back(std::thread(&yolo_process, yolov5_onnx, &yolo_setting, i));
+                                for (int i = 0; i< scene->num_cams; i++) {
+                                    yolo_threads.push_back(std::thread(&yolo_process, yolov5_onnx, &yolo_setting, i));
+                                }
+                                yolo_detection = true;
                             }
-                            yolo_detection = true;
-                        }
-
-                        if (ImGui::MenuItem("YOLOv8Pose")) {
-                            std::string engine_file_path = root_dir + "/yolo/v8_pose/rat_pose.engine";
-                            for (int i = 0; i< scene->num_cams; i++) {
-                                yolo_threads.push_back(std::thread(&yolo_process_v8pose, engine_file_path, i));
+                        } else {
+                            if (ImGui::MenuItem("YOLOv8")) {
+                                std::string engine_file_path = root_dir + "/yolo/yolorat_bbox/rat_bbox.engine";
+                                for (int i = 0; i< scene->num_cams; i++) {
+                                    yolo_threads.push_back(std::thread(&yolo_process_trt, engine_file_path, i));
+                                }
+                                yolo_detection = true;
                             }
-                            yolo_detection = true;
+
+                            if (ImGui::MenuItem("YOLOv8Pose")) {
+                                std::string engine_file_path = root_dir + "/yolo/yolopose/rat_pose.engine";
+                                for (int i = 0; i< scene->num_cams; i++) {
+                                    yolo_threads.push_back(std::thread(&yolo_process_v8pose, engine_file_path, i));
+                                }
+                                yolo_detection = true;
+                            }
 
                         }
-
                         ImGui::EndMenu();
                     }
                 }
@@ -260,12 +269,12 @@ int main(int, char **)
                 if (yolo_detection)
                 {
                     std::unique_lock<std::mutex> lck(g_mutexes[j]);
+                    std::cout << "main_thread: acquire lock" << std::endl; 
                     yolo_input_frames_rgba[j] = scene->display_buffer[j][read_head].frame;
                     g_ready[j] = true;
                     g_cvs[j].notify_one();
                 }
                 
-                // todo: need to use pbo to accelerate this 
                 if (scene->use_cpu_buffer) {
                     upload_texture(&scene->image_texture[j], scene->display_buffer[j][read_head].frame, 3208, 2200);
                 } else {
