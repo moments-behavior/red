@@ -434,7 +434,7 @@ int main(int, char **)
                                     if(*kp < (skeleton->num_nodes - 1)) {(*kp)++;}
                                 }
 
-                                if (ImGui::IsKeyPressed(ImGuiKey_3, false)) {
+                                if (ImGui::IsKeyPressed(ImGuiKey_U, false)) {
                                     for (int k=0; k<scene->num_cams; k++) {
                                         keypoints_map[current_frame_num]->keypoints2d[k][*kp].position = {1E7,  1E7};
                                         keypoints_map[current_frame_num]->keypoints2d[k][*kp].is_labeled = false;                                        
@@ -470,7 +470,6 @@ int main(int, char **)
                                 // delete all keypoint, memory leak here, need to handle it cleanly
                                 if (ImGui::IsKeyPressed(ImGuiKey_B, false)) 
                                 {
-                                    std::cout << "keypressed" << std::endl;
                                     KeyPoints* keypoints = nullptr;
                                     keypoints_map.erase(current_frame_num);
                                     keypoints_find = false;
@@ -602,7 +601,6 @@ int main(int, char **)
                         ImGui::PushID(j);
 
                         if (keypoints_find) {
-                            
                             if (keypoints_map.at(current_frame_num)->keypoints2d[i][j].is_labeled)
                             {
                                 if (keypoints_map[current_frame_num]->active_id[i] == j) {
@@ -630,9 +628,11 @@ int main(int, char **)
                             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, (ImVec4)ImColor::HSV(0.2f, 0.2f, 0.2f));
                             ImGui::PushStyleColor(ImGuiCol_ButtonActive, (ImVec4)ImColor::HSV(0.2f, 0.2f, 0.2f));
                         }
+
                         if (ImGui::Button(skeleton->node_names[j].c_str())) {
                             keypoints_map[current_frame_num]->active_id[i] = j;
                         }
+
                         ImGui::PopStyleColor(3);
                         ImGui::PopID();
                     }
@@ -643,8 +643,7 @@ int main(int, char **)
                     reprojection(keypoints_map.at(current_frame_num), skeleton, camera_params, scene->num_cams);
                 }
 
-                // added by RJ
-                if (ImGui::IsKeyPressed(ImGuiKey_2, false))   // triangulate
+                if (ImGui::IsKeyPressed(ImGuiKey_Q, false))   // triangulate
                 {
                     reprojection(keypoints_map.at(current_frame_num), skeleton, camera_params, scene->num_cams);
                 }
@@ -673,7 +672,7 @@ int main(int, char **)
                         load_2d_keypoints(keypoints_map, skeleton, keypoints_root_folder, i, camera_names[i], scene);
                     }
                 }
-                
+
                 auto upper_it = keypoints_map.upper_bound(current_frame_num); 
                 if (upper_it == keypoints_map.end()) {
                     ImGui::Text("Number of labeled frame : %d", (*upper_it).first);
@@ -718,8 +717,11 @@ int main(int, char **)
                 ImGui::Text("Q -> Active keypoint++ ");
                 ImGui::Text("E -> Active keypoint--");
                 ImGui::Text("D -> Delete active keypoint");
+                ImGui::Text("U -> Delete active keypoint on all cameras");
+                ImGui::Text("B -> Delete all keypoint");
                 ImGui::Text("T -> Active keypoint set to last node");
                 ImGui::Text("W -> Drop active keypoint");
+                ImGui::Text("P -> Triangule");
             }
             ImGui::End();
         }
