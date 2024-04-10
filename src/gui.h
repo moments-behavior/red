@@ -282,7 +282,7 @@ void load_2d_keypoints(std::map<u32, KeyPoints*>& keypoints_map, SkeletonContext
                     keypoints_map[frame_num]->keypoints2d[cam_idx][node].position.x = x;
                     keypoints_map[frame_num]->keypoints2d[cam_idx][node].position.y = y;
                     keypoints_map[frame_num]->keypoints2d[cam_idx][node].is_labeled = true;
-                    std::cout << "frame: " << frame_num << "  node: " << node << "  x: " << keypoints_map[frame_num]->keypoints2d[cam_idx][node].position.x << "  y: " << keypoints_map[frame_num]->keypoints2d[cam_idx][node].position.y << std::endl;
+                    // std::cout << "frame: " << frame_num << "  node: " << node << "  x: " << keypoints_map[frame_num]->keypoints2d[cam_idx][node].position.x << "  y: " << keypoints_map[frame_num]->keypoints2d[cam_idx][node].position.y << std::endl;
                 }
             }
         }
@@ -367,8 +367,8 @@ void load_keypoints(std::map<u32, KeyPoints*>& keypoints_map, SkeletonContext* s
                     keypoints_map[frame_num]->keypoints3d[node].y = y;
                     keypoints_map[frame_num]->keypoints3d[node].z = z;
 
-                    std::cout << "frame: " << frame_num << "  node: " << node << "  x: " << keypoints_map[frame_num]->keypoints3d[node].x \
-                     << "  y: " << keypoints_map[frame_num]->keypoints3d[node].y << "  z: " << keypoints_map[frame_num]->keypoints3d[node].z << std::endl;
+                    // std::cout << "frame: " << frame_num << "  node: " << node << "  x: " << keypoints_map[frame_num]->keypoints3d[node].x \
+                    //  << "  y: " << keypoints_map[frame_num]->keypoints3d[node].y << "  z: " << keypoints_map[frame_num]->keypoints3d[node].z << std::endl;
                 }
             }
         }
@@ -376,8 +376,18 @@ void load_keypoints(std::map<u32, KeyPoints*>& keypoints_map, SkeletonContext* s
     }
     fin.close();
 
+    // for (int i=0; i<scene->num_cams; i++) {
+    //     load_2d_keypoints(keypoints_map, skeleton, root_dir, i, camera_names[i], scene);
+    // }
+
+    auto handles = std::vector<std::thread>();
     for (int i=0; i<scene->num_cams; i++) {
-        load_2d_keypoints(keypoints_map, skeleton, root_dir, i, camera_names[i], scene);
+        handles.push_back(std::thread(&load_2d_keypoints, std::ref(keypoints_map), skeleton, root_dir, i, camera_names[i], scene));
+    }
+
+    for (auto &handle : handles)
+    {
+        handle.join();
     }
 }
 

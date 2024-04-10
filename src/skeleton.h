@@ -260,7 +260,7 @@ void skeleton_initialize(SkeletonContext* skeleton, SkeletonPrimitive skeleton_t
                 ImVec4 color = (ImVec4)ImColor::HSV(i / (float)skeleton->num_nodes, 1.0f, 1.0f);
                 skeleton->node_colors.push_back({color.x, color.y, color.z});
             }
-            
+
             skeleton->edges ={
                 {0, 1},
                 {0, 2},
@@ -282,7 +282,7 @@ void skeleton_initialize(SkeletonContext* skeleton, SkeletonPrimitive skeleton_t
                 {4, 17},
                 {17, 18},
                 {18, 19}};
-                break;
+            break;
 
         case Rat22:
             skeleton->num_nodes = 22;
