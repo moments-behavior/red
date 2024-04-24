@@ -6,6 +6,7 @@
 
 struct PBO_CUDA {
     GLuint pbo;
+    unsigned char* cuda_buffer;
     cudaGraphicsResource_t cuda_resource;
     size_t cuda_pbo_storage_buffer_size;
 };
@@ -17,7 +18,7 @@ struct render_scene
     u32 image_height;
     u32 size_of_buffer;
     GLuint *image_texture;
-    PBO_CUDA **pbo_cuda;
+    PBO_CUDA *pbo_cuda;
     PictureBuffer **display_buffer;
     SeekInfo *seek_context;
     bool use_cpu_buffer;
@@ -54,24 +55,14 @@ static void render_allocate_scene_memory(render_scene *scene, u32 image_width, u
         scene->display_buffer[j] = (PictureBuffer *)malloc(size_of_buffer * sizeof(PictureBuffer));
     }
 
-
-    if (!scene->use_cpu_buffer) {
-        scene->pbo_cuda = (PBO_CUDA **)malloc(sizeof(PBO_CUDA*) * num_cams);
-
-        for (u32 j = 0; j < num_cams; j++) {
-            scene->pbo_cuda[j] = (PBO_CUDA *)malloc(size_of_buffer * sizeof(PBO_CUDA));
-        }
-
-        for (u32 j = 0; j < num_cams; j++) {
-            for (u32 i = 0; i < size_of_buffer; i++) {
-                create_pbo(&scene->pbo_cuda[j][i].pbo, image_width, image_height);
-                register_pbo_to_cuda(&scene->pbo_cuda[j][i].pbo, &scene->pbo_cuda[j][i].cuda_resource);
-                map_cuda_resource(&scene->pbo_cuda[j][i].cuda_resource);
-                cuda_pointer_from_resource(&scene->display_buffer[j][i].frame, &scene->pbo_cuda[j][i].cuda_pbo_storage_buffer_size, &scene->pbo_cuda[j][i].cuda_resource);
-            }
-        }
+    scene->pbo_cuda = (PBO_CUDA *)malloc(sizeof(PBO_CUDA) * num_cams);
+    for (u32 j = 0; j < num_cams; j++) {
+        create_pbo(&scene->pbo_cuda[j].pbo, image_width, image_height);
+        register_pbo_to_cuda(&scene->pbo_cuda[j].pbo, &scene->pbo_cuda[j].cuda_resource);
+        map_cuda_resource(&scene->pbo_cuda[j].cuda_resource);
+        cuda_pointer_from_resource(&scene->pbo_cuda[j].cuda_buffer, &scene->pbo_cuda[j].cuda_pbo_storage_buffer_size, &scene->pbo_cuda[j].cuda_resource);
     }
-
+    
 
     unsigned int size_pic = image_width * image_height * 4 * sizeof(unsigned char);
     // allocate buffer on cpu 
@@ -82,6 +73,9 @@ static void render_allocate_scene_memory(render_scene *scene, u32 image_width, u
             if (scene->use_cpu_buffer) {
                 scene->display_buffer[j][i].frame = (unsigned char *)malloc(size_pic);
                 decoder_clear_buffer_with_constant_image(scene->display_buffer[j][i].frame, image_width, image_height);
+            } else {
+                // gpu buffer
+                cudaMalloc((void **)&scene->display_buffer[j][i].frame, size_pic);
             }
             scene->display_buffer[j][i].frame_number = -1;
             scene->display_buffer[j][i].available_to_write = true;

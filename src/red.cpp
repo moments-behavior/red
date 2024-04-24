@@ -22,7 +22,7 @@
 #pragma comment(lib, "legacy_stdio_definitions")
 #endif
 
-#define label_buffer_size 128
+#define label_buffer_size 8
 
 simplelogger::Logger *logger = simplelogger::LoggerFactory::CreateConsoleLogger();
 
@@ -235,7 +235,6 @@ int main(int, char **)
                 scene->image_width = 3208;
                 scene->image_height = 2200;
                 render_allocate_scene_memory(scene, 3208, 2200, input_file_names.size(), label_buffer_size);
-
                 // multiple threads for decoding for selected videos
                 for (u32 i = 0; i < scene->num_cams; i++)
                 {
@@ -265,26 +264,33 @@ int main(int, char **)
                     std::this_thread::sleep_for(std::chrono::milliseconds(1));
                 }
 
-                // sync yolo detection 
-                if (yolo_detection)
-                {
-                    std::unique_lock<std::mutex> lck(g_mutexes[j]);
-                    std::cout << "main_thread: acquire lock" << std::endl; 
-                    yolo_input_frames_rgba[j] = scene->display_buffer[j][read_head].frame;
-                    g_ready[j] = true;
-                    g_cvs[j].notify_one();
-                }
-                
                 if (scene->use_cpu_buffer) {
-                    upload_texture(&scene->image_texture[j], scene->display_buffer[j][read_head].frame, 3208, 2200);
+                    // upload_texture(&scene->image_texture[j], scene->display_buffer[j][read_head].frame, 3208, 2200); // 2x slower than pbo
+                    // copy frame to cuda buffer
+                    ck(cudaMemcpy(scene->pbo_cuda[j].cuda_buffer, scene->display_buffer[j][read_head].frame, 3208 * 2200 * 4, cudaMemcpyHostToDevice));
+                    bind_pbo(&scene->pbo_cuda[j].pbo);
+                    bind_texture(&scene->image_texture[j]);
+                    upload_image_pbo_to_texture(scene->image_width, scene->image_height); // Needs no arguments because texture and PBO are bound
+                    unbind_pbo();
+                    unbind_texture();
                 } else {
-                    bind_pbo(&scene->pbo_cuda[j][read_head].pbo);
+                    ck(cudaMemcpy(scene->pbo_cuda[j].cuda_buffer, scene->display_buffer[j][read_head].frame, 3208 * 2200 * 4, cudaMemcpyDeviceToDevice));
+                    bind_pbo(&scene->pbo_cuda[j].pbo);
                     bind_texture(&scene->image_texture[j]);
                     upload_image_pbo_to_texture(scene->image_width, scene->image_height); // Needs no arguments because texture and PBO are bound
                     unbind_pbo();
                     unbind_texture();
                 }
 
+                // sync yolo detection 
+                if (yolo_detection)
+                {
+                    std::unique_lock<std::mutex> lck(g_mutexes[j]);
+                    // std::cout << "main_thread: acquire lock" << std::endl; 
+                    yolo_input_frames_rgba[j] = scene->pbo_cuda[j].cuda_buffer;
+                    g_ready[j] = true;
+                    g_cvs[j].notify_one();
+                }
             }
             current_frame_num = to_display_frame_number;
         }
@@ -337,9 +343,16 @@ int main(int, char **)
             for (int j = 0; j < scene->num_cams; j++)
             {
                 if (scene->use_cpu_buffer) {
-                    upload_texture(&scene->image_texture[j], scene->display_buffer[j][select_corr_head].frame, 3208, 2200);
+                    // upload_texture(&scene->image_texture[j], scene->display_buffer[j][select_corr_head].frame, 3208, 2200);
+                    ck(cudaMemcpy(scene->pbo_cuda[j].cuda_buffer, scene->display_buffer[j][select_corr_head].frame, 3208 * 2200 * 4, cudaMemcpyHostToDevice));
+                    bind_pbo(&scene->pbo_cuda[j].pbo);
+                    bind_texture(&scene->image_texture[j]);
+                    upload_image_pbo_to_texture(scene->image_width, scene->image_height); // Needs no arguments because texture and PBO are bound
+                    unbind_pbo();
+                    unbind_texture();
                 } else {
-                    bind_pbo(&scene->pbo_cuda[j][select_corr_head].pbo);
+                    ck(cudaMemcpy(scene->pbo_cuda[j].cuda_buffer, scene->display_buffer[j][select_corr_head].frame, 3208 * 2200 * 4, cudaMemcpyDeviceToDevice));
+                    bind_pbo(&scene->pbo_cuda[j].pbo);
                     bind_texture(&scene->image_texture[j]);
                     upload_image_pbo_to_texture(scene->image_width, scene->image_height); // Needs no arguments because texture and PBO are bound
                     unbind_pbo();

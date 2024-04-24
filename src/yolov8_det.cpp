@@ -299,3 +299,24 @@ void YOLOv8::postprocess(std::vector<Object>& objs)
         objs.push_back(obj);
     }
 }
+
+void YOLOv8::copy_keypoints_gpu(float* d_points, const std::vector<Object>& objs)
+{
+    const int num_point = 4;
+    float points[8] = {0};
+    // TODO: draw both the bbox and the keypoints 
+    for (auto& obj : objs) {
+        points[0] = obj.rect.x;
+        points[1] = obj.rect.y;
+
+        points[2] = obj.rect.x;
+        points[3] = obj.rect.y + obj.rect.height;
+        
+        points[4] = obj.rect.x + obj.rect.width;
+        points[5] = obj.rect.y + obj.rect.height;
+
+        points[6] = obj.rect.x + obj.rect.width;
+        points[7] = obj.rect.y;
+    }
+    CHECK(cudaMemcpy(d_points, points, sizeof(float) * 8, cudaMemcpyHostToDevice));
+}

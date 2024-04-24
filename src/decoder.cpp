@@ -61,7 +61,6 @@ inline void decoder_check_input_files(const char *sz_in_file_path)
 
 void decoder_process(const char *input_file_name, DecoderContext *dc_context, PictureBuffer *display_buffer, int size_of_buffer, SeekInfo *seek_info, bool use_cpu_buffer)
 {
-
     decoder_check_input_files(input_file_name);
     std::cout << input_file_name << std::endl;
 
@@ -69,7 +68,6 @@ void decoder_process(const char *input_file_name, DecoderContext *dc_context, Pi
     ck(cuInit(0));
     CUcontext cuContext = NULL;
     createCudaContext(&cuContext, dc_context->gpu_index, 0);
-
     std::map<std::string, std::string> m;
     size_t nVideoBytes = 0;
     PacketData pktinfo;
@@ -230,7 +228,6 @@ void decoder_process(const char *input_file_name, DecoderContext *dc_context, Pi
                         // std::cout << "thread wait, " << display_buffer[buffer_head].available_to_write << ", " << buffer_head << ", " << display_buffer[buffer_head].frame_number << std::endl;
                         std::this_thread::sleep_for(std::chrono::milliseconds(1));
                     }
-
                     if (use_cpu_buffer) {
                         decoder_get_image_from_gpu(pTmpImage, display_buffer[buffer_head].frame, 4 * dec.GetWidth(), dec.GetHeight());
                     } else {
