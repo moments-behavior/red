@@ -281,7 +281,13 @@ void load_2d_keypoints(std::map<u32, KeyPoints*>& keypoints_map, SkeletonContext
 
                     keypoints_map[frame_num]->keypoints2d[cam_idx][node].position.x = x;
                     keypoints_map[frame_num]->keypoints2d[cam_idx][node].position.y = y;
-                    keypoints_map[frame_num]->keypoints2d[cam_idx][node].is_labeled = true;
+
+                    if (x == 1E7 || y == 1E7)  
+                    {
+                        keypoints_map[frame_num]->keypoints2d[cam_idx][node].is_labeled = false;
+                    } else {
+                        keypoints_map[frame_num]->keypoints2d[cam_idx][node].is_labeled = true;
+                    }
                     // std::cout << "frame: " << frame_num << "  node: " << node << "  x: " << keypoints_map[frame_num]->keypoints2d[cam_idx][node].position.x << "  y: " << keypoints_map[frame_num]->keypoints2d[cam_idx][node].position.y << std::endl;
                 }
             }
