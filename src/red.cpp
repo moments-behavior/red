@@ -22,8 +22,6 @@
 #pragma comment(lib, "legacy_stdio_definitions")
 #endif
 
-#define label_buffer_size 8
-
 simplelogger::Logger *logger = simplelogger::LoggerFactory::CreateConsoleLogger();
 
 std::vector<std::mutex> g_mutexes(MAX_VIEWS);
@@ -101,6 +99,8 @@ int main(int, char **)
     bool show_world_coordinates = false;
     std::string keypoints_root_folder;
     bool change_keypoints_folder =false;
+    int label_buffer_size = 32;
+
 
     while (!glfwWindowShouldClose(window->render_target))
     {
@@ -202,8 +202,10 @@ int main(int, char **)
             //     ImGui::Text("To Display frame number %d ", to_display_frame_number);
             //     ImGui::Text("Readhead %d", read_head);
             // }
-
-            ImGui::Checkbox("CPU Buffer", &cpu_buffer_toggle);
+            if (!video_loaded) {
+                ImGui::Checkbox("CPU Buffer", &cpu_buffer_toggle);
+                ImGui::InputInt("Buffer Size", &label_buffer_size, ImGuiInputTextFlags_EnterReturnsTrue);
+            }
             scene->use_cpu_buffer = cpu_buffer_toggle;
             if (video_loaded && !skeleton_chosen) {
                 if (ImGui::InputInt("Seek step", &dc_context->seek_interval, 10, 100, ImGuiInputTextFlags_EnterReturnsTrue)) {
@@ -601,17 +603,20 @@ int main(int, char **)
             }
         }
 
-        if (plot_keypoints_flag)
+
+        if (plot_keypoints_flag) 
         {
-            if (ImGui::Begin("Labeling Tool"))
-            {
+            if (ImGui::Begin("Keypoints")) {
                 for (int i=0; i<scene->num_cams; i++)
                 {
+                    ImGui::Text(camera_names[i].c_str()); 
+                    ImGui::SameLine();
+
                     for (int j=0; j<skeleton->num_nodes; j++)
                     {
                         if (j > 0) ImGui::SameLine();
 
-                        ImGui::PushID(j);
+                        ImGui::PushID(i*skeleton->num_nodes+j);
 
                         if (keypoints_find) {
                             if (keypoints_map.at(current_frame_num)->keypoints2d[i][j].is_labeled)
@@ -643,20 +648,55 @@ int main(int, char **)
                         }
 
                         if (ImGui::Button(skeleton->node_names[j].c_str())) {
-                            keypoints_map[current_frame_num]->active_id[i] = j;
+                            if (keypoints_find) {
+                                keypoints_map[current_frame_num]->active_id[i] = j;
+                                std::cout << keypoints_map[current_frame_num]->active_id[i] << std::endl;
+                            }
                         }
 
                         ImGui::PopStyleColor(3);
                         ImGui::PopID();
                     }
                 }
+            }
+            ImGui::End();
+        }
 
+
+        if (plot_keypoints_flag)
+        {
+            if (ImGui::Begin("Labeling Tool"))
+            {
+                bool keypoint_triangulated_all = true;
+                if (keypoints_find) {
+                    for (int j=0; j<skeleton->num_nodes; j++)
+                    {
+                        if (keypoints_map.at(current_frame_num)->keypoints3d[j].x == 1E7 || keypoints_map.at(current_frame_num)->keypoints3d[j].y == 1E7 || keypoints_map.at(current_frame_num)->keypoints3d[j].z == 1E7)
+                        {
+                            keypoint_triangulated_all = false;
+                            break;
+                        }
+                    }
+                } else {
+                    keypoint_triangulated_all = false;
+                }
+
+                if (!keypoint_triangulated_all && keypoints_find) {
+                    ImGui::PushStyleColor(ImGuiCol_Button, (ImVec4)ImColor::HSV(0.8, 0.9f, 0.9f));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, (ImVec4)ImColor::HSV(0.8, 0.9f, 0.9f));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonActive, (ImVec4)ImColor::HSV(0.8, 0.9f, 0.9f));
+                }
+                
                 if (ImGui::Button("Triangulate"))
                 {
                     reprojection(keypoints_map.at(current_frame_num), skeleton, camera_params, scene->num_cams);
                 }
+                
+                if (!keypoint_triangulated_all && keypoints_find) {
+                    ImGui::PopStyleColor(3);
+                } 
 
-                if (ImGui::IsKeyPressed(ImGuiKey_Q, false))   // triangulate
+                if (ImGui::IsKeyPressed(ImGuiKey_P, false))   // triangulate
                 {
                     reprojection(keypoints_map.at(current_frame_num), skeleton, camera_params, scene->num_cams);
                 }
