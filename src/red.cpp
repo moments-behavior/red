@@ -801,6 +801,7 @@ int main(int, char **)
                 ImGui::Text("D -> Delete active keypoint");
                 ImGui::Text("U -> Delete active keypoint on all cameras");
                 ImGui::Text("B -> Delete all keypoint");
+                ImGui::Text("R -> Active keypoint set to first node");
                 ImGui::Text("T -> Active keypoint set to last node");
                 ImGui::Text("W -> Drop active keypoint");
                 ImGui::Text("P -> Triangule");
