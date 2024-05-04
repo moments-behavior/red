@@ -100,8 +100,9 @@ int main(int, char **)
     std::string keypoints_root_folder;
     bool change_keypoints_folder =false;
     int label_buffer_size = 32;
-
-
+    bool show_help_window = false;
+    std::vector<bool> is_view_focused;
+    
     while (!glfwWindowShouldClose(window->render_target))
     {
         // Poll and handle events (inputs, window resize, etc.)
@@ -247,11 +248,11 @@ int main(int, char **)
                     camera_names.push_back(cam_string);
                     std::cout << "camera names: " << cam_string << std::endl;
                     decoder_threads.push_back(std::thread(&decoder_process, input_file_names[i].c_str(), dc_context, scene->display_buffer[i], scene->size_of_buffer, &scene->seek_context[i], scene->use_cpu_buffer));
+                    is_view_focused.push_back(false);
                 }
 
                 video_loaded = true;
             }
-
             file_dialog.ClearSelected();
         }
 
@@ -320,7 +321,7 @@ int main(int, char **)
 
                 ImGui::Separator();
 
-                if (ImGui::Button(ICON_FK_MINUS) || ImGui::IsKeyPressed(ImGuiKey_LeftBracket, true))
+                if (ImGui::Button(ICON_FK_MINUS) || ImGui::IsKeyPressed(ImGuiKey_Comma, true))
                 {
                     if (pause_selected > 0)
                     {
@@ -329,7 +330,7 @@ int main(int, char **)
                 };
 
                 ImGui::SameLine();
-                if (ImGui::Button(ICON_FK_PLUS) || ImGui::IsKeyPressed(ImGuiKey_RightBracket, true))
+                if (ImGui::Button(ICON_FK_PLUS) || ImGui::IsKeyPressed(ImGuiKey_Period, true))
                 {
                     if (pause_selected < (scene->size_of_buffer - 1))
                     {
@@ -383,6 +384,7 @@ int main(int, char **)
         {
             for (int j = 0; j < scene->num_cams; j++)
             {
+                
                 // layout
                 ImGui::SetNextWindowSize(ImVec2(500, 400), ImGuiCond_FirstUseEver);
                 ImVec2 window_pos;
@@ -406,11 +408,10 @@ int main(int, char **)
                 ImGui::SetNextWindowPos(window_pos, ImGuiCond_FirstUseEver);
                 ImGui::Begin(camera_names[j].c_str());
                 ImGui::BeginGroup();
-
                 std::string scene_name = "scene view" + std::to_string(j);
                 ImGui::BeginChild(scene_name.c_str(), ImVec2(0, -ImGui::GetFrameHeightWithSpacing())); // Leave room for 1 line below
-
                 ImVec2 avail_size = ImGui::GetContentRegionAvail();
+
                 // ImGui::Image((void*)(intptr_t)image_texture[j], avail_size);
                 if (ImPlot::BeginPlot("##no_plot_name", avail_size, ImPlotFlags_Equal | ImPlotAxisFlags_AutoFit | ImPlotFlags_Crosshairs))
                 {
@@ -424,10 +425,12 @@ int main(int, char **)
                         // plot arena for testing camera parameters 
                         // gui_plot_perimeter(&camera_params[j]);
                         // gui_plot_world_coordinates(&camera_params[j], j);
+                        
 
                         // labeling 
-                        if (ImPlot::IsPlotHovered()){
-                            
+                        if (ImPlot::IsPlotHovered()) {
+                            is_view_focused[j]  = true;
+
                             if (ImGui::IsKeyPressed(ImGuiKey_C, false)) {
                                 // create keypoints
                                 if (!keypoints_find){
@@ -439,7 +442,6 @@ int main(int, char **)
                             }
 
                             if (keypoints_find) {
-
                                 u32* kp = &(keypoints_map[current_frame_num]->active_id[j]);
                                 if (ImGui::IsKeyPressed(ImGuiKey_W, false)){
                                     // labeling sequentially each view
@@ -447,13 +449,6 @@ int main(int, char **)
                                     keypoints_map[current_frame_num]->keypoints2d[j][*kp].position = {mouse.x,  mouse.y};
                                     keypoints_map[current_frame_num]->keypoints2d[j][*kp].is_labeled = true;
                                     if(*kp < (skeleton->num_nodes - 1)) {(*kp)++;}
-                                }
-
-                                if (ImGui::IsKeyPressed(ImGuiKey_U, false)) {
-                                    for (int k=0; k<scene->num_cams; k++) {
-                                        keypoints_map[current_frame_num]->keypoints2d[k][*kp].position = {1E7,  1E7};
-                                        keypoints_map[current_frame_num]->keypoints2d[k][*kp].is_labeled = false;                                        
-                                    }
                                 }
 
                                 // Use "Q" and "E" keys to scroll through and set active keypoint to label
@@ -473,6 +468,19 @@ int main(int, char **)
                                 {
                                     *kp = skeleton->num_nodes-1;
                                 }
+
+                                if (ImGui::IsKeyPressed(ImGuiKey_R, false))   // go to the first keypoint
+                                {
+                                    *kp = 0;
+                                }
+
+                                if (ImGui::IsKeyPressed(ImGuiKey_U, false)) // Delete active keypoints from all the views
+                                {
+                                    for (int k=0; k<scene->num_cams; k++) {
+                                        keypoints_map[current_frame_num]->keypoints2d[k][*kp].position = {1E7,  1E7};
+                                        keypoints_map[current_frame_num]->keypoints2d[k][*kp].is_labeled = false;                                        
+                                    }
+                                }
                                 
                                 if (ImGui::IsKeyPressed(ImGuiKey_D, false))  // delete the active keypoint
                                 {
@@ -490,6 +498,8 @@ int main(int, char **)
                                     keypoints_find = false;
                                 }
                             }
+                        } else {
+                            is_view_focused[j]  = false;
                         }
 
                         if (keypoints_find){
@@ -609,7 +619,14 @@ int main(int, char **)
             if (ImGui::Begin("Keypoints")) {
                 for (int i=0; i<scene->num_cams; i++)
                 {
+                    if (is_view_focused[i]) {
+                        ImGui::PushStyleColor(ImGuiCol_Text, (ImVec4)ImColor::HSV(0.8, 1.0f, 1.0f));
+                    } 
                     ImGui::Text(camera_names[i].c_str()); 
+                    if (is_view_focused[i]) {
+                        ImGui::PopStyleColor();
+                    }
+                    
                     ImGui::SameLine();
 
                     for (int j=0; j<skeleton->num_nodes; j++)
@@ -761,10 +778,22 @@ int main(int, char **)
                     pause_selected = 0;
                     slider_frame_number = to_display_frame_number;
                 }
+            }
+            ImGui::End();
+        }
 
-                ImGui::NewLine();
-                ImGui::Text("[ -> Previous image, ] -> Next image");
+
+        if (ImGui::IsKeyPressed(ImGuiKey_H, false))
+        {
+            show_help_window = !show_help_window;
+        }
+
+        if (show_help_window)
+        {
+            if (ImGui::Begin("Help Menu")) {            
                 ImGui::Text("Space -> Toggle play and pause");
+                ImGui::Text(", -> Previous image");
+                ImGui::Text(". -> Next image");
                 ImGui::Text("While hovering image...");
                 ImGui::Text("C -> Create keypoints on frame");
                 ImGui::Text("Q -> Active keypoint++ ");
@@ -778,8 +807,7 @@ int main(int, char **)
             }
             ImGui::End();
         }
-
-
+      
         // Rendering
         ImGui::Render();
         int display_w, display_h;
