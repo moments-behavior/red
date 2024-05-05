@@ -28,7 +28,7 @@ static void draw_cv_contours(std::vector<cv::Rect> boxes, std::vector<std::strin
     }
 }
 
-static void gui_plot_keypoints(KeyPoints *keypoints, SkeletonContext *skeleton, int view_idx)
+static void gui_plot_keypoints(KeyPoints *keypoints, SkeletonContext *skeleton, int view_idx, int num_cams)
 {
     float pt_size = 6.0f;
     for (u32 node=0; node < skeleton->num_nodes; node++){
@@ -43,7 +43,36 @@ static void gui_plot_keypoints(KeyPoints *keypoints, SkeletonContext *skeleton, 
                 node_color.z = skeleton->node_colors.at(node).z;
             }
             int id = skeleton->num_nodes * view_idx + node;
-            ImPlot::DragPoint(id, &keypoints->keypoints2d[view_idx][node].position.x, &keypoints->keypoints2d[view_idx][node].position.y, node_color, pt_size);
+            static bool drag_point_clicked;
+            static bool drag_point_hovered;
+            static bool drag_point_modified;
+            drag_point_modified = ImPlot::DragPoint(id, &keypoints->keypoints2d[view_idx][node].position.x, &keypoints->keypoints2d[view_idx][node].position.y, node_color, pt_size, ImPlotDragToolFlags_None, &drag_point_clicked, &drag_point_hovered);
+            if (drag_point_modified) {
+                keypoints->keypoints2d[view_idx][node].is_triangulated = false;
+            }
+            if (drag_point_hovered) {
+                if (ImGui::IsKeyPressed(ImGuiKey_R, false))  // delete active keypoint
+                {
+                    keypoints->keypoints2d[view_idx][node].position = {1E7,  1E7};
+                    keypoints->keypoints2d[view_idx][node].is_labeled = false;                                        
+                    keypoints->keypoints2d[view_idx][node].is_triangulated = false;
+                    keypoints->active_id[view_idx] = node;
+                }
+                
+                if (ImGui::IsKeyPressed(ImGuiKey_F, false)) // Delete active keypoints from all the views
+                {
+                    for (int cam_idx =0; cam_idx < num_cams; cam_idx++) {
+                        keypoints->keypoints2d[cam_idx][node].position = {1E7,  1E7};
+                        keypoints->keypoints2d[cam_idx][node].is_labeled = false;                                        
+                        keypoints->keypoints2d[cam_idx][node].is_triangulated = false;
+                        keypoints->active_id[cam_idx] = node;
+                    }
+                }
+            }
+
+            if (drag_point_clicked) {
+                keypoints->active_id[view_idx] = node;
+            }
         }
     }
 
@@ -129,6 +158,7 @@ static void reprojection(KeyPoints *keypoints, SkeletonContext *skeleton, std::v
                 keypoints->keypoints2d[view_idx][node].position.x = x;
                 keypoints->keypoints2d[view_idx][node].position.y = y;
                 keypoints->keypoints2d[view_idx][node].is_labeled = true;
+                keypoints->keypoints2d[view_idx][node].is_triangulated = true;
             }
         }
 
@@ -375,6 +405,17 @@ void load_keypoints(std::map<u32, KeyPoints*>& keypoints_map, SkeletonContext* s
                     keypoints_map[frame_num]->keypoints3d[node].x = x;
                     keypoints_map[frame_num]->keypoints3d[node].y = y;
                     keypoints_map[frame_num]->keypoints3d[node].z = z;
+                    
+                    if (x == 1E7 || y == 1E7 || z==1E7) {
+                        for (int cam_idx=0; cam_idx<scene->num_cams; cam_idx++) {
+                            keypoints_map[frame_num]->keypoints2d[cam_idx][node].is_triangulated = false;
+                        }
+                    }
+                    else {
+                        for (int cam_idx=0; cam_idx<scene->num_cams; cam_idx++) {
+                            keypoints_map[frame_num]->keypoints2d[cam_idx][node].is_triangulated = true;
+                        }
+                    }
 
                     // std::cout << "frame: " << frame_num << "  node: " << node << "  x: " << keypoints_map[frame_num]->keypoints3d[node].x \
                     //  << "  y: " << keypoints_map[frame_num]->keypoints3d[node].y << "  z: " << keypoints_map[frame_num]->keypoints3d[node].z << std::endl;

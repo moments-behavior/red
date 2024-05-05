@@ -24,8 +24,6 @@ DIR_IMPLOT="lib/implot"
 # g++ -std=c++17 -I$DIR_IMPLOT -I$DIR_IMGUI -g -Wall -c -o release/implot_items.o $DIR_IMPLOT/implot_items.cpp
 # g++ -std=c++17 -I$DIR_IMPLOT -I$DIR_IMGUI -g -Wall -c -o release/implot_demo.o $DIR_IMPLOT/implot_demo.cpp
 
-
-
 g++ -Ofast -mssse3 -ffast-math -std=c++17 \
     release/ColorSpace.o \
     -o release/*.o \

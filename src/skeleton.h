@@ -9,6 +9,7 @@
 struct KeyPoints2D{
     tuple_d position; 
     bool is_labeled;
+    bool is_triangulated;
 };
 
 struct KeyPoints{
@@ -380,6 +381,7 @@ void allocate_keypoints(KeyPoints *keypoints, render_scene *scene, SkeletonConte
         keypoints->active_id[j] = 0;
         for (u32 k=0; k < skeleton->num_nodes; k++){
             keypoints->keypoints2d[j][k].is_labeled = false;
+            keypoints->keypoints2d[j][k].is_triangulated = false;
             keypoints->keypoints2d[j][k].position.x = 1E7;
             keypoints->keypoints2d[j][k].position.y = 1E7;
         }

@@ -102,7 +102,7 @@ int main(int, char **)
     int label_buffer_size = 32;
     bool show_help_window = false;
     std::vector<bool> is_view_focused;
-    
+
     while (!glfwWindowShouldClose(window->render_target))
     {
         // Poll and handle events (inputs, window resize, etc.)
@@ -431,7 +431,7 @@ int main(int, char **)
                         if (ImPlot::IsPlotHovered()) {
                             is_view_focused[j]  = true;
 
-                            if (ImGui::IsKeyPressed(ImGuiKey_C, false)) {
+                            if (ImGui::IsKeyPressed(ImGuiKey_Z, false)) {
                                 // create keypoints
                                 if (!keypoints_find){
                                     // not found
@@ -448,50 +448,34 @@ int main(int, char **)
                                     ImPlotPoint mouse = ImPlot::GetPlotMousePos();
                                     keypoints_map[current_frame_num]->keypoints2d[j][*kp].position = {mouse.x,  mouse.y};
                                     keypoints_map[current_frame_num]->keypoints2d[j][*kp].is_labeled = true;
+                                    keypoints_map[current_frame_num]->keypoints2d[j][*kp].is_triangulated = false;
                                     if(*kp < (skeleton->num_nodes - 1)) {(*kp)++;}
                                 }
 
-                                // Use "Q" and "E" keys to scroll through and set active keypoint to label
-                                if (ImGui::IsKeyPressed(ImGuiKey_Q, false))
+                                if (ImGui::IsKeyPressed(ImGuiKey_A, true))
                                 {
                                     if (*kp <= 0) {*kp = 0;}
                                     else (*kp)--;
                                 }
 
-                                if (ImGui::IsKeyPressed(ImGuiKey_E, false))
+                                if (ImGui::IsKeyPressed(ImGuiKey_D, true))
                                 {
                                     if (*kp >= skeleton->num_nodes-1) {*kp = skeleton->num_nodes-1;}
                                     else (*kp)++;
                                 }
                                 
-                                if (ImGui::IsKeyPressed(ImGuiKey_T, false))   // skip to the last keypoint
+                                if (ImGui::IsKeyPressed(ImGuiKey_E, false))   // skip to the last keypoint
                                 {
                                     *kp = skeleton->num_nodes-1;
                                 }
 
-                                if (ImGui::IsKeyPressed(ImGuiKey_R, false))   // go to the first keypoint
+                                if (ImGui::IsKeyPressed(ImGuiKey_Q, false))   // go to the first keypoint
                                 {
                                     *kp = 0;
                                 }
 
-                                if (ImGui::IsKeyPressed(ImGuiKey_U, false)) // Delete active keypoints from all the views
-                                {
-                                    for (int k=0; k<scene->num_cams; k++) {
-                                        keypoints_map[current_frame_num]->keypoints2d[k][*kp].position = {1E7,  1E7};
-                                        keypoints_map[current_frame_num]->keypoints2d[k][*kp].is_labeled = false;                                        
-                                    }
-                                }
-                                
-                                if (ImGui::IsKeyPressed(ImGuiKey_D, false))  // delete the active keypoint
-                                {
-                                    keypoints_map[current_frame_num]->keypoints2d[j][*kp].position.x = 1E7;
-                                    keypoints_map[current_frame_num]->keypoints2d[j][*kp].position.y = 1E7;
-                                    keypoints_map[current_frame_num]->keypoints2d[j][*kp].is_labeled = false;
-                                    std::cout << skeleton->node_names.at(*kp) << " deleted on " << j << std:: endl;
-                                }
-
                                 // delete all keypoint, memory leak here, need to handle it cleanly
-                                if (ImGui::IsKeyPressed(ImGuiKey_B, false)) 
+                                if (ImGui::IsKeyPressed(ImGuiKey_V, false)) 
                                 {
                                     KeyPoints* keypoints = nullptr;
                                     keypoints_map.erase(current_frame_num);
@@ -503,7 +487,7 @@ int main(int, char **)
                         }
 
                         if (keypoints_find){
-                            gui_plot_keypoints(keypoints_map.at(current_frame_num), skeleton, j);
+                            gui_plot_keypoints(keypoints_map.at(current_frame_num), skeleton, j, scene->num_cams);
                             // think more general solution of multiple sets of keypoints 
                             if (skeleton->name == "Rat4Box" || skeleton->name == "Rat4Box3Ball") {
                                 gui_plot_bbox_from_keypoints(keypoints_map.at(current_frame_num), skeleton, j, 4, 5);
@@ -617,62 +601,66 @@ int main(int, char **)
         if (plot_keypoints_flag) 
         {
             if (ImGui::Begin("Keypoints")) {
-                for (int i=0; i<scene->num_cams; i++)
+
+                const float TEXT_BASE_HEIGHT = ImGui::GetTextLineHeightWithSpacing();
                 {
-                    if (is_view_focused[i]) {
-                        ImGui::PushStyleColor(ImGuiCol_Text, (ImVec4)ImColor::HSV(0.8, 1.0f, 1.0f));
-                    } 
-                    ImGui::Text(camera_names[i].c_str()); 
-                    if (is_view_focused[i]) {
-                        ImGui::PopStyleColor();
-                    }
-                    
-                    ImGui::SameLine();
+                    const int rows_count = scene->num_cams;
+                    const int columns_count= skeleton->num_nodes+1;
 
-                    for (int j=0; j<skeleton->num_nodes; j++)
+                    static ImGuiTableFlags table_flags = ImGuiTableFlags_ScrollX | ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_BordersOuter | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_Hideable | ImGuiTableFlags_Resizable | ImGuiTableFlags_HighlightHoveredColumn;
+
+                    if (ImGui::BeginTable("table_angled_headers", columns_count, table_flags, ImVec2(0.0f, TEXT_BASE_HEIGHT * 12)))
                     {
-                        if (j > 0) ImGui::SameLine();
+                        ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_NoHide | ImGuiTableColumnFlags_NoReorder);
+                        for (int column = 1; column < columns_count; column++)
+                            ImGui::TableSetupColumn(skeleton->node_names[column-1].c_str(), ImGuiTableColumnFlags_AngledHeader | ImGuiTableColumnFlags_WidthFixed);
 
-                        ImGui::PushID(i*skeleton->num_nodes+j);
+                        ImGui::TableAngledHeadersRow(); // Draw angled headers for all columns with the ImGuiTableColumnFlags_AngledHeader flag.
+                        ImGui::TableHeadersRow();       // Draw remaining headers and allow access to context-menu and other functions.
 
-                        if (keypoints_find) {
-                            if (keypoints_map.at(current_frame_num)->keypoints2d[i][j].is_labeled)
-                            {
-                                if (keypoints_map[current_frame_num]->active_id[i] == j) {
-                                    ImGui::PushStyleColor(ImGuiCol_Button, (ImVec4)ImColor::HSV(0.8, 0.9f, 0.9f));
-                                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, (ImVec4)ImColor::HSV(0.8, 0.9f, 0.9f));
-                                    ImGui::PushStyleColor(ImGuiCol_ButtonActive, (ImVec4)ImColor::HSV(0.8, 0.9f, 0.9f));
-                                } else {
-                                    ImGui::PushStyleColor(ImGuiCol_Button, (ImVec4)ImColor::HSV(j / (float)skeleton->num_nodes, 0.6f, 0.6f));
-                                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, (ImVec4)ImColor::HSV(j / (float)skeleton->num_nodes, 0.7f, 0.7f));
-                                    ImGui::PushStyleColor(ImGuiCol_ButtonActive, (ImVec4)ImColor::HSV(j / (float)skeleton->num_nodes, 0.8f, 0.8f));
-                                }
-                            } else {
-                                if (keypoints_map[current_frame_num]->active_id[i] == j) {
-                                    ImGui::PushStyleColor(ImGuiCol_Button, (ImVec4)ImColor::HSV(0.8, 0.9f, 0.9f));
-                                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, (ImVec4)ImColor::HSV(0.8, 0.9f, 0.9f));
-                                    ImGui::PushStyleColor(ImGuiCol_ButtonActive, (ImVec4)ImColor::HSV(0.8, 0.9f, 0.9f));
-                                } else {
-                                    ImGui::PushStyleColor(ImGuiCol_Button, (ImVec4)ImColor::HSV(j / (float)skeleton->num_nodes, 0.3f, 0.3f));
-                                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, (ImVec4)ImColor::HSV(j / (float)skeleton->num_nodes, 0.4f, 0.4f));
-                                    ImGui::PushStyleColor(ImGuiCol_ButtonActive, (ImVec4)ImColor::HSV(j / (float)skeleton->num_nodes, 0.5f, 0.5f));
-                                }
+                        for (int row = 0; row < rows_count; row++)
+                        {
+                            ImGui::PushID(row);
+                            ImGui::TableNextRow();
+
+                            if (is_view_focused[row] && keypoints_find) {
+                                ImU32 row_bg_color = ImGui::GetColorU32(ImVec4(0.7f, 0.3f, 0.3f, 0.65f)); 
+                                ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, row_bg_color);
                             }
-                        } else {
-                            ImGui::PushStyleColor(ImGuiCol_Button, (ImVec4)ImColor::HSV(0.2f, 0.2f, 0.2f));
-                            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, (ImVec4)ImColor::HSV(0.2f, 0.2f, 0.2f));
-                            ImGui::PushStyleColor(ImGuiCol_ButtonActive, (ImVec4)ImColor::HSV(0.2f, 0.2f, 0.2f));
-                        }
 
-                        if (ImGui::Button(skeleton->node_names[j].c_str())) {
-                            if (keypoints_find) {
-                                keypoints_map[current_frame_num]->active_id[i] = j;
-                                std::cout << keypoints_map[current_frame_num]->active_id[i] << std::endl;
-                            }
-                        }
+                            ImGui::TableSetColumnIndex(0);
+                            ImGui::AlignTextToFramePadding();
+                            ImGui::Text(camera_names[row].c_str());
+                            for (int column = 1; column < columns_count; column++)
+                                if (ImGui::TableSetColumnIndex(column))
+                                {
+                                    if (keypoints_find) {
+                                        ImVec4 node_color;
+                                        if(keypoints_map[current_frame_num]->active_id[row] == column-1)
+                                        {
+                                            node_color = (ImVec4)ImColor::HSV(0.8, 0.9f, 0.9f);
+                                        }  else {
+                                            if (keypoints_map[current_frame_num]->keypoints2d[row][column-1].is_labeled) 
+                                            {
+                                                node_color.w = 0.5;
+                                                node_color.x = skeleton->node_colors[column-1].x;
+                                                node_color.y = skeleton->node_colors[column-1].y;
+                                                node_color.z = skeleton->node_colors[column-1].z;
+                                            }
 
-                        ImGui::PopStyleColor(3);
-                        ImGui::PopID();
+                                            if (keypoints_map[current_frame_num]->keypoints2d[row][column-1].is_triangulated) 
+                                            {
+                                               ImGui::TextColored(ImVec4(1.0f, 0.0f, 1.0f, 1.0f), "T");
+                                            }    
+                                        }
+                                        
+                                        ImU32 cell_bg_color = ImGui::GetColorU32(node_color);
+                                        ImGui::TableSetBgColor(ImGuiTableBgTarget_CellBg, cell_bg_color);
+                                    }
+                                }
+                            ImGui::PopID();
+                        }
+                        ImGui::EndTable();
                     }
                 }
             }
@@ -684,38 +672,43 @@ int main(int, char **)
         {
             if (ImGui::Begin("Labeling Tool"))
             {
-                bool keypoint_triangulated_all = true;
-                if (keypoints_find) {
-                    for (int j=0; j<skeleton->num_nodes; j++)
-                    {
-                        if (keypoints_map.at(current_frame_num)->keypoints3d[j].x == 1E7 || keypoints_map.at(current_frame_num)->keypoints3d[j].y == 1E7 || keypoints_map.at(current_frame_num)->keypoints3d[j].z == 1E7)
-                        {
-                            keypoint_triangulated_all = false;
-                            break;
+
+                if (scene->num_cams > 1)
+                {
+                    bool keypoint_triangulated_all = true;
+                    if (keypoints_find) {
+                        for (int i=0; i<scene->num_cams; i++)  {
+                            for (int j=0; j<skeleton->num_nodes; j++)
+                            {
+                                if (!keypoints_map.at(current_frame_num)->keypoints2d[i][j].is_triangulated)
+                                {
+                                    keypoint_triangulated_all = false;
+                                }
+                            }
                         }
+                    } else {
+                        keypoint_triangulated_all = false;
                     }
-                } else {
-                    keypoint_triangulated_all = false;
-                }
 
-                if (!keypoint_triangulated_all && keypoints_find) {
-                    ImGui::PushStyleColor(ImGuiCol_Button, (ImVec4)ImColor::HSV(0.8, 0.9f, 0.9f));
-                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, (ImVec4)ImColor::HSV(0.8, 0.9f, 0.9f));
-                    ImGui::PushStyleColor(ImGuiCol_ButtonActive, (ImVec4)ImColor::HSV(0.8, 0.9f, 0.9f));
-                }
-                
-                if (ImGui::Button("Triangulate"))
-                {
-                    reprojection(keypoints_map.at(current_frame_num), skeleton, camera_params, scene->num_cams);
-                }
-                
-                if (!keypoint_triangulated_all && keypoints_find) {
-                    ImGui::PopStyleColor(3);
-                } 
+                    if (!keypoint_triangulated_all && keypoints_find) {
+                        ImGui::PushStyleColor(ImGuiCol_Button, (ImVec4)ImColor::HSV(0.8, 0.9f, 0.9f));
+                        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, (ImVec4)ImColor::HSV(0.8, 0.9f, 0.9f));
+                        ImGui::PushStyleColor(ImGuiCol_ButtonActive, (ImVec4)ImColor::HSV(0.8, 0.9f, 0.9f));
+                    }
+                    
+                    if (ImGui::Button("Triangulate"))
+                    {
+                        reprojection(keypoints_map.at(current_frame_num), skeleton, camera_params, scene->num_cams);
+                    }
+                    
+                    if (!keypoint_triangulated_all && keypoints_find) {
+                        ImGui::PopStyleColor(3);
+                    } 
 
-                if (ImGui::IsKeyPressed(ImGuiKey_P, false))   // triangulate
-                {
-                    reprojection(keypoints_map.at(current_frame_num), skeleton, camera_params, scene->num_cams);
+                    if (ImGui::IsKeyPressed(ImGuiKey_S, false))   // triangulate
+                    {
+                        reprojection(keypoints_map.at(current_frame_num), skeleton, camera_params, scene->num_cams);
+                    }
                 }
 
                 if (ImGui::Button("Save Labeled Data"))
@@ -794,17 +787,21 @@ int main(int, char **)
                 ImGui::Text("Space -> Toggle play and pause");
                 ImGui::Text(", -> Previous image");
                 ImGui::Text(". -> Next image");
-                ImGui::Text("While hovering image...");
-                ImGui::Text("C -> Create keypoints on frame");
-                ImGui::Text("Q -> Active keypoint++ ");
-                ImGui::Text("E -> Active keypoint--");
-                ImGui::Text("D -> Delete active keypoint");
-                ImGui::Text("U -> Delete active keypoint on all cameras");
-                ImGui::Text("B -> Delete all keypoint");
-                ImGui::Text("R -> Active keypoint set to first node");
-                ImGui::Text("T -> Active keypoint set to last node");
+
+                ImGui::SeparatorText("While hovering image");
+                ImGui::Text("Z -> Create keypoints on frame");
                 ImGui::Text("W -> Drop active keypoint");
-                ImGui::Text("P -> Triangule");
+                ImGui::Text("A -> Active keypoint++ ");
+                ImGui::Text("D -> Active keypoint--");
+                ImGui::Text("V -> Delete all keypoint");
+                ImGui::Text("Q -> Active keypoint set to first node");
+                ImGui::Text("E -> Active keypoint set to last node");
+                ImGui::Text("S -> Triangule");
+
+                ImGui::SeparatorText("While hovering keypoints");
+                ImGui::Text("R -> Delete active keypoint");
+                ImGui::Text("F -> Delete active keypoint on all cameras");
+                ImGui::Text("Click keypoint to active it");
             }
             ImGui::End();
         }
