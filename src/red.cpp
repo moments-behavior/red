@@ -208,9 +208,38 @@ int main(int, char **)
                 ImGui::InputInt("Buffer Size", &label_buffer_size, ImGuiInputTextFlags_EnterReturnsTrue);
             }
             scene->use_cpu_buffer = cpu_buffer_toggle;
-            if (video_loaded && !skeleton_chosen) {
+            if (video_loaded) {
                 if (ImGui::InputInt("Seek step", &dc_context->seek_interval, 10, 100, ImGuiInputTextFlags_EnterReturnsTrue)) {
                     std::cout << "Seek step: " << dc_context->seek_interval << std::endl;
+                }
+
+                static int seek_accurate_frame_num = 0;
+                if (ImGui::InputInt("Seek Accurate", &seek_accurate_frame_num, 1, 100, ImGuiInputTextFlags_EnterReturnsTrue)) {
+                    std::cout << "Seek accurate to: " << seek_accurate_frame_num << std::endl;
+                    for (int i = 0; i < scene->num_cams; i++)
+                    {
+                        scene->seek_context[i].seek_frame = (uint64_t)seek_accurate_frame_num;
+                        scene->seek_context[i].use_seek = true;
+                        scene->seek_context[i].seek_accurate = true;
+                    }
+
+                    for (int i = 0; i < scene->num_cams; i++)
+                    {
+                        while (!(scene->seek_context[i].seek_done))
+                        {
+                            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                        }
+                    }
+
+                    for (int i = 0; i < scene->num_cams; i++)
+                    {
+                        scene->seek_context[i].seek_done = false;
+                    }
+                    to_display_frame_number = scene->seek_context[0].seek_frame;
+                    read_head = 0;
+                    just_seeked = true;
+                    pause_selected = 0;
+                    slider_frame_number = to_display_frame_number;
                 }
             }
         }
@@ -741,35 +770,6 @@ int main(int, char **)
                     ImGui::Text("Number of labeled frame : %d", (*upper_it).first);
                 } else {
                     ImGui::Text("Next labeled frame : %d", (*upper_it).first);
-                }
-                
-                static int seek_accurate_frame_num = 0;
-                if (ImGui::InputInt("Seek Accurate to: ", &seek_accurate_frame_num, 1, 100, ImGuiInputTextFlags_EnterReturnsTrue)) {
-                    std::cout << "Seek accurate to: " << seek_accurate_frame_num << std::endl;
-                    for (int i = 0; i < scene->num_cams; i++)
-                    {
-                        scene->seek_context[i].seek_frame = (uint64_t)seek_accurate_frame_num;
-                        scene->seek_context[i].use_seek = true;
-                        scene->seek_context[i].seek_accurate = true;
-                    }
-
-                    for (int i = 0; i < scene->num_cams; i++)
-                    {
-                        while (!(scene->seek_context[i].seek_done))
-                        {
-                            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                        }
-                    }
-
-                    for (int i = 0; i < scene->num_cams; i++)
-                    {
-                        scene->seek_context[i].seek_done = false;
-                    }
-                    to_display_frame_number = scene->seek_context[0].seek_frame;
-                    read_head = 0;
-                    just_seeked = true;
-                    pause_selected = 0;
-                    slider_frame_number = to_display_frame_number;
                 }
             }
             ImGui::End();
