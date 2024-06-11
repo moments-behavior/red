@@ -51,6 +51,8 @@ int main(int, char **)
     std::vector<std::string> camera_names;
     std::vector<CameraParams> camera_params;
     std::vector<std::thread> decoder_threads;
+    std::vector<FFmpegDemuxer*> demuxers; 
+
     DecoderContext *dc_context = (DecoderContext *)malloc(sizeof(DecoderContext));
     *dc_context = (DecoderContext){
         .decoding_flag = false,
@@ -267,7 +269,15 @@ int main(int, char **)
                 scene->image_width = 3208;
                 scene->image_height = 2200;
                 render_allocate_scene_memory(scene, 3208, 2200, input_file_names.size(), label_buffer_size);
+                
                 // multiple threads for decoding for selected videos
+                for (u32 i = 0; i < scene->num_cams; i++)
+                {
+                    std::map<std::string, std::string> m;
+                    FFmpegDemuxer* demuxer = new FFmpegDemuxer(input_file_names[i].c_str(), m);
+                    demuxers.push_back(demuxer);
+                }
+                
                 for (u32 i = 0; i < scene->num_cams; i++)
                 {
                     std::size_t cam_string_position = input_file_names[i].find("Cam");           // position of "Cam" in str
@@ -276,7 +286,7 @@ int main(int, char **)
                     std::string cam_string = input_file_names[i].substr(cam_string_position, length_of_substr); // get from "Cam" to the end
                     camera_names.push_back(cam_string);
                     std::cout << "camera names: " << cam_string << std::endl;
-                    decoder_threads.push_back(std::thread(&decoder_process, input_file_names[i].c_str(), dc_context, scene->display_buffer[i], scene->size_of_buffer, &scene->seek_context[i], scene->use_cpu_buffer));
+                    decoder_threads.push_back(std::thread(&decoder_process, input_file_names[i].c_str(), dc_context, demuxers[i], scene->display_buffer[i], scene->size_of_buffer, &scene->seek_context[i], scene->use_cpu_buffer));
                     is_view_focused.push_back(false);
                 }
 
