@@ -96,7 +96,6 @@ void decoder_process(const char *input_file_name, DecoderContext *dc_context, FF
         // todo: need to make seek_context thread safe
         if (seek_info->use_seek)
         {
-
             // demuxer.Flush();
             std::cout << "target_frame_number:" << seek_info->seek_frame << std::endl;
             

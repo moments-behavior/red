@@ -266,18 +266,17 @@ int main(int, char **)
                 }
 
                 std::sort(input_file_names.begin(), input_file_names.end());
-                scene->image_width = 3208;
-                scene->image_height = 2200;
-                render_allocate_scene_memory(scene, 3208, 2200, input_file_names.size(), label_buffer_size);
-                
-                // multiple threads for decoding for selected videos
-                for (u32 i = 0; i < scene->num_cams; i++)
+
+                for (u32 i = 0; i < input_file_names.size(); i++)
                 {
                     std::map<std::string, std::string> m;
                     FFmpegDemuxer* demuxer = new FFmpegDemuxer(input_file_names[i].c_str(), m);
                     demuxers.push_back(demuxer);
                 }
+
+                render_allocate_scene_memory(scene, demuxers, input_file_names.size(), label_buffer_size);
                 
+                // multiple threads for decoding for selected videos                
                 for (u32 i = 0; i < scene->num_cams; i++)
                 {
                     std::size_t cam_string_position = input_file_names[i].find("Cam");           // position of "Cam" in str
@@ -307,19 +306,19 @@ int main(int, char **)
                 }
 
                 if (scene->use_cpu_buffer) {
-                    // upload_texture(&scene->image_texture[j], scene->display_buffer[j][read_head].frame, 3208, 2200); // 2x slower than pbo
+                    // upload_texture(&scene->image_texture[j], scene->display_buffer[j][read_head].frame, scene->image_width[j], scene->image_height[j]); // 2x slower than pbo
                     // copy frame to cuda buffer
-                    ck(cudaMemcpy(scene->pbo_cuda[j].cuda_buffer, scene->display_buffer[j][read_head].frame, 3208 * 2200 * 4, cudaMemcpyHostToDevice));
+                    ck(cudaMemcpy(scene->pbo_cuda[j].cuda_buffer, scene->display_buffer[j][read_head].frame, scene->image_width[j] * scene->image_height[j] * 4, cudaMemcpyHostToDevice));
                     bind_pbo(&scene->pbo_cuda[j].pbo);
                     bind_texture(&scene->image_texture[j]);
-                    upload_image_pbo_to_texture(scene->image_width, scene->image_height); // Needs no arguments because texture and PBO are bound
+                    upload_image_pbo_to_texture(scene->image_width[j], scene->image_height[j]); // Needs no arguments because texture and PBO are bound
                     unbind_pbo();
                     unbind_texture();
                 } else {
-                    ck(cudaMemcpy(scene->pbo_cuda[j].cuda_buffer, scene->display_buffer[j][read_head].frame, 3208 * 2200 * 4, cudaMemcpyDeviceToDevice));
+                    ck(cudaMemcpy(scene->pbo_cuda[j].cuda_buffer, scene->display_buffer[j][read_head].frame, scene->image_width[j] * scene->image_height[j] * 4, cudaMemcpyDeviceToDevice));
                     bind_pbo(&scene->pbo_cuda[j].pbo);
                     bind_texture(&scene->image_texture[j]);
-                    upload_image_pbo_to_texture(scene->image_width, scene->image_height); // Needs no arguments because texture and PBO are bound
+                    upload_image_pbo_to_texture(scene->image_width[j], scene->image_height[j]); // Needs no arguments because texture and PBO are bound
                     unbind_pbo();
                     unbind_texture();
                 }
@@ -385,18 +384,18 @@ int main(int, char **)
             for (int j = 0; j < scene->num_cams; j++)
             {
                 if (scene->use_cpu_buffer) {
-                    // upload_texture(&scene->image_texture[j], scene->display_buffer[j][select_corr_head].frame, 3208, 2200);
-                    ck(cudaMemcpy(scene->pbo_cuda[j].cuda_buffer, scene->display_buffer[j][select_corr_head].frame, 3208 * 2200 * 4, cudaMemcpyHostToDevice));
+                    // upload_texture(&scene->image_texture[j], scene->display_buffer[j][select_corr_head].frame, scene->image_width[j], scene->image_height[j]);
+                    ck(cudaMemcpy(scene->pbo_cuda[j].cuda_buffer, scene->display_buffer[j][select_corr_head].frame, scene->image_width[j] * scene->image_height[j] * 4, cudaMemcpyHostToDevice));
                     bind_pbo(&scene->pbo_cuda[j].pbo);
                     bind_texture(&scene->image_texture[j]);
-                    upload_image_pbo_to_texture(scene->image_width, scene->image_height); // Needs no arguments because texture and PBO are bound
+                    upload_image_pbo_to_texture(scene->image_width[j], scene->image_height[j]); // Needs no arguments because texture and PBO are bound
                     unbind_pbo();
                     unbind_texture();
                 } else {
-                    ck(cudaMemcpy(scene->pbo_cuda[j].cuda_buffer, scene->display_buffer[j][select_corr_head].frame, 3208 * 2200 * 4, cudaMemcpyDeviceToDevice));
+                    ck(cudaMemcpy(scene->pbo_cuda[j].cuda_buffer, scene->display_buffer[j][select_corr_head].frame, scene->image_width[j] * scene->image_height[j] * 4, cudaMemcpyDeviceToDevice));
                     bind_pbo(&scene->pbo_cuda[j].pbo);
                     bind_texture(&scene->image_texture[j]);
-                    upload_image_pbo_to_texture(scene->image_width, scene->image_height); // Needs no arguments because texture and PBO are bound
+                    upload_image_pbo_to_texture(scene->image_width[j], scene->image_height[j]); // Needs no arguments because texture and PBO are bound
                     unbind_pbo();
                     unbind_texture();
                 }
@@ -454,7 +453,7 @@ int main(int, char **)
                 // ImGui::Image((void*)(intptr_t)image_texture[j], avail_size);
                 if (ImPlot::BeginPlot("##no_plot_name", avail_size, ImPlotFlags_Equal | ImPlotAxisFlags_AutoFit | ImPlotFlags_Crosshairs))
                 {
-                    ImPlot::PlotImage("##no_image_name", (void *)(intptr_t)scene->image_texture[j], ImVec2(0, 0), ImVec2(3208, 2200));
+                    ImPlot::PlotImage("##no_image_name", (void *)(intptr_t)scene->image_texture[j], ImVec2(0, 0), ImVec2(scene->image_width[j], scene->image_height[j]));
                     
                     if (yolo_detection){
                         draw_cv_contours(yolo_boxes.at(j), yolo_labels.at(j), yolo_classid.at(j));
