@@ -86,7 +86,15 @@ void decoder_process(const char *input_file_name, DecoderContext *dc_context, FF
 
     double video_length = demuxer->GetDuration();
     double frame_rate = demuxer->GetFramerate();
-    dc_context->estimated_num_frames = int(video_length * frame_rate);
+    std::cout << "Video framerate: " << frame_rate << std::endl;
+    std::cout << "Video length: " << video_length << std::endl;
+
+    if (demuxer->GetNumFrames() == 0) {
+        dc_context->estimated_num_frames = int(video_length * frame_rate);
+    } else {
+        dc_context->estimated_num_frames = demuxer->GetNumFrames()-1;
+    }
+
     std::cout << "estimated_num_frames:" << dc_context->estimated_num_frames << std::endl;
     int size_in_bytes; 
     bool skip_first_decode_after_seek = false;

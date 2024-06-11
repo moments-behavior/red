@@ -43,7 +43,6 @@ static void render_allocate_scene_memory(render_scene *scene, std::vector<FFmpeg
     {
         scene->image_width[j] = demuxers[j]->GetWidth();
         scene->image_height[j] = demuxers[j]->GetHeight();
-        std::cout << scene->image_width[j] << ", " << scene->image_height[j] << std::endl;
     }
 
     scene->seek_context = (SeekInfo *)malloc(sizeof(SeekInfo) * num_cams);
