@@ -265,7 +265,7 @@ int main(int, char **)
                     input_file_names.push_back(entry.path().string());
                 }
 
-                std::sort(input_file_names.begin(), input_file_names.end());
+                std::sort(input_file_names.begin(), input_file_names.end(), numerical_compare_substr);
 
                 for (u32 i = 0; i < input_file_names.size(); i++)
                 {
@@ -273,6 +273,10 @@ int main(int, char **)
                     FFmpegDemuxer* demuxer = new FFmpegDemuxer(input_file_names[i].c_str(), m);
                     demuxers.push_back(demuxer);
                 }
+
+                std::map<std::string, std::string> m;
+                FFmpegDemuxer dummy_dmuxer(input_file_names[0].c_str(), m);
+                dc_context->seek_interval = (int)dummy_dmuxer.FindKeyFrameInterval(); // get the seek interval
 
                 render_allocate_scene_memory(scene, demuxers, input_file_names.size(), label_buffer_size);
                 

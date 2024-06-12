@@ -197,7 +197,7 @@ void decoder_process(const char *input_file_name, DecoderContext *dc_context, FF
             } else {
                 skip_first_decode_after_seek = false;
             }
-
+            
             if (!nFrame && nFrameReturned)
             {
                 LOG(INFO) << dec.GetVideoInfo();

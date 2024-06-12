@@ -18,4 +18,28 @@ std::vector<std::string> string_split(std::string s, std::string delimiter) {
     return res;
 }
 
+
+
+bool numerical_compare_substr(const std::string& s1, const std::string& s2)
+{ 
+
+    std::size_t s1_start = s1.find("Cam") + 3;
+    std::size_t s2_start = s2.find("Cam") + 3;
+
+    std::size_t s1_end = s1.find("mp4");
+    std::size_t s2_end = s2.find("mp4");
+
+    std::string s1_substr = s1.substr(s1_start, s1_end - s1_start - 1);
+    std::string s2_substr = s2.substr(s2_start, s2_end - s2_start - 1);
+
+    std::cout << s1_substr << " , " << s2_substr  << std::endl;
+
+    int s1_int = std::stoi(s1_substr);
+    int s2_int = std::stoi(s2_substr);
+
+    std::cout << s1_int << " , " << s2_int  << std::endl;
+
+    return s1_int < s2_int;
+}
+
 #endif

@@ -213,6 +213,8 @@ public:
     
     int64_t FindClosestKeyFrameFNI(int64_t frame_num, int key_frame_interval);
 
+    int64_t FindKeyFrameInterval();
+
     uint32_t GetVideoStreamIndex() const;
 
     AVPixelFormat GetPixelFormat() const;
