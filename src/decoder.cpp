@@ -59,7 +59,7 @@ inline void decoder_check_input_files(const char *sz_in_file_path)
     }
 }
 
-void decoder_process(const char *input_file_name, DecoderContext *dc_context, PictureBuffer *display_buffer, int size_of_buffer, SeekInfo *seek_info, bool use_cpu_buffer)
+void decoder_process(const char *input_file_name, DecoderContext *dc_context, FFmpegDemuxer* demuxer, PictureBuffer *display_buffer, int size_of_buffer, SeekInfo *seek_info, bool use_cpu_buffer)
 {
     decoder_check_input_files(input_file_name);
     std::cout << input_file_name << std::endl;
@@ -72,8 +72,7 @@ void decoder_process(const char *input_file_name, DecoderContext *dc_context, Pi
     size_t nVideoBytes = 0;
     PacketData pktinfo;
 
-    FFmpegDemuxer demuxer(input_file_name, m);
-    NvDecoder dec(cuContext, true, FFmpeg2NvCodecId(demuxer.GetVideoCodec()));
+    NvDecoder dec(cuContext, true, FFmpeg2NvCodecId(demuxer->GetVideoCodec()));
     int nWidth = 0, nHeight = 0;
 
     int nFrameReturned = 0, nFrame = 0, iMatrix = 0;
@@ -85,9 +84,17 @@ void decoder_process(const char *input_file_name, DecoderContext *dc_context, Pi
     bool seek_success_flag;
     bool demux_success;
 
-    double video_length = demuxer.GetDuration();
-    double frame_rate = demuxer.GetFramerate();
-    dc_context->estimated_num_frames = int(video_length * frame_rate);
+    double video_length = demuxer->GetDuration();
+    double frame_rate = demuxer->GetFramerate();
+    std::cout << "Video framerate: " << frame_rate << std::endl;
+    std::cout << "Video length: " << video_length << std::endl;
+
+    if (demuxer->GetNumFrames() == 0) {
+        dc_context->estimated_num_frames = int(video_length * frame_rate);
+    } else {
+        dc_context->estimated_num_frames = demuxer->GetNumFrames()-1;
+    }
+
     std::cout << "estimated_num_frames:" << dc_context->estimated_num_frames << std::endl;
     int size_in_bytes; 
     bool skip_first_decode_after_seek = false;
@@ -97,16 +104,15 @@ void decoder_process(const char *input_file_name, DecoderContext *dc_context, Pi
         // todo: need to make seek_context thread safe
         if (seek_info->use_seek)
         {
-
             // demuxer.Flush();
             std::cout << "target_frame_number:" << seek_info->seek_frame << std::endl;
             
             // assume every 10s is a keyframe, double check if your video is like that
-            uint64_t key_frame_num = demuxer.FindClosestKeyFrameFNI(seek_info->seek_frame, dc_context->seek_interval);
+            uint64_t key_frame_num = demuxer->FindClosestKeyFrameFNI(seek_info->seek_frame, dc_context->seek_interval);
             std::cout << "seeking to: " << key_frame_num << std::endl;
             SeekContext s = SeekContext(key_frame_num);
 
-            seek_success_flag = demuxer.Seek(s, pVideo, nVideoBytes, pktinfo);
+            seek_success_flag = demuxer->Seek(s, pVideo, nVideoBytes, pktinfo);
             // std::cout << "seek_success_flag: " << seek_success_flag << std::endl;
 
             // reset the display buffer after seeking
@@ -135,7 +141,7 @@ void decoder_process(const char *input_file_name, DecoderContext *dc_context, Pi
                 uint64_t curr_frame = key_frame_num - 1;
                 // keep decoding till the target frame
                 while (curr_frame != seek_info->seek_frame) {
-                    demux_success = demuxer.Demux(pVideo, nVideoBytes, pktinfo);
+                    demux_success = demuxer->Demux(pVideo, nVideoBytes, pktinfo);
                     if (!demux_success)
                     {
                         // end of stream
@@ -176,7 +182,7 @@ void decoder_process(const char *input_file_name, DecoderContext *dc_context, Pi
         else
         {
             if (!skip_first_decode_after_seek) {            
-                demux_success = demuxer.Demux(pVideo, nVideoBytes, pktinfo);
+                demux_success = demuxer->Demux(pVideo, nVideoBytes, pktinfo);
                 if (!demux_success)
                 {
                     // end of stream
@@ -191,7 +197,7 @@ void decoder_process(const char *input_file_name, DecoderContext *dc_context, Pi
             } else {
                 skip_first_decode_after_seek = false;
             }
-
+            
             if (!nFrame && nFrameReturned)
             {
                 LOG(INFO) << dec.GetVideoInfo();
