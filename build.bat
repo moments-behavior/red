@@ -1,5 +1,11 @@
-del "C:/Users/yaoyao/src/red-refactor/release/imgui.init"
-del "C:/Users/yaoyao/src/red-refactor/release/regui.exe"
+del %~dp0\release\imgui.init
+del %~dp0\release\regui.exe
+
+copy %~dp0lib\GL\lib\x64\glew32.dll %~dp0release\
+copy %~dp0lib\FFmpeg\lib\x64\avcodec-58.dll %~dp0release\
+copy %~dp0lib\FFmpeg\lib\x64\avformat-58.dll %~dp0release\
+copy %~dp0lib\FFmpeg\lib\x64\avutil-56.dll %~dp0release\
+copy %~dp0lib\FFmpeg\lib\x64\swresample-3.dll %~dp0release\
 
 nvcc -c src/create_image_cuda.cu -arch=sm_80 -o release/create_image_cuda.o
 nvcc -c src/ColorSpace.cu -arch=sm_80 -o release/ColorSpace.o
@@ -9,11 +15,11 @@ nvcc -c src/ColorSpace.cu -arch=sm_80 -o release/ColorSpace.o
 clang++.exe -Wno-everything -g -std=c++17 src/red.cpp src/decoder.cpp src/FFmpegDemuxer.cpp src/NvDecoder.cpp ^
 %DIR_IMGUI%/imgui.cpp %DIR_IMGUI%/imgui_demo.cpp %DIR_IMGUI%/imgui_draw.cpp %DIR_IMGUI%/imgui_tables.cpp %DIR_IMGUI%/imgui_widgets.cpp %DIR_IMGUI%/backends/imgui_impl_glfw.cpp %DIR_IMGUI%/backends/imgui_impl_opengl3.cpp ^
 %DIR_IMPLOT%/implot.cpp %DIR_IMPLOT%/implot_items.cpp %DIR_IMPLOT%/implot_demo.cpp ^
--I src ^
 -I lib -I lib/nvcodec -I lib/IconFontCppHeaders ^
--I lib/imgui-filebrowser -I lib/FFmpeg/include -I %DIR_IMGUI%/backends -I %DIR_IMGUI% -I %DIR_IMPLOT% -I "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v11.6/include" -I lib/GLFW ^
+-I lib/imgui-filebrowser -I lib/FFmpeg/include -I %DIR_IMGUI%/backends -I %DIR_IMGUI% -I %DIR_IMPLOT% -I lib/GLFW ^
 release/create_image_cuda.o release/ColorSpace.o -o release/redgui.exe ^
--L "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v11.6/lib/x64" -lcudart -lcuda ^
+-I "C:/Program Files\NVIDIA GPU Computing Toolkit/CUDA/v12.0/include" ^
+-L "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.0/lib/x64" -lcudart -lcuda ^
 -L lib/nvcodec/x64 -lnvencodeapi -lnvcuvid ^
 -L lib/FFmpeg/lib/x64 -lavcodec -lavformat -lavutil -lswresample ^
 -L lib/GL/lib/x64 -lglew32 ^
