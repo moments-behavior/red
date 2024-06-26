@@ -10,11 +10,8 @@
 #include <iostream>
 #include <thread>
 #include <imfilebrowser.h>
-#include <camera.h>
 #include "skeleton.h"
 #include "gui.h"
-#include "yolo_detection.h"
-#include "global.h"
 #include "utils.h"
 
 
@@ -23,14 +20,6 @@
 #endif
 
 simplelogger::Logger *logger = simplelogger::LoggerFactory::CreateConsoleLogger();
-
-std::vector<std::mutex> g_mutexes(MAX_VIEWS);
-std::vector<std::condition_variable> g_cvs(MAX_VIEWS);
-std::vector<bool> g_ready(MAX_VIEWS);
-std::vector<std::vector<cv::Rect>> yolo_boxes(MAX_VIEWS);
-std::vector<std::vector<std::string>> yolo_labels(MAX_VIEWS);
-std::vector<std::vector<int>> yolo_classid(MAX_VIEWS);
-std::vector<unsigned char*> yolo_input_frames_rgba(MAX_VIEWS);
 
 int main(int, char **)
 {
@@ -49,7 +38,6 @@ int main(int, char **)
     std::string root_dir;
     std::vector<std::string> input_file_names;
     std::vector<std::string> camera_names;
-    std::vector<CameraParams> camera_params;
     std::vector<std::thread> decoder_threads;
     std::vector<FFmpegDemuxer*> demuxers; 
 
@@ -95,9 +83,6 @@ int main(int, char **)
     ImVec4 clear_color = ImVec4(0.0f, 0.0f, 0.0f, 1.00f);
     ImGuiIO &io = ImGui::GetIO();
 
-    bool yolo_detection = false;
-    std::vector<std::thread> yolo_threads;
-    yolo_param yolo_setting = yolo_param();
     bool show_world_coordinates = false;
     std::string keypoints_root_folder;
     bool change_keypoints_folder =false;
@@ -144,13 +129,6 @@ int main(int, char **)
                                 // std::string cam_file = root_dir + "/calibration/calibration.csv";
                                 for (u32 i = 0; i < scene->num_cams; i++)
                                 {
-                                    // legacy loading from old formats
-                                    // CameraParams cam = camera_load_params_from_csv(cam_file, i);
-                                    // camera_params.push_back(cam);
-                                    std::string cam_file = root_dir + "/calibration/" + camera_names[i] + ".yaml";
-                                    std::cout << cam_file << std::endl;
-                                    CameraParams cam = camera_load_params_from_yaml(cam_file);
-                                    camera_params.push_back(cam);
                                     skeleton_chosen = true;
                                 }
                                 skeleton->name = element.first;
@@ -158,39 +136,6 @@ int main(int, char **)
                                 plot_keypoints_flag = true;
                                 keypoints_root_folder = root_dir + "/labeled_data/";
                             }
-                        }
-                        ImGui::EndMenu();
-                    }
-
-                    if (ImGui::BeginMenu("Detection")) {
-                        if (cpu_buffer_toggle) {
-                            if (ImGui::MenuItem("YOLOv5")) { 
-                                std::string yolov5_onnx = root_dir + "/yolo/v5/best.onnx";
-                                std::string yolov5_labelname = root_dir + "/yolo/v5/label.names";
-                                read_yolo_labels(yolov5_labelname, &yolo_setting);
-
-                                for (int i = 0; i< scene->num_cams; i++) {
-                                    yolo_threads.push_back(std::thread(&yolo_process, yolov5_onnx, &yolo_setting, i));
-                                }
-                                yolo_detection = true;
-                            }
-                        } else {
-                            if (ImGui::MenuItem("YOLOv8")) {
-                                std::string engine_file_path = root_dir + "/yolo/yolorat_bbox/rat_bbox.engine";
-                                for (int i = 0; i< scene->num_cams; i++) {
-                                    yolo_threads.push_back(std::thread(&yolo_process_trt, engine_file_path, i));
-                                }
-                                yolo_detection = true;
-                            }
-
-                            if (ImGui::MenuItem("YOLOv8Pose")) {
-                                std::string engine_file_path = root_dir + "/yolo/yolopose/rat_pose.engine";
-                                for (int i = 0; i< scene->num_cams; i++) {
-                                    yolo_threads.push_back(std::thread(&yolo_process_v8pose, engine_file_path, i));
-                                }
-                                yolo_detection = true;
-                            }
-
                         }
                         ImGui::EndMenu();
                     }
@@ -326,16 +271,6 @@ int main(int, char **)
                     unbind_pbo();
                     unbind_texture();
                 }
-
-                // sync yolo detection 
-                if (yolo_detection)
-                {
-                    std::unique_lock<std::mutex> lck(g_mutexes[j]);
-                    // std::cout << "main_thread: acquire lock" << std::endl; 
-                    yolo_input_frames_rgba[j] = scene->pbo_cuda[j].cuda_buffer;
-                    g_ready[j] = true;
-                    g_cvs[j].notify_one();
-                }
             }
             current_frame_num = to_display_frame_number;
         }
@@ -458,17 +393,9 @@ int main(int, char **)
                 if (ImPlot::BeginPlot("##no_plot_name", avail_size, ImPlotFlags_Equal | ImPlotAxisFlags_AutoFit | ImPlotFlags_Crosshairs))
                 {
                     ImPlot::PlotImage("##no_image_name", (void *)(intptr_t)scene->image_texture[j], ImVec2(0, 0), ImVec2(scene->image_width[j], scene->image_height[j]));
-                    
-                    if (yolo_detection){
-                        draw_cv_contours(yolo_boxes.at(j), yolo_labels.at(j), yolo_classid.at(j));
-                    }
 
                     if(plot_keypoints_flag){
-                        // plot arena for testing camera parameters 
-                        // gui_plot_perimeter(&camera_params[j]);
-                        // gui_plot_world_coordinates(&camera_params[j], j);
                         
-
                         // labeling 
                         if (ImPlot::IsPlotHovered()) {
                             is_view_focused[j]  = true;
@@ -738,18 +665,9 @@ int main(int, char **)
                         ImGui::PushStyleColor(ImGuiCol_ButtonActive, (ImVec4)ImColor::HSV(0.8, 0.9f, 0.9f));
                     }
                     
-                    if (ImGui::Button("Triangulate"))
-                    {
-                        reprojection(keypoints_map.at(current_frame_num), skeleton, camera_params, scene->num_cams);
-                    }
-                    
+
                     if (!keypoint_triangulated_all && keypoints_find) {
                         ImGui::PopStyleColor(3);
-                    } 
-
-                    if (ImGui::IsKeyPressed(ImGuiKey_S, false))   // triangulate
-                    {
-                        reprojection(keypoints_map.at(current_frame_num), skeleton, camera_params, scene->num_cams);
                     }
                 }
 
@@ -809,7 +727,6 @@ int main(int, char **)
                 ImGui::Text("V -> Delete all keypoint");
                 ImGui::Text("Q -> Active keypoint set to first node");
                 ImGui::Text("E -> Active keypoint set to last node");
-                ImGui::Text("S -> Triangule");
 
                 ImGui::SeparatorText("While hovering keypoints");
                 ImGui::Text("R -> Delete active keypoint");
