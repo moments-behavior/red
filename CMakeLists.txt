@@ -12,4 +12,4 @@ include_directories(lib/IconFontCppHeaders)
 include_directories(lib/imgui-filebrowser)
 
 include_directories(src)
-add_executable(red_refactor src/main.cpp)
+add_executable(red_refactor src/red.cpp)

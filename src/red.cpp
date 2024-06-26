@@ -73,7 +73,12 @@ int main(int, char **)
     
     // others
     ImGui::FileBrowser file_dialog(ImGuiFileBrowserFlags_SelectDirectory);
-    std::filesystem::path cwd = std::filesystem::current_path();
+    #ifdef _WIN32
+        std::string cwd = std::filesystem::current_path().string();
+    #else
+        std::filesystem::path cwd = std::filesystem::current_path();
+    #endif 
+    
     std::string delimiter = "/";
     std::vector<std::string> tokenized_path = string_split (cwd, delimiter);
     std::string start_folder_name = "/home/" + tokenized_path[2] + "/data";

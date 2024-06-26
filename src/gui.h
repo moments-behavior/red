@@ -114,26 +114,26 @@ void save_keypoints(std::map<u32, KeyPoints*> keypoints_map, SkeletonContext* sk
     std::ofstream output_file(filename);
     std::vector<std::ofstream> output2d_files;
 
-    for (uint i = 0; i < num_cameras; i++) {
+    for (u32 i = 0; i < num_cameras; i++) {
         std::string filename_cam = root_dir + "/" + camera_names[i] + "/" + camera_names[i] + "_" + now;
         std::ofstream output_file_cam(filename_cam);
         output2d_files.push_back(std::move(output_file_cam));
     }
 
     output_file << skeleton->name << ",\n";
-    for (uint i = 0; i < num_cameras; i++) {
+    for (u32 i = 0; i < num_cameras; i++) {
         output2d_files[i] << skeleton->name << ",\n";
     }
 
     std::map<u32, KeyPoints*>::iterator it = keypoints_map.begin();
     while (it != keypoints_map.end())
     {
-        uint frame = it->first;
+        u32 frame = it->first;
         KeyPoints* keypoints = it->second;
         // write frame number
         output_file << frame << ",";
         // fore each labeled keypoint, write idx, xpos, ypos, zpos
-        for (uint i = 0; i < skeleton->num_nodes; i++)
+        for (u32 i = 0; i < skeleton->num_nodes; i++)
         {   
             if (i == skeleton->num_nodes - 1) {
                 // last keypoints (RJ added extra "," at end of row)
@@ -163,7 +163,7 @@ void save_keypoints(std::map<u32, KeyPoints*> keypoints_map, SkeletonContext* sk
     output_file.close();
     std::cout << filename << " created"  << std::endl; 
 
-    for (uint i = 0; i < num_cameras; i++) {
+    for (u32 i = 0; i < num_cameras; i++) {
         output2d_files[i].close();
     }
 }
@@ -175,7 +175,11 @@ void load_2d_keypoints(std::map<u32, KeyPoints*>& keypoints_map, SkeletonContext
 
     for (const auto & entry : std::filesystem::directory_iterator(labeled_data_dir))
     {
-        filenames.push_back(entry.path());
+        #ifdef _WIN32
+            filenames.push_back(entry.path().string());
+        #else
+            filenames.push_back(entry.path());
+        #endif 
     }
 
     if (filenames.size() == 0)
@@ -220,7 +224,7 @@ void load_2d_keypoints(std::map<u32, KeyPoints*>& keypoints_map, SkeletonContext
             }
             else
             {
-                uint frame_num = stoul(token);
+                u32 frame_num = stoul(token);
                 if (keypoints_map.find(frame_num)==keypoints_map.end()) {
                     KeyPoints* keypoints = (KeyPoints *)malloc(sizeof(KeyPoints));
                     allocate_keypoints(keypoints, scene, skeleton);
@@ -268,7 +272,11 @@ void load_keypoints(std::map<u32, KeyPoints*>& keypoints_map, SkeletonContext* s
 
     for (const auto & entry : std::filesystem::directory_iterator(label3d_dir))
     {
-        filenames.push_back(entry.path());
+        #ifdef _WIN32
+            filenames.push_back(entry.path().string());
+        #else
+            filenames.push_back(entry.path());
+        #endif 
     }
 
     if (filenames.size() == 0)
@@ -305,7 +313,7 @@ void load_keypoints(std::map<u32, KeyPoints*>& keypoints_map, SkeletonContext* s
             }
             else
             {
-                uint frame_num = stoul(token);
+                u32 frame_num = stoul(token);
                 if (keypoints_map.find(frame_num)==keypoints_map.end()) {
                     KeyPoints* keypoints = (KeyPoints *)malloc(sizeof(KeyPoints));
                     allocate_keypoints(keypoints, scene, skeleton);
