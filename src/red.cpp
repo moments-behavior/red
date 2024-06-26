@@ -126,7 +126,6 @@ int main(int, char **)
                             
                             if(ImGui::MenuItem(element.first.c_str(), NULL, skeleton->name == element.first, !skeleton_chosen))
                             {
-                                // std::string cam_file = root_dir + "/calibration/calibration.csv";
                                 for (u32 i = 0; i < scene->num_cams; i++)
                                 {
                                     skeleton_chosen = true;
@@ -565,7 +564,6 @@ int main(int, char **)
                 ImGui::End();
             }
         }
-
 
         if (plot_keypoints_flag) 
         {
