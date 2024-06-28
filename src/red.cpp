@@ -359,7 +359,6 @@ int main(int, char **)
                 keypoints_find = true;
             }
         }
-
         // Render a video frame
         if (video_loaded)
         {
@@ -638,7 +637,6 @@ int main(int, char **)
             }
             ImGui::End();
         }
-
 
         if (plot_keypoints_flag)
         {
