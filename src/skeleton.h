@@ -12,10 +12,28 @@ struct KeyPoints2D{
     bool is_triangulated;
 };
 
+enum RectState {
+    RectNull,
+    RectOnePoint,
+    RectTwoPoints
+};
+
+struct BoudingBox{
+    ImPlotRect* rect;
+    RectState state;
+};
+
 struct KeyPoints{
     triple_d* keypoints3d;
     KeyPoints2D** keypoints2d; 
-    u32* active_id; 
+    u32* active_kp_id;
+    BoudingBox* bbox2d;
+};
+
+enum LabelType {
+    BBOX_ONLY,
+    SKELETON_ONLY,
+    BBOX_SKELETON
 };
 
 struct SkeletonContext {
@@ -25,6 +43,7 @@ struct SkeletonContext {
     std::vector<tuple_i> edges;
     std::vector<std::string> node_names;
     std::string name;
+    LabelType label_type;
 };
 
 enum SkeletonPrimitive { 
@@ -40,7 +59,8 @@ enum SkeletonPrimitive {
     Table3Corners,
     Rat22,
     Rat20,
-    Rat20Target
+    Rat20Target,
+    BoundingBox
 };
 
 std::map<std::string, SkeletonPrimitive> skeleton_get_all()
@@ -58,7 +78,8 @@ std::map<std::string, SkeletonPrimitive> skeleton_get_all()
         {"Table3Corners", Table3Corners},
         {"Rat22", Rat22},
         {"Rat20", Rat20},
-        {"Rat20Target", Rat20Target}
+        {"Rat20Target", Rat20Target},
+        {"BoundingBox", BoundingBox}
     };
     return skeleton_all;
 }
@@ -362,14 +383,19 @@ void skeleton_initialize(SkeletonContext* skeleton, SkeletonPrimitive skeleton_t
                 {19, 20},
                 {20, 21}};
                 break;
+        case BoundingBox:
+            skeleton->label_type = BBOX_ONLY;
+
+            skeleton->num_nodes = 1;
+            skeleton->num_edges = 1;
+            skeleton->node_names = {"Box"};        
+            break;
     }
 };
 
-
-void allocate_keypoints(KeyPoints *keypoints, render_scene *scene, SkeletonContext* skeleton)
+void allocate_for_skeleton(KeyPoints *keypoints, render_scene *scene, SkeletonContext* skeleton) 
 {
-    // allocate memory for storing keypoints
-    keypoints->active_id = (u32 *)malloc(sizeof(u32) * scene->num_cams);
+    keypoints->active_kp_id = (u32 *)malloc(sizeof(u32) * scene->num_cams);
     keypoints->keypoints3d = (triple_d *)malloc(sizeof(triple_d) * skeleton->num_nodes); 
     keypoints->keypoints2d = (KeyPoints2D **)malloc(sizeof(KeyPoints2D*) * scene->num_cams);
     for (u32 j=0; j < scene->num_cams; j++) {
@@ -378,7 +404,7 @@ void allocate_keypoints(KeyPoints *keypoints, render_scene *scene, SkeletonConte
     
     // initialize to big number 
     for (u32 j=0; j < scene->num_cams; j++) {
-        keypoints->active_id[j] = 0;
+        keypoints->active_kp_id[j] = 0;
         for (u32 k=0; k < skeleton->num_nodes; k++){
             keypoints->keypoints2d[j][k].is_labeled = false;
             keypoints->keypoints2d[j][k].is_triangulated = false;
@@ -391,6 +417,28 @@ void allocate_keypoints(KeyPoints *keypoints, render_scene *scene, SkeletonConte
         keypoints->keypoints3d[k].x = 1E7;
         keypoints->keypoints3d[k].y = 1E7;
         keypoints->keypoints3d[k].z = 1E7;
+    }   
+}
+
+void allocate_for_bbox(KeyPoints *keypoints, render_scene *scene, SkeletonContext* skeleton) {
+    keypoints->bbox2d = (BoudingBox *)malloc(sizeof(BoudingBox) * scene->num_cams);
+    for (u32 j=0; j < scene->num_cams; j++) {
+        keypoints->bbox2d[j].rect = NULL;
+        keypoints->bbox2d[j].state = RectNull;
+    }
+}
+
+
+void allocate_keypoints(KeyPoints *keypoints, render_scene *scene, SkeletonContext* skeleton)
+{
+    // allocate memory for storing keypoints
+    if (skeleton->label_type == BBOX_ONLY) {
+        allocate_for_bbox(keypoints, scene, skeleton);
+    }  else if (skeleton->label_type == SKELETON_ONLY) {
+        allocate_for_skeleton(keypoints, scene, skeleton);
+    } else {
+        allocate_for_bbox(keypoints, scene, skeleton);
+        allocate_for_skeleton(keypoints, scene, skeleton);
     }
 }
 

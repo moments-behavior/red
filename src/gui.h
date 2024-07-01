@@ -19,7 +19,7 @@ static void gui_plot_keypoints(KeyPoints *keypoints, SkeletonContext *skeleton, 
     for (u32 node=0; node < skeleton->num_nodes; node++){
         if (keypoints->keypoints2d[view_idx][node].is_labeled){
             ImVec4 node_color; 
-            if (keypoints->active_id[view_idx]==node) {
+            if (keypoints->active_kp_id[view_idx]==node) {
                 node_color = (ImVec4)ImColor::HSV(0.8, 0.9f, 0.9f);
             } else {
                 node_color.w = 1.0f; 
@@ -41,7 +41,7 @@ static void gui_plot_keypoints(KeyPoints *keypoints, SkeletonContext *skeleton, 
                     keypoints->keypoints2d[view_idx][node].position = {1E7,  1E7};
                     keypoints->keypoints2d[view_idx][node].is_labeled = false;                                        
                     keypoints->keypoints2d[view_idx][node].is_triangulated = false;
-                    keypoints->active_id[view_idx] = node;
+                    keypoints->active_kp_id[view_idx] = node;
                 }
                 
                 if (ImGui::IsKeyPressed(ImGuiKey_F, false)) // Delete active keypoints from all the views
@@ -50,13 +50,13 @@ static void gui_plot_keypoints(KeyPoints *keypoints, SkeletonContext *skeleton, 
                         keypoints->keypoints2d[cam_idx][node].position = {1E7,  1E7};
                         keypoints->keypoints2d[cam_idx][node].is_labeled = false;                                        
                         keypoints->keypoints2d[cam_idx][node].is_triangulated = false;
-                        keypoints->active_id[cam_idx] = node;
+                        keypoints->active_kp_id[cam_idx] = node;
                     }
                 }
             }
 
             if (drag_point_clicked) {
-                keypoints->active_id[view_idx] = node;
+                keypoints->active_kp_id[view_idx] = node;
             }
         }
     }
