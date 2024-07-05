@@ -64,10 +64,11 @@ int main(int, char **)
     bool plot_keypoints_flag = false;
     int current_frame_num = 0;
     bool skeleton_chosen = false;
+    int number_of_animals = 1;
 
     // for labeling 
     SkeletonContext *skeleton;
-    std::map<u32, KeyPoints*> keypoints_map;
+    std::map<u32, Animals*> keypoints_map;
     bool keypoints_find = false;
     std::map<std::string, SkeletonPrimitive> skeleton_map;
     
@@ -160,10 +161,14 @@ int main(int, char **)
             }
             scene->use_cpu_buffer = cpu_buffer_toggle;
             if (video_loaded) {
+                if (!skeleton_chosen) {
+                    ImGui::InputInt("Animals No.", &number_of_animals, ImGuiInputTextFlags_EnterReturnsTrue);
+                }
+
                 if (ImGui::InputInt("Seek step", &dc_context->seek_interval, 10, 100, ImGuiInputTextFlags_EnterReturnsTrue)) {
                     std::cout << "Seek step: " << dc_context->seek_interval << std::endl;
                 }
-
+        
                 static int seek_accurate_frame_num = 0;
                 if (ImGui::InputInt("Seek Accurate", &seek_accurate_frame_num, 1, 100, ImGuiInputTextFlags_EnterReturnsTrue)) {
                     std::cout << "Seek accurate to: " << seek_accurate_frame_num << std::endl;
@@ -351,7 +356,6 @@ int main(int, char **)
             toggle_play_status = false;
         }
 
-
         if (plot_keypoints_flag) {
             if (keypoints_map.find(current_frame_num)==keypoints_map.end()) {
                 keypoints_find = false;
@@ -397,8 +401,8 @@ int main(int, char **)
                 {
                     ImPlot::PlotImage("##no_image_name", (void *)(intptr_t)scene->image_texture[j], ImVec2(0, 0), ImVec2(scene->image_width[j], scene->image_height[j]));
 
-                    if(plot_keypoints_flag){
-
+                    if(plot_keypoints_flag)
+                    {
                         // labeling 
                         if (ImPlot::IsPlotHovered()) {
                             is_view_focused[j]  = true;
@@ -407,20 +411,22 @@ int main(int, char **)
                                 // create keypoints
                                 if (!keypoints_find){
                                     // not found
-                                    KeyPoints* keypoints = (KeyPoints *)malloc(sizeof(KeyPoints));
-                                    allocate_keypoints(keypoints, scene, skeleton);
-                                    keypoints_map[current_frame_num] = keypoints; 
+                                    Animals* animals = (Animals *)malloc(sizeof(Animals));
+                                    allocate_keypoints(animals, scene, skeleton, number_of_animals);
+                                    keypoints_map[current_frame_num] = animals; 
                                 }
                             }
 
-                            if (keypoints_find && skeleton->label_type == SKELETON_ONLY) {
-                                u32* kp = &(keypoints_map[current_frame_num]->active_kp_id[j]);
+                            if (keypoints_find && skeleton->has_skeleton) {
+                                Animals* current_frame_data = keypoints_map[current_frame_num];
+                                KeyPoints* frame_keypoints = &current_frame_data->keypoints[current_frame_data->active_id];
+                                u32* kp = &frame_keypoints->active_kp_id[j];
                                 if (ImGui::IsKeyPressed(ImGuiKey_W, false)) {
                                     // labeling sequentially each view
                                     ImPlotPoint mouse = ImPlot::GetPlotMousePos();
-                                    keypoints_map[current_frame_num]->keypoints2d[j][*kp].position = {mouse.x,  mouse.y};
-                                    keypoints_map[current_frame_num]->keypoints2d[j][*kp].is_labeled = true;
-                                    keypoints_map[current_frame_num]->keypoints2d[j][*kp].is_triangulated = false;
+                                    frame_keypoints->keypoints2d[j][*kp].position = {mouse.x,  mouse.y};
+                                    frame_keypoints->keypoints2d[j][*kp].is_labeled = true;
+                                    frame_keypoints->keypoints2d[j][*kp].is_triangulated = false;
                                     if(*kp < (skeleton->num_nodes - 1)) {(*kp)++;}
                                 }
 
@@ -455,22 +461,24 @@ int main(int, char **)
                                 }
                             }  
                             
-                            if (keypoints_find && skeleton->label_type == BBOX_ONLY) {
-                                if (keypoints_map[current_frame_num]->bbox2d->state == RectOnePoint && ImGui::IsMouseDragging(ImGuiMouseButton_Middle)) {
+                            if (keypoints_find && skeleton->has_bbox) {
+                                Animals* current_frame_data = keypoints_map[current_frame_num];
+                                KeyPoints* frame_keypoints = &current_frame_data->keypoints[current_frame_data->active_id];
+                                if (frame_keypoints->bbox2d->state == RectOnePoint && ImGui::IsMouseDragging(ImGuiMouseButton_Middle)) {
                                     ImPlotPoint mouse = ImPlot::GetPlotMousePos();
-                                    keypoints_map[current_frame_num]->bbox2d->rect->X.Max = mouse.x;
-                                    keypoints_map[current_frame_num]->bbox2d->rect->Y.Max = mouse.y;
+                                    frame_keypoints->bbox2d->rect->X.Max = mouse.x;
+                                    frame_keypoints->bbox2d->rect->Y.Max = mouse.y;
                                 }
 
                                 if (ImGui::IsMouseReleased(ImGuiMouseButton_Middle)) {
-                                    keypoints_map[current_frame_num]->bbox2d->state = RectTwoPoints;
+                                    frame_keypoints->bbox2d->state = RectTwoPoints;
                                 }
 
                                 if (ImGui::IsMouseClicked(ImGuiMouseButton_Middle, false)) {
-                                    if (keypoints_map[current_frame_num]->bbox2d->state == RectNull) {
+                                    if (frame_keypoints->bbox2d->state == RectNull) {
                                         ImPlotPoint mouse = ImPlot::GetPlotMousePos();
-                                        keypoints_map[current_frame_num]->bbox2d->rect = new ImPlotRect(mouse.x, mouse.x, mouse.y, mouse.y);
-                                        keypoints_map[current_frame_num]->bbox2d->state = RectOnePoint;
+                                        frame_keypoints->bbox2d->rect = new ImPlotRect(mouse.x, mouse.x, mouse.y, mouse.y);
+                                        frame_keypoints->bbox2d->state = RectOnePoint;
                                     }
                                 }
                             }
@@ -479,26 +487,29 @@ int main(int, char **)
                             is_view_focused[j]  = false;
                         }
 
-                        if (keypoints_find && skeleton->label_type == SKELETON_ONLY){
-                            gui_plot_keypoints(keypoints_map.at(current_frame_num), skeleton, j, scene->num_cams);
-                            // think more general solution of multiple sets of keypoints 
-                            if (skeleton->name == "Rat4Box" || skeleton->name == "Rat4Box3Ball") {
-                                gui_plot_bbox_from_keypoints(keypoints_map.at(current_frame_num), skeleton, j, 4, 5);
-                            }
-                        }
-                            
-                        if (keypoints_find && skeleton->label_type == BBOX_ONLY) {
-                            if (keypoints_map[current_frame_num]->bbox2d->state != RectNull) {
-                                ImPlotRect* my_rect = keypoints_map[current_frame_num]->bbox2d->rect;
-                                ImPlot::DragRect(0,&my_rect->X.Min,&my_rect->Y.Min,&my_rect->X.Max,&my_rect->Y.Max,ImVec4(1,0,1,1));
+                        if (keypoints_find) {
+                            Animals* current_frame_data = keypoints_map[current_frame_num];
+                            KeyPoints* frame_keypoints = &current_frame_data->keypoints[current_frame_data->active_id];
+
+                            if(skeleton->has_skeleton) {
+
+                                gui_plot_keypoints(frame_keypoints, skeleton, j, scene->num_cams);
+                                // think more general solution of multiple sets of keypoints 
+                                if (skeleton->name == "Rat4Box" || skeleton->name == "Rat4Box3Ball") {
+                                    gui_plot_bbox_from_keypoints(frame_keypoints, skeleton, j, 4, 5);
+                                }
                             }
 
+                            if(skeleton->has_bbox) {
+                                if (frame_keypoints->bbox2d->state != RectNull) {
+                                    ImPlotRect* my_rect = frame_keypoints->bbox2d->rect;
+                                    ImPlot::DragRect(0,&my_rect->X.Min,&my_rect->Y.Min,&my_rect->X.Max,&my_rect->Y.Max,ImVec4(1,0,1,1));
+                                }
+                            }
                         }
-
                     }
                     ImPlot::EndPlot();
                 }
-
                 ImGui::EndChild();
 
                 if (to_display_frame_number == (dc_context->total_num_frame - 1))
@@ -601,68 +612,82 @@ int main(int, char **)
 
         if (plot_keypoints_flag) 
         {
-            if (keypoints_find && skeleton->label_type == SKELETON_ONLY) {
+            if (keypoints_find) {
+        
+                Animals* current_frame_data = keypoints_map[current_frame_num];
+                KeyPoints* frame_keypoints = &current_frame_data->keypoints[current_frame_data->active_id];
+                    
                 if (ImGui::Begin("Keypoints")) {
                     
-                    const float TEXT_BASE_HEIGHT = ImGui::GetTextLineHeightWithSpacing();
+                    for (int animal_id = 0; animal_id < number_of_animals; animal_id++)
                     {
-                        const int rows_count = scene->num_cams;
-                        const int columns_count= skeleton->num_nodes+1;
+                        char buf[32];
+                        sprintf(buf, "Animal %d", animal_id);
+                        if (ImGui::Selectable(buf, current_frame_data->active_id == animal_id))
+                            current_frame_data->active_id = animal_id;
+                    }
 
-                        static ImGuiTableFlags table_flags = ImGuiTableFlags_ScrollX | ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_BordersOuter | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_Hideable | ImGuiTableFlags_Resizable | ImGuiTableFlags_HighlightHoveredColumn;
-
-                        if (ImGui::BeginTable("table_angled_headers", columns_count, table_flags, ImVec2(0.0f, TEXT_BASE_HEIGHT * 12)))
+                    if (skeleton->has_skeleton) {                    
+                        const float TEXT_BASE_HEIGHT = ImGui::GetTextLineHeightWithSpacing();
                         {
-                            ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_NoHide | ImGuiTableColumnFlags_NoReorder);
-                            for (int column = 1; column < columns_count; column++)
-                                ImGui::TableSetupColumn(skeleton->node_names[column-1].c_str(), ImGuiTableColumnFlags_AngledHeader | ImGuiTableColumnFlags_WidthFixed);
+                            const int rows_count = scene->num_cams;
+                            const int columns_count= skeleton->num_nodes+1;
 
-                            ImGui::TableAngledHeadersRow(); // Draw angled headers for all columns with the ImGuiTableColumnFlags_AngledHeader flag.
-                            ImGui::TableHeadersRow();       // Draw remaining headers and allow access to context-menu and other functions.
+                            static ImGuiTableFlags table_flags = ImGuiTableFlags_ScrollX | ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_BordersOuter | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_Hideable | ImGuiTableFlags_Resizable | ImGuiTableFlags_HighlightHoveredColumn;
 
-                            for (int row = 0; row < rows_count; row++)
+                            if (ImGui::BeginTable("table_angled_headers", columns_count, table_flags, ImVec2(0.0f, TEXT_BASE_HEIGHT * 12)))
                             {
-                                ImGui::PushID(row);
-                                ImGui::TableNextRow();
-
-                                if (is_view_focused[row] && keypoints_find) {
-                                    ImU32 row_bg_color = ImGui::GetColorU32(ImVec4(0.7f, 0.3f, 0.3f, 0.65f)); 
-                                    ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, row_bg_color);
-                                }
-
-                                ImGui::TableSetColumnIndex(0);
-                                ImGui::AlignTextToFramePadding();
-                                ImGui::Text(camera_names[row].c_str());
+                                ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_NoHide | ImGuiTableColumnFlags_NoReorder);
                                 for (int column = 1; column < columns_count; column++)
-                                    if (ImGui::TableSetColumnIndex(column))
-                                    {
-                                        if (keypoints_find) {
-                                            ImVec4 node_color;
-                                            if(keypoints_map[current_frame_num]->active_kp_id[row] == column-1)
-                                            {
-                                                node_color = (ImVec4)ImColor::HSV(0.8, 0.9f, 0.9f);
-                                            }  else {
-                                                if (keypoints_map[current_frame_num]->keypoints2d[row][column-1].is_labeled) 
-                                                {
-                                                    node_color.w = 0.5;
-                                                    node_color.x = skeleton->node_colors[column-1].x;
-                                                    node_color.y = skeleton->node_colors[column-1].y;
-                                                    node_color.z = skeleton->node_colors[column-1].z;
-                                                }
+                                    ImGui::TableSetupColumn(skeleton->node_names[column-1].c_str(), ImGuiTableColumnFlags_AngledHeader | ImGuiTableColumnFlags_WidthFixed);
 
-                                                if (keypoints_map[current_frame_num]->keypoints2d[row][column-1].is_triangulated) 
-                                                {
-                                                ImGui::TextColored(ImVec4(1.0f, 0.0f, 1.0f, 1.0f), "T");
-                                                }    
-                                            }
-                                            
-                                            ImU32 cell_bg_color = ImGui::GetColorU32(node_color);
-                                            ImGui::TableSetBgColor(ImGuiTableBgTarget_CellBg, cell_bg_color);
-                                        }
+                                ImGui::TableAngledHeadersRow(); // Draw angled headers for all columns with the ImGuiTableColumnFlags_AngledHeader flag.
+                                ImGui::TableHeadersRow();       // Draw remaining headers and allow access to context-menu and other functions.
+
+                                for (int row = 0; row < rows_count; row++)
+                                {
+                                    ImGui::PushID(row);
+                                    ImGui::TableNextRow();
+
+                                    if (is_view_focused[row] && keypoints_find) {
+                                        ImU32 row_bg_color = ImGui::GetColorU32(ImVec4(0.7f, 0.3f, 0.3f, 0.65f)); 
+                                        ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, row_bg_color);
                                     }
-                                ImGui::PopID();
+
+                                    ImGui::TableSetColumnIndex(0);
+                                    ImGui::AlignTextToFramePadding();
+                                    ImGui::Text(camera_names[row].c_str());
+                                    for (int column = 1; column < columns_count; column++)
+                                        if (ImGui::TableSetColumnIndex(column))
+                                        {
+                                            if (keypoints_find) {
+                                                ImVec4 node_color;
+                                                if(frame_keypoints->active_kp_id[row] == column-1)
+                                                {
+                                                    node_color = (ImVec4)ImColor::HSV(0.8, 0.9f, 0.9f);
+                                                }  else {
+                                                    if (frame_keypoints->keypoints2d[row][column-1].is_labeled) 
+                                                    {
+                                                        node_color.w = 0.5;
+                                                        node_color.x = skeleton->node_colors[column-1].x;
+                                                        node_color.y = skeleton->node_colors[column-1].y;
+                                                        node_color.z = skeleton->node_colors[column-1].z;
+                                                    }
+
+                                                    if (frame_keypoints->keypoints2d[row][column-1].is_triangulated) 
+                                                    {
+                                                    ImGui::TextColored(ImVec4(1.0f, 0.0f, 1.0f, 1.0f), "T");
+                                                    }    
+                                                }
+                                                
+                                                ImU32 cell_bg_color = ImGui::GetColorU32(node_color);
+                                                ImGui::TableSetBgColor(ImGuiTableBgTarget_CellBg, cell_bg_color);
+                                            }
+                                        }
+                                    ImGui::PopID();
+                                }
+                                ImGui::EndTable();
                             }
-                            ImGui::EndTable();
                         }
                     }
                 }
@@ -675,43 +700,14 @@ int main(int, char **)
             if (ImGui::Begin("Labeling Tool"))
             {
 
-                if (scene->num_cams > 1)
-                {
-                    bool keypoint_triangulated_all = true;
-                    if (keypoints_find) {
-                        for (int i=0; i<scene->num_cams; i++)  {
-                            for (int j=0; j<skeleton->num_nodes; j++)
-                            {
-                                if (!keypoints_map.at(current_frame_num)->keypoints2d[i][j].is_triangulated)
-                                {
-                                    keypoint_triangulated_all = false;
-                                }
-                            }
-                        }
-                    } else {
-                        keypoint_triangulated_all = false;
-                    }
-
-                    if (!keypoint_triangulated_all && keypoints_find) {
-                        ImGui::PushStyleColor(ImGuiCol_Button, (ImVec4)ImColor::HSV(0.8, 0.9f, 0.9f));
-                        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, (ImVec4)ImColor::HSV(0.8, 0.9f, 0.9f));
-                        ImGui::PushStyleColor(ImGuiCol_ButtonActive, (ImVec4)ImColor::HSV(0.8, 0.9f, 0.9f));
-                    }
-                    
-
-                    if (!keypoint_triangulated_all && keypoints_find) {
-                        ImGui::PopStyleColor(3);
-                    }
-                }
-
                 if (ImGui::Button("Save Labeled Data"))
                 {
-                    save_keypoints(keypoints_map, skeleton, keypoints_root_folder, scene->num_cams, camera_names);
+                    // save_keypoints(keypoints_map, skeleton, keypoints_root_folder, scene->num_cams, camera_names);
                 }
 
                 if (ImGui::Button("Load Labeled Data"))
                 {
-                    load_keypoints(keypoints_map, skeleton, keypoints_root_folder, scene, camera_names);
+                    // load_keypoints(keypoints_map, skeleton, keypoints_root_folder, scene, camera_names);
                 }
 
                 // TODO: change folder
@@ -724,9 +720,9 @@ int main(int, char **)
 
                 if (ImGui::Button("Load 2d Keypoints Only"))
                 {
-                    for (int i=0; i<scene->num_cams; i++) {
-                        load_2d_keypoints(keypoints_map, skeleton, keypoints_root_folder, i, camera_names[i], scene);
-                    }
+                    // for (int i=0; i<scene->num_cams; i++) {
+                    //     load_2d_keypoints(keypoints_map, skeleton, keypoints_root_folder, i, camera_names[i], scene);
+                    // }
                 }
 
                 auto upper_it = keypoints_map.upper_bound(current_frame_num); 

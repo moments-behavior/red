@@ -30,10 +30,10 @@ struct KeyPoints{
     BoudingBox* bbox2d;
 };
 
-enum LabelType {
-    BBOX_ONLY,
-    SKELETON_ONLY,
-    BBOX_SKELETON
+struct Animals{
+    KeyPoints* keypoints;
+    u32 active_id;
+    u32 max_number;
 };
 
 struct SkeletonContext {
@@ -43,7 +43,8 @@ struct SkeletonContext {
     std::vector<tuple_i> edges;
     std::vector<std::string> node_names;
     std::string name;
-    LabelType label_type;
+    bool has_bbox; 
+    bool has_skeleton;
 };
 
 enum SkeletonPrimitive { 
@@ -384,62 +385,55 @@ void skeleton_initialize(SkeletonContext* skeleton, SkeletonPrimitive skeleton_t
                 {20, 21}};
                 break;
         case BoundingBox:
-            skeleton->label_type = BBOX_ONLY;
-
-            skeleton->num_nodes = 1;
-            skeleton->num_edges = 1;
-            skeleton->node_names = {"Box"};        
+            skeleton->has_bbox = true;
+            skeleton->has_skeleton = false;
             break;
     }
 };
 
-void allocate_for_skeleton(KeyPoints *keypoints, render_scene *scene, SkeletonContext* skeleton) 
+void allocate_keypoints(Animals *animals, render_scene *scene, SkeletonContext* skeleton, u32 number_animals) 
 {
-    keypoints->active_kp_id = (u32 *)malloc(sizeof(u32) * scene->num_cams);
-    keypoints->keypoints3d = (triple_d *)malloc(sizeof(triple_d) * skeleton->num_nodes); 
-    keypoints->keypoints2d = (KeyPoints2D **)malloc(sizeof(KeyPoints2D*) * scene->num_cams);
-    for (u32 j=0; j < scene->num_cams; j++) {
-        keypoints->keypoints2d[j] = (KeyPoints2D *)malloc(sizeof(KeyPoints2D) * skeleton->num_nodes);
-    }
+    animals->keypoints = (KeyPoints *)malloc(sizeof(KeyPoints) * number_animals);
+    animals->max_number = number_animals;
+    animals->active_id = 0;
     
-    // initialize to big number 
-    for (u32 j=0; j < scene->num_cams; j++) {
-        keypoints->active_kp_id[j] = 0;
-        for (u32 k=0; k < skeleton->num_nodes; k++){
-            keypoints->keypoints2d[j][k].is_labeled = false;
-            keypoints->keypoints2d[j][k].is_triangulated = false;
-            keypoints->keypoints2d[j][k].position.x = 1E7;
-            keypoints->keypoints2d[j][k].position.y = 1E7;
+    for (u32 animal_idx=0; animal_idx < number_animals; animal_idx++) {
+        KeyPoints* keypoints = &animals->keypoints[animal_idx]; 
+        
+        if (skeleton->has_bbox) {
+            keypoints->bbox2d = (BoudingBox *)malloc(sizeof(BoudingBox) * scene->num_cams);
+            for (u32 j=0; j < scene->num_cams; j++) {
+                keypoints->bbox2d[j].rect = NULL;
+                keypoints->bbox2d[j].state = RectNull;
+            }
         }
-    }
 
-    for (u32 k=0; k < skeleton->num_nodes; k++) {
-        keypoints->keypoints3d[k].x = 1E7;
-        keypoints->keypoints3d[k].y = 1E7;
-        keypoints->keypoints3d[k].z = 1E7;
-    }   
-}
+        if (skeleton->has_skeleton) {
+            keypoints->active_kp_id = (u32 *)malloc(sizeof(u32) * scene->num_cams);
+            keypoints->keypoints3d = (triple_d *)malloc(sizeof(triple_d) * skeleton->num_nodes); 
+            keypoints->keypoints2d = (KeyPoints2D **)malloc(sizeof(KeyPoints2D*) * scene->num_cams);
+            for (u32 j=0; j < scene->num_cams; j++) {
+                keypoints->keypoints2d[j] = (KeyPoints2D *)malloc(sizeof(KeyPoints2D) * skeleton->num_nodes);
+            }
+            
+            // initialize to big number 
+            for (u32 j=0; j < scene->num_cams; j++) {
+                keypoints->active_kp_id[j] = 0;
+                for (u32 k=0; k < skeleton->num_nodes; k++){
+                    keypoints->keypoints2d[j][k].is_labeled = false;
+                    keypoints->keypoints2d[j][k].is_triangulated = false;
+                    keypoints->keypoints2d[j][k].position.x = 1E7;
+                    keypoints->keypoints2d[j][k].position.y = 1E7;
+                }
+            }
 
-void allocate_for_bbox(KeyPoints *keypoints, render_scene *scene, SkeletonContext* skeleton) {
-    keypoints->bbox2d = (BoudingBox *)malloc(sizeof(BoudingBox) * scene->num_cams);
-    for (u32 j=0; j < scene->num_cams; j++) {
-        keypoints->bbox2d[j].rect = NULL;
-        keypoints->bbox2d[j].state = RectNull;
-    }
-}
-
-
-void allocate_keypoints(KeyPoints *keypoints, render_scene *scene, SkeletonContext* skeleton)
-{
-    // allocate memory for storing keypoints
-    if (skeleton->label_type == BBOX_ONLY) {
-        allocate_for_bbox(keypoints, scene, skeleton);
-    }  else if (skeleton->label_type == SKELETON_ONLY) {
-        allocate_for_skeleton(keypoints, scene, skeleton);
-    } else {
-        allocate_for_bbox(keypoints, scene, skeleton);
-        allocate_for_skeleton(keypoints, scene, skeleton);
-    }
+            for (u32 k=0; k < skeleton->num_nodes; k++) {
+                keypoints->keypoints3d[k].x = 1E7;
+                keypoints->keypoints3d[k].y = 1E7;
+                keypoints->keypoints3d[k].z = 1E7;
+            }
+        }
+    }    
 }
 
 void deallocate_keypoints(KeyPoints *keypoints, render_scene *scene, SkeletonContext* skeleton)
