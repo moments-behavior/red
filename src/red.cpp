@@ -622,7 +622,12 @@ int main(int, char **)
             if (keypoints_find) {
         
                 Animals* current_frame_data = keypoints_map[current_frame_num];
-                    
+
+                if (ImGui::IsKeyPressed(ImGuiKey_Tab, false))
+                {
+                    current_frame_data->active_id = (current_frame_data->active_id + 1) % number_of_animals;
+                }
+
                 if (ImGui::Begin("Keypoints")) {
 
                     if (ImGui::BeginTable("##Animals", number_of_animals, ImGuiTableFlags_Resizable | ImGuiTableFlags_NoSavedSettings | ImGuiTableFlags_Borders))
