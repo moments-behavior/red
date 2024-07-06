@@ -64,7 +64,7 @@ int main(int, char **)
     bool plot_keypoints_flag = false;
     int current_frame_num = 0;
     bool skeleton_chosen = false;
-    int number_of_animals = 1;
+    int number_of_animals = 5;
 
     // for labeling 
     SkeletonContext *skeleton;
@@ -155,6 +155,7 @@ int main(int, char **)
             //     ImGui::Text("To Display frame number %d ", to_display_frame_number);
             //     ImGui::Text("Readhead %d", read_head);
             // }
+
             if (!video_loaded) {
                 ImGui::Checkbox("CPU Buffer", &cpu_buffer_toggle);
                 ImGui::InputInt("Buffer Size", &label_buffer_size, ImGuiInputTextFlags_EnterReturnsTrue);
@@ -162,7 +163,7 @@ int main(int, char **)
             scene->use_cpu_buffer = cpu_buffer_toggle;
             if (video_loaded) {
                 if (!skeleton_chosen) {
-                    ImGui::InputInt("Animals No.", &number_of_animals, ImGuiInputTextFlags_EnterReturnsTrue);
+                    ImGui::InputInt("Animals No.", &number_of_animals, 1, 5, ImGuiInputTextFlags_EnterReturnsTrue);
                 }
 
                 if (ImGui::InputInt("Seek step", &dc_context->seek_interval, 10, 100, ImGuiInputTextFlags_EnterReturnsTrue)) {
@@ -479,6 +480,7 @@ int main(int, char **)
                                         ImPlotPoint mouse = ImPlot::GetPlotMousePos();
                                         frame_keypoints->bbox2d->rect = new ImPlotRect(mouse.x, mouse.x, mouse.y, mouse.y);
                                         frame_keypoints->bbox2d->state = RectOnePoint;
+                                        frame_keypoints->has_labels = true;
                                     }
                                 }
                             }
@@ -489,10 +491,9 @@ int main(int, char **)
 
                         if (keypoints_find) {
                             Animals* current_frame_data = keypoints_map[current_frame_num];
-                            KeyPoints* frame_keypoints = &current_frame_data->keypoints[current_frame_data->active_id];
 
                             if(skeleton->has_skeleton) {
-
+                                KeyPoints* frame_keypoints = &current_frame_data->keypoints[current_frame_data->active_id];
                                 gui_plot_keypoints(frame_keypoints, skeleton, j, scene->num_cams);
                                 // think more general solution of multiple sets of keypoints 
                                 if (skeleton->name == "Rat4Box" || skeleton->name == "Rat4Box3Ball") {
@@ -501,10 +502,16 @@ int main(int, char **)
                             }
 
                             if(skeleton->has_bbox) {
-                                if (frame_keypoints->bbox2d->state != RectNull) {
-                                    ImPlotRect* my_rect = frame_keypoints->bbox2d->rect;
-                                    ImPlot::DragRect(0,&my_rect->X.Min,&my_rect->Y.Min,&my_rect->X.Max,&my_rect->Y.Max,ImVec4(1,0,1,1));
+                                // draw all animals
+                                for (u32 animal_id=0; animal_id < number_of_animals; animal_id++) {
+                                    KeyPoints* frame_keypoints = &current_frame_data->keypoints[animal_id];
+                                    ImColor bbox_color = current_frame_data->colors[animal_id];
+                                    if (frame_keypoints->bbox2d->state != RectNull) {
+                                        ImPlotRect* my_rect = frame_keypoints->bbox2d->rect;
+                                        ImPlot::DragRect(0,&my_rect->X.Min,&my_rect->Y.Min,&my_rect->X.Max,&my_rect->Y.Max, bbox_color);
+                                    }
                                 }
+
                             }
                         }
                     }
@@ -615,18 +622,28 @@ int main(int, char **)
             if (keypoints_find) {
         
                 Animals* current_frame_data = keypoints_map[current_frame_num];
-                KeyPoints* frame_keypoints = &current_frame_data->keypoints[current_frame_data->active_id];
                     
                 if (ImGui::Begin("Keypoints")) {
-                    
-                    for (int animal_id = 0; animal_id < number_of_animals; animal_id++)
+
+                    if (ImGui::BeginTable("##Animals", number_of_animals, ImGuiTableFlags_Resizable | ImGuiTableFlags_NoSavedSettings | ImGuiTableFlags_Borders))
                     {
-                        char buf[32];
-                        sprintf(buf, "Animal %d", animal_id);
-                        if (ImGui::Selectable(buf, current_frame_data->active_id == animal_id))
-                            current_frame_data->active_id = animal_id;
+                        for (int animal_id = 0; animal_id < number_of_animals; animal_id++)
+                        {
+                            char label[32];
+                            sprintf(label, "Ani %d", animal_id);
+                            ImGui::TableNextColumn();
+                            if(ImGui::Selectable(label, current_frame_data->active_id == animal_id)) {
+                                current_frame_data->active_id = animal_id;
+                            }
+                            if (current_frame_data->keypoints[animal_id].has_labels) {
+                                ImGui::TableSetBgColor(ImGuiTableBgTarget_CellBg, current_frame_data->colors[animal_id]);
+                            }
+                        }
+                        ImGui::EndTable();
                     }
 
+
+                    KeyPoints* frame_keypoints = &current_frame_data->keypoints[current_frame_data->active_id];
                     if (skeleton->has_skeleton) {                    
                         const float TEXT_BASE_HEIGHT = ImGui::GetTextLineHeightWithSpacing();
                         {
@@ -676,7 +693,7 @@ int main(int, char **)
 
                                                     if (frame_keypoints->keypoints2d[row][column-1].is_triangulated) 
                                                     {
-                                                    ImGui::TextColored(ImVec4(1.0f, 0.0f, 1.0f, 1.0f), "T");
+                                                        ImGui::TextColored(ImVec4(1.0f, 0.0f, 1.0f, 1.0f), "T");
                                                     }    
                                                 }
                                                 

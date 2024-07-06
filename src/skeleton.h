@@ -28,12 +28,14 @@ struct KeyPoints{
     KeyPoints2D** keypoints2d; 
     u32* active_kp_id;
     BoudingBox* bbox2d;
+    bool has_labels;
 };
 
 struct Animals{
     KeyPoints* keypoints;
     u32 active_id;
     u32 max_number;
+    ImColor* colors;
 };
 
 struct SkeletonContext {
@@ -394,12 +396,14 @@ void skeleton_initialize(SkeletonContext* skeleton, SkeletonPrimitive skeleton_t
 void allocate_keypoints(Animals *animals, render_scene *scene, SkeletonContext* skeleton, u32 number_animals) 
 {
     animals->keypoints = (KeyPoints *)malloc(sizeof(KeyPoints) * number_animals);
+    animals->colors = new ImColor[number_animals];
     animals->max_number = number_animals;
     animals->active_id = 0;
     
     for (u32 animal_idx=0; animal_idx < number_animals; animal_idx++) {
+        animals->colors[animal_idx] = ImColor::HSV(animal_idx / (float)number_animals, 0.8f, 0.8f);
         KeyPoints* keypoints = &animals->keypoints[animal_idx]; 
-        
+        keypoints->has_labels = false;
         if (skeleton->has_bbox) {
             keypoints->bbox2d = (BoudingBox *)malloc(sizeof(BoudingBox) * scene->num_cams);
             for (u32 j=0; j < scene->num_cams; j++) {
