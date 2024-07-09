@@ -733,10 +733,10 @@ int main(int, char **)
                     save_keypoints(keypoints_map, skeleton, keypoints_root_folder, scene->num_cams, camera_names);
                 }
 
-                if (ImGui::Button("Load Labeled Data"))
-                {
-                    // load_keypoints(keypoints_map, skeleton, keypoints_root_folder, scene, camera_names);
-                }
+                // if (ImGui::Button("Load Labeled Data"))
+                // {
+                //     // load_keypoints(keypoints_map, skeleton, keypoints_root_folder, scene, camera_names);
+                // }
 
                 // TODO: change folder
                 ImGui::Text(keypoints_root_folder.c_str());
@@ -748,9 +748,9 @@ int main(int, char **)
 
                 if (ImGui::Button("Load 2d Keypoints Only"))
                 {
-                    // for (int i=0; i<scene->num_cams; i++) {
-                    //     load_2d_keypoints(keypoints_map, skeleton, keypoints_root_folder, i, camera_names[i], scene);
-                    // }
+                    for (int i=0; i<scene->num_cams; i++) {
+                        load_2d_keypoints(keypoints_map, skeleton, keypoints_root_folder, i, camera_names[i], scene, number_of_animals);
+                    }
                 }
 
                 auto upper_it = keypoints_map.upper_bound(current_frame_num); 
