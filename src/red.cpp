@@ -140,6 +140,12 @@ int main(int, char **)
                                 skeleton_initialize(skeleton, element.second);
                                 plot_keypoints_flag = true;
                                 keypoints_root_folder = root_dir + "/labeled_data/";
+                                // create folders
+                                std::filesystem::create_directory(keypoints_root_folder);
+                                std::filesystem::create_directory(keypoints_root_folder + "/worldKeyPoints");
+                                for (u32 i = 0; i < scene->num_cams; i++) {
+                                    std::filesystem::create_directory(keypoints_root_folder + "/" + camera_names[i]);
+                                }
                             }
                         }
                         ImGui::EndMenu();
@@ -465,21 +471,21 @@ int main(int, char **)
                             if (keypoints_find && skeleton->has_bbox) {
                                 Animals* current_frame_data = keypoints_map[current_frame_num];
                                 KeyPoints* frame_keypoints = &current_frame_data->keypoints[current_frame_data->active_id];
-                                if (frame_keypoints->bbox2d->state == RectOnePoint && ImGui::IsMouseDragging(ImGuiMouseButton_Middle)) {
+                                if (frame_keypoints->bbox2d[j].state == RectOnePoint && ImGui::IsMouseDragging(ImGuiMouseButton_Middle)) {
                                     ImPlotPoint mouse = ImPlot::GetPlotMousePos();
-                                    frame_keypoints->bbox2d->rect->X.Max = mouse.x;
-                                    frame_keypoints->bbox2d->rect->Y.Max = mouse.y;
+                                    frame_keypoints->bbox2d[j].rect->X.Max = mouse.x;
+                                    frame_keypoints->bbox2d[j].rect->Y.Max = mouse.y;
                                 }
 
                                 if (ImGui::IsMouseReleased(ImGuiMouseButton_Middle)) {
-                                    frame_keypoints->bbox2d->state = RectTwoPoints;
+                                    frame_keypoints->bbox2d[j].state = RectTwoPoints;
                                 }
 
                                 if (ImGui::IsMouseClicked(ImGuiMouseButton_Middle, false)) {
-                                    if (frame_keypoints->bbox2d->state == RectNull) {
+                                    if (frame_keypoints->bbox2d[j].state == RectNull) {
                                         ImPlotPoint mouse = ImPlot::GetPlotMousePos();
-                                        frame_keypoints->bbox2d->rect = new ImPlotRect(mouse.x, mouse.x, mouse.y, mouse.y);
-                                        frame_keypoints->bbox2d->state = RectOnePoint;
+                                        frame_keypoints->bbox2d[j].rect = new ImPlotRect(mouse.x, mouse.x, mouse.y, mouse.y);
+                                        frame_keypoints->bbox2d[j].state = RectOnePoint;
                                         frame_keypoints->has_labels = true;
                                     }
                                 }
@@ -506,8 +512,8 @@ int main(int, char **)
                                 for (u32 animal_id=0; animal_id < number_of_animals; animal_id++) {
                                     KeyPoints* frame_keypoints = &current_frame_data->keypoints[animal_id];
                                     ImColor bbox_color = current_frame_data->colors[animal_id];
-                                    if (frame_keypoints->bbox2d->state != RectNull) {
-                                        ImPlotRect* my_rect = frame_keypoints->bbox2d->rect;
+                                    if (frame_keypoints->bbox2d[j].state != RectNull) {
+                                        ImPlotRect* my_rect = frame_keypoints->bbox2d[j].rect;
                                         ImPlot::DragRect(0,&my_rect->X.Min,&my_rect->Y.Min,&my_rect->X.Max,&my_rect->Y.Max, bbox_color);
                                     }
                                 }
@@ -724,7 +730,7 @@ int main(int, char **)
 
                 if (ImGui::Button("Save Labeled Data"))
                 {
-                    // save_keypoints(keypoints_map, skeleton, keypoints_root_folder, scene->num_cams, camera_names);
+                    save_keypoints(keypoints_map, skeleton, keypoints_root_folder, scene->num_cams, camera_names);
                 }
 
                 if (ImGui::Button("Load Labeled Data"))

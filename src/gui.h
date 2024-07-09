@@ -109,69 +109,77 @@ std::string current_date_time() {
 
 void save_keypoints(std::map<u32, Animals*> keypoints_map, SkeletonContext* skeleton, std::string root_dir, int num_cameras, std::vector<std::string>& camera_names)
 {
-    // std::string now = current_date_time();
-    // std::string filename = root_dir + "/worldKeyPoints/keypoints_" + now;
-    // std::ofstream output_file(filename);
-    // std::vector<std::ofstream> output2d_files;
+    std::string now = current_date_time();
+    std::string filename = root_dir + "/worldKeyPoints/keypoints_" + now;
+    std::ofstream output_file(filename);
+    std::vector<std::ofstream> output2d_files;
+    for (u32 i = 0; i < num_cameras; i++) {
+        std::string filename_cam = root_dir + "/" + camera_names[i] + "/" + camera_names[i] + "_" + now;
+        std::ofstream output_file_cam(filename_cam);
+        output2d_files.push_back(std::move(output_file_cam));
+    }
 
-    // for (u32 i = 0; i < num_cameras; i++) {
-    //     std::string filename_cam = root_dir + "/" + camera_names[i] + "/" + camera_names[i] + "_" + now;
-    //     std::ofstream output_file_cam(filename_cam);
-    //     output2d_files.push_back(std::move(output_file_cam));
-    // }
+    output_file << skeleton->name << ",\n";
+    for (u32 i = 0; i < num_cameras; i++) {
+        output2d_files[i] << skeleton->name << ",\n";
+    }
 
-    // output_file << skeleton->name << ",\n";
-    // for (u32 i = 0; i < num_cameras; i++) {
-    //     output2d_files[i] << skeleton->name << ",\n";
-    // }
+    std::map<u32, Animals*>::iterator it = keypoints_map.begin();
+    while (it != keypoints_map.end())
+    {
+        // each animal
+        u32 frame = it->first;
+        Animals* animals = it->second;
 
-    // std::map<u32, Animals*>::iterator it = keypoints_map.begin();
-    // while (it != keypoints_map.end())
-    // {
-    //     u32 frame = it->first;
-    //     Animals* animals = it->second;
+        // write frame number
+        output_file << frame << ",";
 
-    //     for (u32 animal_id = 0; animal_id < animals->max_number; animal_id++) {
-    //         if (animals[animal_id].keypoints.)
-
-    //     }
-
-    //     // write frame number
-    //     output_file << frame << ",";
-    //     // fore each labeled keypoint, write idx, xpos, ypos, zpos
-    //     for (u32 i = 0; i < skeleton->num_nodes; i++)
-    //     {   
-    //         if (i == skeleton->num_nodes - 1) {
-    //             // last keypoints (RJ added extra "," at end of row)
-    //             output_file << i << "," << keypoints->keypoints3d[i].x << "," << keypoints->keypoints3d[i].y << "," << keypoints->keypoints3d[i].z << ",";
-    //         } else {
-    //             output_file << i << "," << keypoints->keypoints3d[i].x << "," << keypoints->keypoints3d[i].y << "," << keypoints->keypoints3d[i].z << ",";
-    //         }
-    //     }
-    //     output_file << "\n";
-
-    //     for (int cam = 0; cam < num_cameras; cam++) {
-    //         output2d_files[cam] << frame << ",";
-    //         for (int node = 0; node < skeleton->num_nodes; node++) {
-    //             if (node == skeleton->num_nodes - 1) {
-    //                 // last keypoints (RJ added extra "," at end of row)
-    //                 output2d_files[cam] << node << "," << keypoints->keypoints2d[cam][node].position.x << "," << keypoints->keypoints2d[cam][node].position.y << ",";
-    //             } else {
-    //                 output2d_files[cam] << node << "," << keypoints->keypoints2d[cam][node].position.x << "," << keypoints->keypoints2d[cam][node].position.y << ",";
-    //             }
-    //         }
-    //         output2d_files[cam] << "\n";
-    //     }
-
-    //     it++;
-    // }
-
-    // output_file.close();
-    // std::cout << filename << " created"  << std::endl; 
-
-    // for (u32 i = 0; i < num_cameras; i++) {
-    //     output2d_files[i].close();
-    // }
+        for (u32 animal_id = 0; animal_id < animals->max_number; animal_id++) {
+            if (animals->keypoints[animal_id].has_labels) {
+                output_file << animal_id << ",";
+                if (skeleton->has_skeleton) {
+                    // fore each labeled keypoint, write xpos, ypos, zpos
+                    triple_d* keypoints3d = animals->keypoints[animal_id].keypoints3d;
+                    for (u32 i = 0; i < skeleton->num_nodes; i++)
+                    {   
+                        output_file << i << "," << keypoints3d[i].x << "," << keypoints3d[i].y << "," << keypoints3d[i].z << ",";
+                    }
+                    output_file << "\n";
+                }
+            }
+        }
+        
+        // per view file
+        for (int cam = 0; cam < num_cameras; cam++) {
+            output2d_files[cam] << frame << ",";
+            for (u32 animal_id = 0; animal_id < animals->max_number; animal_id++) {
+                if (animals->keypoints[animal_id].has_labels) {
+                    output2d_files[cam] << animal_id << ",";
+                    if (skeleton->has_bbox) {
+                        // save bbox first if the skeleton has bbox
+                        BoudingBox* bbox2d = &animals->keypoints[animal_id].bbox2d[cam];
+                        if (bbox2d->state == RectNull) {
+                            output2d_files[cam] << 1E7 <<  ","  << 1E7 <<  ",";
+                        } else {
+                            output2d_files[cam] << bbox2d->rect->Min().x <<  ","  << bbox2d->rect->Min().y <<  ",";
+                        }
+                    } 
+                    if (skeleton->has_skeleton) {
+                        KeyPoints2D* keypoints2d = animals->keypoints[animal_id].keypoints2d[cam];
+                        for (int node = 0; node < skeleton->num_nodes; node++) {
+                            output2d_files[cam] << "," << keypoints2d[node].position.x << "," << keypoints2d[node].position.y << ",";
+                        }
+                    }
+                }
+            }
+            output2d_files[cam] << "\n";
+        }
+        it++;
+    }
+    output_file.close();
+    for (u32 i = 0; i < num_cameras; i++) {
+        output2d_files[i].close();
+    }
 }
 
 
