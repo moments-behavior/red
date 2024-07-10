@@ -474,7 +474,7 @@ int main(int, char **)
                                 if (frame_keypoints->bbox2d[j].state == RectOnePoint && ImGui::IsMouseDragging(ImGuiMouseButton_Middle)) {
                                     ImPlotPoint mouse = ImPlot::GetPlotMousePos();
                                     frame_keypoints->bbox2d[j].rect->X.Max = mouse.x;
-                                    frame_keypoints->bbox2d[j].rect->Y.Max = mouse.y;
+                                    frame_keypoints->bbox2d[j].rect->Y.Min = mouse.y;
                                 }
 
                                 if (ImGui::IsMouseReleased(ImGuiMouseButton_Middle)) {
@@ -514,7 +514,10 @@ int main(int, char **)
                                     ImColor bbox_color = current_frame_data->colors[animal_id];
                                     if (frame_keypoints->bbox2d[j].state != RectNull) {
                                         ImPlotRect* my_rect = frame_keypoints->bbox2d[j].rect;
-                                        ImPlot::DragRect(0,&my_rect->X.Min,&my_rect->Y.Min,&my_rect->X.Max,&my_rect->Y.Max, bbox_color);
+                                        if (current_frame_data->active_id == animal_id) {
+                                            ImPlot::DragRect(0,&my_rect->X.Min,&my_rect->Y.Min,&my_rect->X.Max,&my_rect->Y.Max, bbox_color, ImPlotDragToolFlags_None);
+                                        }
+                                        ImPlot::DragRect(0,&my_rect->X.Min,&my_rect->Y.Min,&my_rect->X.Max,&my_rect->Y.Max, bbox_color, ImPlotDragToolFlags_NoInputs);
                                     }
                                 }
 
