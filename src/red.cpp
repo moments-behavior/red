@@ -414,7 +414,7 @@ int main(int, char **)
                         if (ImPlot::IsPlotHovered()) {
                             is_view_focused[j]  = true;
 
-                            if (ImGui::IsKeyPressed(ImGuiKey_Z, false)) {
+                            if (ImGui::IsKeyPressed(ImGuiKey_C, false)) {
                                 // create keypoints
                                 if (!keypoints_find){
                                     // not found
@@ -424,73 +424,81 @@ int main(int, char **)
                                 }
                             }
 
-                            if (keypoints_find && skeleton->has_skeleton) {
+                            if (keypoints_find) {
+
                                 Animals* current_frame_data = keypoints_map[current_frame_num];
-                                KeyPoints* frame_keypoints = &current_frame_data->keypoints[current_frame_data->active_id];
-                                u32* kp = &frame_keypoints->active_kp_id[j];
-                                if (ImGui::IsKeyPressed(ImGuiKey_W, false)) {
-                                    // labeling sequentially each view
-                                    ImPlotPoint mouse = ImPlot::GetPlotMousePos();
-                                    frame_keypoints->keypoints2d[j][*kp].position = {mouse.x,  mouse.y};
-                                    frame_keypoints->keypoints2d[j][*kp].is_labeled = true;
-                                    frame_keypoints->keypoints2d[j][*kp].is_triangulated = false;
-                                    if(*kp < (skeleton->num_nodes - 1)) {(*kp)++;}
-                                }
-
-                                if (ImGui::IsKeyPressed(ImGuiKey_A, true))
-                                {
-                                    if (*kp <= 0) {*kp = 0;}
-                                    else (*kp)--;
-                                }
-
-                                if (ImGui::IsKeyPressed(ImGuiKey_D, true))
-                                {
-                                    if (*kp >= skeleton->num_nodes-1) {*kp = skeleton->num_nodes-1;}
-                                    else (*kp)++;
-                                }
-                                
-                                if (ImGui::IsKeyPressed(ImGuiKey_E, false))   // skip to the last keypoint
-                                {
-                                    *kp = skeleton->num_nodes-1;
-                                }
-
-                                if (ImGui::IsKeyPressed(ImGuiKey_Q, false))   // go to the first keypoint
-                                {
-                                    *kp = 0;
-                                }
-
                                 // delete all keypoint, memory leak here, need to handle it cleanly
-                                if (ImGui::IsKeyPressed(ImGuiKey_V, false)) 
+                                if (ImGui::IsKeyPressed(ImGuiKey_Delete, false)) 
                                 {
-                                    KeyPoints* keypoints = nullptr;
+                                    delete_all_labels(current_frame_data, scene, skeleton, number_of_animals);
                                     keypoints_map.erase(current_frame_num);
                                     keypoints_find = false;
                                 }
-                            }  
-                            
-                            if (keypoints_find && skeleton->has_bbox) {
-                                Animals* current_frame_data = keypoints_map[current_frame_num];
-                                KeyPoints* frame_keypoints = &current_frame_data->keypoints[current_frame_data->active_id];
-                                if (frame_keypoints->bbox2d[j].state == RectOnePoint && ImGui::IsMouseDragging(ImGuiMouseButton_Middle)) {
-                                    ImPlotPoint mouse = ImPlot::GetPlotMousePos();
-                                    frame_keypoints->bbox2d[j].rect->X.Max = mouse.x;
-                                    frame_keypoints->bbox2d[j].rect->Y.Min = mouse.y;
+
+                                if (ImGui::IsKeyPressed(ImGuiKey_Backspace, false)) 
+                                {
+                                    reinitalize_keypoint_active_animal(current_frame_data, scene, skeleton);
                                 }
 
-                                if (ImGui::IsMouseReleased(ImGuiMouseButton_Middle)) {
-                                    frame_keypoints->bbox2d[j].state = RectTwoPoints;
-                                }
-
-                                if (ImGui::IsMouseClicked(ImGuiMouseButton_Middle, false)) {
-                                    if (frame_keypoints->bbox2d[j].state == RectNull) {
+                                if (skeleton->has_skeleton) {
+                                    KeyPoints* frame_keypoints = &current_frame_data->keypoints[current_frame_data->active_id];
+                                    u32* kp = &frame_keypoints->active_kp_id[j];
+                                    if (ImGui::IsKeyPressed(ImGuiKey_W, false)) {
+                                        // labeling sequentially each view
                                         ImPlotPoint mouse = ImPlot::GetPlotMousePos();
-                                        frame_keypoints->bbox2d[j].rect = new ImPlotRect(mouse.x, mouse.x, mouse.y, mouse.y);
-                                        frame_keypoints->bbox2d[j].state = RectOnePoint;
+                                        frame_keypoints->keypoints2d[j][*kp].position = {mouse.x,  mouse.y};
+                                        frame_keypoints->keypoints2d[j][*kp].is_labeled = true;
+                                        frame_keypoints->keypoints2d[j][*kp].is_triangulated = false;
+                                        if(*kp < (skeleton->num_nodes - 1)) {(*kp)++;}
                                         frame_keypoints->has_labels = true;
                                     }
-                                }
-                            }
 
+                                    if (ImGui::IsKeyPressed(ImGuiKey_A, true))
+                                    {
+                                        if (*kp <= 0) {*kp = 0;}
+                                        else (*kp)--;
+                                    }
+
+                                    if (ImGui::IsKeyPressed(ImGuiKey_D, true))
+                                    {
+                                        if (*kp >= skeleton->num_nodes-1) {*kp = skeleton->num_nodes-1;}
+                                        else (*kp)++;
+                                    }
+                                    
+                                    if (ImGui::IsKeyPressed(ImGuiKey_E, false))   // skip to the last keypoint
+                                    {
+                                        *kp = skeleton->num_nodes-1;
+                                    }
+
+                                    if (ImGui::IsKeyPressed(ImGuiKey_Q, false))   // go to the first keypoint
+                                    {
+                                        *kp = 0;
+                                    }
+                                }
+
+                                if (skeleton->has_bbox) {
+                                    KeyPoints* frame_keypoints = &current_frame_data->keypoints[current_frame_data->active_id];
+                                    if (frame_keypoints->bbox2d[j].state == RectOnePoint && ImGui::IsMouseDragging(ImGuiMouseButton_Middle)) {
+                                        ImPlotPoint mouse = ImPlot::GetPlotMousePos();
+                                        frame_keypoints->bbox2d[j].rect->X.Max = mouse.x;
+                                        frame_keypoints->bbox2d[j].rect->Y.Min = mouse.y;
+                                    }
+
+                                    if (ImGui::IsMouseReleased(ImGuiMouseButton_Middle)) {
+                                        frame_keypoints->bbox2d[j].state = RectTwoPoints;
+                                    }
+
+                                    if (ImGui::IsMouseClicked(ImGuiMouseButton_Middle, false)) {
+                                        if (frame_keypoints->bbox2d[j].state == RectNull) {
+                                            ImPlotPoint mouse = ImPlot::GetPlotMousePos();
+                                            frame_keypoints->bbox2d[j].rect = new ImPlotRect(mouse.x, mouse.x, mouse.y, mouse.y);
+                                            frame_keypoints->bbox2d[j].state = RectOnePoint;
+                                            frame_keypoints->has_labels = true;
+                                        }
+                                    }
+                                }
+                                
+                            }  
                         } else {
                             is_view_focused[j]  = false;
                         }
@@ -499,11 +507,15 @@ int main(int, char **)
                             Animals* current_frame_data = keypoints_map[current_frame_num];
 
                             if(skeleton->has_skeleton) {
-                                KeyPoints* frame_keypoints = &current_frame_data->keypoints[current_frame_data->active_id];
-                                gui_plot_keypoints(frame_keypoints, skeleton, j, scene->num_cams);
-                                // think more general solution of multiple sets of keypoints 
-                                if (skeleton->name == "Rat4Box" || skeleton->name == "Rat4Box3Ball") {
-                                    gui_plot_bbox_from_keypoints(frame_keypoints, skeleton, j, 4, 5);
+                                for (u32 animal_id=0; animal_id < number_of_animals; animal_id++) {
+                                    KeyPoints* frame_keypoints = &current_frame_data->keypoints[animal_id];
+                                    if (current_frame_data->active_id == animal_id) {
+                                        ImPlotDragToolFlags flag = ImPlotDragToolFlags_None;
+                                        gui_plot_keypoints(frame_keypoints, skeleton, j, scene->num_cams, flag);
+                                    } else {
+                                        ImPlotDragToolFlags flag = ImPlotDragToolFlags_NoInputs;
+                                        gui_plot_keypoints(frame_keypoints, skeleton, j, scene->num_cams, flag);
+                                    }
                                 }
                             }
 
@@ -775,23 +787,31 @@ int main(int, char **)
         if (show_help_window)
         {
             if (ImGui::Begin("Help Menu")) {            
-                ImGui::Text("Space -> Toggle play and pause");
-                ImGui::Text(", -> Previous image");
-                ImGui::Text(". -> Next image");
+                ImGui::Text("[Space]: toggle play and pause");
+                ImGui::Text("[,]: previous image");
+                ImGui::Text("[.]: next image");
 
-                ImGui::SeparatorText("While hovering image");
-                ImGui::Text("Z -> Create keypoints on frame");
-                ImGui::Text("W -> Drop active keypoint");
-                ImGui::Text("A -> Active keypoint++ ");
-                ImGui::Text("D -> Active keypoint--");
-                ImGui::Text("V -> Delete all keypoint");
-                ImGui::Text("Q -> Active keypoint set to first node");
-                ImGui::Text("E -> Active keypoint set to last node");
+                ImGui::Text("[Tab]: circle selecting each animal");
+
+                ImGui::SeparatorText("After selecting an animal, while hovering image");
+                ImGui::Text("[c]: create bbox or/and keypoints on frame");
+                
+                ImGui::SeparatorText("Bounding box");
+                ImGui::Text("[mouse middle button]: draw bbox, drag then release to finish drawing the bbox");
+
+                ImGui::SeparatorText("Keypoint");
+                ImGui::Text("[w]: drop active keypoint");
+                ImGui::Text("[a]: active keypoint++ ");
+                ImGui::Text("[d]: active keypoint--");
+                ImGui::Text("[q]: active keypoint set to first node");
+                ImGui::Text("[e]: active keypoint set to last node");
 
                 ImGui::SeparatorText("While hovering keypoints");
-                ImGui::Text("R -> Delete active keypoint");
-                ImGui::Text("F -> Delete active keypoint on all cameras");
+                ImGui::Text("[r]: delete active keypoint");
+                ImGui::Text("[f]: delete active keypoint on all cameras");
                 ImGui::Text("Click keypoint to active it");
+
+                ImGui::Text("[Delete]: delete all labels for all animals");
             }
             ImGui::End();
         }

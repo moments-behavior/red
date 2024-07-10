@@ -13,7 +13,7 @@ struct ProjectContext{
 };
 
 
-static void gui_plot_keypoints(KeyPoints *keypoints, SkeletonContext *skeleton, int view_idx, int num_cams)
+static void gui_plot_keypoints(KeyPoints *keypoints, SkeletonContext *skeleton, int view_idx, int num_cams, ImPlotDragToolFlags flag)
 {
     float pt_size = 6.0f;
     for (u32 node=0; node < skeleton->num_nodes; node++){
@@ -31,7 +31,7 @@ static void gui_plot_keypoints(KeyPoints *keypoints, SkeletonContext *skeleton, 
             static bool drag_point_clicked;
             static bool drag_point_hovered;
             static bool drag_point_modified;
-            drag_point_modified = ImPlot::DragPoint(id, &keypoints->keypoints2d[view_idx][node].position.x, &keypoints->keypoints2d[view_idx][node].position.y, node_color, pt_size, ImPlotDragToolFlags_None, &drag_point_clicked, &drag_point_hovered);
+            drag_point_modified = ImPlot::DragPoint(id, &keypoints->keypoints2d[view_idx][node].position.x, &keypoints->keypoints2d[view_idx][node].position.y, node_color, pt_size, flag, &drag_point_clicked, &drag_point_hovered);
             if (drag_point_modified) {
                 keypoints->keypoints2d[view_idx][node].is_triangulated = false;
             }
@@ -167,7 +167,7 @@ void save_keypoints(std::map<u32, Animals*> keypoints_map, SkeletonContext* skel
                     if (skeleton->has_skeleton) {
                         KeyPoints2D* keypoints2d = animals->keypoints[animal_id].keypoints2d[cam];
                         for (int node = 0; node < skeleton->num_nodes; node++) {
-                            output2d_files[cam] << "," << keypoints2d[node].position.x << "," << keypoints2d[node].position.y << ",";
+                            output2d_files[cam] << keypoints2d[node].position.x << "," << keypoints2d[node].position.y << ",";
                         }
                     }
                 }
