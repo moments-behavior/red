@@ -107,7 +107,7 @@ std::string current_date_time() {
 }
 
 
-void save_keypoints(std::map<u32, Animals*> keypoints_map, SkeletonContext* skeleton, std::string root_dir, int num_cameras, std::vector<std::string>& camera_names)
+void save_keypoints(std::map<u32, Animals*> keypoints_map, SkeletonContext* skeleton, std::string root_dir, int num_cameras, std::vector<std::string>& camera_names, int number_of_animals)
 {
     std::string now = current_date_time();
     std::string filename = root_dir + "/worldKeyPoints/keypoints_" + now;
@@ -119,9 +119,9 @@ void save_keypoints(std::map<u32, Animals*> keypoints_map, SkeletonContext* skel
         output2d_files.push_back(std::move(output_file_cam));
     }
 
-    output_file << skeleton->name << ",\n";
+    output_file << skeleton->name << "," << number_of_animals << "\n";
     for (u32 i = 0; i < num_cameras; i++) {
-        output2d_files[i] << skeleton->name << ",\n";
+        output2d_files[i] << skeleton->name << "," << number_of_animals << "\n";
     }
 
     std::map<u32, Animals*>::iterator it = keypoints_map.begin();
@@ -233,8 +233,11 @@ void load_2d_keypoints(std::map<u32, Animals*>& keypoints_map, SkeletonContext* 
                 if (token.compare(skeleton->name) != 0) {
                     std::cout << "Failed loading, skeleton doesn't match." << std::endl;
                     return;
-                }                       
+                }
                 line.erase(0, pos + delimeter.length());
+                pos = line.find(delimeter);
+                token = line.substr(0, pos);
+                number_of_animals = stoul(token);
             }
             else
             {

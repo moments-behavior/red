@@ -425,21 +425,7 @@ int main(int, char **)
                             }
 
                             if (keypoints_find) {
-
                                 Animals* current_frame_data = keypoints_map[current_frame_num];
-                                // delete all keypoint, memory leak here, need to handle it cleanly
-                                if (ImGui::IsKeyPressed(ImGuiKey_Delete, false)) 
-                                {
-                                    delete_all_labels(current_frame_data, scene, skeleton, number_of_animals);
-                                    keypoints_map.erase(current_frame_num);
-                                    keypoints_find = false;
-                                }
-
-                                if (ImGui::IsKeyPressed(ImGuiKey_Backspace, false)) 
-                                {
-                                    reinitalize_keypoint_active_animal(current_frame_data, scene, skeleton);
-                                }
-
                                 if (skeleton->has_skeleton) {
                                     KeyPoints* frame_keypoints = &current_frame_data->keypoints[current_frame_data->active_id];
                                     u32* kp = &frame_keypoints->active_kp_id[j];
@@ -496,6 +482,18 @@ int main(int, char **)
                                             frame_keypoints->has_labels = true;
                                         }
                                     }
+                                }
+
+                                if (ImGui::IsKeyPressed(ImGuiKey_Delete, false)) 
+                                {
+                                    delete_all_labels(current_frame_data, scene, skeleton, number_of_animals);
+                                    keypoints_map.erase(current_frame_num);
+                                    keypoints_find = false;
+                                }
+
+                                if (ImGui::IsKeyPressed(ImGuiKey_Backspace, false)) 
+                                {
+                                    reinitalize_keypoint_active_animal(current_frame_data, scene, skeleton);
                                 }
                                 
                             }  
@@ -745,7 +743,7 @@ int main(int, char **)
 
                 if (ImGui::Button("Save Labeled Data"))
                 {
-                    save_keypoints(keypoints_map, skeleton, keypoints_root_folder, scene->num_cams, camera_names);
+                    save_keypoints(keypoints_map, skeleton, keypoints_root_folder, scene->num_cams, camera_names, number_of_animals);
                 }
 
                 // if (ImGui::Button("Load Labeled Data"))

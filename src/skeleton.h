@@ -183,7 +183,11 @@ void reinitalize_keypoint_active_animal(Animals *animals, render_scene *scene, S
 }
 
 void delete_label_per_animal(KeyPoints* keypoints, render_scene *scene, SkeletonContext* skeleton) {
+    keypoints->has_labels = false;
     if (skeleton->has_bbox) {
+        if (keypoints->bbox2d->rect != NULL) {
+            delete(keypoints->bbox2d->rect);
+        }
         free(keypoints->bbox2d);
     } 
 
@@ -195,7 +199,6 @@ void delete_label_per_animal(KeyPoints* keypoints, render_scene *scene, Skeleton
         free(keypoints->keypoints2d);
         free(keypoints->active_kp_id);
     }
-    keypoints->has_labels = false;
 }
 
 void delete_all_labels(Animals *animals, render_scene *scene, SkeletonContext* skeleton, u32 number_animals)
@@ -209,6 +212,4 @@ void delete_all_labels(Animals *animals, render_scene *scene, SkeletonContext* s
     delete animals->colors;
     free(animals);
 }
-
-
 #endif
