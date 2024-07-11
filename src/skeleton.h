@@ -18,7 +18,7 @@ enum RectState {
     RectTwoPoints
 };
 
-struct BoudingBox{
+struct BoundingBox{
     ImPlotRect* rect;
     RectState state;
 };
@@ -27,7 +27,7 @@ struct KeyPoints{
     triple_d* keypoints3d;
     KeyPoints2D** keypoints2d; 
     u32* active_kp_id;
-    BoudingBox* bbox2d;
+    BoundingBox* bbox2d;
     bool has_labels;
 };
 
@@ -50,15 +50,15 @@ struct SkeletonContext {
 };
 
 enum SkeletonPrimitive { 
-    Fish6,
-    BoundingBox
+    SP_FISH6,
+    SP_BBOX
 };
 
 std::map<std::string, SkeletonPrimitive> skeleton_get_all()
 {
     std::map<std::string, SkeletonPrimitive> skeleton_all = {
-        {"Fish6", Fish6},
-        {"BoundingBox", BoundingBox}
+        {"Fish6", SP_FISH6},
+        {"BoundingBox", SP_BBOX}
     };
     return skeleton_all;
 }
@@ -67,7 +67,7 @@ std::map<std::string, SkeletonPrimitive> skeleton_get_all()
 void skeleton_initialize(SkeletonContext* skeleton, SkeletonPrimitive skeleton_type)
 {
     switch (skeleton_type){
-        case Fish6:
+        case SP_FISH6:
             skeleton->has_skeleton = true;
             skeleton->has_bbox = false;
             skeleton->num_nodes = 6;
@@ -88,7 +88,7 @@ void skeleton_initialize(SkeletonContext* skeleton, SkeletonPrimitive skeleton_t
                 {4, 5}};
                 break;
 
-        case BoundingBox:
+        case SP_BBOX:
             skeleton->has_bbox = true;
             skeleton->has_skeleton = false;
             break;
@@ -107,7 +107,7 @@ void allocate_keypoints(Animals *animals, render_scene *scene, SkeletonContext* 
         KeyPoints* keypoints = &animals->keypoints[animal_idx]; 
         keypoints->has_labels = false;
         if (skeleton->has_bbox) {
-            keypoints->bbox2d = (BoudingBox *)malloc(sizeof(BoudingBox) * scene->num_cams);
+            keypoints->bbox2d = (BoundingBox *)malloc(sizeof(BoundingBox) * scene->num_cams);
             for (u32 j=0; j < scene->num_cams; j++) {
                 keypoints->bbox2d[j].rect = NULL;
                 keypoints->bbox2d[j].state = RectNull;

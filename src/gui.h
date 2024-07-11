@@ -156,7 +156,7 @@ void save_keypoints(std::map<u32, Animals*> keypoints_map, SkeletonContext* skel
                     output2d_files[cam] << animal_id << ",";
                     if (skeleton->has_bbox) {
                         // save bbox first if the skeleton has bbox
-                        BoudingBox* bbox2d = &animals->keypoints[animal_id].bbox2d[cam];
+                        BoundingBox* bbox2d = &animals->keypoints[animal_id].bbox2d[cam];
                         if (bbox2d->state == RectNull) {
                             output2d_files[cam] << 1E7 <<  ","  << 1E7 <<  ",";
                         } else {
@@ -276,7 +276,7 @@ void load_2d_keypoints(std::map<u32, Animals*>& keypoints_map, SkeletonContext* 
                         double max_y = stod(token);
                         line.erase(0, pos + delimeter.length());
 
-                        BoudingBox* bbox2d = &(keypoints_map[frame_num]->keypoints[animal_id].bbox2d[cam_idx]);
+                        BoundingBox* bbox2d = &(keypoints_map[frame_num]->keypoints[animal_id].bbox2d[cam_idx]);
                         bbox2d->rect = new ImPlotRect(min_x, max_x, min_y, max_y);
                         bbox2d->state = RectTwoPoints;
                     }
