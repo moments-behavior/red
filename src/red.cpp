@@ -484,7 +484,7 @@ int main(int, char **)
                                     }
                                 }
 
-                                if (ImGui::IsKeyPressed(ImGuiKey_Delete, false)) 
+                                if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Delete, false)) 
                                 {
                                     delete_all_labels(current_frame_data, scene, skeleton, number_of_animals);
                                     keypoints_map.erase(current_frame_num);
@@ -785,31 +785,31 @@ int main(int, char **)
         if (show_help_window)
         {
             if (ImGui::Begin("Help Menu")) {            
-                ImGui::Text("[Space]: toggle play and pause");
-                ImGui::Text("[,]: previous image");
-                ImGui::Text("[.]: next image");
+                ImGui::Text("<Space>: toggle play and pause");
+                ImGui::Text("<,>: previous image");
+                ImGui::Text("<.>: next image");
 
-                ImGui::Text("[Tab]: circle selecting each animal");
+                ImGui::Text("<Tab>: circle selecting each animal");
 
                 ImGui::SeparatorText("After selecting an animal, while hovering image");
-                ImGui::Text("[c]: create bbox or/and keypoints on frame");
-                
+                ImGui::Text("<c>: create bbox or/and keypoints on frame");
+                ImGui::Text("<Backspace>: delete labels of active animal");
+                ImGui::Text("CTRL-Delete: delete all labels for all animals");
+
                 ImGui::SeparatorText("Bounding box");
-                ImGui::Text("[mouse middle button]: draw bbox, drag then release to finish drawing the bbox");
+                ImGui::Text("<mouse middle button>: draw bbox, drag then release to finish drawing the bbox");
 
                 ImGui::SeparatorText("Keypoint");
-                ImGui::Text("[w]: drop active keypoint");
-                ImGui::Text("[a]: active keypoint++ ");
-                ImGui::Text("[d]: active keypoint--");
-                ImGui::Text("[q]: active keypoint set to first node");
-                ImGui::Text("[e]: active keypoint set to last node");
+                ImGui::Text("<w>: drop active keypoint");
+                ImGui::Text("<a>: active keypoint++ ");
+                ImGui::Text("<d>: active keypoint--");
+                ImGui::Text("<q>: active keypoint set to first node");
+                ImGui::Text("<e>: active keypoint set to last node");
 
-                ImGui::SeparatorText("While hovering keypoints");
-                ImGui::Text("[r]: delete active keypoint");
-                ImGui::Text("[f]: delete active keypoint on all cameras");
+                ImGui::Text("While hovering keypoints");
+                ImGui::Text("<r>: delete active keypoint");
+                ImGui::Text("<f>: delete active keypoint on all cameras");
                 ImGui::Text("Click keypoint to active it");
-
-                ImGui::Text("[Delete]: delete all labels for all animals");
             }
             ImGui::End();
         }
