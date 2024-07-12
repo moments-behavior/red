@@ -4,7 +4,8 @@
 #include <string>
 #include "types.h"
 #include <map>
-
+#include "json.hpp"
+using json = nlohmann::json;
 
 struct KeyPoints2D{
     tuple_d position; 
@@ -51,23 +52,46 @@ struct SkeletonContext {
 
 enum SkeletonPrimitive { 
     SP_FISH6,
-    SP_BBOX
+    SP_BBOX,
+    SP_LOAD
 };
 
 std::map<std::string, SkeletonPrimitive> skeleton_get_all()
 {
     std::map<std::string, SkeletonPrimitive> skeleton_all = {
         {"Fish6", SP_FISH6},
-        {"BoundingBox", SP_BBOX}
+        {"BoundingBox", SP_BBOX},
+        {"Load from root folder", SP_LOAD}
     };
     return skeleton_all;
 }
 
+void load_skeleton_json(std::string file_name, SkeletonContext* skeleton)
+{
+    std::ifstream f(file_name);
+    json s_config = json::parse(f);
+    skeleton->name = s_config["name"];
+    skeleton->has_skeleton = s_config["has_skeleton"];
+    skeleton->has_bbox = s_config["has_bbox"];
+    skeleton->num_nodes = s_config["num_nodes"];
+    skeleton->num_edges = s_config["num_edges"];
 
-void skeleton_initialize(SkeletonContext* skeleton, SkeletonPrimitive skeleton_type)
+    for(int i=0; i<s_config["node_names"].size(); i++) {
+        skeleton->node_names.push_back(s_config["node_names"][i]);
+    }
+
+    for(int i=0; i<s_config["edges"].size(); i++) {
+        tuple_i edge_start_end = {s_config["edges"][i][0], s_config["edges"][i][1]};
+        skeleton->edges.push_back(edge_start_end);
+    }
+}
+
+
+void skeleton_initialize(std::string name, std::string root_dir, SkeletonContext* skeleton, SkeletonPrimitive skeleton_type)
 {
     switch (skeleton_type){
         case SP_FISH6:
+            skeleton->name = name;
             skeleton->has_skeleton = true;
             skeleton->has_bbox = false;
             skeleton->num_nodes = 6;
@@ -89,8 +113,18 @@ void skeleton_initialize(SkeletonContext* skeleton, SkeletonPrimitive skeleton_t
                 break;
 
         case SP_BBOX:
+            skeleton->name = name;
             skeleton->has_bbox = true;
             skeleton->has_skeleton = false;
+            break;
+        
+        case SP_LOAD:
+            std::string skeleton_file_name  = root_dir + "/skeleton.json";
+            load_skeleton_json(skeleton_file_name, skeleton);
+            for (int i = 0; i < skeleton->num_nodes; i++) {
+                ImVec4 color = (ImVec4)ImColor::HSV(i / (float)skeleton->num_nodes, 1.0f, 1.0f);
+                skeleton->node_colors.push_back(color);
+            }
             break;
     }
 };
@@ -210,4 +244,5 @@ void delete_all_labels(Animals *animals, render_scene *scene, SkeletonContext* s
     free(animals->keypoints);
     free(animals);
 }
+
 #endif

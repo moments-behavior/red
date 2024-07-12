@@ -14,7 +14,6 @@
 #include "gui.h"
 #include "utils.h"
 
-
 #if defined(_MSC_VER) && (_MSC_VER >= 1900) && !defined(IMGUI_DISABLE_WIN32_FUNCTIONS)
 #pragma comment(lib, "legacy_stdio_definitions")
 #endif
@@ -96,6 +95,10 @@ int main(int, char **)
     bool show_help_window = false;
     std::vector<bool> is_view_focused;
 
+    ImPlotStyle& style              = ImPlot::GetStyle();
+    ImVec4* colors                  = style.Colors;
+    colors[ImPlotCol_Crosshairs]    = ImVec4(0.3f, 0.10f, 0.64f, 1.00f);
+
     while (!glfwWindowShouldClose(window->render_target))
     {
         // Poll and handle events (inputs, window resize, etc.)
@@ -123,21 +126,14 @@ int main(int, char **)
                 if(video_loaded){
                     if (ImGui::BeginMenu("Skeleton"))
                     {
-                        if (!skeleton_chosen) {
-                            skeleton = new SkeletonContext;
-                            skeleton_map = skeleton_get_all();
-                        }
-
+                        skeleton_map = skeleton_get_all();
                         for (auto & element : skeleton_map) {
                             
                             if(ImGui::MenuItem(element.first.c_str(), NULL, skeleton->name == element.first, !skeleton_chosen))
                             {
-                                for (u32 i = 0; i < scene->num_cams; i++)
-                                {
-                                    skeleton_chosen = true;
-                                }
-                                skeleton->name = element.first;
-                                skeleton_initialize(skeleton, element.second);
+                                skeleton_chosen = true;
+                                skeleton = new SkeletonContext;
+                                skeleton_initialize(element.first, root_dir, skeleton, element.second);
                                 plot_keypoints_flag = true;
                                 keypoints_root_folder = root_dir + "/labeled_data/";
                                 // create folders

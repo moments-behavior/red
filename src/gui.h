@@ -110,7 +110,6 @@ std::string current_date_time() {
     return buf;
 }
 
-
 void save_keypoints(std::map<u32, Animals*> keypoints_map, SkeletonContext* skeleton, std::string root_dir, int num_cameras, std::vector<std::string>& camera_names, int number_of_animals)
 {
     std::string now = current_date_time();
