@@ -13,19 +13,23 @@ struct ProjectContext{
 };
 
 
-static void gui_plot_keypoints(KeyPoints *keypoints, SkeletonContext *skeleton, int view_idx, int num_cams, ImPlotDragToolFlags flag)
+static void gui_plot_keypoints(KeyPoints *keypoints, SkeletonContext *skeleton, int view_idx, int num_cams, bool is_active)
 {
     float pt_size = 6.0f;
     for (u32 node=0; node < skeleton->num_nodes; node++){
         if (keypoints->keypoints2d[view_idx][node].is_labeled){
             ImVec4 node_color; 
-            if (keypoints->active_kp_id[view_idx]==node) {
-                node_color = (ImVec4)ImColor::HSV(0.8, 0.9f, 0.9f);
+            ImPlotDragToolFlags flag;
+            if (is_active) {
+                flag = ImPlotDragToolFlags_None;
+                if (keypoints->active_kp_id[view_idx]==node) {
+                    node_color = (ImVec4)ImColor::HSV(0.8, 0.9f, 0.9f);
+                } else {
+                    node_color = skeleton->node_colors[node];
+                }
             } else {
-                node_color.w = 1.0f; 
-                node_color.x = skeleton->node_colors.at(node).x;
-                node_color.y = skeleton->node_colors.at(node).y;
-                node_color.z = skeleton->node_colors.at(node).z;
+                flag = ImPlotDragToolFlags_NoInputs;
+                node_color = keypoints->animal_color;
             }
             int id = skeleton->num_nodes * view_idx + node;
             static bool drag_point_clicked;

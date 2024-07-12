@@ -29,19 +29,19 @@ struct KeyPoints{
     u32* active_kp_id;
     BoundingBox* bbox2d;
     bool has_labels;
+    ImVec4 animal_color;
 };
 
 struct Animals{
     KeyPoints* keypoints;
     u32 active_id;
     u32 max_number;
-    ImColor* colors;
 };
 
 struct SkeletonContext {
     int num_nodes;
     int num_edges;
-    std::vector<triple_f> node_colors; 
+    std::vector<ImVec4> node_colors; 
     std::vector<tuple_i> edges;
     std::vector<std::string> node_names;
     std::string name;
@@ -76,7 +76,7 @@ void skeleton_initialize(SkeletonContext* skeleton, SkeletonPrimitive skeleton_t
 
             for (int i = 0; i < skeleton->num_nodes; i++) {
                 ImVec4 color = (ImVec4)ImColor::HSV(i / (float)skeleton->num_nodes, 1.0f, 1.0f);
-                skeleton->node_colors.push_back({color.x, color.y, color.z});
+                skeleton->node_colors.push_back(color);
             }
             
             skeleton->edges ={
@@ -98,13 +98,12 @@ void skeleton_initialize(SkeletonContext* skeleton, SkeletonPrimitive skeleton_t
 void allocate_keypoints(Animals *animals, render_scene *scene, SkeletonContext* skeleton, u32 number_animals) 
 {
     animals->keypoints = (KeyPoints *)malloc(sizeof(KeyPoints) * number_animals);
-    animals->colors = new ImColor[number_animals];
     animals->max_number = number_animals;
     animals->active_id = 0;
     
     for (u32 animal_idx=0; animal_idx < number_animals; animal_idx++) {
-        animals->colors[animal_idx] = ImColor::HSV(animal_idx / (float)number_animals, 0.8f, 0.8f);
-        KeyPoints* keypoints = &animals->keypoints[animal_idx]; 
+        KeyPoints* keypoints = &animals->keypoints[animal_idx];
+        keypoints->animal_color = (ImVec4)ImColor::HSV(animal_idx / (float)number_animals, 0.8f, 0.8f);
         keypoints->has_labels = false;
         if (skeleton->has_bbox) {
             keypoints->bbox2d = (BoundingBox *)malloc(sizeof(BoundingBox) * scene->num_cams);
@@ -209,7 +208,6 @@ void delete_all_labels(Animals *animals, render_scene *scene, SkeletonContext* s
         delete_label_per_animal(keypoints, scene, skeleton);
     }
     free(animals->keypoints);
-    delete animals->colors;
     free(animals);
 }
 #endif

@@ -507,13 +507,7 @@ int main(int, char **)
                             if(skeleton->has_skeleton) {
                                 for (u32 animal_id=0; animal_id < number_of_animals; animal_id++) {
                                     KeyPoints* frame_keypoints = &current_frame_data->keypoints[animal_id];
-                                    if (current_frame_data->active_id == animal_id) {
-                                        ImPlotDragToolFlags flag = ImPlotDragToolFlags_None;
-                                        gui_plot_keypoints(frame_keypoints, skeleton, j, scene->num_cams, flag);
-                                    } else {
-                                        ImPlotDragToolFlags flag = ImPlotDragToolFlags_NoInputs;
-                                        gui_plot_keypoints(frame_keypoints, skeleton, j, scene->num_cams, flag);
-                                    }
+                                    gui_plot_keypoints(frame_keypoints, skeleton, j, scene->num_cams, current_frame_data->active_id == animal_id);
                                 }
                             }
 
@@ -521,7 +515,7 @@ int main(int, char **)
                                 // draw all animals
                                 for (u32 animal_id=0; animal_id < number_of_animals; animal_id++) {
                                     KeyPoints* frame_keypoints = &current_frame_data->keypoints[animal_id];
-                                    ImColor bbox_color = current_frame_data->colors[animal_id];
+                                    ImColor bbox_color = frame_keypoints->animal_color;
                                     if (frame_keypoints->bbox2d[j].state != RectNull) {
                                         ImPlotRect* my_rect = frame_keypoints->bbox2d[j].rect;
                                         if (current_frame_data->active_id == animal_id) {
@@ -660,7 +654,7 @@ int main(int, char **)
                                 current_frame_data->active_id = animal_id;
                             }
                             if (current_frame_data->keypoints[animal_id].has_labels) {
-                                ImGui::TableSetBgColor(ImGuiTableBgTarget_CellBg, current_frame_data->colors[animal_id]);
+                                ImGui::TableSetBgColor(ImGuiTableBgTarget_CellBg, (ImColor)current_frame_data->keypoints[animal_id].animal_color);
                             }
                         }
                         ImGui::EndTable();
@@ -709,10 +703,8 @@ int main(int, char **)
                                                 }  else {
                                                     if (frame_keypoints->keypoints2d[row][column-1].is_labeled) 
                                                     {
+                                                        node_color = skeleton->node_colors[column-1];
                                                         node_color.w = 0.5;
-                                                        node_color.x = skeleton->node_colors[column-1].x;
-                                                        node_color.y = skeleton->node_colors[column-1].y;
-                                                        node_color.z = skeleton->node_colors[column-1].z;
                                                     }
 
                                                     if (frame_keypoints->keypoints2d[row][column-1].is_triangulated) 
