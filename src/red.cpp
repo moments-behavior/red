@@ -126,7 +126,11 @@ int main(int, char **)
                 if(video_loaded){
                     if (ImGui::BeginMenu("Skeleton"))
                     {
-                        skeleton_map = skeleton_get_all();
+                        if (!skeleton_chosen) {
+                            skeleton = new SkeletonContext;
+                            skeleton_map = skeleton_get_all();
+                        }
+
                         for (auto & element : skeleton_map) {
                             
                             if(ImGui::MenuItem(element.first.c_str(), NULL, skeleton->name == element.first, !skeleton_chosen))
