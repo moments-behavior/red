@@ -282,6 +282,7 @@ void load_2d_keypoints(std::map<u32, Animals*>& keypoints_map, SkeletonContext* 
                         BoundingBox* bbox2d = &(keypoints_map[frame_num]->keypoints[animal_id].bbox2d[cam_idx]);
                         bbox2d->rect = new ImPlotRect(min_x, max_x, min_y, max_y);
                         bbox2d->state = RectTwoPoints;
+                        keypoints_map[frame_num]->keypoints[animal_id].has_labels = true;
                     }
                     
                     if (skeleton->has_skeleton) {
@@ -305,6 +306,8 @@ void load_2d_keypoints(std::map<u32, Animals*>& keypoints_map, SkeletonContext* 
                             } else {
                                 keypoints2d[node].is_labeled = true;
                             }
+
+                            keypoints_map[frame_num]->keypoints[animal_id].has_labels = true;
                         } 
                     }
                 }
