@@ -136,11 +136,11 @@ const std::string current_date_time() {
 void save_keypoints(std::map<u32, Animals*> keypoints_map, SkeletonContext* skeleton, std::string root_dir, int num_cameras, std::vector<std::string>& camera_names, int number_of_animals)
 {
     std::string now = current_date_time();
-    std::string filename = root_dir + "/worldKeyPoints/keypoints_" + now;
+    std::string filename = root_dir + "/worldKeyPoints/keypoints_" + now + ".csv";
     std::ofstream output_file(filename);
     std::vector<std::ofstream> output2d_files;
     for (u32 i = 0; i < num_cameras; i++) {
-        std::string filename_cam = root_dir + "/" + camera_names[i] + "/" + camera_names[i] + "_" + now;
+        std::string filename_cam = root_dir + "/" + camera_names[i] + "/" + camera_names[i] + "_" + now + ".csv";
         std::ofstream output_file_cam(filename_cam);
         output2d_files.push_back(std::move(output_file_cam));
     }
