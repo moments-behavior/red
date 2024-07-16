@@ -101,13 +101,36 @@ static void gui_plot_bbox_from_keypoints(KeyPoints *keypoints, SkeletonContext *
     }
 }
 
-std::string current_date_time() {
+const std::string current_date_time() {
     time_t     now = time(0);
     struct tm  tstruct;
     char       buf[80];
     tstruct = *localtime(&now);
-    strftime(buf, sizeof(buf), "%Y-%m-%d_%X", &tstruct);
-    return buf;
+    strftime(buf, sizeof(buf), "%Y:%m:%d:%X", &tstruct);
+    
+    std::string delimiter = ":";
+
+    std::string s(buf);
+    size_t pos_start = 0, pos_end, delim_len = delimiter.length();
+    std::string token;
+    std::vector<std::string> res;
+
+    while ((pos_end = s.find(delimiter, pos_start)) != std::string::npos) {
+        token = s.substr (pos_start, pos_end - pos_start);
+        pos_start = pos_end + delim_len;
+        res.push_back (token);
+    }
+
+    res.push_back (s.substr (pos_start));
+    std::string final_string;
+
+    for (int i = 0; i < res.size(); i++) {
+        if (i!=0) {
+            final_string += "_";
+        }
+        final_string += res[i];
+    }
+    return final_string.c_str();
 }
 
 void save_keypoints(std::map<u32, Animals*> keypoints_map, SkeletonContext* skeleton, std::string root_dir, int num_cameras, std::vector<std::string>& camera_names, int number_of_animals)
