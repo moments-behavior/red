@@ -52,6 +52,7 @@ struct SkeletonContext {
 
 enum SkeletonPrimitive { 
     SP_FISH6,
+    SP_FISH12,
     SP_BBOX,
     SP_LOAD
 };
@@ -60,6 +61,7 @@ std::map<std::string, SkeletonPrimitive> skeleton_get_all()
 {
     std::map<std::string, SkeletonPrimitive> skeleton_all = {
         {"Fish6", SP_FISH6},
+        {"Fish12", SP_FISH12},
         {"BoundingBox", SP_BBOX},
         {"Load from root folder", SP_LOAD}
     };
@@ -110,6 +112,32 @@ void skeleton_initialize(std::string name, std::string root_dir, SkeletonContext
                 {2, 3},
                 {3, 4},
                 {4, 5}};
+                break;
+
+        case SP_FISH12:
+            skeleton->has_skeleton = true;
+            skeleton->has_bbox = false;
+            skeleton->num_nodes = 12;
+            skeleton->num_edges = 11;
+            skeleton->node_names = {"EyeL", "EyeR", "Mid1", "SB_Ant", "Mid2", "SB_Post", "Tail1", "Tail2", "Tail3", "Tail4", "Tail5", "Tail6"};
+
+            for (int i = 0; i < skeleton->num_nodes; i++) {
+                ImVec4 color = (ImVec4)ImColor::HSV(i / (float)skeleton->num_nodes, 1.0f, 1.0f);
+                skeleton->node_colors.push_back(color);
+            }
+
+            skeleton->edges = {
+                {0, 2},
+                {1, 2},
+                {2, 3},
+                {3, 4},
+                {4, 5},
+                {5, 6},
+                {6, 7},
+                {7, 8},
+                {8, 9},
+                {9, 10},
+                {10, 11}};
                 break;
 
         case SP_BBOX:
