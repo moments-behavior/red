@@ -733,7 +733,7 @@ int main(int, char **)
             if (ImGui::Begin("Labeling Tool"))
             {
 
-                if (ImGui::Button("Save Labeled Data"))
+                if (ImGui::Button("Save Labeled Data") || (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false)))
                 {
                     save_keypoints(keypoints_map, skeleton, keypoints_root_folder, scene->num_cams, camera_names, number_of_animals);
                 }
@@ -780,6 +780,7 @@ int main(int, char **)
                 ImGui::Text("<Space>: toggle play and pause");
                 ImGui::Text("<,>: previous image");
                 ImGui::Text("<.>: next image");
+                ImGui::Text("CTRL-S: save labels");
 
                 ImGui::Text("<Tab>: circle selecting each animal");
 
