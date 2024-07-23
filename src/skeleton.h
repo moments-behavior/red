@@ -97,7 +97,7 @@ void skeleton_initialize(std::string name, std::string root_dir, SkeletonContext
             skeleton->has_skeleton = true;
             skeleton->has_bbox = false;
             skeleton->num_nodes = 6;
-            skeleton->num_edges = 6;
+            skeleton->num_edges = 5;
             skeleton->node_names = {"EyeL", "EyeR", "Mid1", "SB_Ant", "Mid2", "SB_Post"};
 
             for (int i = 0; i < skeleton->num_nodes; i++) {
@@ -106,9 +106,8 @@ void skeleton_initialize(std::string name, std::string root_dir, SkeletonContext
             }
             
             skeleton->edges ={
-                {0, 1},
                 {0, 2},
-                {1, 3},
+                {1, 2},
                 {2, 3},
                 {3, 4},
                 {4, 5}};
