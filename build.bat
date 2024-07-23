@@ -18,8 +18,8 @@ clang++.exe -Wno-everything -g -std=c++17 src/red.cpp src/decoder.cpp src/FFmpeg
 -I lib -I lib/nvcodec -I lib/IconFontCppHeaders ^
 -I lib/imgui-filebrowser -I lib/FFmpeg/include -I %DIR_IMGUI%/backends -I %DIR_IMGUI% -I %DIR_IMPLOT% -I lib/GLFW ^
 release/create_image_cuda.o release/ColorSpace.o -o release/redgui.exe ^
--I "C:/Program Files\NVIDIA GPU Computing Toolkit/CUDA/v12.0/include" ^
--L "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.0/lib/x64" -lcudart -lcuda ^
+-I "C:/Program Files\NVIDIA GPU Computing Toolkit/CUDA/v12.5/include" ^
+-L "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/lib/x64" -lcudart -lcuda ^
 -L lib/nvcodec/x64 -lnvencodeapi -lnvcuvid ^
 -L lib/FFmpeg/lib/x64 -lavcodec -lavformat -lavutil -lswresample ^
 -L lib/GL/lib/x64 -lglew32 ^
