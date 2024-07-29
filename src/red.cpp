@@ -77,13 +77,12 @@ int main(int, char **)
         std::string cwd = std::filesystem::current_path().string();
     #else
         std::filesystem::path cwd = std::filesystem::current_path();
+        std::string delimiter = "/";
+        std::vector<std::string> tokenized_path = string_split (cwd, delimiter);
+        std::string start_folder_name = "/home/" + tokenized_path[2] + "/data";
+        file_dialog.SetPwd(start_folder_name);
     #endif 
     
-    std::string delimiter = "/";
-    std::vector<std::string> tokenized_path = string_split (cwd, delimiter);
-    std::string start_folder_name = "/home/" + tokenized_path[2] + "/data";
-
-    file_dialog.SetPwd(start_folder_name);
     file_dialog.SetTitle("Select working directory");
     ImVec4 clear_color = ImVec4(0.0f, 0.0f, 0.0f, 1.00f);
     ImGuiIO &io = ImGui::GetIO();
