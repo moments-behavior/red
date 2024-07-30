@@ -431,17 +431,13 @@ int main(int, char **)
                                     u32* kp = &frame_keypoints->active_kp_id[j];
                                     u32* count = &frame_keypoints->counter[j];
                                     if (ImGui::IsKeyPressed(ImGuiKey_W, false)) {
-                                        if(!frame_keypoints->keypoints2d[j][*kp].is_labeled) {
-                                            (*count)++;
-                                        }
+                                        if(!frame_keypoints->keypoints2d[j][*kp].is_labeled) {(*count)++;}
                                         // labeling sequentially each view
                                         ImPlotPoint mouse = ImPlot::GetPlotMousePos();
                                         frame_keypoints->keypoints2d[j][*kp].position = {mouse.x,  mouse.y};
                                         frame_keypoints->keypoints2d[j][*kp].is_labeled = true;
                                         frame_keypoints->keypoints2d[j][*kp].is_triangulated = false;
-                                        if(*kp < (skeleton->num_nodes - 1)) {
-                                            (*kp)++;
-                                        }
+                                        if(*kp < (skeleton->num_nodes - 1)) {(*kp)++;}
                                         frame_keypoints->has_labels = true;
                                     }
 
