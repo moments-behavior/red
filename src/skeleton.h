@@ -31,7 +31,7 @@ struct KeyPoints{
     BoundingBox* bbox2d;
     bool has_labels;
     ImVec4 animal_color;
-    u32* counter;
+    u32 counter;
 };
 
 struct Animals{
@@ -179,15 +179,14 @@ void allocate_keypoints(Animals *animals, render_scene *scene, SkeletonContext* 
             keypoints->active_kp_id = (u32 *)malloc(sizeof(u32) * scene->num_cams);
             keypoints->keypoints3d = (triple_d *)malloc(sizeof(triple_d) * skeleton->num_nodes); 
             keypoints->keypoints2d = (KeyPoints2D **)malloc(sizeof(KeyPoints2D*) * scene->num_cams);
-            keypoints->counter = (u32 *)malloc(sizeof(u32) * scene->num_cams);
             for (u32 j=0; j < scene->num_cams; j++) {
                 keypoints->keypoints2d[j] = (KeyPoints2D *)malloc(sizeof(KeyPoints2D) * skeleton->num_nodes);
             }
             
             // initialize to big number 
+            keypoints->counter = 0;
             for (u32 j=0; j < scene->num_cams; j++) {
                 keypoints->active_kp_id[j] = 0;
-                keypoints->counter[j] = 0;
                 for (u32 k=0; k < skeleton->num_nodes; k++){
                     keypoints->keypoints2d[j][k].is_labeled = false;
                     keypoints->keypoints2d[j][k].is_triangulated = false;
@@ -219,9 +218,9 @@ void reinitalize_keypoint_active_animal(Animals *animals, render_scene *scene, S
         }
 
         if (skeleton->has_skeleton) {
+            keypoints->counter = 0;
             for (u32 j=0; j < scene->num_cams; j++) {
                 keypoints->active_kp_id[j] = 0;
-                keypoints->counter[j] = 0;
                 for (u32 k=0; k < skeleton->num_nodes; k++){
                     keypoints->keypoints2d[j][k].is_labeled = false;
                     keypoints->keypoints2d[j][k].is_triangulated = false;
@@ -262,7 +261,6 @@ void delete_label_per_animal(KeyPoints* keypoints, render_scene *scene, Skeleton
         free(keypoints->keypoints3d);
         free(keypoints->keypoints2d);
         free(keypoints->active_kp_id);
-        free(keypoints->counter);
     }
 }
 
