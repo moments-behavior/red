@@ -31,6 +31,7 @@ struct KeyPoints{
     BoundingBox* bbox2d;
     bool has_labels;
     ImVec4 animal_color;
+    u32 counter;
 };
 
 struct Animals{
@@ -97,8 +98,8 @@ void skeleton_initialize(std::string name, std::string root_dir, SkeletonContext
             skeleton->has_skeleton = true;
             skeleton->has_bbox = false;
             skeleton->num_nodes = 6;
-            skeleton->num_edges = 6;
-            skeleton->node_names = {"Snout", "EyeL", "EyeR", "Neck", "Internal", "TailEnd"};
+            skeleton->num_edges = 5;
+            skeleton->node_names = {"EyeL", "EyeR", "Mid1", "SB_Ant", "Mid2", "SB_Post"};
 
             for (int i = 0; i < skeleton->num_nodes; i++) {
                 ImVec4 color = (ImVec4)ImColor::HSV(i / (float)skeleton->num_nodes, 1.0f, 1.0f);
@@ -106,9 +107,8 @@ void skeleton_initialize(std::string name, std::string root_dir, SkeletonContext
             }
             
             skeleton->edges ={
-                {0, 1},
                 {0, 2},
-                {1, 3},
+                {1, 2},
                 {2, 3},
                 {3, 4},
                 {4, 5}};
@@ -184,6 +184,7 @@ void allocate_keypoints(Animals *animals, render_scene *scene, SkeletonContext* 
             }
             
             // initialize to big number 
+            keypoints->counter = 0;
             for (u32 j=0; j < scene->num_cams; j++) {
                 keypoints->active_kp_id[j] = 0;
                 for (u32 k=0; k < skeleton->num_nodes; k++){
@@ -217,6 +218,7 @@ void reinitalize_keypoint_active_animal(Animals *animals, render_scene *scene, S
         }
 
         if (skeleton->has_skeleton) {
+            keypoints->counter = 0;
             for (u32 j=0; j < scene->num_cams; j++) {
                 keypoints->active_kp_id[j] = 0;
                 for (u32 k=0; k < skeleton->num_nodes; k++){

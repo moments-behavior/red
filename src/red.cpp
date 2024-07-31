@@ -428,7 +428,9 @@ int main(int, char **)
                                 if (skeleton->has_skeleton) {
                                     KeyPoints* frame_keypoints = &current_frame_data->keypoints[current_frame_data->active_id];
                                     u32* kp = &frame_keypoints->active_kp_id[j];
+                                    u32* count = &frame_keypoints->counter;
                                     if (ImGui::IsKeyPressed(ImGuiKey_W, false)) {
+                                        if(!frame_keypoints->keypoints2d[j][*kp].is_labeled) {(*count)++;}
                                         // labeling sequentially each view
                                         ImPlotPoint mouse = ImPlot::GetPlotMousePos();
                                         frame_keypoints->keypoints2d[j][*kp].position = {mouse.x,  mouse.y};
@@ -506,7 +508,7 @@ int main(int, char **)
                             if(skeleton->has_skeleton) {
                                 for (u32 animal_id=0; animal_id < number_of_animals; animal_id++) {
                                     KeyPoints* frame_keypoints = &current_frame_data->keypoints[animal_id];
-                                    gui_plot_keypoints(frame_keypoints, skeleton, j, scene->num_cams, current_frame_data->active_id == animal_id);
+                                    gui_plot_keypoints(frame_keypoints, skeleton, j, animal_id, scene->num_cams, current_frame_data->active_id == animal_id);
                                 }
                             }
 
@@ -647,7 +649,11 @@ int main(int, char **)
                         for (int animal_id = 0; animal_id < number_of_animals; animal_id++)
                         {
                             char label[32];
-                            sprintf(label, "Ani %d", animal_id);
+                            if (skeleton->has_bbox) {
+                                sprintf(label, "Ani %d", animal_id);
+                            } else {
+                                sprintf(label, "Ani %d (%d/%d labeled)", animal_id, current_frame_data->keypoints[animal_id].counter, skeleton->num_nodes);
+                            }
                             ImGui::TableNextColumn();
                             if(ImGui::Selectable(label, current_frame_data->active_id == animal_id)) {
                                 current_frame_data->active_id = animal_id;

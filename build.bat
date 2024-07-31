@@ -14,7 +14,7 @@ nvcc -c src/ColorSpace.cu -arch=sm_80 -o release/ColorSpace.o
 @set DIR_IMGUI=lib/imgui
 @set DIR_IMPLOT=lib/implot
 
-@set DIR_CUDA="C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.0"
+@set DIR_CUDA="C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5"
 
 clang++.exe -Wno-everything -g -std=c++17 src/red.cpp src/decoder.cpp src/FFmpegDemuxer.cpp src/NvDecoder.cpp ^
 %DIR_IMGUI%/imgui.cpp %DIR_IMGUI%/imgui_demo.cpp %DIR_IMGUI%/imgui_draw.cpp %DIR_IMGUI%/imgui_tables.cpp %DIR_IMGUI%/imgui_widgets.cpp %DIR_IMGUI%/backends/imgui_impl_glfw.cpp %DIR_IMGUI%/backends/imgui_impl_opengl3.cpp ^

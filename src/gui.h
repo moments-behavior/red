@@ -13,7 +13,7 @@ struct ProjectContext{
 };
 
 
-static void gui_plot_keypoints(KeyPoints *keypoints, SkeletonContext *skeleton, int view_idx, int num_cams, bool is_active)
+inline void gui_plot_keypoints(KeyPoints *keypoints, SkeletonContext *skeleton, int view_idx, u32 animal_idx, int num_cams, bool is_active)
 {
     float pt_size = 6.0f;
     for (u32 node=0; node < skeleton->num_nodes; node++){
@@ -31,24 +31,25 @@ static void gui_plot_keypoints(KeyPoints *keypoints, SkeletonContext *skeleton, 
                 flag = ImPlotDragToolFlags_NoInputs;
                 node_color = keypoints->animal_color;
             }
-            int id = skeleton->num_nodes * view_idx + node;
-            static bool drag_point_clicked;
-            static bool drag_point_hovered;
-            static bool drag_point_modified;
+            int id = animal_idx * num_cams * skeleton->num_nodes + skeleton->num_nodes * view_idx + node;
+            bool drag_point_clicked = false;
+            bool drag_point_hovered = false;
+            bool drag_point_modified = false;
             drag_point_modified = ImPlot::DragPoint(id, &keypoints->keypoints2d[view_idx][node].position.x, &keypoints->keypoints2d[view_idx][node].position.y, node_color, pt_size, flag, &drag_point_clicked, &drag_point_hovered);
             if (drag_point_modified) {
                 keypoints->keypoints2d[view_idx][node].is_triangulated = false;
             }
             if (drag_point_hovered) {
-                if (ImGui::IsKeyPressed(ImGuiKey_R, false))  // delete active keypoint
+                if (ImGui::IsKeyPressed(ImGuiKey_R, false))  // delete hovered keypoint
                 {
+                    keypoints->counter--;
                     keypoints->keypoints2d[view_idx][node].position = {1E7,  1E7};
                     keypoints->keypoints2d[view_idx][node].is_labeled = false;                                        
                     keypoints->keypoints2d[view_idx][node].is_triangulated = false;
                     keypoints->active_kp_id[view_idx] = node;
                 }
                 
-                if (ImGui::IsKeyPressed(ImGuiKey_F, false)) // Delete active keypoints from all the views
+                if (ImGui::IsKeyPressed(ImGuiKey_F, false)) // Delete hovered keypoints from all the views
                 {
                     for (int cam_idx =0; cam_idx < num_cams; cam_idx++) {
                         keypoints->keypoints2d[cam_idx][node].position = {1E7,  1E7};
@@ -79,7 +80,7 @@ static void gui_plot_keypoints(KeyPoints *keypoints, SkeletonContext *skeleton, 
 
 }
 
-static void gui_plot_bbox_from_keypoints(KeyPoints *keypoints, SkeletonContext *skeleton, int view_idx, int top_left_idx, int bottom_right_idx)
+inline void gui_plot_bbox_from_keypoints(KeyPoints *keypoints, SkeletonContext *skeleton, int view_idx, int top_left_idx, int bottom_right_idx)
 {
     if (keypoints->keypoints2d[view_idx][top_left_idx].is_labeled && keypoints->keypoints2d[view_idx][bottom_right_idx].is_labeled) {
         double xs[5] {keypoints->keypoints2d[view_idx][top_left_idx].position.x,
