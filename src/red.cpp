@@ -508,7 +508,7 @@ int main(int, char **)
                             if(skeleton->has_skeleton) {
                                 for (u32 animal_id=0; animal_id < number_of_animals; animal_id++) {
                                     KeyPoints* frame_keypoints = &current_frame_data->keypoints[animal_id];
-                                    gui_plot_keypoints(frame_keypoints, skeleton, j, scene->num_cams, current_frame_data->active_id == animal_id);
+                                    gui_plot_keypoints(frame_keypoints, skeleton, j, animal_id, scene->num_cams, current_frame_data->active_id == animal_id);
                                 }
                             }
 
