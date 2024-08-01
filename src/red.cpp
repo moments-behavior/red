@@ -644,9 +644,7 @@ int main(int, char **)
                     } else {
                         current_frame_data->active_id = (current_frame_data->active_id + 1) % number_of_animals;
                     }
-                    
                 }
-                // if (ImGui::IsKeyPressed())
 
                 if (ImGui::Begin("Keypoints")) {
 
@@ -794,6 +792,7 @@ int main(int, char **)
                 ImGui::Text("CTRL-S: save labels");
 
                 ImGui::Text("<Tab>: circle selecting each animal");
+                ImGui::Text("Shift-Tab: select previous animal");
 
                 ImGui::SeparatorText("After selecting an animal, while hovering image");
                 ImGui::Text("<c>: create bbox or/and keypoints on frame");
