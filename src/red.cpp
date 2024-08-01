@@ -639,8 +639,14 @@ int main(int, char **)
 
                 if (ImGui::IsKeyPressed(ImGuiKey_Tab, false))
                 {
-                    current_frame_data->active_id = (current_frame_data->active_id + 1) % number_of_animals;
+                    if (ImGui::GetIO().KeyShift) {
+                        current_frame_data->active_id = (current_frame_data->active_id + number_of_animals - 1) % number_of_animals;
+                    } else {
+                        current_frame_data->active_id = (current_frame_data->active_id + 1) % number_of_animals;
+                    }
+                    
                 }
+                // if (ImGui::IsKeyPressed())
 
                 if (ImGui::Begin("Keypoints")) {
 
