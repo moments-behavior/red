@@ -139,18 +139,21 @@ int main(int, char **)
                             
                             if(ImGui::MenuItem(element.first.c_str(), NULL, skeleton->name == element.first, !skeleton_chosen))
                             {
-                                // std::string cam_file = root_dir + "/calibration/calibration.csv";
-                                for (u32 i = 0; i < scene->num_cams; i++)
-                                {
-                                    // legacy loading from old formats
-                                    // CameraParams cam = camera_load_params_from_csv(cam_file, i);
-                                    // camera_params.push_back(cam);
-                                    std::string cam_file = root_dir + "/calibration/" + camera_names[i] + ".yaml";
-                                    std::cout << cam_file << std::endl;
-                                    CameraParams cam = camera_load_params_from_yaml(cam_file);
-                                    camera_params.push_back(cam);
-                                    skeleton_chosen = true;
+                                skeleton_chosen = true;
+
+                                if (scene->num_cams > 1) {
+                                    for (u32 i = 0; i < scene->num_cams; i++)
+                                    {
+                                        // legacy loading from old formats
+                                        // CameraParams cam = camera_load_params_from_csv(cam_file, i);
+                                        // camera_params.push_back(cam);
+                                        std::string cam_file = root_dir + "/calibration/" + camera_names[i] + ".yaml";
+                                        std::cout << cam_file << std::endl;
+                                        CameraParams cam = camera_load_params_from_yaml(cam_file);
+                                        camera_params.push_back(cam);
+                                    }
                                 }
+
                                 skeleton->name = element.first;
                                 skeleton_initialize(skeleton, element.second);
                                 plot_keypoints_flag = true;
