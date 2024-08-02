@@ -259,6 +259,43 @@ int64_t FFmpegDemuxer::FindClosestKeyFrameFNI(int64_t frame_num, int key_frame_i
     return key_frame_num;
 }
 
+int64_t FFmpegDemuxer::FindKeyFrameInterval()
+{
+    int ret = 0;
+    bool eof = false, gotVideo = false;
+    int64_t cnt = 0;
+    int keyframe_encounter = 0;
+
+    while (!eof) {
+        ret = av_read_frame(fmtc, &pktSrc);
+        if (ret < 0) {
+            if (ret == AVERROR_EOF) {
+                eof = true;
+                break;
+            } else {
+                LOG(FATAL) << "Error: av_read_frame failed with " << AVERROR(ret);
+            }
+            break;
+        }
+        
+        if (pktSrc.stream_index == videoStream) {
+            if (pktSrc.flags & AV_PKT_FLAG_KEY) {
+                keyframe_encounter++;
+            }
+            ++cnt;
+        }
+
+        auto pCopyPacket = av_packet_clone(&pktSrc);
+        av_packet_free(&pCopyPacket);
+
+        if (keyframe_encounter == 2) {
+            break;
+        }
+    }
+    std::cout << "identified seek interval: "<< cnt-1 << std::endl;
+    return cnt-1;
+}
+
 bool FFmpegDemuxer::Seek(SeekContext& seekCtx, uint8_t*& pVideo,
     size_t& rVideoBytes, PacketData& pktData,
     uint8_t** ppSEI, size_t* pSEIBytes)
