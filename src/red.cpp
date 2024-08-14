@@ -773,6 +773,7 @@ int main(int, char **)
                 } else {
                     ImGui::Text("Next labeled frame : %d", (*upper_it).first);
                 }
+                ImGui::Text("Total labeled frames : %d", keypoints_map.size());
             }
             ImGui::End();
         }
