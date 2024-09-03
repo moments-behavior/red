@@ -261,11 +261,13 @@ int main(int, char **)
                 root_dir = file_dialog.GetSelected().string();
 
                 // load movies
-                std::string movie_dir = root_dir + "/movies";
+                std::string movie_dir = root_dir;
 
                 for (const auto &entry : std::filesystem::directory_iterator(movie_dir))
                 {
-                    input_file_names.push_back(entry.path().string());
+                    if (entry.path().extension()==".mp4") {
+                        input_file_names.push_back(entry.path().string());
+                    }
                 }
 
                 std::sort(input_file_names.begin(), input_file_names.end(), numerical_compare_substr);
