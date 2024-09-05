@@ -769,11 +769,37 @@ int main(int, char **)
 
                 auto upper_it = keypoints_map.upper_bound(current_frame_num); 
                 if (upper_it == keypoints_map.end()) {
-                    ImGui::Text("Number of labeled frame : %d", (*upper_it).first);
-                } else {
-                    ImGui::Text("Next labeled frame : %d", (*upper_it).first);
+                    upper_it = keypoints_map.begin();
+                }
+                ImGui::Text("Next labeled frame : %d", (*upper_it).first);
+                if (ImGui::Button("Jump to Next Labeled Frame") || ImGui::IsKeyPressed(ImGuiKey_RightArrow, false)) {
+                    for (int i = 0; i < scene->num_cams; i++)
+                    {
+                        scene->seek_context[i].seek_frame = (uint64_t)(*upper_it).first;
+                        scene->seek_context[i].use_seek = true;
+                        scene->seek_context[i].seek_accurate = true;
+                    }
+
+                    for (int i = 0; i < scene->num_cams; i++)
+                    {
+                        while (!(scene->seek_context[i].seek_done))
+                        {
+                            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                        }
+                    }
+
+                    for (int i = 0; i < scene->num_cams; i++)
+                    {
+                        scene->seek_context[i].seek_done = false;
+                    }
+                    to_display_frame_number = scene->seek_context[0].seek_frame;
+                    read_head = 0;
+                    just_seeked = true;
+                    pause_selected = 0;
+                    slider_frame_number = to_display_frame_number;
                 }
                 ImGui::Text("Total labeled frames : %d", keypoints_map.size());
+                
             }
             ImGui::End();
         }
@@ -790,7 +816,6 @@ int main(int, char **)
                 ImGui::Text("<Space>: toggle play and pause");
                 ImGui::Text("<,>: previous image");
                 ImGui::Text("<.>: next image");
-                ImGui::Text("CTRL-S: save labels");
 
                 ImGui::Text("<Tab>: circle selecting each animal");
                 ImGui::Text("Shift-Tab: select previous animal");
@@ -809,6 +834,8 @@ int main(int, char **)
                 ImGui::Text("<d>: active keypoint--");
                 ImGui::Text("<q>: active keypoint set to first node");
                 ImGui::Text("<e>: active keypoint set to last node");
+                ImGui::Text("<Right Arrow>: next labeled frame");
+                ImGui::Text("CTRL-S: save labels");
 
                 ImGui::Text("While hovering keypoints");
                 ImGui::Text("<r>: delete active keypoint");
