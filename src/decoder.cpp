@@ -59,16 +59,12 @@ inline void decoder_check_input_files(const char *sz_in_file_path)
     }
 }
 
-void decoder_process(const char *input_file_name, DecoderContext *dc_context, FFmpegDemuxer* demuxer, PictureBuffer *display_buffer, int size_of_buffer, SeekInfo *seek_info, bool use_cpu_buffer)
+void decoder_process(DecoderContext *dc_context, FFmpegDemuxer* demuxer, PictureBuffer *display_buffer, int size_of_buffer, SeekInfo *seek_info, bool use_cpu_buffer)
 {
-    decoder_check_input_files(input_file_name);
-    std::cout << input_file_name << std::endl;
-
     CUdeviceptr pTmpImage = 0;
     ck(cuInit(0));
     CUcontext cuContext = NULL;
     createCudaContext(&cuContext, dc_context->gpu_index, 0);
-    std::map<std::string, std::string> m;
     size_t nVideoBytes = 0;
     PacketData pktinfo;
 

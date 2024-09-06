@@ -9,7 +9,7 @@
 #include "implot.h"
 #include <iostream>
 #include <thread>
-#include <imfilebrowser.h>
+#include <ImGuiFileDialog.h>
 #include <camera.h>
 #include "skeleton.h"
 #include "gui.h"
@@ -47,7 +47,6 @@ int main(int, char **)
     render_scene *scene = (render_scene *)malloc(sizeof(render_scene));
 
     std::string root_dir;
-    std::vector<std::string> input_file_names;
     std::vector<std::string> camera_names;
     std::vector<CameraParams> camera_params;
     std::vector<std::thread> decoder_threads;
@@ -84,14 +83,12 @@ int main(int, char **)
     std::map<std::string, SkeletonPrimitive> skeleton_map;
     
     // others
-    ImGui::FileBrowser file_dialog(ImGuiFileBrowserFlags_SelectDirectory);
     std::filesystem::path cwd = std::filesystem::current_path();
     std::string delimiter = "/";
     std::vector<std::string> tokenized_path = string_split (cwd, delimiter);
-    std::string start_folder_name = "/home/" + tokenized_path[2] + "/data";
-
-    file_dialog.SetPwd(start_folder_name);
-    file_dialog.SetTitle("Select working directory");
+    // std::string start_folder_name = "/home/" + tokenized_path[2] + "/data";
+    std::string start_folder_name = "/nfs/exports/ratlv/exp";
+    
     ImVec4 clear_color = ImVec4(0.0f, 0.0f, 0.0f, 1.00f);
     ImGuiIO &io = ImGui::GetIO();
 
@@ -100,7 +97,6 @@ int main(int, char **)
     yolo_param yolo_setting = yolo_param();
     bool show_world_coordinates = false;
     std::string keypoints_root_folder;
-    bool change_keypoints_folder =false;
     int label_buffer_size = 32;
     bool show_help_window = false;
     std::vector<bool> is_view_focused;
@@ -124,7 +120,10 @@ int main(int, char **)
                 {
                     if (ImGui::MenuItem("Open"))
                     {
-                        file_dialog.Open();
+                        IGFD::FileDialogConfig config;
+                        config.countSelectionMax = 0;
+                        config.path = start_folder_name;
+		                ImGuiFileDialog::Instance()->OpenDialog("ChooseFileDlgKey", "Choose File", ".mp4", config);
                     };
                     ImGui::EndMenu();
                 }
@@ -160,6 +159,12 @@ int main(int, char **)
                                 skeleton_initialize(skeleton, element.second);
                                 plot_keypoints_flag = true;
                                 keypoints_root_folder = root_dir + "/labeled_data/";
+                                // create folders
+                                std::filesystem::create_directory(keypoints_root_folder);
+                                std::filesystem::create_directory(keypoints_root_folder + "/worldKeyPoints");
+                                for (u32 i = 0; i < scene->num_cams; i++) {
+                                    std::filesystem::create_directory(keypoints_root_folder + "/" + camera_names[i]);
+                                }
                             }
                         }
                         ImGui::EndMenu();
@@ -250,59 +255,44 @@ int main(int, char **)
         }
         ImGui::End();
 
-        file_dialog.Display();
-
-        if (file_dialog.HasSelected())
-        {
-            if (change_keypoints_folder) {
-                keypoints_root_folder = file_dialog.GetSelected().string();
-                change_keypoints_folder = false;
-            } else {
-                root_dir = file_dialog.GetSelected().string();
-
-                // load movies
-                std::string movie_dir = root_dir;
-
-                for (const auto &entry : std::filesystem::directory_iterator(movie_dir))
+        // file explorer display
+        if (ImGuiFileDialog::Instance()->Display("ChooseFileDlgKey"))
+        { // => will show a dialog
+            if (ImGuiFileDialog::Instance()->IsOk())
+            { // action if OK
+                auto selected_movies = ImGuiFileDialog::Instance()->GetSelection();
+                root_dir = ImGuiFileDialog::Instance()->GetCurrentPath();
+                for(const auto& elem : selected_movies)
                 {
-                    if (entry.path().extension()==".mp4") {
-                        input_file_names.push_back(entry.path().string());
-                    }
-                }
-
-                std::sort(input_file_names.begin(), input_file_names.end(), numerical_compare_substr);
-
-                for (u32 i = 0; i < input_file_names.size(); i++)
-                {
-                    std::map<std::string, std::string> m;
-                    FFmpegDemuxer* demuxer = new FFmpegDemuxer(input_file_names[i].c_str(), m);
-                    demuxers.push_back(demuxer);
-                }
-
-                std::map<std::string, std::string> m;
-                FFmpegDemuxer dummy_dmuxer(input_file_names[0].c_str(), m);
-                dc_context->seek_interval = (int)dummy_dmuxer.FindKeyFrameInterval(); // get the seek interval
-
-                render_allocate_scene_memory(scene, demuxers, input_file_names.size(), label_buffer_size);
-                
-                // multiple threads for decoding for selected videos                
-                for (u32 i = 0; i < scene->num_cams; i++)
-                {
-                    std::size_t cam_string_position = input_file_names[i].find("Cam");           // position of "Cam" in str
-                    std::size_t cam_string_mp4_position = input_file_names[i].find("mp4");
-                    std::size_t length_of_substr = cam_string_mp4_position - cam_string_position - 1;
-                    std::string cam_string = input_file_names[i].substr(cam_string_position, length_of_substr); // get from "Cam" to the end
+                    std::size_t cam_string_mp4_position = elem.first.find("mp4");
+                    std::string cam_string = elem.first.substr(0, cam_string_mp4_position-1); // get from "Cam" to the end
                     camera_names.push_back(cam_string);
                     std::cout << "camera names: " << cam_string << std::endl;
-                    decoder_threads.push_back(std::thread(&decoder_process, input_file_names[i].c_str(), dc_context, demuxers[i], scene->display_buffer[i], scene->size_of_buffer, &scene->seek_context[i], scene->use_cpu_buffer));
+
+                    std::map<std::string, std::string> m;
+                    FFmpegDemuxer* demuxer = new FFmpegDemuxer(elem.second.c_str(), m);
+                    demuxers.push_back(demuxer);
+                }
+                std::map<std::string, std::string> m;
+                FFmpegDemuxer dummy_dmuxer(selected_movies.begin()->second.c_str(), m);
+                dc_context->seek_interval = (int)dummy_dmuxer.FindKeyFrameInterval(); // get the seek interval
+                
+                render_allocate_scene_memory(scene, demuxers, selected_movies.size(), label_buffer_size);
+                
+                // multiple threads for decoding for selected videos
+                int i = 0;            
+                for(int i = 0; i < scene->num_cams; i++)
+                {
+                    decoder_threads.push_back(std::thread(&decoder_process, dc_context, demuxers[i], scene->display_buffer[i], scene->size_of_buffer, &scene->seek_context[i], scene->use_cpu_buffer));
                     is_view_focused.push_back(false);
                 }
-
                 video_loaded = true;
             }
-            file_dialog.ClearSelected();
+            // close
+            ImGuiFileDialog::Instance()->Close();
         }
 
+                            
         if (dc_context->decoding_flag && play_video)
         {
             for (u32 j = 0; j < scene->num_cams; j++)
@@ -473,7 +463,6 @@ int main(int, char **)
                         // gui_plot_perimeter(&camera_params[j]);
                         // gui_plot_world_coordinates(&camera_params[j], j);
                         
-
                         // labeling 
                         if (ImPlot::IsPlotHovered()) {
                             is_view_focused[j]  = true;
@@ -772,8 +761,10 @@ int main(int, char **)
                 ImGui::Text(keypoints_root_folder.c_str());
                 ImGui::SameLine();
                 if (ImGui::Button("Update keypoints folder")) {
-                    change_keypoints_folder = true;
-                    file_dialog.Open();
+                    IGFD::FileDialogConfig config;
+                    config.countSelectionMax = 1;
+                    config.path = root_dir;
+                    ImGuiFileDialog::Instance()->OpenDialog("ChooseDirDlgKey", "Choose a Directory", nullptr, config);
                 }
 
                 if (ImGui::Button("Load 2d Keypoints Only"))
@@ -793,6 +784,16 @@ int main(int, char **)
             ImGui::End();
         }
 
+        if (ImGuiFileDialog::Instance()->Display("ChooseDirDlgKey"))
+        { // => will show a dialog
+            if (ImGuiFileDialog::Instance()->IsOk())
+            { // action if OK
+                auto selected_folder = ImGuiFileDialog::Instance()->GetSelection();
+                keypoints_root_folder = ImGuiFileDialog::Instance()->GetCurrentPath();
+            }
+            // close
+            ImGuiFileDialog::Instance()->Close();
+        }
 
         if (ImGui::IsKeyPressed(ImGuiKey_H, false))
         {

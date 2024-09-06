@@ -28,13 +28,13 @@ g++ -Ofast -mssse3 -ffast-math -std=c++17 \
     release/ColorSpace.o \
     -o release/*.o \
     -Ilib/nvcodec \
-    -o release/redgui -I ./src/ src/*.cpp \
+    -o release/redgui -I ./src/ src/*.cpp lib/ImGuiFileDialog/ImGuiFileDialog.cpp \
     -I/usr/local/cuda/include \
     -I$DIR_IMPLOT \
     -I$DIR_IMGUI \
     -I$DIR_IMGUI/backends \
     -Ilib/IconFontCppHeaders \
-    -Ilib/imgui-filebrowser \
+    -Ilib/ImGuiFileDialog \
     -L/usr/local/cuda/lib64/ -lcudart -lcuda -lnvcuvid -lnppicc -lnppidei -lnvidia-encode -lnppc -lnppig -lnppial \
     -lGLEW -lGLU -lGL \
     -lpthread \
