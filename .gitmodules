@@ -10,3 +10,6 @@
 [submodule "lib/implot"]
 	path = lib/implot
 	url = https://github.com/epezent/implot.git
+[submodule "lib/ImGuiFileDialog"]
+	path = lib/ImGuiFileDialog
+	url = https://github.com/aiekick/ImGuiFileDialog.git
