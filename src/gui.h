@@ -164,25 +164,48 @@ static void reprojection(KeyPoints *keypoints, SkeletonContext *skeleton, std::v
     }
 }
 
-std::string current_date_time() {
+const std::string current_date_time() {
     time_t     now = time(0);
     struct tm  tstruct;
     char       buf[80];
     tstruct = *localtime(&now);
-    strftime(buf, sizeof(buf), "%Y-%m-%d_%X", &tstruct);
-    return buf;
+    strftime(buf, sizeof(buf), "%Y:%m:%d:%X", &tstruct);
+    
+    std::string delimiter = ":";
+
+    std::string s(buf);
+    size_t pos_start = 0, pos_end, delim_len = delimiter.length();
+    std::string token;
+    std::vector<std::string> res;
+
+    while ((pos_end = s.find(delimiter, pos_start)) != std::string::npos) {
+        token = s.substr (pos_start, pos_end - pos_start);
+        pos_start = pos_end + delim_len;
+        res.push_back (token);
+    }
+
+    res.push_back (s.substr (pos_start));
+    std::string final_string;
+
+    for (int i = 0; i < res.size(); i++) {
+        if (i!=0) {
+            final_string += "_";
+        }
+        final_string += res[i];
+    }
+    return final_string.c_str();
 }
 
 
 void save_keypoints(std::map<u32, KeyPoints*> keypoints_map, SkeletonContext* skeleton, std::string root_dir, int num_cameras, std::vector<std::string>& camera_names)
 {
     std::string now = current_date_time();
-    std::string filename = root_dir + "/worldKeyPoints/keypoints_" + now;
+    std::string filename = root_dir + "/worldKeyPoints/keypoints_" + now + ".csv";
     std::ofstream output_file(filename);
     std::vector<std::ofstream> output2d_files;
 
     for (uint i = 0; i < num_cameras; i++) {
-        std::string filename_cam = root_dir + "/" + camera_names[i] + "/" + camera_names[i] + "_" + now;
+        std::string filename_cam = root_dir + "/" + camera_names[i] + "/" + camera_names[i] + "_" + now + ".csv";
         std::ofstream output_file_cam(filename_cam);
         output2d_files.push_back(std::move(output_file_cam));
     }

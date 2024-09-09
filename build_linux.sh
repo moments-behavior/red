@@ -11,6 +11,7 @@ nvcc -c src/kernel.cu -arch=sm_80 -o release/kernel.o
 
 DIR_IMGUI="lib/imgui"
 DIR_IMPLOT="lib/implot"
+DIR_FFMPEG=$HOME/nvidia/ffmpeg/build
 
 # g++ -std=c++11 -I$DIR_IMGUI -g -Wall -Wformat `pkg-config --cflags glfw3` -c -o release/imgui.o $DIR_IMGUI/imgui.cpp
 # g++ -std=c++11 -I$DIR_IMGUI -g -Wall -Wformat `pkg-config --cflags glfw3` -c -o release/imgui_demo.o $DIR_IMGUI/imgui_demo.cpp
@@ -39,8 +40,8 @@ g++ -Ofast -mssse3 -ffast-math -std=c++17 \
     -lGLEW -lGLU -lGL \
     -lpthread \
     `pkg-config --static --libs glfw3` \
-    -I$HOME/nvidia/ffmpeg/build/include/ \
-    -L$HOME/nvidia/ffmpeg/build/lib/ -lavformat -lswscale -lswresample -lavutil -lavcodec \
+    -I$DIR_FFMPEG/include/ \
+    -L$DIR_FFMPEG/lib/ -lavformat -lswscale -lswresample -lavutil -lavcodec \
     -I/usr/local/include/opencv4 \
     -L/usr/local/lib \
     -lopencv_sfm -lopencv_core -lopencv_bgsegm -lopencv_imgcodecs -lopencv_imgproc -lopencv_video -lopencv_highgui -lopencv_videoio -lopencv_calib3d -lopencv_dnn \
