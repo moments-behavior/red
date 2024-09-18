@@ -87,7 +87,7 @@ int main(int, char **)
     std::string delimiter = "/";
     std::vector<std::string> tokenized_path = string_split (cwd, delimiter);
     // std::string start_folder_name = "/home/" + tokenized_path[2] + "/data";
-    std::string start_folder_name = "/nfs/exports/ratlv/exp";
+    std::string start_folder_name = "/nfs/exports/ratlv";
     
     ImVec4 clear_color = ImVec4(0.0f, 0.0f, 0.0f, 1.00f);
     ImGuiIO &io = ImGui::GetIO();
