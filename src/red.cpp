@@ -467,7 +467,7 @@ int main(int, char **)
                         if (ImPlot::IsPlotHovered()) {
                             is_view_focused[j]  = true;
 
-                            if (ImGui::IsKeyPressed(ImGuiKey_Z, false)) {
+                            if (ImGui::IsKeyPressed(ImGuiKey_C, false)) {
                                 // create keypoints
                                 if (!keypoints_find){
                                     // not found
@@ -511,7 +511,7 @@ int main(int, char **)
                                 }
 
                                 // delete all keypoint, memory leak here, need to handle it cleanly
-                                if (ImGui::IsKeyPressed(ImGuiKey_V, false)) 
+                                if (ImGui::IsKeyPressed(ImGuiKey_Backspace, false)) 
                                 {
                                     KeyPoints* keypoints = nullptr;
                                     keypoints_map.erase(current_frame_num);
@@ -803,23 +803,23 @@ int main(int, char **)
         if (show_help_window)
         {
             if (ImGui::Begin("Help Menu")) {            
-                ImGui::Text("Space -> Toggle play and pause");
-                ImGui::Text(", -> Previous image");
-                ImGui::Text(". -> Next image");
+                ImGui::Text("<Space>: toggle play and pause");
+                ImGui::Text("<,>: previous image");
+                ImGui::Text("<.>: next image");
 
                 ImGui::SeparatorText("While hovering image");
-                ImGui::Text("Z -> Create keypoints on frame");
-                ImGui::Text("W -> Drop active keypoint");
-                ImGui::Text("A -> Active keypoint++ ");
-                ImGui::Text("D -> Active keypoint--");
-                ImGui::Text("V -> Delete all keypoint");
-                ImGui::Text("Q -> Active keypoint set to first node");
-                ImGui::Text("E -> Active keypoint set to last node");
-                ImGui::Text("S -> Triangule");
+                ImGui::Text("<c>: create keypoints on frame");
+                ImGui::Text("<w>: drop active keypoint");
+                ImGui::Text("<a>: active keypoint++ ");
+                ImGui::Text("<d>: active keypoint--");
+                ImGui::Text("<q>: active keypoint set to first node");
+                ImGui::Text("<e>: active keypoint set to last node");
+                ImGui::Text("<s> -> triangule");
+                ImGui::Text("<Backspace>: delete all keypoints");
 
                 ImGui::SeparatorText("While hovering keypoints");
-                ImGui::Text("R -> Delete active keypoint");
-                ImGui::Text("F -> Delete active keypoint on all cameras");
+                ImGui::Text("<r>: delete active keypoint");
+                ImGui::Text("<f>: delete active keypoint on all cameras");
                 ImGui::Text("Click keypoint to active it");
             }
             ImGui::End();
