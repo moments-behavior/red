@@ -747,7 +747,7 @@ int main(int, char **)
                     }
                 }
 
-                if (ImGui::Button("Save Labeled Data"))
+                if (ImGui::Button("Save Labeled Data") || (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false)))
                 {
                     save_keypoints(keypoints_map, skeleton, keypoints_root_folder, scene->num_cams, camera_names);
                 }
@@ -776,10 +776,36 @@ int main(int, char **)
 
                 auto upper_it = keypoints_map.upper_bound(current_frame_num); 
                 if (upper_it == keypoints_map.end()) {
-                    ImGui::Text("Number of labeled frame : %d", (*upper_it).first);
-                } else {
-                    ImGui::Text("Next labeled frame : %d", (*upper_it).first);
+                    upper_it = keypoints_map.begin();
                 }
+                ImGui::Text("Next labeled frame : %d", (*upper_it).first);
+                if (ImGui::Button("Jump to Next Labeled Frame") || ImGui::IsKeyPressed(ImGuiKey_RightArrow, false)) {
+                    for (int i = 0; i < scene->num_cams; i++)
+                    {
+                        scene->seek_context[i].seek_frame = (uint64_t)(*upper_it).first;
+                        scene->seek_context[i].use_seek = true;
+                        scene->seek_context[i].seek_accurate = true;
+                    }
+
+                    for (int i = 0; i < scene->num_cams; i++)
+                    {
+                        while (!(scene->seek_context[i].seek_done))
+                        {
+                            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                        }
+                    }
+
+                    for (int i = 0; i < scene->num_cams; i++)
+                    {
+                        scene->seek_context[i].seek_done = false;
+                    }
+                    to_display_frame_number = scene->seek_context[0].seek_frame;
+                    read_head = 0;
+                    just_seeked = true;
+                    pause_selected = 0;
+                    slider_frame_number = to_display_frame_number;
+                }
+                ImGui::Text("Total labeled frames : %d", keypoints_map.size());
             }
             ImGui::End();
         }
@@ -816,6 +842,8 @@ int main(int, char **)
                 ImGui::Text("<e>: active keypoint set to last node");
                 ImGui::Text("<s> -> triangule");
                 ImGui::Text("<Backspace>: delete all keypoints");
+                ImGui::Text("<Right Arrow>: next labeled frame");
+                ImGui::Text("CTRL-S: save labels");
 
                 ImGui::SeparatorText("While hovering keypoints");
                 ImGui::Text("<r>: delete active keypoint");
