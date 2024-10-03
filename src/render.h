@@ -26,7 +26,7 @@ struct render_scene
 
 void render_initialize_target(gx_context *context)
 {
-    GLFWwindow *render_target = gx_glfw_init_render_target(3, 3, context->width, context->height, "RED Labeling Tool", context->glsl_version);
+    GLFWwindow *render_target = gx_glfw_init_render_target(3, 3, context->width, context->height, "Red", context->glsl_version);
     gx_init(context, render_target);
     gx_imgui_init(context);
 }
