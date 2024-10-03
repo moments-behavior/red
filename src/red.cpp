@@ -97,7 +97,7 @@ int main(int, char **)
     yolo_param yolo_setting = yolo_param();
     bool show_world_coordinates = false;
     std::string keypoints_root_folder;
-    int label_buffer_size = 32;
+    int label_buffer_size = 64;
     bool show_help_window = false;
     std::vector<bool> is_view_focused;
 
