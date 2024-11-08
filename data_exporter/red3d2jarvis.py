@@ -19,7 +19,6 @@ skeleton = args.skeleton
 output_folder = args.output_folder
 _, _, num_keypoints = skeleton_selector[skeleton]()
 
-# cameras = ['Cam2002480', 'Cam2002483', 'Cam2002485', 'Cam2002492', 'Cam710038']
 cameras = get_all_cams_in_labeled_folder(label_folder)
 
 # Save annotations
@@ -27,28 +26,20 @@ world_point_folder = label_folder + "/worldKeyPoints"
 all_files = glob.glob(world_point_folder + "/*")
 all_files.sort()
 select_most_recent_labels = all_files[-1]
-print(select_most_recent_labels)
+print("Select most recent label: {}".foramt(select_most_recent_labels))
 
 selected_annotation = select_most_recent_labels.split("/")[-1][10:]
 selected_annotation = selected_annotation.split(".")[0]
 world_labels = csv_reader_rats(select_most_recent_labels, num_keypoints, True) 
 
-## need to filter out the invalid lables
-# world_labels_filterd = {}
-# for name, value in world_labels.items():
-#     if not np.any(value==1E7):
-#         world_labels_filterd[name] = value
-
-frame_range = list(np.arange(9266, 9478)) + list(np.arange(12410, 12562))
+# filter out invalid lables
 world_labels_filterd = {}
-for frame in frame_range:
-    if frame in world_labels.keys():
-        if not np.any(world_labels[frame]==1E7):
-            world_labels_filterd[frame] = world_labels[frame]
+for name, value in world_labels.items():
+    if not np.any(value==1E7):
+        world_labels_filterd[name] = value
 
 labels_frames = np.asarray(list(world_labels_filterd.keys()))
 total_num_labels = len(labels_frames)
-
 
 id_shuffled = np.arange(total_num_labels)
 np.random.shuffle(id_shuffled)
