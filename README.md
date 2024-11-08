@@ -8,7 +8,7 @@ Contact [Jinyao Yan](yanj11@janelia.hhmi.org) if you have questions about the so
 ## Features
 1. Real-time GPU accelerated decoding (h264, h265)
 2. Synchronized decoding
-3. Multi-view keypoint labeling and triangulation  
+3. Multi-view keypoints labeling and triangulation  
 
 ## Dependencies
 1. NVIDIA Video Codec SDK
@@ -116,11 +116,11 @@ Once built, it will make a folder called `release`. The executable `redgui` is t
 ./run.sh
 ```
 
-
-## Use the Application
+## Use the App
 A video demo is coming...
 
-
+## Format data for Deep Learning
+Currently we are saving labeled keypoints simply as a plain csv file. We provide python scripts for formating data as [COCO format](https://docs.aws.amazon.com/rekognition/latest/customlabels-dg/md-coco-overview.html), which is used by [Jarvis](https://github.com/JARVIS-MoCap/JARVIS-HybridNet). Please refer to utils.
 
 ## Contribute
 
