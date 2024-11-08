@@ -166,17 +166,31 @@ def multiprocess_save_jpegs(input_args):
     print("Saving jpeg for {} ...".format(cam_name))
     file_dir =  trial_name + "/{}/".format(cam_name)
 
-    for frame_num in all_image_frames:
-        ## each frame
-        video_file = os.path.join(video_folder_name, "{}.mp4".format(cam_name))
-        cap = cv.VideoCapture(video_file)
-        cap.set(1, frame_num); 
+    print(all_image_frames)
+    # exit()    
+    
+    video_file = os.path.join(video_folder_name, "{}.mp4".format(cam_name))
+    cap = cv.VideoCapture(video_file)
+    cap.set(cv.CAP_PROP_POS_FRAMES, all_image_frames[0]-1); 
+
+    start_frame = np.min(all_image_frames)-1
+    end_frame = np.max(all_image_frames)
+
+    frame_num = start_frame    
+    
+    while (frame_num >= start_frame and frame_num <= end_frame):
         ret, frame = cap.read() # frame shape (2200, 3208, 3)    
         if ret == False:
             print("Missing fame: {}".format(frame_num))
+
+        else:
             
-        dir_name = os.path.join(save_folder, "{}/".format(set_mode), file_dir)
-        os.makedirs(dir_name, exist_ok=True)   
-        
-        frame_name = dir_name + "Frame_" + str(int(frame_num)) + '.jpg'
-        cv.imwrite(frame_name, frame)
+            frame_num = frame_num + 1
+            
+            if frame_num in all_image_frames:            
+                dir_name = os.path.join(save_folder, "{}/".format(set_mode), file_dir)
+                os.makedirs(dir_name, exist_ok=True)   
+                
+                frame_filename = dir_name + "Frame_" + str(int(frame_num)) + '.jpg'
+                # print(f"saving {frame_num} for {cam_name} in {set_mode}")
+                cv.imwrite(frame_filename, frame)

@@ -116,11 +116,14 @@ video_folder = "/".join(label_folder.split("/")[:-1])
 train_jobs = []
 for camera in cameras:
     train_jobs.append([trial_name, camera, video_folder, output_folder, 'train', train_image_frames])
+print(train_image_frames)
 
 valid_jobs = []
 for camera in cameras:
     valid_jobs.append([trial_name, camera, video_folder, output_folder, 'val', val_image_frames])
+print(val_image_frames)
 
+# exit()
 
 num_jobs = len(valid_jobs)
 with Pool(num_jobs) as p:
