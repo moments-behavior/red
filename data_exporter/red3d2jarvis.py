@@ -26,7 +26,7 @@ world_point_folder = label_folder + "/worldKeyPoints"
 all_files = glob.glob(world_point_folder + "/*")
 all_files.sort()
 select_most_recent_labels = all_files[-1]
-print("Select most recent label: {}".foramt(select_most_recent_labels))
+print("Select most recent label: {}".format(select_most_recent_labels))
 
 selected_annotation = select_most_recent_labels.split("/")[-1][10:]
 selected_annotation = selected_annotation.split(".")[0]
