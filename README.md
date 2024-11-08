@@ -9,6 +9,7 @@ Contact [Jinyao Yan](yanj11@janelia.hhmi.org) if you have questions about the so
 1. Real-time GPU accelerated decoding (h264, h265)
 2. Synchronized decoding
 3. Multi-view keypoints labeling and triangulation  
+4. YOLOv5 (OpenCV cuDNN ONNX model) and YOLOv8 (TensoRT) inference  
 
 ## Dependencies
 1. NVIDIA Video Codec SDK
