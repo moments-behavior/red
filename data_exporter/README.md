@@ -4,6 +4,7 @@ Create conda python virtual environment
 
 ```
 conda create -n red_exporter python=3.9
+conda activate red_exporter
 conda install numpy
 conda install -c menpo opencv
 ```
