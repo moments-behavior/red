@@ -1,27 +1,34 @@
 # Red Labeling App
-3D labeling tool for multiple cameras
+3D labeling tool for multiple cameras in C++
 
-# Building 
-## Build opencv with dnn support 
-1. Download and upzip `opencv-4.6.0.zip` and `opencv_contrib-4.6.0.zip`.
+Contact [Jinyao Yan](yanj11@janelia.hhmi.org) if you have questions about the software 
 
-2. Install Ceres Solver with instruction from https://docs.opencv.org/4.x/db/db8/tutorial_sfm_installation.html
+![gui](images/gui.png)
 
-If you want to build with opencv sfm, please follow instruction from: https://docs.opencv.org/4.x/db/db8/tutorial_sfm_installation.html. 
+## Features
+1. Real-time GPU accelerated decoding (h264, h265)
+2. Synchronized decoding
+3. Multi-view keypoint labeling and triangulation  
 
-Ceres is optional, but if you want to enable the solver, make sure you are building with Ceres 1.14.x:  https://ceres-solver.googlesource.com/ceres-solver/+/refs/heads/1.14.x, by 
+## Dependencies
+1. NVIDIA Video Codec SDK
+1. CUDA Toolkit and cuDNN
+2. FFmpeg 
+3. OpenCV
+4. TensorRT
+5. OpenGL
+
+## Build instructions 
+
+### Install OpenCV
+- download and upzip `opencv-4.8.0.zip` and `opencv_contrib-4.8.0.zip`. Unzip the folders to `~/build/`, for instance. 
+
+- to build OpenCV with opencv sfm, please follow instructions from: https://docs.opencv.org/4.x/db/db8/tutorial_sfm_installation.html first to install sfm dependency. Ceres solver is optional. If you wish to install ceres solver, a more detailed installation instruction can be found at: http://ceres-solver.org/installation.html#linux. At the time of test, one need to set CMake flag USE_CUDA=OFF for ceres.  
+
+- build OpenCV using 
 
 ```
-git checkout facb199f3eda902360f9e1d5271372b7e54febe1
-```
-otherwise you will have build issue, and have to turn off Ceres. 
-
-3. Install cudnn follow instruction from cudnn website. The version I am currently using is `cudnn-linux-x86_64-8.7.0.84_cuda11-archive/`. 
-
-4. Build opencv using 
-
-```
-cd opencv-4.6.0/ 
+cd opencv-4.8.0/ 
 mkdir build
 cd build 
 ```
@@ -45,7 +52,7 @@ cmake -D CMAKE_BUILD_TYPE=RELEASE \
 -D OPENCV_GENERATE_PKGCONFIG=ON \
 -D OPENCV_PC_FILE_NAME=opencv.pc \
 -D OPENCV_ENABLE_NONFREE=ON \
--D OPENCV_EXTRA_MODULES_PATH=~/Build/opencv_contrib-4.6.0/modules \
+-D OPENCV_EXTRA_MODULES_PATH=~/build/opencv_contrib-4.8.0/modules \
 -D INSTALL_PYTHON_EXAMPLES=OFF \
 -D INSTALL_C_EXAMPLES=ON \
 -D BUILD_EXAMPLES=ON ..
@@ -55,3 +62,66 @@ cmake -D CMAKE_BUILD_TYPE=RELEASE \
 make -j8 
 sudo make install
 ```
+
+### Install cuDNN (depends on CUDA installation)
+- download the cudnn install files (we use `cudnn 8.9.3` with `driver 525.105.17` and `cuda 12` )
+- you may run the commands below for the exact version or download a TAR file for Linux_x86_64 from the [cudnn version archives](https://developer.nvidia.com/rdp/cudnn-archive)
+    ```
+    cd /home/$USER/setup_files
+    wget https://developer.nvidia.com/downloads/compute/cudnn/secure/8.9.3/local_installers/12.x/cudnn-linux-x86_64-8.9.3.28_cuda12-archive.tar.xz/
+- extract the file
+  ```
+  tar -xvf cudnn-linux-x86_64-8.x.x.x_cudaX.Y-archive.tar.xz
+  ```
+- copy cudnn files to where your `cuda` is installed -- we assume it is installed at `/usr/local/cuda` 
+  ```
+  cd <to where files where extracted above>
+  sudo cp cudnn-*-archive/include/cudnn*.h /usr/local/cuda/include 
+  sudo cp -P cudnn-*-archive/lib/libcudnn* /usr/local/cuda/lib64 
+  sudo chmod a+r /usr/local/cuda/include/cudnn*.h /usr/local/cuda/lib64/libcudnn*
+  ```
+- verify installation and cudnn version
+  ```
+  source ~/.bashrc
+  cat /usr/local/cuda/include/cudnn_version.h | grep CUDNN_MAJOR -A 2
+  ```
+  you can expect an output like:
+  ```
+  #define CUDNN_MAJOR 8
+  #define CUDNN_MINOR 9
+  #define CUDNN_PATCHLEVEL 3
+  --
+  #define CUDNN_VERSION (CUDNN_MAJOR * 1000 + CUDNN_MINOR * 100 + CUDNN_PATCHLEVEL)
+  ```
+
+### Install RED 
+
+- Clone the repo and submodules
+
+```
+git clone https://github.com/JohnsonLabJanelia/orange.git
+git submodule init
+git submodule update
+```
+
+If you are building the project for the first time, uncomment [`line 16 ~ line 26`](https://github.com/JohnsonLabJanelia/red/blob/0829b09d20b0dbccb0ea6df7a20e5ee4e23f635f/build_linux.sh#L16) for building `ImGui` and `ImPlot` object files. Run
+```
+./build.sh
+```
+Comment out Line 16 ~ line 26 to reduce compiling time afterwards. 
+
+Once built, it will make a folder called `release`. The executable `redgui` is the application. Start the program using the run script. 
+
+```
+./run.sh
+```
+
+
+## Use the Application
+A video demo is coming...
+
+
+
+## Contribute
+
+Please open an issue for bug fix or feature request. If you wish to make changes to the source code, you can fork the repo. To contribute to the project, please create a [pull request](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/creating-a-pull-request).

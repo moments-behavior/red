@@ -44,7 +44,8 @@ enum SkeletonPrimitive {
     Rat22,
     Rat20,
     Rat24,
-    Rat20Target
+    Rat20Target,
+    Rat24Target
 };
 
 std::map<std::string, SkeletonPrimitive> skeleton_get_all()
@@ -66,7 +67,8 @@ std::map<std::string, SkeletonPrimitive> skeleton_get_all()
         {"Rat22", Rat22},
         {"Rat20", Rat20},
         {"Rat24", Rat24},
-        {"Rat20Target", Rat20Target}
+        {"Rat20Target", Rat20Target},
+        {"Rat24Target", Rat24Target}
     };
     return skeleton_all;
 }
@@ -423,6 +425,49 @@ void skeleton_initialize(SkeletonContext* skeleton, SkeletonPrimitive skeleton_t
                 {4, 17},
                 {17, 18},
                 {18, 19}};
+            break;
+
+        case Rat24Target:
+            skeleton->num_nodes = 25;
+            skeleton->num_edges = 24;
+            skeleton->node_names = {"Snout", "EarL", "EarR", "Neck", "SpineL", "TailBase",
+                                    "ShoulderL", "ElbowL", "WristL", "HandL",
+                                    "ShoulderR", "ElbowR", "WristR", "HandR",
+                                    "KneeL", "AnkleL", "FootL",
+                                    "KneeR", "AnkleR", "FootR",
+                                    "TailTip", "TailMid", "Tail1Q", "Tail3Q", "Target"};
+
+            for (int i = 0; i < skeleton->num_nodes; i++) {
+                ImVec4 color = (ImVec4)ImColor::HSV(i / (float)skeleton->num_nodes, 1.0f, 1.0f);
+                skeleton->node_colors.push_back({color.x, color.y, color.z});
+            }
+
+            skeleton->edges ={
+                {0, 1},
+                {0, 2},
+                {1, 3},
+                {2, 3},
+                {3, 4},
+                {4, 5},
+                {3, 6},
+                {6, 7},
+                {7, 8},
+                {8, 9},
+                {3, 10},
+                {10, 11},
+                {11, 12},
+                {12, 13},
+                {4, 14},
+                {14, 15},
+                {15, 16},
+                {4, 17},
+                {17, 18},
+                {18, 19},
+                {5, 22},
+                {22, 21},
+                {21, 23},
+                {23, 20}
+                };
             break;
 
         case Rat22:
