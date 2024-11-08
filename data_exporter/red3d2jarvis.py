@@ -53,7 +53,6 @@ val_ids = np.sort(val_ids)
 train_image_frames = labels_frames[train_ids]
 val_image_frames = labels_frames[val_ids]
 
-dataset_name = label_folder.split("/")[-2]
 trial_name = selected_annotation
 
 ## 
@@ -71,9 +70,7 @@ set_of_frames = {
 annotation_json_val = geneate_annotation_file(trial_name, skeleton, cameras, annotations, images, set_of_frames)
 
 
-save_root = os.path.join(output_folder, dataset_name)
-
-annotation_path = os.path.join(save_root, "annotations/") 
+annotation_path = os.path.join(output_folder, "annotations/") 
 os.makedirs(annotation_path, exist_ok=True)   
 
 with open(annotation_path + "instances_train.json", 'w') as f:
@@ -82,13 +79,13 @@ with open(annotation_path + "instances_train.json", 'w') as f:
 with open(annotation_path + "instances_val.json", 'w') as f:
     json.dump(annotation_json_val, f)
 
-print("Prepared dataset at {}.".format(save_root))
+print("Prepared dataset at {}.".format(output_folder))
 
 
 ## save calibration
 calibration_folder = os.path.join("/".join(label_folder.split("/")[:-1]), "calibration")
 
-save_calib_folder = os.path.join(save_root, "calib_params", trial_name)
+save_calib_folder = os.path.join(output_folder, "calib_params", trial_name)
 os.makedirs(save_calib_folder, exist_ok=True)
 
 for cam in cameras:
@@ -118,11 +115,11 @@ video_folder = "/".join(label_folder.split("/")[:-1])
 
 train_jobs = []
 for camera in cameras:
-    train_jobs.append([trial_name, camera, video_folder, save_root, 'train', train_image_frames])
+    train_jobs.append([trial_name, camera, video_folder, output_folder, 'train', train_image_frames])
 
 valid_jobs = []
 for camera in cameras:
-    valid_jobs.append([trial_name, camera, video_folder, save_root, 'val', val_image_frames])
+    valid_jobs.append([trial_name, camera, video_folder, output_folder, 'val', val_image_frames])
 
 
 num_jobs = len(valid_jobs)
