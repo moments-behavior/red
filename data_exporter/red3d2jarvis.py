@@ -26,7 +26,7 @@ world_point_folder = label_folder + "/worldKeyPoints"
 all_files = glob.glob(world_point_folder + "/*")
 all_files.sort()
 select_most_recent_labels = all_files[-1]
-print("Select most recent label: {}".foramt(select_most_recent_labels))
+print("Select most recent label: {}".format(select_most_recent_labels))
 
 selected_annotation = select_most_recent_labels.split("/")[-1][10:]
 selected_annotation = selected_annotation.split(".")[0]
@@ -116,11 +116,14 @@ video_folder = "/".join(label_folder.split("/")[:-1])
 train_jobs = []
 for camera in cameras:
     train_jobs.append([trial_name, camera, video_folder, output_folder, 'train', train_image_frames])
+print(train_image_frames)
 
 valid_jobs = []
 for camera in cameras:
     valid_jobs.append([trial_name, camera, video_folder, output_folder, 'val', val_image_frames])
+print(val_image_frames)
 
+# exit()
 
 num_jobs = len(valid_jobs)
 with Pool(num_jobs) as p:
