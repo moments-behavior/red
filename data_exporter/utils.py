@@ -194,3 +194,26 @@ def multiprocess_save_jpegs(input_args):
                 frame_filename = dir_name + "Frame_" + str(int(frame_num)) + '.jpg'
                 # print(f"saving {frame_num} for {cam_name} in {set_mode}")
                 cv.imwrite(frame_filename, frame)
+
+
+def load_jarvis_3d_csv_rats(file_name, num_keypoints):
+    labels = {}
+    with open(file_name) as csv_file:
+        csv_reader = csv.reader(csv_file, delimiter=',')
+        line_count = 0
+        for row in csv_reader:
+            if line_count not in [0, 1]:
+                if 'NaN' not in row:        
+                    keypoints = [float(x) for x in row]
+                    keypoints = np.asarray(keypoints)
+                    keypoints = keypoints.reshape([num_keypoints, 4])                                        
+                    labels[line_count-2] = keypoints
+            line_count += 1
+    return labels
+
+
+def Project(points, intrinsic, distortion, rotation_matrix, tvec):
+    result = []
+    if len(points) > 0:
+        result, _ = cv.projectPoints(points.astype(float), rotation_matrix, tvec, intrinsic, distortion)
+    return np.squeeze(result, axis=1)
