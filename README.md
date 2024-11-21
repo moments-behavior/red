@@ -23,10 +23,7 @@ Contact [Jinyao Yan](yanj11@janelia.hhmi.org) if you have questions about the so
 
 ### Install cuDNN (depends on CUDA installation)
 - download the cudnn install files (we use `cudnn 8.9.3` with `driver 525.105.17` and `cuda 12` )
-- you may run the commands below for the exact version or download a TAR file for Linux_x86_64 from the [cudnn version archives](https://developer.nvidia.com/rdp/cudnn-archive)
-    ```
-    cd /home/$USER/setup_files
-    wget https://developer.nvidia.com/downloads/compute/cudnn/secure/8.9.3/local_installers/12.x/cudnn-linux-x86_64-8.9.3.28_cuda12-archive.tar.xz/
+- you may run the commands below for the exact version or download a TAR file for `cudnn-linux-x86_64-8.9.3.28_cuda12-archive.tar.xz` from the [cudnn version archives](https://developer.nvidia.com/rdp/cudnn-archive)
 - extract the file
   ```
   tar -xvf cudnn-linux-x86_64-8.x.x.x_cudaX.Y-archive.tar.xz
