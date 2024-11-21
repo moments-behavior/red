@@ -21,6 +21,37 @@ Contact [Jinyao Yan](yanj11@janelia.hhmi.org) if you have questions about the so
 
 ## Build instructions 
 
+### Install cuDNN (depends on CUDA installation)
+- download the cudnn install files (we use `cudnn 8.9.3` with `driver 525.105.17` and `cuda 12` )
+- you may run the commands below for the exact version or download a TAR file for Linux_x86_64 from the [cudnn version archives](https://developer.nvidia.com/rdp/cudnn-archive)
+    ```
+    cd /home/$USER/setup_files
+    wget https://developer.nvidia.com/downloads/compute/cudnn/secure/8.9.3/local_installers/12.x/cudnn-linux-x86_64-8.9.3.28_cuda12-archive.tar.xz/
+- extract the file
+  ```
+  tar -xvf cudnn-linux-x86_64-8.x.x.x_cudaX.Y-archive.tar.xz
+  ```
+- copy cudnn files to where your `cuda` is installed -- we assume it is installed at `/usr/local/cuda` 
+  ```
+  cd <to where files where extracted above>
+  sudo cp cudnn-*-archive/include/cudnn*.h /usr/local/cuda/include 
+  sudo cp -P cudnn-*-archive/lib/libcudnn* /usr/local/cuda/lib64 
+  sudo chmod a+r /usr/local/cuda/include/cudnn*.h /usr/local/cuda/lib64/libcudnn*
+  ```
+- verify installation and cudnn version
+  ```
+  source ~/.bashrc
+  cat /usr/local/cuda/include/cudnn_version.h | grep CUDNN_MAJOR -A 2
+  ```
+  you can expect an output like:
+  ```
+  #define CUDNN_MAJOR 8
+  #define CUDNN_MINOR 9
+  #define CUDNN_PATCHLEVEL 3
+  --
+  #define CUDNN_VERSION (CUDNN_MAJOR * 1000 + CUDNN_MINOR * 100 + CUDNN_PATCHLEVEL)
+  ```
+
 ### Install OpenCV
 - download and upzip `opencv-4.8.0.zip` and `opencv_contrib-4.8.0.zip`. Unzip the folders to `~/build/`, for instance. 
 
@@ -63,37 +94,6 @@ cmake -D CMAKE_BUILD_TYPE=RELEASE \
 make -j8 
 sudo make install
 ```
-
-### Install cuDNN (depends on CUDA installation)
-- download the cudnn install files (we use `cudnn 8.9.3` with `driver 525.105.17` and `cuda 12` )
-- you may run the commands below for the exact version or download a TAR file for Linux_x86_64 from the [cudnn version archives](https://developer.nvidia.com/rdp/cudnn-archive)
-    ```
-    cd /home/$USER/setup_files
-    wget https://developer.nvidia.com/downloads/compute/cudnn/secure/8.9.3/local_installers/12.x/cudnn-linux-x86_64-8.9.3.28_cuda12-archive.tar.xz/
-- extract the file
-  ```
-  tar -xvf cudnn-linux-x86_64-8.x.x.x_cudaX.Y-archive.tar.xz
-  ```
-- copy cudnn files to where your `cuda` is installed -- we assume it is installed at `/usr/local/cuda` 
-  ```
-  cd <to where files where extracted above>
-  sudo cp cudnn-*-archive/include/cudnn*.h /usr/local/cuda/include 
-  sudo cp -P cudnn-*-archive/lib/libcudnn* /usr/local/cuda/lib64 
-  sudo chmod a+r /usr/local/cuda/include/cudnn*.h /usr/local/cuda/lib64/libcudnn*
-  ```
-- verify installation and cudnn version
-  ```
-  source ~/.bashrc
-  cat /usr/local/cuda/include/cudnn_version.h | grep CUDNN_MAJOR -A 2
-  ```
-  you can expect an output like:
-  ```
-  #define CUDNN_MAJOR 8
-  #define CUDNN_MINOR 9
-  #define CUDNN_PATCHLEVEL 3
-  --
-  #define CUDNN_VERSION (CUDNN_MAJOR * 1000 + CUDNN_MINOR * 100 + CUDNN_PATCHLEVEL)
-  ```
 
 ### Install RED 
 
