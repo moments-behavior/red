@@ -215,7 +215,8 @@ void YOLOv8_pose::preprocess_gpu(unsigned char* d_rgb)
     this->pparam.height = height;
     this->pparam.width  = width;
 
-    this->context->setInputShape(0, nvinfer1::Dims{4, {1, 3, inp_w_int, inp_w_int}});
+    const char* name  = this->engine->getIOTensorName(0);
+    this->context->setInputShape(name, nvinfer1::Dims{4, {1, 3, inp_w_int, inp_w_int}});
     CHECK(cudaMemcpyAsync(this->device_ptrs[0], d_planar, inp_w_int*inp_w_int*sizeof(float3), cudaMemcpyDeviceToDevice, this->stream));
 }
 
@@ -268,7 +269,8 @@ void YOLOv8_pose::copy_from_Mat(const cv::Mat& image)
     cv::Size size{width, height};
     this->letterbox(image, nchw, size);
 
-    this->context->setInputShape(0, nvinfer1::Dims{4, {1, 3, height, width}});
+    const char* name  = this->engine->getIOTensorName(0);
+    this->context->setInputShape(name, nvinfer1::Dims{4, {1, 3, height, width}});
 
     CHECK(cudaMemcpyAsync(
         this->device_ptrs[0], nchw.ptr<float>(), nchw.total() * nchw.elemSize(), cudaMemcpyHostToDevice, this->stream));
@@ -278,13 +280,21 @@ void YOLOv8_pose::copy_from_Mat(const cv::Mat& image, cv::Size& size)
 {
     cv::Mat nchw;
     this->letterbox(image, nchw, size);
-    this->context->setInputShape(0, nvinfer1::Dims{4, {1, 3, size.height, size.width}});
+    
+    const char* name  = this->engine->getIOTensorName(0);
+    this->context->setInputShape(name, nvinfer1::Dims{4, {1, 3, size.height, size.width}});
     CHECK(cudaMemcpyAsync(
         this->device_ptrs[0], nchw.ptr<float>(), nchw.total() * nchw.elemSize(), cudaMemcpyHostToDevice, this->stream));
 }
  
 void YOLOv8_pose::infer()
 {
+
+    for (int32_t i = 0, e = this->engine->getNbIOTensors(); i < e; i++)
+    {
+        auto const name = this->engine->getIOTensorName(i);
+        this->context->setTensorAddress(name, this->device_ptrs[i]);
+    }
 
     this->context->enqueueV3(this->stream);
     for (int i = 0; i < this->num_outputs; i++) {
