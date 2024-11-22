@@ -14,7 +14,7 @@ using namespace pose;
 class YOLOv8_pose
 {
 public:
-    explicit YOLOv8_pose(const std::string &engine_file_path);
+    explicit YOLOv8_pose(const std::string &engine_file_path, int width, int height);
 
     ~YOLOv8_pose();
 
@@ -51,6 +51,12 @@ private:
     unsigned char *d_boarder;
     float *d_float;
     float *d_planar;
+    int img_width;
+    int img_height;
+    int padw;
+    int padh;
+    int inp_h_int;
+    int inp_w_int;
 
     nvinfer1::ICudaEngine *engine = nullptr;
     nvinfer1::IRuntime *runtime = nullptr;
