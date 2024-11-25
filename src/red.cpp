@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <chrono>
+#include <ctime>
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
@@ -69,7 +70,9 @@ int main(int, char **)
     SkeletonContext *skeleton;
     std::map<u32, Animals*> keypoints_map;
     bool keypoints_find = false;
+    bool allow_exit = true;
     std::map<std::string, SkeletonPrimitive> skeleton_map;
+    std::time_t last_saved = time(NULL);
     
     // others
     ImGui::FileBrowser file_dialog(ImGuiFileBrowserFlags_SelectDirectory);
@@ -98,8 +101,7 @@ int main(int, char **)
     ImVec4* colors                  = style.Colors;
     colors[ImPlotCol_Crosshairs]    = ImVec4(0.3f, 0.10f, 0.64f, 1.00f);
 
-    while (!glfwWindowShouldClose(window->render_target))
-    {
+    while (!glfwWindowShouldClose(window->render_target) || !allow_exit) {
         // Poll and handle events (inputs, window resize, etc.)
         glfwPollEvents();
 
@@ -108,9 +110,32 @@ int main(int, char **)
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
 
+        if (glfwWindowShouldClose(window->render_target)) {
+            ImGui::OpenPopup("Warning");
+        }
+        if (ImGui::BeginPopupModal("Warning")) {
+            ImGui::Text("You have unsaved changes");
+            if (ImGui::Button("Cancel")) {
+                glfwSetWindowShouldClose(window->render_target, GLFW_FALSE);
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Close without saving")) {
+                allow_exit = true;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Save before closing")) {
+                save_keypoints(keypoints_map, skeleton, keypoints_root_folder, scene->num_cams, camera_names, number_of_animals);
+                allow_exit = true;
+                last_saved = time(NULL);
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+        
         if (ImGui::Begin("File Browser", NULL, ImGuiWindowFlags_MenuBar))
         {
-
             if (ImGui::BeginMenuBar())
             {
                 if (ImGui::BeginMenu("File"))
@@ -420,6 +445,7 @@ int main(int, char **)
                                     Animals* animals = (Animals *)malloc(sizeof(Animals));
                                     allocate_keypoints(animals, scene, skeleton, number_of_animals);
                                     keypoints_map[current_frame_num] = animals; 
+                                    allow_exit = false;
                                 }
                             }
 
@@ -438,6 +464,7 @@ int main(int, char **)
                                         frame_keypoints->keypoints2d[j][*kp].is_triangulated = false;
                                         if(*kp < (skeleton->num_nodes - 1)) {(*kp)++;}
                                         frame_keypoints->has_labels = true;
+                                        allow_exit = false;
                                     }
 
                                     if (ImGui::IsKeyPressed(ImGuiKey_A, true))
@@ -482,6 +509,7 @@ int main(int, char **)
                                             frame_keypoints->bbox2d[j].state = RectOnePoint;
                                             frame_keypoints->has_labels = true;
                                         }
+                                        allow_exit = false;
                                     }
                                 }
 
@@ -490,11 +518,13 @@ int main(int, char **)
                                     delete_all_labels(current_frame_data, scene, skeleton, number_of_animals);
                                     keypoints_map.erase(current_frame_num);
                                     keypoints_find = false;
+                                    allow_exit = false;
                                 }
 
                                 if (ImGui::IsKeyPressed(ImGuiKey_Backspace, false)) 
                                 {
                                     reinitalize_keypoint_active_animal(current_frame_data, scene, skeleton);
+                                    allow_exit = false;
                                 }
                                 
                             }  
@@ -508,7 +538,7 @@ int main(int, char **)
                             if(skeleton->has_skeleton) {
                                 for (u32 animal_id=0; animal_id < number_of_animals; animal_id++) {
                                     KeyPoints* frame_keypoints = &current_frame_data->keypoints[animal_id];
-                                    gui_plot_keypoints(frame_keypoints, skeleton, j, animal_id, scene->num_cams, current_frame_data->active_id == animal_id);
+                                    gui_plot_keypoints(frame_keypoints, skeleton, j, animal_id, scene->num_cams, current_frame_data->active_id == animal_id, allow_exit);
                                 }
                             }
 
@@ -742,10 +772,13 @@ int main(int, char **)
             if (ImGui::Begin("Labeling Tool"))
             {
 
-                if (ImGui::Button("Save Labeled Data") || (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false)))
-                {
+                if (ImGui::Button("Save Labeled Data") || (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false))) {
                     save_keypoints(keypoints_map, skeleton, keypoints_root_folder, scene->num_cams, camera_names, number_of_animals);
+                    allow_exit = true;
+                    last_saved = time(NULL);
                 }
+                ImGui::SameLine();
+                ImGui::Text("Last saved: %s", ctime(&last_saved));
 
                 // if (ImGui::Button("Load Labeled Data"))
                 // {
@@ -773,23 +806,17 @@ int main(int, char **)
                 }
                 ImGui::Text("Next labeled frame : %d", (*upper_it).first);
                 if (ImGui::Button("Jump to Next Labeled Frame") || ImGui::IsKeyPressed(ImGuiKey_RightArrow, false)) {
-                    for (int i = 0; i < scene->num_cams; i++)
-                    {
+                    for (int i = 0; i < scene->num_cams; i++) {
                         scene->seek_context[i].seek_frame = (uint64_t)(*upper_it).first;
                         scene->seek_context[i].use_seek = true;
                         scene->seek_context[i].seek_accurate = true;
                     }
-
-                    for (int i = 0; i < scene->num_cams; i++)
-                    {
-                        while (!(scene->seek_context[i].seek_done))
-                        {
+                    for (int i = 0; i < scene->num_cams; i++) {
+                        while (!(scene->seek_context[i].seek_done)) {
                             std::this_thread::sleep_for(std::chrono::milliseconds(1));
                         }
                     }
-
-                    for (int i = 0; i < scene->num_cams; i++)
-                    {
+                    for (int i = 0; i < scene->num_cams; i++) {
                         scene->seek_context[i].seek_done = false;
                     }
                     to_display_frame_number = scene->seek_context[0].seek_frame;
@@ -883,6 +910,7 @@ int main(int, char **)
                 slider_frame_number = to_display_frame_number;
             }
         }
+
     }
 
     // Cleanup
