@@ -60,14 +60,14 @@ annotations, images, frame_set_one = process_one_session(trial_name, label_folde
 set_of_frames = {
     trial_name: frame_set_one
 }
-annotation_json_train = geneate_annotation_file(trial_name, skeleton, cameras, annotations, images, set_of_frames)
+annotation_json_train = generate_annotation_file(trial_name, skeleton, cameras, annotations, images, set_of_frames)
 
 
 annotations, images, frame_set_one = process_one_session(trial_name, label_folder, num_keypoints, selected_annotation, val_image_frames, cameras)
 set_of_frames = {
     trial_name: frame_set_one
 }
-annotation_json_val = geneate_annotation_file(trial_name, skeleton, cameras, annotations, images, set_of_frames)
+annotation_json_val = generate_annotation_file(trial_name, skeleton, cameras, annotations, images, set_of_frames)
 
 
 annotation_path = os.path.join(output_folder, "annotations/") 

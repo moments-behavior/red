@@ -137,7 +137,7 @@ def generate_framesets(dataset_name, set_of_frames, framesets):
             entry_name = trial_name + "/Frame_{}".format(frame_num)            
             framesets[entry_name] = one_frameset_entry
 
-def geneate_annotation_file(trial_name, skeleton_name, cameras, annotations, images, set_of_frames):
+def generate_annotation_file(trial_name, skeleton_name, cameras, annotations, images, set_of_frames):
     
     keypoint_names, skeleton, num_keypoints = skeleton_selector[skeleton_name]()
 
