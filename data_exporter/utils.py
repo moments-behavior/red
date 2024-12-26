@@ -161,10 +161,16 @@ def generate_annotation_file(trial_name, skeleton_name, cameras, annotations, im
 
 
 def multiprocess_save_jpegs(input_args):
-    trial_name, cam_name, video_folder_name, save_folder, set_mode, all_image_frames = input_args
+    trial_name, cam_name, video_folder_name, save_folder, map_frame_to_mode, all_image_frames = input_args
 
     print("Saving jpeg for {} ...".format(cam_name))
     file_dir =  trial_name + "/{}/".format(cam_name)
+
+    # make directories for images
+    dir_name = os.path.join(save_folder, "train", file_dir)
+    os.makedirs(dir_name, exist_ok=True) 
+    dir_name = os.path.join(save_folder, "val", file_dir)
+    os.makedirs(dir_name, exist_ok=True) 
 
     print(all_image_frames)
     # exit()    
@@ -187,9 +193,10 @@ def multiprocess_save_jpegs(input_args):
             
             frame_num = frame_num + 1
             
-            if frame_num in all_image_frames:            
+            if frame_num in all_image_frames:    
+                set_mode = map_frame_to_mode[frame_num]        
                 dir_name = os.path.join(save_folder, "{}/".format(set_mode), file_dir)
-                os.makedirs(dir_name, exist_ok=True)   
+                # os.makedirs(dir_name, exist_ok=True)   
                 
                 frame_filename = dir_name + "Frame_" + str(int(frame_num)) + '.jpg'
                 # print(f"saving {frame_num} for {cam_name} in {set_mode}")
