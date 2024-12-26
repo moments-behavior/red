@@ -6,6 +6,8 @@ from utils import *
 import glob
 import cv2 as cv
 from multiprocessing import Pool
+import platform
+from multiprocessing import get_context
 
 parser = argparse.ArgumentParser()
 parser.add_argument('-i', '--label_folder', type=str, required=True)
@@ -126,10 +128,24 @@ print(val_image_frames)
 # exit()
 
 num_jobs = len(valid_jobs)
-with Pool(num_jobs) as p:
-    p.map(multiprocess_save_jpegs, valid_jobs)
+
+if platform.system() == 'Darwin':  # fix for macOS
+    print("threadpooling for macos")
+    with get_context("fork").Pool(num_jobs) as p:
+        p.map(multiprocess_save_jpegs, valid_jobs)
+else:
+    with Pool(num_jobs) as p:
+        p.map(multiprocess_save_jpegs, valid_jobs)
+        
+num_jobs = len(train_jobs)    
+if platform.system() == 'Darwin':  # fix for macOS
+    print("threadpooling for macos")
+    with get_context("fork").Pool(num_jobs) as p:
+        p.map(multiprocess_save_jpegs, train_jobs)
+else:
+    with Pool(num_jobs) as p:
+        p.map(multiprocess_save_jpegs, train_jobs)        
 
 
-with Pool(num_jobs) as p:
-    p.map(multiprocess_save_jpegs, train_jobs)
+
 
