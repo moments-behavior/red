@@ -217,6 +217,50 @@ def load_jarvis_3d_csv_rats(file_name, num_keypoints):
             line_count += 1
     return labels
 
+def merge_json_annotations(json_data):
+   
+    root_json = {}
+    root_json["keypoint_names"] = json_data[0]["keypoint_names"]
+    root_json["skeleton"] = json_data[0]["skeleton"]
+    root_json["categories"] = json_data[0]["categories"]
+
+    # Initialize the "calibrations" key in root_json if it doesn't exist
+    root_json["calibrations"] = {}
+    root_json["images"] = []
+    root_json["annotations"] = []
+    root_json["framesets"] = {}
+      
+    img_idx_offset = 0 #need to offset the image ids for each dataset
+    
+    for dsets in json_data:
+        
+        # calibrations
+        calib_key = list(dsets["calibrations"].keys())[0]
+        for calib_key, calib_value in dsets["calibrations"].items():
+            root_json["calibrations"][calib_key] = calib_value
+            
+        #images
+        for img in dsets["images"]:
+            img["id"] = img["id"] + img_idx_offset
+            root_json["images"].append(img)
+            
+        
+        #annotations
+        for annots in dsets["annotations"]:
+            annots["id"] = annots["id"] + img_idx_offset
+            annots["image_id"] = annots["image_id"] + img_idx_offset
+            root_json["annotations"].append(annots)
+            
+        # frameset
+        for frameset_key, frameset_value in dsets["framesets"].items():
+            frameset_value["frames"] = [x + img_idx_offset for x in frameset_value["frames"]]
+            root_json["framesets"][frameset_key] = frameset_value
+            
+
+        img_idx_offset += len(dsets["images"])
+        
+
+    return root_json
 
 def Project(points, intrinsic, distortion, rotation_matrix, tvec):
     result = []
