@@ -132,12 +132,11 @@ all_image_frames = np.sort(all_image_frames)
 
 all_jobs = []
 
-# exit()
-
 for camera in cameras:
     all_jobs.append([trial_name, camera, video_folder, output_folder, map_frame_to_mode, all_image_frames])    
 
 num_jobs = len(all_jobs)
+
 if platform.system() == 'Darwin':  # fix for macOS
     print("threadpooling for macos")
     with get_context("fork").Pool(num_jobs) as p:
@@ -145,37 +144,6 @@ if platform.system() == 'Darwin':  # fix for macOS
 else:
     with Pool(num_jobs) as p:
         p.map(multiprocess_save_jpegs, all_jobs)
-
-# train_jobs = []
-# for camera in cameras:
-#     train_jobs.append([trial_name, camera, video_folder, output_folder, 'train', train_image_frames])
-# print(train_image_frames)
-
-# valid_jobs = []
-# for camera in cameras:
-#     valid_jobs.append([trial_name, camera, video_folder, output_folder, 'val', val_image_frames])
-# print(val_image_frames)
-
-# exit()
-
-# num_jobs = len(valid_jobs)
-
-# if platform.system() == 'Darwin':  # fix for macOS
-#     print("threadpooling for macos")
-#     with get_context("fork").Pool(num_jobs) as p:
-#         p.map(multiprocess_save_jpegs, valid_jobs)
-# else:
-#     with Pool(num_jobs) as p:
-#         p.map(multiprocess_save_jpegs, valid_jobs)
-        
-# num_jobs = len(train_jobs)    
-# if platform.system() == 'Darwin':  # fix for macOS
-#     print("threadpooling for macos")
-#     with get_context("fork").Pool(num_jobs) as p:
-#         p.map(multiprocess_save_jpegs, train_jobs)
-# else:
-#     with Pool(num_jobs) as p:
-#         p.map(multiprocess_save_jpegs, train_jobs)        
 
 
 
