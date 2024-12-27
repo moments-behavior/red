@@ -195,11 +195,10 @@ def multiprocess_save_jpegs(input_args):
             
             if frame_num in all_image_frames:    
                 set_mode = map_frame_to_mode[frame_num]        
-                dir_name = os.path.join(save_folder, "{}/".format(set_mode), file_dir)
-                # os.makedirs(dir_name, exist_ok=True)   
+                dir_name = os.path.join(save_folder, "{}/".format(set_mode), file_dir)  
                 
                 frame_filename = dir_name + "Frame_" + str(int(frame_num)) + '.jpg'
-                # print(f"saving {frame_num} for {cam_name} in {set_mode}")
+
                 cv.imwrite(frame_filename, frame)
 
 
