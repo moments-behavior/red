@@ -40,6 +40,7 @@ python jarvis2red3d.py -i /path/to/predictions_3D_folder/ -s [skeleton name] -o 
 Note, there is a filter applied to filter out predictions with confidence score less than 0.7, and z > 500mm (since rats are not that tall). The fiter could be disabled by `--filter=0`. 
 
 
+
 ## Merge multiple jarvis datasets (WIP)
 You can merge multiple jarvis projects into a single projects (we assume both projects have same camera set, image resolutions, & XX) 
 
