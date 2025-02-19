@@ -5,6 +5,13 @@ from keypoints import *
 import argparse
 from datetime import datetime
 import yaml
+import random
+from multiprocessing import Pool
+import platform
+from multiprocessing import get_context
+
+
+np.random.seed(42)
 
 parser = argparse.ArgumentParser()
 parser.add_argument('-i', '--label_folder', type=str, required=True)
@@ -60,120 +67,78 @@ trial_name = selected_annotation
 num_keypoints = 1   
 id_ball = 1
 d_ball = 100
-## 
+
+
+# export annotations 
 annotations = process_one_session_ball(trial_name, label_folder, num_keypoints, selected_annotation, train_image_frames, cameras,d_ball,id_ball)
 create_yolo_annotation_files(output_folder,trial_name,annotations,cameras,"train")
 
 annotations = process_one_session_ball(trial_name, label_folder, num_keypoints, selected_annotation, val_image_frames, cameras,d_ball,id_ball)
 create_yolo_annotation_files(output_folder,trial_name,annotations,cameras,"valid")
 
+# save calibration files
+calibration_folder = os.path.join("/".join(label_folder.split("/")[:-1]), "calibration")
 
-exit()
-# use the most recent file for labels 
-if det_mode == 'point2bbox':
-    labels_file = sorted(glob.glob(root_dir + "/ball_labeled_data/{}/*".format(cam_name)))[-1]
+save_calib_folder = os.path.join(output_folder,trial_name,"calib_params")
+os.makedirs(save_calib_folder, exist_ok=True)
 
-print("Loading most recent file: ", labels_file)
-video_file = root_dir + "/movies/{}.mp4".format(cam_name)
-
-labels_unfiltered = csv_reader_rodent(labels_file, num_keypoints, False, [0, 1, 2, 3, 4, 5])
-
-labels = {}
-for key, value in labels_unfiltered.items():
-    if not((value >= 1E7).any()):
-        labels[key] = value    
-
-labels_frames = np.asarray(list(labels.keys()))
-total_num_labels = len(labels_frames)
-
-id_shuffled = np.arange(total_num_labels)
-#np.random.shuffle(id_shuffled)
-num_train = int(np.floor(total_num_labels * 0.9))
-print("Train set: {}, validation set: {}.".format(num_train, total_num_labels - num_train))
-
-train_ids = id_shuffled[:num_train]
-np.sort(train_ids)
-val_ids = id_shuffled[num_train:]
-np.sort(val_ids)
-
-video = cv.VideoCapture(video_file)
-amount_of_frames = video.get(cv.CAP_PROP_FRAME_COUNT)
-fps = video.get(cv.CAP_PROP_FPS);
-print("Number of frames: {}, framerate {}".format(amount_of_frames, fps))
-frame_width  = video.get(cv.CAP_PROP_FRAME_WIDTH)
-frame_height = video.get(cv.CAP_PROP_FRAME_HEIGHT)
+for cam in cameras:
+    input_file_name = calibration_folder + "/{}.yaml".format(cam)
+    fs = cv.FileStorage(input_file_name, cv.FILE_STORAGE_READ)
+    intrinsicMatrix = fs.getNode("camera_matrix").mat()
+    intrinsicMatrix = intrinsicMatrix.T
+    distortionCoefficients = fs.getNode("distortion_coefficients").mat()
+    distortionCoefficients = distortionCoefficients.T
+    R = fs.getNode("rc_ext").mat()
+    R = R.T
+    T = fs.getNode("tc_ext").mat()
 
 
-vr = VideoReader(video_file, ctx=cpu(0))
+    output_filename =  save_calib_folder + "/{}.yaml".format(cam)
+    s = cv.FileStorage(output_filename, cv.FileStorage_WRITE)
+    s.write('intrinsicMatrix', intrinsicMatrix)
+    s.write('distortionCoefficients', distortionCoefficients)
+    s.write('R', R)
+    s.write('T', T)
+    s.release()
+    print(output_filename)
 
-image_save_dir_train = output_dir + "images/train/"
-label_save_dir_train = output_dir + "labels/train/"
+## save jpeg images
+video_folder = "/".join(label_folder.split("/")[:-1])
 
-image_save_dir_val = output_dir + "images/val/"
-label_save_dir_val = output_dir + "labels/val/"
+map_frame_to_mode = {}
+all_image_frames = []
 
-os.makedirs(image_save_dir_train, exist_ok=True)
-os.makedirs(label_save_dir_train, exist_ok=True)
-os.makedirs(image_save_dir_val, exist_ok=True)
-os.makedirs(label_save_dir_val, exist_ok=True)
-
-save_format = "jpg"
-
-def create_yolo_ball_bb_line(ball_keypoints, frame_width, frame_height, ball_bb_size, label_idx):
-    ball_center_x = ball_keypoints[0] / frame_width
-    ball_center_y = ball_keypoints[1] / frame_height
-    ball_w = ball_bb_size / frame_width
-    ball_h = ball_bb_size / frame_height
-    line = "{} {} {} {} {}".format(label_idx, ball_center_x, ball_center_y, ball_w, ball_h)
-    return line
-
-
-def create_yolo_rat_bb_line(rat_keypoints, frame_width, frame_height, margin, label_idx):
-    rat_x = rat_keypoints[:, 0] / frame_width
-    rat_y = rat_keypoints[:, 1] / frame_height
+for img in train_image_frames:
+    map_frame_to_mode[img] = 'train'
+    all_image_frames.append(img)
     
-    margin_x = margin / frame_width
-    margin_y = margin / frame_height
-    rat_x_min = np.max((0, np.min(rat_x) - margin_x))
-    rat_x_max = np.min((frame_width, np.max(rat_x) + margin_x))
-    rat_y_min = np.max((0, np.min(rat_y) - margin_y))
-    rat_y_max = np.min((frame_height, np.max(rat_y) + margin_y))
-    rat_center_x = (rat_x_min + rat_x_max) / 2.0 
-    rat_center_y = (rat_y_min + rat_y_max) / 2.0
-    rat_w = rat_x_max - rat_x_min
-    rat_h = rat_y_max - rat_y_min
+for img in val_image_frames:
+    map_frame_to_mode[img] = 'valid'
+    all_image_frames.append(img)
 
-    line = "{} {} {} {} {}".format(label_idx, rat_center_x,rat_center_y,rat_w,rat_h)
-    return line
+all_image_frames = np.asarray(all_image_frames)
+all_image_frames = np.sort(all_image_frames)
+    
 
-print("Create train dataset...")
-# TODO: could load in smaller batches for less memory 
-train_frame_ids = labels_frames[train_ids]
-batch_frames = vr.get_batch(train_frame_ids)
-batch_frames = batch_frames.asnumpy()
-for idx in range(train_ids.shape[0]):
-    frame_idx = train_frame_ids[idx]
-    frame = batch_frames[idx]
-    frame = cv.cvtColor(frame, cv.COLOR_RGB2BGR)
-    cv.imwrite(image_save_dir_train + "{}.{}".format(frame_idx, save_format), frame)
-    with open(os.path.join(label_save_dir_train, str(frame_idx) + '.txt'), 'w') as f:
-        line = create_yolo_rat_bb_line(labels[frame_idx], frame_width, frame_height, 40, 0)        
-        f.write(line)
-        f.write('\n')
+all_jobs = []
+
+for camera in cameras:
+    save_folder = os.path.join(output_folder,trial_name,camera)        
+    all_jobs.append([trial_name, camera, video_folder, save_folder, map_frame_to_mode, all_image_frames,"yolo"])    
+
+num_jobs = len(all_jobs)
+# print(all_jobs[0])
+# exit()
+
+if platform.system() == 'Darwin':  # fix for macOS
+    print("threadpooling for macos")
+    with get_context("fork").Pool(num_jobs) as p:
+        p.map(multiprocess_save_jpegs, all_jobs)
+else:
+    with Pool(num_jobs) as p:
+        p.map(multiprocess_save_jpegs, all_jobs)
 
 
-print("Create val dataset...")
-val_frame_ids = labels_frames[val_ids]
-batch_frames = vr.get_batch(val_frame_ids)
-batch_frames = batch_frames.asnumpy()
-for idx in range(val_ids.shape[0]):
-    frame_idx = val_frame_ids[idx]
-    frame = batch_frames[idx]
-    frame = cv.cvtColor(frame, cv.COLOR_RGB2BGR)
-    cv.imwrite(image_save_dir_val + "{}.{}".format(frame_idx, save_format), frame)
-    with open(os.path.join(label_save_dir_val, str(frame_idx) + '.txt'), 'w') as f:
-        line = create_yolo_rat_bb_line(labels[frame_idx], frame_width, frame_height, 40, 0)        
-        f.write(line)
-        f.write('\n')
 
-print("Data saved to: ", output_dir)
+

@@ -221,17 +221,24 @@ def generate_annotation_file(trial_name, skeleton_name, cameras, annotations, im
     return root_json
 
     
-def multiprocess_save_jpegs(input_args):
-    trial_name, cam_name, video_folder_name, save_folder, map_frame_to_mode, all_image_frames = input_args
+def multiprocess_save_jpegs(input_args, ):
+    trial_name, cam_name, video_folder_name, save_folder, map_frame_to_mode, all_image_frames,export_mode = input_args
 
     print("Saving jpeg for {} ...".format(cam_name))
     file_dir =  trial_name + "/{}/".format(cam_name)
 
     # make directories for images
-    dir_name = os.path.join(save_folder, "train", file_dir)
-    os.makedirs(dir_name, exist_ok=True) 
-    dir_name = os.path.join(save_folder, "val", file_dir)
-    os.makedirs(dir_name, exist_ok=True) 
+    if(export_mode == "jarvis"):
+        dir_name = os.path.join(save_folder, "train", file_dir)
+        os.makedirs(dir_name, exist_ok=True)     
+        dir_name = os.path.join(save_folder, "val", file_dir)
+        os.makedirs(dir_name, exist_ok=True) 
+    elif(export_mode == "yolo"):
+        dir_name = os.path.join(save_folder, "train", "images")
+        os.makedirs(dir_name, exist_ok=True)     
+        dir_name = os.path.join(save_folder, "valid", "images")
+        os.makedirs(dir_name, exist_ok=True) 
+        
 
     print(all_image_frames)
     # exit()    
@@ -256,12 +263,17 @@ def multiprocess_save_jpegs(input_args):
             
             if frame_num in all_image_frames:    
                 set_mode = map_frame_to_mode[frame_num]        
-                dir_name = os.path.join(save_folder, "{}/".format(set_mode), file_dir)  
-                
-                frame_filename = dir_name + "Frame_" + str(int(frame_num)) + '.jpg'
+                if(export_mode == "jarvis"):
+                    dir_name = os.path.join(save_folder, "{}/".format(set_mode), file_dir)                  
+                    frame_filename = dir_name + "Frame_" + str(int(frame_num)) + '.jpg'
+                elif(export_mode == "yolo"):
+                    frame_filename = os.path.join(save_folder, set_mode,"images",f"Frame_{frame_num}.jpg")                  
+                    # frame_filename = dir_name + "Frame_" + str(int(frame_num)) + '.jpg'
 
                 cv.imwrite(frame_filename, frame)
 
+        if(frame_num % 1000 == 0):
+            print(f"Processed frame: {frame_num} for {cam_name}")
 
 def load_jarvis_3d_csv_rats(file_name, num_keypoints):
     labels = {}
