@@ -23,6 +23,7 @@ def csv_reader_rats(file_name, num_keypoints, three_d=False, select_keypoints_id
                 if three_d:
                     keypoints = keypoints.reshape([num_keypoints, 4])
                 else:
+                    print(file_name)
                     keypoints = keypoints.reshape([num_keypoints, 3])
                 keypoints = keypoints[:, 1:]
                 if not three_d:
@@ -123,6 +124,66 @@ def process_one_session(trial_name, load_file_path, num_keypoints, annotation_fi
             image_frame_id = image_frame_id + 1
     return annotations, images, set_of_frames
 
+def process_one_session_ball(trial_name, load_file_path, num_keypoints, annotation_file, all_image_frames, cameras, d_ball,label_id,select_keypoints_idx=[]):
+    
+    annotations = {}
+    for which_cam in cameras:
+
+        # print(select_keypoints_idx)
+        labels = csv_reader_rats(load_file_path + "/{}/{}_{}.csv".format(which_cam, which_cam, annotation_file), num_keypoints, three_d=False, select_keypoints_idx=select_keypoints_idx)   
+
+        file_dir = trial_name + "/{}/".format(which_cam)
+        all_2d_labeled_frames = labels.keys()
+        
+        annotation_entry = []
+        file_name_annotation = []
+        file_name_image = []
+
+        for frame_num in all_image_frames:
+            ## each frame 
+            
+            img_height=2200
+            img_width =3208
+            bbox_size=d_ball
+            
+            
+            if frame_num in all_2d_labeled_frames:
+                bbox = []            
+                x_min = (labels[frame_num][:, 0].min())/img_width
+                x_size = bbox_size/img_width
+                y_min = labels[frame_num][:, 1].min()/img_height
+                y_size = bbox_size/img_height
+                bbox= [f"{label_id} {x_min} {y_min} {x_size} {y_size}"]
+
+                # print(bbox)
+                
+                
+                annotation_entry.extend(bbox)
+                file_name_annotation.extend([f"Frame_{frame_num}.txt"])
+                file_name_image.extend([f"Frame_{frame_num}.jpg"])
+                
+                # file_name_image.extend("Frame_" + str(int(frame_num)) + '.jpg')
+
+        annotations[which_cam,"entry"] = annotation_entry
+        annotations[which_cam,"fname_annot"] = file_name_annotation
+        annotations[which_cam,"fname_img"] = file_name_image
+    
+    return annotations
+
+
+def create_yolo_annotation_files(output_folder, trial_name, annotations,cameras,dset_mode):
+    
+    for which_cam in cameras:
+        dir_labels = os.path.join(output_folder,trial_name,which_cam,dset_mode,"labels")
+        os.makedirs(dir_labels, exist_ok=True)
+        for i in range(len(annotations[which_cam,"entry"])):  
+
+            # print(annotations[which_cam,"fname_img"][i])
+            fname_label =  os.path.join(dir_labels,annotations[which_cam,'fname_annot'][i])
+            with open(fname_label, "w") as f:
+                f.write(annotations[which_cam,"entry"][i])
+
+
 def generate_framesets(dataset_name, set_of_frames, framesets):
     """
     set_of_frames: dictionary of framesets
@@ -159,7 +220,7 @@ def generate_annotation_file(trial_name, skeleton_name, cameras, annotations, im
     root_json["framesets"] = framesets
     return root_json
 
-
+    
 def multiprocess_save_jpegs(input_args):
     trial_name, cam_name, video_folder_name, save_folder, map_frame_to_mode, all_image_frames = input_args
 
