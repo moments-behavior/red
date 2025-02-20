@@ -65,3 +65,9 @@ jarvis_merge
 ```
 python merge_jarvis_datasets.py -i ~/data/jarvis_merge -o ~/data/test_merge
 ```
+
+## red --> yolo conversion
+TODO: add more doc and arguments
+```
+python3 red3d2yolo.py -i /mnt/labelpc_mouse_vids/2024_12_21_17_54_58/ball_labeled_data/ -o /home/ro/Documents/red2yolo/
+```
