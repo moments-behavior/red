@@ -21,7 +21,7 @@ struct KeyPoints{
 struct SkeletonContext {
     int num_nodes;
     int num_edges;
-    std::vector<triple_f> node_colors; 
+    std::vector<ImVec4> node_colors; 
     std::vector<tuple_i> edges;
     std::vector<std::string> node_names;
     std::string name;
@@ -83,7 +83,7 @@ void skeleton_initialize(SkeletonContext* skeleton, SkeletonPrimitive skeleton_t
 
             for (int i = 0; i < skeleton->num_nodes; i++) {
                 ImVec4 color = (ImVec4)ImColor::HSV(i / (float)skeleton->num_nodes, 0.8f, 0.8f);
-                skeleton->node_colors.push_back({color.x, color.y, color.z});
+                skeleton->node_colors.push_back(color);
             }
 
             skeleton->edges ={
@@ -100,7 +100,7 @@ void skeleton_initialize(SkeletonContext* skeleton, SkeletonPrimitive skeleton_t
 
             for (int i = 0; i < skeleton->num_nodes; i++) {
                 ImVec4 color = (ImVec4)ImColor::HSV(i / (float)skeleton->num_nodes, 1.0f, 1.0f);
-                skeleton->node_colors.push_back({color.x, color.y, color.z});
+                skeleton->node_colors.push_back(color);
             }
             
             break;
@@ -112,7 +112,7 @@ void skeleton_initialize(SkeletonContext* skeleton, SkeletonPrimitive skeleton_t
 
             for (int i = 0; i < skeleton->num_nodes; i++) {
                 ImVec4 color = (ImVec4)ImColor::HSV(i / (float)skeleton->num_nodes, 1.0f, 1.0f);
-                skeleton->node_colors.push_back({color.x, color.y, color.z});
+                skeleton->node_colors.push_back(color);
             }
 
             skeleton->edges ={
@@ -134,7 +134,7 @@ void skeleton_initialize(SkeletonContext* skeleton, SkeletonPrimitive skeleton_t
 
             for (int i = 0; i < skeleton->num_nodes; i++) {
                 ImVec4 color = (ImVec4)ImColor::HSV(i / (float)skeleton->num_nodes, 1.0f, 1.0f);
-                skeleton->node_colors.push_back({color.x, color.y, color.z});
+                skeleton->node_colors.push_back(color);
             }
             skeleton->edges ={
                 {0, 1}
@@ -149,7 +149,7 @@ void skeleton_initialize(SkeletonContext* skeleton, SkeletonPrimitive skeleton_t
 
             for (int i = 0; i < skeleton->num_nodes; i++) {
                 ImVec4 color = (ImVec4)ImColor::HSV(i / (float)skeleton->num_nodes, 1.0f, 1.0f);
-                skeleton->node_colors.push_back({color.x, color.y, color.z});
+                skeleton->node_colors.push_back(color);
             }
             skeleton->edges ={
                 {0, 1},
@@ -164,7 +164,7 @@ void skeleton_initialize(SkeletonContext* skeleton, SkeletonPrimitive skeleton_t
 
             for (int i = 0; i < skeleton->num_nodes; i++) {
                 ImVec4 color = (ImVec4)ImColor::HSV(i / (float)skeleton->num_nodes, 1.0f, 1.0f);
-                skeleton->node_colors.push_back({color.x, color.y, color.z});
+                skeleton->node_colors.push_back(color);
             }
             skeleton->edges ={
                 {0, 2},
@@ -180,7 +180,7 @@ void skeleton_initialize(SkeletonContext* skeleton, SkeletonPrimitive skeleton_t
 
             for (int i = 0; i < skeleton->num_nodes; i++) {
                 ImVec4 color = (ImVec4)ImColor::HSV(i / (float)skeleton->num_nodes, 1.0f, 1.0f);
-                skeleton->node_colors.push_back({color.x, color.y, color.z});
+                skeleton->node_colors.push_back(color);
             }
             skeleton->edges ={
                 {0, 1},
@@ -198,7 +198,7 @@ void skeleton_initialize(SkeletonContext* skeleton, SkeletonPrimitive skeleton_t
 
             for (int i = 0; i < skeleton->num_nodes; i++) {
                 ImVec4 color = (ImVec4)ImColor::HSV(i / (float)skeleton->num_nodes, 1.0f, 1.0f);
-                skeleton->node_colors.push_back({color.x, color.y, color.z});
+                skeleton->node_colors.push_back(color);
             }
 
             skeleton->edges ={
@@ -218,7 +218,7 @@ void skeleton_initialize(SkeletonContext* skeleton, SkeletonPrimitive skeleton_t
 
             for (int i = 0; i < skeleton->num_nodes; i++) {
                 ImVec4 color = (ImVec4)ImColor::HSV(i / (float)skeleton->num_nodes, 1.0f, 1.0f);
-                skeleton->node_colors.push_back({color.x, color.y, color.z});
+                skeleton->node_colors.push_back(color);
             }
 
             skeleton->edges ={
@@ -238,7 +238,7 @@ void skeleton_initialize(SkeletonContext* skeleton, SkeletonPrimitive skeleton_t
 
             for (int i = 0; i < skeleton->num_nodes; i++) {
                 ImVec4 color = (ImVec4)ImColor::HSV(i / (float)skeleton->num_nodes, 1.0f, 1.0f);
-                skeleton->node_colors.push_back({color.x, color.y, color.z});
+                skeleton->node_colors.push_back(color);
             }
 
             skeleton->edges ={
@@ -258,7 +258,7 @@ void skeleton_initialize(SkeletonContext* skeleton, SkeletonPrimitive skeleton_t
 
             for (int i = 0; i < skeleton->num_nodes; i++) {
                 ImVec4 color = (ImVec4)ImColor::HSV(i / (float)skeleton->num_nodes, 1.0f, 1.0f);
-                skeleton->node_colors.push_back({color.x, color.y, color.z});
+                skeleton->node_colors.push_back(color);
             }
 
             skeleton->edges ={
@@ -275,7 +275,7 @@ void skeleton_initialize(SkeletonContext* skeleton, SkeletonPrimitive skeleton_t
 
             for (int i = 0; i < skeleton->num_nodes; i++) {
                 ImVec4 color = (ImVec4)ImColor::HSV(i / (float)skeleton->num_nodes, 1.0f, 1.0f);
-                skeleton->node_colors.push_back({color.x, color.y, color.z});
+                skeleton->node_colors.push_back(color);
             }
 
             skeleton->edges ={
@@ -292,7 +292,7 @@ void skeleton_initialize(SkeletonContext* skeleton, SkeletonPrimitive skeleton_t
 
             for (int i = 0; i < skeleton->num_nodes; i++) {
                 ImVec4 color = (ImVec4)ImColor::HSV(i / (float)skeleton->num_nodes, 1.0f, 1.0f);
-                skeleton->node_colors.push_back({color.x, color.y, color.z});
+                skeleton->node_colors.push_back(color);
             }
             
             skeleton->edges ={
@@ -319,7 +319,7 @@ void skeleton_initialize(SkeletonContext* skeleton, SkeletonPrimitive skeleton_t
 
             for (int i = 0; i < skeleton->num_nodes; i++) {
                 ImVec4 color = (ImVec4)ImColor::HSV(i / (float)skeleton->num_nodes, 1.0f, 1.0f);
-                skeleton->node_colors.push_back({color.x, color.y, color.z});
+                skeleton->node_colors.push_back(color);
             }
 
             skeleton->edges ={
@@ -357,7 +357,7 @@ void skeleton_initialize(SkeletonContext* skeleton, SkeletonPrimitive skeleton_t
 
             for (int i = 0; i < skeleton->num_nodes; i++) {
                 ImVec4 color = (ImVec4)ImColor::HSV(i / (float)skeleton->num_nodes, 1.0f, 1.0f);
-                skeleton->node_colors.push_back({color.x, color.y, color.z});
+                skeleton->node_colors.push_back(color);
             }
 
             skeleton->edges ={
@@ -399,7 +399,7 @@ void skeleton_initialize(SkeletonContext* skeleton, SkeletonPrimitive skeleton_t
 
             for (int i = 0; i < skeleton->num_nodes; i++) {
                 ImVec4 color = (ImVec4)ImColor::HSV(i / (float)skeleton->num_nodes, 1.0f, 1.0f);
-                skeleton->node_colors.push_back({color.x, color.y, color.z});
+                skeleton->node_colors.push_back(color);
             }
 
             skeleton->edges ={
@@ -436,7 +436,7 @@ void skeleton_initialize(SkeletonContext* skeleton, SkeletonPrimitive skeleton_t
 
             for (int i = 0; i < skeleton->num_nodes; i++) {
                 ImVec4 color = (ImVec4)ImColor::HSV(i / (float)skeleton->num_nodes, 1.0f, 1.0f);
-                skeleton->node_colors.push_back({color.x, color.y, color.z});
+                skeleton->node_colors.push_back(color);
             }
             
             skeleton->edges ={

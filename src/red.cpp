@@ -86,8 +86,7 @@ int main(int, char **)
     std::filesystem::path cwd = std::filesystem::current_path();
     std::string delimiter = "/";
     std::vector<std::string> tokenized_path = string_split (cwd, delimiter);
-    // std::string start_folder_name = "/home/" + tokenized_path[2] + "/data";
-    std::string start_folder_name = "/nfs/exports/ratlv";
+    std::string start_folder_name = "/home/" + tokenized_path[2] + "/data";
     
     ImVec4 clear_color = ImVec4(0.0f, 0.0f, 0.0f, 1.00f);
     ImGuiIO &io = ImGui::GetIO();
@@ -643,6 +642,7 @@ int main(int, char **)
                     const int rows_count = scene->num_cams;
                     const int columns_count= skeleton->num_nodes+1;
 
+
                     static ImGuiTableFlags table_flags = ImGuiTableFlags_ScrollX | ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_BordersOuter | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_Hideable | ImGuiTableFlags_Resizable | ImGuiTableFlags_HighlightHoveredColumn;
 
                     if (ImGui::BeginTable("table_angled_headers", columns_count, table_flags, ImVec2(0.0f, TEXT_BASE_HEIGHT * 12)))
@@ -650,7 +650,8 @@ int main(int, char **)
                         ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_NoHide | ImGuiTableColumnFlags_NoReorder);
                         for (int column = 1; column < columns_count; column++)
                             ImGui::TableSetupColumn(skeleton->node_names[column-1].c_str(), ImGuiTableColumnFlags_AngledHeader | ImGuiTableColumnFlags_WidthFixed);
-
+                        ImGui::TableSetupScrollFreeze(1, 2);
+                        
                         ImGui::TableAngledHeadersRow(); // Draw angled headers for all columns with the ImGuiTableColumnFlags_AngledHeader flag.
                         ImGui::TableHeadersRow();       // Draw remaining headers and allow access to context-menu and other functions.
 
@@ -660,7 +661,7 @@ int main(int, char **)
                             ImGui::TableNextRow();
 
                             if (is_view_focused[row] && keypoints_find) {
-                                ImU32 row_bg_color = ImGui::GetColorU32(ImVec4(0.7f, 0.3f, 0.3f, 0.65f)); 
+                                ImU32 row_bg_color = ImGui::GetColorU32(ImVec4(0.7f, 0.3f, 0.3f, 0.65f));  
                                 ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, row_bg_color);
                             }
 
@@ -674,21 +675,19 @@ int main(int, char **)
                                         ImVec4 node_color;
                                         if(keypoints_map[current_frame_num]->active_id[row] == column-1)
                                         {
-                                            node_color = (ImVec4)ImColor::HSV(0.8, 0.9f, 0.9f);
+                                            node_color = (ImVec4)ImColor::HSV(0.8, 1.0f, 1.0f);
                                         }  else {
                                             if (keypoints_map[current_frame_num]->keypoints2d[row][column-1].is_labeled) 
                                             {
-                                                node_color.w = 0.5;
-                                                node_color.x = skeleton->node_colors[column-1].x;
-                                                node_color.y = skeleton->node_colors[column-1].y;
-                                                node_color.z = skeleton->node_colors[column-1].z;
-                                            }
-
-                                            if (keypoints_map[current_frame_num]->keypoints2d[row][column-1].is_triangulated) 
-                                            {
-                                               ImGui::TextColored(ImVec4(1.0f, 0.0f, 1.0f, 1.0f), "T");
-                                            }    
+                                                node_color = skeleton->node_colors[column-1];
+                                                node_color.w = 0.9;
+                                            }   
                                         }
+
+                                        if (keypoints_map[current_frame_num]->keypoints2d[row][column-1].is_triangulated) 
+                                        {
+                                            ImGui::TextColored(ImVec4(1.0f, 1.0f, 1.0f, 1.0f), "T");
+                                        }    
                                         
                                         ImU32 cell_bg_color = ImGui::GetColorU32(node_color);
                                         ImGui::TableSetBgColor(ImGuiTableBgTarget_CellBg, cell_bg_color);
@@ -727,9 +726,9 @@ int main(int, char **)
                     }
 
                     if (!keypoint_triangulated_all && keypoints_find) {
-                        ImGui::PushStyleColor(ImGuiCol_Button, (ImVec4)ImColor::HSV(0.8, 0.9f, 0.9f));
-                        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, (ImVec4)ImColor::HSV(0.8, 0.9f, 0.9f));
-                        ImGui::PushStyleColor(ImGuiCol_ButtonActive, (ImVec4)ImColor::HSV(0.8, 0.9f, 0.9f));
+                        ImGui::PushStyleColor(ImGuiCol_Button, (ImVec4)ImColor::HSV(0.8, 1.0f, 1.0f));
+                        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, (ImVec4)ImColor::HSV(0.8, 0.9f, 0.8f));
+                        ImGui::PushStyleColor(ImGuiCol_ButtonActive, (ImVec4)ImColor::HSV(0.8, 0.9f, 0.5f));
                     }
                     
                     if (ImGui::Button("Triangulate"))

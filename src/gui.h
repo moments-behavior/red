@@ -34,12 +34,13 @@ static void gui_plot_keypoints(KeyPoints *keypoints, SkeletonContext *skeleton, 
         if (keypoints->keypoints2d[view_idx][node].is_labeled){
             ImVec4 node_color; 
             if (keypoints->active_id[view_idx]==node) {
-                node_color = (ImVec4)ImColor::HSV(0.8, 0.9f, 0.9f);
+                node_color = (ImVec4)ImColor::HSV(0.8, 1.0f, 1.0f);
+                node_color.w = 0.9;
+                pt_size = 8.0f;
             } else {
-                node_color.w = 1.0f; 
-                node_color.x = skeleton->node_colors.at(node).x;
-                node_color.y = skeleton->node_colors.at(node).y;
-                node_color.z = skeleton->node_colors.at(node).z;
+                node_color = skeleton->node_colors.at(node);
+                node_color.w = 0.9;
+                pt_size = 6.0f;
             }
             int id = skeleton->num_nodes * view_idx + node;
             static bool drag_point_clicked;
