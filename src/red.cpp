@@ -364,9 +364,7 @@ int main(int, char **)
                     }
                 }
 
-                ImGui::Separator();
-
-                if (ImGui::Button(ICON_FK_MINUS) || ImGui::IsKeyPressed(ImGuiKey_Comma, true))
+                if (ImGui::IsKeyPressed(ImGuiKey_Comma, true))
                 {
                     if (pause_selected > 0)
                     {
@@ -374,8 +372,7 @@ int main(int, char **)
                     }
                 };
 
-                ImGui::SameLine();
-                if (ImGui::Button(ICON_FK_PLUS) || ImGui::IsKeyPressed(ImGuiKey_Period, true))
+                if (ImGui::IsKeyPressed(ImGuiKey_Period, true))
                 {
                     if (pause_selected < (scene->size_of_buffer - 1))
                     {
@@ -793,6 +790,8 @@ int main(int, char **)
                 if (upper_it == keypoints_map.end()) {
                     upper_it = keypoints_map.begin();
                 }
+                
+                ImGui::Separator();
                 ImGui::Text("Next labeled frame : %d", (*upper_it).first);
                 if (ImGui::Button("Jump to Next Labeled Frame") || ImGui::IsKeyPressed(ImGuiKey_RightArrow, false)) {
                     for (int i = 0; i < scene->num_cams; i++)
