@@ -132,9 +132,7 @@ this is based on [these instructions](https://docs.nvidia.com/deeplearning/tenso
 - Clone the repo and submodules
 
 ```
-git clone https://github.com/JohnsonLabJanelia/orange.git
-git submodule init
-git submodule update
+git clone --recursive https://github.com/JohnsonLabJanelia/red.git
 ```
 
 If you are building the project for the first time, uncomment [`line 16 ~ line 26`](https://github.com/JohnsonLabJanelia/red/blob/0829b09d20b0dbccb0ea6df7a20e5ee4e23f635f/build_linux.sh#L16) for building `ImGui` and `ImPlot` object files. Run
