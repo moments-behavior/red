@@ -569,7 +569,7 @@ int main(int, char **)
                 }
                 else
                 {
-                    if (ImGui::Button(play_video ? ICON_FK_PAUSE : ICON_FK_PLAY)  ||  ImGui::IsKeyPressed(ImGuiKey_Space, true))
+                    if (ImGui::Button(play_video ? ICON_FK_PAUSE : ICON_FK_PLAY))
                     {
                         play_video = !play_video;
                         if (!play_video) {
@@ -629,6 +629,13 @@ int main(int, char **)
 
                 ImGui::EndGroup();
                 ImGui::End();
+            }
+
+            if (ImGui::IsKeyPressed(ImGuiKey_Space, false)) {
+                play_video = !play_video;
+                if (!play_video) {
+                    pause_selected = 0;
+                }
             }
         }
 
