@@ -205,7 +205,7 @@ int main(int, char **)
                 ImGui::EndMenuBar();
             }
 
-            ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
+            // ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
 
             // if (video_loaded) {
             //     ImGui::Text("Frame number %d ", scene->display_buffer[0][read_head].frame_number);
@@ -213,10 +213,19 @@ int main(int, char **)
             //     ImGui::Text("Readhead %d", read_head);
             // }
             if (!video_loaded) {
-                ImGui::Checkbox("CPU Buffer", &cpu_buffer_toggle);
-                ImGui::InputInt("Buffer Size", &label_buffer_size, ImGuiInputTextFlags_EnterReturnsTrue);
+                {
+                    const char* items[] = { "CPU Buffer", "GPU Buffer"};
+                    static int item_current = 0;
+                    ImGui::Combo("Buffer type", &item_current, items, IM_ARRAYSIZE(items));
+                    if (item_current == 0) {
+                        scene->use_cpu_buffer = true;
+                    } else {
+                        scene->use_cpu_buffer = false;
+                    }
+                }
+
+                ImGui::InputInt("Buffer size", &label_buffer_size, ImGuiInputTextFlags_EnterReturnsTrue);
             }
-            scene->use_cpu_buffer = cpu_buffer_toggle;
             if (video_loaded) {
                 if (ImGui::InputInt("Seek step", &dc_context->seek_interval, 10, 100, ImGuiInputTextFlags_EnterReturnsTrue)) {
                     std::cout << "Seek step: " << dc_context->seek_interval << std::endl;
@@ -341,12 +350,12 @@ int main(int, char **)
             ImGui::SetNextWindowSize(ImVec2(500, 440), ImGuiCond_FirstUseEver);
             if (ImGui::Begin("Frames in the buffer"))
             {
-                ImGui::Text("Frame number selected: %d", scene->display_buffer[0][select_corr_head].frame_number);
                 {
                     for (u32 i = 0; i < scene->size_of_buffer; i++)
                     {
-                        char label[128];
-                        sprintf(label, "Buffer %d", i);
+                        int seletable_frame_id = (i + read_head) % scene->size_of_buffer;
+                        char label[32];
+                        sprintf(label, "Frame %d", scene->display_buffer[0][seletable_frame_id].frame_number);
                         if (ImGui::Selectable(label, pause_selected == i))
                         {
                             // start from the lowest frame
