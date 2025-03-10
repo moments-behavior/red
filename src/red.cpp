@@ -224,15 +224,17 @@ int main(int, char **)
                     }
                 }
 
-                ImGui::InputInt("Buffer size", &label_buffer_size, ImGuiInputTextFlags_EnterReturnsTrue);
+                ImGui::InputInt("Buffer size", &label_buffer_size);
             }
             if (video_loaded) {
-                if (ImGui::InputInt("Seek step", &dc_context->seek_interval, 10, 100, ImGuiInputTextFlags_EnterReturnsTrue)) {
+                if (ImGui::InputInt("Seek step", &dc_context->seek_interval, 10, 100)) {
                     std::cout << "Seek step: " << dc_context->seek_interval << std::endl;
                 }
 
                 static int seek_accurate_frame_num = 0;
-                if (ImGui::InputInt("Seek Accurate", &seek_accurate_frame_num, 1, 100, ImGuiInputTextFlags_EnterReturnsTrue)) {
+                ImGui::InputInt("Seek Accurate", &seek_accurate_frame_num, 1, 100);
+                if (ImGui::IsItemDeactivatedAfterEdit()) 
+                {
                     std::cout << "Seek accurate to: " << seek_accurate_frame_num << std::endl;
                     for (int i = 0; i < scene->num_cams; i++)
                     {
@@ -457,7 +459,7 @@ int main(int, char **)
                 // ImGui::Image((void*)(intptr_t)image_texture[j], avail_size);
                 if (ImPlot::BeginPlot("##no_plot_name", avail_size, ImPlotFlags_Equal | ImPlotAxisFlags_AutoFit | ImPlotFlags_Crosshairs))
                 {
-                    ImPlot::PlotImage("##no_image_name", (void *)(intptr_t)scene->image_texture[j], ImVec2(0, 0), ImVec2(scene->image_width[j], scene->image_height[j]));
+                    ImPlot::PlotImage("##no_image_name", (ImTextureID)(intptr_t)scene->image_texture[j], ImVec2(0, 0), ImVec2(scene->image_width[j], scene->image_height[j]));
                     
                     if (yolo_detection){
                         draw_cv_contours(yolo_boxes.at(j), yolo_labels.at(j), yolo_classid.at(j));
