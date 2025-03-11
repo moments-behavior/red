@@ -148,7 +148,7 @@ Once built, it will make a folder called `release`. The executable `redgui` is t
 ```
 
 ## Use the App
-A video demo is coming...
+Please see this [link](https://www.youtube.com/watch?v=9eOJaadE1Nc) for a video demo of the app. 
 
 ## Format data for Deep Learning
 Currently we are saving labeled keypoints simply as a plain csv file. We provide python scripts for formating data as [COCO format](https://docs.aws.amazon.com/rekognition/latest/customlabels-dg/md-coco-overview.html), which is used by [JARVIS](https://github.com/JARVIS-MoCap/JARVIS-HybridNet). Please refer to [data_exporter](https://github.com/JohnsonLabJanelia/red/tree/main/data_exporter).
