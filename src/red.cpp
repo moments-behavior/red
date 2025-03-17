@@ -461,7 +461,7 @@ int main(int, char **)
                     if(plot_keypoints_flag){
                         // plot arena for testing camera parameters 
                         // gui_plot_perimeter(&camera_params[j]);
-                        // gui_plot_world_coordinates(&camera_params[j], j);
+                        gui_plot_world_coordinates(&camera_params[j], j);
                         
                         // labeling 
                         if (ImPlot::IsPlotHovered()) {
