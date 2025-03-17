@@ -12,7 +12,7 @@ nvcc -c src/kernel.cu -arch=sm_80 -o release/kernel.o
 DIR_IMGUI="lib/imgui"
 DIR_IMPLOT="lib/implot"
 DIR_FFMPEG=$HOME/nvidia/ffmpeg/build
-DIR_TENSORRT=$HOME/build/TensorRT-8.6.1.6
+DIR_TENSORRT=$HOME/nvidia/TensorRT
 
 g++ -std=c++11 -I$DIR_IMGUI -g -Wall -Wformat `pkg-config --cflags glfw3` -c -o release/imgui.o $DIR_IMGUI/imgui.cpp
 g++ -std=c++11 -I$DIR_IMGUI -g -Wall -Wformat `pkg-config --cflags glfw3` -c -o release/imgui_demo.o $DIR_IMGUI/imgui_demo.cpp

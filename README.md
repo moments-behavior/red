@@ -5,6 +5,9 @@ Contact [Jinyao Yan](yanj11@janelia.hhmi.org) if you have questions about the so
 
 ![gui](images/gui.png)
 
+## Video demo
+Please see this [link](https://www.youtube.com/watch?v=9eOJaadE1Nc) for a video demo of the app. 
+
 ## Features
 1. Real-time GPU accelerated decoding (h264, h265)
 2. Synchronized decoding
@@ -21,12 +24,36 @@ Contact [Jinyao Yan](yanj11@janelia.hhmi.org) if you have questions about the so
 
 ## Build instructions 
 
+### Install cuDNN (depends on CUDA installation)
+- download the cudnn install files (we use `cudnn 8.9.3` with `driver 525.105.17` and `cuda 12.0` )
+- you may run the commands below for the exact version or download a TAR file for `cudnn-linux-x86_64-8.9.3.28_cuda12-archive.tar.xz` from the [cudnn version archives](https://developer.nvidia.com/rdp/cudnn-archive)
+- extract the file
+- copy cudnn files to where your `cuda` is installed -- we assume it is installed at `/usr/local/cuda` 
+  ```
+  sudo cp cudnn-*-archive/include/cudnn*.h /usr/local/cuda/include 
+  sudo cp -P cudnn-*-archive/lib/libcudnn* /usr/local/cuda/lib64 
+  sudo chmod a+r /usr/local/cuda/include/cudnn*.h /usr/local/cuda/lib64/libcudnn*
+  ```
+- verify installation and cudnn version
+  ```
+  source ~/.bashrc
+  cat /usr/local/cuda/include/cudnn_version.h | grep CUDNN_MAJOR -A 2
+  ```
+  you can expect an output like:
+  ```
+  #define CUDNN_MAJOR 8
+  #define CUDNN_MINOR 9
+  #define CUDNN_PATCHLEVEL 3
+  --
+  #define CUDNN_VERSION (CUDNN_MAJOR * 1000 + CUDNN_MINOR * 100 + CUDNN_PATCHLEVEL)
+  ```
+
 ### Install OpenCV
-- download and upzip `opencv-4.8.0.zip` and `opencv_contrib-4.8.0.zip`. Unzip the folders to `~/build/`, for instance. 
+- download and upzip `opencv-4.8.0.zip` and `opencv_contrib-4.8.0.zip`. Unzip the folders to `~/build/`, for instance. Note, if you are using cuda 12.2, please download opencv-4.10 instead.
 
 - to build OpenCV with opencv sfm, please follow instructions from: https://docs.opencv.org/4.x/db/db8/tutorial_sfm_installation.html first to install sfm dependency. Ceres solver is optional. If you wish to install ceres solver, a more detailed installation instruction can be found at: http://ceres-solver.org/installation.html#linux. At the time of test, one need to set CMake flag USE_CUDA=OFF for ceres.  
 
-- build OpenCV using 
+- build OpenCV using
 
 ```
 cd opencv-4.8.0/ 
@@ -60,49 +87,55 @@ cmake -D CMAKE_BUILD_TYPE=RELEASE \
 ```
 
 ```
-make -j8 
+make -j $(nproc) 
 sudo make install
 ```
+### Install TensorRT
+- [tensor-rt (depends on nvidia-driver and CUDA)](#install-tensor-rt)
 
-### Install cuDNN (depends on CUDA installation)
-- download the cudnn install files (we use `cudnn 8.9.3` with `driver 525.105.17` and `cuda 12` )
-- you may run the commands below for the exact version or download a TAR file for Linux_x86_64 from the [cudnn version archives](https://developer.nvidia.com/rdp/cudnn-archive)
+### install tensor-rt
+this is based on [these instructions](https://docs.nvidia.com/deeplearning/tensorrt/install-guide/index.html#installing-tar) (has more details if needed)
+
+**0. download and extract tensor-rt installation file**
+  - we use `TensorRT-8.6.1.6` with `cuda 12.0`  -- you can directly download this (or from this page). But if you are using `cuda 12.2` and above, please use TensorRT 10, for instance `TensorRT-10.6.0.26.Linux.x86_64-gnu.cuda-12.6`. The installation steps are similar.
     ```
-    cd /home/$USER/setup_files
-    wget https://developer.nvidia.com/downloads/compute/cudnn/secure/8.9.3/local_installers/12.x/cudnn-linux-x86_64-8.9.3.28_cuda12-archive.tar.xz/
-- extract the file
-  ```
-  tar -xvf cudnn-linux-x86_64-8.x.x.x_cudaX.Y-archive.tar.xz
-  ```
-- copy cudnn files to where your `cuda` is installed -- we assume it is installed at `/usr/local/cuda` 
-  ```
-  cd <to where files where extracted above>
-  sudo cp cudnn-*-archive/include/cudnn*.h /usr/local/cuda/include 
-  sudo cp -P cudnn-*-archive/lib/libcudnn* /usr/local/cuda/lib64 
-  sudo chmod a+r /usr/local/cuda/include/cudnn*.h /usr/local/cuda/lib64/libcudnn*
-  ```
-- verify installation and cudnn version
-  ```
-  source ~/.bashrc
-  cat /usr/local/cuda/include/cudnn_version.h | grep CUDNN_MAJOR -A 2
-  ```
-  you can expect an output like:
-  ```
-  #define CUDNN_MAJOR 8
-  #define CUDNN_MINOR 9
-  #define CUDNN_PATCHLEVEL 3
-  --
-  #define CUDNN_VERSION (CUDNN_MAJOR * 1000 + CUDNN_MINOR * 100 + CUDNN_PATCHLEVEL)
-  ```
+    cd /home/$USER/nvidia
+    wget https://developer.nvidia.com/downloads/compute/machine-learning/tensorrt/secure/8.6.1/tars/TensorRT-8.6.1.6.Linux.x86_64-gnu.cuda-12.0.tar.gz
+    tar -xzvf TensorRT-8.6.1.6.Linux.x86_64-gnu.cuda-12.0.tar.gz
+    ```
+  - this should extract a folder `TensorRT-8.6.1.6` with following subdirectories
+    ```
+    bin  data  doc  include  lib  python  samples  targets
+    ```
+  - rename the folder `TensorRT`.
+
+**1. add tensor-rt path in bashrc**
+  - Add the absolute path to the TensorRT lib directory to the environment variable `LD_LIBRARY_PATH`:
+    ```
+    export LD_LIBRARY_PATH=/home/$USER/nvidia/TensorRT/lib:$LD_LIBRARY_PATH 
+    source ~/.bashrc
+    ```
+**2. verify installation**
+  - try to build one of the sample programs (say, `trtexec`) to verify installation
+    ```
+    cd /home/$USER/nvidia/TensorRT/samples/trtexec
+    make
+    ```
+  - run the program built above
+    ```
+    cd home/$USER/nvidia/TensorRT/bin/
+    ./trtexec
+    ```
+
+
+
 
 ### Install RED 
 
 - Clone the repo and submodules
 
 ```
-git clone https://github.com/JohnsonLabJanelia/orange.git
-git submodule init
-git submodule update
+git clone --recursive https://github.com/JohnsonLabJanelia/red.git
 ```
 
 If you are building the project for the first time, uncomment [`line 16 ~ line 26`](https://github.com/JohnsonLabJanelia/red/blob/0829b09d20b0dbccb0ea6df7a20e5ee4e23f635f/build_linux.sh#L16) for building `ImGui` and `ImPlot` object files. Run
@@ -116,9 +149,6 @@ Once built, it will make a folder called `release`. The executable `redgui` is t
 ```
 ./run.sh
 ```
-
-## Use the App
-A video demo is coming...
 
 ## Format data for Deep Learning
 Currently we are saving labeled keypoints simply as a plain csv file. We provide python scripts for formating data as [COCO format](https://docs.aws.amazon.com/rekognition/latest/customlabels-dg/md-coco-overview.html), which is used by [JARVIS](https://github.com/JARVIS-MoCap/JARVIS-HybridNet). Please refer to [data_exporter](https://github.com/JohnsonLabJanelia/red/tree/main/data_exporter).
