@@ -10,7 +10,7 @@
 #include <iostream>
 #include <thread>
 #include <ImGuiFileDialog.h>
-#include <camera.h>
+#include "camera.h"
 #include "skeleton.h"
 #include "gui.h"
 #include "yolo_detection.h"
@@ -122,7 +122,7 @@ int main(int, char **)
                         IGFD::FileDialogConfig config;
                         config.countSelectionMax = 0;
                         config.path = start_folder_name;
-		                ImGuiFileDialog::Instance()->OpenDialog("ChooseFileDlgKey", "Choose File", ".mp4", config);
+		                ImGuiFileDialog::Instance()->OpenDialog("ChooseFileDlgKey", "Choose File", ".tiff,.mp4", config);
                     };
                     ImGui::EndMenu();
                 }
@@ -270,33 +270,49 @@ int main(int, char **)
         { // => will show a dialog
             if (ImGuiFileDialog::Instance()->IsOk())
             { // action if OK
-                auto selected_movies = ImGuiFileDialog::Instance()->GetSelection();
+                auto selected_files = ImGuiFileDialog::Instance()->GetSelection();
                 root_dir = ImGuiFileDialog::Instance()->GetCurrentPath();
-                for(const auto& elem : selected_movies)
-                {
-                    std::size_t cam_string_mp4_position = elem.first.find("mp4");
-                    std::string cam_string = elem.first.substr(0, cam_string_mp4_position-1); // get from "Cam" to the end
-                    camera_names.push_back(cam_string);
-                    std::cout << "camera names: " << cam_string << std::endl;
 
+                // check if it is mp4, if it is mp4 files
+                auto first_selection = *selected_files.begin(); // Dereferencing iterator
+                if (string_ends_with(first_selection.first, ".mp4")) {
+                    for(const auto& elem : selected_files)
+                    {
+                        std::size_t cam_string_mp4_position = elem.first.find("mp4");
+                        std::string cam_string = elem.first.substr(0, cam_string_mp4_position-1); // get from "Cam" to the end
+                        camera_names.push_back(cam_string);
+                        std::cout << "camera names: " << cam_string << std::endl;
+
+                        std::map<std::string, std::string> m;
+                        FFmpegDemuxer* demuxer = new FFmpegDemuxer(elem.second.c_str(), m);
+                        demuxers.push_back(demuxer);
+                    }
                     std::map<std::string, std::string> m;
-                    FFmpegDemuxer* demuxer = new FFmpegDemuxer(elem.second.c_str(), m);
-                    demuxers.push_back(demuxer);
+                    FFmpegDemuxer dummy_dmuxer(selected_files.begin()->second.c_str(), m);
+                    dc_context->seek_interval = (int)dummy_dmuxer.FindKeyFrameInterval(); // get the seek interval
+                    
+                    scene->num_cams = selected_files.size();
+                    for (u32 j = 0; j < scene->num_cams; j++)
+                    {
+                        scene->image_width[j] = demuxers[j]->GetWidth();
+                        scene->image_height[j] = demuxers[j]->GetHeight();
+                    }
+                    render_allocate_scene_memory(scene, label_buffer_size);
+                    
+                    // multiple threads for decoding for selected videos
+                    int i = 0;            
+                    for(int i = 0; i < scene->num_cams; i++)
+                    {
+                        decoder_threads.push_back(std::thread(&decoder_process, dc_context, demuxers[i], scene->display_buffer[i], scene->size_of_buffer, &scene->seek_context[i], scene->use_cpu_buffer));
+                        is_view_focused.push_back(false);
+                    }
+                    video_loaded = true;
+                } else {
+                    printf("selected images \n");
+                    scene->num_cams = 1;
+                    
+
                 }
-                std::map<std::string, std::string> m;
-                FFmpegDemuxer dummy_dmuxer(selected_movies.begin()->second.c_str(), m);
-                dc_context->seek_interval = (int)dummy_dmuxer.FindKeyFrameInterval(); // get the seek interval
-                
-                render_allocate_scene_memory(scene, demuxers, selected_movies.size(), label_buffer_size);
-                
-                // multiple threads for decoding for selected videos
-                int i = 0;            
-                for(int i = 0; i < scene->num_cams; i++)
-                {
-                    decoder_threads.push_back(std::thread(&decoder_process, dc_context, demuxers[i], scene->display_buffer[i], scene->size_of_buffer, &scene->seek_context[i], scene->use_cpu_buffer));
-                    is_view_focused.push_back(false);
-                }
-                video_loaded = true;
             }
             // close
             ImGuiFileDialog::Instance()->Close();

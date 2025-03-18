@@ -18,7 +18,10 @@ std::vector<std::string> string_split(std::string s, std::string delimiter) {
     return res;
 }
 
-
+bool string_ends_with(const std::string& str, const std::string& suffix) {
+    return str.size() >= suffix.size() &&
+           str.compare(str.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
 
 bool numerical_compare_substr(const std::string& s1, const std::string& s2)
 { 

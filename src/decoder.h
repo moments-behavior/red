@@ -7,6 +7,7 @@
 #include "FFmpegDemuxer.h"
 #include "AppDecUtils.h"
 #include "ColorSpace.h"
+#include <opencv2/opencv.hpp>
 
 struct SeekInfo
 {

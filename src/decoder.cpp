@@ -249,3 +249,37 @@ void decoder_process(DecoderContext *dc_context, FFmpegDemuxer* demuxer, Picture
         }
     } while (!(dc_context->stop_flag));
 }
+
+void image_loader(DecoderContext *dc_context, std::vector<std::string> img_list, PictureBuffer *display_buffer, int size_of_buffer, SeekInfo *seek_info, bool use_cpu_buffer)
+{
+    int buffer_head = 0;
+    int frame_number = 0;
+    while(!(dc_context->stop_flag))
+    {
+        if (frame_number == 0)
+        {
+            cv::Mat image = cv::imread(img_list[frame_number], cv::IMREAD_COLOR);  
+            cv::Mat image_rgba;
+            cv::cvtColor(image, image_rgba, cv::COLOR_BGR2RGBA);
+            size_t buffer_size = image.total() * image.elemSize(); // Rows * Cols * Channels
+            memcpy(display_buffer[buffer_head].frame, image_rgba.data, buffer_size);
+
+            display_buffer[buffer_head].available_to_write = false;
+            dc_context->decoding_flag = true;
+            display_buffer[buffer_head].frame_number = frame_number;
+        }
+        while (!display_buffer[buffer_head].available_to_write && !(dc_context->stop_flag) && !(seek_info->use_seek))
+        {
+            cv::Mat image = cv::imread(img_list[frame_number], cv::IMREAD_COLOR);  
+            cv::Mat image_rgba;
+            cv::cvtColor(image, image_rgba, cv::COLOR_BGR2RGBA);
+            size_t buffer_size = image.total() * image.elemSize(); // Rows * Cols * Channels
+            memcpy(display_buffer[buffer_head].frame, image_rgba.data, buffer_size);
+
+            display_buffer[buffer_head].available_to_write = false;
+            display_buffer[buffer_head].frame_number = frame_number;
+        }
+        frame_number = frame_number + 1;
+        buffer_head = (buffer_head + 1) % size_of_buffer;
+    }
+}
