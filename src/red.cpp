@@ -87,7 +87,7 @@ int main(int, char **)
     std::string delimiter = "/";
     std::vector<std::string> tokenized_path = string_split (cwd, delimiter);
     std::string start_folder_name = "/home/" + tokenized_path[2] + "/data";
-    
+    start_folder_name = "/home/user/data/2025_03_17/robot";
     ImVec4 clear_color = ImVec4(0.0f, 0.0f, 0.0f, 1.00f);
     ImGuiIO &io = ImGui::GetIO();
 
@@ -292,6 +292,8 @@ int main(int, char **)
                     dc_context->seek_interval = (int)dummy_dmuxer.FindKeyFrameInterval(); // get the seek interval
                     
                     scene->num_cams = selected_files.size();
+                    scene->image_width = (u32 *)malloc(sizeof(u32) * scene->num_cams);
+                    scene->image_height = (u32 *)malloc(sizeof(u32) * scene->num_cams);    
                     for (u32 j = 0; j < scene->num_cams; j++)
                     {
                         scene->image_width[j] = demuxers[j]->GetWidth();
@@ -300,7 +302,6 @@ int main(int, char **)
                     render_allocate_scene_memory(scene, label_buffer_size);
                     
                     // multiple threads for decoding for selected videos
-                    int i = 0;            
                     for(int i = 0; i < scene->num_cams; i++)
                     {
                         decoder_threads.push_back(std::thread(&decoder_process, dc_context, demuxers[i], scene->display_buffer[i], scene->size_of_buffer, &scene->seek_context[i], scene->use_cpu_buffer));
@@ -309,8 +310,24 @@ int main(int, char **)
                     video_loaded = true;
                 } else {
                     printf("selected images \n");
+                    camera_names.push_back("imgs");
+                    dc_context->seek_interval = 1;
+
                     scene->num_cams = 1;
-                    
+                    scene->image_width = (u32 *)malloc(sizeof(u32) * scene->num_cams);
+                    scene->image_height = (u32 *)malloc(sizeof(u32) * scene->num_cams); 
+                    for (u32 j = 0; j < scene->num_cams; j++)
+                    {
+                        scene->image_width[j] = 3208;
+                        scene->image_height[j] = 2200;
+                    }
+                    render_allocate_scene_memory(scene, label_buffer_size);
+                    for(int i = 0; i < scene->num_cams; i++)
+                    {
+                        decoder_threads.push_back(std::thread(&image_loader, dc_context, selected_files, scene->display_buffer[i], scene->size_of_buffer, &scene->seek_context[i], scene->use_cpu_buffer));
+                        is_view_focused.push_back(false);
+                    }
+                    video_loaded = true;
 
                 }
             }

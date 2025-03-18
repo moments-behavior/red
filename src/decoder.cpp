@@ -250,36 +250,52 @@ void decoder_process(DecoderContext *dc_context, FFmpegDemuxer* demuxer, Picture
     } while (!(dc_context->stop_flag));
 }
 
-void image_loader(DecoderContext *dc_context, std::vector<std::string> img_list, PictureBuffer *display_buffer, int size_of_buffer, SeekInfo *seek_info, bool use_cpu_buffer)
+void image_loader(DecoderContext *dc_context, const std::map<std::string, std::string> &img_list, PictureBuffer *display_buffer, int size_of_buffer, SeekInfo *seek_info, bool use_cpu_buffer)
 {
     int buffer_head = 0;
     int frame_number = 0;
+    std::vector<std::pair<std::string, std::string>> img_list_vector(img_list.begin(), img_list.end());
+    dc_context->total_num_frame = img_list_vector.size();
+    dc_context->estimated_num_frames = img_list_vector.size();
     while(!(dc_context->stop_flag))
     {
-        if (frame_number == 0)
-        {
-            cv::Mat image = cv::imread(img_list[frame_number], cv::IMREAD_COLOR);  
-            cv::Mat image_rgba;
-            cv::cvtColor(image, image_rgba, cv::COLOR_BGR2RGBA);
-            size_t buffer_size = image.total() * image.elemSize(); // Rows * Cols * Channels
-            memcpy(display_buffer[buffer_head].frame, image_rgba.data, buffer_size);
+        if (seek_info->use_seek) {
+            buffer_head = 0;
+            frame_number = seek_info->seek_frame;
+            display_buffer[0].frame_number = -1;
+            seek_info->use_seek = false;
+            seek_info->seek_done = true;
+        } else {
+            if (frame_number < img_list_vector.size()) {
+                if (frame_number == 0)
+                {
+                    cv::Mat image = cv::imread(img_list_vector[frame_number].second, cv::IMREAD_COLOR);  
+                    cv::Mat image_rgba;
+                    cv::cvtColor(image, image_rgba, cv::COLOR_BGR2RGBA);
+                    size_t buffer_size = image_rgba.total() * image_rgba.elemSize(); // Rows * Cols * Channels
+                    memcpy(display_buffer[buffer_head].frame, image_rgba.data, buffer_size);
 
-            display_buffer[buffer_head].available_to_write = false;
-            dc_context->decoding_flag = true;
-            display_buffer[buffer_head].frame_number = frame_number;
+                    display_buffer[buffer_head].available_to_write = false;
+                    dc_context->decoding_flag = true;
+                    display_buffer[buffer_head].frame_number = frame_number;
+                } else {
+                    while (!display_buffer[buffer_head].available_to_write && !(dc_context->stop_flag) && !(seek_info->use_seek))
+                    {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                    }
+                    cv::Mat image = cv::imread(img_list_vector[frame_number].second, cv::IMREAD_COLOR);  
+                    cv::Mat image_rgba;
+                    cv::cvtColor(image, image_rgba, cv::COLOR_BGR2RGBA);
+                    size_t buffer_size = image_rgba.total() * image_rgba.elemSize(); // Rows * Cols * Channels
+                    memcpy(display_buffer[buffer_head].frame, image_rgba.data, buffer_size);
+                    display_buffer[buffer_head].available_to_write = false;
+                    display_buffer[buffer_head].frame_number = frame_number;
+                }
+                frame_number = frame_number + 1;
+                buffer_head = (buffer_head + 1) % size_of_buffer;
+            } else {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
         }
-        while (!display_buffer[buffer_head].available_to_write && !(dc_context->stop_flag) && !(seek_info->use_seek))
-        {
-            cv::Mat image = cv::imread(img_list[frame_number], cv::IMREAD_COLOR);  
-            cv::Mat image_rgba;
-            cv::cvtColor(image, image_rgba, cv::COLOR_BGR2RGBA);
-            size_t buffer_size = image.total() * image.elemSize(); // Rows * Cols * Channels
-            memcpy(display_buffer[buffer_head].frame, image_rgba.data, buffer_size);
-
-            display_buffer[buffer_head].available_to_write = false;
-            display_buffer[buffer_head].frame_number = frame_number;
-        }
-        frame_number = frame_number + 1;
-        buffer_head = (buffer_head + 1) % size_of_buffer;
     }
 }

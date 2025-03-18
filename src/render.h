@@ -34,11 +34,8 @@ void render_initialize_target(gx_context *context)
 static void render_allocate_scene_memory(render_scene *scene, u32 size_of_buffer)
 {
     int num_cams = scene->num_cams;
-    scene->image_width = (u32 *)malloc(sizeof(u32) * num_cams);
-    scene->image_height = (u32 *)malloc(sizeof(u32) * num_cams);    
     scene->image_texture = (GLuint *)malloc(sizeof(GLuint) * num_cams);
     scene->size_of_buffer = size_of_buffer;
-
 
     scene->seek_context = (SeekInfo *)malloc(sizeof(SeekInfo) * num_cams);
     for (u32 j = 0; j < num_cams; j++)
