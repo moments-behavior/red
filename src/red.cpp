@@ -99,7 +99,8 @@ int main(int, char **)
     int label_buffer_size = 64;
     bool show_help_window = false;
     std::vector<bool> is_view_focused;
-
+    bool input_is_imgs = false;
+    std::vector<std::pair<std::string, std::string>> selected_files_vector;
     while (!glfwWindowShouldClose(window->render_target))
     {
         // Poll and handle events (inputs, window resize, etc.)
@@ -309,7 +310,9 @@ int main(int, char **)
                     }
                     video_loaded = true;
                 } else {
-                    printf("selected images \n");
+                    input_is_imgs = true;
+                    selected_files_vector.clear();
+                    selected_files_vector.insert(selected_files_vector.begin(), selected_files.begin(), selected_files.end());
                     camera_names.push_back("imgs");
                     dc_context->seek_interval = 1;
 
@@ -318,13 +321,14 @@ int main(int, char **)
                     scene->image_height = (u32 *)malloc(sizeof(u32) * scene->num_cams); 
                     for (u32 j = 0; j < scene->num_cams; j++)
                     {
-                        scene->image_width[j] = 3208;
-                        scene->image_height[j] = 2200;
+                        cv::Mat image = cv::imread(first_selection.second, cv::IMREAD_COLOR);
+                        scene->image_width[j] = image.cols;
+                        scene->image_height[j] = image.rows;
                     }
                     render_allocate_scene_memory(scene, label_buffer_size);
                     for(int i = 0; i < scene->num_cams; i++)
                     {
-                        decoder_threads.push_back(std::thread(&image_loader, dc_context, selected_files, scene->display_buffer[i], scene->size_of_buffer, &scene->seek_context[i], scene->use_cpu_buffer));
+                        decoder_threads.push_back(std::thread(&image_loader, dc_context, selected_files_vector, scene->display_buffer[i], scene->size_of_buffer, &scene->seek_context[i], scene->use_cpu_buffer));
                         is_view_focused.push_back(false);
                     }
                     video_loaded = true;
@@ -796,7 +800,7 @@ int main(int, char **)
 
                 if (ImGui::Button("Save Labeled Data") || (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false)))
                 {
-                    save_keypoints(keypoints_map, skeleton, keypoints_root_folder, scene->num_cams, camera_names);
+                    save_keypoints(keypoints_map, skeleton, keypoints_root_folder, scene->num_cams, camera_names, &input_is_imgs, selected_files_vector);
                 }
 
                 if (ImGui::Button("Load Labeled Data"))

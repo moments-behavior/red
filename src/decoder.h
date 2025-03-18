@@ -38,6 +38,5 @@ void decoder_get_image_from_gpu(CUdeviceptr dpSrc, uint8_t *pDst, int nWidth, in
 void decoder_clear_buffer_with_constant_image(unsigned char *image_pt, int width, int height);
 void decoder_print_one_display_buffer(unsigned char *image_pt, int width, int height, int channels);
 void decoder_process(DecoderContext *dc_context, FFmpegDemuxer* demuxer, PictureBuffer *display_buffer, int size_of_buffer, SeekInfo *seek_context, bool use_cpu_buffer);
-void image_loader(DecoderContext *dc_context, const std::map<std::string, std::string> &img_list, PictureBuffer *display_buffer, int size_of_buffer, SeekInfo *seek_info, bool use_cpu_buffer);
-
+void image_loader(DecoderContext *dc_context, const std::vector<std::pair<std::string, std::string>> &img_list, PictureBuffer *display_buffer, int size_of_buffer, SeekInfo *seek_info, bool use_cpu_buffer);
 #endif

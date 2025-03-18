@@ -96,8 +96,6 @@ void decoder_process(DecoderContext *dc_context, FFmpegDemuxer* demuxer, Picture
     bool skip_first_decode_after_seek = false;
     do
     {
-
-        // todo: need to make seek_context thread safe
         if (seek_info->use_seek)
         {
             // demuxer.Flush();
@@ -250,16 +248,23 @@ void decoder_process(DecoderContext *dc_context, FFmpegDemuxer* demuxer, Picture
     } while (!(dc_context->stop_flag));
 }
 
-void image_loader(DecoderContext *dc_context, const std::map<std::string, std::string> &img_list, PictureBuffer *display_buffer, int size_of_buffer, SeekInfo *seek_info, bool use_cpu_buffer)
+void image_loader(DecoderContext *dc_context, const std::vector<std::pair<std::string, std::string>> &img_list_vector, PictureBuffer *display_buffer, int size_of_buffer, SeekInfo *seek_info, bool use_cpu_buffer)
 {
     int buffer_head = 0;
     int frame_number = 0;
-    std::vector<std::pair<std::string, std::string>> img_list_vector(img_list.begin(), img_list.end());
     dc_context->total_num_frame = img_list_vector.size();
     dc_context->estimated_num_frames = img_list_vector.size();
     while(!(dc_context->stop_flag))
     {
         if (seek_info->use_seek) {
+            // reset the display buffer after seeking
+            for (int i = 0; i < size_of_buffer; i++)
+            {
+                // if (use_cpu_buffer) {
+                //     decoder_clear_buffer_with_constant_image(display_buffer[i].frame, 3208, 2200);
+                // }
+                display_buffer[i].available_to_write = true;
+            }
             buffer_head = 0;
             frame_number = seek_info->seek_frame;
             display_buffer[0].frame_number = -1;
