@@ -248,7 +248,7 @@ void decoder_process(DecoderContext *dc_context, FFmpegDemuxer* demuxer, Picture
     } while (!(dc_context->stop_flag));
 }
 
-void image_loader(DecoderContext *dc_context, const std::vector<std::pair<std::string, std::string>> &img_list_vector, PictureBuffer *display_buffer, int size_of_buffer, SeekInfo *seek_info, bool use_cpu_buffer)
+void image_loader(DecoderContext *dc_context, const std::vector<std::string> &img_list_vector, PictureBuffer *display_buffer, int size_of_buffer, SeekInfo *seek_info, bool use_cpu_buffer, std::string cam_name, std::string root_dir)
 {
     int buffer_head = 0;
     int frame_number = 0;
@@ -274,7 +274,8 @@ void image_loader(DecoderContext *dc_context, const std::vector<std::pair<std::s
             if (frame_number < img_list_vector.size()) {
                 if (frame_number == 0)
                 {
-                    cv::Mat image = cv::imread(img_list_vector[frame_number].second, cv::IMREAD_COLOR);  
+                    std::string file_name = root_dir + "/" + cam_name + "_" + img_list_vector[frame_number]; 
+                    cv::Mat image = cv::imread(file_name, cv::IMREAD_COLOR);  
                     cv::Mat image_rgba;
                     cv::cvtColor(image, image_rgba, cv::COLOR_BGR2RGBA);
                     size_t buffer_size = image_rgba.total() * image_rgba.elemSize(); // Rows * Cols * Channels
@@ -288,7 +289,8 @@ void image_loader(DecoderContext *dc_context, const std::vector<std::pair<std::s
                     {
                         std::this_thread::sleep_for(std::chrono::milliseconds(1));
                     }
-                    cv::Mat image = cv::imread(img_list_vector[frame_number].second, cv::IMREAD_COLOR);  
+                    std::string file_name = root_dir + "/" + cam_name + "_" + img_list_vector[frame_number];
+                    cv::Mat image = cv::imread(file_name, cv::IMREAD_COLOR);  
                     cv::Mat image_rgba;
                     cv::cvtColor(image, image_rgba, cv::COLOR_BGR2RGBA);
                     size_t buffer_size = image_rgba.total() * image_rgba.elemSize(); // Rows * Cols * Channels

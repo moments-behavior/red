@@ -75,6 +75,7 @@ int main(int, char **)
     bool plot_keypoints_flag = false;
     int current_frame_num = 0;
     bool skeleton_chosen = false;
+    std::vector<std::string> imgs_names;
 
     // for labeling 
     SkeletonContext *skeleton;
@@ -100,7 +101,7 @@ int main(int, char **)
     bool show_help_window = false;
     std::vector<bool> is_view_focused;
     bool input_is_imgs = false;
-    std::vector<std::pair<std::string, std::string>> selected_files_vector;
+
     while (!glfwWindowShouldClose(window->render_target))
     {
         // Poll and handle events (inputs, window resize, etc.)
@@ -280,7 +281,7 @@ int main(int, char **)
                     for(const auto& elem : selected_files)
                     {
                         std::size_t cam_string_mp4_position = elem.first.find("mp4");
-                        std::string cam_string = elem.first.substr(0, cam_string_mp4_position-1); // get from "Cam" to the end
+                        std::string cam_string = elem.first.substr(0, cam_string_mp4_position-1); 
                         camera_names.push_back(cam_string);
                         std::cout << "camera names: " << cam_string << std::endl;
 
@@ -311,12 +312,23 @@ int main(int, char **)
                     video_loaded = true;
                 } else {
                     input_is_imgs = true;
-                    selected_files_vector.clear();
-                    selected_files_vector.insert(selected_files_vector.begin(), selected_files.begin(), selected_files.end());
-                    camera_names.push_back("imgs");
-                    dc_context->seek_interval = 1;
+                    for(const auto& elem : selected_files)
+                    {   
+                        std::size_t cam_string_position = elem.first.find("_");
+                        std::string cam_name = elem.first.substr(0, cam_string_position);
+                        std::string file_name = elem.first.substr(cam_string_position+1);
 
-                    scene->num_cams = 1;
+                        if (std::find(camera_names.begin(), camera_names.end(), cam_name) == camera_names.end()) {
+                            camera_names.push_back(cam_name);
+                        }
+
+                        if (std::find(imgs_names.begin(), imgs_names.end(), file_name) == imgs_names.end()) {
+                            imgs_names.push_back(file_name);
+                        }
+                    }
+
+                    dc_context->seek_interval = 1;
+                    scene->num_cams = camera_names.size();
                     scene->image_width = (u32 *)malloc(sizeof(u32) * scene->num_cams);
                     scene->image_height = (u32 *)malloc(sizeof(u32) * scene->num_cams); 
                     for (u32 j = 0; j < scene->num_cams; j++)
@@ -328,7 +340,7 @@ int main(int, char **)
                     render_allocate_scene_memory(scene, label_buffer_size);
                     for(int i = 0; i < scene->num_cams; i++)
                     {
-                        decoder_threads.push_back(std::thread(&image_loader, dc_context, selected_files_vector, scene->display_buffer[i], scene->size_of_buffer, &scene->seek_context[i], scene->use_cpu_buffer));
+                        decoder_threads.push_back(std::thread(&image_loader, dc_context, imgs_names, scene->display_buffer[i], scene->size_of_buffer, &scene->seek_context[i], scene->use_cpu_buffer, camera_names[i], root_dir));
                         is_view_focused.push_back(false);
                     }
                     video_loaded = true;
@@ -800,7 +812,7 @@ int main(int, char **)
 
                 if (ImGui::Button("Save Labeled Data") || (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false)))
                 {
-                    save_keypoints(keypoints_map, skeleton, keypoints_root_folder, scene->num_cams, camera_names, &input_is_imgs, selected_files_vector);
+                    save_keypoints(keypoints_map, skeleton, keypoints_root_folder, scene->num_cams, camera_names, &input_is_imgs, imgs_names);
                 }
 
                 if (ImGui::Button("Load Labeled Data"))

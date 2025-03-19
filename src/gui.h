@@ -204,7 +204,7 @@ void save_keypoints(std::map<u32, KeyPoints*> keypoints_map,
     int num_cameras, 
     std::vector<std::string>& camera_names,
     bool* input_is_imgs,
-    const std::vector<std::pair<std::string, std::string>>& input_files
+    const std::vector<std::string>& input_files
     )
 {
     std::string now = current_date_time();
@@ -229,7 +229,11 @@ void save_keypoints(std::map<u32, KeyPoints*> keypoints_map,
         uint frame = it->first;
         KeyPoints* keypoints = it->second;
         // write frame number
-        output_file << frame << ",";
+        if (*input_is_imgs) {
+            output_file << input_files[frame] << ",";
+        } else {
+            output_file << frame << ",";
+        }
         // fore each labeled keypoint, write idx, xpos, ypos, zpos
         for (uint i = 0; i < skeleton->num_nodes; i++)
         {   
@@ -244,7 +248,7 @@ void save_keypoints(std::map<u32, KeyPoints*> keypoints_map,
 
         for (int cam = 0; cam < num_cameras; cam++) {
             if (*input_is_imgs) {
-                output2d_files[cam] << input_files[frame].second << ",";
+                output2d_files[cam] << input_files[frame] << ",";
             } else {
                 output2d_files[cam] << frame << ",";
             }
