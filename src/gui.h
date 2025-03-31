@@ -198,7 +198,14 @@ const std::string current_date_time() {
 }
 
 
-void save_keypoints(std::map<u32, KeyPoints*> keypoints_map, SkeletonContext* skeleton, std::string root_dir, int num_cameras, std::vector<std::string>& camera_names)
+void save_keypoints(std::map<u32, KeyPoints*> keypoints_map, 
+    SkeletonContext* skeleton, 
+    std::string root_dir, 
+    int num_cameras, 
+    std::vector<std::string>& camera_names,
+    bool* input_is_imgs,
+    const std::vector<std::string>& input_files
+    )
 {
     std::string now = current_date_time();
     std::string filename = root_dir + "/worldKeyPoints/keypoints_" + now + ".csv";
@@ -222,7 +229,11 @@ void save_keypoints(std::map<u32, KeyPoints*> keypoints_map, SkeletonContext* sk
         uint frame = it->first;
         KeyPoints* keypoints = it->second;
         // write frame number
-        output_file << frame << ",";
+        if (*input_is_imgs) {
+            output_file << input_files[frame] << ",";
+        } else {
+            output_file << frame << ",";
+        }
         // fore each labeled keypoint, write idx, xpos, ypos, zpos
         for (uint i = 0; i < skeleton->num_nodes; i++)
         {   
@@ -236,7 +247,11 @@ void save_keypoints(std::map<u32, KeyPoints*> keypoints_map, SkeletonContext* sk
         output_file << "\n";
 
         for (int cam = 0; cam < num_cameras; cam++) {
-            output2d_files[cam] << frame << ",";
+            if (*input_is_imgs) {
+                output2d_files[cam] << input_files[frame] << ",";
+            } else {
+                output2d_files[cam] << frame << ",";
+            }
             for (int node = 0; node < skeleton->num_nodes; node++) {
                 if (node == skeleton->num_nodes - 1) {
                     // last keypoints (RJ added extra "," at end of row)
