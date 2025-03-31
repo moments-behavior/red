@@ -113,13 +113,13 @@ static void gui_plot_bbox_from_keypoints(KeyPoints *keypoints, SkeletonContext *
 }
 
 
-static void reprojection(KeyPoints *keypoints, SkeletonContext *skeleton, std::vector<CameraParams> camera_params, int num_cams)
+static void reprojection(KeyPoints *keypoints, SkeletonContext *skeleton, std::vector<CameraParams> camera_params, render_scene* scene)
 {
    
     for (u32 node=0; node < skeleton->num_nodes; node++){
 
         u32 num_views_labeled {0}; 
-        for (u32 view_idx = 0; view_idx < num_cams; view_idx++){
+        for (u32 view_idx = 0; view_idx < scene->num_cams; view_idx++){
             if(keypoints->keypoints2d[view_idx][node].is_labeled) {num_views_labeled++;}
         }
 
@@ -129,11 +129,12 @@ static void reprojection(KeyPoints *keypoints, SkeletonContext *skeleton, std::v
             std::vector<cv::Mat> projection_matrices;
             cv::Mat output;
 
-            for (u32 view_idx = 0; view_idx < num_cams; view_idx++)
+            for (u32 view_idx = 0; view_idx < scene->num_cams; view_idx++)
             {
                 if(keypoints->keypoints2d[view_idx][node].is_labeled)
                 {
-                    cv::Mat point = (cv::Mat_<float>(2, 1) << keypoints->keypoints2d[view_idx][node].position.x, (float)2200 - keypoints->keypoints2d[view_idx][node].position.y);
+                    
+                    cv::Mat point = (cv::Mat_<float>(2, 1) << keypoints->keypoints2d[view_idx][node].position.x, (float)scene->image_height[view_idx] - keypoints->keypoints2d[view_idx][node].position.y);
                     cv::Mat pointUndistort;
                     cv::undistortPoints(point, pointUndistort, camera_params[view_idx].k, camera_params[view_idx].dist_coeffs, cv::noArray(), camera_params[view_idx].k);
                     
@@ -149,16 +150,18 @@ static void reprojection(KeyPoints *keypoints, SkeletonContext *skeleton, std::v
             keypoints->keypoints3d[node].y = output.at<float>(1);
             keypoints->keypoints3d[node].z = output.at<float>(2);
 
-            for (u32 view_idx = 0; view_idx < num_cams; view_idx++)
+            for (u32 view_idx = 0; view_idx < scene->num_cams; view_idx++)
             {
                 cv::Mat imagePts;
                 cv::projectPoints(output, camera_params[view_idx].rvec, camera_params[view_idx].tvec, camera_params[view_idx].k, camera_params[view_idx].dist_coeffs, imagePts);
                 double x = imagePts.at<float>(0, 0);
-                double y = float(2200) - imagePts.at<float>(0, 1);
-                keypoints->keypoints2d[view_idx][node].position.x = x;
-                keypoints->keypoints2d[view_idx][node].position.y = y;
-                keypoints->keypoints2d[view_idx][node].is_labeled = true;
-                keypoints->keypoints2d[view_idx][node].is_triangulated = true;
+                double y = float(scene->image_height[view_idx]) - imagePts.at<float>(0, 1);
+                if (x > 0 && x <= scene->image_height[view_idx] && y > 0 && y <= scene->image_height[view_idx]) {
+                    keypoints->keypoints2d[view_idx][node].position.x = x;
+                    keypoints->keypoints2d[view_idx][node].position.y = y;
+                    keypoints->keypoints2d[view_idx][node].is_labeled = true;
+                    keypoints->keypoints2d[view_idx][node].is_triangulated = true;
+                }
             }
         }
 
