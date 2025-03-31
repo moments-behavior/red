@@ -124,7 +124,7 @@ int main(int, char **)
                         IGFD::FileDialogConfig config;
                         config.countSelectionMax = 0;
                         config.path = start_folder_name;
-		                ImGuiFileDialog::Instance()->OpenDialog("ChooseFileDlgKey", "Choose File", ".tiff,.mp4", config);
+		                ImGuiFileDialog::Instance()->OpenDialog("ChooseFileDlgKey", "Choose File", ".mp4,.tiff,.jpeg,.png", config);
                     };
                     ImGui::EndMenu();
                 }
