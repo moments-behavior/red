@@ -156,7 +156,7 @@ static void reprojection(KeyPoints *keypoints, SkeletonContext *skeleton, std::v
                 cv::projectPoints(output, camera_params[view_idx].rvec, camera_params[view_idx].tvec, camera_params[view_idx].k, camera_params[view_idx].dist_coeffs, imagePts);
                 double x = imagePts.at<float>(0, 0);
                 double y = float(scene->image_height[view_idx]) - imagePts.at<float>(0, 1);
-                if (x > 0 && x <= scene->image_height[view_idx] && y > 0 && y <= scene->image_height[view_idx]) {
+                if (x > 0 && x < scene->image_width[view_idx] && y > 0 && y < scene->image_height[view_idx]) {
                     keypoints->keypoints2d[view_idx][node].position.x = x;
                     keypoints->keypoints2d[view_idx][node].position.y = y;
                     keypoints->keypoints2d[view_idx][node].is_labeled = true;
