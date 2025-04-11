@@ -88,7 +88,7 @@ int main(int, char **)
     std::string delimiter = "/";
     std::vector<std::string> tokenized_path = string_split (cwd, delimiter);
     std::string start_folder_name = "/home/" + tokenized_path[2] + "/data";
-    start_folder_name = "/home/user/data/2025_03_17/robot";
+    start_folder_name = "/nfs/exports/ratlv";
     ImVec4 clear_color = ImVec4(0.0f, 0.0f, 0.0f, 1.00f);
     ImGuiIO &io = ImGui::GetIO();
 
@@ -333,9 +333,13 @@ int main(int, char **)
                     scene->image_height = (u32 *)malloc(sizeof(u32) * scene->num_cams); 
                     for (u32 j = 0; j < scene->num_cams; j++)
                     {
-                        cv::Mat image = cv::imread(first_selection.second, cv::IMREAD_COLOR);
+                        std::string file_name = root_dir + "/" + camera_names[j] + "_" + imgs_names[0];
+                        cv::Mat image = cv::imread(file_name, cv::IMREAD_COLOR);
                         scene->image_width[j] = image.cols;
                         scene->image_height[j] = image.rows;
+                    }
+                    if (imgs_names.size() < label_buffer_size) {
+                        label_buffer_size = imgs_names.size();
                     }
                     render_allocate_scene_memory(scene, label_buffer_size);
                     for(int i = 0; i < scene->num_cams; i++)
@@ -406,7 +410,11 @@ int main(int, char **)
                     {
                         int seletable_frame_id = (i + read_head) % scene->size_of_buffer;
                         char label[32];
-                        sprintf(label, "Frame %d", scene->display_buffer[0][seletable_frame_id].frame_number);
+                        if (input_is_imgs) {
+                            snprintf(label, sizeof(label), "%s", imgs_names[i].c_str());
+                        } else {
+                            sprintf(label, "Frame %d", scene->display_buffer[0][seletable_frame_id].frame_number);
+                        }
                         if (ImGui::Selectable(label, pause_selected == i))
                         {
                             // start from the lowest frame
