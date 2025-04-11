@@ -31,19 +31,11 @@ void render_initialize_target(gx_context *context)
     gx_imgui_init(context);
 }
 
-static void render_allocate_scene_memory(render_scene *scene, std::vector<FFmpegDemuxer*>& demuxers, u32 num_cams, u32 size_of_buffer)
+static void render_allocate_scene_memory(render_scene *scene, u32 size_of_buffer)
 {
-    scene->num_cams = num_cams;
-    scene->image_width = (u32 *)malloc(sizeof(u32) * num_cams);
-    scene->image_height = (u32 *)malloc(sizeof(u32) * num_cams);    
+    int num_cams = scene->num_cams;
     scene->image_texture = (GLuint *)malloc(sizeof(GLuint) * num_cams);
     scene->size_of_buffer = size_of_buffer;
-
-    for (u32 j = 0; j < num_cams; j++)
-    {
-        scene->image_width[j] = demuxers[j]->GetWidth();
-        scene->image_height[j] = demuxers[j]->GetHeight();
-    }
 
     scene->seek_context = (SeekInfo *)malloc(sizeof(SeekInfo) * num_cams);
     for (u32 j = 0; j < num_cams; j++)

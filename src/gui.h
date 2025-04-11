@@ -34,12 +34,13 @@ static void gui_plot_keypoints(KeyPoints *keypoints, SkeletonContext *skeleton, 
         if (keypoints->keypoints2d[view_idx][node].is_labeled){
             ImVec4 node_color; 
             if (keypoints->active_id[view_idx]==node) {
-                node_color = (ImVec4)ImColor::HSV(0.8, 0.9f, 0.9f);
+                node_color = (ImVec4)ImColor::HSV(0.8, 1.0f, 1.0f);
+                node_color.w = 0.9;
+                pt_size = 8.0f;
             } else {
-                node_color.w = 1.0f; 
-                node_color.x = skeleton->node_colors.at(node).x;
-                node_color.y = skeleton->node_colors.at(node).y;
-                node_color.z = skeleton->node_colors.at(node).z;
+                node_color = skeleton->node_colors.at(node);
+                node_color.w = 0.9;
+                pt_size = 6.0f;
             }
             int id = skeleton->num_nodes * view_idx + node;
             static bool drag_point_clicked;
@@ -112,13 +113,13 @@ static void gui_plot_bbox_from_keypoints(KeyPoints *keypoints, SkeletonContext *
 }
 
 
-static void reprojection(KeyPoints *keypoints, SkeletonContext *skeleton, std::vector<CameraParams> camera_params, int num_cams)
+static void reprojection(KeyPoints *keypoints, SkeletonContext *skeleton, std::vector<CameraParams> camera_params, render_scene* scene)
 {
    
     for (u32 node=0; node < skeleton->num_nodes; node++){
 
         u32 num_views_labeled {0}; 
-        for (u32 view_idx = 0; view_idx < num_cams; view_idx++){
+        for (u32 view_idx = 0; view_idx < scene->num_cams; view_idx++){
             if(keypoints->keypoints2d[view_idx][node].is_labeled) {num_views_labeled++;}
         }
 
@@ -128,11 +129,12 @@ static void reprojection(KeyPoints *keypoints, SkeletonContext *skeleton, std::v
             std::vector<cv::Mat> projection_matrices;
             cv::Mat output;
 
-            for (u32 view_idx = 0; view_idx < num_cams; view_idx++)
+            for (u32 view_idx = 0; view_idx < scene->num_cams; view_idx++)
             {
                 if(keypoints->keypoints2d[view_idx][node].is_labeled)
                 {
-                    cv::Mat point = (cv::Mat_<float>(2, 1) << keypoints->keypoints2d[view_idx][node].position.x, (float)2200 - keypoints->keypoints2d[view_idx][node].position.y);
+                    
+                    cv::Mat point = (cv::Mat_<float>(2, 1) << keypoints->keypoints2d[view_idx][node].position.x, (float)scene->image_height[view_idx] - keypoints->keypoints2d[view_idx][node].position.y);
                     cv::Mat pointUndistort;
                     cv::undistortPoints(point, pointUndistort, camera_params[view_idx].k, camera_params[view_idx].dist_coeffs, cv::noArray(), camera_params[view_idx].k);
                     
@@ -148,16 +150,18 @@ static void reprojection(KeyPoints *keypoints, SkeletonContext *skeleton, std::v
             keypoints->keypoints3d[node].y = output.at<float>(1);
             keypoints->keypoints3d[node].z = output.at<float>(2);
 
-            for (u32 view_idx = 0; view_idx < num_cams; view_idx++)
+            for (u32 view_idx = 0; view_idx < scene->num_cams; view_idx++)
             {
                 cv::Mat imagePts;
                 cv::projectPoints(output, camera_params[view_idx].rvec, camera_params[view_idx].tvec, camera_params[view_idx].k, camera_params[view_idx].dist_coeffs, imagePts);
                 double x = imagePts.at<float>(0, 0);
-                double y = float(2200) - imagePts.at<float>(0, 1);
-                keypoints->keypoints2d[view_idx][node].position.x = x;
-                keypoints->keypoints2d[view_idx][node].position.y = y;
-                keypoints->keypoints2d[view_idx][node].is_labeled = true;
-                keypoints->keypoints2d[view_idx][node].is_triangulated = true;
+                double y = float(scene->image_height[view_idx]) - imagePts.at<float>(0, 1);
+                if (x > 0 && x < scene->image_width[view_idx] && y > 0 && y < scene->image_height[view_idx]) {
+                    keypoints->keypoints2d[view_idx][node].position.x = x;
+                    keypoints->keypoints2d[view_idx][node].position.y = y;
+                    keypoints->keypoints2d[view_idx][node].is_labeled = true;
+                    keypoints->keypoints2d[view_idx][node].is_triangulated = true;
+                }
             }
         }
 
@@ -197,7 +201,14 @@ const std::string current_date_time() {
 }
 
 
-void save_keypoints(std::map<u32, KeyPoints*> keypoints_map, SkeletonContext* skeleton, std::string root_dir, int num_cameras, std::vector<std::string>& camera_names)
+void save_keypoints(std::map<u32, KeyPoints*> keypoints_map, 
+    SkeletonContext* skeleton, 
+    std::string root_dir, 
+    int num_cameras, 
+    std::vector<std::string>& camera_names,
+    bool* input_is_imgs,
+    const std::vector<std::string>& input_files
+    )
 {
     std::string now = current_date_time();
     std::string filename = root_dir + "/worldKeyPoints/keypoints_" + now + ".csv";
@@ -221,7 +232,11 @@ void save_keypoints(std::map<u32, KeyPoints*> keypoints_map, SkeletonContext* sk
         uint frame = it->first;
         KeyPoints* keypoints = it->second;
         // write frame number
-        output_file << frame << ",";
+        if (*input_is_imgs) {
+            output_file << input_files[frame] << ",";
+        } else {
+            output_file << frame << ",";
+        }
         // fore each labeled keypoint, write idx, xpos, ypos, zpos
         for (uint i = 0; i < skeleton->num_nodes; i++)
         {   
@@ -235,7 +250,11 @@ void save_keypoints(std::map<u32, KeyPoints*> keypoints_map, SkeletonContext* sk
         output_file << "\n";
 
         for (int cam = 0; cam < num_cameras; cam++) {
-            output2d_files[cam] << frame << ",";
+            if (*input_is_imgs) {
+                output2d_files[cam] << input_files[frame] << ",";
+            } else {
+                output2d_files[cam] << frame << ",";
+            }
             for (int node = 0; node < skeleton->num_nodes; node++) {
                 if (node == skeleton->num_nodes - 1) {
                     // last keypoints (RJ added extra "," at end of row)

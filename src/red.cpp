@@ -10,7 +10,7 @@
 #include <iostream>
 #include <thread>
 #include <ImGuiFileDialog.h>
-#include <camera.h>
+#include "camera.h"
 #include "skeleton.h"
 #include "gui.h"
 #include "yolo_detection.h"
@@ -75,6 +75,7 @@ int main(int, char **)
     bool plot_keypoints_flag = false;
     int current_frame_num = 0;
     bool skeleton_chosen = false;
+    std::vector<std::string> imgs_names;
 
     // for labeling 
     SkeletonContext *skeleton;
@@ -86,9 +87,8 @@ int main(int, char **)
     std::filesystem::path cwd = std::filesystem::current_path();
     std::string delimiter = "/";
     std::vector<std::string> tokenized_path = string_split (cwd, delimiter);
-    // std::string start_folder_name = "/home/" + tokenized_path[2] + "/data";
-    std::string start_folder_name = "/nfs/exports/ratlv";
-    
+    std::string start_folder_name = "/home/" + tokenized_path[2] + "/data";
+    start_folder_name = "/home/user/data/2025_03_17/robot";
     ImVec4 clear_color = ImVec4(0.0f, 0.0f, 0.0f, 1.00f);
     ImGuiIO &io = ImGui::GetIO();
 
@@ -100,6 +100,7 @@ int main(int, char **)
     int label_buffer_size = 64;
     bool show_help_window = false;
     std::vector<bool> is_view_focused;
+    bool input_is_imgs = false;
 
     while (!glfwWindowShouldClose(window->render_target))
     {
@@ -123,7 +124,7 @@ int main(int, char **)
                         IGFD::FileDialogConfig config;
                         config.countSelectionMax = 0;
                         config.path = start_folder_name;
-		                ImGuiFileDialog::Instance()->OpenDialog("ChooseFileDlgKey", "Choose File", ".mp4", config);
+		                ImGuiFileDialog::Instance()->OpenDialog("ChooseFileDlgKey", "Choose File", ".mp4,.tiff,.jpeg,.png", config);
                     };
                     ImGui::EndMenu();
                 }
@@ -206,7 +207,7 @@ int main(int, char **)
                 ImGui::EndMenuBar();
             }
 
-            ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
+            // ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
 
             // if (video_loaded) {
             //     ImGui::Text("Frame number %d ", scene->display_buffer[0][read_head].frame_number);
@@ -214,17 +215,28 @@ int main(int, char **)
             //     ImGui::Text("Readhead %d", read_head);
             // }
             if (!video_loaded) {
-                ImGui::Checkbox("CPU Buffer", &cpu_buffer_toggle);
-                ImGui::InputInt("Buffer Size", &label_buffer_size, ImGuiInputTextFlags_EnterReturnsTrue);
+                {
+                    const char* items[] = { "CPU Buffer", "GPU Buffer"};
+                    static int item_current = 0;
+                    ImGui::Combo("Buffer type", &item_current, items, IM_ARRAYSIZE(items));
+                    if (item_current == 0) {
+                        scene->use_cpu_buffer = true;
+                    } else {
+                        scene->use_cpu_buffer = false;
+                    }
+                }
+
+                ImGui::InputInt("Buffer size", &label_buffer_size);
             }
-            scene->use_cpu_buffer = cpu_buffer_toggle;
             if (video_loaded) {
-                if (ImGui::InputInt("Seek step", &dc_context->seek_interval, 10, 100, ImGuiInputTextFlags_EnterReturnsTrue)) {
+                if (ImGui::InputInt("Seek step", &dc_context->seek_interval, 10, 100)) {
                     std::cout << "Seek step: " << dc_context->seek_interval << std::endl;
                 }
 
                 static int seek_accurate_frame_num = 0;
-                if (ImGui::InputInt("Seek Accurate", &seek_accurate_frame_num, 1, 100, ImGuiInputTextFlags_EnterReturnsTrue)) {
+                ImGui::InputInt("Seek Accurate", &seek_accurate_frame_num, 1, 100);
+                if (ImGui::IsItemDeactivatedAfterEdit()) 
+                {
                     std::cout << "Seek accurate to: " << seek_accurate_frame_num << std::endl;
                     for (int i = 0; i < scene->num_cams; i++)
                     {
@@ -260,33 +272,80 @@ int main(int, char **)
         { // => will show a dialog
             if (ImGuiFileDialog::Instance()->IsOk())
             { // action if OK
-                auto selected_movies = ImGuiFileDialog::Instance()->GetSelection();
+                auto selected_files = ImGuiFileDialog::Instance()->GetSelection();
                 root_dir = ImGuiFileDialog::Instance()->GetCurrentPath();
-                for(const auto& elem : selected_movies)
-                {
-                    std::size_t cam_string_mp4_position = elem.first.find("mp4");
-                    std::string cam_string = elem.first.substr(0, cam_string_mp4_position-1); // get from "Cam" to the end
-                    camera_names.push_back(cam_string);
-                    std::cout << "camera names: " << cam_string << std::endl;
 
+                // check if it is mp4, if it is mp4 files
+                auto first_selection = *selected_files.begin(); // Dereferencing iterator
+                if (string_ends_with(first_selection.first, ".mp4")) {
+                    for(const auto& elem : selected_files)
+                    {
+                        std::size_t cam_string_mp4_position = elem.first.find("mp4");
+                        std::string cam_string = elem.first.substr(0, cam_string_mp4_position-1); 
+                        camera_names.push_back(cam_string);
+                        std::cout << "camera names: " << cam_string << std::endl;
+
+                        std::map<std::string, std::string> m;
+                        FFmpegDemuxer* demuxer = new FFmpegDemuxer(elem.second.c_str(), m);
+                        demuxers.push_back(demuxer);
+                    }
                     std::map<std::string, std::string> m;
-                    FFmpegDemuxer* demuxer = new FFmpegDemuxer(elem.second.c_str(), m);
-                    demuxers.push_back(demuxer);
+                    FFmpegDemuxer dummy_dmuxer(selected_files.begin()->second.c_str(), m);
+                    dc_context->seek_interval = (int)dummy_dmuxer.FindKeyFrameInterval(); // get the seek interval
+                    
+                    scene->num_cams = selected_files.size();
+                    scene->image_width = (u32 *)malloc(sizeof(u32) * scene->num_cams);
+                    scene->image_height = (u32 *)malloc(sizeof(u32) * scene->num_cams);    
+                    for (u32 j = 0; j < scene->num_cams; j++)
+                    {
+                        scene->image_width[j] = demuxers[j]->GetWidth();
+                        scene->image_height[j] = demuxers[j]->GetHeight();
+                    }
+                    render_allocate_scene_memory(scene, label_buffer_size);
+                    
+                    // multiple threads for decoding for selected videos
+                    for(int i = 0; i < scene->num_cams; i++)
+                    {
+                        decoder_threads.push_back(std::thread(&decoder_process, dc_context, demuxers[i], scene->display_buffer[i], scene->size_of_buffer, &scene->seek_context[i], scene->use_cpu_buffer));
+                        is_view_focused.push_back(false);
+                    }
+                    video_loaded = true;
+                } else {
+                    input_is_imgs = true;
+                    for(const auto& elem : selected_files)
+                    {   
+                        std::size_t cam_string_position = elem.first.find("_");
+                        std::string cam_name = elem.first.substr(0, cam_string_position);
+                        std::string file_name = elem.first.substr(cam_string_position+1);
+
+                        if (std::find(camera_names.begin(), camera_names.end(), cam_name) == camera_names.end()) {
+                            camera_names.push_back(cam_name);
+                        }
+
+                        if (std::find(imgs_names.begin(), imgs_names.end(), file_name) == imgs_names.end()) {
+                            imgs_names.push_back(file_name);
+                        }
+                    }
+
+                    dc_context->seek_interval = 1;
+                    scene->num_cams = camera_names.size();
+                    scene->image_width = (u32 *)malloc(sizeof(u32) * scene->num_cams);
+                    scene->image_height = (u32 *)malloc(sizeof(u32) * scene->num_cams); 
+                    for (u32 j = 0; j < scene->num_cams; j++)
+                    {
+                        cv::Mat image = cv::imread(first_selection.second, cv::IMREAD_COLOR);
+                        scene->image_width[j] = image.cols;
+                        scene->image_height[j] = image.rows;
+                    }
+                    render_allocate_scene_memory(scene, label_buffer_size);
+                    for(int i = 0; i < scene->num_cams; i++)
+                    {
+                        decoder_threads.push_back(std::thread(&image_loader, dc_context, imgs_names, scene->display_buffer[i], scene->size_of_buffer, &scene->seek_context[i], scene->use_cpu_buffer, camera_names[i], root_dir));
+                        is_view_focused.push_back(false);
+                    }
+                    video_loaded = true;
+
                 }
-                std::map<std::string, std::string> m;
-                FFmpegDemuxer dummy_dmuxer(selected_movies.begin()->second.c_str(), m);
-                dc_context->seek_interval = (int)dummy_dmuxer.FindKeyFrameInterval(); // get the seek interval
-                
-                render_allocate_scene_memory(scene, demuxers, selected_movies.size(), label_buffer_size);
-                
-                // multiple threads for decoding for selected videos
-                int i = 0;            
-                for(int i = 0; i < scene->num_cams; i++)
-                {
-                    decoder_threads.push_back(std::thread(&decoder_process, dc_context, demuxers[i], scene->display_buffer[i], scene->size_of_buffer, &scene->seek_context[i], scene->use_cpu_buffer));
-                    is_view_focused.push_back(false);
-                }
-                video_loaded = true;
             }
             // close
             ImGuiFileDialog::Instance()->Close();
@@ -342,12 +401,12 @@ int main(int, char **)
             ImGui::SetNextWindowSize(ImVec2(500, 440), ImGuiCond_FirstUseEver);
             if (ImGui::Begin("Frames in the buffer"))
             {
-                ImGui::Text("Frame number selected: %d", scene->display_buffer[0][select_corr_head].frame_number);
                 {
                     for (u32 i = 0; i < scene->size_of_buffer; i++)
                     {
-                        char label[128];
-                        sprintf(label, "Buffer %d", i);
+                        int seletable_frame_id = (i + read_head) % scene->size_of_buffer;
+                        char label[32];
+                        sprintf(label, "Frame %d", scene->display_buffer[0][seletable_frame_id].frame_number);
                         if (ImGui::Selectable(label, pause_selected == i))
                         {
                             // start from the lowest frame
@@ -356,9 +415,7 @@ int main(int, char **)
                     }
                 }
 
-                ImGui::Separator();
-
-                if (ImGui::Button(ICON_FK_MINUS) || ImGui::IsKeyPressed(ImGuiKey_Comma, true))
+                if (ImGui::IsKeyPressed(ImGuiKey_Comma, true))
                 {
                     if (pause_selected > 0)
                     {
@@ -366,8 +423,7 @@ int main(int, char **)
                     }
                 };
 
-                ImGui::SameLine();
-                if (ImGui::Button(ICON_FK_PLUS) || ImGui::IsKeyPressed(ImGuiKey_Period, true))
+                if (ImGui::IsKeyPressed(ImGuiKey_Period, true))
                 {
                     if (pause_selected < (scene->size_of_buffer - 1))
                     {
@@ -452,7 +508,7 @@ int main(int, char **)
                 // ImGui::Image((void*)(intptr_t)image_texture[j], avail_size);
                 if (ImPlot::BeginPlot("##no_plot_name", avail_size, ImPlotFlags_Equal | ImPlotAxisFlags_AutoFit | ImPlotFlags_Crosshairs))
                 {
-                    ImPlot::PlotImage("##no_image_name", (void *)(intptr_t)scene->image_texture[j], ImVec2(0, 0), ImVec2(scene->image_width[j], scene->image_height[j]));
+                    ImPlot::PlotImage("##no_image_name", (ImTextureID)(intptr_t)scene->image_texture[j], ImVec2(0, 0), ImVec2(scene->image_width[j], scene->image_height[j]));
                     
                     if (yolo_detection){
                         draw_cv_contours(yolo_boxes.at(j), yolo_labels.at(j), yolo_classid.at(j));
@@ -570,7 +626,7 @@ int main(int, char **)
                 }
                 else
                 {
-                    if (ImGui::Button(play_video ? ICON_FK_PAUSE : ICON_FK_PLAY)  ||  ImGui::IsKeyPressed(ImGuiKey_Space, true))
+                    if (ImGui::Button(play_video ? ICON_FK_PAUSE : ICON_FK_PLAY))
                     {
                         play_video = !play_video;
                         if (!play_video) {
@@ -631,6 +687,13 @@ int main(int, char **)
                 ImGui::EndGroup();
                 ImGui::End();
             }
+
+            if (ImGui::IsKeyPressed(ImGuiKey_Space, false)) {
+                play_video = !play_video;
+                if (!play_video) {
+                    pause_selected = 0;
+                }
+            }
         }
 
 
@@ -643,6 +706,7 @@ int main(int, char **)
                     const int rows_count = scene->num_cams;
                     const int columns_count= skeleton->num_nodes+1;
 
+
                     static ImGuiTableFlags table_flags = ImGuiTableFlags_ScrollX | ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_BordersOuter | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_Hideable | ImGuiTableFlags_Resizable | ImGuiTableFlags_HighlightHoveredColumn;
 
                     if (ImGui::BeginTable("table_angled_headers", columns_count, table_flags, ImVec2(0.0f, TEXT_BASE_HEIGHT * 12)))
@@ -650,7 +714,8 @@ int main(int, char **)
                         ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_NoHide | ImGuiTableColumnFlags_NoReorder);
                         for (int column = 1; column < columns_count; column++)
                             ImGui::TableSetupColumn(skeleton->node_names[column-1].c_str(), ImGuiTableColumnFlags_AngledHeader | ImGuiTableColumnFlags_WidthFixed);
-
+                        ImGui::TableSetupScrollFreeze(1, 2);
+                        
                         ImGui::TableAngledHeadersRow(); // Draw angled headers for all columns with the ImGuiTableColumnFlags_AngledHeader flag.
                         ImGui::TableHeadersRow();       // Draw remaining headers and allow access to context-menu and other functions.
 
@@ -660,7 +725,7 @@ int main(int, char **)
                             ImGui::TableNextRow();
 
                             if (is_view_focused[row] && keypoints_find) {
-                                ImU32 row_bg_color = ImGui::GetColorU32(ImVec4(0.7f, 0.3f, 0.3f, 0.65f)); 
+                                ImU32 row_bg_color = ImGui::GetColorU32(ImVec4(0.7f, 0.3f, 0.3f, 0.65f));  
                                 ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, row_bg_color);
                             }
 
@@ -674,21 +739,19 @@ int main(int, char **)
                                         ImVec4 node_color;
                                         if(keypoints_map[current_frame_num]->active_id[row] == column-1)
                                         {
-                                            node_color = (ImVec4)ImColor::HSV(0.8, 0.9f, 0.9f);
+                                            node_color = (ImVec4)ImColor::HSV(0.8, 1.0f, 1.0f);
                                         }  else {
                                             if (keypoints_map[current_frame_num]->keypoints2d[row][column-1].is_labeled) 
                                             {
-                                                node_color.w = 0.5;
-                                                node_color.x = skeleton->node_colors[column-1].x;
-                                                node_color.y = skeleton->node_colors[column-1].y;
-                                                node_color.z = skeleton->node_colors[column-1].z;
-                                            }
-
-                                            if (keypoints_map[current_frame_num]->keypoints2d[row][column-1].is_triangulated) 
-                                            {
-                                               ImGui::TextColored(ImVec4(1.0f, 0.0f, 1.0f, 1.0f), "T");
-                                            }    
+                                                node_color = skeleton->node_colors[column-1];
+                                                node_color.w = 0.9;
+                                            }   
                                         }
+
+                                        if (keypoints_map[current_frame_num]->keypoints2d[row][column-1].is_triangulated) 
+                                        {
+                                            ImGui::TextColored(ImVec4(1.0f, 1.0f, 1.0f, 1.0f), "T");
+                                        }    
                                         
                                         ImU32 cell_bg_color = ImGui::GetColorU32(node_color);
                                         ImGui::TableSetBgColor(ImGuiTableBgTarget_CellBg, cell_bg_color);
@@ -727,14 +790,14 @@ int main(int, char **)
                     }
 
                     if (!keypoint_triangulated_all && keypoints_find) {
-                        ImGui::PushStyleColor(ImGuiCol_Button, (ImVec4)ImColor::HSV(0.8, 0.9f, 0.9f));
-                        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, (ImVec4)ImColor::HSV(0.8, 0.9f, 0.9f));
-                        ImGui::PushStyleColor(ImGuiCol_ButtonActive, (ImVec4)ImColor::HSV(0.8, 0.9f, 0.9f));
+                        ImGui::PushStyleColor(ImGuiCol_Button, (ImVec4)ImColor::HSV(0.8, 1.0f, 1.0f));
+                        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, (ImVec4)ImColor::HSV(0.8, 0.9f, 0.8f));
+                        ImGui::PushStyleColor(ImGuiCol_ButtonActive, (ImVec4)ImColor::HSV(0.8, 0.9f, 0.5f));
                     }
                     
                     if (ImGui::Button("Triangulate"))
                     {
-                        reprojection(keypoints_map.at(current_frame_num), skeleton, camera_params, scene->num_cams);
+                        reprojection(keypoints_map.at(current_frame_num), skeleton, camera_params, scene);
                     }
                     
                     if (!keypoint_triangulated_all && keypoints_find) {
@@ -743,13 +806,13 @@ int main(int, char **)
 
                     if (ImGui::IsKeyPressed(ImGuiKey_S, false))   // triangulate
                     {
-                        reprojection(keypoints_map.at(current_frame_num), skeleton, camera_params, scene->num_cams);
+                        reprojection(keypoints_map.at(current_frame_num), skeleton, camera_params, scene);
                     }
                 }
 
                 if (ImGui::Button("Save Labeled Data") || (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false)))
                 {
-                    save_keypoints(keypoints_map, skeleton, keypoints_root_folder, scene->num_cams, camera_names);
+                    save_keypoints(keypoints_map, skeleton, keypoints_root_folder, scene->num_cams, camera_names, &input_is_imgs, imgs_names);
                 }
 
                 if (ImGui::Button("Load Labeled Data"))
@@ -778,6 +841,8 @@ int main(int, char **)
                 if (upper_it == keypoints_map.end()) {
                     upper_it = keypoints_map.begin();
                 }
+                
+                ImGui::Separator();
                 ImGui::Text("Next labeled frame : %d", (*upper_it).first);
                 if (ImGui::Button("Jump to Next Labeled Frame") || ImGui::IsKeyPressed(ImGuiKey_RightArrow, false)) {
                     for (int i = 0; i < scene->num_cams; i++)
