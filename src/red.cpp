@@ -411,7 +411,7 @@ int main(int, char **)
                         int seletable_frame_id = (i + read_head) % scene->size_of_buffer;
                         char label[32];
                         if (input_is_imgs) {
-                            snprintf(label, sizeof(label), "%s", imgs_names[i].c_str());
+                            snprintf(label, sizeof(label), "%d: %s", scene->display_buffer[0][seletable_frame_id].frame_number, imgs_names[i].c_str());
                         } else {
                             sprintf(label, "Frame %d", scene->display_buffer[0][seletable_frame_id].frame_number);
                         }
