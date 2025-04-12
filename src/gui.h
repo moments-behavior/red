@@ -520,9 +520,21 @@ static void gui_plot_world_coordinates(CameraParams* cvp, int cam_id, int image_
     {
         double xs[2] {axis_x_values[0], axis_x_values[edge+1]};
         double ys[2] {axis_y_values[0], axis_y_values[edge+1]};
-        
+
+        double vec2_x = axis_x_values[edge+1] - axis_x_values[0];
+        double vec2_y = axis_y_values[edge+1] - axis_y_values[0];
+
+        double vec2_norm_x = -vec2_y;
+        double vec2_norm_y = vec2_x;
+
+        double arrow_end_1_x = axis_x_values[edge+1] - vec2_x / 2 + vec2_norm_x / 2;
+        double arrow_end_1_y = axis_y_values[edge+1] - vec2_y / 2 + vec2_norm_y / 2;
+
+        double arrow_end_2_x = axis_x_values[edge+1] - vec2_x / 2 - vec2_norm_x / 2;
+        double arrow_end_2_y = axis_y_values[edge+1] - vec2_y / 2 - vec2_norm_y / 2;
+
         ImVec4 my_color; 
-        my_color.w = 1.0f; 
+        my_color.w = 0.8f; 
         my_color.x = node_colors[edge+1].x;
         my_color.y = node_colors[edge+1].y;
         my_color.z = node_colors[edge+1].z;
@@ -530,6 +542,19 @@ static void gui_plot_world_coordinates(CameraParams* cvp, int cam_id, int image_
         ImPlot::SetNextMarkerStyle(ImPlotMarker_Circle, 6.0, my_color);
         ImPlot::SetNextLineStyle(my_color, 3.0);
         ImPlot::PlotLine(name.c_str(), xs, ys, 2, ImPlotLineFlags_Segments);
+
+        xs[0] = axis_x_values[edge+1];
+        xs[1] = arrow_end_1_x;
+        ys[0] = axis_y_values[edge+1];
+        ys[1] = arrow_end_1_y;
+        ImPlot::PlotLine(name.c_str(), xs, ys, 2, ImPlotLineFlags_Segments);
+
+        xs[0] = axis_x_values[edge+1];
+        xs[1] = arrow_end_2_x;
+        ys[0] = axis_y_values[edge+1];
+        ys[1] = arrow_end_2_y;
+        ImPlot::PlotLine(name.c_str(), xs, ys, 2, ImPlotLineFlags_Segments);
+
     }
     
 }

@@ -112,16 +112,16 @@ void yolo_process(std::string onnx_file, yolo_param* post_setting, int camera_id
     }
 }
 
-void yolo_process_v8pose(std::string engine_file, int camera_id)
+void yolo_process_v8pose(std::string engine_file, int camera_id, int width, int height)
 {
     // load models
     unsigned char *d_convert;
-    CHECK(cudaMalloc((void **)&d_convert, 3208 * 2200 * 3));
+    CHECK(cudaMalloc((void **)&d_convert, width * height * 3));
     float *d_points;
     unsigned int *d_skeleton; 
     unsigned int skeleton[8] = {0, 2, 1, 2, 2, 3};
 
-    YOLOv8_pose* yolov8_pose = new YOLOv8_pose(engine_file);
+    YOLOv8_pose* yolov8_pose = new YOLOv8_pose(engine_file, width, height);
     yolov8_pose->make_pipe(true);
 
     cudaMalloc((void **)&d_points, sizeof(float) * 8);
@@ -139,27 +139,27 @@ void yolo_process_v8pose(std::string engine_file, int camera_id)
         g_cvs[camera_id].wait(ul, [&]() {return g_ready[camera_id];});
 
         // model detection here, assume frame on gpu 
-        rgba2rgb_convert(d_convert, yolo_input_frames_rgba[camera_id], 3208, 2200, 0);
+        rgba2rgb_convert(d_convert, yolo_input_frames_rgba[camera_id], width, height, 0);
         yolov8_pose->preprocess_gpu(d_convert);
         yolov8_pose->infer();
         yolov8_pose->postprocess(objs, score_thres, iou_thres, topk);
         yolov8_pose->copy_keypoints_gpu(d_points, objs);
-        gpu_draw_rat_pose(yolo_input_frames_rgba[camera_id], 3208, 2200, d_points, d_skeleton, yolov8_pose->stream);        
+        gpu_draw_rat_pose(yolo_input_frames_rgba[camera_id], width, height, d_points, d_skeleton, yolov8_pose->stream);        
         g_ready[camera_id] = false;
     }
 }
 
 
-void yolo_process_trt(std::string engine_file, int camera_id)
+void yolo_process_trt(std::string engine_file, int camera_id, int width, int height)
 {
     // load models
     unsigned char *d_convert;
-    CHECK(cudaMalloc((void **)&d_convert, 3208 * 2200 * 3));
+    CHECK(cudaMalloc((void **)&d_convert, width * height * 3));
     float *d_points;
     unsigned int *d_skeleton; 
     unsigned int skeleton[8] = {0, 1, 1, 2, 2, 3, 3, 0}; // box
 
-    YOLOv8* yolov8 = new YOLOv8(engine_file);
+    YOLOv8* yolov8 = new YOLOv8(engine_file, width, height);
     yolov8->make_pipe(true);
 
     cudaMalloc((void **)&d_points, sizeof(float) * 8);
@@ -177,12 +177,12 @@ void yolo_process_trt(std::string engine_file, int camera_id)
         // std::cout << "camera_yolo_thread" <<  camera_id << ": acquire lock" << std::endl; 
 
         // model detection here, assume frame on gpu 
-        rgba2rgb_convert(d_convert, yolo_input_frames_rgba[camera_id], 3208, 2200, yolov8->stream);
+        rgba2rgb_convert(d_convert, yolo_input_frames_rgba[camera_id], width, height, yolov8->stream);
         yolov8->preprocess_gpu(d_convert);
         yolov8->infer();
         yolov8->postprocess(objs);
         yolov8->copy_keypoints_gpu(d_points, objs);
-        gpu_draw_rat_pose(yolo_input_frames_rgba[camera_id], 3208, 2200, d_points, d_skeleton, yolov8->stream);        
+        gpu_draw_rat_pose(yolo_input_frames_rgba[camera_id], width, height, d_points, d_skeleton, yolov8->stream);        
         g_ready[camera_id] = false;
     }
 }

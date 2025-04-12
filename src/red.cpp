@@ -16,7 +16,7 @@
 #include "yolo_detection.h"
 #include "global.h"
 #include "utils.h"
-
+#include "filesystem"
 
 #if defined(_MSC_VER) && (_MSC_VER >= 1900) && !defined(IMGUI_DISABLE_WIN32_FUNCTIONS)
 #pragma comment(lib, "legacy_stdio_definitions")
@@ -187,7 +187,7 @@ int main(int, char **)
                             if (ImGui::MenuItem("YOLOv8")) {
                                 std::string engine_file_path = root_dir + "/yolo/yolorat_bbox/rat_bbox.engine";
                                 for (int i = 0; i< scene->num_cams; i++) {
-                                    yolo_threads.push_back(std::thread(&yolo_process_trt, engine_file_path, i));
+                                    yolo_threads.push_back(std::thread(&yolo_process_trt, engine_file_path, i, scene->image_width[i], scene->image_height[i]));
                                 }
                                 yolo_detection = true;
                             }
@@ -195,7 +195,7 @@ int main(int, char **)
                             if (ImGui::MenuItem("YOLOv8Pose")) {
                                 std::string engine_file_path = root_dir + "/yolo/yolopose/rat_pose.engine";
                                 for (int i = 0; i< scene->num_cams; i++) {
-                                    yolo_threads.push_back(std::thread(&yolo_process_v8pose, engine_file_path, i));
+                                    yolo_threads.push_back(std::thread(&yolo_process_v8pose, engine_file_path, i, scene->image_width[i], scene->image_height[i]));
                                 }
                                 yolo_detection = true;
                             }
@@ -526,7 +526,7 @@ int main(int, char **)
                         // plot arena for testing camera parameters 
                         // gui_plot_perimeter(&camera_params[j], scene->image_height[j]);
                         gui_plot_world_coordinates(&camera_params[j], j, scene->image_height[j]);
-                        
+
                         // labeling 
                         if (ImPlot::IsPlotHovered()) {
                             is_view_focused[j]  = true;
