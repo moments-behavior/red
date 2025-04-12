@@ -11,12 +11,12 @@ struct ProjectContext{
     std::vector<std::string> camera_names;
 };
 
-static void draw_cv_contours(std::vector<cv::Rect> boxes, std::vector<std::string> labels, std::vector<int> class_ids)
+static void draw_cv_contours(std::vector<cv::Rect> boxes, std::vector<std::string> labels, std::vector<int> class_ids, int image_height)
 {
     for (int i=0; i<boxes.size(); i++)
     {
         double x[5] = {(double)boxes[i].x, (double)boxes[i].x, (double)boxes[i].x + boxes[i].width, (double)boxes[i].x + boxes[i].width, (double)boxes[i].x};
-        double y[5] = {(double)2200 - boxes[i].y, (double)2200 - boxes[i].y - boxes[i].height, (double)2200 - boxes[i].y - boxes[i].height, (double)2200 - boxes[i].y, (double)2200 - boxes[i].y};
+        double y[5] = {(double)image_height - boxes[i].y, (double)image_height - boxes[i].y - boxes[i].height, (double)image_height - boxes[i].y - boxes[i].height, (double)image_height - boxes[i].y, (double)image_height - boxes[i].y};
         
         if(class_ids[i] == 0){
             ImPlot::SetNextLineStyle(ImVec4(1.0, 0.0, 1.0,1.0), 3.0);
@@ -482,7 +482,7 @@ void load_keypoints(std::map<u32, KeyPoints*>& keypoints_map, SkeletonContext* s
     }
 }
 
-void world_coordinates_projection_points(CameraParams* cvp, double* axis_x_values, double* axis_y_values, float scale)
+void world_coordinates_projection_points(CameraParams* cvp, int image_height, double* axis_x_values, double* axis_y_values, float scale)
 {
     std::vector<cv::Point3f> world_coordinates;
     world_coordinates.push_back(cv::Point3f(0.0f, 0.0f, 0.0f));
@@ -495,14 +495,14 @@ void world_coordinates_projection_points(CameraParams* cvp, double* axis_x_value
     
     for (int i = 0; i < 4; i++){
         axis_x_values[i] = img_pts.at(i).x;
-        axis_y_values[i] = 2200 - img_pts.at(i).y;
+        axis_y_values[i] = image_height - img_pts.at(i).y;
     }
 }
 
-static void gui_plot_world_coordinates(CameraParams* cvp, int cam_id)
+static void gui_plot_world_coordinates(CameraParams* cvp, int cam_id, int image_height)
 {
     double axis_x_values[4]; double axis_y_values[4]; 
-    world_coordinates_projection_points(cvp, axis_x_values, axis_y_values, 50);
+    world_coordinates_projection_points(cvp, image_height, axis_x_values, axis_y_values, 50);
     ImPlot::SetNextMarkerStyle(ImPlotMarker_Circle, 6.0, ImVec4(1.0, 1.0, 1.0,1.0));
     ImPlot::SetNextLineStyle(ImVec4(1.0, 1.0, 1.0,1.0), 3.0);
     std::string name = "World Origin";
@@ -560,7 +560,7 @@ static void gui_plot_world_coordinates(CameraParams* cvp, int cam_id)
 }
 
 
-void gui_arena_projection_points(CameraParams* cvp, float* arena_x, float* arena_y, int n)
+void gui_arena_projection_points(CameraParams* cvp, int image_height, float* arena_x, float* arena_y, int n)
 {
     std::vector<float> x;
     std::vector<float> y;
@@ -591,15 +591,15 @@ void gui_arena_projection_points(CameraParams* cvp, float* arena_x, float* arena
 
     for (int i = 0; i < n; i++){
         arena_x[i] = img_pts.at(i).x;
-        arena_y[i] = 2200 - img_pts.at(i).y;
+        arena_y[i] = image_height - img_pts.at(i).y;
     }
 }
 
 
-static void gui_plot_perimeter(CameraParams* cvp)
+static void gui_plot_perimeter(CameraParams* cvp, int image_height)
 {
     float arena_x[100]; float arena_y[100]; 
-    gui_arena_projection_points(cvp, arena_x, arena_y, 100);
+    gui_arena_projection_points(cvp, image_height, arena_x, arena_y, 100);
     ImPlot::SetNextMarkerStyle(ImPlotMarker_Circle, 6.0, ImVec4(1.0, 1.0, 1.0,1.0));
     ImPlot::SetNextLineStyle(ImVec4(1.0, 1.0, 1.0,1.0), 3.0);
     std::string name = "arena";
