@@ -10,7 +10,7 @@ using namespace pose;
 class YOLOv8
 {
 public:
-    explicit YOLOv8(const std::string &engine_file_path);
+    explicit YOLOv8(const std::string &engine_file_path, int width, int height);
     ~YOLOv8();
 
     void make_pipe(bool warmup = true);
@@ -39,6 +39,13 @@ private:
     unsigned char *d_boarder;
     float *d_float;
     float *d_planar;
+    int img_width;
+    int img_height;
+    int padw;
+    int padh;
+    int inp_h_int;
+    int inp_w_int;
+
 
     nvinfer1::ICudaEngine *engine = nullptr;
     nvinfer1::IRuntime *runtime = nullptr;
