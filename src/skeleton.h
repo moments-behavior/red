@@ -439,7 +439,7 @@ void skeleton_initialize(SkeletonContext* skeleton, SkeletonPrimitive skeleton_t
 
             for (int i = 0; i < skeleton->num_nodes; i++) {
                 ImVec4 color = (ImVec4)ImColor::HSV(i / (float)skeleton->num_nodes, 1.0f, 1.0f);
-                skeleton->node_colors.push_back({color.x, color.y, color.z});
+                skeleton->node_colors.push_back(color);
             }
 
             skeleton->edges ={
