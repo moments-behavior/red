@@ -23,6 +23,7 @@ def csv_reader_rats(file_name, num_keypoints, three_d=False, select_keypoints_id
                 if three_d:
                     keypoints = keypoints.reshape([num_keypoints, 4])
                 else:
+                    print(file_name)
                     keypoints = keypoints.reshape([num_keypoints, 3])
                 keypoints = keypoints[:, 1:]
                 if not three_d:
@@ -123,6 +124,66 @@ def process_one_session(trial_name, load_file_path, num_keypoints, annotation_fi
             image_frame_id = image_frame_id + 1
     return annotations, images, set_of_frames
 
+def process_one_session_ball(trial_name, load_file_path, num_keypoints, annotation_file, all_image_frames, cameras, d_ball,label_id,select_keypoints_idx=[]):
+    
+    annotations = {}
+    for which_cam in cameras:
+
+        # print(select_keypoints_idx)
+        labels = csv_reader_rats(load_file_path + "/{}/{}_{}.csv".format(which_cam, which_cam, annotation_file), num_keypoints, three_d=False, select_keypoints_idx=select_keypoints_idx)   
+
+        file_dir = trial_name + "/{}/".format(which_cam)
+        all_2d_labeled_frames = labels.keys()
+        
+        annotation_entry = []
+        file_name_annotation = []
+        file_name_image = []
+
+        for frame_num in all_image_frames:
+            ## each frame 
+            
+            img_height=2200
+            img_width =3208
+            bbox_size=d_ball
+            
+            
+            if frame_num in all_2d_labeled_frames:
+                bbox = []            
+                x_min = (labels[frame_num][:, 0].min())/img_width
+                x_size = bbox_size/img_width
+                y_min = labels[frame_num][:, 1].min()/img_height
+                y_size = bbox_size/img_height
+                bbox= [f"{label_id} {x_min} {y_min} {x_size} {y_size}"]
+
+                # print(bbox)
+                
+                
+                annotation_entry.extend(bbox)
+                file_name_annotation.extend([f"Frame_{frame_num}.txt"])
+                file_name_image.extend([f"Frame_{frame_num}.jpg"])
+                
+                # file_name_image.extend("Frame_" + str(int(frame_num)) + '.jpg')
+
+        annotations[which_cam,"entry"] = annotation_entry
+        annotations[which_cam,"fname_annot"] = file_name_annotation
+        annotations[which_cam,"fname_img"] = file_name_image
+    
+    return annotations
+
+
+def create_yolo_annotation_files(output_folder, trial_name, annotations,cameras,dset_mode):
+    
+    for which_cam in cameras:
+        dir_labels = os.path.join(output_folder,trial_name,which_cam,dset_mode,"labels")
+        os.makedirs(dir_labels, exist_ok=True)
+        for i in range(len(annotations[which_cam,"entry"])):  
+
+            # print(annotations[which_cam,"fname_img"][i])
+            fname_label =  os.path.join(dir_labels,annotations[which_cam,'fname_annot'][i])
+            with open(fname_label, "w") as f:
+                f.write(annotations[which_cam,"entry"][i])
+
+
 def generate_framesets(dataset_name, set_of_frames, framesets):
     """
     set_of_frames: dictionary of framesets
@@ -137,7 +198,7 @@ def generate_framesets(dataset_name, set_of_frames, framesets):
             entry_name = trial_name + "/Frame_{}".format(frame_num)            
             framesets[entry_name] = one_frameset_entry
 
-def geneate_annotation_file(trial_name, skeleton_name, cameras, annotations, images, set_of_frames):
+def generate_annotation_file(trial_name, skeleton_name, cameras, annotations, images, set_of_frames):
     
     keypoint_names, skeleton, num_keypoints = skeleton_selector[skeleton_name]()
 
@@ -159,12 +220,25 @@ def geneate_annotation_file(trial_name, skeleton_name, cameras, annotations, ima
     root_json["framesets"] = framesets
     return root_json
 
-
-def multiprocess_save_jpegs(input_args):
-    trial_name, cam_name, video_folder_name, save_folder, set_mode, all_image_frames = input_args
+    
+def multiprocess_save_jpegs(input_args, ):
+    trial_name, cam_name, video_folder_name, save_folder, map_frame_to_mode, all_image_frames,export_mode = input_args
 
     print("Saving jpeg for {} ...".format(cam_name))
     file_dir =  trial_name + "/{}/".format(cam_name)
+
+    # make directories for images
+    if(export_mode == "jarvis"):
+        dir_name = os.path.join(save_folder, "train", file_dir)
+        os.makedirs(dir_name, exist_ok=True)     
+        dir_name = os.path.join(save_folder, "val", file_dir)
+        os.makedirs(dir_name, exist_ok=True) 
+    elif(export_mode == "yolo"):
+        dir_name = os.path.join(save_folder, "train", "images")
+        os.makedirs(dir_name, exist_ok=True)     
+        dir_name = os.path.join(save_folder, "valid", "images")
+        os.makedirs(dir_name, exist_ok=True) 
+        
 
     print(all_image_frames)
     # exit()    
@@ -187,14 +261,19 @@ def multiprocess_save_jpegs(input_args):
             
             frame_num = frame_num + 1
             
-            if frame_num in all_image_frames:            
-                dir_name = os.path.join(save_folder, "{}/".format(set_mode), file_dir)
-                os.makedirs(dir_name, exist_ok=True)   
-                
-                frame_filename = dir_name + "Frame_" + str(int(frame_num)) + '.jpg'
-                # print(f"saving {frame_num} for {cam_name} in {set_mode}")
+            if frame_num in all_image_frames:    
+                set_mode = map_frame_to_mode[frame_num]        
+                if(export_mode == "jarvis"):
+                    dir_name = os.path.join(save_folder, "{}/".format(set_mode), file_dir)                  
+                    frame_filename = dir_name + "Frame_" + str(int(frame_num)) + '.jpg'
+                elif(export_mode == "yolo"):
+                    frame_filename = os.path.join(save_folder, set_mode,"images",f"Frame_{frame_num}.jpg")                  
+                    # frame_filename = dir_name + "Frame_" + str(int(frame_num)) + '.jpg'
+
                 cv.imwrite(frame_filename, frame)
 
+        if(frame_num % 1000 == 0):
+            print(f"Processed frame: {frame_num} for {cam_name}")
 
 def load_jarvis_3d_csv_rats(file_name, num_keypoints):
     labels = {}
@@ -211,6 +290,50 @@ def load_jarvis_3d_csv_rats(file_name, num_keypoints):
             line_count += 1
     return labels
 
+def merge_json_annotations(json_data):
+   
+    root_json = {}
+    root_json["keypoint_names"] = json_data[0]["keypoint_names"]
+    root_json["skeleton"] = json_data[0]["skeleton"]
+    root_json["categories"] = json_data[0]["categories"]
+
+    # Initialize the "calibrations" key in root_json if it doesn't exist
+    root_json["calibrations"] = {}
+    root_json["images"] = []
+    root_json["annotations"] = []
+    root_json["framesets"] = {}
+      
+    img_idx_offset = 0 #need to offset the image ids for each dataset
+    
+    for dsets in json_data:
+        
+        # calibrations
+        calib_key = list(dsets["calibrations"].keys())[0]
+        for calib_key, calib_value in dsets["calibrations"].items():
+            root_json["calibrations"][calib_key] = calib_value
+            
+        #images
+        for img in dsets["images"]:
+            img["id"] = img["id"] + img_idx_offset
+            root_json["images"].append(img)
+            
+        
+        #annotations
+        for annots in dsets["annotations"]:
+            annots["id"] = annots["id"] + img_idx_offset
+            annots["image_id"] = annots["image_id"] + img_idx_offset
+            root_json["annotations"].append(annots)
+            
+        # frameset
+        for frameset_key, frameset_value in dsets["framesets"].items():
+            frameset_value["frames"] = [x + img_idx_offset for x in frameset_value["frames"]]
+            root_json["framesets"][frameset_key] = frameset_value
+            
+
+        img_idx_offset += len(dsets["images"])
+        
+
+    return root_json
 
 def Project(points, intrinsic, distortion, rotation_matrix, tvec):
     result = []
