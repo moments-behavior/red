@@ -12,7 +12,6 @@ parser.add_argument('-s', '--skeleton', type=str, default='rat20')
 parser.add_argument('-f', '--filter', type=int, default=1)
 parser.add_argument('-t', '--threshold', type=float, default=0.7)
 parser.add_argument('-o', '--output_dir', type=str, default="predictions")
-parser.add_argument('--override_output_dir',type=bool, default=False)
 
 
 args = parser.parse_args()
@@ -21,7 +20,6 @@ input_jarvis_folder = args.input_jarvis_folder
 skeleton = args.skeleton
 use_filter = args.filter
 output_dir = args.output_dir
-override_output_dir = args.override_output_dir
 _, _, num_keypoints = skeleton_selector[skeleton]()
 
 labels_raw = load_jarvis_3d_csv_rats(input_jarvis_folder + "/data3D.csv", num_keypoints)
@@ -42,10 +40,7 @@ with open(input_jarvis_folder + "/info.yaml") as stream:
     except yaml.YAMLError as exc:
         print(exc)
 
-if(override_output_dir):
-    output_folder = output_dir
-else:
-    output_folder = os.path.join(jarvis_info['recording_path'], '{}'.format(output_dir))
+output_folder = os.path.join(jarvis_info['recording_path'], '{}'.format(output_dir))
 
 if not os.path.exists(output_folder):
     os.makedirs(output_folder)

@@ -5,6 +5,12 @@ from keypoints import *
 import csv
 import numpy as np
 
+def get_skeleton_name(file_name):
+    with open(file_name) as csv_file:
+        csv_reader = csv.reader(csv_file)
+        first_row = next(csv_reader) 
+    return first_row[0]
+
 def csv_reader_rats(file_name, num_keypoints, three_d=False, select_keypoints_idx=[], prediction_file=False):
     labels = {}
     with open(file_name) as csv_file:
@@ -26,6 +32,7 @@ def csv_reader_rats(file_name, num_keypoints, three_d=False, select_keypoints_id
                     print(file_name)
                     keypoints = keypoints.reshape([num_keypoints, 3])
                 keypoints = keypoints[:, 1:]
+                keypoints[keypoints == 1e7] = np.nan
                 if not three_d:
                     keypoints[:, 1] = 2200 - keypoints[:, 1]  
                 if (len(select_keypoints_idx) > 0):
@@ -51,19 +58,22 @@ def get_all_cams_in_labeled_folder(label_folder):
             cameras.append(one_folder)
     return cameras
 
-def process_one_session(trial_name, load_file_path, num_keypoints, annotation_file, all_image_frames, cameras, select_keypoints_idx=[]):
-    """
-    args:
-        all_image_frames: list of all the frames annotated in 3d
-    return: (int) number of pictures in the session
-    """
+def process_one_session(trial_name, 
+                        load_file_path, 
+                        num_keypoints, 
+                        annotation_file, 
+                        all_image_frames, 
+                        cameras, 
+                        image_width,
+                        image_height,
+                        select_keypoints_idx=[]):
     set_of_frames = {}
     annotations = []
     images = []
     annotation_frame_id = 0
     image_frame_id = 0
     for which_cam in cameras:
-
+        
         labels = csv_reader_rats(load_file_path + "/{}/{}_{}.csv".format(which_cam, which_cam, annotation_file), num_keypoints, three_d=False, select_keypoints_idx=select_keypoints_idx)   
 
         file_dir = trial_name + "/{}/".format(which_cam)
@@ -77,36 +87,45 @@ def process_one_session(trial_name, load_file_path, num_keypoints, annotation_fi
                 "date_captured":"",
                 "file_name":file_name_annotation,
                 "flickr_url":"",
-                "height":2200,
+                "height":image_height[which_cam],
                 "id":image_frame_id,
-                "width":3208
+                "width":image_width[which_cam]
             }
 
             if frame_num in all_2d_labeled_frames:
-                bbox = []
-                x_min = labels[frame_num][:, 0].min()
-                x_size = labels[frame_num][:, 0].max() - labels[frame_num][:, 0].min()
-                y_min = labels[frame_num][:, 1].min()
-                y_size = labels[frame_num][:, 1].max() - labels[frame_num][:, 1].min()
-                bbox = [x_min, y_min, x_size, y_size]
+                is_all_nan = np.all(np.isnan(labels[frame_num]))
+                if not is_all_nan:
+                    if select_keypoints_idx: 
+                        annotation_num_kp = len(select_keypoints_idx)
+                    else:
+                        annotation_num_kp = num_keypoints
+                    bbox = []
+                    x_min = np.nanmin(labels[frame_num][:, 0])
+                    x_size = np.nanmax(labels[frame_num][:, 0]) - np.nanmin(labels[frame_num][:, 0])
+                    y_min = np.nanmin(labels[frame_num][:, 1])
+                    y_size = np.nanmax(labels[frame_num][:, 1]) - np.nanmin(labels[frame_num][:, 1])
+                    bbox = [x_min, y_min, x_size, y_size]
 
-                keypoints = []
-                for keypoint_idx in range(num_keypoints):
-                    x = int(labels[frame_num][keypoint_idx, 0])
-                    y = int(labels[frame_num][keypoint_idx, 1])
-                    keypoints.extend([x, y, 1])
-                
-                annotation_entry = {
-                    "bbox": bbox,
-                    "category_id": 1,
-                    "id": annotation_frame_id,
-                    "image_id": image_frame_id, 
-                    "iscrowd":0,
-                    "keypoints": keypoints,
-                    "num_keypoints":num_keypoints,
-                    "segmentation":[]
-                }
+                    keypoints = []
+                    for keypoint_idx in range(annotation_num_kp):
+                        if np.any(np.isnan(labels[frame_num][keypoint_idx])):
+                            x = 0
+                            y = 0
+                        else:
+                            x = int(labels[frame_num][keypoint_idx, 0])
+                            y = int(labels[frame_num][keypoint_idx, 1])
+                        keypoints.extend([x, y, 1])
 
+                    annotation_entry = {
+                        "bbox": bbox,
+                        "category_id": 1,
+                        "id": annotation_frame_id,
+                        "image_id": image_frame_id, 
+                        "iscrowd":0,
+                        "keypoints": keypoints,
+                        "num_keypoints":annotation_num_kp,
+                        "segmentation":[]
+                    }
             
             # for create framesets
             frame_num_int = int(frame_num)
@@ -116,7 +135,7 @@ def process_one_session(trial_name, load_file_path, num_keypoints, annotation_fi
             else:
                 set_of_frames[frame_num_int].append(image_frame_id)
 
-            if frame_num in all_2d_labeled_frames:
+            if frame_num in all_2d_labeled_frames and not is_all_nan:
                 annotations.append(annotation_entry)
                 annotation_frame_id = annotation_frame_id + 1
 
@@ -198,10 +217,8 @@ def generate_framesets(dataset_name, set_of_frames, framesets):
             entry_name = trial_name + "/Frame_{}".format(frame_num)            
             framesets[entry_name] = one_frameset_entry
 
-def generate_annotation_file(trial_name, skeleton_name, cameras, annotations, images, set_of_frames):
+def generate_annotation_file(trial_name, keypoint_names, skeleton, num_keypoints, cameras, annotations, images, set_of_frames):
     
-    keypoint_names, skeleton, num_keypoints = skeleton_selector[skeleton_name]()
-
     categories = [{"id":0,"name":"Rat","num_keypoints":num_keypoints,"supercategory":"None"}]
     root_json = {}
     root_json["keypoint_names"] = keypoint_names
@@ -221,8 +238,8 @@ def generate_annotation_file(trial_name, skeleton_name, cameras, annotations, im
     return root_json
 
     
-def multiprocess_save_jpegs(input_args, ):
-    trial_name, cam_name, video_folder_name, save_folder, map_frame_to_mode, all_image_frames,export_mode = input_args
+def multiprocess_save_jpegs(input_args):
+    trial_name, cam_name, video_folder_name, save_folder, map_frame_to_mode, all_image_frames, export_mode = input_args
 
     print("Saving jpeg for {} ...".format(cam_name))
     file_dir =  trial_name + "/{}/".format(cam_name)

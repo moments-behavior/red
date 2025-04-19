@@ -69,10 +69,19 @@ def rat4():
             {"keypointA":"EarR","keypointB":"Tail","length":0.0,"name":"Joint 4"}]
     return keypoint_names, skeleton, 4
 
+def rat4target():
+    keypoint_names = ["Snout", "EarL", "EarR", "Tail", "Target"]
+    skeleton = [{"keypointA":"Snout","keypointB":"EarL","length":0.0,"name":"Joint 1"},
+            {"keypointA":"Snout","keypointB":"EarR","length":0.0,"name":"Joint 2"},
+            {"keypointA":"EarL","keypointB":"Tail","length":0.0,"name":"Joint 3"},
+            {"keypointA":"EarR","keypointB":"Tail","length":0.0,"name":"Joint 4"}]
+    return keypoint_names, skeleton, 5
+
 
 skeleton_selector = {
-    "rat4": rat4,
-    "rat6": rat6,
-    "rat20": rat20,
-    "rat24": rat24
+    "Rat4Target": rat4target,
+    "Rat4": rat4,
+    "Rat6": rat6,
+    "Rat20": rat20,
+    "Rat24": rat24
 }
