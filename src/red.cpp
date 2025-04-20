@@ -88,7 +88,7 @@ int main(int, char **)
     std::string delimiter = "/";
     std::vector<std::string> tokenized_path = string_split (cwd, delimiter);
     std::string start_folder_name = "/home/" + tokenized_path[2] + "/data";
-    // start_folder_name = "/nfs/exports/ratlv";
+    start_folder_name = "/nfs/exports/ratlv";
     ImVec4 clear_color = ImVec4(0.0f, 0.0f, 0.0f, 1.00f);
     ImGuiIO &io = ImGui::GetIO();
 
@@ -525,8 +525,10 @@ int main(int, char **)
                     if(plot_keypoints_flag){
                         // plot arena for testing camera parameters 
                         // gui_plot_perimeter(&camera_params[j], scene->image_height[j]);
-                        gui_plot_world_coordinates(&camera_params[j], j, scene->image_height[j]);
-
+                        // if (scene->num_cams > 1) {
+                        //     gui_plot_world_coordinates(&camera_params[j], j, scene->image_height[j]);
+                        // }
+                        
                         // labeling 
                         if (ImPlot::IsPlotHovered()) {
                             is_view_focused[j]  = true;

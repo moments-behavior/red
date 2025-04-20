@@ -112,6 +112,24 @@ static void gui_plot_bbox_from_keypoints(KeyPoints *keypoints, SkeletonContext *
     }
 }
 
+bool is_in_camera_fov(cv::Mat point_world,
+    const cv::Mat& rvec,
+    const cv::Mat& tvec,
+    const cv::Mat& K,
+    int image_width,
+    int image_height)
+{
+    cv::Mat image_pts;
+    cv::Mat dist_coeffs = cv::Mat::zeros(5, 1, CV_64F);
+    cv::projectPoints(point_world, rvec, tvec, K, dist_coeffs, image_pts);
+    double x = image_pts.at<double>(0, 0);
+    double y = image_height - image_pts.at<double>(0, 1);
+    if (x > 0 && x < image_width && y > 0 && y < image_height) {
+       return true;
+    }
+    return false;
+}
+
 
 static void reprojection(KeyPoints *keypoints, SkeletonContext *skeleton, std::vector<CameraParams> camera_params, render_scene* scene)
 {
@@ -134,7 +152,7 @@ static void reprojection(KeyPoints *keypoints, SkeletonContext *skeleton, std::v
                 if(keypoints->keypoints2d[view_idx][node].is_labeled)
                 {
                     
-                    cv::Mat point = (cv::Mat_<float>(2, 1) << keypoints->keypoints2d[view_idx][node].position.x, (float)scene->image_height[view_idx] - keypoints->keypoints2d[view_idx][node].position.y);
+                    cv::Mat point = (cv::Mat_<double>(2, 1) << keypoints->keypoints2d[view_idx][node].position.x, (double)scene->image_height[view_idx] - keypoints->keypoints2d[view_idx][node].position.y);
                     cv::Mat pointUndistort;
                     cv::undistortPoints(point, pointUndistort, camera_params[view_idx].k, camera_params[view_idx].dist_coeffs, cv::noArray(), camera_params[view_idx].k);
                     
@@ -144,29 +162,32 @@ static void reprojection(KeyPoints *keypoints, SkeletonContext *skeleton, std::v
             }
 
             cv::sfm::triangulatePoints(sfmPoints2d, projection_matrices, output);
-            output.convertTo(output, CV_32F);
 
-            keypoints->keypoints3d[node].x = output.at<float>(0);
-            keypoints->keypoints3d[node].y = output.at<float>(1);
-            keypoints->keypoints3d[node].z = output.at<float>(2);
+            keypoints->keypoints3d[node].x = output.at<double>(0);
+            keypoints->keypoints3d[node].y = output.at<double>(1);
+            keypoints->keypoints3d[node].z = output.at<double>(2);
 
             for (u32 view_idx = 0; view_idx < scene->num_cams; view_idx++)
-            {
-                cv::Mat imagePts;
-                cv::projectPoints(output, camera_params[view_idx].rvec, camera_params[view_idx].tvec, camera_params[view_idx].k, camera_params[view_idx].dist_coeffs, imagePts);
-                double x = imagePts.at<float>(0, 0);
-                double y = float(scene->image_height[view_idx]) - imagePts.at<float>(0, 1);
-                if (x > 0 && x < scene->image_width[view_idx] && y > 0 && y < scene->image_height[view_idx]) {
-                    keypoints->keypoints2d[view_idx][node].position.x = x;
-                    keypoints->keypoints2d[view_idx][node].position.y = y;
-                    keypoints->keypoints2d[view_idx][node].is_labeled = true;
-                    keypoints->keypoints2d[view_idx][node].is_triangulated = true;
+            {    
+
+                if (is_in_camera_fov(output, camera_params[view_idx].rvec, camera_params[view_idx].tvec, camera_params[view_idx].k, scene->image_width[view_idx], scene->image_height[view_idx])) {
+                    cv::Mat imagePts;
+                    cv::projectPoints(output, camera_params[view_idx].rvec, camera_params[view_idx].tvec, camera_params[view_idx].k, camera_params[view_idx].dist_coeffs, imagePts);
+                    double x = imagePts.at<double>(0, 0);
+                    double y = double(scene->image_height[view_idx]) - imagePts.at<double>(0, 1);
+                    if (x > 0 && x < scene->image_width[view_idx] && y > 0 && y < scene->image_height[view_idx]) {
+                        keypoints->keypoints2d[view_idx][node].position.x = x;
+                        keypoints->keypoints2d[view_idx][node].position.y = y;
+                        keypoints->keypoints2d[view_idx][node].is_labeled = true;
+                        keypoints->keypoints2d[view_idx][node].is_triangulated = true;
+                    }
                 }
             }
         }
 
     }
 }
+
 
 const std::string current_date_time() {
     time_t     now = time(0);
