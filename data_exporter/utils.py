@@ -29,7 +29,6 @@ def csv_reader_rats(file_name, num_keypoints, three_d=False, select_keypoints_id
                 if three_d:
                     keypoints = keypoints.reshape([num_keypoints, 4])
                 else:
-                    print(file_name)
                     keypoints = keypoints.reshape([num_keypoints, 3])
                 keypoints = keypoints[:, 1:]
                 keypoints[keypoints == 1e7] = np.nan
@@ -93,17 +92,17 @@ def process_one_session(trial_name,
             }
 
             if frame_num in all_2d_labeled_frames:
-                is_all_nan = np.all(np.isnan(labels[frame_num]))
-                if not is_all_nan:
+                is_any_nan = np.any(np.isnan(labels[frame_num]))
+                if not is_any_nan:
                     if select_keypoints_idx: 
                         annotation_num_kp = len(select_keypoints_idx)
                     else:
                         annotation_num_kp = num_keypoints
                     bbox = []
-                    x_min = np.nanmin(labels[frame_num][:, 0])
-                    x_size = np.nanmax(labels[frame_num][:, 0]) - np.nanmin(labels[frame_num][:, 0])
-                    y_min = np.nanmin(labels[frame_num][:, 1])
-                    y_size = np.nanmax(labels[frame_num][:, 1]) - np.nanmin(labels[frame_num][:, 1])
+                    x_min = np.min(labels[frame_num][:, 0])
+                    x_size = np.max(labels[frame_num][:, 0]) - np.min(labels[frame_num][:, 0])
+                    y_min = np.min(labels[frame_num][:, 1])
+                    y_size = np.max(labels[frame_num][:, 1]) - np.min(labels[frame_num][:, 1])
                     bbox = [x_min, y_min, x_size, y_size]
 
                     keypoints = []
@@ -135,9 +134,11 @@ def process_one_session(trial_name,
             else:
                 set_of_frames[frame_num_int].append(image_frame_id)
 
-            if frame_num in all_2d_labeled_frames and not is_all_nan:
-                annotations.append(annotation_entry)
-                annotation_frame_id = annotation_frame_id + 1
+            if frame_num in all_2d_labeled_frames:
+                is_any_nan = np.any(np.isnan(labels[frame_num]))
+                if not is_any_nan:
+                    annotations.append(annotation_entry)
+                    annotation_frame_id = annotation_frame_id + 1
 
             images.append(image_entry)
             image_frame_id = image_frame_id + 1
@@ -273,11 +274,8 @@ def multiprocess_save_jpegs(input_args):
         ret, frame = cap.read() # frame shape (2200, 3208, 3)    
         if ret == False:
             print("Missing fame: {}".format(frame_num))
-
         else:
-            
             frame_num = frame_num + 1
-            
             if frame_num in all_image_frames:    
                 set_mode = map_frame_to_mode[frame_num]        
                 if(export_mode == "jarvis"):

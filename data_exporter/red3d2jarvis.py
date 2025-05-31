@@ -89,7 +89,6 @@ else:
     annotation_num_kps = num_keypoints
 annotation_json_train = generate_annotation_file(trial_name, keypoints_names_selected, skeleton_names, annotation_num_kps, cameras, annotations, images, set_of_frames)
 
-
 annotations, images, frame_set_one = process_one_session(trial_name, 
                                                          label_folder, 
                                                          num_keypoints, 
@@ -97,7 +96,7 @@ annotations, images, frame_set_one = process_one_session(trial_name,
                                                          val_image_frames, 
                                                          cameras, 
                                                          image_width,
-                                                         image_height
+                                                         image_height,
                                                          select_keypoints_idx=select_indices)
 set_of_frames = {
     trial_name: frame_set_one
