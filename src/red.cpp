@@ -92,6 +92,11 @@ int main(int, char **)
     ImVec4 clear_color = ImVec4(0.0f, 0.0f, 0.0f, 1.00f);
     ImGuiIO &io = ImGui::GetIO();
 
+    ImPlotStyle& style              = ImPlot::GetStyle();
+    ImVec4* colors                  = style.Colors;
+    colors[ImPlotCol_Crosshairs]    = ImVec4(0.3f, 0.10f, 0.64f, 1.00f);
+
+
     bool yolo_detection = false;
     std::vector<std::thread> yolo_threads;
     yolo_param yolo_setting = yolo_param();
