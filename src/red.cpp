@@ -76,6 +76,7 @@ int main(int, char **)
     bool plot_keypoints_flag = false;
     int current_frame_num = 0;
     bool skeleton_chosen = false;
+    bool load_skip_3d = false;
     std::vector<std::string> imgs_names;
 
     // for labeling 
@@ -883,13 +884,6 @@ int main(int, char **)
                     config.countSelectionMax = 1;
                     config.path = root_dir;
                     ImGuiFileDialog::Instance()->OpenDialog("ChooseKeypointsFolder", "Choose Keypoints Folder", nullptr, config);
-                }
-
-                if (ImGui::Button("Load 2d Keypoints Only"))
-                {
-                    for (int i=0; i<scene->num_cams; i++) {
-                        load_2d_keypoints(keypoints_map, skeleton, keypoints_root_folder, i, camera_names[i], scene);
-                    }
                 }
 
                 auto upper_it = keypoints_map.upper_bound(current_frame_num); 

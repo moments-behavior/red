@@ -310,7 +310,7 @@ void load_2d_keypoints(std::map<u32, KeyPoints*>& keypoints_map, SkeletonContext
 
     if (filenames.size() == 0)
     {
-        std::cout << "no files in labeled_data_dir for " << camera_name << std::endl;
+        std::cout << "No files in directory for " << camera_name << std::endl;
         return;
     };
 
@@ -336,12 +336,13 @@ void load_2d_keypoints(std::map<u32, KeyPoints*>& keypoints_map, SkeletonContext
     int lineNum = 0;
     while(!fin.eof()){
         fin >> line;
-
         while ((pos = line.find(delimeter)) != std::string::npos)
         {
             token = line.substr(0, pos);
             if (lineNum == 0)
             {
+                std::cout << token << std::endl;
+                std::cout << skeleton->name << std::endl;
                 if (token.compare(skeleton->name) != 0) {
                     std::cout << "Failed loading, skeleton doesn't match." << std::endl;
                     return;
@@ -393,101 +394,103 @@ void load_2d_keypoints(std::map<u32, KeyPoints*>& keypoints_map, SkeletonContext
 }
 
 void load_keypoints(std::map<u32, KeyPoints*>& keypoints_map, SkeletonContext* skeleton, std::string root_dir, render_scene *scene, std::vector<std::string>& camera_names) {
-     
-    std::string label3d_dir = root_dir + "/worldKeyPoints/";
-    std::vector<std::string> filenames;
 
-    for (const auto & entry : std::filesystem::directory_iterator(label3d_dir))
-    {
-        filenames.push_back(entry.path());
-    }
+    if (scene->num_cams > 1) {
+        std::string label3d_dir = root_dir + "/worldKeyPoints/";
+        std::vector<std::string> filenames;
 
-    if (filenames.size() == 0)
-    {
-        std::cout << "Failed loading, no files in labeled_data_dir" << std::endl;
-        return;
-    };
-
-    sort(filenames.begin(), filenames.end());
-    std::string mostRecentFile = filenames.back();
-    std::cout << "mostRecentFile: " << mostRecentFile << std::endl;
-
-    std::ifstream fin;
-    fin.open(mostRecentFile);
-    if (fin.fail()) throw mostRecentFile;  
-    std::string line;
-    std::string delimeter = ",";
-    size_t pos = 0;
-    std::string token;
-
-    int lineNum = 0;
-    while(!fin.eof()) {
-        fin >> line;
-        while ((pos = line.find(delimeter)) != std::string::npos)
+        for (const auto & entry : std::filesystem::directory_iterator(label3d_dir))
         {
-            token = line.substr(0, pos);
-            if (lineNum == 0)
-            {
-                if (token.compare(skeleton->name) != 0) {
-                    std::cout << "Failed loading, skeleton doesn't match." << std::endl;
-                    return;
-                }                       
-                line.erase(0, pos + delimeter.length());
-            }
-            else
-            {
-                uint frame_num = stoul(token);
-                if (keypoints_map.find(frame_num)==keypoints_map.end()) {
-                    KeyPoints* keypoints = (KeyPoints *)malloc(sizeof(KeyPoints));
-                    allocate_keypoints(keypoints, scene, skeleton);
-                    keypoints_map[frame_num] = keypoints; 
-                }
-                line.erase(0, pos + delimeter.length());
-
-                while ((pos = line.find(delimeter)) != std::string::npos)
-                {
-                    token = line.substr(0, pos);
-                    int node = stoi(token);   // get the node index
-                    line.erase(0, pos + delimeter.length());
-
-                    pos = line.find(delimeter);
-                    token = line.substr(0, pos);
-                    double x = stod(token);
-                    line.erase(0, pos + delimeter.length());
-
-                    pos = line.find(delimeter);
-                    token = line.substr(0, pos);
-                    double y = stod(token);
-                    line.erase(0, pos + delimeter.length());
-
-                    pos = line.find(delimeter);
-                    token = line.substr(0, pos);
-                    double z = stod(token);
-                    line.erase(0, pos + delimeter.length());
-
-                    keypoints_map[frame_num]->keypoints3d[node].x = x;
-                    keypoints_map[frame_num]->keypoints3d[node].y = y;
-                    keypoints_map[frame_num]->keypoints3d[node].z = z;
-                    
-                    if (x == 1E7 || y == 1E7 || z==1E7) {
-                        for (int cam_idx=0; cam_idx<scene->num_cams; cam_idx++) {
-                            keypoints_map[frame_num]->keypoints2d[cam_idx][node].is_triangulated = false;
-                        }
-                    }
-                    else {
-                        for (int cam_idx=0; cam_idx<scene->num_cams; cam_idx++) {
-                            keypoints_map[frame_num]->keypoints2d[cam_idx][node].is_triangulated = true;
-                        }
-                    }
-
-                    // std::cout << "frame: " << frame_num << "  node: " << node << "  x: " << keypoints_map[frame_num]->keypoints3d[node].x \
-                    //  << "  y: " << keypoints_map[frame_num]->keypoints3d[node].y << "  z: " << keypoints_map[frame_num]->keypoints3d[node].z << std::endl;
-                }
-            }
+            filenames.push_back(entry.path());
         }
-        lineNum++;
+
+        if (filenames.size() == 0)
+        {
+            std::cout << "Failed loading, no files in directory." << std::endl;
+            return;
+        };
+
+        sort(filenames.begin(), filenames.end());
+        std::string mostRecentFile = filenames.back();
+        std::cout << "mostRecentFile: " << mostRecentFile << std::endl;
+
+        std::ifstream fin;
+        fin.open(mostRecentFile);
+        if (fin.fail()) throw mostRecentFile;  
+        std::string line;
+        std::string delimeter = ",";
+        size_t pos = 0;
+        std::string token;
+
+        int lineNum = 0;
+        while(!fin.eof()) {
+            fin >> line;
+            while ((pos = line.find(delimeter)) != std::string::npos)
+            {
+                token = line.substr(0, pos);
+                if (lineNum == 0)
+                {
+                    if (token.compare(skeleton->name) != 0) {
+                        std::cout << "Failed loading, skeleton doesn't match." << std::endl;
+                        return;
+                    }                       
+                    line.erase(0, pos + delimeter.length());
+                }
+                else
+                {
+                    uint frame_num = stoul(token);
+                    if (keypoints_map.find(frame_num)==keypoints_map.end()) {
+                        KeyPoints* keypoints = (KeyPoints *)malloc(sizeof(KeyPoints));
+                        allocate_keypoints(keypoints, scene, skeleton);
+                        keypoints_map[frame_num] = keypoints; 
+                    }
+                    line.erase(0, pos + delimeter.length());
+
+                    while ((pos = line.find(delimeter)) != std::string::npos)
+                    {
+                        token = line.substr(0, pos);
+                        int node = stoi(token);   // get the node index
+                        line.erase(0, pos + delimeter.length());
+
+                        pos = line.find(delimeter);
+                        token = line.substr(0, pos);
+                        double x = stod(token);
+                        line.erase(0, pos + delimeter.length());
+
+                        pos = line.find(delimeter);
+                        token = line.substr(0, pos);
+                        double y = stod(token);
+                        line.erase(0, pos + delimeter.length());
+
+                        pos = line.find(delimeter);
+                        token = line.substr(0, pos);
+                        double z = stod(token);
+                        line.erase(0, pos + delimeter.length());
+
+                        keypoints_map[frame_num]->keypoints3d[node].x = x;
+                        keypoints_map[frame_num]->keypoints3d[node].y = y;
+                        keypoints_map[frame_num]->keypoints3d[node].z = z;
+                        
+                        if (x == 1E7 || y == 1E7 || z==1E7) {
+                            for (int cam_idx=0; cam_idx<scene->num_cams; cam_idx++) {
+                                keypoints_map[frame_num]->keypoints2d[cam_idx][node].is_triangulated = false;
+                            }
+                        }
+                        else {
+                            for (int cam_idx=0; cam_idx<scene->num_cams; cam_idx++) {
+                                keypoints_map[frame_num]->keypoints2d[cam_idx][node].is_triangulated = true;
+                            }
+                        }
+
+                        // std::cout << "frame: " << frame_num << "  node: " << node << "  x: " << keypoints_map[frame_num]->keypoints3d[node].x \
+                        //  << "  y: " << keypoints_map[frame_num]->keypoints3d[node].y << "  z: " << keypoints_map[frame_num]->keypoints3d[node].z << std::endl;
+                    }
+                }
+            }
+            lineNum++;
+        }
+        fin.close();
     }
-    fin.close();
 
     // for (int i=0; i<scene->num_cams; i++) {
     //     load_2d_keypoints(keypoints_map, skeleton, root_dir, i, camera_names[i], scene);
