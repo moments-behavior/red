@@ -30,7 +30,7 @@ python red3d2jarvis.py -i /home/user/example_for_data_exporting/labeled_data/ -s
 If the skeleton is not in the `keypoints.py`, please add your skeleton manually. We will provide utils for generating from skeleton json file soon.  
 
 
-### Load model predictions 
+### Load predictions int RED
 
 We provide script to convert JARVIS prediction back to RED format for visualizing in RED. 
 
