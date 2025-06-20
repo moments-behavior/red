@@ -1,4 +1,4 @@
-# Format data for deep learning training 
+# Format data for deep learning  
 
 Create conda python virtual environment
 
