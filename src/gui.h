@@ -393,7 +393,7 @@ void load_2d_keypoints(std::map<u32, KeyPoints*>& keypoints_map, SkeletonContext
     fin.close();
 }
 
-void load_keypoints(std::map<u32, KeyPoints*>& keypoints_map, SkeletonContext* skeleton, std::string root_dir, render_scene *scene, std::vector<std::string>& camera_names) {
+int load_keypoints(std::map<u32, KeyPoints*>& keypoints_map, SkeletonContext* skeleton, std::string root_dir, render_scene *scene, std::vector<std::string>& camera_names, std::string& error_message) {
 
     if (scene->num_cams > 1) {
         std::string label3d_dir = root_dir + "/worldKeyPoints/";
@@ -406,8 +406,8 @@ void load_keypoints(std::map<u32, KeyPoints*>& keypoints_map, SkeletonContext* s
 
         if (filenames.size() == 0)
         {
-            std::cout << "Failed loading, no files in directory." << std::endl;
-            return;
+            error_message = "Failed loading, no files in directory.";
+            return 1;
         };
 
         sort(filenames.begin(), filenames.end());
@@ -431,8 +431,8 @@ void load_keypoints(std::map<u32, KeyPoints*>& keypoints_map, SkeletonContext* s
                 if (lineNum == 0)
                 {
                     if (token.compare(skeleton->name) != 0) {
-                        std::cout << "Failed loading, skeleton doesn't match." << std::endl;
-                        return;
+                        error_message = "Failed loading, skeleton doesn't match.";
+                        return 1;
                     }                       
                     line.erase(0, pos + delimeter.length());
                 }
@@ -505,6 +505,7 @@ void load_keypoints(std::map<u32, KeyPoints*>& keypoints_map, SkeletonContext* s
     {
         handle.join();
     }
+    return 0;
 }
 
 void world_coordinates_projection_points(CameraParams* cvp, int image_height, double* axis_x_values, double* axis_y_values, float scale)

@@ -108,6 +108,8 @@ int main(int, char **)
     bool show_help_window = false;
     std::vector<bool> is_view_focused;
     bool input_is_imgs = false;
+    bool show_error = false;
+    std::string error_message;
 
     while (!glfwWindowShouldClose(window->render_target))
     {
@@ -874,18 +876,19 @@ int main(int, char **)
 
                 if (ImGui::Button("Load Labeled Data"))
                 {
-                    load_keypoints(keypoints_map, skeleton, keypoints_root_folder, scene, camera_names);
+                    if(load_keypoints(keypoints_map, skeleton, keypoints_root_folder, scene, camera_names, error_message)) {
+                        show_error = true;
+                    }
                 }
 
-                // TODO: change folder
-                ImGui::Text(keypoints_root_folder.c_str());
-                ImGui::SameLine();
                 if (ImGui::Button("Update keypoints folder")) {
                     IGFD::FileDialogConfig config;
                     config.countSelectionMax = 1;
                     config.path = root_dir;
                     ImGuiFileDialog::Instance()->OpenDialog("ChooseKeypointsFolder", "Choose Keypoints Folder", nullptr, config);
                 }
+                ImGui::SameLine();
+                ImGui::Text(keypoints_root_folder.c_str());          
 
                 auto upper_it = keypoints_map.upper_bound(current_frame_num); 
                 if (upper_it == keypoints_map.end()) {
@@ -966,6 +969,23 @@ int main(int, char **)
                 ImGui::Text("Click keypoint to active it");
             }
             ImGui::End();
+        }
+        
+        if (show_error) {
+            ImGui::OpenPopup("Error");
+            show_error = false;  // Reset the flag so it only opens once
+        }
+
+        if (ImGui::BeginPopupModal("Error", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
+            ImGui::Text("%s", error_message.c_str());
+            ImGui::Separator();
+
+            if (ImGui::Button("OK")) {
+                ImGui::CloseCurrentPopup();
+                show_error = false;
+            }
+
+            ImGui::EndPopup();
         }
       
         // Rendering
