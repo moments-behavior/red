@@ -9,8 +9,8 @@ conda install numpy
 conda install -c menpo opencv
 conda install pyyaml
 ```
-
-## Generate training data 
+## Jarvis
+### Generate training data 
 
 ```
 conda activate red_exporter
@@ -30,7 +30,7 @@ python red3d2jarvis.py -i /home/user/example_for_data_exporting/labeled_data/ -s
 If the skeleton is not in the `keypoints.py`, please add your skeleton manually. We will provide utils for generating from skeleton json file soon.  
 
 
-## Load model predictions 
+### Load model predictions 
 
 We provide script to convert JARVIS prediction back to RED format for visualizing in RED. 
 
@@ -41,7 +41,7 @@ Note, there is a filter applied to filter out predictions with confidence score 
 
 
 
-## Merge multiple jarvis datasets (WIP)
+### Merge multiple jarvis datasets (WIP)
 You can merge multiple jarvis projects into a single projects (we assume both projects have same camera set, image resolutions, & XX) 
 
 - first prepare datasets by converting multiple annotated projects from `red` into `jarvis` projects using the script `red3d2jarvis.py`
@@ -66,8 +66,8 @@ jarvis_merge
 python merge_jarvis_datasets.py -i ~/data/jarvis_merge -o ~/data/test_merge
 ```
 
-## red --> yolo conversion
-TODO: add more doc and arguments
+## YOLO 
+### Generate training data 
 ```
 python3 red3d2yolo.py -i /mnt/labelpc_mouse_vids/2024_12_21_17_54_58/ball_labeled_data/ -o /home/ro/Documents/red2yolo/
 ```
