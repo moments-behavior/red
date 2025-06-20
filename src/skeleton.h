@@ -4,7 +4,8 @@
 #include <string>
 #include "types.h"
 #include <map>
-
+#include "json.hpp"
+using json = nlohmann::json;
 
 struct KeyPoints2D{
     tuple_d position; 
@@ -45,7 +46,8 @@ enum SkeletonPrimitive {
     Rat20,
     Rat24,
     Rat20Target,
-    Rat24Target
+    Rat24Target,
+    SP_LOAD
 };
 
 std::map<std::string, SkeletonPrimitive> skeleton_get_all()
@@ -68,16 +70,34 @@ std::map<std::string, SkeletonPrimitive> skeleton_get_all()
         {"Rat20", Rat20},
         {"Rat24", Rat24},
         {"Rat20Target", Rat20Target},
-        {"Rat24Target", Rat24Target}
-    };
+        {"Rat24Target", Rat24Target},
+        {"Load from root folder", SP_LOAD}};
     return skeleton_all;
 }
 
-
-void skeleton_initialize(SkeletonContext* skeleton, SkeletonPrimitive skeleton_type)
+void load_skeleton_json(std::string file_name, SkeletonContext* skeleton)
 {
-    switch (skeleton_type){
+    std::ifstream f(file_name);
+    json s_config = json::parse(f);
+    skeleton->name = s_config["name"];
+    skeleton->num_nodes = s_config["num_nodes"];
+    skeleton->num_edges = s_config["num_edges"];
+
+    for(int i=0; i<s_config["node_names"].size(); i++) {
+        skeleton->node_names.push_back(s_config["node_names"][i]);
+    }
+
+    for(int i=0; i<s_config["edges"].size(); i++) {
+        tuple_i edge_start_end = {s_config["edges"][i][0], s_config["edges"][i][1]};
+        skeleton->edges.push_back(edge_start_end);
+    }
+}
+
+void skeleton_initialize(std::string name, std::string root_dir, SkeletonContext* skeleton, SkeletonPrimitive skeleton_type)
+{
+    switch (skeleton_type) {
         case Table3Corners:
+            skeleton->name = name;
             skeleton->num_nodes = 3;
             skeleton->num_edges = 2;
              
@@ -96,6 +116,7 @@ void skeleton_initialize(SkeletonContext* skeleton, SkeletonPrimitive skeleton_t
 
         
         case Target:
+            skeleton->name = name;
             skeleton->num_nodes = 1;
             skeleton->num_edges = 0;
             skeleton->node_names = {"Target"};
@@ -108,6 +129,7 @@ void skeleton_initialize(SkeletonContext* skeleton, SkeletonPrimitive skeleton_t
             break;
 
         case Rat7Target:
+            skeleton->name = name;
             skeleton->num_nodes = 9;
             skeleton->num_edges = 8;
             skeleton->node_names = {"Snout", "EarL", "EarR", "Neck", "SpineF", "SpineM", "SpineL", "TailBase", "Target"};
@@ -130,6 +152,7 @@ void skeleton_initialize(SkeletonContext* skeleton, SkeletonPrimitive skeleton_t
             break;
 
         case RatTarget:
+            skeleton->name = name;
             skeleton->num_nodes = 2;
             skeleton->num_edges = 1;
             skeleton->node_names = {"Snout", "Target"};
@@ -144,7 +167,8 @@ void skeleton_initialize(SkeletonContext* skeleton, SkeletonPrimitive skeleton_t
 
             break;
 
-        case Rat3Target:
+        case Rat3Target:            
+            skeleton->name = name;
             skeleton->num_nodes = 4;
             skeleton->num_edges = 2;
             skeleton->node_names = {"Snout", "EarL", "EarR", "Target"};
@@ -160,6 +184,7 @@ void skeleton_initialize(SkeletonContext* skeleton, SkeletonPrimitive skeleton_t
             break;
 
         case Rat4Target:
+            skeleton->name = name;
             skeleton->num_nodes = 5;
             skeleton->num_edges = 3;
             skeleton->node_names = {"EarR", "EarL", "Snout", "Tail", "Target"};
@@ -176,6 +201,7 @@ void skeleton_initialize(SkeletonContext* skeleton, SkeletonPrimitive skeleton_t
             break;
 
         case Rat4:
+            skeleton->name = name;
             skeleton->num_nodes = 4;
             skeleton->num_edges = 3;
             skeleton->node_names = {"EarR", "EarL", "Snout", "Tail"};
@@ -193,6 +219,7 @@ void skeleton_initialize(SkeletonContext* skeleton, SkeletonPrimitive skeleton_t
 
 
         case Rat6Target:
+            skeleton->name = name;
             skeleton->num_nodes = 7;
             skeleton->num_edges = 6;
             skeleton->node_names = {"Snout", "EarL", "EarR", "Neck", "SpineL", "TailBase", "Target"};
@@ -213,6 +240,7 @@ void skeleton_initialize(SkeletonContext* skeleton, SkeletonPrimitive skeleton_t
             break;
 
         case Rat6Target2:
+            skeleton->name = name;
             skeleton->num_nodes = 8;
             skeleton->num_edges = 6;
             skeleton->node_names = {"Snout", "EarL", "EarR", "Neck", "SpineL", "TailBase", "Target1", "Target2"};
@@ -233,6 +261,7 @@ void skeleton_initialize(SkeletonContext* skeleton, SkeletonPrimitive skeleton_t
             break;
 
         case Rat6:
+            skeleton->name = name;
             skeleton->num_nodes = 6;
             skeleton->num_edges = 6;
             skeleton->node_names = {"Snout", "EarL", "EarR", "Neck", "SpineL", "TailBase"};
@@ -252,7 +281,8 @@ void skeleton_initialize(SkeletonContext* skeleton, SkeletonPrimitive skeleton_t
                 };
             break;
 
-        case Rat4Box:
+        case Rat4Box:            
+            skeleton->name = name;
             skeleton->num_nodes = 6;
             skeleton->num_edges = 3;
             skeleton->node_names = {"EarR", "EarL", "Snout", "Tail", "TopLeft", "BottomRight"};
@@ -270,6 +300,7 @@ void skeleton_initialize(SkeletonContext* skeleton, SkeletonPrimitive skeleton_t
             break;
 
         case Rat4Box3Ball:
+            skeleton->name = name;
             skeleton->num_nodes = 9;
             skeleton->num_edges = 3;
             skeleton->node_names = {"EarR", "EarL", "Snout", "Tail", "TopLeft", "BottomRight", "Ball0", "Ball1", "Ball2"};
@@ -287,6 +318,7 @@ void skeleton_initialize(SkeletonContext* skeleton, SkeletonPrimitive skeleton_t
             break;
 
         case Rat10Target2:
+            skeleton->name = name;
             skeleton->num_nodes = 12;
             skeleton->num_edges = 10;
             skeleton->node_names = {"Snout", "EarL", "EarR", "Neck", "SpineL", "TailBase", "HandL", "HandR", "FootL", "FootR", "Target1", "Target2"};
@@ -310,6 +342,7 @@ void skeleton_initialize(SkeletonContext* skeleton, SkeletonPrimitive skeleton_t
             break;
 
         case Rat20:
+            skeleton->name = name;
             skeleton->num_nodes = 20;
             skeleton->num_edges = 20;
             skeleton->node_names = {"Snout", "EarL", "EarR", "Neck", "SpineL", "TailBase",
@@ -346,7 +379,8 @@ void skeleton_initialize(SkeletonContext* skeleton, SkeletonPrimitive skeleton_t
                 {18, 19}};
             break;
 
-        case Rat24:
+        case Rat24:            
+            skeleton->name = name;
             skeleton->num_nodes = 24;
             skeleton->num_edges = 24;
             skeleton->node_names = {"Snout", "EarL", "EarR", "Neck", "SpineL", "TailBase",
@@ -390,6 +424,7 @@ void skeleton_initialize(SkeletonContext* skeleton, SkeletonPrimitive skeleton_t
             break;
 
         case Rat20Target:
+            skeleton->name = name;
             skeleton->num_nodes = 21;
             skeleton->num_edges = 20;
             skeleton->node_names = {"Snout", "EarL", "EarR", "Neck", "SpineL", "TailBase",
@@ -427,6 +462,7 @@ void skeleton_initialize(SkeletonContext* skeleton, SkeletonPrimitive skeleton_t
             break;
 
         case Rat24Target:
+            skeleton->name = name;
             skeleton->num_nodes = 25;
             skeleton->num_edges = 24;
             skeleton->node_names = {"Snout", "EarL", "EarR", "Neck", "SpineL", "TailBase",
@@ -470,6 +506,7 @@ void skeleton_initialize(SkeletonContext* skeleton, SkeletonPrimitive skeleton_t
             break;
 
         case Rat22:
+            skeleton->name = name;
             skeleton->num_nodes = 22;
             skeleton->num_edges = 22;
             skeleton->node_names = {"Snout", "EarL", "EarR", "Neck", "SpineL", "TailBase",
@@ -507,6 +544,14 @@ void skeleton_initialize(SkeletonContext* skeleton, SkeletonPrimitive skeleton_t
                 {19, 20},
                 {20, 21}};
                 break;
+        case SP_LOAD:
+            std::string skeleton_file_name  = root_dir + "/skeleton.json";
+            load_skeleton_json(skeleton_file_name, skeleton);
+            for (int i = 0; i < skeleton->num_nodes; i++) {
+                ImVec4 color = (ImVec4)ImColor::HSV(i / (float)skeleton->num_nodes, 1.0f, 1.0f);
+                skeleton->node_colors.push_back(color);
+            }
+            break;
     }
 };
 

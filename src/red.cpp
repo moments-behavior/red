@@ -47,6 +47,7 @@ int main(int, char **)
     render_scene *scene = (render_scene *)malloc(sizeof(render_scene));
 
     std::string root_dir;
+    std::string skeleton_dir;
     std::vector<std::string> camera_names;
     std::vector<CameraParams> camera_params;
     std::vector<std::thread> decoder_threads;
@@ -129,7 +130,7 @@ int main(int, char **)
                         IGFD::FileDialogConfig config;
                         config.countSelectionMax = 0;
                         config.path = start_folder_name;
-		                ImGuiFileDialog::Instance()->OpenDialog("ChooseFileDlgKey", "Choose File", ".mp4,.tiff,.jpeg,.png", config);
+		                ImGuiFileDialog::Instance()->OpenDialog("ChooseMedia", "Choose Media", ".mp4,.tiff,.jpeg,.jpg,.png", config);
                     };
                     ImGui::EndMenu();
                 }
@@ -146,30 +147,34 @@ int main(int, char **)
                             
                             if(ImGui::MenuItem(element.first.c_str(), NULL, skeleton->name == element.first, !skeleton_chosen))
                             {
-                                skeleton_chosen = true;
-
-                                if (scene->num_cams > 1) {
-                                    for (u32 i = 0; i < scene->num_cams; i++)
-                                    {
-                                        // legacy loading from old formats
-                                        // CameraParams cam = camera_load_params_from_csv(cam_file, i);
-                                        // camera_params.push_back(cam);
-                                        std::string cam_file = root_dir + "/calibration/" + camera_names[i] + ".yaml";
-                                        std::cout << cam_file << std::endl;
-                                        CameraParams cam = camera_load_params_from_yaml(cam_file);
-                                        camera_params.push_back(cam);
+                                if (element.second == SP_LOAD) {
+                                    IGFD::FileDialogConfig config;
+                                    config.countSelectionMax = 1;
+                                    config.path = skeleton_dir;
+                                    ImGuiFileDialog::Instance()->OpenDialog("ChooseSkeleton", "Choose Skeleton", ".json", config);
+                                } else {
+                                    skeleton_chosen = true;
+                                    if (scene->num_cams > 1) {
+                                        for (u32 i = 0; i < scene->num_cams; i++)
+                                        {
+                                            // legacy loading from old formats
+                                            // CameraParams cam = camera_load_params_from_csv(cam_file, i);
+                                            // camera_params.push_back(cam);
+                                            std::string cam_file = root_dir + "/calibration/" + camera_names[i] + ".yaml";
+                                            std::cout << cam_file << std::endl;
+                                            CameraParams cam = camera_load_params_from_yaml(cam_file);
+                                            camera_params.push_back(cam);
+                                        }
                                     }
-                                }
-
-                                skeleton->name = element.first;
-                                skeleton_initialize(skeleton, element.second);
-                                plot_keypoints_flag = true;
-                                keypoints_root_folder = root_dir + "/labeled_data/";
-                                // create folders
-                                std::filesystem::create_directory(keypoints_root_folder);
-                                std::filesystem::create_directory(keypoints_root_folder + "/worldKeyPoints");
-                                for (u32 i = 0; i < scene->num_cams; i++) {
-                                    std::filesystem::create_directory(keypoints_root_folder + "/" + camera_names[i]);
+                                    skeleton_initialize(element.first, root_dir, skeleton, element.second);
+                                    plot_keypoints_flag = true;
+                                    keypoints_root_folder = root_dir + "/labeled_data/";
+                                    // create folders
+                                    std::filesystem::create_directory(keypoints_root_folder);
+                                    std::filesystem::create_directory(keypoints_root_folder + "/worldKeyPoints");
+                                    for (u32 i = 0; i < scene->num_cams; i++) {
+                                        std::filesystem::create_directory(keypoints_root_folder + "/" + camera_names[i]);
+                                    }
                                 }
                             }
                         }
@@ -273,12 +278,13 @@ int main(int, char **)
         ImGui::End();
 
         // file explorer display
-        if (ImGuiFileDialog::Instance()->Display("ChooseFileDlgKey"))
-        { // => will show a dialog
+        if (ImGuiFileDialog::Instance()->Display("ChooseMedia"))
+        {
             if (ImGuiFileDialog::Instance()->IsOk())
             { // action if OK
                 auto selected_files = ImGuiFileDialog::Instance()->GetSelection();
                 root_dir = ImGuiFileDialog::Instance()->GetCurrentPath();
+                skeleton_dir = root_dir;
 
                 // check if it is mp4, if it is mp4 files
                 auto first_selection = *selected_files.begin(); // Dereferencing iterator
@@ -360,6 +366,40 @@ int main(int, char **)
             ImGuiFileDialog::Instance()->Close();
         }
 
+        if (ImGuiFileDialog::Instance()->Display("ChooseSkeleton"))
+        {
+            if (ImGuiFileDialog::Instance()->IsOk())
+            { // action if OK
+                auto skeleton_file = ImGuiFileDialog::Instance()->GetSelection();
+                if (!skeleton_file.empty()) {
+                    skeleton_chosen = true;
+                    if (scene->num_cams > 1) {
+                        for (u32 i = 0; i < scene->num_cams; i++)
+                        {
+                            // legacy loading from old formats
+                            // CameraParams cam = camera_load_params_from_csv(cam_file, i);
+                            // camera_params.push_back(cam);
+                            std::string cam_file = root_dir + "/calibration/" + camera_names[i] + ".yaml";
+                            std::cout << cam_file << std::endl;
+                            CameraParams cam = camera_load_params_from_yaml(cam_file);
+                            camera_params.push_back(cam);
+                        }
+                    }
+                    skeleton_dir = ImGuiFileDialog::Instance()->GetCurrentPath();
+                    skeleton_initialize("", root_dir, skeleton, SP_LOAD);
+                    plot_keypoints_flag = true;
+                    keypoints_root_folder = root_dir + "/labeled_data/";
+                    // create folders
+                    std::filesystem::create_directory(keypoints_root_folder);
+                    std::filesystem::create_directory(keypoints_root_folder + "/worldKeyPoints");
+                    for (u32 i = 0; i < scene->num_cams; i++) {
+                        std::filesystem::create_directory(keypoints_root_folder + "/" + camera_names[i]);
+                    }
+                }
+            }
+            // close
+            ImGuiFileDialog::Instance()->Close();
+        }
                             
         if (dc_context->decoding_flag && play_video)
         {
@@ -842,7 +882,7 @@ int main(int, char **)
                     IGFD::FileDialogConfig config;
                     config.countSelectionMax = 1;
                     config.path = root_dir;
-                    ImGuiFileDialog::Instance()->OpenDialog("ChooseDirDlgKey", "Choose a Directory", nullptr, config);
+                    ImGuiFileDialog::Instance()->OpenDialog("ChooseKeypointsFolder", "Choose Keypoints Folder", nullptr, config);
                 }
 
                 if (ImGui::Button("Load 2d Keypoints Only"))
@@ -890,7 +930,7 @@ int main(int, char **)
             ImGui::End();
         }
 
-        if (ImGuiFileDialog::Instance()->Display("ChooseDirDlgKey"))
+        if (ImGuiFileDialog::Instance()->Display("ChooseKeypointsFolder"))
         { // => will show a dialog
             if (ImGuiFileDialog::Instance()->IsOk())
             { // action if OK

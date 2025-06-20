@@ -393,6 +393,7 @@ void load_2d_keypoints(std::map<u32, KeyPoints*>& keypoints_map, SkeletonContext
 }
 
 void load_keypoints(std::map<u32, KeyPoints*>& keypoints_map, SkeletonContext* skeleton, std::string root_dir, render_scene *scene, std::vector<std::string>& camera_names) {
+     
     std::string label3d_dir = root_dir + "/worldKeyPoints/";
     std::vector<std::string> filenames;
 
