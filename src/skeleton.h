@@ -93,7 +93,7 @@ void load_skeleton_json(std::string file_name, SkeletonContext* skeleton)
     }
 }
 
-void skeleton_initialize(std::string name, std::string root_dir, SkeletonContext* skeleton, SkeletonPrimitive skeleton_type)
+void skeleton_initialize(std::string name, std::string skeleton_file_name, SkeletonContext* skeleton, SkeletonPrimitive skeleton_type)
 {
     switch (skeleton_type) {
         case Table3Corners:
@@ -545,7 +545,6 @@ void skeleton_initialize(std::string name, std::string root_dir, SkeletonContext
                 {20, 21}};
                 break;
         case SP_LOAD:
-            std::string skeleton_file_name  = root_dir + "/skeleton.json";
             load_skeleton_json(skeleton_file_name, skeleton);
             for (int i = 0; i < skeleton->num_nodes; i++) {
                 ImVec4 color = (ImVec4)ImColor::HSV(i / (float)skeleton->num_nodes, 1.0f, 1.0f);

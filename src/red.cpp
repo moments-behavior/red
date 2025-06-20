@@ -372,6 +372,7 @@ int main(int, char **)
             if (ImGuiFileDialog::Instance()->IsOk())
             { // action if OK
                 auto skeleton_file = ImGuiFileDialog::Instance()->GetSelection();
+
                 if (!skeleton_file.empty()) {
                     skeleton_chosen = true;
                     if (scene->num_cams > 1) {
@@ -387,7 +388,7 @@ int main(int, char **)
                         }
                     }
                     skeleton_dir = ImGuiFileDialog::Instance()->GetCurrentPath();
-                    skeleton_initialize("", root_dir, skeleton, SP_LOAD);
+                    skeleton_initialize("", skeleton_file.begin()->second, skeleton, SP_LOAD);
                     plot_keypoints_flag = true;
                     keypoints_root_folder = root_dir + "/labeled_data/";
                     // create folders
