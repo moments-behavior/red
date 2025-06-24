@@ -38,12 +38,12 @@ print("Select most recent label: {}".format(select_most_recent_labels))
 
 selected_annotation = select_most_recent_labels.split("/")[-1][10:]
 selected_annotation = selected_annotation.split(".")[0]
-world_labels = csv_reader_rats(select_most_recent_labels, 1, three_d=True) 
+world_labels = csv_reader_rats(select_most_recent_labels, 1, three_d=True)
 
 # filter out invalid lables
 world_labels_filterd = {}
 for name, value in world_labels.items():
-    if not np.any(value==1E7):
+    if not np.any(value == 1E7):
         world_labels_filterd[name] = value
 
 labels_frames = np.asarray(list(world_labels_filterd.keys()))
@@ -52,34 +52,40 @@ total_num_labels = len(labels_frames)
 id_shuffled = np.arange(total_num_labels)
 np.random.shuffle(id_shuffled)
 num_train = int(np.floor(total_num_labels * 0.9))
-print("Train set: {}, validation set: {}.".format(num_train, total_num_labels - num_train))
+print("Train set: {}, validation set: {}.".format(
+    num_train, total_num_labels - num_train))
 train_ids = id_shuffled[:num_train]
 train_ids = np.sort(train_ids)
 val_ids = id_shuffled[num_train:]
 val_ids = np.sort(val_ids)
-## split frames to train and val
+# split frames to train and val
 train_image_frames = labels_frames[train_ids]
 val_image_frames = labels_frames[val_ids]
 
 
 trial_name = selected_annotation
 
-num_keypoints = 1   
+num_keypoints = 1
 id_ball = 1
 d_ball = 100
 
 
-# export annotations 
-annotations = process_one_session_ball(trial_name, label_folder, num_keypoints, selected_annotation, train_image_frames, cameras,d_ball,id_ball)
-create_yolo_annotation_files(output_folder,trial_name,annotations,cameras,"train")
+# export annotations
+annotations = process_one_session_ball(trial_name, label_folder, num_keypoints,
+                                       selected_annotation, train_image_frames, cameras, d_ball, id_ball, 3208, 2200)
+create_yolo_annotation_files(
+    output_folder, trial_name, annotations, cameras, "train")
 
-annotations = process_one_session_ball(trial_name, label_folder, num_keypoints, selected_annotation, val_image_frames, cameras,d_ball,id_ball)
-create_yolo_annotation_files(output_folder,trial_name,annotations,cameras,"valid")
+annotations = process_one_session_ball(trial_name, label_folder, num_keypoints,
+                                       selected_annotation, val_image_frames, cameras, d_ball, id_ball, 3208, 2200)
+create_yolo_annotation_files(
+    output_folder, trial_name, annotations, cameras, "valid")
 
 # save calibration files
-calibration_folder = os.path.join("/".join(label_folder.split("/")[:-1]), "calibration")
+calibration_folder = os.path.join(
+    "/".join(label_folder.split("/")[:-1]), "calibration")
 
-save_calib_folder = os.path.join(output_folder,trial_name,"calib_params")
+save_calib_folder = os.path.join(output_folder, trial_name, "calib_params")
 os.makedirs(save_calib_folder, exist_ok=True)
 
 for cam in cameras:
@@ -93,8 +99,7 @@ for cam in cameras:
     R = R.T
     T = fs.getNode("tc_ext").mat()
 
-
-    output_filename =  save_calib_folder + "/{}.yaml".format(cam)
+    output_filename = save_calib_folder + "/{}.yaml".format(cam)
     s = cv.FileStorage(output_filename, cv.FileStorage_WRITE)
     s.write('intrinsicMatrix', intrinsicMatrix)
     s.write('distortionCoefficients', distortionCoefficients)
@@ -103,7 +108,7 @@ for cam in cameras:
     s.release()
     print(output_filename)
 
-## save jpeg images
+# save jpeg images
 video_folder = "/".join(label_folder.split("/")[:-1])
 
 map_frame_to_mode = {}
@@ -112,20 +117,21 @@ all_image_frames = []
 for img in train_image_frames:
     map_frame_to_mode[img] = 'train'
     all_image_frames.append(img)
-    
+
 for img in val_image_frames:
     map_frame_to_mode[img] = 'valid'
     all_image_frames.append(img)
 
 all_image_frames = np.asarray(all_image_frames)
 all_image_frames = np.sort(all_image_frames)
-    
+
 
 all_jobs = []
 
 for camera in cameras:
-    save_folder = os.path.join(output_folder,trial_name,camera)        
-    all_jobs.append([trial_name, camera, video_folder, save_folder, map_frame_to_mode, all_image_frames,"yolo"])    
+    save_folder = os.path.join(output_folder, trial_name, camera)
+    all_jobs.append([trial_name, camera, video_folder, save_folder,
+                    map_frame_to_mode, all_image_frames, "yolo"])
 
 num_jobs = len(all_jobs)
 # print(all_jobs[0])
@@ -138,7 +144,3 @@ if platform.system() == 'Darwin':  # fix for macOS
 else:
     with Pool(num_jobs) as p:
         p.map(multiprocess_save_jpegs, all_jobs)
-
-
-
-

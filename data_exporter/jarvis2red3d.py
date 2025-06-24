@@ -15,14 +15,15 @@ parser.add_argument('-o', '--output_dir', type=str, default="predictions")
 
 
 args = parser.parse_args()
-threshold  = args.threshold
+threshold = args.threshold
 input_jarvis_folder = args.input_jarvis_folder
 skeleton = args.skeleton
 use_filter = args.filter
 output_dir = args.output_dir
 _, _, num_keypoints = skeleton_selector[skeleton]()
 
-labels_raw = load_jarvis_3d_csv_rats(input_jarvis_folder + "/data3D.csv", num_keypoints)
+labels_raw = load_jarvis_3d_csv_rats(
+    input_jarvis_folder + "/data3D.csv", num_keypoints)
 print("Number of raw labels: {}".format(len(labels_raw)))
 
 labels = {}
@@ -40,13 +41,14 @@ with open(input_jarvis_folder + "/info.yaml") as stream:
     except yaml.YAMLError as exc:
         print(exc)
 
-output_folder = os.path.join(jarvis_info['recording_path'], '{}'.format(output_dir))
+output_folder = os.path.join(
+    jarvis_info['recording_path'], '{}'.format(output_dir))
 
 if not os.path.exists(output_folder):
     os.makedirs(output_folder)
 calibration_folder = os.path.join(jarvis_info['recording_path'], 'calibration')
 
-# project to 2d using calibrations, save 2d points 
+# project to 2d using calibrations, save 2d points
 cam_names = []
 for file in glob.glob(calibration_folder + "/*.yaml"):
     file_name = file.split("/")
@@ -59,9 +61,13 @@ for i in range(len(cam_names)):
     filename = calibration_folder + "/{}.yaml".format(cam_names[i])
     fs = cv.FileStorage(filename, cv.FILE_STORAGE_READ)
     cam_params['camera_matrix'] = fs.getNode("camera_matrix").mat()
-    cam_params['distortion_coefficients'] = fs.getNode("distortion_coefficients").mat()
+    cam_params['distortion_coefficients'] = fs.getNode(
+        "distortion_coefficients").mat()
     cam_params['tc_ext'] = fs.getNode("tc_ext").mat()
     cam_params['rc_ext'] = fs.getNode("rc_ext").mat()
+    cam_params['image_width'] = int(fs.getNode("image_width").real())
+    cam_params['image_height'] = int(fs.getNode("image_height").real())
+
     cam_list.append(cam_params)
 
 now = datetime.now()
@@ -72,16 +78,17 @@ for camera_id in range(len(cam_names)):
     labels_converted = {}
     output_file_name = "{}_{}.csv".format(cam_names[camera_id], dt_string)
     for frame_id in labels.keys():
-        projected_2d_keypoints = Project(labels[frame_id], 
-                cam_list[camera_id]['camera_matrix'], 
-                cam_list[camera_id]['distortion_coefficients'], 
-                cam_list[camera_id]['rc_ext'],
-                cam_list[camera_id]['tc_ext'])
-        projected_2d_keypoints[:, 1] = 2200 - projected_2d_keypoints[:, 1]
+        projected_2d_keypoints = Project(labels[frame_id],
+                                         cam_list[camera_id]['camera_matrix'],
+                                         cam_list[camera_id]['distortion_coefficients'],
+                                         cam_list[camera_id]['rc_ext'],
+                                         cam_list[camera_id]['tc_ext'])
+        projected_2d_keypoints[:, 1] = cam_list[camera_id]['image_height'] - \
+            projected_2d_keypoints[:, 1]
         labels_converted[frame_id] = projected_2d_keypoints
 
     output_folder_name = os.path.join(output_folder, cam_names[camera_id])
-    os.makedirs(output_folder_name, exist_ok=True)   
+    os.makedirs(output_folder_name, exist_ok=True)
 
     output_file = os.path.join(output_folder_name, output_file_name)
     print(output_file)
