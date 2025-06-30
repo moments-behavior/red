@@ -17,7 +17,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('-i', '--label_folder', type=str, required=True)
 parser.add_argument('-m', '--mode', type=str, default='point2bbox')
 parser.add_argument('-o', '--output_folder', type=str, required=True)
-parser.add_argument('-d', '-d_ball', type=int, default=100)
+parser.add_argument('-d', '--d_ball', type=int, default=100)
 
 
 args = parser.parse_args()
