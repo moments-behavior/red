@@ -17,6 +17,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('-i', '--label_folder', type=str, required=True)
 parser.add_argument('-m', '--mode', type=str, default='point2bbox')
 parser.add_argument('-o', '--output_folder', type=str, required=True)
+parser.add_argument('-d', '-d_ball', type=int, default=100)
 
 
 args = parser.parse_args()
@@ -24,7 +25,6 @@ label_folder = args.label_folder
 label_folder = os.path.normpath(label_folder)
 det_mode = args.mode
 output_folder = args.output_folder
-
 
 cameras = get_all_cams_in_labeled_folder(label_folder)
 
@@ -67,7 +67,7 @@ trial_name = selected_annotation
 
 num_keypoints = 1
 id_ball = 1
-d_ball = 100
+d_ball = args.d_ball
 
 
 # export annotations
