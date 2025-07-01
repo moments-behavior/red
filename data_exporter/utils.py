@@ -303,15 +303,15 @@ def multiprocess_save_jpegs(input_args):
                     # frame_filename = dir_name + "Frame_" + str(int(frame_num)) + '.jpg'
 
                 cv.imwrite(frame_filename, frame)
-                if (export_mode == "yolo"):
-                    # Resize frame to 640x640 for YOLO export
-                    subprocess.run(["ffmpeg", 
-                                    "-y", 
-                                    "-i", frame_filename, 
-                                    "-vf", "scale=640:640",
-                                    "-frames:v", "1",
-                                    "-update", "1",
-                                    frame_filename])
+                # if (export_mode == "yolo"):
+                #     # Resize frame to 640x640 for YOLO export
+                #     subprocess.run(["ffmpeg", 
+                #                     "-y", 
+                #                     "-i", frame_filename, 
+                #                     "-vf", "scale=640:640",
+                #                     "-frames:v", "1",
+                #                     "-update", "1",
+                #                     frame_filename])
 
         if (frame_num % 1000 == 0):
             print(f"Processed frame: {frame_num} for {cam_name}")
