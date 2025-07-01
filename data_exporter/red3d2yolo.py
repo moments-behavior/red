@@ -72,22 +72,23 @@ num_keypoints = 1
 id_ball = 0
 d_ball = args.d_ball
 
-image_size = 640
+image_width = 1464
+image_height= 1936
 
 # export annotations
 annotations = process_one_session_ball(trial_name, label_folder, num_keypoints,
-                                       selected_annotation, train_image_frames, cameras, d_ball, id_ball, image_size, image_size)
+                                       selected_annotation, train_image_frames, cameras, d_ball, id_ball, image_width, image_height)
 
 create_yolo_annotation_files(
     output_folder, trial_name, annotations, cameras, "train")
 
 annotations = process_one_session_ball(trial_name, label_folder, num_keypoints,
-                                       selected_annotation, val_image_frames, cameras, d_ball, id_ball, image_size, image_size)
+                                       selected_annotation, val_image_frames, cameras, d_ball, id_ball, image_width, image_height)
 create_yolo_annotation_files(
     output_folder, trial_name, annotations, cameras, "valid")
 
 annotations = process_one_session_ball(trial_name, label_folder, num_keypoints,
-                                       selected_annotation, test_image_frames, cameras, d_ball, id_ball, image_size, image_size)
+                                       selected_annotation, test_image_frames, cameras, d_ball, id_ball, image_width, image_height)
 create_yolo_annotation_files(
     output_folder, trial_name, annotations, cameras, "test")
 

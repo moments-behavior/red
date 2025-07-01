@@ -163,6 +163,7 @@ def process_one_session_ball(trial_name, load_file_path, num_keypoints, annotati
         # print(select_keypoints_idx)
         labels = csv_reader_rats(load_file_path + "/{}/{}_{}.csv".format(which_cam, which_cam,
                                  annotation_file), num_keypoints, three_d=False, select_keypoints_idx=select_keypoints_idx)
+        print(labels)
 
         file_dir = trial_name + "/{}/".format(which_cam)
         all_2d_labeled_frames = labels.keys()
