@@ -51,28 +51,32 @@ total_num_labels = len(labels_frames)
 
 id_shuffled = np.arange(total_num_labels)
 np.random.shuffle(id_shuffled)
-num_train = int(np.floor(total_num_labels * 0.9))
-print("Train set: {}, validation set: {}.".format(
-    num_train, total_num_labels - num_train))
+num_train = int(np.floor(total_num_labels * 0.7))
+num_validation = int(np.floor(total_num_labels * 0.2))
+print("Train set: {}, Validation set: {}, Test set: {}".format(
+    num_train, num_validation, total_num_labels - num_train - num_validation))
 train_ids = id_shuffled[:num_train]
 train_ids = np.sort(train_ids)
-val_ids = id_shuffled[num_train:]
+val_ids = id_shuffled[num_train:num_train + num_validation]
 val_ids = np.sort(val_ids)
+test_ids = id_shuffled[num_train + num_validation:]
+test_ids = np.sort(test_ids)
 # split frames to train and val
 train_image_frames = labels_frames[train_ids]
 val_image_frames = labels_frames[val_ids]
-
+test_image_frames = labels_frames[test_ids]
 
 trial_name = selected_annotation
 
 num_keypoints = 1
-id_ball = 1
+id_ball = 0
 d_ball = args.d_ball
 
 
 # export annotations
 annotations = process_one_session_ball(trial_name, label_folder, num_keypoints,
                                        selected_annotation, train_image_frames, cameras, d_ball, id_ball, 3208, 2200)
+
 create_yolo_annotation_files(
     output_folder, trial_name, annotations, cameras, "train")
 
@@ -80,6 +84,11 @@ annotations = process_one_session_ball(trial_name, label_folder, num_keypoints,
                                        selected_annotation, val_image_frames, cameras, d_ball, id_ball, 3208, 2200)
 create_yolo_annotation_files(
     output_folder, trial_name, annotations, cameras, "valid")
+
+annotations = process_one_session_ball(trial_name, label_folder, num_keypoints,
+                                       selected_annotation, test_image_frames, cameras, d_ball, id_ball, 3208, 2200)
+create_yolo_annotation_files(
+    output_folder, trial_name, annotations, cameras, "test")
 
 # save calibration files
 calibration_folder = os.path.join(
@@ -122,14 +131,18 @@ for img in val_image_frames:
     map_frame_to_mode[img] = 'valid'
     all_image_frames.append(img)
 
+for img in test_image_frames:
+    map_frame_to_mode[img] = 'test'
+    all_image_frames.append(img)
+
 all_image_frames = np.asarray(all_image_frames)
 all_image_frames = np.sort(all_image_frames)
 
 
 all_jobs = []
 
+save_folder = os.path.join(output_folder, trial_name)
 for camera in cameras:
-    save_folder = os.path.join(output_folder, trial_name, camera)
     all_jobs.append([trial_name, camera, video_folder, save_folder,
                     map_frame_to_mode, all_image_frames, "yolo"])
 
@@ -144,3 +157,5 @@ if platform.system() == 'Darwin':  # fix for macOS
 else:
     with Pool(num_jobs) as p:
         p.map(multiprocess_save_jpegs, all_jobs)
+
+generate_master_yaml_tennisball(save_folder)

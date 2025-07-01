@@ -4,6 +4,7 @@ import cv2 as cv
 from keypoints import *
 import csv
 import numpy as np
+import subprocess
 
 
 def get_skeleton_name(file_name):
@@ -186,8 +187,8 @@ def process_one_session_ball(trial_name, load_file_path, num_keypoints, annotati
                 # print(bbox)
 
                 annotation_entry.extend(bbox)
-                file_name_annotation.extend([f"Frame_{frame_num}.txt"])
-                file_name_image.extend([f"Frame_{frame_num}.jpg"])
+                file_name_annotation.extend([f"{which_cam}_Frame_{frame_num}.txt"])
+                file_name_image.extend([f"{which_cam}_Frame_{frame_num}.jpg"])
 
                 # file_name_image.extend("Frame_" + str(int(frame_num)) + '.jpg')
 
@@ -202,7 +203,7 @@ def create_yolo_annotation_files(output_folder, trial_name, annotations, cameras
 
     for which_cam in cameras:
         dir_labels = os.path.join(
-            output_folder, trial_name, which_cam, dset_mode, "labels")
+            output_folder, trial_name, dset_mode, "labels")
         os.makedirs(dir_labels, exist_ok=True)
         for i in range(len(annotations[which_cam, "entry"])):
 
@@ -268,6 +269,8 @@ def multiprocess_save_jpegs(input_args):
         os.makedirs(dir_name, exist_ok=True)
         dir_name = os.path.join(save_folder, "valid", "images")
         os.makedirs(dir_name, exist_ok=True)
+        dir_name = os.path.join(save_folder, "test", "images")
+        os.makedirs(dir_name, exist_ok=True)
 
     print(all_image_frames)
     # exit()
@@ -284,7 +287,7 @@ def multiprocess_save_jpegs(input_args):
     while (frame_num >= start_frame and frame_num <= end_frame):
         ret, frame = cap.read()
         if ret == False:
-            print("Missing fame: {}".format(frame_num))
+            print("Missing frame: {}".format(frame_num))
         else:
             frame_num = frame_num + 1
             if frame_num in all_image_frames:
@@ -296,10 +299,19 @@ def multiprocess_save_jpegs(input_args):
                         str(int(frame_num)) + '.jpg'
                 elif (export_mode == "yolo"):
                     frame_filename = os.path.join(
-                        save_folder, set_mode, "images", f"Frame_{frame_num}.jpg")
+                        save_folder, set_mode, "images", f"{cam_name}_Frame_{frame_num}.jpg")
                     # frame_filename = dir_name + "Frame_" + str(int(frame_num)) + '.jpg'
 
                 cv.imwrite(frame_filename, frame)
+                if (export_mode == "yolo"):
+                    # Resize frame to 640x640 for YOLO export
+                    subprocess.run(["ffmpeg", 
+                                    "-y", 
+                                    "-i", frame_filename, 
+                                    "-vf", "scale=640:640",
+                                    "-frames:v", "1",
+                                    "-update", "1",
+                                    frame_filename])
 
         if (frame_num % 1000 == 0):
             print(f"Processed frame: {frame_num} for {cam_name}")
@@ -371,3 +383,16 @@ def Project(points, intrinsic, distortion, rotation_matrix, tvec):
         result, _ = cv.projectPoints(points.astype(
             float), rotation_matrix, tvec, intrinsic, distortion)
     return np.squeeze(result, axis=1)
+
+def generate_master_yaml_tennisball(dir: str, class_name: str = "tennisball"):
+    output_yaml = dir + "/data.yaml"
+
+    with open(output_yaml, 'w') as file:
+        file.write("train: ../train/images\n")
+        file.write("val: ../valid/images\n")
+        file.write("test: ../test/images\n")
+
+        file.write("\nnc: 1\n")
+        file.write(f"names: ['{class_name}']\n")
+
+        print(f"YAML data file generated at: {output_yaml}")

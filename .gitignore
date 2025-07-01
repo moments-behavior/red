@@ -16,3 +16,5 @@ src/fonts
 cmake-build-debug/
 
 __pycache__
+
+.DS_Store
