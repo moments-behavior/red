@@ -72,8 +72,8 @@ num_keypoints = 1
 id_ball = 0
 d_ball = args.d_ball
 
-image_width = 1464
-image_height= 1936
+image_width = 1936
+image_height= 1464
 
 # export annotations
 annotations = process_one_session_ball(trial_name, label_folder, num_keypoints,
