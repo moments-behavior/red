@@ -1,5 +1,4 @@
-/*
- * Copyright 2019 NVIDIA Corporation
+/** Copyright 2019 NVIDIA Corporation
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -22,7 +21,7 @@ using namespace std;
 
 static string AvErrorToString(int av_error_code) {
     const auto buf_size = 1024U;
-    char* err_string = (char*)calloc(buf_size, sizeof(*err_string));
+    char *err_string = (char *)calloc(buf_size, sizeof(*err_string));
     if (!err_string) {
         return string();
     }
@@ -39,10 +38,9 @@ static string AvErrorToString(int av_error_code) {
     return str;
 }
 
-FFmpegDemuxer::FFmpegDemuxer(const char* szFilePath,
-    const map<string, string>& ffmpeg_options)
+FFmpegDemuxer::FFmpegDemuxer(const char *szFilePath,
+                             const map<string, string> &ffmpeg_options)
     : FFmpegDemuxer(CreateFormatContext(szFilePath, ffmpeg_options)) {}
-
 
 uint32_t FFmpegDemuxer::GetWidth() const { return width; }
 
@@ -70,10 +68,9 @@ AVColorSpace FFmpegDemuxer::GetColorSpace() const { return color_space; }
 
 AVColorRange FFmpegDemuxer::GetColorRange() const { return color_range; }
 
-
-bool FFmpegDemuxer::Demux(uint8_t*& pVideo, size_t& rVideoBytes,
-    PacketData& pktData, uint8_t** ppSEI,
-    size_t* pSEIBytes) {
+bool FFmpegDemuxer::Demux(uint8_t *&pVideo, size_t &rVideoBytes,
+                          PacketData &pktData, uint8_t **ppSEI,
+                          size_t *pSEIBytes) {
     if (!fmtc) {
         return false;
     }
@@ -90,30 +87,29 @@ bool FFmpegDemuxer::Demux(uint8_t*& pVideo, size_t& rVideoBytes,
         seiBytes.clear();
     }
 
-    auto appendBytes = [](vector<uint8_t>& elementaryBytes, AVPacket& avPacket,
-        AVPacket& avPacketOut, AVBSFContext* pAvbsfContext,
-        int streamId, bool isFilteringNeeded) {
-            if (avPacket.stream_index != streamId) {
-                return;
+    auto appendBytes = [](vector<uint8_t> &elementaryBytes, AVPacket &avPacket,
+                          AVPacket &avPacketOut, AVBSFContext *pAvbsfContext,
+                          int streamId, bool isFilteringNeeded) {
+        if (avPacket.stream_index != streamId) {
+            return;
+        }
+
+        if (isFilteringNeeded) {
+            if (avPacketOut.data) {
+                av_packet_unref(&avPacketOut);
             }
 
-            if (isFilteringNeeded) {
-                if (avPacketOut.data) {
-                    av_packet_unref(&avPacketOut);
-                }
+            av_bsf_send_packet(pAvbsfContext, &avPacket);
+            av_bsf_receive_packet(pAvbsfContext, &avPacketOut);
 
-                av_bsf_send_packet(pAvbsfContext, &avPacket);
-                av_bsf_receive_packet(pAvbsfContext, &avPacketOut);
-
-                if (avPacketOut.data && avPacketOut.size) {
-                    elementaryBytes.insert(elementaryBytes.end(), avPacketOut.data,
-                        avPacketOut.data + avPacketOut.size);
-                }
+            if (avPacketOut.data && avPacketOut.size) {
+                elementaryBytes.insert(elementaryBytes.end(), avPacketOut.data,
+                                       avPacketOut.data + avPacketOut.size);
             }
-            else if (avPacket.data && avPacket.size) {
-                elementaryBytes.insert(elementaryBytes.end(), avPacket.data,
-                    avPacket.data + avPacket.size);
-            }
+        } else if (avPacket.data && avPacket.size) {
+            elementaryBytes.insert(elementaryBytes.end(), avPacket.data,
+                                   avPacket.data + avPacket.size);
+        }
     };
 
     int ret = 0;
@@ -131,32 +127,35 @@ bool FFmpegDemuxer::Demux(uint8_t*& pVideo, size_t& rVideoBytes,
             if (!bsfc_sei) {
                 // SEI has NAL type 6 for H.264 and NAL type 39 & 40 for H.265;
                 const string sei_filter =
-                    is_mp4H264
-                    ? "filter_units=pass_types=6"
-                    : is_mp4HEVC ? "filter_units=pass_types=39-40" : "unknown";
+                    is_mp4H264   ? "filter_units=pass_types=6"
+                    : is_mp4HEVC ? "filter_units=pass_types=39-40"
+                                 : "unknown";
                 ret = av_bsf_list_parse_str(sei_filter.c_str(), &bsfc_sei);
                 if (0 > ret) {
-                    throw runtime_error("Error initializing " + sei_filter +
+                    throw runtime_error(
+                        "Error initializing " + sei_filter +
                         " bitstream filter: " + AvErrorToString(ret));
                 }
 
-                ret = avcodec_parameters_copy(bsfc_sei->par_in,
-                    fmtc->streams[videoStream]->codecpar);
+                ret = avcodec_parameters_copy(
+                    bsfc_sei->par_in, fmtc->streams[videoStream]->codecpar);
                 if (0 != ret) {
                     throw runtime_error("Error copying codec parameters: " +
-                        AvErrorToString(ret));
+                                        AvErrorToString(ret));
                 }
 
                 ret = av_bsf_init(bsfc_sei);
                 if (0 != ret) {
-                    throw runtime_error("Error initializing " + sei_filter +
+                    throw runtime_error(
+                        "Error initializing " + sei_filter +
                         " bitstream filter: " + AvErrorToString(ret));
                 }
             }
 
             // Extract SEI NAL units from packet;
             auto pCopyPacket = av_packet_clone(&pktSrc);
-            appendBytes(seiBytes, *pCopyPacket, pktSei, bsfc_sei, videoStream, true);
+            appendBytes(seiBytes, *pCopyPacket, pktSei, bsfc_sei, videoStream,
+                        true);
             av_packet_free(&pCopyPacket);
         }
 
@@ -178,7 +177,7 @@ bool FFmpegDemuxer::Demux(uint8_t*& pVideo, size_t& rVideoBytes,
 
     const bool bsf_needed = is_mp4H264 || is_mp4HEVC;
     appendBytes(annexbBytes, pktSrc, pktDst, bsfc_annexb, videoStream,
-        bsf_needed);
+                bsf_needed);
 
     pVideo = annexbBytes.data();
     rVideoBytes = annexbBytes.size();
@@ -210,8 +209,7 @@ void FFmpegDemuxer::Flush() {
     avformat_flush(fmtc);
 }
 
-int64_t FFmpegDemuxer::TsFromTime(double ts_sec)
-{
+int64_t FFmpegDemuxer::TsFromTime(double ts_sec) {
     /* Internal timestamp representation is integer, so multiply to AV_TIME_BASE
      * and switch to fixed point precision arithmetics; */
     auto const ts_tbu = lround(ts_sec * AV_TIME_BASE);
@@ -222,105 +220,183 @@ int64_t FFmpegDemuxer::TsFromTime(double ts_sec)
     return av_rescale_q(ts_tbu, factor, fmtc->streams[videoStream]->time_base);
 }
 
-int64_t FFmpegDemuxer::TsFromFrameNumber(int64_t frame_num)
-{
+int64_t FFmpegDemuxer::TsFromFrameNumber(int64_t frame_num) {
     auto const ts_sec = (double)frame_num / GetFramerate();
     return TsFromTime(ts_sec);
 }
 
-
-int64_t FFmpegDemuxer::FrameNumberFromTs(int64_t ts)
-{
+int64_t FFmpegDemuxer::FrameNumberFromTs(int64_t ts) {
     // Rescale the timestamp to value represented in stream base units;
     AVRational factor;
     factor.num = 1;
     factor.den = AV_TIME_BASE;
 
-    auto const ts_tbu = av_rescale_q(ts, fmtc->streams[videoStream]->time_base, factor);
+    auto const ts_tbu =
+        av_rescale_q(ts, fmtc->streams[videoStream]->time_base, factor);
     double ts_sec = (double)ts_tbu / (double)AV_TIME_BASE;
-    int64_t frame_num = (int64_t) (ts_sec * GetFramerate());
+    int64_t frame_num = (int64_t)(ts_sec * GetFramerate());
     return frame_num;
 }
 
-int64_t FFmpegDemuxer::FindClosestKeyFrame(int64_t frame_num, int key_frame_interval)
-{  
+int64_t FFmpegDemuxer::FindClosestKeyFrame(int64_t frame_num,
+                                           int key_frame_interval) {
     // key_frame_interval is in second here
-    
-    int key_frame_frequency = (int) (key_frame_interval* GetFramerate());
-    int64_t key_frame_num = frame_num - (int64_t)(frame_num % key_frame_frequency);
+
+    int key_frame_frequency = (int)(key_frame_interval * GetFramerate());
+    int64_t key_frame_num =
+        frame_num - (int64_t)(frame_num % key_frame_frequency);
     return key_frame_num;
 }
 
-
-int64_t FFmpegDemuxer::FindClosestKeyFrameFNI(int64_t frame_num, int key_frame_interval)
-{
+int64_t FFmpegDemuxer::FindClosestKeyFrameFNI(int64_t frame_num,
+                                              int key_frame_interval) {
     // key_frame_interval is in frame number
-    int64_t key_frame_num = frame_num - (int64_t)(frame_num % key_frame_interval);
+    int64_t key_frame_num =
+        frame_num - (int64_t)(frame_num % key_frame_interval);
     return key_frame_num;
 }
 
-int64_t FFmpegDemuxer::FindKeyFrameInterval()
-{
+// int64_t FFmpegDemuxer::FindKeyFrameInterval()
+// {
+//     int ret = 0;
+//     bool eof = false, gotVideo = false;
+//     int64_t cnt = 0;
+//     int keyframe_encounter = 0;
+
+//     while (!eof) {
+//         ret = av_read_frame(fmtc, &pktSrc);
+//         if (ret < 0) {
+//             if (ret == AVERROR_EOF) {
+//                 eof = true;
+//                 break;
+//             } else {
+//                 LOG(FATAL) << "Error: av_read_frame failed with " <<
+//                 AVERROR(ret);
+//             }
+//             break;
+//         }
+
+//         if (pktSrc.stream_index == videoStream) {
+//             if (pktSrc.flags & AV_PKT_FLAG_KEY) {
+//                 keyframe_encounter++;
+//             }
+//             ++cnt;
+//         }
+
+//         auto pCopyPacket = av_packet_clone(&pktSrc);
+//         av_packet_free(&pCopyPacket);
+
+//         if (keyframe_encounter == 2) {
+//             break;
+//         }
+//     }
+//     std::cout << "identified seek interval: "<< cnt-1 << std::endl;
+//     return cnt-1;
+// }
+
+int64_t FFmpegDemuxer::FindKeyFrameInterval() {
     int ret = 0;
-    bool eof = false, gotVideo = false;
-    int64_t cnt = 0;
-    int keyframe_encounter = 0;
+    int64_t decoded_frame_count = 0;
+    int keyframe_count = 0;
+    bool eof = false;
+
+    AVCodecParameters *codecpar = fmtc->streams[videoStream]->codecpar;
+    const AVCodec *decoder = avcodec_find_decoder(codecpar->codec_id);
+    if (!decoder) {
+        LOG(FATAL) << "Could not find decoder";
+    }
+
+    AVCodecContext *codec_ctx = avcodec_alloc_context3(decoder);
+    if (!codec_ctx) {
+        LOG(FATAL) << "Could not allocate codec context";
+    }
+
+    if ((ret = avcodec_parameters_to_context(codec_ctx, codecpar)) < 0) {
+        LOG(FATAL) << "Failed to copy codec params: " << AVERROR(ret);
+    }
+
+    if ((ret = avcodec_open2(codec_ctx, decoder, nullptr)) < 0) {
+        LOG(FATAL) << "Failed to open decoder: " << AVERROR(ret);
+    }
+
+    AVPacket *pkt = av_packet_alloc();
+    AVFrame *frame = av_frame_alloc();
 
     while (!eof) {
-        ret = av_read_frame(fmtc, &pktSrc);
+        ret = av_read_frame(fmtc, pkt);
         if (ret < 0) {
             if (ret == AVERROR_EOF) {
                 eof = true;
                 break;
             } else {
-                LOG(FATAL) << "Error: av_read_frame failed with " << AVERROR(ret);
+                LOG(FATAL) << "Error reading packet: " << AVERROR(ret);
             }
-            break;
-        }
-        
-        if (pktSrc.stream_index == videoStream) {
-            if (pktSrc.flags & AV_PKT_FLAG_KEY) {
-                keyframe_encounter++;
-            }
-            ++cnt;
         }
 
-        auto pCopyPacket = av_packet_clone(&pktSrc);
-        av_packet_free(&pCopyPacket);
+        if (pkt->stream_index == videoStream) {
+            ret = avcodec_send_packet(codec_ctx, pkt);
+            if (ret < 0 && ret != AVERROR(EAGAIN)) {
+                LOG(FATAL) << "Error sending packet: " << AVERROR(ret);
+            }
 
-        if (keyframe_encounter == 2) {
-            break;
+            while (ret >= 0) {
+                ret = avcodec_receive_frame(codec_ctx, frame);
+                if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
+                    break;
+                else if (ret < 0) {
+                    LOG(FATAL) << "Error receiving frame: " << AVERROR(ret);
+                }
+
+                decoded_frame_count++;
+
+                if (frame->key_frame) {
+                    keyframe_count++;
+                    if (keyframe_count == 2) {
+                        goto done;
+                    }
+                }
+
+                av_frame_unref(frame);
+            }
         }
+
+        av_packet_unref(pkt);
     }
-    std::cout << "identified seek interval: "<< cnt-1 << std::endl;
-    return cnt-1;
+
+done:
+    av_frame_free(&frame);
+    av_packet_free(&pkt);
+    avcodec_free_context(&codec_ctx);
+
+    std::cout << "Identified GOP interval (decoded frames): "
+              << decoded_frame_count - 1 << std::endl;
+    return decoded_frame_count - 1;
 }
 
-bool FFmpegDemuxer::Seek(SeekContext& seekCtx, uint8_t*& pVideo,
-    size_t& rVideoBytes, PacketData& pktData,
-    uint8_t** ppSEI, size_t* pSEIBytes)
-{
+bool FFmpegDemuxer::Seek(SeekContext &seekCtx, uint8_t *&pVideo,
+                         size_t &rVideoBytes, PacketData &pktData,
+                         uint8_t **ppSEI, size_t *pSEIBytes) {
     /* !!! IMPORTANT !!!
      * Across this function packet decode timestamp (DTS) values are used to
-     * compare given timestamp against. This is done for reason. DTS values shall
-     * monotonically increase during the course of decoding unlike PTS velues
-     * which may be affected by frame reordering due to B frames presence.
+     * compare given timestamp against. This is done for reason. DTS values
+     * shall monotonically increase during the course of decoding unlike PTS
+     * velues which may be affected by frame reordering due to B frames
+     * presence.
      */
 
-     //if (!is_seekable) {
-     //    cerr << "Seek isn't supported for this input." << endl;
-     //    return false;
-     //}
+    // if (!is_seekable) {
+    //     cerr << "Seek isn't supported for this input." << endl;
+    //     return false;
+    // }
 
     if (IsVFR() && (BY_NUMBER == seekCtx.crit)) {
-        cerr << "Can't seek by frame number in VFR sequences. Seek by timestamp "
-            "instead."
-            << endl;
-        return false;
+        std::cout << "Is is a VFR sequences? Treating it as CFR by seeking "
+                     "with number."
+                  << std::endl;
     }
 
     // Seek for single frame;
-    auto seek_frame = [&](SeekContext const& seek_ctx, int flags) {
+    auto seek_frame = [&](SeekContext const &seek_ctx, int flags) {
         bool seek_backward = false;
         int64_t timestamp = 0;
         int ret = 0;
@@ -330,25 +406,28 @@ bool FFmpegDemuxer::Seek(SeekContext& seekCtx, uint8_t*& pVideo,
             timestamp = TsFromFrameNumber(seek_ctx.seek_frame);
             seek_backward = last_packet_data.dts > timestamp;
             ret = av_seek_frame(fmtc, GetVideoStreamIndex(), timestamp,
-                seek_backward ? AVSEEK_FLAG_BACKWARD | flags : flags);
+                                seek_backward ? AVSEEK_FLAG_BACKWARD | flags
+                                              : flags);
             break;
         case BY_TIMESTAMP:
             timestamp = TsFromTime(seek_ctx.seek_frame);
             seek_backward = last_packet_data.dts > timestamp;
             ret = av_seek_frame(fmtc, GetVideoStreamIndex(), timestamp,
-                seek_backward ? AVSEEK_FLAG_BACKWARD | flags : flags);
+                                seek_backward ? AVSEEK_FLAG_BACKWARD | flags
+                                              : flags);
             break;
         default:
             throw runtime_error("Invalid seek mode");
         }
 
         if (ret < 0) {
-            throw runtime_error("Error seeking for frame: " + AvErrorToString(ret));
+            throw runtime_error("Error seeking for frame: " +
+                                AvErrorToString(ret));
         }
     };
 
     // Check if frame satisfies seek conditions;
-    auto is_seek_done = [&](PacketData& pkt_data, SeekContext const& seek_ctx) {
+    auto is_seek_done = [&](PacketData &pkt_data, SeekContext const &seek_ctx) {
         int64_t target_ts = 0;
 
         switch (seek_ctx.crit) {
@@ -365,18 +444,17 @@ bool FFmpegDemuxer::Seek(SeekContext& seekCtx, uint8_t*& pVideo,
 
         if (pkt_data.dts == target_ts) {
             return 0;
-        }
-        else if (pkt_data.dts > target_ts) {
+        } else if (pkt_data.dts > target_ts) {
             return 1;
-        }
-        else {
+        } else {
             return -1;
         };
     };
 
     /* This will seek for exact frame number;
      * Note that decoder may not be able to decode such frame; */
-    auto seek_for_exact_frame = [&](PacketData& pkt_data, SeekContext& seek_ctx) {
+    auto seek_for_exact_frame = [&](PacketData &pkt_data,
+                                    SeekContext &seek_ctx) {
         // Repetititive seek until seek condition is satisfied;
         SeekContext tmp_ctx(seek_ctx.seek_frame);
         seek_frame(tmp_ctx, AVSEEK_FLAG_ANY);
@@ -404,13 +482,13 @@ bool FFmpegDemuxer::Seek(SeekContext& seekCtx, uint8_t*& pVideo,
     };
 
     // Seek for closest key frame in the past;
-    auto seek_for_prev_key_frame = [&](PacketData& pkt_data,
-        SeekContext& seek_ctx) {
-            seek_frame(seek_ctx, AVSEEK_FLAG_BACKWARD);
+    auto seek_for_prev_key_frame = [&](PacketData &pkt_data,
+                                       SeekContext &seek_ctx) {
+        seek_frame(seek_ctx, AVSEEK_FLAG_BACKWARD);
 
-            Demux(pVideo, rVideoBytes, pkt_data, ppSEI, pSEIBytes);
-            seek_ctx.out_frame_pts = pkt_data.pts;
-            seek_ctx.out_frame_duration = pkt_data.duration;
+        Demux(pVideo, rVideoBytes, pkt_data, ppSEI, pSEIBytes);
+        seek_ctx.out_frame_pts = pkt_data.pts;
+        seek_ctx.out_frame_duration = pkt_data.duration;
     };
 
     switch (seekCtx.mode) {
@@ -428,8 +506,7 @@ bool FFmpegDemuxer::Seek(SeekContext& seekCtx, uint8_t*& pVideo,
     return true;
 }
 
-int FFmpegDemuxer::ReadPacket(void* opaque, uint8_t* pBuf, int nBuf)
-{
+int FFmpegDemuxer::ReadPacket(void *opaque, uint8_t *pBuf, int nBuf) {
     return 0;
 }
 
@@ -459,37 +536,37 @@ FFmpegDemuxer::~FFmpegDemuxer() {
     }
 }
 
-
-AVFormatContext*
-FFmpegDemuxer::CreateFormatContext(const char* szFilePath,
-    const map<string, string>& ffmpeg_options) {
+AVFormatContext *
+FFmpegDemuxer::CreateFormatContext(const char *szFilePath,
+                                   const map<string, string> &ffmpeg_options) {
     avformat_network_init();
 
     // Set up format context options;
-    AVDictionary* options = NULL;
-    for (auto& pair : ffmpeg_options) {
+    AVDictionary *options = NULL;
+    for (auto &pair : ffmpeg_options) {
         cout << pair.first << ": " << pair.second << endl;
         auto err =
             av_dict_set(&options, pair.first.c_str(), pair.second.c_str(), 0);
         if (err < 0) {
             cerr << "Can't set up dictionary option: " << pair.first << " "
-                << pair.second << ": " << AvErrorToString(err) << "\n";
+                 << pair.second << ": " << AvErrorToString(err) << "\n";
             return nullptr;
         }
     }
 
-    AVFormatContext* ctx = nullptr;
-    //av_register_all();
+    AVFormatContext *ctx = nullptr;
+    // av_register_all();
     auto err = avformat_open_input(&ctx, szFilePath, nullptr, &options);
     if (err < 0 || nullptr == ctx) {
-        cerr << "Can't open " << szFilePath << ": " << AvErrorToString(err) << "\n";
+        cerr << "Can't open " << szFilePath << ": " << AvErrorToString(err)
+             << "\n";
         return nullptr;
     }
 
     return ctx;
 }
 
-FFmpegDemuxer::FFmpegDemuxer(AVFormatContext* fmtcx) : fmtc(fmtcx) {
+FFmpegDemuxer::FFmpegDemuxer(AVFormatContext *fmtcx) : fmtc(fmtcx) {
     pktSrc = {};
     pktDst = {};
 
@@ -504,8 +581,8 @@ FFmpegDemuxer::FFmpegDemuxer(AVFormatContext* fmtcx) : fmtc(fmtcx) {
     auto ret = avformat_find_stream_info(fmtc, nullptr);
     if (0 != ret) {
         stringstream ss;
-        ss << __FUNCTION__ << ": can't find stream info;" << AvErrorToString(ret)
-            << endl;
+        ss << __FUNCTION__ << ": can't find stream info;"
+           << AvErrorToString(ret) << endl;
         throw runtime_error(ss.str());
     }
 
@@ -513,28 +590,27 @@ FFmpegDemuxer::FFmpegDemuxer(AVFormatContext* fmtcx) : fmtc(fmtcx) {
         av_find_best_stream(fmtc, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
     if (videoStream < 0) {
         stringstream ss;
-        ss << __FUNCTION__ << ": can't find video stream in input file." << endl;
+        ss << __FUNCTION__ << ": can't find video stream in input file."
+           << endl;
         throw runtime_error(ss.str());
     }
 
-    //gop_size = fmtc->streams[videoStream]->codec->gop_size;
+    // gop_size = fmtc->streams[videoStream]->codec->gop_size;
     eVideoCodec = fmtc->streams[videoStream]->codecpar->codec_id;
     width = fmtc->streams[videoStream]->codecpar->width;
     height = fmtc->streams[videoStream]->codecpar->height;
     framerate = (double)fmtc->streams[videoStream]->r_frame_rate.num /
-        (double)fmtc->streams[videoStream]->r_frame_rate.den;
+                (double)fmtc->streams[videoStream]->r_frame_rate.den;
     avg_framerate = (double)fmtc->streams[videoStream]->avg_frame_rate.num /
-        (double)fmtc->streams[videoStream]->avg_frame_rate.den;
+                    (double)fmtc->streams[videoStream]->avg_frame_rate.den;
     timebase = (double)fmtc->streams[videoStream]->time_base.num /
-        (double)fmtc->streams[videoStream]->time_base.den;
+               (double)fmtc->streams[videoStream]->time_base.den;
     eChromaFormat = (AVPixelFormat)fmtc->streams[videoStream]->codecpar->format;
     nb_frames = fmtc->streams[videoStream]->nb_frames;
     color_space = fmtc->streams[videoStream]->codecpar->color_space;
     color_range = fmtc->streams[videoStream]->codecpar->color_range;
     duration = fmtc->streams[videoStream]->duration;
     fduration = duration * timebase;
-
-
 
     is_mp4H264 = (eVideoCodec == AV_CODEC_ID_H264);
     is_mp4HEVC = (eVideoCodec == AV_CODEC_ID_HEVC);
@@ -550,32 +626,34 @@ FFmpegDemuxer::FFmpegDemuxer(AVFormatContext* fmtcx) : fmtc(fmtcx) {
     pktSei.size = 0;
 
     // Initialize Annex.B BSF;
-    const string bfs_name =
-        is_mp4H264 ? "h264_mp4toannexb"
-        : is_mp4HEVC ? "hevc_mp4toannexb" : is_VP9 ? string() : "unknown";
+    const string bfs_name = is_mp4H264   ? "h264_mp4toannexb"
+                            : is_mp4HEVC ? "hevc_mp4toannexb"
+                            : is_VP9     ? string()
+                                         : "unknown";
 
     if (!bfs_name.empty()) {
-        const AVBitStreamFilter* toAnnexB = av_bsf_get_by_name(bfs_name.c_str());
+        const AVBitStreamFilter *toAnnexB =
+            av_bsf_get_by_name(bfs_name.c_str());
         if (!toAnnexB) {
             throw runtime_error("can't get " + bfs_name + " filter by name");
         }
         ret = av_bsf_alloc(toAnnexB, &bsfc_annexb);
         if (0 != ret) {
             throw runtime_error("Error allocating " + bfs_name +
-                " filter: " + AvErrorToString(ret));
+                                " filter: " + AvErrorToString(ret));
         }
 
         ret = avcodec_parameters_copy(bsfc_annexb->par_in,
-            fmtc->streams[videoStream]->codecpar);
+                                      fmtc->streams[videoStream]->codecpar);
         if (0 != ret) {
             throw runtime_error("Error copying codec parameters: " +
-                AvErrorToString(ret));
+                                AvErrorToString(ret));
         }
 
         ret = av_bsf_init(bsfc_annexb);
         if (0 != ret) {
             throw runtime_error("Error initializing " + bfs_name +
-                " bitstream filter: " + AvErrorToString(ret));
+                                " bitstream filter: " + AvErrorToString(ret));
         }
     }
 

@@ -23,10 +23,8 @@ extern "C" {
 #include "cuviddec.h"
 #include "nvcuvid.h"
 #include <map>
-#include <stdexcept>
 #include <string>
 #include <vector>
-
 
 struct PacketData {
     int64_t pts;
@@ -42,9 +40,9 @@ enum SeekMode {
     EXACT_FRAME = 0,
     /* Seek for previous key frame in past.
      * Suitable for seek & decode.  */
-     PREV_KEY_FRAME = 1,
+    PREV_KEY_FRAME = 1,
 
-     SEEK_MODE_NUM_ELEMS
+    SEEK_MODE_NUM_ELEMS
 };
 
 enum SeekCriteria {
@@ -86,46 +84,36 @@ struct SeekContext {
 
     SeekContext()
         : use_seek(false), seek_frame(0), mode(PREV_KEY_FRAME), crit(BY_NUMBER),
-        out_frame_pts(0), out_frame_duration(0), num_frames_decoded(0U)
-    {
-    }
+          out_frame_pts(0), out_frame_duration(0), num_frames_decoded(0U) {}
 
     SeekContext(uint64_t frame_id)
         : use_seek(true), seek_frame(frame_id), mode(PREV_KEY_FRAME),
-        crit(BY_NUMBER), out_frame_pts(0), out_frame_duration(0),
-        num_frames_decoded(0U)
-    {
-    }
+          crit(BY_NUMBER), out_frame_pts(0), out_frame_duration(0),
+          num_frames_decoded(0U) {}
 
     SeekContext(uint64_t frame_id, SeekCriteria criteria)
         : use_seek(true), seek_frame(frame_id), mode(PREV_KEY_FRAME),
-        crit(criteria), out_frame_pts(0), out_frame_duration(0),
-        num_frames_decoded(0U)
-    {
-    }
+          crit(criteria), out_frame_pts(0), out_frame_duration(0),
+          num_frames_decoded(0U) {}
 
     SeekContext(uint64_t frame_num, SeekMode seek_mode)
-        : use_seek(true), seek_frame(frame_num), mode(seek_mode), crit(BY_NUMBER),
-        out_frame_pts(0), out_frame_duration(0), num_frames_decoded(0U)
-    {
-    }
+        : use_seek(true), seek_frame(frame_num), mode(seek_mode),
+          crit(BY_NUMBER), out_frame_pts(0), out_frame_duration(0),
+          num_frames_decoded(0U) {}
 
     SeekContext(uint64_t frame_num, SeekMode seek_mode, SeekCriteria criteria)
-        : use_seek(true), seek_frame(frame_num), mode(seek_mode), crit(criteria),
-        out_frame_pts(0), out_frame_duration(0), num_frames_decoded(0U)
-    {
-    }
+        : use_seek(true), seek_frame(frame_num), mode(seek_mode),
+          crit(criteria), out_frame_pts(0), out_frame_duration(0),
+          num_frames_decoded(0U) {}
 
-    SeekContext(const SeekContext& other)
+    SeekContext(const SeekContext &other)
         : use_seek(other.use_seek), seek_frame(other.seek_frame),
-        mode(other.mode), crit(other.crit), out_frame_pts(other.out_frame_pts),
-        out_frame_duration(other.out_frame_duration),
-        num_frames_decoded(other.num_frames_decoded)
-    {
-    }
+          mode(other.mode), crit(other.crit),
+          out_frame_pts(other.out_frame_pts),
+          out_frame_duration(other.out_frame_duration),
+          num_frames_decoded(other.num_frames_decoded) {}
 
-    SeekContext& operator=(const SeekContext& other)
-    {
+    SeekContext &operator=(const SeekContext &other) {
         use_seek = other.use_seek;
         seek_frame = other.seek_frame;
         mode = other.mode;
@@ -137,12 +125,10 @@ struct SeekContext {
     }
 };
 
-
-class FFmpegDemuxer
-{
-    AVIOContext* avioc = nullptr;
-    AVBSFContext* bsfc_annexb = nullptr, * bsfc_sei = nullptr;
-    AVFormatContext* fmtc = nullptr;
+class FFmpegDemuxer {
+    AVIOContext *avioc = nullptr;
+    AVBSFContext *bsfc_annexb = nullptr, *bsfc_sei = nullptr;
+    AVFormatContext *fmtc = nullptr;
 
     AVPacket pktSrc, pktDst, pktSei;
     AVCodecID eVideoCodec = AV_CODEC_ID_NONE;
@@ -173,16 +159,16 @@ class FFmpegDemuxer
     std::vector<uint8_t> annexbBytes;
     std::vector<uint8_t> seiBytes;
 
-    explicit FFmpegDemuxer(AVFormatContext* fmtcx);
+    explicit FFmpegDemuxer(AVFormatContext *fmtcx);
 
-    AVFormatContext*
-        CreateFormatContext(const char* szFilePath,
-            const std::map<std::string, std::string>& ffmpeg_options);
+    AVFormatContext *CreateFormatContext(
+        const char *szFilePath,
+        const std::map<std::string, std::string> &ffmpeg_options);
 
-public:
+  public:
     explicit FFmpegDemuxer(
-        const char* szFilePath,
-        const std::map<std::string, std::string>& ffmpeg_options);
+        const char *szFilePath,
+        const std::map<std::string, std::string> &ffmpeg_options);
     ~FFmpegDemuxer();
 
     AVCodecID GetVideoCodec() const;
@@ -210,7 +196,7 @@ public:
     int64_t FrameNumberFromTs(int64_t ts);
 
     int64_t FindClosestKeyFrame(int64_t frame_num, int key_frame_interval);
-    
+
     int64_t FindClosestKeyFrameFNI(int64_t frame_num, int key_frame_interval);
 
     int64_t FindKeyFrameInterval();
@@ -225,20 +211,19 @@ public:
 
     double GetDuration() const;
 
-    bool Demux(uint8_t*& pVideo, size_t& rVideoBytes, PacketData& pktData,
-        uint8_t** ppSEI = nullptr, size_t* pSEIBytes = nullptr);
+    bool Demux(uint8_t *&pVideo, size_t &rVideoBytes, PacketData &pktData,
+               uint8_t **ppSEI = nullptr, size_t *pSEIBytes = nullptr);
 
-    bool Seek(SeekContext& seek_ctx, uint8_t*& pVideo, size_t& rVideoBytes,
-        PacketData& pktData, uint8_t** ppSEI = nullptr,
-        size_t* pSEIBytes = nullptr);
+    bool Seek(SeekContext &seek_ctx, uint8_t *&pVideo, size_t &rVideoBytes,
+              PacketData &pktData, uint8_t **ppSEI = nullptr,
+              size_t *pSEIBytes = nullptr);
 
     void Flush();
 
-    static int ReadPacket(void* opaque, uint8_t* pBuf, int nBuf);
+    static int ReadPacket(void *opaque, uint8_t *pBuf, int nBuf);
 };
 
-inline cudaVideoCodec FFmpeg2NvCodecId(AVCodecID id)
-{
+inline cudaVideoCodec FFmpeg2NvCodecId(AVCodecID id) {
     switch (id) {
     case AV_CODEC_ID_MPEG1VIDEO:
         return cudaVideoCodec_MPEG1;
