@@ -389,11 +389,11 @@ bool FFmpegDemuxer::Seek(SeekContext &seekCtx, uint8_t *&pVideo,
     //     return false;
     // }
 
-    if (IsVFR() && (BY_NUMBER == seekCtx.crit)) {
-        std::cout << "Is is a VFR sequences? Treating it as CFR by seeking "
-                     "with number."
-                  << std::endl;
-    }
+    // if (IsVFR() && (BY_NUMBER == seekCtx.crit)) {
+    //     std::cout << "Is is a VFR sequences? Treating it as CFR by seeking "
+    //                  "with number."
+    //               << std::endl;
+    // }
 
     // Seek for single frame;
     auto seek_frame = [&](SeekContext const &seek_ctx, int flags) {
