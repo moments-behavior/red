@@ -127,6 +127,7 @@ int main(int, char **) {
                         IGFD::FileDialogConfig config;
                         config.countSelectionMax = 0;
                         config.path = start_folder_name;
+                        config.flags = ImGuiFileDialogFlags_Modal;
                         ImGuiFileDialog::Instance()->OpenDialog(
                             "ChooseMedia", "Choose Media",
                             ".mp4,.tiff,.jpeg,.jpg,.png", config);
@@ -150,6 +151,7 @@ int main(int, char **) {
                                     IGFD::FileDialogConfig config;
                                     config.countSelectionMax = 1;
                                     config.path = skeleton_dir;
+                                    config.flags = ImGuiFileDialogFlags_Modal;
                                     ImGuiFileDialog::Instance()->OpenDialog(
                                         "ChooseSkeleton", "Choose Skeleton",
                                         ".json", config);
