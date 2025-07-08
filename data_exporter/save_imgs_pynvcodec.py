@@ -1,4 +1,3 @@
-import PyNvVideoCodec as nvc
 import numpy as np
 import cv2
 import ctypes as C
@@ -10,8 +9,39 @@ def cast_address_to_1d_bytearray(base_address, size):
     )
 
 
+input_file_path = (
+    "/nfs/exports/ratlv/exp_2025_03/unsorted/2025_07_05_23_33_14/Cam710038.mp4"
+)
+
+# input_file_path = (
+#     "/nfs/exports/ratlv/exp_2025_03/unsorted/2025_07_05_17_38_30/Cam710038.mp4"
+# )
+# input_file_path = "/nfs/exports/ratlv/exp_2025_03/remy_emilie/2025_06_26_16_25_51/Cam710038.mp4"
+# opencv
+cap = cv2.VideoCapture(input_file_path)  # Or use 'video.mp4' for a file
+
+if not cap.isOpened():
+    print("Error: Could not open video stream.")
+    exit()
+
+# Get the FPS
+fps = cap.get(cv2.CAP_PROP_FPS)
+print(f"Frames per second: {fps}")
+
+frame_number = 181
+cap.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
+ret, frame = cap.read()
+if ret:
+    print("Successful seek.")
+else:
+    print("Failed to retrieve the frame.")
+# Release the stream
+cap.release()
+
+
+import PyNvVideoCodec as nvc
+
 # Input video
-input_file_path = "/mnt/data/new_writer/Cam710038.mp4"
 use_device_memory = 0  # 0 = system memory, 1 = device memory
 
 # Initialize decoder
@@ -24,11 +54,12 @@ simple_decoder = nvc.SimpleDecoder(
 
 # Get video metadata
 metadata = simple_decoder.get_stream_metadata()
+print(metadata)
 print(f"Total frames: {metadata.num_frames}")
 print(f"FPS: {metadata.average_fps}")
 
 # Frame indices to retrieve
-frame_indices = [0]
+frame_indices = [0, 5]
 
 # Decode specific frames
 frames = simple_decoder.get_batch_frames_by_index(frame_indices)
