@@ -538,6 +538,11 @@ int load_keypoints_depreciated(std::map<u32, KeyPoints *> &keypoints_map,
                                std::string &error_message) {
 
     if (scene->num_cams > 1) {
+        if (!std::filesystem::exists(root_dir + "/worldkeypoints")) {
+            error_message = "'worldkeypoints' directory is missing.";
+            return 1;
+        }
+
         std::string label3d_dir = root_dir + "/worldKeyPoints/";
         std::vector<std::string> filenames;
 
@@ -761,9 +766,9 @@ int load_keypoints(std::map<u32, KeyPoints *> &keypoints_map,
 
     if (filenames.empty()) {
         error_message = "Failed loading, no date-time named folders found.";
-        error_message += "\nIf you are loading old format, please check "
-                         "old format. Once loaded, please save it "
-                         "to convert to new format.";
+        error_message +=
+            "\nIf you are loading an old format, please check 'Old Format'. "
+            "Once loaded, please save it to convert to the new format.";
         return 1;
     }
     sort(filenames.begin(), filenames.end());

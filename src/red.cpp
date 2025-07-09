@@ -1084,7 +1084,7 @@ int main(int, char **) {
                     }
                 }
                 ImGui::SameLine();
-                ImGui::Checkbox("old format", &load_old_format);
+                ImGui::Checkbox("Old format", &load_old_format);
 
                 if (ImGui::Button("Update keypoints folder")) {
                     IGFD::FileDialogConfig config;
@@ -1095,7 +1095,7 @@ int main(int, char **) {
                         nullptr, config);
                 }
                 ImGui::SameLine();
-                ImGui::Text(keypoints_root_folder.c_str());
+                ImGui::Text("%s", keypoints_root_folder.c_str());
 
                 auto upper_it = keypoints_map.upper_bound(current_frame_num);
                 if (upper_it == keypoints_map.end()) {
