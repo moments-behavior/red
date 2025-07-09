@@ -1030,7 +1030,9 @@ int main(int, char **) {
                         keypoint_triangulated_all = false;
                     }
 
-                    if (!keypoint_triangulated_all && keypoints_find) {
+                    bool enabled = keypoints_find;
+                    bool apply_color = !keypoint_triangulated_all && enabled;
+                    if (apply_color) {
                         ImGui::PushStyleColor(
                             ImGuiCol_Button,
                             (ImVec4)ImColor::HSV(0.8, 1.0f, 1.0f));
@@ -1042,20 +1044,24 @@ int main(int, char **) {
                             (ImVec4)ImColor::HSV(0.8, 0.9f, 0.5f));
                     }
 
+                    ImGui::BeginDisabled(!enabled);
                     if (ImGui::Button("Triangulate")) {
                         reprojection(keypoints_map.at(current_frame_num),
                                      skeleton, camera_params, scene);
                     }
+                    ImGui::EndDisabled();
 
-                    if (!keypoint_triangulated_all && keypoints_find) {
+                    if (apply_color) {
                         ImGui::PopStyleColor(3);
                     }
 
-                    if (ImGui::IsKeyPressed(ImGuiKey_S,
-                                            false)) // triangulate
-                    {
-                        reprojection(keypoints_map.at(current_frame_num),
-                                     skeleton, camera_params, scene);
+                    if (keypoints_find) {
+                        if (ImGui::IsKeyPressed(ImGuiKey_S,
+                                                false)) // triangulate
+                        {
+                            reprojection(keypoints_map.at(current_frame_num),
+                                         skeleton, camera_params, scene);
+                        }
                     }
                 }
 
@@ -1152,7 +1158,7 @@ int main(int, char **) {
                 ImGui::Text("<d>: active keypoint--");
                 ImGui::Text("<q>: active keypoint set to first node");
                 ImGui::Text("<e>: active keypoint set to last node");
-                ImGui::Text("<s> -> triangule");
+                ImGui::Text("<s> -> triangulate");
                 ImGui::Text("<Backspace>: delete all keypoints");
                 ImGui::Text("<Right Arrow>: next labeled frame");
                 ImGui::Text("CTRL-S: save labels");
