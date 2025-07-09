@@ -745,11 +745,8 @@ int load_2d_keypoints(std::map<u32, KeyPoints *> &keypoints_map,
     return 0;
 }
 
-int load_keypoints(std::map<u32, KeyPoints *> &keypoints_map,
-                   SkeletonContext *skeleton, std::string root_dir,
-                   render_scene *scene, std::vector<std::string> &camera_names,
-                   std::string &error_message) {
-
+int find_most_recent_labels(std::string root_dir, std::string &most_recent_file,
+                            std::string &error_message) {
     std::regex datetime_regex(R"(^\d{4}_\d{2}_\d{2}_\d{2}_\d{2}_\d{2}$)");
 
     std::vector<std::string> filenames;
@@ -772,12 +769,18 @@ int load_keypoints(std::map<u32, KeyPoints *> &keypoints_map,
         return 1;
     }
     sort(filenames.begin(), filenames.end());
-    std::string most_recent_file = filenames.back();
-    std::cout << "Most recent file: " << most_recent_file << std::endl;
+    most_recent_file = filenames.back();
+}
+
+int load_keypoints(std::string keypoints_folder,
+                   std::map<u32, KeyPoints *> &keypoints_map,
+                   SkeletonContext *skeleton, render_scene *scene,
+                   std::vector<std::string> &camera_names,
+                   std::string &error_message) {
 
     if (scene->num_cams > 1) {
         // load 3d keypoints
-        std::string kp_3d = most_recent_file + "/keypoints3d.csv";
+        std::string kp_3d = keypoints_folder + "/keypoints3d.csv";
         std::ifstream fin(kp_3d);
         if (!fin) {
             error_message = "Failed to open: " + kp_3d;
@@ -867,7 +870,7 @@ int load_keypoints(std::map<u32, KeyPoints *> &keypoints_map,
     std::vector<std::string> error_messages(scene->num_cams);
 
     for (int i = 0; i < scene->num_cams; i++) {
-        std::string kp2d = most_recent_file + "/" + camera_names[i] + ".csv";
+        std::string kp2d = keypoints_folder + "/" + camera_names[i] + ".csv";
         results.push_back(promises[i].get_future());
 
         handles.emplace_back(

@@ -1050,6 +1050,18 @@ int main(int, char **) {
                     }
                 }
 
+                if (ImGui::Button("Update keypoints working directory")) {
+                    IGFD::FileDialogConfig config;
+                    config.countSelectionMax = 1;
+                    config.path = root_dir;
+                    config.flags = ImGuiFileDialogFlags_Modal;
+                    ImGuiFileDialog::Instance()->OpenDialog(
+                        "ChooseKeypointsFolder",
+                        "Choose keypoints working directory", nullptr, config);
+                }
+                ImGui::SameLine();
+                ImGui::Text("%s", keypoints_root_folder.c_str());
+
                 if (ImGui::Button("Save Labeled Data") ||
                     (ImGui::GetIO().KeyCtrl &&
                      ImGui::IsKeyPressed(ImGuiKey_S, false))) {
@@ -1064,7 +1076,7 @@ int main(int, char **) {
                 }
 
                 static bool load_old_format = false;
-                if (ImGui::Button("Load Labeled Data")) {
+                if (ImGui::Button("Load Most Recent Labels")) {
                     free_all_keypoints(keypoints_map, scene);
                     if (load_old_format) {
                         if (load_keypoints_depreciated(
@@ -1075,27 +1087,32 @@ int main(int, char **) {
                         }
 
                     } else {
-                        if (load_keypoints(keypoints_map, skeleton,
-                                           keypoints_root_folder, scene,
-                                           camera_names, error_message)) {
-                            free_all_keypoints(keypoints_map, scene);
+                        std::string most_recent_folder;
+                        if (find_most_recent_labels(
+                                root_dir, most_recent_folder, error_message)) {
                             show_error = true;
+                        } else {
+                            if (load_keypoints(most_recent_folder,
+                                               keypoints_map, skeleton, scene,
+                                               camera_names, error_message)) {
+                                free_all_keypoints(keypoints_map, scene);
+                                show_error = true;
+                            }
                         }
                     }
                 }
                 ImGui::SameLine();
                 ImGui::Checkbox("Old format", &load_old_format);
 
-                if (ImGui::Button("Update keypoints folder")) {
+                if (ImGui::Button("Load From Selected")) {
                     IGFD::FileDialogConfig config;
                     config.countSelectionMax = 1;
-                    config.path = root_dir;
+                    config.path = keypoints_root_folder;
+                    config.flags = ImGuiFileDialogFlags_Modal;
                     ImGuiFileDialog::Instance()->OpenDialog(
-                        "ChooseKeypointsFolder", "Choose Keypoints Folder",
-                        nullptr, config);
+                        "LoadFromSelected", "Load from selected", nullptr,
+                        config);
                 }
-                ImGui::SameLine();
-                ImGui::Text("%s", keypoints_root_folder.c_str());
 
                 auto upper_it = keypoints_map.upper_bound(current_frame_num);
                 if (upper_it == keypoints_map.end()) {
@@ -1134,13 +1151,25 @@ int main(int, char **) {
             ImGui::End();
         }
 
-        if (ImGuiFileDialog::Instance()->Display(
-                "ChooseKeypointsFolder")) {            // => will show a dialog
-            if (ImGuiFileDialog::Instance()->IsOk()) { // action if OK
-                auto selected_folder =
-                    ImGuiFileDialog::Instance()->GetSelection();
+        if (ImGuiFileDialog::Instance()->Display("ChooseKeypointsFolder")) {
+            if (ImGuiFileDialog::Instance()->IsOk()) {
                 keypoints_root_folder =
                     ImGuiFileDialog::Instance()->GetCurrentPath();
+            }
+            // close
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        if (ImGuiFileDialog::Instance()->Display("LoadFromSelected")) {
+            if (ImGuiFileDialog::Instance()->IsOk()) {
+                auto selected_folder =
+                    ImGuiFileDialog::Instance()->GetCurrentPath();
+                free_all_keypoints(keypoints_map, scene);
+                if (load_keypoints(selected_folder, keypoints_map, skeleton,
+                                   scene, camera_names, error_message)) {
+                    free_all_keypoints(keypoints_map, scene);
+                    show_error = true;
+                }
             }
             // close
             ImGuiFileDialog::Instance()->Close();
