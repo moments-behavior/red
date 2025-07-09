@@ -188,15 +188,6 @@ int main(int, char **) {
                                         // create folders
                                         std::filesystem::create_directory(
                                             keypoints_root_folder);
-                                        std::filesystem::create_directory(
-                                            keypoints_root_folder +
-                                            "/worldKeyPoints");
-                                        for (u32 i = 0; i < scene->num_cams;
-                                             i++) {
-                                            std::filesystem::create_directory(
-                                                keypoints_root_folder + "/" +
-                                                camera_names[i]);
-                                        }
                                         skeleton_chosen = true;
                                     }
                                 }
@@ -458,15 +449,6 @@ int main(int, char **) {
                                             skeleton, SP_LOAD);
                         plot_keypoints_flag = true;
                         keypoints_root_folder = root_dir + "/labeled_data/";
-                        // create folders
-                        std::filesystem::create_directory(
-                            keypoints_root_folder);
-                        std::filesystem::create_directory(
-                            keypoints_root_folder + "/worldKeyPoints");
-                        for (u32 i = 0; i < scene->num_cams; i++) {
-                            std::filesystem::create_directory(
-                                keypoints_root_folder + "/" + camera_names[i]);
-                        }
                         skeleton_chosen = true;
                     }
                 }
@@ -1074,9 +1056,13 @@ int main(int, char **) {
                 }
 
                 if (ImGui::Button("Load Labeled Data")) {
+                    // throw current keypoints if there is any
+
                     if (load_keypoints(keypoints_map, skeleton,
                                        keypoints_root_folder, scene,
                                        camera_names, error_message)) {
+                        // throw away loaded keypoints
+
                         show_error = true;
                     }
                 }

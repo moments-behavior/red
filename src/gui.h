@@ -4,6 +4,9 @@
 #include "skeleton.h"
 #include <filesystem>
 #include <fstream>
+#include <future>
+#include <thread>
+#include <vector>
 
 struct ProjectContext {
     std::string root_dir;
@@ -271,11 +274,12 @@ const std::string current_date_time() {
     return final_string.c_str();
 }
 
-void save_keypoints(std::map<u32, KeyPoints *> keypoints_map,
-                    SkeletonContext *skeleton, std::string root_dir,
-                    int num_cameras, std::vector<std::string> &camera_names,
-                    bool *input_is_imgs,
-                    const std::vector<std::string> &input_files) {
+void save_keypoints_depreciated(std::map<u32, KeyPoints *> keypoints_map,
+                                SkeletonContext *skeleton, std::string root_dir,
+                                int num_cameras,
+                                std::vector<std::string> &camera_names,
+                                bool *input_is_imgs,
+                                const std::vector<std::string> &input_files) {
     std::string now = current_date_time();
     std::string filename =
         root_dir + "/worldKeyPoints/keypoints_" + now + ".csv";
@@ -353,10 +357,78 @@ void save_keypoints(std::map<u32, KeyPoints *> keypoints_map,
     }
 }
 
-void load_2d_keypoints(std::map<u32, KeyPoints *> &keypoints_map,
-                       SkeletonContext *skeleton, std::string root_dir,
-                       int cam_idx, std::string camera_name,
-                       render_scene *scene) {
+void save_keypoints(std::map<u32, KeyPoints *> keypoints_map,
+                    SkeletonContext *skeleton, std::string root_dir,
+                    int num_cameras, std::vector<std::string> &camera_names,
+                    bool *input_is_imgs,
+                    const std::vector<std::string> &input_files) {
+    std::string now = current_date_time();
+    std::string save_folder = root_dir + "/" + now;
+    std::filesystem::create_directories(save_folder);
+    std::string filename = save_folder + "/keypoints3d.csv";
+
+    std::ofstream output3d_file(filename);
+    std::vector<std::ofstream> output2d_files;
+
+    for (uint i = 0; i < num_cameras; i++) {
+        std::string filename_cam = save_folder + "/" + camera_names[i] + ".csv";
+        std::ofstream output_file_cam(filename_cam);
+        output2d_files.push_back(std::move(output_file_cam));
+    }
+
+    output3d_file << skeleton->name << "\n";
+    for (uint i = 0; i < num_cameras; i++) {
+        output2d_files[i] << skeleton->name << "\n";
+    }
+
+    std::map<u32, KeyPoints *>::iterator it = keypoints_map.begin();
+    while (it != keypoints_map.end()) {
+        uint frame = it->first;
+        KeyPoints *keypoints = it->second;
+
+        // Write frame number
+        if (*input_is_imgs) {
+            output3d_file << input_files[frame];
+        } else {
+            output3d_file << frame;
+        }
+
+        // Write each labeled keypoint
+        for (uint i = 0; i < skeleton->num_nodes; i++) {
+            output3d_file << "," << i << "," << keypoints->keypoints3d[i].x
+                          << "," << keypoints->keypoints3d[i].y << ","
+                          << keypoints->keypoints3d[i].z;
+        }
+        output3d_file << "\n";
+
+        for (int cam = 0; cam < num_cameras; cam++) {
+            if (*input_is_imgs) {
+                output2d_files[cam] << input_files[frame];
+            } else {
+                output2d_files[cam] << frame;
+            }
+            for (int node = 0; node < skeleton->num_nodes; node++) {
+                output2d_files[cam]
+                    << "," << node << ","
+                    << keypoints->keypoints2d[cam][node].position.x << ","
+                    << keypoints->keypoints2d[cam][node].position.y;
+            }
+            output2d_files[cam] << "\n";
+        }
+
+        it++;
+    }
+    output3d_file.close();
+    for (uint i = 0; i < num_cameras; i++) {
+        output2d_files[i].close();
+    }
+}
+
+void load_2d_keypoints_depreciated(std::map<u32, KeyPoints *> &keypoints_map,
+                                   SkeletonContext *skeleton,
+                                   std::string root_dir, int cam_idx,
+                                   std::string camera_name,
+                                   render_scene *scene) {
     std::string labeled_data_dir = root_dir + "/" + camera_name;
     std::vector<std::string> filenames;
 
@@ -458,10 +530,11 @@ void load_2d_keypoints(std::map<u32, KeyPoints *> &keypoints_map,
     fin.close();
 }
 
-int load_keypoints(std::map<u32, KeyPoints *> &keypoints_map,
-                   SkeletonContext *skeleton, std::string root_dir,
-                   render_scene *scene, std::vector<std::string> &camera_names,
-                   std::string &error_message) {
+int load_keypoints_depreciated(std::map<u32, KeyPoints *> &keypoints_map,
+                               SkeletonContext *skeleton, std::string root_dir,
+                               render_scene *scene,
+                               std::vector<std::string> &camera_names,
+                               std::string &error_message) {
 
     if (scene->num_cams > 1) {
         std::string label3d_dir = root_dir + "/worldKeyPoints/";
@@ -569,7 +642,7 @@ int load_keypoints(std::map<u32, KeyPoints *> &keypoints_map,
 
     auto handles = std::vector<std::thread>();
     for (int i = 0; i < scene->num_cams; i++) {
-        handles.push_back(std::thread(&load_2d_keypoints,
+        handles.push_back(std::thread(&load_2d_keypoints_depreciated,
                                       std::ref(keypoints_map), skeleton,
                                       root_dir, i, camera_names[i], scene));
     }
@@ -577,6 +650,237 @@ int load_keypoints(std::map<u32, KeyPoints *> &keypoints_map,
     for (auto &handle : handles) {
         handle.join();
     }
+    return 0;
+}
+
+int load_2d_keypoints(std::map<u32, KeyPoints *> &keypoints_map,
+                      SkeletonContext *skeleton, std::string kp2d_file,
+                      int cam_idx, render_scene *scene,
+                      std::string &error_message) {
+
+    std::ifstream fin(kp2d_file);
+    if (!fin) {
+        error_message = "Failed to open: " + kp2d_file;
+        return 1;
+    }
+
+    std::string line;
+    std::string delimeter = ",";
+    size_t pos = 0;
+    std::string token;
+
+    // read csv file with cam parameters and tokenize line for this camera
+    int lineNum = 0;
+    while (!fin.eof()) {
+        fin >> line;
+        while ((pos = line.find(delimeter)) != std::string::npos) {
+            token = line.substr(0, pos);
+            if (lineNum == 0) {
+                std::cout << token << std::endl;
+                std::cout << skeleton->name << std::endl;
+                if (token.compare(skeleton->name) != 0) {
+                    error_message = "Failed loading, skeleton doesn't match.";
+                    return 1;
+                }
+                line.erase(0, pos + delimeter.length());
+            } else {
+                uint frame_num = stoul(token);
+                if (keypoints_map.find(frame_num) == keypoints_map.end()) {
+                    KeyPoints *keypoints =
+                        (KeyPoints *)malloc(sizeof(KeyPoints));
+                    allocate_keypoints(keypoints, scene, skeleton);
+                    keypoints_map[frame_num] = keypoints;
+                }
+                line.erase(0, pos + delimeter.length());
+
+                while ((pos = line.find(delimeter)) != std::string::npos) {
+                    token = line.substr(0, pos);
+                    int node = stoi(token); // get the node index
+                    line.erase(0, pos + delimeter.length());
+
+                    pos = line.find(delimeter);
+                    token = line.substr(0, pos);
+                    double x = stod(token);
+                    line.erase(0, pos + delimeter.length());
+
+                    pos = line.find(delimeter);
+                    token = line.substr(0, pos);
+                    double y = stod(token);
+                    line.erase(0, pos + delimeter.length());
+
+                    keypoints_map[frame_num]
+                        ->keypoints2d[cam_idx][node]
+                        .position.x = x;
+                    keypoints_map[frame_num]
+                        ->keypoints2d[cam_idx][node]
+                        .position.y = y;
+
+                    if (x == 1E7 || y == 1E7) {
+                        keypoints_map[frame_num]
+                            ->keypoints2d[cam_idx][node]
+                            .is_labeled = false;
+                    } else {
+                        keypoints_map[frame_num]
+                            ->keypoints2d[cam_idx][node]
+                            .is_labeled = true;
+                    }
+                    // std::cout << "frame: " << frame_num << "  node: " << node
+                    // << "  x: " <<
+                    // keypoints_map[frame_num]->keypoints2d[cam_idx][node].position.x
+                    // << "  y: " <<
+                    // keypoints_map[frame_num]->keypoints2d[cam_idx][node].position.y
+                    // << std::endl;
+                }
+            }
+        }
+        lineNum++;
+    }
+    fin.close();
+    return 0;
+}
+
+int load_keypoints(std::map<u32, KeyPoints *> &keypoints_map,
+                   SkeletonContext *skeleton, std::string root_dir,
+                   render_scene *scene, std::vector<std::string> &camera_names,
+                   std::string &error_message) {
+
+    std::vector<std::string> filenames;
+    for (const auto &entry : std::filesystem::directory_iterator(root_dir)) {
+        filenames.push_back(entry.path());
+    }
+
+    if (filenames.size() == 0) {
+        error_message = "Failed loading, no files in directory.";
+        return 1;
+    };
+
+    sort(filenames.begin(), filenames.end());
+    std::string most_recent_file = filenames.back();
+    std::cout << "Most recent file: " << most_recent_file << std::endl;
+
+    if (scene->num_cams > 1) {
+        // load 3d keypoints
+        std::string kp_3d = most_recent_file + "/keypoints3d.csv";
+        std::ifstream fin(kp_3d);
+        if (!fin) {
+            error_message = "File open failed, skipping.";
+            return 1;
+        }
+
+        std::string line;
+        std::string delimeter = ",";
+        size_t pos = 0;
+        std::string token;
+
+        int line_num = 0;
+        while (!fin.eof()) {
+            fin >> line;
+            while ((pos = line.find(delimeter)) != std::string::npos) {
+                token = line.substr(0, pos);
+                if (line_num == 0) {
+                    if (token.compare(skeleton->name) != 0) {
+                        error_message =
+                            "Failed loading, skeleton doesn't match.";
+                        return 1;
+                    }
+                    line.erase(0, pos + delimeter.length());
+                } else {
+                    uint frame_num = stoul(token);
+                    if (keypoints_map.find(frame_num) == keypoints_map.end()) {
+                        KeyPoints *keypoints =
+                            (KeyPoints *)malloc(sizeof(KeyPoints));
+                        allocate_keypoints(keypoints, scene, skeleton);
+                        keypoints_map[frame_num] = keypoints;
+                    }
+                    line.erase(0, pos + delimeter.length());
+
+                    while ((pos = line.find(delimeter)) != std::string::npos) {
+                        token = line.substr(0, pos);
+                        int node = stoi(token); // get the node index
+                        line.erase(0, pos + delimeter.length());
+
+                        pos = line.find(delimeter);
+                        token = line.substr(0, pos);
+                        double x = stod(token);
+                        line.erase(0, pos + delimeter.length());
+
+                        pos = line.find(delimeter);
+                        token = line.substr(0, pos);
+                        double y = stod(token);
+                        line.erase(0, pos + delimeter.length());
+
+                        pos = line.find(delimeter);
+                        token = line.substr(0, pos);
+                        double z = stod(token);
+                        line.erase(0, pos + delimeter.length());
+
+                        keypoints_map[frame_num]->keypoints3d[node].x = x;
+                        keypoints_map[frame_num]->keypoints3d[node].y = y;
+                        keypoints_map[frame_num]->keypoints3d[node].z = z;
+
+                        if (x == 1E7 || y == 1E7 || z == 1E7) {
+                            for (int cam_idx = 0; cam_idx < scene->num_cams;
+                                 cam_idx++) {
+                                keypoints_map[frame_num]
+                                    ->keypoints2d[cam_idx][node]
+                                    .is_triangulated = false;
+                            }
+                        } else {
+                            for (int cam_idx = 0; cam_idx < scene->num_cams;
+                                 cam_idx++) {
+                                keypoints_map[frame_num]
+                                    ->keypoints2d[cam_idx][node]
+                                    .is_triangulated = true;
+                            }
+                        }
+
+                        // std::cout << "frame: " << frame_num << "  node: " << node << "  x: " << keypoints_map[frame_num]->keypoints3d[node].x \
+                        //  << "  y: " << keypoints_map[frame_num]->keypoints3d[node].y << "  z: " << keypoints_map[frame_num]->keypoints3d[node].z << std::endl;
+                    }
+                }
+            }
+            line_num++;
+        }
+        fin.close();
+    }
+
+    std::vector<std::thread> handles;
+    std::vector<std::promise<int>> promises(scene->num_cams);
+    std::vector<std::future<int>> results;
+    std::vector<std::string> error_messages(scene->num_cams);
+
+    for (int i = 0; i < scene->num_cams; i++) {
+        std::string kp2d = most_recent_file + "/" + camera_names[i] + ".csv";
+        results.push_back(promises[i].get_future());
+
+        handles.emplace_back(
+            [&keypoints_map, skeleton, kp2d, i, scene, &error_messages,
+             &promises](int cam_idx) {
+                int ret = load_2d_keypoints(keypoints_map, skeleton, kp2d, i,
+                                            scene, error_messages[i]);
+                promises[cam_idx].set_value(ret);
+            },
+            i);
+    }
+
+    // Join threads
+    for (auto &t : handles)
+        t.join();
+
+    bool has_error = false;
+    for (int i = 0; i < results.size(); ++i) {
+        int status = results[i].get();
+        if (status != 0) {
+            error_message +=
+                camera_names[i] + " error: " + error_messages[i] + "\n";
+            has_error = true;
+        }
+    }
+
+    if (has_error) {
+        return 1;
+    }
+
     return 0;
 }
 
