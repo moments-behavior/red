@@ -62,6 +62,20 @@ static void gui_plot_keypoints(KeyPoints *keypoints, SkeletonContext *skeleton,
                 keypoints->keypoints2d[view_idx][node].is_triangulated = false;
             }
             if (drag_point_hovered) {
+                if (keypoints->keypoints2d[view_idx][node].is_triangulated) {
+
+                    std::ostringstream oss;
+                    oss << std::fixed << std::setprecision(2);
+                    oss << "(" << keypoints->keypoints3d->x << ", "
+                        << keypoints->keypoints3d->y << ", "
+                        << keypoints->keypoints3d->z << ")";
+                    std::string label = oss.str();
+                    ImVec2 mouse_pos = ImGui::GetMousePos();
+                    ImVec2 textPos = ImVec2(mouse_pos.x + 10, mouse_pos.y + 10);
+                    ImGui::GetForegroundDrawList()->AddText(
+                        textPos, IM_COL32(220, 20, 60, 255), label.c_str());
+                }
+
                 if (ImGui::IsKeyPressed(ImGuiKey_R,
                                         false)) // delete active keypoint
                 {

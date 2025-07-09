@@ -101,7 +101,6 @@ int main(int, char **) {
     bool yolo_detection = false;
     std::vector<std::thread> yolo_threads;
     yolo_param yolo_setting = yolo_param();
-    bool show_world_coordinates = false;
     std::string keypoints_root_folder;
     int label_buffer_size = 64;
     bool show_help_window = false;
