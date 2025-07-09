@@ -1,5 +1,6 @@
 #ifndef RED_SKELETON
 #define RED_SKELETON
+#include "imgui.h"
 #include "json.hpp"
 #include "types.h"
 #include <map>
@@ -77,7 +78,7 @@ std::map<std::string, SkeletonPrimitive> skeleton_get_all() {
 void load_skeleton_json(std::string file_name, SkeletonContext *skeleton) {
     std::ifstream f(file_name);
     json s_config = json::parse(f);
-    skeleton->name = s_config["name"];
+    skeleton->name = file_name;
     skeleton->num_nodes = s_config["num_nodes"];
     skeleton->num_edges = s_config["num_edges"];
 
@@ -179,29 +180,29 @@ void skeleton_initialize(std::string name, std::string skeleton_file_name,
     case Rat4Target:
         skeleton->name = name;
         skeleton->num_nodes = 5;
-        skeleton->num_edges = 3;
-        skeleton->node_names = {"EarR", "EarL", "Snout", "Tail", "Target"};
+        skeleton->num_edges = 4;
+        skeleton->node_names = {"Snout", "EarL", "EarR", "Tail"};
 
         for (int i = 0; i < skeleton->num_nodes; i++) {
             ImVec4 color = (ImVec4)ImColor::HSV(i / (float)skeleton->num_nodes,
                                                 1.0f, 1.0f);
             skeleton->node_colors.push_back(color);
         }
-        skeleton->edges = {{0, 2}, {1, 2}, {2, 3}};
+        skeleton->edges = {{0, 1}, {0, 2}, {1, 3}, {2, 3}};
         break;
 
     case Rat4:
         skeleton->name = name;
         skeleton->num_nodes = 4;
-        skeleton->num_edges = 3;
-        skeleton->node_names = {"EarR", "EarL", "Snout", "Tail"};
+        skeleton->num_edges = 4;
+        skeleton->node_names = {"Snout", "EarL", "EarR", "Tail"};
 
         for (int i = 0; i < skeleton->num_nodes; i++) {
             ImVec4 color = (ImVec4)ImColor::HSV(i / (float)skeleton->num_nodes,
                                                 1.0f, 1.0f);
             skeleton->node_colors.push_back(color);
         }
-        skeleton->edges = {{0, 2}, {1, 2}, {2, 3}};
+        skeleton->edges = {{0, 1}, {0, 2}, {1, 3}, {2, 3}};
         break;
 
     case Rat6Target:
