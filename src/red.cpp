@@ -72,6 +72,8 @@ int main(int, char **) {
     int slider_frame_number = 0;
     bool just_seeked = false;
     bool slider_just_changed = false;
+    std::time_t last_saved = static_cast<std::time_t>(-1);
+
     bool video_loaded = false;
     bool cpu_buffer_toggle = true;
     bool plot_keypoints_flag = false;
@@ -755,11 +757,12 @@ int main(int, char **) {
                                     *kp = 0;
                                 }
 
-                                // delete all keypoint, memory leak here,
-                                // need to handle it cleanly
+                                // delete all keypoint on a frame
                                 if (ImGui::IsKeyPressed(ImGuiKey_Backspace,
                                                         false)) {
-                                    KeyPoints *keypoints = nullptr;
+                                    free_keypoints(
+                                        keypoints_map[current_frame_num],
+                                        scene);
                                     keypoints_map.erase(current_frame_num);
                                     keypoints_find = false;
                                 }
@@ -1053,19 +1056,35 @@ int main(int, char **) {
                     save_keypoints(keypoints_map, skeleton,
                                    keypoints_root_folder, scene->num_cams,
                                    camera_names, &input_is_imgs, imgs_names);
+                    last_saved = time(NULL);
+                }
+                if (last_saved != static_cast<std::time_t>(-1)) {
+                    ImGui::SameLine();
+                    ImGui::Text("Last saved: %s", ctime(&last_saved));
                 }
 
+                static bool load_old_format = false;
                 if (ImGui::Button("Load Labeled Data")) {
-                    // throw current keypoints if there is any
+                    free_all_keypoints(keypoints_map, scene);
+                    if (load_old_format) {
+                        if (load_keypoints_depreciated(
+                                keypoints_map, skeleton, keypoints_root_folder,
+                                scene, camera_names, error_message)) {
+                            free_all_keypoints(keypoints_map, scene);
+                            show_error = true;
+                        }
 
-                    if (load_keypoints(keypoints_map, skeleton,
-                                       keypoints_root_folder, scene,
-                                       camera_names, error_message)) {
-                        // throw away loaded keypoints
-
-                        show_error = true;
+                    } else {
+                        if (load_keypoints(keypoints_map, skeleton,
+                                           keypoints_root_folder, scene,
+                                           camera_names, error_message)) {
+                            free_all_keypoints(keypoints_map, scene);
+                            show_error = true;
+                        }
                     }
                 }
+                ImGui::SameLine();
+                ImGui::Checkbox("old format", &load_old_format);
 
                 if (ImGui::Button("Update keypoints folder")) {
                     IGFD::FileDialogConfig config;

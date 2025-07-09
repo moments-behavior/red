@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <fstream>
 #include <future>
+#include <regex>
 #include <thread>
 #include <vector>
 
@@ -744,16 +745,27 @@ int load_keypoints(std::map<u32, KeyPoints *> &keypoints_map,
                    render_scene *scene, std::vector<std::string> &camera_names,
                    std::string &error_message) {
 
+    std::regex datetime_regex(R"(^\d{4}_\d{2}_\d{2}_\d{2}_\d{2}_\d{2}$)");
+
     std::vector<std::string> filenames;
     for (const auto &entry : std::filesystem::directory_iterator(root_dir)) {
-        filenames.push_back(entry.path());
+        if (!entry.is_directory())
+            continue;
+
+        std::string folder_name = entry.path().filename().string();
+
+        if (std::regex_match(folder_name, datetime_regex)) {
+            filenames.push_back(entry.path());
+        }
     }
 
-    if (filenames.size() == 0) {
-        error_message = "Failed loading, no files in directory.";
+    if (filenames.empty()) {
+        error_message = "Failed loading, no date-time named folders found.";
+        error_message += "\nIf you are loading old format, please check "
+                         "old format. Once loaded, please save it "
+                         "to convert to new format.";
         return 1;
-    };
-
+    }
     sort(filenames.begin(), filenames.end());
     std::string most_recent_file = filenames.back();
     std::cout << "Most recent file: " << most_recent_file << std::endl;
@@ -763,7 +775,7 @@ int load_keypoints(std::map<u32, KeyPoints *> &keypoints_map,
         std::string kp_3d = most_recent_file + "/keypoints3d.csv";
         std::ifstream fin(kp_3d);
         if (!fin) {
-            error_message = "File open failed, skipping.";
+            error_message = "Failed to open: " + kp_3d;
             return 1;
         }
 
@@ -779,8 +791,8 @@ int load_keypoints(std::map<u32, KeyPoints *> &keypoints_map,
                 token = line.substr(0, pos);
                 if (line_num == 0) {
                     if (token.compare(skeleton->name) != 0) {
-                        error_message =
-                            "Failed loading, skeleton doesn't match.";
+                        error_message = "3D keypoints failed loading, skeleton "
+                                        "doesn't match.";
                         return 1;
                     }
                     line.erase(0, pos + delimeter.length());
