@@ -443,10 +443,6 @@ void load_2d_keypoints_depreciated(std::map<u32, KeyPoints *> &keypoints_map,
         return;
     };
 
-    for (int i = 0; i < filenames.size(); i++) {
-        std::cout << filenames.at(i) << std::endl;
-    }
-
     sort(filenames.begin(), filenames.end());
     std::string mostRecentFile = filenames.back();
     std::cout << "mostRecentFile: " << mostRecentFile << std::endl;
@@ -468,11 +464,9 @@ void load_2d_keypoints_depreciated(std::map<u32, KeyPoints *> &keypoints_map,
         while ((pos = line.find(delimeter)) != std::string::npos) {
             token = line.substr(0, pos);
             if (lineNum == 0) {
-                std::cout << token << std::endl;
-                std::cout << skeleton->name << std::endl;
                 if (token.compare(skeleton->name) != 0) {
-                    std::cout << "Failed loading, skeleton doesn't match."
-                              << std::endl;
+                    std::cout << "Failed loading, skeleton doesn't match.\n"
+                              << skeleton->name << ":" << token << std::endl;
                     return;
                 }
                 line.erase(0, pos + delimeter.length());
@@ -538,8 +532,9 @@ int load_keypoints_depreciated(std::map<u32, KeyPoints *> &keypoints_map,
                                std::string &error_message) {
 
     if (scene->num_cams > 1) {
-        if (!std::filesystem::exists(root_dir + "/worldkeypoints")) {
-            error_message = "'worldkeypoints' directory is missing.";
+        if (!std::filesystem::exists(root_dir + "/worldKeyPoints")) {
+            error_message =
+                "'worldKeyPoints' directory is missing from: " + root_dir;
             return 1;
         }
 
@@ -576,8 +571,9 @@ int load_keypoints_depreciated(std::map<u32, KeyPoints *> &keypoints_map,
                 token = line.substr(0, pos);
                 if (lineNum == 0) {
                     if (token.compare(skeleton->name) != 0) {
-                        error_message =
-                            "Failed loading, skeleton doesn't match.";
+                        error_message = "Failed loading 3d keypoints, skeleton "
+                                        "doesn't match.\n";
+                        error_message += skeleton->name + ":" + token;
                         return 1;
                     }
                     line.erase(0, pos + delimeter.length());
@@ -685,7 +681,8 @@ int load_2d_keypoints(std::map<u32, KeyPoints *> &keypoints_map,
                 std::cout << token << std::endl;
                 std::cout << skeleton->name << std::endl;
                 if (token.compare(skeleton->name) != 0) {
-                    error_message = "Failed loading, skeleton doesn't match.";
+                    error_message = "Failed loading, skeleton doesn't match.\n";
+                    error_message += skeleton->name + ":" + token;
                     return 1;
                 }
                 line.erase(0, pos + delimeter.length());
@@ -801,6 +798,7 @@ int load_keypoints(std::string keypoints_folder,
                     if (token.compare(skeleton->name) != 0) {
                         error_message = "3D keypoints failed loading, skeleton "
                                         "doesn't match.";
+                        error_message += skeleton->name + ":" + token;
                         return 1;
                     }
                     line.erase(0, pos + delimeter.length());

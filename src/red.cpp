@@ -1146,7 +1146,7 @@ int main(int, char **) {
                     pause_selected = 0;
                     slider_frame_number = to_display_frame_number;
                 }
-                ImGui::Text("Total labeled frames : %d", keypoints_map.size());
+                ImGui::Text("Total labeled frames : %zu", keypoints_map.size());
             }
             ImGui::End();
         }

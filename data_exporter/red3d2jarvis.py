@@ -1,4 +1,5 @@
 from keypoints import *
+import re
 import argparse
 import numpy as np
 import json
@@ -8,12 +9,19 @@ import cv2 as cv
 from multiprocessing import Pool
 import platform
 from multiprocessing import get_context
+import os
 
 parser = argparse.ArgumentParser()
-parser.add_argument('-i', '--label_folder', type=str, required=True)
-parser.add_argument('-o', '--output_folder', type=str, required=True)
-parser.add_argument('-s', '--select_indices', nargs='+',
-                    type=int, help='List of numbers', default=[])
+parser.add_argument("-i", "--label_folder", type=str, required=True)
+parser.add_argument("-o", "--output_folder", type=str, required=True)
+parser.add_argument(
+    "-s",
+    "--select_indices",
+    nargs="+",
+    type=int,
+    help="List of numbers",
+    default=[],
+)
 
 args = parser.parse_args()
 label_folder = args.label_folder
@@ -21,22 +29,40 @@ label_folder = os.path.normpath(label_folder)
 output_folder = args.output_folder
 select_indices = args.select_indices
 
-world_point_folder = label_folder + "/worldKeyPoints"
-all_files = glob.glob(world_point_folder + "/*")
-all_files.sort()
-select_most_recent_labels = all_files[-1]
-print("Select most recent label: {}".format(select_most_recent_labels))
-cameras = get_all_cams_in_labeled_folder(label_folder)
+datetime_pattern = re.compile(r"^\d{4}_\d{2}_\d{2}_\d{2}_\d{2}_\d{2}$")
+
+matching_folders = [
+    name
+    for name in os.listdir(label_folder)
+    if os.path.isdir(os.path.join(label_folder, name))
+    and datetime_pattern.match(name)
+]
+matching_folders.sort()
+select_folder = matching_folders[-1]
+print("Select most recent label: {}".format(select_folder))
+
+select_folder_path = os.path.join(label_folder, select_folder)
+cameras = get_all_cams_in_labeled_folder(select_folder_path)
 
 # get skeleton name
-skeleton = get_skeleton_name(select_most_recent_labels)
-print(skeleton)
-keypoints_names, skeleton_names, num_keypoints = skeleton_selector[skeleton]()
+selected_kp_3d = os.path.join(select_folder_path, "keypoints3d.csv")
+skeleton = get_skeleton_name(selected_kp_3d)
+print("Skeleton:", skeleton)
 
-selected_annotation = select_most_recent_labels.split("/")[-1][10:]
-selected_annotation = selected_annotation.split(".")[0]
-world_labels = csv_reader_rats(
-    select_most_recent_labels, num_keypoints, True, select_keypoints_idx=select_indices)
+if skeleton.endswith("json"):
+    keypoints_names, skeleton_names, num_keypoints = (
+        load_skeleton_json_format_for_jarvis(skeleton)
+    )
+else:
+    keypoints_names, skeleton_names, num_keypoints = skeleton_selector[
+        skeleton
+    ]()
+
+world_labels = csv_reader_red3d(
+    selected_kp_3d,
+    num_keypoints,
+    select_keypoints_idx=select_indices,
+)
 
 # filter out invalid lables
 world_labels_filterd = {}
@@ -50,8 +76,11 @@ total_num_labels = len(labels_frames)
 id_shuffled = np.arange(total_num_labels)
 np.random.shuffle(id_shuffled)
 num_train = int(np.floor(total_num_labels * 0.9))
-print("Train set: {}, validation set: {}.".format(
-    num_train, total_num_labels - num_train))
+print(
+    "Train set: {}, validation set: {}.".format(
+        num_train, total_num_labels - num_train
+    )
+)
 train_ids = id_shuffled[:num_train]
 train_ids = np.sort(train_ids)
 val_ids = id_shuffled[num_train:]
@@ -60,10 +89,11 @@ val_ids = np.sort(val_ids)
 train_image_frames = labels_frames[train_ids]
 val_image_frames = labels_frames[val_ids]
 
-trial_name = selected_annotation
+trial_name = select_folder
 
 calibration_folder = os.path.join(
-    "/".join(label_folder.split("/")[:-1]), "calibration")
+    "/".join(label_folder.split("/")[:-1]), "calibration"
+)
 image_width = {}
 image_height = {}
 for cam in cameras:
@@ -74,50 +104,65 @@ for cam in cameras:
         image_height[cam] = int(fs.getNode("image_height").real())
 
 
-annotations, images, frame_set_one = process_one_session(trial_name,
-                                                         label_folder,
-                                                         num_keypoints,
-                                                         selected_annotation,
-                                                         train_image_frames,
-                                                         cameras,
-                                                         image_width,
-                                                         image_height,
-                                                         select_keypoints_idx=select_indices)
-set_of_frames = {
-    trial_name: frame_set_one
-}
+annotations, images, frame_set_one = process_one_session(
+    trial_name,
+    select_folder_path,
+    num_keypoints,
+    train_image_frames,
+    cameras,
+    image_width,
+    image_height,
+    select_keypoints_idx=select_indices,
+)
+set_of_frames = {trial_name: frame_set_one}
 if select_indices:
     keypoints_names_selected = [keypoints_names[i] for i in select_indices]
     annotation_num_kps = len(select_indices)
 else:
     keypoints_names_selected = keypoints_names
     annotation_num_kps = num_keypoints
-annotation_json_train = generate_annotation_file(
-    trial_name, keypoints_names_selected, skeleton_names, annotation_num_kps, cameras, annotations, images, set_of_frames)
 
-annotations, images, frame_set_one = process_one_session(trial_name,
-                                                         label_folder,
-                                                         num_keypoints,
-                                                         selected_annotation,
-                                                         val_image_frames,
-                                                         cameras,
-                                                         image_width,
-                                                         image_height,
-                                                         select_keypoints_idx=select_indices)
-set_of_frames = {
-    trial_name: frame_set_one
-}
+annotation_json_train = generate_annotation_file(
+    trial_name,
+    keypoints_names_selected,
+    skeleton_names,
+    annotation_num_kps,
+    cameras,
+    annotations,
+    images,
+    set_of_frames,
+)
+
+annotations, images, frame_set_one = process_one_session(
+    trial_name,
+    select_folder_path,
+    num_keypoints,
+    val_image_frames,
+    cameras,
+    image_width,
+    image_height,
+    select_keypoints_idx=select_indices,
+)
+set_of_frames = {trial_name: frame_set_one}
 annotation_json_val = generate_annotation_file(
-    trial_name, keypoints_names_selected, skeleton_names, annotation_num_kps, cameras, annotations, images, set_of_frames)
+    trial_name,
+    keypoints_names_selected,
+    skeleton_names,
+    annotation_num_kps,
+    cameras,
+    annotations,
+    images,
+    set_of_frames,
+)
 
 
 annotation_path = os.path.join(output_folder, "annotations/")
 os.makedirs(annotation_path, exist_ok=True)
 
-with open(annotation_path + "instances_train.json", 'w') as f:
+with open(annotation_path + "instances_train.json", "w") as f:
     json.dump(annotation_json_train, f)
 
-with open(annotation_path + "instances_val.json", 'w') as f:
+with open(annotation_path + "instances_val.json", "w") as f:
     json.dump(annotation_json_val, f)
 
 print("Prepared dataset at {}.".format(output_folder))
@@ -140,10 +185,12 @@ for cam in cameras:
 
     output_filename = save_calib_folder + "/{}.yaml".format(cam)
     s = cv.FileStorage(output_filename, cv.FileStorage_WRITE)
-    s.write('intrinsicMatrix', intrinsicMatrix)
-    s.write('distortionCoefficients', distortionCoefficients)
-    s.write('R', R)
-    s.write('T', T)
+    s.write("image_width", image_width[cam])
+    s.write("image_height", image_height[cam])
+    s.write("intrinsicMatrix", intrinsicMatrix)
+    s.write("distortionCoefficients", distortionCoefficients)
+    s.write("R", R)
+    s.write("T", T)
     s.release()
     print(output_filename)
 
@@ -155,11 +202,11 @@ map_frame_to_mode = {}
 all_image_frames = []
 
 for img in train_image_frames:
-    map_frame_to_mode[img] = 'train'
+    map_frame_to_mode[img] = "train"
     all_image_frames.append(img)
 
 for img in val_image_frames:
-    map_frame_to_mode[img] = 'val'
+    map_frame_to_mode[img] = "val"
     all_image_frames.append(img)
 
 all_image_frames = np.asarray(all_image_frames)
@@ -169,15 +216,24 @@ all_image_frames = np.sort(all_image_frames)
 all_jobs = []
 
 for camera in cameras:
-    all_jobs.append([trial_name, camera, video_folder, output_folder,
-                    map_frame_to_mode, all_image_frames, 'jarvis'])
+    all_jobs.append(
+        [
+            trial_name,
+            camera,
+            video_folder,
+            output_folder,
+            map_frame_to_mode,
+            all_image_frames,
+            "jarvis",
+        ]
+    )
 
 num_jobs = len(all_jobs)
 
-if platform.system() == 'Darwin':  # fix for macOS
+if platform.system() == "Darwin":  # fix for macOS
     print("threadpooling for macos")
     with get_context("fork").Pool(num_jobs) as p:
-        p.map(multiprocess_save_jpegs, all_jobs)
+        p.map(multiprocess_save_jpegs_opencv, all_jobs)
 else:
     with Pool(num_jobs) as p:
-        p.map(multiprocess_save_jpegs, all_jobs)
+        p.map(multiprocess_save_jpegs_opencv, all_jobs)

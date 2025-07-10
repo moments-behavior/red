@@ -13,30 +13,54 @@ def get_skeleton_name(file_name):
     return first_row[0]
 
 
-def csv_reader_rats(file_name, num_keypoints, three_d=False, select_keypoints_idx=[], prediction_file=False, img_height=2200):
+def csv_reader_red2d(
+    file_name,
+    num_keypoints,
+    img_height,
+    select_keypoints_idx=[],
+):
     labels = {}
     with open(file_name) as csv_file:
-        csv_reader = csv.reader(csv_file, delimiter=',')
+        csv_reader = csv.reader(csv_file, delimiter=",")
         line_count = 0
         for row in csv_reader:
             if line_count == 0:
                 # print(f'{", ".join(row)}')
                 line_count += 1
             else:
-                if prediction_file:
-                    keypoints = [float(x) for x in row[1:]]
-                else:
-                    keypoints = [float(x) for x in row[1:-1]]
+                keypoints = [float(x) for x in row[1:]]
                 keypoints = np.asarray(keypoints)
-                if three_d:
-                    keypoints = keypoints.reshape([num_keypoints, 4])
-                else:
-                    keypoints = keypoints.reshape([num_keypoints, 3])
+                keypoints = keypoints.reshape([num_keypoints, 3])
                 keypoints = keypoints[:, 1:]
                 keypoints[keypoints == 1e7] = np.nan
-                if not three_d:
-                    keypoints[:, 1] = img_height - keypoints[:, 1]
-                if (len(select_keypoints_idx) > 0):
+                keypoints[:, 1] = img_height - keypoints[:, 1]
+                if len(select_keypoints_idx) > 0:
+                    keypoints = keypoints[select_keypoints_idx, :]
+                labels[int(row[0])] = keypoints
+                line_count += 1
+    return labels
+
+
+def csv_reader_red3d(
+    file_name,
+    num_keypoints,
+    select_keypoints_idx=[],
+):
+    labels = {}
+    with open(file_name) as csv_file:
+        csv_reader = csv.reader(csv_file, delimiter=",")
+        line_count = 0
+        for row in csv_reader:
+            if line_count == 0:
+                # print(f'{", ".join(row)}')
+                line_count += 1
+            else:
+                keypoints = [float(x) for x in row[1:]]
+                keypoints = np.asarray(keypoints)
+                keypoints = keypoints.reshape([num_keypoints, 4])
+                keypoints = keypoints[:, 1:]
+                keypoints[keypoints == 1e7] = np.nan
+                if len(select_keypoints_idx) > 0:
                     keypoints = keypoints[select_keypoints_idx, :]
                 labels[int(row[0])] = keypoints
                 line_count += 1
@@ -53,7 +77,16 @@ def get_subfolders(path):
     return subfolders
 
 
-def get_all_cams_in_labeled_folder(label_folder):
+def get_all_cams_in_labeled_folder(folder):
+    cameras = [
+        os.path.splitext(os.path.basename(f))[0]
+        for f in glob.glob(os.path.join(folder, "*.csv"))
+        if os.path.basename(f) != "keypoints3d.csv"
+    ]
+    return cameras
+
+
+def get_all_cams_in_labeled_folder_depreciate(label_folder):
     all_folders = get_subfolders(label_folder)
     cameras = []
     for one_folder in all_folders:
@@ -62,31 +95,36 @@ def get_all_cams_in_labeled_folder(label_folder):
     return cameras
 
 
-def process_one_session(trial_name,
-                        load_file_path,
-                        num_keypoints,
-                        annotation_file,
-                        all_image_frames,
-                        cameras,
-                        image_width,
-                        image_height,
-                        select_keypoints_idx=[]):
+def process_one_session(
+    trial_name,
+    load_file_path,
+    num_keypoints,
+    all_image_frames,
+    cameras,
+    image_width,
+    image_height,
+    select_keypoints_idx=[],
+):
     set_of_frames = {}
     annotations = []
     images = []
     annotation_frame_id = 0
     image_frame_id = 0
     for which_cam in cameras:
-
-        labels = csv_reader_rats(load_file_path + "/{}/{}_{}.csv".format(which_cam, which_cam,
-                                 annotation_file), num_keypoints, three_d=False, select_keypoints_idx=select_keypoints_idx, img_height=image_height[which_cam])
+        labels = csv_reader_red2d(
+            load_file_path + "/{}.csv".format(which_cam),
+            num_keypoints,
+            img_height=image_height[which_cam],
+            select_keypoints_idx=select_keypoints_idx,
+        )
 
         file_dir = trial_name + "/{}/".format(which_cam)
         all_2d_labeled_frames = labels.keys()
         for frame_num in all_image_frames:
             # each frame
-            file_name_annotation = file_dir + \
-                "Frame_" + str(int(frame_num)) + '.jpg'
+            file_name_annotation = (
+                file_dir + "Frame_" + str(int(frame_num)) + ".jpg"
+            )
 
             image_entry = {
                 "coco_url": "",
@@ -95,7 +133,7 @@ def process_one_session(trial_name,
                 "flickr_url": "",
                 "height": image_height[which_cam],
                 "id": image_frame_id,
-                "width": image_width[which_cam]
+                "width": image_width[which_cam],
             }
 
             if frame_num in all_2d_labeled_frames:
@@ -107,11 +145,13 @@ def process_one_session(trial_name,
                         annotation_num_kp = num_keypoints
                     bbox = []
                     x_min = np.min(labels[frame_num][:, 0])
-                    x_size = np.max(labels[frame_num][:, 0]) - \
-                        np.min(labels[frame_num][:, 0])
+                    x_size = np.max(labels[frame_num][:, 0]) - np.min(
+                        labels[frame_num][:, 0]
+                    )
                     y_min = np.min(labels[frame_num][:, 1])
-                    y_size = np.max(labels[frame_num][:, 1]) - \
-                        np.min(labels[frame_num][:, 1])
+                    y_size = np.max(labels[frame_num][:, 1]) - np.min(
+                        labels[frame_num][:, 1]
+                    )
                     bbox = [x_min, y_min, x_size, y_size]
 
                     keypoints = []
@@ -132,7 +172,7 @@ def process_one_session(trial_name,
                         "iscrowd": 0,
                         "keypoints": keypoints,
                         "num_keypoints": annotation_num_kp,
-                        "segmentation": []
+                        "segmentation": [],
                     }
 
             # for create framesets
@@ -154,14 +194,31 @@ def process_one_session(trial_name,
     return annotations, images, set_of_frames
 
 
-def process_one_session_ball(trial_name, load_file_path, num_keypoints, annotation_file, all_image_frames, cameras, d_ball, label_id, img_width, img_height, select_keypoints_idx=[]):
+def process_one_session_ball(
+    trial_name,
+    load_file_path,
+    num_keypoints,
+    annotation_file,
+    all_image_frames,
+    cameras,
+    d_ball,
+    label_id,
+    img_width,
+    img_height,
+    select_keypoints_idx=[],
+):
 
     annotations = {}
     for which_cam in cameras:
 
         # print(select_keypoints_idx)
-        labels = csv_reader_rats(load_file_path + "/{}/{}_{}.csv".format(which_cam, which_cam,
-                                 annotation_file), num_keypoints, three_d=False, select_keypoints_idx=select_keypoints_idx)
+        labels = csv_reader_rats(
+            load_file_path
+            + "/{}/{}_{}.csv".format(which_cam, which_cam, annotation_file),
+            num_keypoints,
+            three_d=False,
+            select_keypoints_idx=select_keypoints_idx,
+        )
 
         file_dir = trial_name + "/{}/".format(which_cam)
         all_2d_labeled_frames = labels.keys()
@@ -177,10 +234,10 @@ def process_one_session_ball(trial_name, load_file_path, num_keypoints, annotati
 
             if frame_num in all_2d_labeled_frames:
                 bbox = []
-                x_min = (labels[frame_num][:, 0].min())/img_width
-                x_size = bbox_size/img_width
-                y_min = labels[frame_num][:, 1].min()/img_height
-                y_size = bbox_size/img_height
+                x_min = (labels[frame_num][:, 0].min()) / img_width
+                x_size = bbox_size / img_width
+                y_min = labels[frame_num][:, 1].min() / img_height
+                y_size = bbox_size / img_height
                 bbox = [f"{label_id} {x_min} {y_min} {x_size} {y_size}"]
 
                 # print(bbox)
@@ -198,17 +255,21 @@ def process_one_session_ball(trial_name, load_file_path, num_keypoints, annotati
     return annotations
 
 
-def create_yolo_annotation_files(output_folder, trial_name, annotations, cameras, dset_mode):
+def create_yolo_annotation_files(
+    output_folder, trial_name, annotations, cameras, dset_mode
+):
 
     for which_cam in cameras:
         dir_labels = os.path.join(
-            output_folder, trial_name, which_cam, dset_mode, "labels")
+            output_folder, trial_name, which_cam, dset_mode, "labels"
+        )
         os.makedirs(dir_labels, exist_ok=True)
         for i in range(len(annotations[which_cam, "entry"])):
 
             # print(annotations[which_cam,"fname_img"][i])
             fname_label = os.path.join(
-                dir_labels, annotations[which_cam, 'fname_annot'][i])
+                dir_labels, annotations[which_cam, "fname_annot"][i]
+            )
             with open(fname_label, "w") as f:
                 f.write(annotations[which_cam, "entry"][i])
 
@@ -221,17 +282,32 @@ def generate_framesets(dataset_name, set_of_frames, framesets):
         for frame_num, image_ids in frameset.items():
             one_frameset_entry = {
                 "datasetName": dataset_name,
-                "frames": image_ids
+                "frames": image_ids,
             }
 
             entry_name = trial_name + "/Frame_{}".format(frame_num)
             framesets[entry_name] = one_frameset_entry
 
 
-def generate_annotation_file(trial_name, keypoint_names, skeleton, num_keypoints, cameras, annotations, images, set_of_frames):
+def generate_annotation_file(
+    trial_name,
+    keypoint_names,
+    skeleton,
+    num_keypoints,
+    cameras,
+    annotations,
+    images,
+    set_of_frames,
+):
 
-    categories = [{"id": 0, "name": "Rat",
-                   "num_keypoints": num_keypoints, "supercategory": "None"}]
+    categories = [
+        {
+            "id": 0,
+            "name": "Rat",
+            "num_keypoints": num_keypoints,
+            "supercategory": "None",
+        }
+    ]
     root_json = {}
     root_json["keypoint_names"] = keypoint_names
     root_json["skeleton"] = skeleton
@@ -241,8 +317,9 @@ def generate_annotation_file(trial_name, keypoint_names, skeleton, num_keypoints
 
     calib_file_dict = {}
     for cam in cameras:
-        calib_file_dict["{}".format(
-            cam)] = "calib_params/{}/{}.yaml".format(trial_name, cam)
+        calib_file_dict["{}".format(cam)] = "calib_params/{}/{}.yaml".format(
+            trial_name, cam
+        )
     root_json["calibrations"] = {"{}".format(trial_name): calib_file_dict}
 
     framesets = {}
@@ -251,19 +328,27 @@ def generate_annotation_file(trial_name, keypoint_names, skeleton, num_keypoints
     return root_json
 
 
-def multiprocess_save_jpegs(input_args):
-    trial_name, cam_name, video_folder_name, save_folder, map_frame_to_mode, all_image_frames, export_mode = input_args
+def multiprocess_save_jpegs_opencv(input_args):
+    (
+        trial_name,
+        cam_name,
+        video_folder_name,
+        save_folder,
+        map_frame_to_mode,
+        all_image_frames,
+        export_mode,
+    ) = input_args
 
     print("Saving jpeg for {} ...".format(cam_name))
     file_dir = trial_name + "/{}/".format(cam_name)
 
     # make directories for images
-    if (export_mode == "jarvis"):
+    if export_mode == "jarvis":
         dir_name = os.path.join(save_folder, "train", file_dir)
         os.makedirs(dir_name, exist_ok=True)
         dir_name = os.path.join(save_folder, "val", file_dir)
         os.makedirs(dir_name, exist_ok=True)
-    elif (export_mode == "yolo"):
+    elif export_mode == "yolo":
         dir_name = os.path.join(save_folder, "train", "images")
         os.makedirs(dir_name, exist_ok=True)
         dir_name = os.path.join(save_folder, "valid", "images")
@@ -274,14 +359,14 @@ def multiprocess_save_jpegs(input_args):
 
     video_file = os.path.join(video_folder_name, "{}.mp4".format(cam_name))
     cap = cv.VideoCapture(video_file)
-    cap.set(cv.CAP_PROP_POS_FRAMES, all_image_frames[0]-1)
+    cap.set(cv.CAP_PROP_POS_FRAMES, all_image_frames[0] - 1)
 
-    start_frame = np.min(all_image_frames)-1
+    start_frame = np.min(all_image_frames) - 1
     end_frame = np.max(all_image_frames)
 
     frame_num = start_frame
 
-    while (frame_num >= start_frame and frame_num <= end_frame):
+    while frame_num >= start_frame and frame_num <= end_frame:
         ret, frame = cap.read()
         if ret == False:
             print("Missing fame: {}".format(frame_num))
@@ -289,34 +374,40 @@ def multiprocess_save_jpegs(input_args):
             frame_num = frame_num + 1
             if frame_num in all_image_frames:
                 set_mode = map_frame_to_mode[frame_num]
-                if (export_mode == "jarvis"):
+                if export_mode == "jarvis":
                     dir_name = os.path.join(
-                        save_folder, "{}/".format(set_mode), file_dir)
-                    frame_filename = dir_name + "Frame_" + \
-                        str(int(frame_num)) + '.jpg'
-                elif (export_mode == "yolo"):
+                        save_folder, "{}/".format(set_mode), file_dir
+                    )
+                    frame_filename = (
+                        dir_name + "Frame_" + str(int(frame_num)) + ".jpg"
+                    )
+                elif export_mode == "yolo":
                     frame_filename = os.path.join(
-                        save_folder, set_mode, "images", f"Frame_{frame_num}.jpg")
+                        save_folder,
+                        set_mode,
+                        "images",
+                        f"Frame_{frame_num}.jpg",
+                    )
                     # frame_filename = dir_name + "Frame_" + str(int(frame_num)) + '.jpg'
 
                 cv.imwrite(frame_filename, frame)
 
-        if (frame_num % 1000 == 0):
+        if frame_num % 1000 == 0:
             print(f"Processed frame: {frame_num} for {cam_name}")
 
 
 def load_jarvis_3d_csv_rats(file_name, num_keypoints):
     labels = {}
     with open(file_name) as csv_file:
-        csv_reader = csv.reader(csv_file, delimiter=',')
+        csv_reader = csv.reader(csv_file, delimiter=",")
         line_count = 0
         for row in csv_reader:
             if line_count not in [0, 1]:
-                if 'NaN' not in row:
+                if "NaN" not in row:
                     keypoints = [float(x) for x in row]
                     keypoints = np.asarray(keypoints)
                     keypoints = keypoints.reshape([num_keypoints, 4])
-                    labels[line_count-2] = keypoints
+                    labels[line_count - 2] = keypoints
             line_count += 1
     return labels
 
@@ -357,7 +448,8 @@ def merge_json_annotations(json_data):
         # frameset
         for frameset_key, frameset_value in dsets["framesets"].items():
             frameset_value["frames"] = [
-                x + img_idx_offset for x in frameset_value["frames"]]
+                x + img_idx_offset for x in frameset_value["frames"]
+            ]
             root_json["framesets"][frameset_key] = frameset_value
 
         img_idx_offset += len(dsets["images"])
@@ -368,6 +460,7 @@ def merge_json_annotations(json_data):
 def Project(points, intrinsic, distortion, rotation_matrix, tvec):
     result = []
     if len(points) > 0:
-        result, _ = cv.projectPoints(points.astype(
-            float), rotation_matrix, tvec, intrinsic, distortion)
+        result, _ = cv.projectPoints(
+            points.astype(float), rotation_matrix, tvec, intrinsic, distortion
+        )
     return np.squeeze(result, axis=1)

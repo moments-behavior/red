@@ -181,7 +181,7 @@ void skeleton_initialize(std::string name, std::string skeleton_file_name,
         skeleton->name = name;
         skeleton->num_nodes = 5;
         skeleton->num_edges = 4;
-        skeleton->node_names = {"Snout", "EarL", "EarR", "Tail"};
+        skeleton->node_names = {"Snout", "EarL", "EarR", "Tail", "Target"};
 
         for (int i = 0; i < skeleton->num_nodes; i++) {
             ImVec4 color = (ImVec4)ImColor::HSV(i / (float)skeleton->num_nodes,
