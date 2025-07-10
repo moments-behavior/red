@@ -19,8 +19,14 @@ parser.add_argument(
     "--select_indices",
     nargs="+",
     type=int,
-    help="List of numbers",
+    help="List of numbers, for instance: -s 0 1 2 3",
     default=[],
+)
+parser.add_argument(
+    "-m",
+    "--margin",
+    type=float,
+    help="Margin in pixel to add when deciding bounding box.",
 )
 
 args = parser.parse_args()
@@ -28,6 +34,7 @@ label_folder = args.label_folder
 label_folder = os.path.normpath(label_folder)
 output_folder = args.output_folder
 select_indices = args.select_indices
+margin_pixel = args.margin
 
 datetime_pattern = re.compile(r"^\d{4}_\d{2}_\d{2}_\d{2}_\d{2}_\d{2}$")
 
@@ -113,6 +120,7 @@ annotations, images, frame_set_one = process_one_session(
     image_width,
     image_height,
     select_keypoints_idx=select_indices,
+    margin_pixel=margin_pixel,
 )
 set_of_frames = {trial_name: frame_set_one}
 if select_indices:
@@ -142,6 +150,7 @@ annotations, images, frame_set_one = process_one_session(
     image_width,
     image_height,
     select_keypoints_idx=select_indices,
+    margin_pixel=margin_pixel,
 )
 set_of_frames = {trial_name: frame_set_one}
 annotation_json_val = generate_annotation_file(

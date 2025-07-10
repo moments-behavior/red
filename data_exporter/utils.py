@@ -104,6 +104,7 @@ def process_one_session(
     image_width,
     image_height,
     select_keypoints_idx=[],
+    margin_pixel=None,
 ):
     set_of_frames = {}
     annotations = []
@@ -145,13 +146,24 @@ def process_one_session(
                         annotation_num_kp = num_keypoints
                     bbox = []
                     x_min = np.min(labels[frame_num][:, 0])
-                    x_size = np.max(labels[frame_num][:, 0]) - np.min(
-                        labels[frame_num][:, 0]
-                    )
+                    x_max = np.max(labels[frame_num][:, 0])
+
                     y_min = np.min(labels[frame_num][:, 1])
-                    y_size = np.max(labels[frame_num][:, 1]) - np.min(
-                        labels[frame_num][:, 1]
-                    )
+                    y_max = np.max(labels[frame_num][:, 1])
+
+                    if margin_pixel is not None:
+                        x_min = np.clip(x_min - margin_pixel, 0, None)
+                        x_max = np.clip(
+                            x_max + margin_pixel, None, image_width[which_cam]
+                        )
+
+                        y_min = np.clip(y_min - margin_pixel, 0, None)
+                        y_max = np.clip(
+                            y_max + margin_pixel, None, image_height[which_cam]
+                        )
+
+                    x_size = x_max - x_min
+                    y_size = y_max - y_min
                     bbox = [x_min, y_min, x_size, y_size]
 
                     keypoints = []

@@ -82,8 +82,13 @@ while True:
     file_name = imgs[image_index]["file_name"]
     path = os.path.join(root_dir, set_name, file_name)
     img = cv2.imread(path)
-    _, keypoints = load_annotations(image_index, annotations)
-
+    bbox, keypoints = load_annotations(image_index, annotations)
+    if bbox[0][-1] != -1:
+        top_left = bbox[0][:2]
+        top_left = top_left.astype(int)
+        bottom_right = bbox[0][2:4]
+        bottom_right = bottom_right.astype(int)
+        cv2.rectangle(img, top_left, bottom_right, (0, 255, 0), 2)
     keypoints = keypoints.reshape(-1, 3)
     for i, keypoint in enumerate(keypoints):
         if keypoint[0] + keypoint[1] != 0:
@@ -104,7 +109,19 @@ while True:
             )
 
     img = cv2.resize(img, None, fx=1 / 3, fy=1 / 3)
-    cv2.imshow("My Image", img)
+
+    cv2.putText(
+        img,
+        file_name,
+        org=(10, 30),
+        fontFace=cv2.FONT_HERSHEY_SIMPLEX,
+        fontScale=0.7,
+        color=(0, 255, 0),
+        thickness=2,
+        lineType=cv2.LINE_AA,
+    )
+
+    cv2.imshow("preview", img)
     # Wait for a key press (0 = wait indefinitely)
     key = cv2.waitKey()
     if key == ord("q"):
