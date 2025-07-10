@@ -1,0 +1,113 @@
+import argparse
+import cv2
+import os
+import json
+from collections import defaultdict
+import numpy as np
+from utils import get_skeleton
+
+parser = argparse.ArgumentParser()
+parser.add_argument("-i", "--root_dir", type=str, required=True)
+parser.add_argument("-s", "--set_name", type=str, default="train")
+
+args = parser.parse_args()
+root_dir = args.root_dir
+set_name = args.set_name
+dataset_file = open(
+    os.path.join(root_dir, "annotations", "instances_" + set_name + ".json")
+)
+dataset = json.load(dataset_file)
+
+num_keypoints = []
+for category in dataset["categories"]:
+    num_keypoints.append(category["num_keypoints"])
+
+image_ids = [img["id"] for img in dataset["images"]]
+
+annotations, categories, imgs = dict(), dict(), dict()
+imgToAnns = defaultdict(list)
+
+if "annotations" in dataset:
+    for ann in dataset["annotations"]:
+        imgToAnns[ann["image_id"]].append(ann)
+        annotations[ann["id"]] = ann
+
+if "images" in dataset:
+    for img in dataset["images"]:
+        imgs[img["id"]] = img
+
+if "categories" in dataset:
+    for cat in dataset["categories"]:
+        categories[cat["id"]] = cat
+
+keypoint_names = dataset["keypoint_names"]
+skeleton = []
+for component in dataset["skeleton"]:
+    skeleton.append([component["keypointA"], component["keypointB"]])
+
+
+# load annotations
+def load_annotations(image_index, dataset_annotations):
+    annotations_ids = [ann["id"] for ann in imgToAnns[image_ids[image_index]]]
+    annotations = np.zeros((0, 5))
+    keypoints = np.zeros((0, num_keypoints[0] * 3))
+
+    if len(annotations_ids) == 0:
+        annotations = np.zeros((1, 5))
+        annotations[0][4] = -1
+        keypoints = np.zeros((1, num_keypoints[0] * 3))
+    else:
+        coco_annotations = [dataset_annotations[id] for id in annotations_ids]
+        for idx, a in enumerate(coco_annotations):
+            annotation = np.zeros((1, 5))
+            annotation[0, :4] = a["bbox"]
+            for i in range(len(annotation)):
+                annotation[i] /= 1
+            annotation[0, 4] = a["category_id"] - 1
+            annotations = np.append(annotations, annotation, axis=0)
+            keypoint = np.array(a["keypoints"]).reshape(
+                1, num_keypoints[0] * 3
+            )
+            keypoints = np.append(keypoints, keypoint, axis=0)
+
+        # transform from [x, y, w, h] to [x1, y1, x2, y2]
+        annotations[:, 2] = annotations[:, 0] + annotations[:, 2]
+        annotations[:, 3] = annotations[:, 1] + annotations[:, 3]
+    return annotations, keypoints
+
+
+colors, line_idxs = get_skeleton(skeleton, keypoint_names)
+image_index = 0
+while True:
+    file_name = imgs[image_index]["file_name"]
+    path = os.path.join(root_dir, set_name, file_name)
+    img = cv2.imread(path)
+    _, keypoints = load_annotations(image_index, annotations)
+
+    keypoints = keypoints.reshape(-1, 3)
+    for i, keypoint in enumerate(keypoints):
+        if keypoint[0] + keypoint[1] != 0:
+            img = cv2.circle(
+                img, (int(keypoint[0]), int(keypoint[1])), 4, colors[i], 6
+            )
+    for line in line_idxs:
+        if (
+            keypoints[line[0]][0] + keypoints[line[0]][1] != 0
+            and keypoints[line[1]][0] + keypoints[line[1]][1] != 0
+        ):
+            cv2.line(
+                img,
+                (int(keypoints[line[0]][0]), int(keypoints[line[0]][1])),
+                (int(keypoints[line[1]][0]), int(keypoints[line[1]][1])),
+                colors[line[1]],
+                2,
+            )
+
+    img = cv2.resize(img, None, fx=1 / 3, fy=1 / 3)
+    cv2.imshow("My Image", img)
+    # Wait for a key press (0 = wait indefinitely)
+    key = cv2.waitKey()
+    if key == ord("q"):
+        cv2.destroyAllWindows()
+        break
+    image_index = image_index + 1
