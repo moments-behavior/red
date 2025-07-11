@@ -31,8 +31,8 @@ def convert_yolobbox_cv_rectangle(yolo_bbox, frame_width, frame_height):
 
 
 dataset_folder = config["path"]
-image_folder = os.path.join(dataset_folder, "images", "train")
-label_folder = os.path.join(dataset_folder, "labels", "train")
+image_folder = os.path.join(dataset_folder, "images", "{}".format(set_name))
+label_folder = os.path.join(dataset_folder, "labels", "{}".format(set_name))
 image_files = glob.glob(image_folder + "/*.jpg")
 image_files.sort()
 image_name = []
