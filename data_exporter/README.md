@@ -24,7 +24,7 @@ python red3d2jarvis.py -i [label_folder] -o [output_folder]
 For instance, 
 
 ```
-python red3d2jarvis.py -i /home/user/example_for_data_exporting/labeled_data/ -o /home/user/example_for_data_exporting/jarvis_test
+python red3d2jarvis.py -i /home/user/example_for_data_exporting/labeled_data/ -o /home/user/example_for_data_exporting/jarvis_test -m 40 -s 0 1 2 3
 ```
 To check the dataset,
 
