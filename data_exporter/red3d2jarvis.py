@@ -81,6 +81,7 @@ labels_frames = np.asarray(list(world_labels_filterd.keys()))
 total_num_labels = len(labels_frames)
 
 id_shuffled = np.arange(total_num_labels)
+rng = np.random.default_rng(seed=42)
 np.random.shuffle(id_shuffled)
 num_train = int(np.floor(total_num_labels * 0.9))
 print(
@@ -220,8 +221,6 @@ for img in val_image_frames:
 
 all_image_frames = np.asarray(all_image_frames)
 all_image_frames = np.sort(all_image_frames)
-
-
 all_jobs = []
 
 for camera in cameras:
@@ -233,7 +232,6 @@ for camera in cameras:
             output_folder,
             map_frame_to_mode,
             all_image_frames,
-            "jarvis",
         ]
     )
 

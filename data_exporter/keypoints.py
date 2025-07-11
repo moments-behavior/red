@@ -430,6 +430,12 @@ def rat4target():
     return keypoint_names, skeleton, 5
 
 
+def ball_only():
+    keypoint_names = ["Target"]
+    skeleton = []
+    return keypoint_names, skeleton, 1
+
+
 def load_skeleton_json_format_for_jarvis(json_file):
     with open(json_file, "r") as f:
         data = json.load(f)
@@ -456,4 +462,5 @@ skeleton_selector = {
     "Rat6": rat6,
     "Rat20": rat20,
     "Rat24": rat24,
+    "Target": ball_only,
 }

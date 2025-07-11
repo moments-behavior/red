@@ -26,6 +26,11 @@ For instance,
 ```
 python red3d2jarvis.py -i /home/user/example_for_data_exporting/labeled_data/ -o /home/user/example_for_data_exporting/jarvis_test
 ```
+To check the dataset,
+
+```
+python check_jarvis_dataset.py -i /nfs/exports/ratlv/exp_2025_03/remy_emilie/2025_04_04_14_26_47/jarvis_test -s train
+```
 
 If the skeleton is not in the `keypoints.py`, please add your skeleton manually. We will provide utils for generating from skeleton json file soon.  
 
@@ -69,5 +74,9 @@ python merge_jarvis_datasets.py -i ~/data/jarvis_merge -o ~/data/test_merge
 ## YOLO 
 ### Generate training data 
 ```
-python3 red3d2yolo.py -i /mnt/labelpc_mouse_vids/2024_12_21_17_54_58/ball_labeled_data/ -o /home/ro/Documents/red2yolo/
+python red3d2yolo.py -i [path/to/labels] -o output_dir -d 100
+```
+### To visualize a dataset
+```
+python check_yolo_dataset.py -y [path/to/config.yaml] -s [train or val]
 ```

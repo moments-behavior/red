@@ -207,83 +207,61 @@ def process_one_session(
 
 
 def process_one_session_ball(
-    trial_name,
     load_file_path,
     num_keypoints,
-    annotation_file,
     all_image_frames,
     cameras,
-    d_ball,
+    bbox_size,
     label_id,
-    img_width,
-    img_height,
+    image_width,
+    image_height,
     select_keypoints_idx=[],
 ):
-
     annotations = {}
     for which_cam in cameras:
-
-        # print(select_keypoints_idx)
-        labels = csv_reader_rats(
-            load_file_path
-            + "/{}/{}_{}.csv".format(which_cam, which_cam, annotation_file),
+        img_width = image_width[which_cam]
+        img_height = image_height[which_cam]
+        labels = csv_reader_red2d(
+            load_file_path + "/{}.csv".format(which_cam),
             num_keypoints,
-            three_d=False,
+            img_height,
             select_keypoints_idx=select_keypoints_idx,
         )
 
-        file_dir = trial_name + "/{}/".format(which_cam)
         all_2d_labeled_frames = labels.keys()
-
         annotation_entry = []
         file_name_annotation = []
         file_name_image = []
+        frame_per_cam = []
 
         for frame_num in all_image_frames:
-            # each frame
+            is_any_nan = np.any(np.isnan(labels[frame_num]))
+            if not is_any_nan:
+                if frame_num in all_2d_labeled_frames:
+                    bbox = []
+                    x_min = (labels[frame_num][:, 0].min()) / img_width
+                    x_size = bbox_size / img_width
+                    y_min = labels[frame_num][:, 1].min() / img_height
+                    y_size = bbox_size / img_height
+                    bbox = [f"{label_id} {x_min} {y_min} {x_size} {y_size}"]
 
-            bbox_size = d_ball
+                    # print(bbox)
+                    annotation_entry.extend(bbox)
+                    file_name_annotation.extend(
+                        [f"Frame_{frame_num}_{which_cam}.txt"]
+                    )
+                    file_name_image.extend(
+                        [f"Frame_{frame_num}_{which_cam}.jpg"]
+                    )
+                    frame_per_cam.extend([frame_num])
 
-            if frame_num in all_2d_labeled_frames:
-                bbox = []
-                x_min = (labels[frame_num][:, 0].min()) / img_width
-                x_size = bbox_size / img_width
-                y_min = labels[frame_num][:, 1].min() / img_height
-                y_size = bbox_size / img_height
-                bbox = [f"{label_id} {x_min} {y_min} {x_size} {y_size}"]
-
-                # print(bbox)
-
-                annotation_entry.extend(bbox)
-                file_name_annotation.extend([f"Frame_{frame_num}.txt"])
-                file_name_image.extend([f"Frame_{frame_num}.jpg"])
-
-                # file_name_image.extend("Frame_" + str(int(frame_num)) + '.jpg')
-
-        annotations[which_cam, "entry"] = annotation_entry
-        annotations[which_cam, "fname_annot"] = file_name_annotation
-        annotations[which_cam, "fname_img"] = file_name_image
-
+        annotations[which_cam] = {
+            "frame": frame_per_cam,
+            "entry": annotation_entry,
+            "fname_annot": file_name_annotation,
+            "fname_img": file_name_image,
+        }
     return annotations
-
-
-def create_yolo_annotation_files(
-    output_folder, trial_name, annotations, cameras, dset_mode
-):
-
-    for which_cam in cameras:
-        dir_labels = os.path.join(
-            output_folder, trial_name, which_cam, dset_mode, "labels"
-        )
-        os.makedirs(dir_labels, exist_ok=True)
-        for i in range(len(annotations[which_cam, "entry"])):
-
-            # print(annotations[which_cam,"fname_img"][i])
-            fname_label = os.path.join(
-                dir_labels, annotations[which_cam, "fname_annot"][i]
-            )
-            with open(fname_label, "w") as f:
-                f.write(annotations[which_cam, "entry"][i])
 
 
 def generate_framesets(dataset_name, set_of_frames, framesets):
@@ -348,64 +326,47 @@ def multiprocess_save_jpegs_opencv(input_args):
         save_folder,
         map_frame_to_mode,
         all_image_frames,
-        export_mode,
     ) = input_args
 
     print("Saving jpeg for {} ...".format(cam_name))
     file_dir = trial_name + "/{}/".format(cam_name)
 
     # make directories for images
-    if export_mode == "jarvis":
-        dir_name = os.path.join(save_folder, "train", file_dir)
-        os.makedirs(dir_name, exist_ok=True)
-        dir_name = os.path.join(save_folder, "val", file_dir)
-        os.makedirs(dir_name, exist_ok=True)
-    elif export_mode == "yolo":
-        dir_name = os.path.join(save_folder, "train", "images")
-        os.makedirs(dir_name, exist_ok=True)
-        dir_name = os.path.join(save_folder, "valid", "images")
-        os.makedirs(dir_name, exist_ok=True)
+    dir_name = os.path.join(save_folder, "train", file_dir)
+    os.makedirs(dir_name, exist_ok=True)
+    dir_name = os.path.join(save_folder, "val", file_dir)
+    os.makedirs(dir_name, exist_ok=True)
 
     print(all_image_frames)
-    # exit()
 
     video_file = os.path.join(video_folder_name, "{}.mp4".format(cam_name))
     cap = cv.VideoCapture(video_file)
-    cap.set(cv.CAP_PROP_POS_FRAMES, all_image_frames[0] - 1)
+    cap.set(cv.CAP_PROP_POS_FRAMES, all_image_frames[0])
+    frame_num = all_image_frames[0]
 
-    start_frame = np.min(all_image_frames) - 1
-    end_frame = np.max(all_image_frames)
-
-    frame_num = start_frame
-
-    while frame_num >= start_frame and frame_num <= end_frame:
+    while (
+        frame_num >= all_image_frames[0] and frame_num <= all_image_frames[-1]
+    ):
         ret, frame = cap.read()
-        if ret == False:
+        if not ret:
             print("Missing fame: {}".format(frame_num))
+            cap.release()
+            break
         else:
-            frame_num = frame_num + 1
             if frame_num in all_image_frames:
                 set_mode = map_frame_to_mode[frame_num]
-                if export_mode == "jarvis":
-                    dir_name = os.path.join(
-                        save_folder, "{}/".format(set_mode), file_dir
-                    )
-                    frame_filename = (
-                        dir_name + "Frame_" + str(int(frame_num)) + ".jpg"
-                    )
-                elif export_mode == "yolo":
-                    frame_filename = os.path.join(
-                        save_folder,
-                        set_mode,
-                        "images",
-                        f"Frame_{frame_num}.jpg",
-                    )
-                    # frame_filename = dir_name + "Frame_" + str(int(frame_num)) + '.jpg'
-
+                dir_name = os.path.join(
+                    save_folder, "{}/".format(set_mode), file_dir
+                )
+                frame_filename = (
+                    dir_name + "Frame_" + str(int(frame_num)) + ".jpg"
+                )
                 cv.imwrite(frame_filename, frame)
+            frame_num = frame_num + 1
 
         if frame_num % 1000 == 0:
             print(f"Processed frame: {frame_num} for {cam_name}")
+    cap.release()
 
 
 def load_jarvis_3d_csv_rats(file_name, num_keypoints):

@@ -9,51 +9,89 @@ import random
 from multiprocessing import Pool
 import platform
 from multiprocessing import get_context
-
-
-np.random.seed(42)
+import numpy as np
+import re
 
 parser = argparse.ArgumentParser()
-parser.add_argument('-i', '--label_folder', type=str, required=True)
-parser.add_argument('-m', '--mode', type=str, default='point2bbox')
-parser.add_argument('-o', '--output_folder', type=str, required=True)
-
+parser.add_argument("-i", "--label_folder", type=str, required=True)
+parser.add_argument("-o", "--output_folder", type=str, required=True)
+parser.add_argument(
+    "-s",
+    "--select_indices",
+    nargs="+",
+    type=int,
+    help="List of numbers, for instance: -s 0 1 2 3",
+    default=[],
+)
+parser.add_argument(
+    "-d",
+    "--d_ball",
+    type=float,
+    help="Bounding box size for the ball.",
+)
 
 args = parser.parse_args()
 label_folder = args.label_folder
 label_folder = os.path.normpath(label_folder)
-det_mode = args.mode
 output_folder = args.output_folder
+select_indices = args.select_indices
+d_ball = args.d_ball
 
+datetime_pattern = re.compile(r"^\d{4}_\d{2}_\d{2}_\d{2}_\d{2}_\d{2}$")
 
-cameras = get_all_cams_in_labeled_folder(label_folder)
+matching_folders = [
+    name
+    for name in os.listdir(label_folder)
+    if os.path.isdir(os.path.join(label_folder, name))
+    and datetime_pattern.match(name)
+]
+matching_folders.sort()
+select_folder = matching_folders[-1]
+print("Select most recent label: {}".format(select_folder))
 
+select_folder_path = os.path.join(label_folder, select_folder)
+cameras = get_all_cams_in_labeled_folder(select_folder_path)
 
-# Save annotations
-world_point_folder = label_folder + "/worldKeyPoints"
-all_files = glob.glob(world_point_folder + "/*")
-all_files.sort()
-select_most_recent_labels = all_files[-1]
-print("Select most recent label: {}".format(select_most_recent_labels))
+# get skeleton name
+selected_kp_3d = os.path.join(select_folder_path, "keypoints3d.csv")
+skeleton = get_skeleton_name(selected_kp_3d)
+print("Skeleton:", skeleton)
 
-selected_annotation = select_most_recent_labels.split("/")[-1][10:]
-selected_annotation = selected_annotation.split(".")[0]
-world_labels = csv_reader_rats(select_most_recent_labels, 1, three_d=True)
+if skeleton.endswith("json"):
+    keypoints_names, skeleton_names, num_keypoints = (
+        load_skeleton_json_format_for_jarvis(skeleton)
+    )
+else:
+    keypoints_names, skeleton_names, num_keypoints = skeleton_selector[
+        skeleton
+    ]()
+
+world_labels = csv_reader_red3d(
+    selected_kp_3d,
+    num_keypoints,
+    select_keypoints_idx=select_indices,
+)
 
 # filter out invalid lables
 world_labels_filterd = {}
 for name, value in world_labels.items():
-    if not np.any(value == 1E7):
+    if not np.any(value == 1e7):
+        # if all values are valid
         world_labels_filterd[name] = value
 
 labels_frames = np.asarray(list(world_labels_filterd.keys()))
 total_num_labels = len(labels_frames)
 
 id_shuffled = np.arange(total_num_labels)
-np.random.shuffle(id_shuffled)
+rng = np.random.default_rng(seed=42)
+rng.shuffle(id_shuffled)
+
 num_train = int(np.floor(total_num_labels * 0.9))
-print("Train set: {}, validation set: {}.".format(
-    num_train, total_num_labels - num_train))
+print(
+    "Train set: {}, validation set: {}.".format(
+        num_train, total_num_labels - num_train
+    )
+)
 train_ids = id_shuffled[:num_train]
 train_ids = np.sort(train_ids)
 val_ids = id_shuffled[num_train:]
@@ -62,85 +100,103 @@ val_ids = np.sort(val_ids)
 train_image_frames = labels_frames[train_ids]
 val_image_frames = labels_frames[val_ids]
 
-
-trial_name = selected_annotation
-
-num_keypoints = 1
-id_ball = 1
-d_ball = 100
-
-
-# export annotations
-annotations = process_one_session_ball(trial_name, label_folder, num_keypoints,
-                                       selected_annotation, train_image_frames, cameras, d_ball, id_ball, 3208, 2200)
-create_yolo_annotation_files(
-    output_folder, trial_name, annotations, cameras, "train")
-
-annotations = process_one_session_ball(trial_name, label_folder, num_keypoints,
-                                       selected_annotation, val_image_frames, cameras, d_ball, id_ball, 3208, 2200)
-create_yolo_annotation_files(
-    output_folder, trial_name, annotations, cameras, "valid")
-
-# save calibration files
 calibration_folder = os.path.join(
-    "/".join(label_folder.split("/")[:-1]), "calibration")
+    "/".join(label_folder.split("/")[:-1]), "calibration"
+)
 
-save_calib_folder = os.path.join(output_folder, trial_name, "calib_params")
-os.makedirs(save_calib_folder, exist_ok=True)
-
+image_width = {}
+image_height = {}
 for cam in cameras:
     input_file_name = calibration_folder + "/{}.yaml".format(cam)
     fs = cv.FileStorage(input_file_name, cv.FILE_STORAGE_READ)
-    intrinsicMatrix = fs.getNode("camera_matrix").mat()
-    intrinsicMatrix = intrinsicMatrix.T
-    distortionCoefficients = fs.getNode("distortion_coefficients").mat()
-    distortionCoefficients = distortionCoefficients.T
-    R = fs.getNode("rc_ext").mat()
-    R = R.T
-    T = fs.getNode("tc_ext").mat()
+    if fs.isOpened():
+        image_width[cam] = int(fs.getNode("image_width").real())
+        image_height[cam] = int(fs.getNode("image_height").real())
 
-    output_filename = save_calib_folder + "/{}.yaml".format(cam)
-    s = cv.FileStorage(output_filename, cv.FileStorage_WRITE)
-    s.write('intrinsicMatrix', intrinsicMatrix)
-    s.write('distortionCoefficients', distortionCoefficients)
-    s.write('R', R)
-    s.write('T', T)
-    s.release()
-    print(output_filename)
+annotations_train = process_one_session_ball(
+    select_folder_path,
+    num_keypoints,
+    train_image_frames,
+    cameras,
+    d_ball,
+    0,
+    image_width,
+    image_height,
+    select_indices,
+)
+
+annotations_val = process_one_session_ball(
+    select_folder_path,
+    num_keypoints,
+    val_image_frames,
+    cameras,
+    d_ball,
+    0,
+    image_width,
+    image_height,
+    select_indices,
+)
+
+
+def save_yolo_data_opencv(output_folder, annotations, dset_mode, video_folder):
+    for which_cam in annotations:
+        dir_labels = os.path.join(
+            output_folder,
+            "labels",
+            dset_mode,
+        )
+        dir_images = os.path.join(output_folder, "images", dset_mode)
+        os.makedirs(dir_labels, exist_ok=True)
+        os.makedirs(dir_images, exist_ok=True)
+        for i in range(len(annotations[which_cam]["entry"])):
+            fname_label = os.path.join(
+                dir_labels,
+                annotations[which_cam]["fname_annot"][i],
+            )
+            with open(fname_label, "w") as f:
+                f.write(annotations[which_cam]["entry"][i])
+        print("Saving jpeg for {} ...".format(which_cam))
+        video_file = os.path.join(video_folder, "{}.mp4".format(which_cam))
+        cap = cv.VideoCapture(video_file)
+        image_frames = annotations[which_cam]["frame"]
+        cap.set(cv.CAP_PROP_POS_FRAMES, image_frames[0])
+
+        frame_num = image_frames[0]
+        while frame_num >= image_frames[0] and frame_num <= image_frames[-1]:
+            ret, frame = cap.read()
+            if not ret:
+                print("Missing fame: {}".format(frame_num))
+                cap.release()
+                break
+            else:
+                if frame_num in image_frames:
+                    index = image_frames.index(frame_num)
+                    fname_image = os.path.join(
+                        dir_images, annotations[which_cam]["fname_img"][index]
+                    )
+                    cv.imwrite(fname_image, frame)
+                frame_num = frame_num + 1
+        cap.release()
+
 
 # save jpeg images
 video_folder = "/".join(label_folder.split("/")[:-1])
 
-map_frame_to_mode = {}
-all_image_frames = []
+final_output_folder = os.path.join(output_folder, select_folder)
+save_yolo_data_opencv(
+    final_output_folder, annotations_train, "train", video_folder
+)
+save_yolo_data_opencv(
+    final_output_folder, annotations_val, "val", video_folder
+)
 
-for img in train_image_frames:
-    map_frame_to_mode[img] = 'train'
-    all_image_frames.append(img)
+# write ymal config file
+config = {
+    "path": final_output_folder,
+    "train": "images/train",
+    "val": "images/val",
+    "names": {0: "ball"},
+}
 
-for img in val_image_frames:
-    map_frame_to_mode[img] = 'valid'
-    all_image_frames.append(img)
-
-all_image_frames = np.asarray(all_image_frames)
-all_image_frames = np.sort(all_image_frames)
-
-
-all_jobs = []
-
-for camera in cameras:
-    save_folder = os.path.join(output_folder, trial_name, camera)
-    all_jobs.append([trial_name, camera, video_folder, save_folder,
-                    map_frame_to_mode, all_image_frames, "yolo"])
-
-num_jobs = len(all_jobs)
-# print(all_jobs[0])
-# exit()
-
-if platform.system() == 'Darwin':  # fix for macOS
-    print("threadpooling for macos")
-    with get_context("fork").Pool(num_jobs) as p:
-        p.map(multiprocess_save_jpegs, all_jobs)
-else:
-    with Pool(num_jobs) as p:
-        p.map(multiprocess_save_jpegs, all_jobs)
+with open(output_folder + "/config_{}.yaml".format(select_folder), "w") as f:
+    yaml.dump(config, f, default_flow_style=False)
