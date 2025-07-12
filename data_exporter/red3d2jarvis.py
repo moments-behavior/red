@@ -182,6 +182,7 @@ print("Prepared dataset at {}.".format(output_folder))
 save_calib_folder = os.path.join(output_folder, "calib_params", trial_name)
 os.makedirs(save_calib_folder, exist_ok=True)
 
+# Jarvis uses crazy transpose for some reason
 for cam in cameras:
     input_file_name = calibration_folder + "/{}.yaml".format(cam)
     fs = cv.FileStorage(input_file_name, cv.FILE_STORAGE_READ)

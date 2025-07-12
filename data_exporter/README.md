@@ -3,11 +3,12 @@
 Create conda python virtual environment
 
 ```
-conda create -n red_exporter python=3.9
+conda create -n red_exporter python=3.10
 conda activate red_exporter
 conda install numpy
-conda install -c menpo opencv
-conda install pyyaml
+conda install -c conda-forge opencv
+pip install pyyaml
+pip install PyNvVideoCodec
 ```
 ## Jarvis
 ### Generate training data 
@@ -18,18 +19,13 @@ cd data_exporter
 ```
 
 ```
-python red3d2jarvis.py -i [label_folder] -o [output_folder]
+python red3d2jarvis.py -i label_folder -o output_folder [-s subset of keypoints index] [-m margin for bounding box estimate]
 ```
 
-For instance, 
-
-```
-python red3d2jarvis.py -i /home/user/example_for_data_exporting/labeled_data/ -o /home/user/example_for_data_exporting/jarvis_test -m 40 -s 0 1 2 3
-```
 To check the dataset,
 
 ```
-python check_jarvis_dataset.py -i /nfs/exports/ratlv/exp_2025_03/remy_emilie/2025_04_04_14_26_47/jarvis_test -s train
+python check_jarvis_dataset.py -i /nfs/exports/ratlv/exp_2025_03/remy_emilie/2025_04_04_14_26_47/jarvis_test [-s train/valid]
 ```
 
 If the skeleton is not in the `keypoints.py`, please add your skeleton manually. We will provide utils for generating from skeleton json file soon.  
@@ -74,9 +70,11 @@ python merge_jarvis_datasets.py -i ~/data/jarvis_merge -o ~/data/test_merge
 ## YOLO 
 ### Generate training data 
 ```
-python red3d2yolo.py -i [path/to/labels] -o output_dir -d 100
+python red3d2yolo.py -i path/to/labels -o output_dir -d 40
 ```
+d is the diameter of the ball in the same unit of calibration, for instance, mm. The scrip automatically scale the bounding box size based on the depth to the camera. 
+
 ### To visualize a dataset
 ```
-python check_yolo_dataset.py -y [path/to/config.yaml] -s [train or val]
+python check_yolo_dataset.py -y path/to/config.yaml [-s train/val]
 ```

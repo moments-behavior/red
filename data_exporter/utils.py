@@ -211,7 +211,7 @@ def process_one_session_ball(
     num_keypoints,
     all_image_frames,
     cameras,
-    bbox_size,
+    d_ball_pxs,
     label_id,
     image_width,
     image_height,
@@ -233,12 +233,12 @@ def process_one_session_ball(
         file_name_annotation = []
         file_name_image = []
         frame_per_cam = []
-
         for frame_num in all_image_frames:
             is_any_nan = np.any(np.isnan(labels[frame_num]))
             if not is_any_nan:
                 if frame_num in all_2d_labeled_frames:
                     bbox = []
+                    bbox_size = float(d_ball_pxs[which_cam][frame_num])
                     x_min = (labels[frame_num][:, 0].min()) / img_width
                     x_size = bbox_size / img_width
                     y_min = labels[frame_num][:, 1].min() / img_height
