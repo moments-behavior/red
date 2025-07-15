@@ -70,9 +70,9 @@ static void gui_plot_keypoints(KeyPoints *keypoints, SkeletonContext *skeleton,
 
                     std::ostringstream oss;
                     oss << std::fixed << std::setprecision(2);
-                    oss << "(" << keypoints->keypoints3d->x << ", "
-                        << keypoints->keypoints3d->y << ", "
-                        << keypoints->keypoints3d->z << ")";
+                    oss << "(" << keypoints->keypoints3d[node].x << ", "
+                        << keypoints->keypoints3d[node].y << ", "
+                        << keypoints->keypoints3d[node].z << ")";
                     std::string label = oss.str();
                     ImVec2 mouse_pos = ImGui::GetMousePos();
                     ImVec2 textPos = ImVec2(mouse_pos.x + 10, mouse_pos.y + 10);
@@ -767,6 +767,8 @@ int find_most_recent_labels(std::string root_dir, std::string &most_recent_file,
     }
     sort(filenames.begin(), filenames.end());
     most_recent_file = filenames.back();
+    std::cout << most_recent_file << std::endl;
+    return 0;
 }
 
 int load_keypoints(std::string keypoints_folder,

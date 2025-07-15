@@ -1088,8 +1088,9 @@ int main(int, char **) {
 
                     } else {
                         std::string most_recent_folder;
-                        if (find_most_recent_labels(
-                                root_dir, most_recent_folder, error_message)) {
+                        if (find_most_recent_labels(keypoints_root_folder,
+                                                    most_recent_folder,
+                                                    error_message)) {
                             show_error = true;
                         } else {
                             if (load_keypoints(most_recent_folder,
