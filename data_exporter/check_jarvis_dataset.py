@@ -78,7 +78,7 @@ def load_annotations(image_index, dataset_annotations):
 
 colors, line_idxs = get_skeleton(skeleton, keypoint_names)
 image_index = 0
-while True:
+for image_index in range(len(imgs)):
     file_name = imgs[image_index]["file_name"]
     path = os.path.join(root_dir, set_name, file_name)
     img = cv2.imread(path)
@@ -127,4 +127,3 @@ while True:
     if key == ord("q"):
         cv2.destroyAllWindows()
         break
-    image_index = image_index + 1
