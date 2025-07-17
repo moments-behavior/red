@@ -256,122 +256,121 @@ int64_t FFmpegDemuxer::FindClosestKeyFrameFNI(int64_t frame_num,
     return key_frame_num;
 }
 
-// int64_t FFmpegDemuxer::FindKeyFrameInterval()
-// {
-//     int ret = 0;
-//     bool eof = false, gotVideo = false;
-//     int64_t cnt = 0;
-//     int keyframe_encounter = 0;
-
-//     while (!eof) {
-//         ret = av_read_frame(fmtc, &pktSrc);
-//         if (ret < 0) {
-//             if (ret == AVERROR_EOF) {
-//                 eof = true;
-//                 break;
-//             } else {
-//                 LOG(FATAL) << "Error: av_read_frame failed with " <<
-//                 AVERROR(ret);
-//             }
-//             break;
-//         }
-
-//         if (pktSrc.stream_index == videoStream) {
-//             if (pktSrc.flags & AV_PKT_FLAG_KEY) {
-//                 keyframe_encounter++;
-//             }
-//             ++cnt;
-//         }
-
-//         auto pCopyPacket = av_packet_clone(&pktSrc);
-//         av_packet_free(&pCopyPacket);
-
-//         if (keyframe_encounter == 2) {
-//             break;
-//         }
-//     }
-//     std::cout << "identified seek interval: "<< cnt-1 << std::endl;
-//     return cnt-1;
-// }
-
 int64_t FFmpegDemuxer::FindKeyFrameInterval() {
     int ret = 0;
-    int64_t decoded_frame_count = 0;
-    int keyframe_count = 0;
-    bool eof = false;
-
-    AVCodecParameters *codecpar = fmtc->streams[videoStream]->codecpar;
-    const AVCodec *decoder = avcodec_find_decoder(codecpar->codec_id);
-    if (!decoder) {
-        LOG(FATAL) << "Could not find decoder";
-    }
-
-    AVCodecContext *codec_ctx = avcodec_alloc_context3(decoder);
-    if (!codec_ctx) {
-        LOG(FATAL) << "Could not allocate codec context";
-    }
-
-    if ((ret = avcodec_parameters_to_context(codec_ctx, codecpar)) < 0) {
-        LOG(FATAL) << "Failed to copy codec params: " << AVERROR(ret);
-    }
-
-    if ((ret = avcodec_open2(codec_ctx, decoder, nullptr)) < 0) {
-        LOG(FATAL) << "Failed to open decoder: " << AVERROR(ret);
-    }
-
-    AVPacket *pkt = av_packet_alloc();
-    AVFrame *frame = av_frame_alloc();
+    bool eof = false, gotVideo = false;
+    int64_t cnt = 0;
+    int keyframe_encounter = 0;
 
     while (!eof) {
-        ret = av_read_frame(fmtc, pkt);
+        ret = av_read_frame(fmtc, &pktSrc);
         if (ret < 0) {
             if (ret == AVERROR_EOF) {
                 eof = true;
                 break;
             } else {
-                LOG(FATAL) << "Error reading packet: " << AVERROR(ret);
+                LOG(FATAL) << "Error: av_read_frame failed with "
+                           << AVERROR(ret);
             }
+            break;
         }
 
-        if (pkt->stream_index == videoStream) {
-            ret = avcodec_send_packet(codec_ctx, pkt);
-            if (ret < 0 && ret != AVERROR(EAGAIN)) {
-                LOG(FATAL) << "Error sending packet: " << AVERROR(ret);
+        if (pktSrc.stream_index == videoStream) {
+            if (pktSrc.flags & AV_PKT_FLAG_KEY) {
+                keyframe_encounter++;
             }
-
-            while (ret >= 0) {
-                ret = avcodec_receive_frame(codec_ctx, frame);
-                if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
-                    break;
-                else if (ret < 0) {
-                    LOG(FATAL) << "Error receiving frame: " << AVERROR(ret);
-                }
-
-                decoded_frame_count++;
-
-                if (frame->key_frame) {
-                    keyframe_count++;
-                    if (keyframe_count == 2) {
-                        goto done;
-                    }
-                }
-
-                av_frame_unref(frame);
-            }
+            ++cnt;
         }
 
-        av_packet_unref(pkt);
+        auto pCopyPacket = av_packet_clone(&pktSrc);
+        av_packet_free(&pCopyPacket);
+
+        if (keyframe_encounter == 2) {
+            break;
+        }
     }
-
-done:
-    av_frame_free(&frame);
-    av_packet_free(&pkt);
-    avcodec_free_context(&codec_ctx);
-
-    std::cout << "Identified GOP interval (decoded frames): "
-              << decoded_frame_count - 1 << std::endl;
-    return decoded_frame_count - 1;
+    std::cout << "identified seek interval: " << cnt - 1 << std::endl;
+    return cnt - 1;
 }
+
+// int64_t FFmpegDemuxer::FindKeyFrameInterval() {
+//     int ret = 0;
+//     int64_t decoded_frame_count = 0;
+//     int keyframe_count = 0;
+//     bool eof = false;
+
+//     AVCodecParameters *codecpar = fmtc->streams[videoStream]->codecpar;
+//     const AVCodec *decoder = avcodec_find_decoder(codecpar->codec_id);
+//     if (!decoder) {
+//         LOG(FATAL) << "Could not find decoder";
+//     }
+
+//     AVCodecContext *codec_ctx = avcodec_alloc_context3(decoder);
+//     if (!codec_ctx) {
+//         LOG(FATAL) << "Could not allocate codec context";
+//     }
+
+//     if ((ret = avcodec_parameters_to_context(codec_ctx, codecpar)) < 0) {
+//         LOG(FATAL) << "Failed to copy codec params: " << AVERROR(ret);
+//     }
+
+//     if ((ret = avcodec_open2(codec_ctx, decoder, nullptr)) < 0) {
+//         LOG(FATAL) << "Failed to open decoder: " << AVERROR(ret);
+//     }
+
+//     AVPacket *pkt = av_packet_alloc();
+//     AVFrame *frame = av_frame_alloc();
+
+//     while (!eof) {
+//         ret = av_read_frame(fmtc, pkt);
+//         if (ret < 0) {
+//             if (ret == AVERROR_EOF) {
+//                 eof = true;
+//                 break;
+//             } else {
+//                 LOG(FATAL) << "Error reading packet: " << AVERROR(ret);
+//             }
+//         }
+
+//         if (pkt->stream_index == videoStream) {
+//             ret = avcodec_send_packet(codec_ctx, pkt);
+//             if (ret < 0 && ret != AVERROR(EAGAIN)) {
+//                 LOG(FATAL) << "Error sending packet: " << AVERROR(ret);
+//             }
+
+//             while (ret >= 0) {
+//                 ret = avcodec_receive_frame(codec_ctx, frame);
+//                 if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
+//                     break;
+//                 else if (ret < 0) {
+//                     LOG(FATAL) << "Error receiving frame: " << AVERROR(ret);
+//                 }
+
+//                 decoded_frame_count++;
+
+//                 if (frame->key_frame) {
+//                     keyframe_count++;
+//                     if (keyframe_count == 2) {
+//                         goto done;
+//                     }
+//                 }
+
+//                 av_frame_unref(frame);
+//             }
+//         }
+
+//         av_packet_unref(pkt);
+//     }
+
+// done:
+//     av_frame_free(&frame);
+//     av_packet_free(&pkt);
+//     avcodec_free_context(&codec_ctx);
+
+//     std::cout << "Identified GOP interval (decoded frames): "
+//               << decoded_frame_count - 1 << std::endl;
+//     return decoded_frame_count - 1;
+// }
 
 bool FFmpegDemuxer::Seek(SeekContext &seekCtx, uint8_t *&pVideo,
                          size_t &rVideoBytes, PacketData &pktData,

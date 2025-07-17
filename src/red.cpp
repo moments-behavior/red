@@ -454,9 +454,9 @@ int main(int, char **) {
                         skeleton_chosen = true;
                     }
                 }
-                // close
-                ImGuiFileDialog::Instance()->Close();
             }
+            // close
+            ImGuiFileDialog::Instance()->Close();
         }
 
         if (dc_context->decoding_flag && play_video) {
