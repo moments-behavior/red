@@ -369,7 +369,7 @@ def multiprocess_save_jpegs_opencv(input_args):
     cap.release()
 
 
-def load_jarvis_3d_csv_rats(file_name, num_keypoints):
+def load_jarvis_3d_csv_rats(file_name):
     labels = {}
     with open(file_name) as csv_file:
         csv_reader = csv.reader(csv_file, delimiter=",")
@@ -379,7 +379,7 @@ def load_jarvis_3d_csv_rats(file_name, num_keypoints):
                 if "NaN" not in row:
                     keypoints = [float(x) for x in row]
                     keypoints = np.asarray(keypoints)
-                    keypoints = keypoints.reshape([num_keypoints, 4])
+                    keypoints = keypoints.reshape([-1, 4])
                     labels[line_count - 2] = keypoints
             line_count += 1
     return labels
