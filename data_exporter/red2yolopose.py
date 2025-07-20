@@ -151,7 +151,7 @@ def create_yolo_rat_line(rat_keypoints, frame_width, frame_height, margin):
 
     line = "0 {} {} {} {}".format(rat_center_x, rat_center_y, rat_w, rat_h)
     for i in range(num_rat_keypoints):
-        line += " {} {} {}".format(rat_x[i], rat_y[i], 1)
+        line += " {} {} {}".format(rat_x[i], rat_y[i], 2)
     return line
 
 
@@ -165,7 +165,7 @@ def create_yolo_ball_line(
     line = "1 {} {} {} {}".format(ball_center_x, ball_center_y, ball_w, ball_h)
     for i in range(num_zero_padding):
         if i == 0:
-            line += " {} {} {}".format(ball_center_x, ball_center_y, 1)
+            line += " {} {} {}".format(ball_center_x, ball_center_y, 2)
         else:
             line += " 0 0 0"
     return line
