@@ -66,11 +66,14 @@ else:
         skeleton
     ]()
 
-world_labels = csv_reader_red3d(
-    selected_kp_3d,
-    num_keypoints,
-    select_keypoints_idx=select_indices,
-)
+world_labels_all = csv_reader_red3d(selected_kp_3d)
+
+if not select_indices:
+    world_labels = world_labels_all
+else:
+    world_labels = {}
+    for key, value in world_labels_all.items():
+        world_labels[key] = value[select_indices]
 
 # filter out invalid lables
 world_labels_filter = {}

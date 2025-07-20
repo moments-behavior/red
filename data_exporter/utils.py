@@ -15,9 +15,7 @@ def get_skeleton_name(file_name):
 
 def csv_reader_red2d(
     file_name,
-    num_keypoints,
     img_height,
-    select_keypoints_idx=[],
 ):
     labels = {}
     with open(file_name) as csv_file:
@@ -30,22 +28,16 @@ def csv_reader_red2d(
             else:
                 keypoints = [float(x) for x in row[1:]]
                 keypoints = np.asarray(keypoints)
-                keypoints = keypoints.reshape([num_keypoints, 3])
+                keypoints = keypoints.reshape([-1, 3])
                 keypoints = keypoints[:, 1:]
                 keypoints[keypoints == 1e7] = np.nan
                 keypoints[:, 1] = img_height - keypoints[:, 1]
-                if len(select_keypoints_idx) > 0:
-                    keypoints = keypoints[select_keypoints_idx, :]
                 labels[int(row[0])] = keypoints
                 line_count += 1
     return labels
 
 
-def csv_reader_red3d(
-    file_name,
-    num_keypoints,
-    select_keypoints_idx=[],
-):
+def csv_reader_red3d(file_name):
     labels = {}
     with open(file_name) as csv_file:
         csv_reader = csv.reader(csv_file, delimiter=",")
@@ -57,11 +49,9 @@ def csv_reader_red3d(
             else:
                 keypoints = [float(x) for x in row[1:]]
                 keypoints = np.asarray(keypoints)
-                keypoints = keypoints.reshape([num_keypoints, 4])
+                keypoints = keypoints.reshape([-1, 4])
                 keypoints = keypoints[:, 1:]
                 keypoints[keypoints == 1e7] = np.nan
-                if len(select_keypoints_idx) > 0:
-                    keypoints = keypoints[select_keypoints_idx, :]
                 labels[int(row[0])] = keypoints
                 line_count += 1
     return labels
@@ -112,12 +102,17 @@ def process_one_session(
     annotation_frame_id = 0
     image_frame_id = 0
     for which_cam in cameras:
-        labels = csv_reader_red2d(
+        labels_all = csv_reader_red2d(
             load_file_path + "/{}.csv".format(which_cam),
-            num_keypoints,
             img_height=image_height[which_cam],
-            select_keypoints_idx=select_keypoints_idx,
         )
+
+        if not select_keypoints_idx:
+            labels = labels_all
+        else:
+            labels = {}
+            for key, value in labels_all.items():
+                labels[key] = value[select_keypoints_idx]
 
         file_dir = trial_name + "/{}/".format(which_cam)
         all_2d_labeled_frames = labels.keys()
@@ -221,12 +216,17 @@ def process_one_session_ball(
     for which_cam in cameras:
         img_width = image_width[which_cam]
         img_height = image_height[which_cam]
-        labels = csv_reader_red2d(
+        labels_all = csv_reader_red2d(
             load_file_path + "/{}.csv".format(which_cam),
-            num_keypoints,
             img_height,
-            select_keypoints_idx=select_keypoints_idx,
         )
+
+        if not select_keypoints_idx:
+            labels = labels_all
+        else:
+            labels = {}
+            for key, value in labels_all.items():
+                labels[key] = value[select_keypoints_idx]
 
         all_2d_labeled_frames = labels.keys()
         annotation_entry = []
