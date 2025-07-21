@@ -2,6 +2,8 @@
 #include <stdlib.h>
 #include <chrono>
 #include <ctime>
+#include <filesystem>
+#include <algorithm>
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
@@ -14,12 +16,244 @@
 #include "skeleton.h"
 #include "gui.h"
 #include "utils.h"
+#include <torch/torch.h>
+#include <torch/script.h>
 
 #if defined(_MSC_VER) && (_MSC_VER >= 1900) && !defined(IMGUI_DISABLE_WIN32_FUNCTIONS)
 #pragma comment(lib, "legacy_stdio_definitions")
 #endif
 
 simplelogger::Logger *logger = simplelogger::LoggerFactory::CreateConsoleLogger();
+
+struct YoloPrediction {
+    float x, y, w, h;
+    float confidence;
+    int class_id;
+};
+
+struct YoloBBox {
+    double x_min, y_min, x_max, y_max;
+    float confidence;
+    int class_id;
+    bool is_valid;
+    
+    YoloBBox() : x_min(0), y_min(0), x_max(0), y_max(0), confidence(0), class_id(-1), is_valid(false) {}
+    
+    YoloBBox(const YoloPrediction& pred) {
+        x_min = pred.x - pred.w / 2.0;
+        y_min = pred.y - pred.h / 2.0;
+        x_max = pred.x + pred.w / 2.0;
+        y_max = pred.y + pred.h / 2.0;
+        confidence = pred.confidence;
+        class_id = pred.class_id;
+        is_valid = true;
+    }
+};
+
+// Non-Maximum Suppression helper function
+float calculateIoU(const YoloPrediction& a, const YoloPrediction& b) {
+    float x1_a = a.x - a.w / 2.0f;
+    float y1_a = a.y - a.h / 2.0f;
+    float x2_a = a.x + a.w / 2.0f;
+    float y2_a = a.y + a.h / 2.0f;
+    
+    float x1_b = b.x - b.w / 2.0f;
+    float y1_b = b.y - b.h / 2.0f;
+    float x2_b = b.x + b.w / 2.0f;
+    float y2_b = b.y + b.h / 2.0f;
+    
+    float x1_inter = std::max(x1_a, x1_b);
+    float y1_inter = std::max(y1_a, y1_b);
+    float x2_inter = std::min(x2_a, x2_b);
+    float y2_inter = std::min(y2_a, y2_b);
+    
+    if (x2_inter <= x1_inter || y2_inter <= y1_inter) {
+        return 0.0f;
+    }
+    
+    float intersection = (x2_inter - x1_inter) * (y2_inter - y1_inter);
+    float area_a = a.w * a.h;
+    float area_b = b.w * b.h;
+    float union_area = area_a + area_b - intersection;
+    
+    return intersection / union_area;
+}
+
+std::vector<YoloPrediction> applyNMS(std::vector<YoloPrediction>& predictions, float iou_threshold = 0.5f) {
+    std::sort(predictions.begin(), predictions.end(), 
+              [](const YoloPrediction& a, const YoloPrediction& b) {
+                  return a.confidence > b.confidence;
+              });
+    
+    std::vector<bool> suppressed(predictions.size(), false);
+    std::vector<YoloPrediction> result;
+    
+    for (size_t i = 0; i < predictions.size(); ++i) {
+        if (suppressed[i]) continue;
+        
+        result.push_back(predictions[i]);
+        
+        for (size_t j = i + 1; j < predictions.size(); ++j) {
+            if (suppressed[j]) continue;
+            
+            if (predictions[i].class_id == predictions[j].class_id) {
+                float iou = calculateIoU(predictions[i], predictions[j]);
+                if (iou > iou_threshold) {
+                    suppressed[j] = true;
+                }
+            }
+        }
+    }
+    
+    return result;
+}
+
+std::vector<YoloPrediction> runYoloInference(const std::string& model_path, unsigned char* frame_data, int width, int height) {
+    std::vector<YoloPrediction> predictions;
+    
+    try {
+        if (!std::filesystem::exists(model_path)) {
+            std::cerr << "Model file does not exist: " << model_path << std::endl;
+            throw std::runtime_error("Model file not found");
+        }
+        
+        if (std::filesystem::file_size(model_path) == 0) {
+            std::cerr << "Model file is empty: " << model_path << std::endl;
+            throw std::runtime_error("Model file is empty");
+        }
+        
+        std::cout << "Loading YOLO model from: " << model_path << std::endl;
+        std::cout << "Model file size: " << std::filesystem::file_size(model_path) << " bytes" << std::endl;
+        
+        torch::jit::script::Module module;
+        try {
+            module = torch::jit::load(model_path);
+        } catch (const c10::Error& e) {
+            std::cerr << "Failed to load TorchScript model. This might be caused by:" << std::endl;
+            std::cerr << "1. The file is not a valid TorchScript model (.pt format)" << std::endl;
+            std::cerr << "2. The model was saved with a different PyTorch version" << std::endl;
+            std::cerr << "3. The model file is corrupted" << std::endl;
+            std::cerr << "4. The model is in .pth format (state dict) instead of .pt (TorchScript)" << std::endl;
+            std::cerr << "PyTorch error: " << e.what() << std::endl;
+            throw std::runtime_error("Failed to load TorchScript model");
+        }
+        
+        module.eval();
+        
+        if (!frame_data) {
+            std::cerr << "Frame data is null" << std::endl;
+            throw std::runtime_error("Invalid frame data");
+        }
+        
+        std::cout << "Converting frame data to tensor (size: " << width << "x" << height << ")" << std::endl;
+        
+        torch::Tensor tensor = torch::from_blob(frame_data, {height, width, 4}, torch::kUInt8);
+        tensor = tensor.slice(2, 0, 3); 
+        tensor = tensor.permute({2, 0, 1}); 
+        tensor = tensor.to(torch::kFloat) / 255.0;
+        
+        tensor = torch::nn::functional::interpolate(tensor.unsqueeze(0), 
+            torch::nn::functional::InterpolateFuncOptions().size(std::vector<int64_t>{640, 640}).mode(torch::kBilinear).align_corners(false));
+        
+        std::cout << "Running inference..." << std::endl;
+        
+        // Run inference
+        std::vector<torch::jit::IValue> inputs;
+        inputs.push_back(tensor);
+        
+        torch::Tensor output;
+        try {
+            output = module.forward(inputs).toTensor();
+        } catch (const std::exception& e) {
+            std::cerr << "Inference failed. The model might expect different input format." << std::endl;
+            std::cerr << "Inference error: " << e.what() << std::endl;
+            throw std::runtime_error("Inference failed");
+        }
+        
+        std::cout << "Inference completed. Output shape: [";
+        for (int i = 0; i < output.dim(); ++i) {
+            std::cout << output.size(i);
+            if (i < output.dim() - 1) std::cout << ", ";
+        }
+        std::cout << "]" << std::endl;
+        
+        if (output.dim() == 3 && output.size(1) == 6) {
+            output = output.permute({0, 2, 1}); 
+        }
+        output = output.squeeze(0); 
+        
+        float conf_threshold = 0.25f;
+        float scale_x = static_cast<float>(width) / 640.0f;
+        float scale_y = static_cast<float>(height) / 640.0f;
+        
+        auto output_accessor = output.accessor<float, 2>();
+        int num_detections = output.size(0);
+        int output_features = output.size(1);
+        
+        std::cout << "Processing " << num_detections << " detections with " << output_features << " features per detection" << std::endl;
+        
+        for (int i = 0; i < num_detections; ++i) {
+            float confidence, class_score;
+            int class_id;
+            
+            if (output_features == 6) {
+                confidence = output_accessor[i][4];
+                class_id = static_cast<int>(output_accessor[i][5]);
+            } else if (output_features >= 84) {
+                float max_score = 0.0f;
+                int max_class = -1;
+                for (int c = 0; c < (output_features - 4); ++c) {
+                    float score = output_accessor[i][4 + c];
+                    if (score > max_score) {
+                        max_score = score;
+                        max_class = c;
+                    }
+                }
+                confidence = max_score;
+                class_id = max_class;
+            } else {
+                std::cerr << "Unexpected output format with " << output_features << " features" << std::endl;
+                continue;
+            }
+            
+            if (confidence > conf_threshold) {
+                float cx_model = output_accessor[i][0];
+                float cy_model = output_accessor[i][1];
+                float w_model = output_accessor[i][2];
+                float h_model = output_accessor[i][3];
+                
+                YoloPrediction pred;
+                // Scale coordinates back to original image size
+                pred.x = cx_model * scale_x;
+                pred.y = height - (cy_model * scale_y); 
+                pred.w = w_model * scale_x;
+                pred.h = h_model * scale_y;
+                pred.confidence = confidence;
+                pred.class_id = class_id;
+                
+                predictions.push_back(pred);
+            }
+        }
+        
+        std::cout << "Found " << predictions.size() << " raw detections before NMS" << std::endl;
+        
+        predictions = applyNMS(predictions, 0.45f);  
+        
+        std::cout << "YOLO inference completed. Found " << predictions.size() << " detections after NMS." << std::endl;
+        
+        for (size_t i = 0; i < predictions.size(); ++i) {
+            const auto& pred = predictions[i];
+            std::cout << "Final Detection " << i << ": center=(" << pred.x << "," << pred.y 
+                     << ") size=(" << pred.w << "," << pred.h << ") conf=" << pred.confidence 
+                     << " class=" << pred.class_id << std::endl;
+        }
+        
+    } catch (const std::exception& e) {
+        std::cerr << "PyTorch inference error: " << e.what() << std::endl;
+    }
+    
+    return predictions;
+}
 
 int main(int, char **)
 {
@@ -76,6 +310,7 @@ int main(int, char **)
     
     // others
     ImGui::FileBrowser file_dialog(ImGuiFileBrowserFlags_SelectDirectory);
+    ImGui::FileBrowser model_file_dialog;
     #ifdef _WIN32
         std::string cwd = std::filesystem::current_path().string();
     #else
@@ -84,15 +319,24 @@ int main(int, char **)
         std::vector<std::string> tokenized_path = string_split (cwd, delimiter);
         std::string start_folder_name = "/home/" + tokenized_path[2] + "/data";
         file_dialog.SetPwd(start_folder_name);
+        model_file_dialog.SetPwd(start_folder_name);
     #endif 
     
     file_dialog.SetTitle("Select working directory");
+    model_file_dialog.SetTitle("Select YOLO Model");
+    model_file_dialog.SetTypeFilters({ ".pt", ".pth" });
+    
     ImVec4 clear_color = ImVec4(0.0f, 0.0f, 0.0f, 1.00f);
     ImGuiIO &io = ImGui::GetIO();
 
     bool show_world_coordinates = false;
     std::string keypoints_root_folder;
     bool change_keypoints_folder =false;
+    std::string yolo_model_path;
+    bool model_selected = false;
+    std::vector<std::vector<YoloPrediction>> yolo_predictions; // per camera predictions
+    std::vector<std::vector<YoloBBox>> yolo_bboxes; 
+    bool show_yolo_predictions = false;
     int label_buffer_size = 32;
     bool show_help_window = false;
     std::vector<bool> is_view_focused;
@@ -233,6 +477,7 @@ int main(int, char **)
         ImGui::End();
 
         file_dialog.Display();
+        model_file_dialog.Display();
 
         if (file_dialog.HasSelected())
         {
@@ -243,7 +488,7 @@ int main(int, char **)
                 root_dir = file_dialog.GetSelected().string();
 
                 // load movies
-                std::string movie_dir = root_dir + "/movies";
+                std::string movie_dir = root_dir;
 
                 for (const auto &entry : std::filesystem::directory_iterator(movie_dir))
                 {
@@ -278,9 +523,20 @@ int main(int, char **)
                     is_view_focused.push_back(false);
                 }
 
+                yolo_predictions.resize(scene->num_cams);
+                yolo_bboxes.resize(scene->num_cams);
+
                 video_loaded = true;
             }
             file_dialog.ClearSelected();
+        }
+
+        if (model_file_dialog.HasSelected())
+        {
+            yolo_model_path = model_file_dialog.GetSelected().string();
+            model_selected = true;
+            std::cout << "Selected YOLO model: " << yolo_model_path << std::endl;
+            model_file_dialog.ClearSelected();
         }
 
         if (dc_context->decoding_flag && play_video)
@@ -431,6 +687,38 @@ int main(int, char **)
                 if (ImPlot::BeginPlot("##no_plot_name", avail_size, ImPlotFlags_Equal | ImPlotAxisFlags_AutoFit | ImPlotFlags_Crosshairs))
                 {
                     ImPlot::PlotImage("##no_image_name", (void *)(intptr_t)scene->image_texture[j], ImVec2(0, 0), ImVec2(scene->image_width[j], scene->image_height[j]));
+
+                    if (show_yolo_predictions && j < yolo_bboxes.size()) {
+                        for (size_t bbox_idx = 0; bbox_idx < yolo_bboxes[j].size(); ++bbox_idx) {
+                            auto& bbox = yolo_bboxes[j][bbox_idx];
+                            if (bbox.is_valid) {
+                                int drag_rect_id = 1000 + j * 100 + bbox_idx;
+                                
+                                ImVec4 yolo_color = ImVec4(1.0f, 0.0f, 0.0f, 0.8f);
+                                
+                                bool bbox_clicked = false, bbox_hovered = false, bbox_held = false;
+                                bool bbox_modified = ImPlot::DragRect(drag_rect_id, 
+                                                                    &bbox.x_min, &bbox.y_min, 
+                                                                    &bbox.x_max, &bbox.y_max, 
+                                                                    yolo_color, 
+                                                                    ImPlotDragToolFlags_None,
+                                                                    &bbox_clicked, &bbox_hovered, &bbox_held);
+                                
+                                if (bbox_hovered || bbox_held) {
+                                    double center_x = (bbox.x_min + bbox.x_max) / 2.0;
+                                    double center_y = (bbox.y_min + bbox.y_max) / 2.0;
+                                    std::string info_text = "Class:" + std::to_string(bbox.class_id) + 
+                                                          " Conf:" + std::to_string(bbox.confidence).substr(0, 4);
+                                    ImPlot::PlotText(info_text.c_str(), center_x, center_y);
+                                }
+                                
+                                if (bbox_modified) {
+                                    // TODO: update box on modification
+
+                                }
+                            }
+                        }
+                    }
 
                     if(plot_keypoints_flag)
                     {
@@ -724,7 +1012,7 @@ int main(int, char **)
                                     ImGui::TableNextRow();
 
                                     if (is_view_focused[row] && keypoints_find) {
-                                        ImU32 row_bg_color = ImGui::GetColorU32(ImVec4(0.7f, 0.3f, 0.3f, 0.65f)); 
+                                        ImU32 row_bg_color = ImGui::GetColorU32(ImVec4(0.7f, 0.3f, 0.65f, 0.65f)); 
                                         ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, row_bg_color);
                                     }
 
@@ -827,6 +1115,53 @@ int main(int, char **)
                 }
                 ImGui::Text("Total labeled frames : %d", keypoints_map.size());
                 
+                ImGui::SeparatorText("YOLO Model");
+                
+                if (ImGui::Button("Select YOLO"))
+                {
+                    model_file_dialog.Open();
+                }
+                
+                if (model_selected)
+                {
+                    ImGui::Text("Model: %s", std::filesystem::path(yolo_model_path).filename().string().c_str());
+                    
+                    if (ImGui::Button("Run YOLO Prediction"))
+                    {
+                        std::cout << "Running YOLO prediction on frame " << current_frame_num << std::endl;
+                        
+                        for (int cam_id = 0; cam_id < scene->num_cams; cam_id++) {
+                            unsigned char* frame_data = nullptr;
+                            if (play_video && dc_context->decoding_flag) {
+                                frame_data = scene->display_buffer[cam_id][read_head].frame;
+                            } else if (!play_video) {
+                                int select_corr_head = (pause_selected + read_head) % scene->size_of_buffer;
+                                frame_data = scene->display_buffer[cam_id][select_corr_head].frame;
+                            }
+                            
+                            if (frame_data) {
+                                yolo_predictions[cam_id] = runYoloInference(yolo_model_path, frame_data, 
+                                                                          scene->image_width[cam_id], scene->image_height[cam_id]);
+                                
+                                // Convert predictions to manipulable bounding boxes
+                                yolo_bboxes[cam_id].clear();
+                                for (const auto& pred : yolo_predictions[cam_id]) {
+                                    yolo_bboxes[cam_id].emplace_back(pred);
+                                }
+                                
+                                std::cout << "Camera " << cam_id << ": Found " << yolo_predictions[cam_id].size() << " detections" << std::endl;
+                            }
+                        }
+                        show_yolo_predictions = true;
+                    }
+                    
+                    ImGui::Checkbox("Show YOLO Predictions", &show_yolo_predictions);
+                }
+                else
+                {
+                    ImGui::Text("No model selected");
+                }
+
             }
             ImGui::End();
         }
