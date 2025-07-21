@@ -336,7 +336,10 @@ int main(int, char **)
     bool model_selected = false;
     std::vector<std::vector<YoloPrediction>> yolo_predictions; // per camera predictions
     std::vector<std::vector<YoloBBox>> yolo_bboxes; 
+    std::map<int, std::vector<std::vector<YoloBBox>>> yolo_frame_cache; 
     bool show_yolo_predictions = false;
+    bool auto_yolo_labeling = false; 
+    int last_yolo_frame = -1; 
     int label_buffer_size = 32;
     bool show_help_window = false;
     std::vector<bool> is_view_focused;
@@ -488,7 +491,7 @@ int main(int, char **)
                 root_dir = file_dialog.GetSelected().string();
 
                 // load movies
-                std::string movie_dir = root_dir;
+                std::string movie_dir = root_dir + "/movies";
 
                 for (const auto &entry : std::filesystem::directory_iterator(movie_dir))
                 {
@@ -650,6 +653,93 @@ int main(int, char **)
                 keypoints_find = true;
             }
         }
+
+                static int previous_frame_num = -1;
+        if (video_loaded && current_frame_num != previous_frame_num) {
+            if (yolo_frame_cache.find(current_frame_num) != yolo_frame_cache.end()) {
+                std::cout << "Frame " << current_frame_num << " already processed by YOLO" << std::endl;
+            } else {
+                for (int cam_id = 0; cam_id < scene->num_cams; cam_id++) {
+                    yolo_bboxes[cam_id].clear();
+                }
+                
+                if (auto_yolo_labeling && model_selected) {
+                    std::cout << "Running automatic YOLO prediction on frame " << current_frame_num << std::endl;
+                    
+                    for (int cam_id = 0; cam_id < scene->num_cams; cam_id++) {
+                        unsigned char* frame_data = nullptr;
+                        if (play_video && dc_context->decoding_flag) {
+                            frame_data = scene->display_buffer[cam_id][read_head].frame;
+                        } else if (!play_video) {
+                            int select_corr_head = (pause_selected + read_head) % scene->size_of_buffer;
+                            frame_data = scene->display_buffer[cam_id][select_corr_head].frame;
+                        }
+                        
+                        if (frame_data) {
+                            yolo_predictions[cam_id] = runYoloInference(yolo_model_path, frame_data, 
+                                                                      scene->image_width[cam_id], scene->image_height[cam_id]);
+                            
+                            for (const auto& pred : yolo_predictions[cam_id]) {
+                                yolo_bboxes[cam_id].emplace_back(pred);
+                            }
+                            
+                            std::cout << "Camera " << cam_id << ": Found " << yolo_predictions[cam_id].size() << " detections" << std::endl;
+                        }
+                    }
+                    
+                    if (!yolo_bboxes.empty() && std::any_of(yolo_bboxes.begin(), yolo_bboxes.end(), 
+                        [](const auto& cam_bboxes) { return !cam_bboxes.empty(); })) {
+                        
+                        if (!keypoints_find) {
+                            Animals* animals = (Animals *)malloc(sizeof(Animals));
+                            allocate_keypoints(animals, scene, skeleton, number_of_animals);
+                            keypoints_map[current_frame_num] = animals; 
+                            keypoints_find = true;
+                        }
+                        
+                        Animals* current_frame_data = keypoints_map[current_frame_num];
+                        
+                        std::map<int, int> class_to_animal; // Map class_id to animal_id
+                        int next_animal_id = 0;
+                        
+                        for (int cam_id = 0; cam_id < scene->num_cams; cam_id++) {
+                            for (size_t bbox_idx = 0; bbox_idx < yolo_bboxes[cam_id].size(); bbox_idx++) {
+                                const auto& yolo_bbox = yolo_bboxes[cam_id][bbox_idx];
+                                if (yolo_bbox.is_valid) {
+                                    if (class_to_animal.find(yolo_bbox.class_id) == class_to_animal.end()) {
+                                        class_to_animal[yolo_bbox.class_id] = next_animal_id % number_of_animals;
+                                        next_animal_id++;
+                                    }
+                                    
+                                    int target_animal_id = class_to_animal[yolo_bbox.class_id];
+                                    KeyPoints* frame_keypoints = &current_frame_data->keypoints[target_animal_id];
+                                    
+                                    BoundingBox new_bbox;
+                                    new_bbox.rect = new ImPlotRect(yolo_bbox.x_min, yolo_bbox.x_max, yolo_bbox.y_min, yolo_bbox.y_max);
+                                    new_bbox.state = RectTwoPoints;
+                                    new_bbox.class_id = yolo_bbox.class_id;
+                                    new_bbox.confidence = yolo_bbox.confidence;
+                                    
+                                    frame_keypoints->bbox2d_list[cam_id].push_back(new_bbox);
+                                    frame_keypoints->has_labels = true;
+                                    allow_exit = false;
+                                    
+                                    std::cout << "Auto-converted YOLO bbox (class " << yolo_bbox.class_id 
+                                              << ") to animal " << target_animal_id << ", camera " << cam_id << std::endl;
+                                }
+                            }
+                        }
+                    }
+                    
+                    yolo_frame_cache[current_frame_num] = std::vector<std::vector<YoloBBox>>(scene->num_cams);
+                    for (int cam_id = 0; cam_id < scene->num_cams; cam_id++) {
+                        yolo_bboxes[cam_id].clear();
+                    }
+                }
+            }
+            previous_frame_num = current_frame_num;
+        }
+
         // Render a video frame
         if (video_loaded)
         {
@@ -692,29 +782,78 @@ int main(int, char **)
                         for (size_t bbox_idx = 0; bbox_idx < yolo_bboxes[j].size(); ++bbox_idx) {
                             auto& bbox = yolo_bboxes[j][bbox_idx];
                             if (bbox.is_valid) {
-                                int drag_rect_id = 1000 + j * 100 + bbox_idx;
-                                
-                                ImVec4 yolo_color = ImVec4(1.0f, 0.0f, 0.0f, 0.8f);
-                                
-                                bool bbox_clicked = false, bbox_hovered = false, bbox_held = false;
-                                bool bbox_modified = ImPlot::DragRect(drag_rect_id, 
-                                                                    &bbox.x_min, &bbox.y_min, 
-                                                                    &bbox.x_max, &bbox.y_max, 
-                                                                    yolo_color, 
-                                                                    ImPlotDragToolFlags_None,
-                                                                    &bbox_clicked, &bbox_hovered, &bbox_held);
-                                
-                                if (bbox_hovered || bbox_held) {
-                                    double center_x = (bbox.x_min + bbox.x_max) / 2.0;
-                                    double center_y = (bbox.y_min + bbox.y_max) / 2.0;
-                                    std::string info_text = "Class:" + std::to_string(bbox.class_id) + 
-                                                          " Conf:" + std::to_string(bbox.confidence).substr(0, 4);
-                                    ImPlot::PlotText(info_text.c_str(), center_x, center_y);
+                                // Check if this YOLO bbox has already been converted to a user bbox
+                                bool already_converted = false;
+                                if (keypoints_find) {
+                                    Animals* current_frame_data = keypoints_map[current_frame_num];
+                                    for (u32 animal_id = 0; animal_id < number_of_animals; animal_id++) {
+                                        KeyPoints* frame_keypoints = &current_frame_data->keypoints[animal_id];
+                                        if (j < frame_keypoints->bbox2d_list.size()) {
+                                            for (const auto& user_bbox : frame_keypoints->bbox2d_list[j]) {
+                                                if (user_bbox.state != RectNull && user_bbox.rect != nullptr) {
+                                                    // Check if this user bbox roughly matches the YOLO bbox
+                                                    double tolerance = 10.0; // pixels
+                                                    if (std::abs(user_bbox.rect->X.Min - bbox.x_min) < tolerance &&
+                                                        std::abs(user_bbox.rect->Y.Min - bbox.y_min) < tolerance &&
+                                                        std::abs(user_bbox.rect->X.Max - bbox.x_max) < tolerance &&
+                                                        std::abs(user_bbox.rect->Y.Max - bbox.y_max) < tolerance) {
+                                                        already_converted = true;
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        if (already_converted) break;
+                                    }
                                 }
                                 
-                                if (bbox_modified) {
-                                    // TODO: update box on modification
-
+                                if (!already_converted) {
+                                    int drag_rect_id = 1000 + j * 100 + bbox_idx;
+                                    
+                                    ImVec4 yolo_color = ImVec4(1.0f, 0.0f, 0.0f, 0.8f);
+                                    
+                                    bool bbox_clicked = false, bbox_hovered = false, bbox_held = false;
+                                    bool bbox_modified = ImPlot::DragRect(drag_rect_id, 
+                                                                        &bbox.x_min, &bbox.y_min, 
+                                                                        &bbox.x_max, &bbox.y_max, 
+                                                                        yolo_color, 
+                                                                        ImPlotDragToolFlags_None,
+                                                                        &bbox_clicked, &bbox_hovered, &bbox_held);
+                                    
+                                    if (bbox_hovered || bbox_held) {
+                                        double center_x = (bbox.x_min + bbox.x_max) / 2.0;
+                                        double center_y = (bbox.y_min + bbox.y_max) / 2.0;
+                                        std::string info_text = "YOLO Class:" + std::to_string(bbox.class_id) + 
+                                                              " Conf:" + std::to_string(bbox.confidence).substr(0, 4);
+                                        ImPlot::PlotText(info_text.c_str(), center_x, center_y);
+                                    }
+                                    
+                                    if (bbox_modified) {
+                                        yolo_frame_cache[current_frame_num] = yolo_bboxes;
+                                        
+                                        if (ImGui::IsKeyPressed(ImGuiKey_Y, false)) { 
+                                            if (!keypoints_find) {
+                                                Animals* animals = (Animals *)malloc(sizeof(Animals));
+                                                allocate_keypoints(animals, scene, skeleton, number_of_animals);
+                                                keypoints_map[current_frame_num] = animals; 
+                                                keypoints_find = true;
+                                            }
+                                            
+                                            Animals* current_frame_data = keypoints_map[current_frame_num];
+                                            KeyPoints* frame_keypoints = &current_frame_data->keypoints[current_frame_data->active_id];
+                                            
+                                            if (frame_keypoints->bbox2d[j].state == RectNull) {
+                                                frame_keypoints->bbox2d[j].rect = new ImPlotRect(bbox.x_min, bbox.x_max, bbox.y_min, bbox.y_max);
+                                                frame_keypoints->bbox2d[j].state = RectTwoPoints;
+                                                frame_keypoints->bbox2d[j].class_id = bbox.class_id;
+                                                frame_keypoints->bbox2d[j].confidence = bbox.confidence;
+                                                frame_keypoints->has_labels = true;
+                                                allow_exit = false;
+                                                
+                                                std::cout << "Converted YOLO bbox to user bbox for camera " << j << std::endl;
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -835,6 +974,7 @@ int main(int, char **)
                                 for (u32 animal_id=0; animal_id < number_of_animals; animal_id++) {
                                     KeyPoints* frame_keypoints = &current_frame_data->keypoints[animal_id];
                                     ImColor bbox_color = frame_keypoints->animal_color;
+                                    
                                     if (frame_keypoints->bbox2d[j].state != RectNull) {
                                         ImPlotRect* my_rect = frame_keypoints->bbox2d[j].rect;
                                         if (current_frame_data->active_id == animal_id) {
@@ -842,11 +982,51 @@ int main(int, char **)
                                         }
                                         ImPlot::DragRect(0,&my_rect->X.Min,&my_rect->Y.Min,&my_rect->X.Max,&my_rect->Y.Max, bbox_color, ImPlotDragToolFlags_NoInputs);
                                     }
+                                    
+                                    if (j < frame_keypoints->bbox2d_list.size()) {
+                                        for (size_t bbox_idx = 0; bbox_idx < frame_keypoints->bbox2d_list[j].size(); ++bbox_idx) {
+                                            BoundingBox& bbox = frame_keypoints->bbox2d_list[j][bbox_idx];
+                                            if (bbox.state != RectNull && bbox.rect != nullptr) {
+                                                int multi_bbox_id = 2000 + animal_id * 1000 + j * 100 + bbox_idx;
+                                                
+                                                ImVec4 multi_bbox_color = bbox_color;
+                                                multi_bbox_color.w = 0.6f; 
+                                                
+                                                bool bbox_clicked = false, bbox_hovered = false, bbox_held = false;
+                                                bool bbox_modified = false;
+                                                
+                                                if (current_frame_data->active_id == animal_id) {
+                                                    bbox_modified = ImPlot::DragRect(multi_bbox_id,
+                                                                                   &bbox.rect->X.Min, &bbox.rect->Y.Min,
+                                                                                   &bbox.rect->X.Max, &bbox.rect->Y.Max,
+                                                                                   multi_bbox_color, ImPlotDragToolFlags_None,
+                                                                                   &bbox_clicked, &bbox_hovered, &bbox_held);
+                                                } else {
+                                                    ImPlot::DragRect(multi_bbox_id,
+                                                                   &bbox.rect->X.Min, &bbox.rect->Y.Min,
+                                                                   &bbox.rect->X.Max, &bbox.rect->Y.Max,
+                                                                   multi_bbox_color, ImPlotDragToolFlags_NoInputs);
+                                                }
+                                                
+                                                if (bbox_hovered || bbox_held) {
+                                                    double center_x = (bbox.rect->X.Min + bbox.rect->X.Max) / 2.0;
+                                                    double center_y = (bbox.rect->Y.Min + bbox.rect->Y.Max) / 2.0;
+                                                    std::string info_text = "Class:" + std::to_string(bbox.class_id) + 
+                                                                          " Conf:" + std::to_string(bbox.confidence).substr(0, 4);
+                                                    ImPlot::PlotText(info_text.c_str(), center_x, center_y);
+                                                }
+                                                
+                                                if (bbox_modified) {
+                                                    allow_exit = false;
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
-
                             }
                         }
                     }
+                    
                     ImPlot::EndPlot();
                 }
                 ImGui::EndChild();
@@ -975,7 +1155,7 @@ int main(int, char **)
                                 sprintf(label, "Ani %d", animal_id);
                             } else {
                                 sprintf(label, "Ani %d (%d/%d labeled)", animal_id, current_frame_data->keypoints[animal_id].counter, skeleton->num_nodes);
-                            }
+                                                        }
                             ImGui::TableNextColumn();
                             if(ImGui::Selectable(label, current_frame_data->active_id == animal_id)) {
                                 current_frame_data->active_id = animal_id;
@@ -1143,7 +1323,6 @@ int main(int, char **)
                                 yolo_predictions[cam_id] = runYoloInference(yolo_model_path, frame_data, 
                                                                           scene->image_width[cam_id], scene->image_height[cam_id]);
                                 
-                                // Convert predictions to manipulable bounding boxes
                                 yolo_bboxes[cam_id].clear();
                                 for (const auto& pred : yolo_predictions[cam_id]) {
                                     yolo_bboxes[cam_id].emplace_back(pred);
@@ -1152,10 +1331,61 @@ int main(int, char **)
                                 std::cout << "Camera " << cam_id << ": Found " << yolo_predictions[cam_id].size() << " detections" << std::endl;
                             }
                         }
-                        show_yolo_predictions = true;
+                        
+                        if (!yolo_bboxes.empty() && std::any_of(yolo_bboxes.begin(), yolo_bboxes.end(), 
+                            [](const auto& cam_bboxes) { return !cam_bboxes.empty(); })) {
+                            
+                            if (!keypoints_find) {
+                                Animals* animals = (Animals *)malloc(sizeof(Animals));
+                                allocate_keypoints(animals, scene, skeleton, number_of_animals);
+                                keypoints_map[current_frame_num] = animals; 
+                                keypoints_find = true;
+                            }
+                            
+                            Animals* current_frame_data = keypoints_map[current_frame_num];
+                            
+                            std::map<int, int> class_to_animal;
+                            int next_animal_id = 0;
+                            
+                            for (int cam_id = 0; cam_id < scene->num_cams; cam_id++) {
+                                for (size_t bbox_idx = 0; bbox_idx < yolo_bboxes[cam_id].size(); bbox_idx++) {
+                                    const auto& yolo_bbox = yolo_bboxes[cam_id][bbox_idx];
+                                    if (yolo_bbox.is_valid) {
+                                        if (class_to_animal.find(yolo_bbox.class_id) == class_to_animal.end()) {
+                                            class_to_animal[yolo_bbox.class_id] = next_animal_id % number_of_animals;
+                                            next_animal_id++;
+                                        }
+                                        
+                                        int target_animal_id = class_to_animal[yolo_bbox.class_id];
+                                        KeyPoints* frame_keypoints = &current_frame_data->keypoints[target_animal_id];
+                                        
+                                        BoundingBox new_bbox;
+                                        new_bbox.rect = new ImPlotRect(yolo_bbox.x_min, yolo_bbox.x_max, yolo_bbox.y_min, yolo_bbox.y_max);
+                                        new_bbox.state = RectTwoPoints;
+                                        new_bbox.class_id = yolo_bbox.class_id;
+                                        new_bbox.confidence = yolo_bbox.confidence;
+                                        
+                                        frame_keypoints->bbox2d_list[cam_id].push_back(new_bbox);
+                                        frame_keypoints->has_labels = true;
+                                        allow_exit = false;
+                                        
+                                        std::cout << "Auto-converted YOLO bbox (class " << yolo_bbox.class_id 
+                                                  << ") to animal " << target_animal_id << ", camera " << cam_id << std::endl;
+                                    }
+                                }
+                            }
+                        }
                     }
                     
                     ImGui::Checkbox("Show YOLO Predictions", &show_yolo_predictions);
+                    
+                    ImGui::Checkbox("Automatic YOLO Labeling", &auto_yolo_labeling);
+                    
+                    if (auto_yolo_labeling) {
+                        ImGui::SameLine();
+                        ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "(Auto mode ON)");
+                    }
+
                 }
                 else
                 {
@@ -1262,4 +1492,4 @@ int main(int, char **)
         t.join();
 
     return 0;
-}
+                }

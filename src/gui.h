@@ -185,13 +185,27 @@ void save_keypoints(std::map<u32, Animals*> keypoints_map, SkeletonContext* skel
                 if (animals->keypoints[animal_id].has_labels) {
                     output2d_files[cam] << animal_id << ",";
                     if (skeleton->has_bbox) {
-                        // save bbox first if the skeleton has bbox
                         BoundingBox* bbox2d = &animals->keypoints[animal_id].bbox2d[cam];
                         if (bbox2d->state == RectNull) {
+                            output2d_files[cam] << 1E7 <<  ","  << 1E7 <<  ",";
                             output2d_files[cam] << 1E7 <<  ","  << 1E7 <<  ",";
                         } else {
                             output2d_files[cam] << bbox2d->rect->X.Min <<  ","  << bbox2d->rect->Y.Min <<  ",";
                             output2d_files[cam] << bbox2d->rect->X.Max <<  ","  << bbox2d->rect->Y.Max <<  ",";
+                        }
+                        
+                        std::vector<BoundingBox> valid_bboxes;
+                        for (const auto& multi_bbox : animals->keypoints[animal_id].bbox2d_list[cam]) {
+                            if (multi_bbox.state != RectNull && multi_bbox.rect != nullptr) {
+                                valid_bboxes.push_back(multi_bbox);
+                            }
+                        }
+                        
+                        output2d_files[cam] << valid_bboxes.size() << ",";
+                        
+                        for (const auto& multi_bbox : valid_bboxes) {
+                            output2d_files[cam] << multi_bbox.rect->X.Min << "," << multi_bbox.rect->Y.Min << ",";
+                            output2d_files[cam] << multi_bbox.rect->X.Max << "," << multi_bbox.rect->Y.Max << ",";
                         }
                     } 
                     if (skeleton->has_skeleton) {
@@ -307,8 +321,71 @@ void load_2d_keypoints(std::map<u32, Animals*>& keypoints_map, SkeletonContext* 
                         line.erase(0, pos + delimeter.length());
 
                         BoundingBox* bbox2d = &(keypoints_map[frame_num]->keypoints[animal_id].bbox2d[cam_idx]);
-                        bbox2d->rect = new ImPlotRect(min_x, max_x, min_y, max_y);
-                        bbox2d->state = RectTwoPoints;
+                        if (min_x != 1E7 && min_y != 1E7 && max_x != 1E7 && max_y != 1E7) {
+                            bbox2d->rect = new ImPlotRect(min_x, max_x, min_y, max_y);
+                            bbox2d->state = RectTwoPoints;
+                            bbox2d->class_id = -1;  
+                            bbox2d->confidence = 0.0f;
+                        } else {
+                            bbox2d->rect = nullptr;
+                            bbox2d->state = RectNull;
+                            bbox2d->class_id = -1;
+                            bbox2d->confidence = 0.0f;
+                        }
+                        
+                        pos = line.find(delimeter);
+                        token = line.substr(0, pos);
+                        int num_multi_bboxes = stoi(token);
+                        line.erase(0, pos + delimeter.length());
+                        
+                        keypoints_map[frame_num]->keypoints[animal_id].bbox2d_list[cam_idx].clear();
+                        
+                        for (int bbox_i = 0; bbox_i < num_multi_bboxes; bbox_i++) {
+                            pos = line.find(delimeter);
+                            token = line.substr(0, pos);
+                            double multi_min_x = stod(token);
+                            line.erase(0, pos + delimeter.length());
+                            
+                            pos = line.find(delimeter);
+                            token = line.substr(0, pos);
+                            double multi_min_y = stod(token);
+                            line.erase(0, pos + delimeter.length());
+                            
+                            pos = line.find(delimeter);
+                            token = line.substr(0, pos);
+                            double multi_max_x = stod(token);
+                            line.erase(0, pos + delimeter.length());
+                            
+                            pos = line.find(delimeter);
+                            token = line.substr(0, pos);
+                            double multi_max_y = stod(token);
+                            line.erase(0, pos + delimeter.length());
+                            
+                            pos = line.find(delimeter);
+                            token = line.substr(0, pos);
+                            int class_id = stoi(token);
+                            line.erase(0, pos + delimeter.length());
+                            
+                            pos = line.find(delimeter);
+                            if (pos != std::string::npos) {
+                                token = line.substr(0, pos);
+                                line.erase(0, pos + delimeter.length());
+                            } else {
+                                token = line;
+                                line = "";
+                            }
+                            float confidence = stof(token);
+                            
+                            if (multi_min_x != 1E7 && multi_min_y != 1E7 && multi_max_x != 1E7 && multi_max_y != 1E7) {
+                                BoundingBox multi_bbox;
+                                multi_bbox.rect = new ImPlotRect(multi_min_x, multi_max_x, multi_min_y, multi_max_y);
+                                multi_bbox.state = RectTwoPoints;
+                                multi_bbox.class_id = class_id;
+                                multi_bbox.confidence = confidence;
+                                keypoints_map[frame_num]->keypoints[animal_id].bbox2d_list[cam_idx].push_back(multi_bbox);
+                            }
+                        }
+                        
                         keypoints_map[frame_num]->keypoints[animal_id].has_labels = true;
                     }
                     

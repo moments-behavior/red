@@ -22,13 +22,16 @@ enum RectState {
 struct BoundingBox{
     ImPlotRect* rect;
     RectState state;
+    int class_id;
+    float confidence;  
 };
 
 struct KeyPoints{
     triple_d* keypoints3d;
     KeyPoints2D** keypoints2d; 
     u32* active_kp_id;
-    BoundingBox* bbox2d;
+    std::vector<std::vector<BoundingBox>> bbox2d_list;  
+    BoundingBox* bbox2d;  
     bool has_labels;
     ImVec4 animal_color;
     u32 counter;
@@ -167,11 +170,21 @@ void allocate_keypoints(Animals *animals, render_scene *scene, SkeletonContext* 
         KeyPoints* keypoints = &animals->keypoints[animal_idx];
         keypoints->animal_color = (ImVec4)ImColor::HSV(animal_idx / (float)number_animals, 0.8f, 0.8f);
         keypoints->has_labels = false;
+        
+        // Initialize the bbox2d_list using placement new to properly construct the vector
+        new (&keypoints->bbox2d_list) std::vector<std::vector<BoundingBox>>();
+        
         if (skeleton->has_bbox) {
+            // Initialize the multiple bounding box list
+            keypoints->bbox2d_list.resize(scene->num_cams);
+            
+            // Keep backward compatibility
             keypoints->bbox2d = (BoundingBox *)malloc(sizeof(BoundingBox) * scene->num_cams);
             for (u32 j=0; j < scene->num_cams; j++) {
                 keypoints->bbox2d[j].rect = NULL;
                 keypoints->bbox2d[j].state = RectNull;
+                keypoints->bbox2d[j].class_id = -1;
+                keypoints->bbox2d[j].confidence = 0.0f;
             }
         }
 
@@ -247,6 +260,10 @@ void reinitalize_keypoint_active_animal(Animals *animals, render_scene *scene, S
 
 void delete_label_per_animal(KeyPoints* keypoints, render_scene *scene, SkeletonContext* skeleton) {
     keypoints->has_labels = false;
+    
+    // Properly destroy the bbox2d_list vector
+    keypoints->bbox2d_list.~vector<std::vector<BoundingBox>>();
+    
     if (skeleton->has_bbox) {
         if (keypoints->bbox2d->rect != NULL) {
             delete(keypoints->bbox2d->rect);
