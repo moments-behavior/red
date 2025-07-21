@@ -27,6 +27,10 @@ set_name = args.set_name
 with open(yaml_file, "r") as f:
     config = yaml.safe_load(f)
 
+class_names = config["names"]
+num_classes = len(class_names)
+colors = get_colors(num_classes)
+
 # Access values
 print("Dataset path:", config["path"])
 
@@ -71,8 +75,6 @@ while True:
             class_id = int(row[0])
             label[class_id] = [float(x) for x in row[1:]]
 
-    colors = get_colors(len(label))
-    color_idx = 0
     for key, value in label.items():
         bbox = value[:4]
         top_left, bottom_right = convert_yolobbox_cv_rectangle(
@@ -80,7 +82,19 @@ while True:
         )
         thickness = 5
         img = cv2.rectangle(
-            img, top_left, bottom_right, colors[color_idx], thickness
+            img, top_left, bottom_right, colors[key], thickness
+        )
+
+        text_pos = (top_left[0], top_left[1] - 5)
+        cv2.putText(
+            img,
+            class_names[key],
+            text_pos,
+            cv2.FONT_HERSHEY_SIMPLEX,
+            2,
+            colors[key],
+            2,
+            cv2.LINE_AA,
         )
         keypoints = np.asarray(value[4:])
         keypoints = keypoints.reshape([-1, 3])
@@ -92,10 +106,9 @@ while True:
                     img,
                     point,
                     radius=10,
-                    color=colors[color_idx],
+                    color=colors[key],
                     thickness=-1,
                 )
-        color_idx = color_idx + 1
 
     img = cv2.resize(img, None, fx=1 / 2, fy=1 / 2)
     cv2.putText(

@@ -224,5 +224,5 @@ config = {
     "names": {0: "ball"},
 }
 
-with open(output_folder + "/config_{}.yaml".format(select_folder), "w") as f:
+with open(output_folder + "/config.yaml", "w") as f:
     yaml.dump(config, f, default_flow_style=False)

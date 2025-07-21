@@ -26,47 +26,59 @@ def save_image_label(
     frames = simple_decoder.get_batch_frames_by_index(image_frames)
     for frame_idx in range(len(image_frames)):
         frame_num = image_frames[frame_idx]
-        luma_base_addr = frames[frame_idx].GetPtrToPlane(0)
-        new_array = cast_address_to_1d_bytearray(
-            base_address=luma_base_addr, size=frames[frame_idx].framesize()
-        )
-
-        img = new_array.reshape(
-            (metadata.height, metadata.width, -3)
-        )  # or (height, width) for grayscale
-        img_bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-        img_file_name = f"Frame_{frame_num}_{which_cam}.jpg"
-        img_save_to = os.path.join(image_save_dir, img_file_name)
-        cv2.imwrite(img_save_to, img_bgr)
-
         label_one_frame = labels[frame_num]
-        with open(
-            os.path.join(
-                label_save_dir,
-                f"Frame_{frame_num}_{which_cam}" + ".txt",
-            ),
-            "w",
-        ) as f:
-            # rat keypoints
-            line = create_yolo_rat_line(
-                label_one_frame[:4],
-                metadata.width,
-                metadata.height,
-                40,
-            )
-            f.write(line)
-            f.write("\n")
 
-            # ball keypoint
-            line = create_yolo_ball_line(
-                label_one_frame[4],
-                metadata.width,
-                metadata.height,
-                120,
-                4,
+        rat_keypoints = label_one_frame[:4]
+        target_keypoints = label_one_frame[4]
+
+        if np.isnan(rat_keypoints).any() and np.isnan(target_keypoints).any():
+            skip_frame = True
+        else:
+            skip_frame = False
+
+        if not skip_frame:
+            luma_base_addr = frames[frame_idx].GetPtrToPlane(0)
+            new_array = cast_address_to_1d_bytearray(
+                base_address=luma_base_addr, size=frames[frame_idx].framesize()
             )
-            f.write(line)
-            f.write("\n")
+
+            img = new_array.reshape(
+                (metadata.height, metadata.width, -3)
+            )  # or (height, width) for grayscale
+            img_bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+            img_file_name = f"Frame_{frame_num}_{which_cam}.jpg"
+            img_save_to = os.path.join(image_save_dir, img_file_name)
+            cv2.imwrite(img_save_to, img_bgr)
+
+            with open(
+                os.path.join(
+                    label_save_dir,
+                    f"Frame_{frame_num}_{which_cam}" + ".txt",
+                ),
+                "w",
+            ) as f:
+                # rat keypoints
+                if not np.isnan(rat_keypoints).any():
+                    line = create_yolo_rat_line(
+                        rat_keypoints,
+                        metadata.width,
+                        metadata.height,
+                        40,
+                    )
+                    f.write(line)
+                    f.write("\n")
+
+                # ball keypoint
+                if not np.isnan(target_keypoints).any():
+                    line = create_yolo_ball_line(
+                        label_one_frame[4],
+                        metadata.width,
+                        metadata.height,
+                        120,
+                        4,
+                    )
+                    f.write(line)
+                    f.write("\n")
 
 
 parser = argparse.ArgumentParser()
@@ -221,5 +233,5 @@ config = {
     "names": {0: "rat", 1: "ball"},
 }
 
-with open(output_folder + "/config_{}.yaml".format(select_folder), "w") as f:
+with open(output_folder + "/config.yaml", "w") as f:
     yaml.dump(config, f, default_flow_style=False)
