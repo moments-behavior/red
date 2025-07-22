@@ -1377,8 +1377,6 @@ int main(int, char **)
                         }
                     }
                     
-                    ImGui::Checkbox("Show YOLO Predictions", &show_yolo_predictions);
-                    
                     ImGui::Checkbox("Automatic YOLO Labeling", &auto_yolo_labeling);
                     
                     if (auto_yolo_labeling) {
