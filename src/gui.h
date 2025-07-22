@@ -291,39 +291,7 @@ void load_2d_keypoints(std::map<u32, Animals*>& keypoints_map, SkeletonContext* 
                     line.erase(0, pos + delimeter.length());
 
                     if (skeleton->has_bbox) {
-                        pos = line.find(delimeter);
-                        token = line.substr(0, pos);
-                        double min_x = stod(token);
-                        line.erase(0, pos + delimeter.length());
-
-                        pos = line.find(delimeter);
-                        token = line.substr(0, pos);
-                        double min_y = stod(token);
-                        line.erase(0, pos + delimeter.length());
-
-                        pos = line.find(delimeter);
-                        token = line.substr(0, pos);
-                        double max_x = stod(token);
-                        line.erase(0, pos + delimeter.length());
-
-                        pos = line.find(delimeter);
-                        token = line.substr(0, pos);
-                        double max_y = stod(token);
-                        line.erase(0, pos + delimeter.length());
-
-                        BoundingBox* bbox2d = &(keypoints_map[frame_num]->keypoints[animal_id].bbox2d[cam_idx]);
-                        if (min_x != 1E7 && min_y != 1E7 && max_x != 1E7 && max_y != 1E7) {
-                            bbox2d->rect = new ImPlotRect(min_x, max_x, min_y, max_y);
-                            bbox2d->state = RectTwoPoints;
-                            bbox2d->class_id = -1;  
-                            bbox2d->confidence = 0.0f;
-                        } else {
-                            bbox2d->rect = nullptr;
-                            bbox2d->state = RectNull;
-                            bbox2d->class_id = -1;
-                            bbox2d->confidence = 0.0f;
-                        }
-                        
+                        // Read number of multi bboxes first (this matches save format)
                         pos = line.find(delimeter);
                         token = line.substr(0, pos);
                         int num_multi_bboxes = stoi(token);
