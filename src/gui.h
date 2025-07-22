@@ -157,7 +157,6 @@ void save_keypoints(std::map<u32, Animals*> keypoints_map, SkeletonContext* skel
     std::map<u32, Animals*>::iterator it = keypoints_map.begin();
     while (it != keypoints_map.end())
     {
-        // each animal
         u32 frame = it->first;
         Animals* animals = it->second;
 
@@ -185,29 +184,21 @@ void save_keypoints(std::map<u32, Animals*> keypoints_map, SkeletonContext* skel
                 if (animals->keypoints[animal_id].has_labels) {
                     output2d_files[cam] << animal_id << ",";
                     if (skeleton->has_bbox) {
-                        BoundingBox* bbox2d = &animals->keypoints[animal_id].bbox2d[cam];
-                        if (bbox2d->state == RectNull) {
-                            output2d_files[cam] << 1E7 <<  ","  << 1E7 <<  ",";
-                            output2d_files[cam] << 1E7 <<  ","  << 1E7 <<  ",";
-                        } else {
-                            output2d_files[cam] << bbox2d->rect->X.Min <<  ","  << bbox2d->rect->Y.Min <<  ",";
-                            output2d_files[cam] << bbox2d->rect->X.Max <<  ","  << bbox2d->rect->Y.Max <<  ",";
-                        }
-                        
                         std::vector<BoundingBox> valid_bboxes;
                         for (const auto& multi_bbox : animals->keypoints[animal_id].bbox2d_list[cam]) {
                             if (multi_bbox.state != RectNull && multi_bbox.rect != nullptr) {
                                 valid_bboxes.push_back(multi_bbox);
                             }
                         }
-                        
+
                         output2d_files[cam] << valid_bboxes.size() << ",";
-                        
+
                         for (const auto& multi_bbox : valid_bboxes) {
+                            output2d_files[cam] << multi_bbox.class_id << ",";
                             output2d_files[cam] << multi_bbox.rect->X.Min << "," << multi_bbox.rect->Y.Min << ",";
                             output2d_files[cam] << multi_bbox.rect->X.Max << "," << multi_bbox.rect->Y.Max << ",";
                         }
-                    } 
+                    }
                     if (skeleton->has_skeleton) {
                         KeyPoints2D* keypoints2d = animals->keypoints[animal_id].keypoints2d[cam];
                         for (int node = 0; node < skeleton->num_nodes; node++) {
@@ -341,6 +332,13 @@ void load_2d_keypoints(std::map<u32, Animals*>& keypoints_map, SkeletonContext* 
                         keypoints_map[frame_num]->keypoints[animal_id].bbox2d_list[cam_idx].clear();
                         
                         for (int bbox_i = 0; bbox_i < num_multi_bboxes; bbox_i++) {
+                            // Read class_id first
+                            pos = line.find(delimeter);
+                            token = line.substr(0, pos);
+                            int class_id = stoi(token);
+                            line.erase(0, pos + delimeter.length());
+                            
+                            // Then read bounding box coordinates
                             pos = line.find(delimeter);
                             token = line.substr(0, pos);
                             double multi_min_x = stod(token);
@@ -356,32 +354,25 @@ void load_2d_keypoints(std::map<u32, Animals*>& keypoints_map, SkeletonContext* 
                             double multi_max_x = stod(token);
                             line.erase(0, pos + delimeter.length());
                             
-                            pos = line.find(delimeter);
-                            token = line.substr(0, pos);
-                            double multi_max_y = stod(token);
-                            line.erase(0, pos + delimeter.length());
-                            
-                            pos = line.find(delimeter);
-                            token = line.substr(0, pos);
-                            int class_id = stoi(token);
-                            line.erase(0, pos + delimeter.length());
-                            
+                            // Handle last coordinate (max_y) which may not have trailing comma
                             pos = line.find(delimeter);
                             if (pos != std::string::npos) {
                                 token = line.substr(0, pos);
                                 line.erase(0, pos + delimeter.length());
                             } else {
+                                // Last token - take remainder of line
                                 token = line;
                                 line = "";
                             }
-                            float confidence = stof(token);
+                            double multi_max_y = stod(token);
                             
+                            // Only create bbox if it's valid (not placeholder values)
                             if (multi_min_x != 1E7 && multi_min_y != 1E7 && multi_max_x != 1E7 && multi_max_y != 1E7) {
                                 BoundingBox multi_bbox;
                                 multi_bbox.rect = new ImPlotRect(multi_min_x, multi_max_x, multi_min_y, multi_max_y);
                                 multi_bbox.state = RectTwoPoints;
-                                multi_bbox.class_id = class_id;
-                                multi_bbox.confidence = confidence;
+                                multi_bbox.class_id = class_id;  // Now properly loaded from CSV
+                                multi_bbox.confidence = 0.0f;  // Default since not saved
                                 keypoints_map[frame_num]->keypoints[animal_id].bbox2d_list[cam_idx].push_back(multi_bbox);
                             }
                         }

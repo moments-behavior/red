@@ -25,6 +25,11 @@
 
 simplelogger::Logger *logger = simplelogger::LoggerFactory::CreateConsoleLogger();
 
+// Global class mapping system for consistent class IDs between YOLO and user-drawn boxes
+std::map<int, int> global_class_to_animal; // Global mapping from class_id to animal_id
+std::map<int, int> global_animal_to_class; // Reverse mapping from animal_id to class_id
+int next_class_id = 0; // For assigning new class IDs
+
 struct YoloPrediction {
     float x, y, w, h;
     float confidence;
@@ -919,6 +924,52 @@ int main(int, char **)
 
                                 if (skeleton->has_bbox) {
                                     KeyPoints* frame_keypoints = &current_frame_data->keypoints[current_frame_data->active_id];
+                                    
+                                    // Get the appropriate class ID for this animal
+                                    int current_animal_id = current_frame_data->active_id;
+                                    int user_class_id = -1; // Default fallback
+                                    
+                                    // Check if this animal already has a class ID assigned
+                                    if (global_animal_to_class.find(current_animal_id) != global_animal_to_class.end()) {
+                                        user_class_id = global_animal_to_class[current_animal_id];
+                                    } else {
+                                        // Assign a new class ID for this animal
+                                        user_class_id = next_class_id++;
+                                        global_animal_to_class[current_animal_id] = user_class_id;
+                                        global_class_to_animal[user_class_id] = current_animal_id;
+                                        std::cout << "Assigned class ID " << user_class_id << " to animal " << current_animal_id << std::endl;
+                                    }
+                                    
+                                    // Handle multiple bounding boxes - allow user to draw multiple boxes like YOLO
+                                    if (ImGui::IsMouseClicked(ImGuiMouseButton_Middle, false)) {
+                                        // Create a new bounding box and add it to the list
+                                        ImPlotPoint mouse = ImPlot::GetPlotMousePos();
+                                        BoundingBox new_bbox;
+                                        new_bbox.rect = new ImPlotRect(mouse.x, mouse.x, mouse.y, mouse.y);
+                                        new_bbox.state = RectOnePoint;
+                                        new_bbox.class_id = user_class_id;  // Use the animal's assigned class ID
+                                        new_bbox.confidence = 1.0f;  // User-drawn boxes get full confidence
+                                        
+                                        // Add to the multiple bounding box list
+                                        frame_keypoints->bbox2d_list[j].push_back(new_bbox);
+                                        frame_keypoints->has_labels = true;
+                                        allow_exit = false;
+                                    }
+                                    
+                                    // Handle dragging for boxes in RectOnePoint state
+                                    for (auto& bbox : frame_keypoints->bbox2d_list[j]) {
+                                        if (bbox.state == RectOnePoint && ImGui::IsMouseDragging(ImGuiMouseButton_Middle)) {
+                                            ImPlotPoint mouse = ImPlot::GetPlotMousePos();
+                                            bbox.rect->X.Max = mouse.x;
+                                            bbox.rect->Y.Min = mouse.y;
+                                        }
+                                        
+                                        if (bbox.state == RectOnePoint && ImGui::IsMouseReleased(ImGuiMouseButton_Middle)) {
+                                            bbox.state = RectTwoPoints;
+                                        }
+                                    }
+                                    
+                                    // Keep backward compatibility with single bbox
                                     if (frame_keypoints->bbox2d[j].state == RectOnePoint && ImGui::IsMouseDragging(ImGuiMouseButton_Middle)) {
                                         ImPlotPoint mouse = ImPlot::GetPlotMousePos();
                                         frame_keypoints->bbox2d[j].rect->X.Max = mouse.x;
@@ -975,7 +1026,11 @@ int main(int, char **)
                                     KeyPoints* frame_keypoints = &current_frame_data->keypoints[animal_id];
                                     ImColor bbox_color = frame_keypoints->animal_color;
                                     
-                                    if (frame_keypoints->bbox2d[j].state != RectNull) {
+                                    // Only show single bbox if there are no multiple bboxes
+                                    bool has_multiple_bboxes = j < frame_keypoints->bbox2d_list.size() && 
+                                                             !frame_keypoints->bbox2d_list[j].empty();
+                                    
+                                    if (!has_multiple_bboxes && frame_keypoints->bbox2d[j].state != RectNull) {
                                         ImPlotRect* my_rect = frame_keypoints->bbox2d[j].rect;
                                         if (current_frame_data->active_id == animal_id) {
                                             ImPlot::DragRect(0,&my_rect->X.Min,&my_rect->Y.Min,&my_rect->X.Max,&my_rect->Y.Max, bbox_color, ImPlotDragToolFlags_None);
@@ -1014,6 +1069,15 @@ int main(int, char **)
                                                     std::string info_text = "Class:" + std::to_string(bbox.class_id) + 
                                                                           " Conf:" + std::to_string(bbox.confidence).substr(0, 4);
                                                     ImPlot::PlotText(info_text.c_str(), center_x, center_y);
+                                                    
+                                                    // Delete bounding box when 'Delete' key is pressed while hovering
+                                                    if (ImGui::IsKeyPressed(ImGuiKey_Delete, false)) {
+                                                        // Mark for deletion
+                                                        delete bbox.rect;
+                                                        bbox.rect = nullptr;
+                                                        bbox.state = RectNull;
+                                                        allow_exit = false;
+                                                    }
                                                 }
                                                 
                                                 if (bbox_modified) {
@@ -1490,4 +1554,4 @@ int main(int, char **)
         t.join();
 
     return 0;
-                }
+}
