@@ -11,6 +11,26 @@ import glob
 import subprocess
 from pathlib import Path
 import shutil
+import random
+import time
+
+def clear_dataset_directories(output_dir):
+    """Clear existing files from train and val directories."""
+    directories = [
+        os.path.join(output_dir, "train", "images"),
+        os.path.join(output_dir, "train", "labels"),
+        os.path.join(output_dir, "val", "images"),
+        os.path.join(output_dir, "val", "labels")
+    ]
+    
+    for directory in directories:
+        if os.path.exists(directory):
+            for filename in os.listdir(directory):
+                file_path = os.path.join(directory, filename)
+                if os.path.isfile(file_path):
+                    os.remove(file_path)
+            print(f"Cleared files from: {directory}")
+
 
 def find_most_recent_csv_files(data_root):
     """Find the most recent CSV files for each camera."""
@@ -239,7 +259,7 @@ def convert_bbox_to_yolo_format(bbox, img_width, img_height, original_width, ori
     
     # Normalize to [0, 1] range
     center_x_norm = center_x / img_width
-    center_y_norm = center_y / img_height
+    center_y_norm = (img_height - center_y) / img_height
     width_norm = width / img_width
     height_norm = height / img_height
     
@@ -247,10 +267,14 @@ def convert_bbox_to_yolo_format(bbox, img_width, img_height, original_width, ori
 
 def create_yolo_dataset(csv_files, video_files, data_root, output_dir):
     """Create YOLOv8 dataset structure from CSV files and extract corresponding frames."""
+    clear_dataset_directories(output_dir)
     
     # Create output directories
     train_images_dir = os.path.join(output_dir, "train", "images")
     train_labels_dir = os.path.join(output_dir, "train", "labels")
+
+    val_labels_dir = os.path.join(output_dir, "val", "labels")
+    val_images_dir = os.path.join(output_dir, "val", "images")
     
     os.makedirs(train_images_dir, exist_ok=True)
     os.makedirs(train_labels_dir, exist_ok=True)
@@ -262,6 +286,24 @@ def create_yolo_dataset(csv_files, video_files, data_root, output_dir):
     # Auto-detect original video dimensions from the first available video
     original_width = None
     original_height = None
+
+    # Set split for testing and validation
+    training_split = 0.8  # 80% for training
+    val_split = (1 - training_split)  # 20% for validation
+
+    now = int(time.time())
+    random.seed(now)  # Seed for reproducibility
+    random.shuffle(list(csv_files.items()))  # Shuffle CSV files for consistent splits
+    random.shuffle(list(video_files.items()))  # Shuffle video files for consistent splits
+
+    # Create train/val directories
+    os.makedirs(train_images_dir, exist_ok=True)
+    os.makedirs(train_labels_dir, exist_ok=True)
+    os.makedirs(val_images_dir, exist_ok=True)
+    os.makedirs(val_labels_dir, exist_ok=True)
+
+    # Randomly sort csv and video files to ensure consistent splits
+
     
     if video_files:
         first_video = list(video_files.values())[0]
@@ -329,7 +371,17 @@ def create_yolo_dataset(csv_files, video_files, data_root, output_dir):
     print(f"Found {len(frame_info)} unique frames to process")
     print(f"Detected class IDs: {sorted_class_ids}")
     print(f"Class mapping: {class_id_mapping}")
+
+    frame_items = list(frame_info.items())
+    random.shuffle(frame_items)
     
+    total_frames = len(frame_items)
+    train_count = int(total_frames * training_split)
+    
+    print(f"Total frames: {total_frames}, Training: {train_count}, Validation: {total_frames - train_count}")
+    
+    #TODO: Remove this since it probably isn't necessary
+
     # Copy YOLO model to dataset directory (2 directories up from CSV location)
     if csv_files:
         first_csv = list(csv_files.values())[0]
@@ -359,15 +411,20 @@ def create_yolo_dataset(csv_files, video_files, data_root, output_dir):
             print("No YOLO model files (.pt, .pth, .onnx) found in the expected directory")
     
     # Second pass: extract frames and create labels with normalized class IDs
-    for frame_key, info in frame_info.items():
+    for i, (frame_key, info) in enumerate(frame_items):
         cam_name = info['cam_name']
         frame_num = info['frame_num']
         bboxes = info['bboxes']
         
-        # Extract video frame if video file exists
+        # file save directories
         if cam_name in video_files:
-            image_file = os.path.join(train_images_dir, f"{frame_key}.jpg")
-            
+            if i < train_count:  # Use train_count instead of len(frame_info) * training_split
+                image_file = os.path.join(train_images_dir, f"{frame_key}.jpg")
+                label_file = os.path.join(train_labels_dir, f"{frame_key}.txt")
+            else:
+                image_file = os.path.join(val_images_dir, f"{frame_key}.jpg")
+                label_file = os.path.join(val_labels_dir, f"{frame_key}.txt")
+
             print(f"Extracting frame {frame_num} from {cam_name}...")
             success = extract_frame_with_ffmpeg(
                 video_files[cam_name], 
@@ -382,9 +439,6 @@ def create_yolo_dataset(csv_files, video_files, data_root, output_dir):
         else:
             print(f"Warning: No video file found for {cam_name}, skipping frame extraction")
             continue
-        
-        # Create YOLO format label file with normalized class IDs
-        label_file = os.path.join(train_labels_dir, f"{frame_key}.txt")
         
         with open(label_file, 'w') as lf:
             for bbox in bboxes:
@@ -412,9 +466,8 @@ def create_yolo_dataset(csv_files, video_files, data_root, output_dir):
     
     yaml_content = f"""# YOLOv8 dataset configuration
 # Generated automatically from RED CSV export
-path: {os.path.abspath(output_dir)}
 train: train/images
-val: train/images  # Using same for validation, split manually if needed
+val: train/images
 
 # Classes detected from CSV data
 # Original class IDs: {sorted_class_ids}
@@ -424,7 +477,7 @@ val: train/images  # Using same for validation, split manually if needed
 nc: {len(sorted_class_ids)}  # number of classes
 """
     
-    with open(os.path.join(output_dir, "dataset.yaml"), 'w') as f:
+    with open(os.path.join(output_dir, "data.yaml"), 'w') as f:
         f.write(yaml_content)
     
     # Also create a class mapping reference file
@@ -520,9 +573,9 @@ def main():
     print("Dataset includes:")
     print("- Extracted video frames resized to 640x640")
     print("- YOLO format labels with adjusted coordinates")
-    print("- dataset.yaml configuration file")
+    print("- data.yaml configuration file")
     print("\nNext steps:")
-    print("1. Update dataset.yaml with correct class names and count")
+    print("1. Update data.yaml with correct class names and count")
     print("2. Split into train/val datasets if needed")
     print("3. Train your YOLOv8 model!")
 
