@@ -182,10 +182,15 @@ std::vector<YoloPrediction> runYoloInference(const std::string& model_path, unsi
         }
         std::cout << "]" << std::endl;
         
-        if (output.dim() == 3 && output.size(1) == 6) {
-            output = output.permute({0, 2, 1}); 
+        if (output.dim() == 3) {
+            output = output.permute({0, 2, 1});
         }
-        output = output.squeeze(0); 
+        output = output.squeeze(0);  
+        
+        if (output.dim() != 2) {
+            std::cerr << "Unexpected output tensor dimensions: " << output.dim() << std::endl;
+            return predictions;
+        }
         
         float conf_threshold = 0.25f;
         float scale_x = static_cast<float>(width) / 640.0f;
@@ -198,13 +203,16 @@ std::vector<YoloPrediction> runYoloInference(const std::string& model_path, unsi
         std::cout << "Processing " << num_detections << " detections with " << output_features << " features per detection" << std::endl;
         
         for (int i = 0; i < num_detections; ++i) {
-            float confidence, class_score;
+            float confidence;
             int class_id;
             
             if (output_features == 6) {
                 confidence = output_accessor[i][4];
                 class_id = static_cast<int>(output_accessor[i][5]);
-            } else if (output_features >= 84) {
+            } else if (output_features == 5) {
+                confidence = output_accessor[i][4];
+                class_id = 0;
+            } else if (output_features > 5) {
                 float max_score = 0.0f;
                 int max_class = -1;
                 for (int c = 0; c < (output_features - 4); ++c) {
@@ -503,6 +511,7 @@ int main(int, char **)
                     input_file_names.push_back(entry.path().string());
                 }
 
+                // DO NOT MODIFY THE LINE BELOW
                 std::sort(input_file_names.begin(), input_file_names.end(), numerical_compare_substr);
 
                 for (u32 i = 0; i < input_file_names.size(); i++)
@@ -1540,18 +1549,103 @@ int main(int, char **)
 
     }
 
-    // Cleanup
-    ImGui_ImplOpenGL3_Shutdown();
-    ImGui_ImplGlfw_Shutdown();
-    ImGui::DestroyContext();
-
-    glfwDestroyWindow(window->render_target);
-    glfwTerminate();
-
+    // Cleanup before exit to prevent crashes
+    
+    // Stop decoding
     dc_context->stop_flag = true;
-    // wait for threads to join
-    for (auto &t : decoder_threads)
-        t.join();
+    
+    // Clean up keypoints_map
+    for (auto& kv_pair : keypoints_map) {
+        if (kv_pair.second) {
+            delete_all_labels(kv_pair.second, scene, skeleton, number_of_animals);
+        }
+    }
+    keypoints_map.clear();
+    
+    // Clean up skeleton if allocated
+    if (skeleton_chosen && skeleton) {
+        delete skeleton;
+        skeleton = nullptr;
+    }
+    
+    // Clean up scene resources - manual cleanup since no dedicated function exists
+    if (scene) {
+        if (scene->image_width) free(scene->image_width);
+        if (scene->image_height) free(scene->image_height);
+        if (scene->image_texture) {
+            for (u32 i = 0; i < scene->num_cams; i++) {
+                glDeleteTextures(1, &scene->image_texture[i]);
+            }
+            free(scene->image_texture);
+        }
+        if (scene->seek_context) free(scene->seek_context);
+        if (scene->display_buffer) {
+            for (u32 i = 0; i < scene->num_cams; i++) {
+                if (scene->display_buffer[i]) {
+                    for (u32 j = 0; j < scene->size_of_buffer; j++) {
+                        if (scene->display_buffer[i][j].frame) {
+                            if (scene->use_cpu_buffer) {
+                                free(scene->display_buffer[i][j].frame);
+                            } else {
+                                cudaFree(scene->display_buffer[i][j].frame);
+                            }
+                        }
+                    }
+                    free(scene->display_buffer[i]);
+                }
+            }
+            free(scene->display_buffer);
+        }
+        if (scene->pbo_cuda) {
+            for (u32 i = 0; i < scene->num_cams; i++) {
+                glDeleteBuffers(1, &scene->pbo_cuda[i].pbo);
+                if (scene->pbo_cuda[i].cuda_buffer) {
+                    cudaFree(scene->pbo_cuda[i].cuda_buffer);
+                }
+            }
+            free(scene->pbo_cuda);
+        }
+        free(scene);
+        scene = nullptr;
+    }
+    
+    // Clean up decoder context
+    if (dc_context) {
+        free(dc_context);
+        dc_context = nullptr;
+    }
+    
+    // Clean up demuxers
+    for (auto* demuxer : demuxers) {
+        if (demuxer) {
+            delete demuxer;
+        }
+    }
+    demuxers.clear();
+    
+    // Clean up window resources
+    if (window) {
+        if (window->render_target_title) {
+            free(window->render_target_title);
+        }
+        if (window->glsl_version) {
+            free(window->glsl_version);
+        }
+        
+        // Shutdown ImGui
+        ImGui_ImplOpenGL3_Shutdown();
+        ImGui_ImplGlfw_Shutdown();
+        ImGui::DestroyContext();
+        
+        // Cleanup GLFW
+        if (window->render_target) {
+            glfwDestroyWindow(window->render_target);
+        }
+        glfwTerminate();
+        
+        free(window);
+        window = nullptr;
+    }
 
     return 0;
 }
