@@ -271,12 +271,28 @@ std::vector<YoloPrediction> runYoloInference(const std::string& model_path, unsi
 int main(int, char **)
 {
     gx_context *window = (gx_context *)malloc(sizeof(gx_context));
+    
+    // Initialize all fields to safe values first
     *window = (gx_context){
         .swap_interval = 1, // use vsync
         .width = 1920,
         .height = 1080,
-        .render_target_title = (char *)malloc(100), // window title
-        .glsl_version = (char *)malloc(100)};
+        .render_target = nullptr,
+        .render_target_title = nullptr,
+        .glsl_version = nullptr
+    };
+    
+    // Allocate and initialize memory safely
+    window->render_target_title = (char *)malloc(100);
+    if (window->render_target_title) {
+        strcpy(window->render_target_title, "RED Labeling Tool");
+    }
+    
+    window->glsl_version = (char *)malloc(100);
+    if (window->glsl_version) {
+        // Initialize to empty string - will be set by render_initialize_target
+        window->glsl_version[0] = '\0';
+    }
 
     render_initialize_target(window);
 
@@ -1559,93 +1575,15 @@ int main(int, char **)
 
     }
 
-    // Cleanup before exit to prevent crashes
-    
-    // Stop decoding
     dc_context->stop_flag = true;
     
-    // Clean up keypoints_map
-    for (auto& kv_pair : keypoints_map) {
-        if (kv_pair.second) {
-            delete_all_labels(kv_pair.second, scene, skeleton, number_of_animals);
-        }
-    }
     keypoints_map.clear();
-    
-    // Clean up skeleton if allocated
-    if (skeleton_chosen && skeleton) {
-        delete skeleton;
-        skeleton = nullptr;
-    }
-    
-    // Clean up scene resources - manual cleanup since no dedicated function exists
-    if (scene) {
-        if (scene->image_width) free(scene->image_width);
-        if (scene->image_height) free(scene->image_height);
-        if (scene->image_texture) {
-            for (u32 i = 0; i < scene->num_cams; i++) {
-                glDeleteTextures(1, &scene->image_texture[i]);
-            }
-            free(scene->image_texture);
-        }
-        if (scene->seek_context) free(scene->seek_context);
-        if (scene->display_buffer) {
-            for (u32 i = 0; i < scene->num_cams; i++) {
-                if (scene->display_buffer[i]) {
-                    for (u32 j = 0; j < scene->size_of_buffer; j++) {
-                        if (scene->display_buffer[i][j].frame) {
-                            if (scene->use_cpu_buffer) {
-                                free(scene->display_buffer[i][j].frame);
-                            } else {
-                                cudaFree(scene->display_buffer[i][j].frame);
-                            }
-                        }
-                    }
-                    free(scene->display_buffer[i]);
-                }
-            }
-            free(scene->display_buffer);
-        }
-        if (scene->pbo_cuda) {
-            for (u32 i = 0; i < scene->num_cams; i++) {
-                glDeleteBuffers(1, &scene->pbo_cuda[i].pbo);
-                if (scene->pbo_cuda[i].cuda_buffer) {
-                    cudaFree(scene->pbo_cuda[i].cuda_buffer);
-                }
-            }
-            free(scene->pbo_cuda);
-        }
-        free(scene);
-        scene = nullptr;
-    }
-    
-    // Clean up decoder context
-    if (dc_context) {
-        free(dc_context);
-        dc_context = nullptr;
-    }
-    
-    // Clean up demuxers
-    for (auto* demuxer : demuxers) {
-        if (demuxer) {
-            delete demuxer;
-        }
-    }
-    demuxers.clear();
-    
-    // Clean up window resources
     if (window) {
-        if (window->render_target_title) {
-            free(window->render_target_title);
-        }
-        if (window->glsl_version) {
-            free(window->glsl_version);
-        }
         
         // Shutdown ImGui
         ImGui_ImplOpenGL3_Shutdown();
         ImGui_ImplGlfw_Shutdown();
-        ImGui::DestroyContext();
+            ImGui::DestroyContext();
         
         // Cleanup GLFW
         if (window->render_target) {
