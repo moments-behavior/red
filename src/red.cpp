@@ -1576,6 +1576,12 @@ int main(int, char **)
     }
 
     dc_context->stop_flag = true;
+
+    for (auto& thread : decoder_threads) {
+        if (thread.joinable()) {
+            thread.join();
+        }
+    }
     
     keypoints_map.clear();
     if (window) {
