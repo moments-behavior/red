@@ -511,7 +511,6 @@ int main(int, char **)
                     input_file_names.push_back(entry.path().string());
                 }
 
-                // DO NOT MODIFY THE LINE BELOW
                 std::sort(input_file_names.begin(), input_file_names.end(), numerical_compare_substr);
 
                 for (u32 i = 0; i < input_file_names.size(); i++)
@@ -796,7 +795,6 @@ int main(int, char **)
                         for (size_t bbox_idx = 0; bbox_idx < yolo_bboxes[j].size(); ++bbox_idx) {
                             auto& bbox = yolo_bboxes[j][bbox_idx];
                             if (bbox.is_valid) {
-                                // Check if this YOLO bbox has already been converted to a user bbox
                                 bool already_converted = false;
                                 if (keypoints_find) {
                                     Animals* current_frame_data = keypoints_map[current_frame_num];
@@ -805,7 +803,6 @@ int main(int, char **)
                                         if (j < frame_keypoints->bbox2d_list.size()) {
                                             for (const auto& user_bbox : frame_keypoints->bbox2d_list[j]) {
                                                 if (user_bbox.state != RectNull && user_bbox.rect != nullptr) {
-                                                    // Check if this user bbox roughly matches the YOLO bbox
                                                     double tolerance = 10.0; // pixels
                                                     if (std::abs(user_bbox.rect->X.Min - bbox.x_min) < tolerance &&
                                                         std::abs(user_bbox.rect->Y.Min - bbox.y_min) < tolerance &&
@@ -949,23 +946,19 @@ int main(int, char **)
                                         std::cout << "Assigned class ID " << user_class_id << " to animal " << current_animal_id << std::endl;
                                     }
                                     
-                                    // Handle multiple bounding boxes - allow user to draw multiple boxes like YOLO
                                     if (ImGui::IsMouseClicked(ImGuiMouseButton_Middle, false)) {
-                                        // Create a new bounding box and add it to the list
                                         ImPlotPoint mouse = ImPlot::GetPlotMousePos();
                                         BoundingBox new_bbox;
                                         new_bbox.rect = new ImPlotRect(mouse.x, mouse.x, mouse.y, mouse.y);
                                         new_bbox.state = RectOnePoint;
-                                        new_bbox.class_id = user_class_id;  // Use the animal's assigned class ID
-                                        new_bbox.confidence = 1.0f;  // User-drawn boxes get full confidence
+                                        new_bbox.class_id = user_class_id;  
+                                        new_bbox.confidence = 1.0f; 
                                         
-                                        // Add to the multiple bounding box list
                                         frame_keypoints->bbox2d_list[j].push_back(new_bbox);
                                         frame_keypoints->has_labels = true;
                                         allow_exit = false;
                                     }
                                     
-                                    // Handle dragging for boxes in RectOnePoint state
                                     for (auto& bbox : frame_keypoints->bbox2d_list[j]) {
                                         if (bbox.state == RectOnePoint && ImGui::IsMouseDragging(ImGuiMouseButton_Middle)) {
                                             ImPlotPoint mouse = ImPlot::GetPlotMousePos();
@@ -978,7 +971,6 @@ int main(int, char **)
                                         }
                                     }
                                     
-                                    // Keep backward compatibility with single bbox
                                     if (frame_keypoints->bbox2d[j].state == RectOnePoint && ImGui::IsMouseDragging(ImGuiMouseButton_Middle)) {
                                         ImPlotPoint mouse = ImPlot::GetPlotMousePos();
                                         frame_keypoints->bbox2d[j].rect->X.Max = mouse.x;
@@ -1079,18 +1071,33 @@ int main(int, char **)
                                                                           " Conf:" + std::to_string(bbox.confidence).substr(0, 4);
                                                     ImPlot::PlotText(info_text.c_str(), center_x, center_y);
                                                     
-                                                    // Delete bounding box when 'Delete' key is pressed while hovering
-                                                    if (ImGui::IsKeyPressed(ImGuiKey_Delete, false)) {
-                                                        // Mark for deletion
+                                                    // Delete bounding box from current camera when 'r' key is pressed while hovering
+                                                    if (ImGui::IsKeyPressed(ImGuiKey_R, false)) {
+                                                        // Mark for deletion by setting state to RectNull
                                                         delete bbox.rect;
                                                         bbox.rect = nullptr;
                                                         bbox.state = RectNull;
                                                         allow_exit = false;
                                                     }
-                                                }
-                                                
-                                                if (bbox_modified) {
-                                                    allow_exit = false;
+                                                    
+                                                    // Delete bounding box from all cameras when 'f' key is pressed while hovering
+                                                    if (ImGui::IsKeyPressed(ImGuiKey_F, false)) {
+                                                        // Find this bbox's class_id and delete all bboxes with same class from all cameras
+                                                        int target_class_id = bbox.class_id;
+                                                        for (int cam_idx = 0; cam_idx < scene->num_cams; cam_idx++) {
+                                                            auto& bbox_list = frame_keypoints->bbox2d_list[cam_idx];
+                                                            for (auto& other_bbox : bbox_list) {
+                                                                if (other_bbox.class_id == target_class_id && 
+                                                                    other_bbox.state != RectNull && 
+                                                                    other_bbox.rect != nullptr) {
+                                                                    delete other_bbox.rect;
+                                                                    other_bbox.rect = nullptr;
+                                                                    other_bbox.state = RectNull;
+                                                                }
+                                                            }
+                                                        }
+                                                        allow_exit = false;
+                                                    }
                                                 }
                                             }
                                         }
@@ -1490,6 +1497,9 @@ int main(int, char **)
 
                 ImGui::SeparatorText("Bounding box");
                 ImGui::Text("<mouse middle button>: draw bbox, drag then release to finish drawing the bbox");
+                ImGui::Text("While hovering bounding boxes");
+                ImGui::Text("<r>: delete bounding box from current camera");
+                ImGui::Text("<f>: delete bounding box from all cameras");
 
                 ImGui::SeparatorText("Keypoint");
                 ImGui::Text("<w>: drop active keypoint");
