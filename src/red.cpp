@@ -1088,7 +1088,7 @@ int main(int, char **)
                                                     ImPlot::PlotText(info_text.c_str(), center_x, center_y);
                                                     
                                                     // Delete bounding box from current camera when 'r' key is pressed while hovering
-                                                    if (ImGui::IsKeyPressed(ImGuiKey_R, false)) {
+                                                    if (ImGui::IsKeyPressed(ImGuiKey_T, false)) {
                                                         // Mark for deletion by setting state to RectNull
                                                         delete bbox.rect;
                                                         bbox.rect = nullptr;
@@ -1514,7 +1514,7 @@ int main(int, char **)
                 ImGui::SeparatorText("Bounding box");
                 ImGui::Text("<mouse middle button>: draw bbox, drag then release to finish drawing the bbox");
                 ImGui::Text("While hovering bounding boxes");
-                ImGui::Text("<r>: delete bounding box from current camera");
+                ImGui::Text("<t>: delete bounding box from current camera");
                 ImGui::Text("<f>: delete bounding box from all cameras");
 
                 ImGui::SeparatorText("Keypoint");

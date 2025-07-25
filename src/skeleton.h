@@ -58,6 +58,7 @@ enum SkeletonPrimitive {
     SP_FISH6,
     SP_FISH12,
     SP_BBOX,
+    SP_SIMPLE_BBOX_SKELETON,
     SP_LOAD
 };
 
@@ -67,6 +68,7 @@ std::map<std::string, SkeletonPrimitive> skeleton_get_all()
         {"Fish6", SP_FISH6},
         {"Fish12", SP_FISH12},
         {"BoundingBox", SP_BBOX},
+        {"Simple BBox+Skeleton", SP_SIMPLE_BBOX_SKELETON},
         {"Load from root folder", SP_LOAD}
     };
     return skeleton_all;
@@ -149,6 +151,23 @@ void skeleton_initialize(std::string name, std::string root_dir, SkeletonContext
             skeleton->has_skeleton = false;
             break;
         
+        case SP_SIMPLE_BBOX_SKELETON:
+            skeleton->name = name;
+            skeleton->has_skeleton = true;
+            skeleton->has_bbox = true;
+            skeleton->num_nodes = 2;
+            skeleton->num_edges = 1;
+            skeleton->node_names = {"Point1", "Point2"};
+
+            for (int i = 0; i < skeleton->num_nodes; i++) {
+                ImVec4 color = (ImVec4)ImColor::HSV(i / (float)skeleton->num_nodes, 1.0f, 1.0f);
+                skeleton->node_colors.push_back(color);
+            }
+
+            skeleton->edges = {
+                {0, 1}};
+                break;
+
         case SP_LOAD:
             std::string skeleton_file_name  = root_dir + "/skeleton.json";
             load_skeleton_json(skeleton_file_name, skeleton);
