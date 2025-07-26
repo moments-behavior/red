@@ -71,7 +71,7 @@ std::map<std::string, SkeletonPrimitive> skeleton_get_all() {
         {"Rat24", Rat24},
         {"Rat20Target", Rat20Target},
         {"Rat24Target", Rat24Target},
-        {"Load from root folder", SP_LOAD}};
+        {"Load from json", SP_LOAD}};
     return skeleton_all;
 }
 

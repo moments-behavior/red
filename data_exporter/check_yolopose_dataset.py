@@ -7,6 +7,33 @@ import yaml
 import numpy as np
 
 
+def letterbox(img, new_shape=(640, 640), color=(114, 114, 114)):
+    """Resize and pad image to meet YOLO input requirements."""
+    h, w = img.shape[:2]
+    scale = min(new_shape[0] / h, new_shape[1] / w)
+    nh, nw = int(h * scale), int(w * scale)
+    img_resized = cv2.resize(img, (nw, nh), interpolation=cv2.INTER_LINEAR)
+
+    # Compute padding
+    pad_top = (new_shape[0] - nh) // 2
+    pad_bottom = new_shape[0] - nh - pad_top
+    pad_left = (new_shape[1] - nw) // 2
+    pad_right = new_shape[1] - nw - pad_left
+
+    # Pad image
+    img_padded = cv2.copyMakeBorder(
+        img_resized,
+        pad_top,
+        pad_bottom,
+        pad_left,
+        pad_right,
+        cv2.BORDER_CONSTANT,
+        value=color,
+    )
+
+    return img_padded, scale, (pad_left, pad_top)
+
+
 def get_colors(n):
     hsv = np.zeros((n, 1, 3), dtype=np.uint8)
     for i in range(n):
@@ -19,10 +46,12 @@ def get_colors(n):
 parser = argparse.ArgumentParser()
 parser.add_argument("-y", "--yaml_file", type=str, required=True)
 parser.add_argument("-s", "--set_name", type=str, default="train")
+parser.add_argument("-d", "--downsample", type=int, default="640")
 
 args = parser.parse_args()
 yaml_file = args.yaml_file
 set_name = args.set_name
+downsample = args.downsample
 
 with open(yaml_file, "r") as f:
     config = yaml.safe_load(f)
@@ -33,6 +62,7 @@ colors = get_colors(num_classes)
 
 # Access values
 print("Dataset path:", config["path"])
+draw_keypoint = True
 
 
 def convert_yolobbox_cv_rectangle(yolo_bbox, frame_width, frame_height):
@@ -53,6 +83,7 @@ image_files.sort()
 image_name = []
 for image in image_files:
     image_name.append(image.split("/")[-1].split(".")[0])
+
 
 sel_idx = 0
 while True:
@@ -75,42 +106,44 @@ while True:
             class_id = int(row[0])
             label[class_id] = [float(x) for x in row[1:]]
 
-    for key, value in label.items():
-        bbox = value[:4]
-        top_left, bottom_right = convert_yolobbox_cv_rectangle(
-            bbox, width, height
-        )
-        thickness = 5
-        img = cv2.rectangle(
-            img, top_left, bottom_right, colors[key], thickness
-        )
+    if draw_keypoint:
+        for key, value in label.items():
+            bbox = value[:4]
+            top_left, bottom_right = convert_yolobbox_cv_rectangle(
+                bbox, width, height
+            )
+            thickness = 5
+            img = cv2.rectangle(
+                img, top_left, bottom_right, colors[key], thickness
+            )
 
-        text_pos = (top_left[0], top_left[1] - 5)
-        cv2.putText(
-            img,
-            class_names[key],
-            text_pos,
-            cv2.FONT_HERSHEY_SIMPLEX,
-            2,
-            colors[key],
-            2,
-            cv2.LINE_AA,
-        )
-        keypoints = np.asarray(value[4:])
-        keypoints = keypoints.reshape([-1, 3])
-        for i in range(keypoints.shape[0]):
-            x, y, visible = keypoints[i]
-            if visible:
-                point = (int(round(x * width)), int(round(y * height)))
-                cv2.circle(
-                    img,
-                    point,
-                    radius=10,
-                    color=colors[key],
-                    thickness=-1,
-                )
+            text_pos = (top_left[0], top_left[1] - 5)
+            cv2.putText(
+                img,
+                class_names[key],
+                text_pos,
+                cv2.FONT_HERSHEY_SIMPLEX,
+                2,
+                colors[key],
+                2,
+                cv2.LINE_AA,
+            )
+            keypoints = np.asarray(value[4:])
+            keypoints = keypoints.reshape([-1, 3])
+            for i in range(keypoints.shape[0]):
+                x, y, visible = keypoints[i]
+                if visible:
+                    point = (int(round(x * width)), int(round(y * height)))
+                    cv2.circle(
+                        img,
+                        point,
+                        radius=10,
+                        color=colors[key],
+                        thickness=-1,
+                    )
 
-    img = cv2.resize(img, None, fx=1 / 2, fy=1 / 2)
+    img, scale, pad = letterbox(img, (downsample, downsample))
+
     cv2.putText(
         img,
         sel_image,
@@ -128,4 +161,7 @@ while True:
     if key == ord("q"):
         cv2.destroyAllWindows()
         break
-    sel_idx = sel_idx + 1
+    elif key == ord("n"):
+        sel_idx = sel_idx + 1
+    elif key == ord("t"):
+        draw_keypoint = not draw_keypoint

@@ -36,7 +36,7 @@ void gx_init(gx_context *context, GLFWwindow *render_target) {
     context->render_target = render_target;
     glfwMakeContextCurrent(render_target);
     gx_glew_error_callback(glewInit());
-    glfwSwapInterval(1); // Enable vsync
+    glfwSwapInterval(context->swap_interval); // Enable vsync
 }
 
 GLFWwindow *gx_glfw_init_render_target(u32 marjor_version, u32 minor_version,

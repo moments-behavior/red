@@ -74,7 +74,7 @@ def save_image_label(
                         label_one_frame[4],
                         metadata.width,
                         metadata.height,
-                        120,
+                        55,
                         4,
                     )
                     f.write(line)
