@@ -69,7 +69,7 @@ std::map<std::string, SkeletonPrimitive> skeleton_get_all()
         {"Fish12", SP_FISH12},
         {"BoundingBox", SP_BBOX},
         {"Simple BBox+Skeleton", SP_SIMPLE_BBOX_SKELETON},
-        {"Load from root folder", SP_LOAD}
+        {"Load from JSON", SP_LOAD}
     };
     return skeleton_all;
 }
@@ -169,12 +169,8 @@ void skeleton_initialize(std::string name, std::string root_dir, SkeletonContext
                 break;
 
         case SP_LOAD:
-            std::string skeleton_file_name  = root_dir + "/skeleton.json";
-            load_skeleton_json(skeleton_file_name, skeleton);
-            for (int i = 0; i < skeleton->num_nodes; i++) {
-                ImVec4 color = (ImVec4)ImColor::HSV(i / (float)skeleton->num_nodes, 1.0f, 1.0f);
-                skeleton->node_colors.push_back(color);
-            }
+            // This case is now handled by file dialog in main application
+            skeleton->name = name;
             break;
     }
 };

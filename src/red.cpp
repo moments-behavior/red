@@ -344,6 +344,9 @@ int main(int, char **)
     ImGui::FileBrowser file_dialog(ImGuiFileBrowserFlags_SelectDirectory);
     ImGui::FileBrowser model_file_dialog;
     ImGui::FileBrowser skeleton_file_dialog;
+    bool pending_skeleton_load = false; 
+    std::string selected_skeleton_name; 
+    
     #ifdef _WIN32
         std::string cwd = std::filesystem::current_path().string();
     #else
@@ -477,16 +480,21 @@ int main(int, char **)
                             
                             if(ImGui::MenuItem(element.first.c_str(), NULL, skeleton->name == element.first, !skeleton_chosen))
                             {
-                                skeleton_chosen = true;
-                                skeleton = new SkeletonContext;
-                                skeleton_initialize(element.first, root_dir, skeleton, element.second);
-                                plot_keypoints_flag = true;
-                                keypoints_root_folder = root_dir + "/labeled_data/";
-                                // create folders
-                                std::filesystem::create_directory(keypoints_root_folder);
-                                std::filesystem::create_directory(keypoints_root_folder + "/worldKeyPoints");
-                                for (u32 i = 0; i < scene->num_cams; i++) {
-                                    std::filesystem::create_directory(keypoints_root_folder + "/" + camera_names[i]);
+                                if (element.second == SP_LOAD) {
+                                    pending_skeleton_load = true;
+                                    selected_skeleton_name = element.first;
+                                    skeleton_file_dialog.Open();
+                                } else {
+                                    skeleton_chosen = true;
+                                    skeleton = new SkeletonContext;
+                                    skeleton_initialize(element.first, root_dir, skeleton, element.second);
+                                    plot_keypoints_flag = true;
+                                    keypoints_root_folder = root_dir + "/labeled_data/";
+                                    std::filesystem::create_directory(keypoints_root_folder);
+                                    std::filesystem::create_directory(keypoints_root_folder + "/worldKeyPoints");
+                                    for (u32 i = 0; i < scene->num_cams; i++) {
+                                        std::filesystem::create_directory(keypoints_root_folder + "/" + camera_names[i]);
+                                    }
                                 }
                             }
                         }
@@ -570,7 +578,6 @@ int main(int, char **)
                     input_file_names.push_back(entry.path().string());
                 }
 
-                // DO NOT MODIFY LINE BELOW
                 std::sort(input_file_names.begin(), input_file_names.end(), numerical_compare_substr);
 
                 for (u32 i = 0; i < input_file_names.size(); i++)
@@ -1641,7 +1648,14 @@ int main(int, char **)
                                 
                                 if (!edge_exists) {
                                     creator_edges.emplace_back(selected_node_for_edge, node.id);
+                                } else {
+                                    // Delete the existing edge
+                                    creator_edges.erase(std::remove_if(creator_edges.begin(), creator_edges.end(),
+                                        [selected_node_for_edge, node_id = node.id](const SkeletonCreatorEdge& edge) {
+                                            return (edge.node1_id == selected_node_for_edge && edge.node2_id == node_id) || (edge.node1_id == node_id && edge.node2_id == selected_node_for_edge);
+                                        }), creator_edges.end());
                                 }
+                                 
                                 selected_node_for_edge = -1;
                             } else {
                                 selected_node_for_edge = -1; 
@@ -1654,14 +1668,14 @@ int main(int, char **)
                 
                 if (selected_node_for_edge >= 0) {
                    
-                    ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "Selected node for edge creation. Ctrl+Click another node to create edge, or press ESC to cancel.");
+                    ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "Selected node for edge creation. Ctrl+Click another node to create edge or remove existing edge, or press ESC to cancel.");
                 }
                 
                 ImGui::SeparatorText("Help");
                 ImGui::BulletText("Left-click in the plot area to add a new node");
                 ImGui::BulletText("Drag nodes to reposition them");
                 ImGui::BulletText("Ctrl+Click a node to select it for edge creation");
-                ImGui::BulletText("Ctrl+Click another node to create an edge between them");
+                ImGui::BulletText("Ctrl+Click another node to create an edge or remove an existing edge between them");
                 ImGui::BulletText("Press ESC to cancel edge creation");
                 ImGui::BulletText("Press R while hovering a node to delete it and its edges");
                 
@@ -1720,9 +1734,9 @@ int main(int, char **)
                     }
                 }
                 
-                if (ImGui::Button("Load selected")) {
-                    skeleton_file_dialog.Open();
-                }
+                // if (ImGui::Button("Load selected")) {
+                //     skeleton_file_dialog.Open();
+                // }
                 
                 if (!creator_nodes.empty()) {
                     ImGui::SeparatorText("Nodes");
@@ -1768,55 +1782,89 @@ int main(int, char **)
             std::string selected_skeleton_path = skeleton_file_dialog.GetSelected().string();
             std::cout << "Loading skeleton from: " << selected_skeleton_path << std::endl;
             
-            try {
-                std::ifstream f(selected_skeleton_path);
-                if (!f.is_open()) {
-                    std::cerr << "Failed to open skeleton file: " << selected_skeleton_path << std::endl;
-                } else {
-                    json skeleton_json = json::parse(f);
-                    f.close();
+            if (pending_skeleton_load) {
+                // Handle skeleton loading for "Load from root folder" option
+                try {
+                    skeleton_chosen = true;
+                    skeleton = new SkeletonContext;
+                    load_skeleton_json(selected_skeleton_path, skeleton);
                     
-                    // Clear existing skeleton creator data
-                    creator_nodes.clear();
-                    creator_edges.clear();
-                    next_node_id = 0;
-                    selected_node_for_edge = -1;
-                    
-                    // Load skeleton data
-                    skeleton_creator_name = skeleton_json["name"];
-                    skeleton_creator_has_bbox = skeleton_json["has_bbox"];
-                    skeleton_creator_has_skeleton = skeleton_json["has_skeleton"];
-                    
-                    // Load nodes
-                    std::vector<std::string> node_names = skeleton_json["node_names"];
-                    for (size_t i = 0; i < node_names.size(); i++) {
-                        SkeletonCreatorNode node;
-                        node.id = (int)i;
-                        node.name = node_names[i];
-                        // Position nodes in a grid layout for visualization
-                        int cols = (int)std::ceil(std::sqrt(node_names.size()));
-                        node.position.x = 0.1 + (i % cols) * (0.8 / std::max(1, cols - 1));
-                        node.position.y = 0.1 + (i / cols) * (0.8 / std::max(1, (int)node_names.size() / cols));
-                        node.color = (ImVec4)ImColor::HSV(i / (float)node_names.size(), 1.0f, 1.0f);
-                        creator_nodes.push_back(node);
-                    }
-                    next_node_id = (int)node_names.size();
-                    
-                    // Load edges
-                    std::vector<std::vector<int>> edges = skeleton_json["edges"];
-                    for (const auto& edge : edges) {
-                        if (edge.size() >= 2 && edge[0] >= 0 && edge[1] >= 0 && 
-                            edge[0] < (int)creator_nodes.size() && edge[1] < (int)creator_nodes.size()) {
-                            creator_edges.emplace_back(creator_nodes[edge[0]].id, creator_nodes[edge[1]].id);
-                        }
+                    // Generate colors for nodes
+                    for (int i = 0; i < skeleton->num_nodes; i++) {
+                        ImVec4 color = (ImVec4)ImColor::HSV(i / (float)skeleton->num_nodes, 1.0f, 1.0f);
+                        skeleton->node_colors.push_back(color);
                     }
                     
-                    std::cout << "Successfully loaded skeleton '" << skeleton_creator_name 
-                              << "' with " << creator_nodes.size() << " nodes and " 
-                              << creator_edges.size() << " edges" << std::endl;
+                    plot_keypoints_flag = true;
+                    keypoints_root_folder = root_dir + "/labeled_data/";
+                    // create folders
+                    std::filesystem::create_directory(keypoints_root_folder);
+                    std::filesystem::create_directory(keypoints_root_folder + "/worldKeyPoints");
+                    for (u32 i = 0; i < scene->num_cams; i++) {
+                        std::filesystem::create_directory(keypoints_root_folder + "/" + camera_names[i]);
+                    }
+                    
+                    std::cout << "Successfully loaded skeleton from file for '" << selected_skeleton_name 
+                              << "' with " << skeleton->num_nodes << " nodes and " 
+                              << skeleton->num_edges << " edges" << std::endl;
+                } catch (const std::exception& e) {
+                    std::cerr << "Error loading skeleton JSON for main skeleton selection: " << e.what() << std::endl;
+                    skeleton_chosen = false;
                 }
-            } catch (const std::exception& e) {
-                std::cerr << "Error loading skeleton JSON: " << e.what() << std::endl;
+                
+                pending_skeleton_load = false;
+            } else {
+                // Handle skeleton loading for skeleton creator
+                try {
+                    std::ifstream f(selected_skeleton_path);
+                    if (!f.is_open()) {
+                        std::cerr << "Failed to open skeleton file: " << selected_skeleton_path << std::endl;
+                    } else {
+                        json skeleton_json = json::parse(f);
+                        f.close();
+                        
+                        // Clear existing skeleton creator data
+                        creator_nodes.clear();
+                        creator_edges.clear();
+                        next_node_id = 0;
+                        selected_node_for_edge = -1;
+                        
+                        // Load skeleton data
+                        skeleton_creator_name = skeleton_json["name"];
+                        skeleton_creator_has_bbox = skeleton_json["has_bbox"];
+                        skeleton_creator_has_skeleton = skeleton_json["has_skeleton"];
+                        
+                        // Load nodes
+                        std::vector<std::string> node_names = skeleton_json["node_names"];
+                        for (size_t i = 0; i < node_names.size(); i++) {
+                            SkeletonCreatorNode node;
+                            node.id = (int)i;
+                            node.name = node_names[i];
+                            // Position nodes in a grid layout for visualization
+                            int cols = (int)std::ceil(std::sqrt(node_names.size()));
+                            node.position.x = 0.1 + (i % cols) * (0.8 / std::max(1, cols - 1));
+                            node.position.y = 0.1 + (i / cols) * (0.8 / std::max(1, (int)node_names.size() / cols));
+                            node.color = (ImVec4)ImColor::HSV(i / (float)node_names.size(), 1.0f, 1.0f);
+                            creator_nodes.push_back(node);
+                        }
+                        next_node_id = (int)node_names.size();
+                        
+                        // Load edges
+                        std::vector<std::vector<int>> edges = skeleton_json["edges"];
+                        for (const auto& edge : edges) {
+                            if (edge.size() >= 2 && edge[0] >= 0 && edge[1] >= 0 && 
+                                edge[0] < (int)creator_nodes.size() && edge[1] < (int)creator_nodes.size()) {
+                                creator_edges.emplace_back(creator_nodes[edge[0]].id, creator_nodes[edge[1]].id);
+                            }
+                        }
+                        
+                        std::cout << "Successfully loaded skeleton '" << skeleton_creator_name 
+                                  << "' with " << creator_nodes.size() << " nodes and " 
+                                  << creator_edges.size() << " edges" << std::endl;
+                    }
+                } catch (const std::exception& e) {
+                    std::cerr << "Error loading skeleton JSON: " << e.what() << std::endl;
+                }
             }
             
             skeleton_file_dialog.ClearSelected();
