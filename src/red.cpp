@@ -301,7 +301,7 @@ int main(int, char **)
 
     render_scene *scene = (render_scene *)malloc(sizeof(render_scene));
 
-    std::string root_dir;
+    std::string root_dir = std::filesystem::current_path().string();
     std::vector<std::string> input_file_names;
     std::vector<std::string> camera_names;
     std::vector<std::thread> decoder_threads;
@@ -353,7 +353,7 @@ int main(int, char **)
         std::string start_folder_name = "/home/" + tokenized_path[2] + "/data";
         file_dialog.SetPwd(start_folder_name);
         model_file_dialog.SetPwd(start_folder_name);
-        skeleton_file_dialog.SetPwd(start_folder_name);
+        skeleton_file_dialog.SetPwd(std::filesystem::current_path().string() + "/skeleton");
     #endif 
     
     file_dialog.SetTitle("Select working directory");
@@ -1676,41 +1676,7 @@ int main(int, char **)
                 
                 ImGui::SameLine();
                 if (ImGui::Button("Load from JSON")) {
-                    if (!root_dir.empty()) {
-                        std::string skeleton_file = root_dir + "/skeleton/skeleton.json";
-                        if (std::filesystem::exists(skeleton_file)) {
-                            try {
-                                std::ifstream f(skeleton_file);
-                                json s_config = json::parse(f);
-                                
-                                creator_nodes.clear();
-                                creator_edges.clear();
-                                next_node_id = 0;
-                                selected_node_for_edge = -1;
-                                
-                                skeleton_creator_name = s_config["name"];
-                                skeleton_creator_has_skeleton = s_config["has_skeleton"];
-                                skeleton_creator_has_bbox = s_config["has_bbox"];
-                                
-                                int num_nodes = s_config["num_nodes"];
-                                for (int i = 0; i < num_nodes; i++) {
-                                    double x = 0.1 + (i % 3) * 0.4; 
-                                    double y = 0.1 + (i / 3) * 0.3;
-                                    creator_nodes.emplace_back(x, y, i);
-                                    creator_nodes.back().name = s_config["node_names"][i];
-                                }
-                                next_node_id = num_nodes;
-                                
-                                for (const auto& edge : s_config["edges"]) {
-                                    creator_edges.emplace_back(edge[0], edge[1]);
-                                }
-                                
-                                std::cout << "Loaded skeleton from: " << skeleton_file << std::endl;
-                            } catch (const std::exception& e) {
-                                std::cerr << "Error loading skeleton: " << e.what() << std::endl;
-                            }
-                        }
-                    }
+                    skeleton_file_dialog.Open();
                 }
                 
                 ImGui::SameLine();
@@ -1741,15 +1707,21 @@ int main(int, char **)
                             }
                         }
                         skeleton_json["edges"] = edges_array;
+
+                        std::string skeleton_dir = std::filesystem::current_path().string() + "/skeleton";
                         
                         std::string filename;
-                        filename = root_dir + "/skeleton/" + skeleton_creator_name + ".json";
+                        filename = skeleton_dir + "/" + skeleton_creator_name + ".json";
                         
                         std::ofstream file(filename);
                         file << skeleton_json.dump(4);
                         file.close();
-                        std::cout << "Skeleton saved to: " << root_dir << filename << std::endl;
+                        std::cout << "Skeleton saved to: " << filename << std::endl;
                     }
+                }
+                
+                if (ImGui::Button("Load selected")) {
+                    skeleton_file_dialog.Open();
                 }
                 
                 if (!creator_nodes.empty()) {
@@ -1791,6 +1763,65 @@ int main(int, char **)
             ImGui::End();
         }
 
+        if (skeleton_file_dialog.HasSelected())
+        {
+            std::string selected_skeleton_path = skeleton_file_dialog.GetSelected().string();
+            std::cout << "Loading skeleton from: " << selected_skeleton_path << std::endl;
+            
+            try {
+                std::ifstream f(selected_skeleton_path);
+                if (!f.is_open()) {
+                    std::cerr << "Failed to open skeleton file: " << selected_skeleton_path << std::endl;
+                } else {
+                    json skeleton_json = json::parse(f);
+                    f.close();
+                    
+                    // Clear existing skeleton creator data
+                    creator_nodes.clear();
+                    creator_edges.clear();
+                    next_node_id = 0;
+                    selected_node_for_edge = -1;
+                    
+                    // Load skeleton data
+                    skeleton_creator_name = skeleton_json["name"];
+                    skeleton_creator_has_bbox = skeleton_json["has_bbox"];
+                    skeleton_creator_has_skeleton = skeleton_json["has_skeleton"];
+                    
+                    // Load nodes
+                    std::vector<std::string> node_names = skeleton_json["node_names"];
+                    for (size_t i = 0; i < node_names.size(); i++) {
+                        SkeletonCreatorNode node;
+                        node.id = (int)i;
+                        node.name = node_names[i];
+                        // Position nodes in a grid layout for visualization
+                        int cols = (int)std::ceil(std::sqrt(node_names.size()));
+                        node.position.x = 0.1 + (i % cols) * (0.8 / std::max(1, cols - 1));
+                        node.position.y = 0.1 + (i / cols) * (0.8 / std::max(1, (int)node_names.size() / cols));
+                        node.color = (ImVec4)ImColor::HSV(i / (float)node_names.size(), 1.0f, 1.0f);
+                        creator_nodes.push_back(node);
+                    }
+                    next_node_id = (int)node_names.size();
+                    
+                    // Load edges
+                    std::vector<std::vector<int>> edges = skeleton_json["edges"];
+                    for (const auto& edge : edges) {
+                        if (edge.size() >= 2 && edge[0] >= 0 && edge[1] >= 0 && 
+                            edge[0] < (int)creator_nodes.size() && edge[1] < (int)creator_nodes.size()) {
+                            creator_edges.emplace_back(creator_nodes[edge[0]].id, creator_nodes[edge[1]].id);
+                        }
+                    }
+                    
+                    std::cout << "Successfully loaded skeleton '" << skeleton_creator_name 
+                              << "' with " << creator_nodes.size() << " nodes and " 
+                              << creator_edges.size() << " edges" << std::endl;
+                }
+            } catch (const std::exception& e) {
+                std::cerr << "Error loading skeleton JSON: " << e.what() << std::endl;
+            }
+            
+            skeleton_file_dialog.ClearSelected();
+        }
+        
         if (ImGui::IsKeyPressed(ImGuiKey_H, false))
         {
             show_help_window = !show_help_window;
