@@ -20,6 +20,9 @@
 #include <torch/script.h>
 #include "json.hpp"
 
+#define STB_IMAGE_IMPLEMENTATION
+#include "stb_image.h"
+
 using json = nlohmann::json;
 
 #if defined(_MSC_VER) && (_MSC_VER >= 1900) && !defined(IMGUI_DISABLE_WIN32_FUNCTIONS)
@@ -350,6 +353,7 @@ int main(int, char **)
     ImGui::FileBrowser file_dialog(ImGuiFileBrowserFlags_SelectDirectory);
     ImGui::FileBrowser model_file_dialog;
     ImGui::FileBrowser skeleton_file_dialog;
+    ImGui::FileBrowser background_image_dialog;
     bool pending_skeleton_load = false; 
     std::string selected_skeleton_name; 
     
@@ -363,6 +367,7 @@ int main(int, char **)
         file_dialog.SetPwd(start_folder_name);
         model_file_dialog.SetPwd(start_folder_name);
         skeleton_file_dialog.SetPwd(std::filesystem::current_path().string() + "/skeleton");
+        background_image_dialog.SetPwd(start_folder_name);
     #endif 
     
     file_dialog.SetTitle("Select working directory");
@@ -370,6 +375,8 @@ int main(int, char **)
     model_file_dialog.SetTypeFilters({ ".pt", ".pth" });
     skeleton_file_dialog.SetTitle("Load Skeleton JSON");
     skeleton_file_dialog.SetTypeFilters({ ".json" });
+    background_image_dialog.SetTitle("Select Background Image");
+    background_image_dialog.SetTypeFilters({ ".png", ".jpg", ".jpeg" });
     
     ImVec4 clear_color = ImVec4(0.0f, 0.0f, 0.0f, 1.00f);
     ImGuiIO &io = ImGui::GetIO();
@@ -418,6 +425,11 @@ int main(int, char **)
     std::string skeleton_creator_name = "CustomSkeleton";
     bool skeleton_creator_has_bbox = false;
     bool skeleton_creator_has_skeleton = true;
+    
+    std::string background_image_path = "";
+    bool background_image_selected = false;
+    GLuint background_texture = 0;
+    int background_width = 0, background_height = 0;
 
     while (!glfwWindowShouldClose(window->render_target) || !allow_exit) {
         // Poll and handle events (inputs, window resize, etc.)
@@ -567,6 +579,7 @@ int main(int, char **)
         file_dialog.Display();
         model_file_dialog.Display();
         skeleton_file_dialog.Display();
+        background_image_dialog.Display();
 
         if (file_dialog.HasSelected())
         {
@@ -1747,6 +1760,17 @@ int main(int, char **)
                 
                 ImGui::Checkbox("Has Bounding Box", &skeleton_creator_has_bbox);
                 
+                if (ImGui::Button("Select Background Image")) {
+                    background_image_dialog.Open();
+                }
+                ImGui::SameLine();
+                if (background_image_selected && background_texture != 0) {
+                    std::filesystem::path path(background_image_path);
+                    ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "Image: %s (%dx%d)", path.filename().string().c_str(), background_width, background_height);
+                } else {
+                    ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "No background image");
+                }
+                
                 ImGui::SeparatorText("Interactive Editor");
                 
                 if (ImPlot::BeginPlot("Skeleton Creator", ImVec2(-1, 400), ImPlotFlags_Equal))
@@ -1757,6 +1781,11 @@ int main(int, char **)
 
                     ImPlot::SetupAxisTicks(ImAxis_X1, nullptr, 0);
                     ImPlot::SetupAxisTicks(ImAxis_Y1, nullptr, 0);
+                    
+                    if (background_image_selected && background_texture != 0) {
+                        ImPlot::PlotImage("##background", (void*)(intptr_t)background_texture, 
+                                         ImPlotPoint(0, 0), ImPlotPoint(1, 1));
+                    }
                     
                     if (ImPlot::IsPlotHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::GetIO().KeyCtrl) {
                         if (selected_node_for_edge < 0) {
@@ -2058,6 +2087,36 @@ int main(int, char **)
             skeleton_file_dialog.ClearSelected();
         }
         
+        if (background_image_dialog.HasSelected())
+        {
+            std::string selected_image_path = background_image_dialog.GetSelected().string();
+            std::cout << "Loading background image from: " << selected_image_path << std::endl;
+            
+            int channels;
+            unsigned char* image_data = stbi_load(selected_image_path.c_str(), &background_width, &background_height, &channels, 4);
+            
+            if (image_data) {
+                if (background_texture != 0) {
+                    glDeleteTextures(1, &background_texture);
+                }
+                
+                create_texture(&background_texture);
+                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, background_width, background_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, image_data);
+                unbind_texture();
+                
+                background_image_path = selected_image_path;
+                background_image_selected = true;
+                
+                stbi_image_free(image_data);
+                std::cout << "Successfully loaded background image: " << background_width << "x" << background_height << std::endl;
+            } else {
+                std::cerr << "Failed to load background image: " << selected_image_path << std::endl;
+                background_image_selected = false;
+            }
+            
+            background_image_dialog.ClearSelected();
+        }
+        
         if (ImGui::IsKeyPressed(ImGuiKey_H, false))
         {
             show_help_window = !show_help_window;
@@ -2157,6 +2216,11 @@ int main(int, char **)
         ImGui_ImplOpenGL3_Shutdown();
         ImGui_ImplGlfw_Shutdown();
             ImGui::DestroyContext();
+        
+        // Cleanup background texture
+        if (background_texture != 0) {
+            glDeleteTextures(1, &background_texture);
+        }
         
         // Cleanup GLFW
         if (window->render_target) {

@@ -42,6 +42,7 @@ g++ -Ofast -mssse3 -ffast-math -std=c++17 \
     -I$DIR_IMGUI/backends \
     -Ilib/IconFontCppHeaders \
     -Ilib/imgui-filebrowser \
+    -Ilib/ImGuiFileDialog/stb \
     -L/usr/local/cuda/lib64/ -lcudart -lcuda -lnvcuvid -lnppicc -lnppidei -lnvidia-encode -lnppc -lnppig -lnppial \
     -lGLEW -lGLU -lGL \
     -lpthread \
