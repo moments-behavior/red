@@ -1710,6 +1710,7 @@ int main(int, char **)
                                         new_bbox.state = RectTwoPoints;
                                         new_bbox.class_id = yolo_bbox.class_id;
                                         new_bbox.confidence = yolo_bbox.confidence;
+                                        new_bbox.has_bbox_keypoints = false;
                                         
                                         frame_keypoints->bbox2d_list[cam_id].push_back(new_bbox);
                                         frame_keypoints->has_labels = true;
