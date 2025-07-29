@@ -933,7 +933,7 @@ int main(int, char **)
                                             Animals* current_frame_data = keypoints_map[current_frame_num];
                                             KeyPoints* frame_keypoints = &current_frame_data->keypoints[current_frame_data->active_id];
                                             
-                                            if (frame_keypoints->bbox2d[j].state == RectNull) {
+                                            if (skeleton->has_bbox && frame_keypoints->bbox2d[j].state == RectNull) {
                                                 frame_keypoints->bbox2d[j].rect = new ImPlotRect(bbox.x_min, bbox.x_max, bbox.y_min, bbox.y_max);
                                                 frame_keypoints->bbox2d[j].state = RectTwoPoints;
                                                 frame_keypoints->bbox2d[j].class_id = bbox.class_id;
@@ -995,7 +995,7 @@ int main(int, char **)
                                         }
                                     }
                                     
-                                    if (!active_bbox && frame_keypoints->bbox2d[j].state != RectNull && frame_keypoints->bbox2d[j].rect != nullptr) {
+                                    if (!active_bbox && skeleton->has_bbox && frame_keypoints->bbox2d[j].state != RectNull && frame_keypoints->bbox2d[j].rect != nullptr) {
                                         if (is_point_in_bbox(mouse.x, mouse.y, frame_keypoints->bbox2d[j].rect)) {
                                             active_bbox = &frame_keypoints->bbox2d[j];
                                             active_bbox_id = -1; 
@@ -1120,17 +1120,17 @@ int main(int, char **)
                                         }
                                     }
                                     
-                                    if (frame_keypoints->bbox2d[j].state == RectOnePoint && ImGui::IsMouseDragging(ImGuiMouseButton_Middle)) {
+                                    if (skeleton->has_bbox && frame_keypoints->bbox2d[j].state == RectOnePoint && ImGui::IsMouseDragging(ImGuiMouseButton_Middle)) {
                                         ImPlotPoint mouse = ImPlot::GetPlotMousePos();
                                         frame_keypoints->bbox2d[j].rect->X.Max = mouse.x;
                                         frame_keypoints->bbox2d[j].rect->Y.Min = mouse.y;
                                     }
 
-                                    if (ImGui::IsMouseReleased(ImGuiMouseButton_Middle)) {
+                                    if (skeleton->has_bbox && ImGui::IsMouseReleased(ImGuiMouseButton_Middle)) {
                                         frame_keypoints->bbox2d[j].state = RectTwoPoints;
                                     }
 
-                                    if (ImGui::IsMouseClicked(ImGuiMouseButton_Middle, false)) {
+                                    if (skeleton->has_bbox && ImGui::IsMouseClicked(ImGuiMouseButton_Middle, false)) {
                                         if (frame_keypoints->bbox2d[j].state == RectNull) {
                                             ImPlotPoint mouse = ImPlot::GetPlotMousePos();
                                             frame_keypoints->bbox2d[j].rect = new ImPlotRect(mouse.x, mouse.x, mouse.y, mouse.y);

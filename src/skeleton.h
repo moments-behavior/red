@@ -215,6 +215,10 @@ void allocate_keypoints(Animals *animals, render_scene *scene, SkeletonContext* 
                 keypoints->bbox2d[j].bbox_keypoints2d = nullptr;
                 keypoints->bbox2d[j].active_kp_id = nullptr;
             }
+        } else {
+            // Even when no bbox, initialize empty bbox2d_list to prevent crashes
+            keypoints->bbox2d_list.resize(scene->num_cams);
+            keypoints->bbox2d = nullptr;
         }
 
         if (skeleton->has_skeleton) {
@@ -394,20 +398,21 @@ void reinitalize_keypoint_active_animal(Animals *animals, render_scene *scene, S
 void delete_label_per_animal(KeyPoints* keypoints, render_scene *scene, SkeletonContext* skeleton) {
     keypoints->has_labels = false;
     
-    // Clean up bbox2d_list keypoints
-    for (u32 j = 0; j < scene->num_cams; j++) {
-        for (auto& bbox : keypoints->bbox2d_list[j]) {
-            free_bbox_keypoints(&bbox, scene, skeleton);
-        }
-    }
-    
-    // Properly destroy the bbox2d_list vector
-    keypoints->bbox2d_list.~vector<std::vector<BoundingBox>>();
-    
     if (skeleton->has_bbox) {
+        // Clean up bbox2d_list keypoints
+        for (u32 j = 0; j < scene->num_cams; j++) {
+            for (auto& bbox : keypoints->bbox2d_list[j]) {
+                free_bbox_keypoints(&bbox, scene, skeleton);
+            }
+        }
+        
+        // Properly destroy the bbox2d_list vector
+        keypoints->bbox2d_list.~vector<std::vector<BoundingBox>>();
+        
         if (keypoints->bbox2d->rect != NULL) {
             delete(keypoints->bbox2d->rect);
         }
+        // Clean up bbox2d keypoints
         for (u32 j = 0; j < scene->num_cams; j++) {
             free_bbox_keypoints(&keypoints->bbox2d[j], scene, skeleton);
         }
