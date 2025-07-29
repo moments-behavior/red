@@ -1767,6 +1767,18 @@ int main(int, char **)
                 if (background_image_selected && background_texture != 0) {
                     std::filesystem::path path(background_image_path);
                     ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "Image: %s (%dx%d)", path.filename().string().c_str(), background_width, background_height);
+                    ImGui::SameLine();
+                    if (ImGui::Button("Clear Background")) {
+                        if (background_texture != 0) {
+                            glDeleteTextures(1, &background_texture);
+                            background_texture = 0;
+                        }
+                        background_image_path = "";
+                        background_image_selected = false;
+                        background_width = 0;
+                        background_height = 0;
+                        std::cout << "Background image cleared" << std::endl;
+                    }
                 } else {
                     ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "No background image");
                 }
@@ -1775,7 +1787,7 @@ int main(int, char **)
                 
                 if (ImPlot::BeginPlot("Skeleton Creator", ImVec2(-1, 400), ImPlotFlags_Equal))
                 {
-                    ImPlot::SetupAxes("X", "Y");
+                    ImPlot::SetupAxes("", "");
                     ImPlot::SetupAxisLimits(ImAxis_X1, 0.0, 1.0, ImGuiCond_Always);
                     ImPlot::SetupAxisLimits(ImAxis_Y1, 0.0, 1.0, ImGuiCond_Always);
 
@@ -1921,10 +1933,13 @@ int main(int, char **)
                         skeleton_json["num_edges"] = (int)creator_edges.size();
                         
                         std::vector<std::string> node_names;
+                        std::vector<std::vector<double>> node_positions;
                         for (const auto& node : creator_nodes) {
                             node_names.push_back(node.name);
+                            node_positions.push_back({node.position.x, node.position.y});
                         }
                         skeleton_json["node_names"] = node_names;
+                        skeleton_json["node_positions"] = node_positions;
                         
                         std::vector<std::vector<int>> edges_array;
                         for (const auto& edge : creator_edges) {
@@ -1947,7 +1962,7 @@ int main(int, char **)
                         std::ofstream file(filename);
                         file << skeleton_json.dump(4);
                         file.close();
-                        std::cout << "Skeleton saved to: " << filename << std::endl;
+                        std::cout << "Skeleton saved to: " << filename << " (with node positions)" << std::endl;
                     }
                 }
                 
@@ -2053,14 +2068,30 @@ int main(int, char **)
                         
                         // Load nodes
                         std::vector<std::string> node_names = skeleton_json["node_names"];
+                        
+                        // Check if positions are saved in the JSON (for backward compatibility)
+                        bool has_positions = skeleton_json.contains("node_positions");
+                        std::vector<std::vector<double>> node_positions;
+                        if (has_positions) {
+                            node_positions = skeleton_json["node_positions"];
+                        }
+                        
                         for (size_t i = 0; i < node_names.size(); i++) {
                             SkeletonCreatorNode node;
                             node.id = (int)i;
                             node.name = node_names[i];
-                            // Position nodes in a grid layout for visualization
-                            int cols = (int)std::ceil(std::sqrt(node_names.size()));
-                            node.position.x = 0.1 + (i % cols) * (0.8 / std::max(1, cols - 1));
-                            node.position.y = 0.1 + (i / cols) * (0.8 / std::max(1, (int)node_names.size() / cols));
+                            
+                            if (has_positions && i < node_positions.size() && node_positions[i].size() >= 2) {
+                                // Use saved positions
+                                node.position.x = node_positions[i][0];
+                                node.position.y = node_positions[i][1];
+                            } else {
+                                // Fall back to grid layout for backward compatibility
+                                int cols = (int)std::ceil(std::sqrt(node_names.size()));
+                                node.position.x = 0.1 + (i % cols) * (0.8 / std::max(1, cols - 1));
+                                node.position.y = 0.1 + (i / cols) * (0.8 / std::max(1, (int)node_names.size() / cols));
+                            }
+                            
                             node.color = (ImVec4)ImColor::HSV(i / (float)node_names.size(), 1.0f, 1.0f);
                             creator_nodes.push_back(node);
                         }
@@ -2077,7 +2108,13 @@ int main(int, char **)
                         
                         std::cout << "Successfully loaded skeleton '" << skeleton_creator_name 
                                   << "' with " << creator_nodes.size() << " nodes and " 
-                                  << creator_edges.size() << " edges" << std::endl;
+                                  << creator_edges.size() << " edges";
+                        if (has_positions) {
+                            std::cout << " (with saved positions)";
+                        } else {
+                            std::cout << " (using grid layout)";
+                        }
+                        std::cout << std::endl;
                     }
                 } catch (const std::exception& e) {
                     std::cerr << "Error loading skeleton JSON: " << e.what() << std::endl;
