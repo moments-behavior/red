@@ -105,6 +105,81 @@ inline void gui_plot_bbox_from_keypoints(KeyPoints *keypoints, SkeletonContext *
     }
 }
 
+inline void gui_plot_bbox_keypoints(BoundingBox* bbox, SkeletonContext *skeleton, int view_idx, u32 animal_idx, int num_cams, bool is_active, bool& is_saved, int bbox_id)
+{
+    if (!bbox->has_bbox_keypoints || !skeleton->has_skeleton) return;
+    
+    float pt_size = 4.0f; 
+    for (u32 node = 0; node < skeleton->num_nodes; node++) {
+        if (bbox->bbox_keypoints2d[view_idx][node].is_labeled) {
+            ImVec4 node_color; 
+            ImPlotDragToolFlags flag;
+            if (is_active) {
+                flag = ImPlotDragToolFlags_None;
+                if (bbox->active_kp_id[view_idx] == node) {
+                    node_color = (ImVec4)ImColor::HSV(0.2, 0.9f, 0.9f); // Different active color for bbox keypoints
+                } else {
+                    node_color = skeleton->node_colors[node];
+                }
+            } else {
+                flag = ImPlotDragToolFlags_NoInputs;
+                node_color = ImVec4(0.7f, 0.7f, 0.7f, 0.8f); // Gray for inactive bbox keypoints
+            }
+            
+            int id = 10000 + bbox_id * 1000 + animal_idx * num_cams * skeleton->num_nodes + skeleton->num_nodes * view_idx + node;
+            bool drag_point_clicked = false;
+            bool drag_point_hovered = false;
+            bool drag_point_modified = false;
+            
+            drag_point_modified = ImPlot::DragPoint(id, 
+                &bbox->bbox_keypoints2d[view_idx][node].position.x, 
+                &bbox->bbox_keypoints2d[view_idx][node].position.y, 
+                node_color, pt_size, flag, &drag_point_clicked, &drag_point_hovered);
+                
+            if (drag_point_modified) {
+                constrain_keypoint_to_bbox(&bbox->bbox_keypoints2d[view_idx][node], bbox->rect);
+                bbox->bbox_keypoints2d[view_idx][node].is_triangulated = false;
+                is_saved = false;
+            }
+            
+            if (drag_point_hovered) {
+                if (ImGui::IsKeyPressed(ImGuiKey_R, false)) { // delete hovered keypoint
+                    bbox->bbox_keypoints2d[view_idx][node].position = {1E7, 1E7};
+                    bbox->bbox_keypoints2d[view_idx][node].is_labeled = false;                                        
+                    bbox->bbox_keypoints2d[view_idx][node].is_triangulated = false;
+                    bbox->active_kp_id[view_idx] = node;
+                    is_saved = false;
+                }
+                
+                if (ImGui::IsKeyPressed(ImGuiKey_F, false)) { 
+                    for (int cam_idx = 0; cam_idx < num_cams; cam_idx++) {
+                        bbox->bbox_keypoints2d[cam_idx][node].position = {1E7, 1E7};
+                        bbox->bbox_keypoints2d[cam_idx][node].is_labeled = false;                                        
+                        bbox->bbox_keypoints2d[cam_idx][node].is_triangulated = false;
+                        bbox->active_kp_id[cam_idx] = node;
+                    }
+                    is_saved = false;
+                }
+            }
+
+            if (drag_point_clicked) {
+                bbox->active_kp_id[view_idx] = node;
+            }
+        }
+    }
+
+    for (u32 edge = 0; edge < skeleton->num_edges; edge++) {
+        auto[a, b] = skeleton->edges[edge];
+
+        if (bbox->bbox_keypoints2d[view_idx][a].is_labeled && bbox->bbox_keypoints2d[view_idx][b].is_labeled) {
+            double xs[2] {bbox->bbox_keypoints2d[view_idx][a].position.x, bbox->bbox_keypoints2d[view_idx][b].position.x};
+            double ys[2] {bbox->bbox_keypoints2d[view_idx][a].position.y, bbox->bbox_keypoints2d[view_idx][b].position.y};
+            ImPlot::SetNextLineStyle(ImVec4(0.8f, 0.8f, 0.2f, 0.8f), 1.5f); 
+            ImPlot::PlotLine("##bbox_line", xs, ys, 2);
+        }
+    }
+}
+
 const std::string current_date_time() {
     time_t     now = time(0);
     struct tm  tstruct;
@@ -197,6 +272,19 @@ void save_keypoints(std::map<u32, Animals*> keypoints_map, SkeletonContext* skel
                             output2d_files[cam] << multi_bbox.class_id << ",";
                             output2d_files[cam] << multi_bbox.rect->X.Min << "," << multi_bbox.rect->Y.Min << ",";
                             output2d_files[cam] << multi_bbox.rect->X.Max << "," << multi_bbox.rect->Y.Max << ",";
+                            
+                            // Save bbox keypoints
+                            if (multi_bbox.has_bbox_keypoints && skeleton->has_skeleton) {
+                                for (int node = 0; node < skeleton->num_nodes; node++) {
+                                    output2d_files[cam] << multi_bbox.bbox_keypoints2d[cam][node].position.x << ",";
+                                    output2d_files[cam] << multi_bbox.bbox_keypoints2d[cam][node].position.y << ",";
+                                }
+                            } else {
+                                // Save placeholders for empty bbox keypoints
+                                for (int node = 0; node < skeleton->num_nodes; node++) {
+                                    output2d_files[cam] << "1E7,1E7,";
+                                }
+                            }
                         }
                     }
                     if (skeleton->has_skeleton) {
@@ -339,9 +427,71 @@ void load_2d_keypoints(std::map<u32, Animals*>& keypoints_map, SkeletonContext* 
                                 BoundingBox multi_bbox;
                                 multi_bbox.rect = new ImPlotRect(multi_min_x, multi_max_x, multi_min_y, multi_max_y);
                                 multi_bbox.state = RectTwoPoints;
-                                multi_bbox.class_id = class_id;  // Now properly loaded from CSV
-                                multi_bbox.confidence = 0.0f;  // Default since not saved
+                                multi_bbox.class_id = class_id;  
+                                multi_bbox.confidence = 0.0f;  
+                                multi_bbox.has_bbox_keypoints = false;
+                                multi_bbox.bbox_keypoints2d = nullptr;
+                                multi_bbox.active_kp_id = nullptr;
+                                
+                                if (skeleton->has_skeleton) {
+                                    allocate_bbox_keypoints(&multi_bbox, scene, skeleton);
+                                }
+                                
+                                if (skeleton->has_skeleton) {
+                                    for (int node = 0; node < skeleton->num_nodes; node++) {
+                                        pos = line.find(delimeter);
+                                        if (pos == std::string::npos) {
+                                            for (int remaining_node = node; remaining_node < skeleton->num_nodes; remaining_node++) {
+                                                multi_bbox.bbox_keypoints2d[cam_idx][remaining_node].position.x = 1E7;
+                                                multi_bbox.bbox_keypoints2d[cam_idx][remaining_node].position.y = 1E7;
+                                                multi_bbox.bbox_keypoints2d[cam_idx][remaining_node].is_labeled = false;
+                                                multi_bbox.bbox_keypoints2d[cam_idx][remaining_node].is_triangulated = false;
+                                            }
+                                            break;
+                                        }
+                                        token = line.substr(0, pos);
+                                        double bbox_x = stod(token);
+                                        line.erase(0, pos + delimeter.length());
+                                        
+                                        pos = line.find(delimeter);
+                                        if (pos == std::string::npos) {
+                                            token = line;
+                                            line = "";
+                                        } else {
+                                            token = line.substr(0, pos);
+                                            line.erase(0, pos + delimeter.length());
+                                        }
+                                        double bbox_y = stod(token);
+                                        
+                                        multi_bbox.bbox_keypoints2d[cam_idx][node].position.x = bbox_x;
+                                        multi_bbox.bbox_keypoints2d[cam_idx][node].position.y = bbox_y;
+                                        
+                                        if (bbox_x == 1E7 || bbox_y == 1E7) {
+                                            multi_bbox.bbox_keypoints2d[cam_idx][node].is_labeled = false;
+                                        } else {
+                                            multi_bbox.bbox_keypoints2d[cam_idx][node].is_labeled = true;
+                                        }
+                                        multi_bbox.bbox_keypoints2d[cam_idx][node].is_triangulated = false;
+                                    }
+                                }
+                                
                                 keypoints_map[frame_num]->keypoints[animal_id].bbox2d_list[cam_idx].push_back(multi_bbox);
+                            } else {
+                                if (skeleton->has_skeleton) {
+                                    for (int node = 0; node < skeleton->num_nodes; node++) {
+                                        pos = line.find(delimeter);
+                                        if (pos == std::string::npos) {
+                                            break;
+                                        }
+                                        line.erase(0, pos + delimeter.length());
+                                        pos = line.find(delimeter);
+                                        if (pos == std::string::npos) {
+                                            line = "";
+                                            break;
+                                        }
+                                        line.erase(0, pos + delimeter.length());
+                                    }
+                                }
                             }
                         }
                         

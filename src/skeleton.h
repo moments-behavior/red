@@ -23,7 +23,11 @@ struct BoundingBox{
     ImPlotRect* rect;
     RectState state;
     int class_id;
-    float confidence;  
+    float confidence;
+    
+    KeyPoints2D** bbox_keypoints2d;  // Per-camera keypoints for this bbox
+    bool has_bbox_keypoints;
+    u32* active_kp_id;  // Active keypoint ID per camera for this bbox
 };
 
 struct KeyPoints{
@@ -175,6 +179,13 @@ void skeleton_initialize(std::string name, std::string root_dir, SkeletonContext
     }
 };
 
+void allocate_keypoints(Animals *animals, render_scene *scene, SkeletonContext* skeleton, u32 number_animals);
+
+void allocate_bbox_keypoints(BoundingBox* bbox, render_scene *scene, SkeletonContext* skeleton);
+void free_bbox_keypoints(BoundingBox* bbox, render_scene *scene, SkeletonContext* skeleton);
+void constrain_keypoint_to_bbox(KeyPoints2D* keypoint, ImPlotRect* bbox_rect);
+bool is_point_in_bbox(double x, double y, ImPlotRect* bbox_rect);
+
 void allocate_keypoints(Animals *animals, render_scene *scene, SkeletonContext* skeleton, u32 number_animals) 
 {
     animals->keypoints = (KeyPoints *)malloc(sizeof(KeyPoints) * number_animals);
@@ -200,6 +211,9 @@ void allocate_keypoints(Animals *animals, render_scene *scene, SkeletonContext* 
                 keypoints->bbox2d[j].state = RectNull;
                 keypoints->bbox2d[j].class_id = -1;
                 keypoints->bbox2d[j].confidence = 0.0f;
+                keypoints->bbox2d[j].has_bbox_keypoints = false;
+                keypoints->bbox2d[j].bbox_keypoints2d = nullptr;
+                keypoints->bbox2d[j].active_kp_id = nullptr;
             }
         }
 
@@ -232,12 +246,116 @@ void allocate_keypoints(Animals *animals, render_scene *scene, SkeletonContext* 
     }    
 }
 
+void allocate_bbox_keypoints(BoundingBox* bbox, render_scene *scene, SkeletonContext* skeleton) {
+    if (!skeleton->has_skeleton) {
+        bbox->has_bbox_keypoints = false;
+        return;
+    }
+    
+    bbox->has_bbox_keypoints = true;
+    bbox->active_kp_id = (u32 *)malloc(sizeof(u32) * scene->num_cams);
+    bbox->bbox_keypoints2d = (KeyPoints2D **)malloc(sizeof(KeyPoints2D*) * scene->num_cams);
+    
+    for (u32 j = 0; j < scene->num_cams; j++) {
+        bbox->bbox_keypoints2d[j] = (KeyPoints2D *)malloc(sizeof(KeyPoints2D) * skeleton->num_nodes);
+        bbox->active_kp_id[j] = 0;
+        
+        for (u32 k = 0; k < skeleton->num_nodes; k++) {
+            bbox->bbox_keypoints2d[j][k].is_labeled = false;
+            bbox->bbox_keypoints2d[j][k].is_triangulated = false;
+            bbox->bbox_keypoints2d[j][k].position.x = 1E7;
+            bbox->bbox_keypoints2d[j][k].position.y = 1E7;
+        }
+    }
+}
+
+void free_bbox_keypoints(BoundingBox* bbox, render_scene *scene, SkeletonContext* skeleton) {
+    if (!bbox->has_bbox_keypoints) return;
+    
+    for (u32 j = 0; j < scene->num_cams; j++) {
+        if (bbox->bbox_keypoints2d[j]) {
+            free(bbox->bbox_keypoints2d[j]);
+        }
+    }
+    if (bbox->bbox_keypoints2d) {
+        free(bbox->bbox_keypoints2d);
+        bbox->bbox_keypoints2d = nullptr;
+    }
+    if (bbox->active_kp_id) {
+        free(bbox->active_kp_id);
+        bbox->active_kp_id = nullptr;
+    }
+    bbox->has_bbox_keypoints = false;
+}
+
+void constrain_keypoint_to_bbox(KeyPoints2D* keypoint, ImPlotRect* bbox_rect) {
+    if (!bbox_rect || !keypoint->is_labeled) return;
+    
+    // Constrain keypoint position to be within bounding box
+    if (keypoint->position.x < bbox_rect->X.Min) {
+        keypoint->position.x = bbox_rect->X.Min;
+    } else if (keypoint->position.x > bbox_rect->X.Max) {
+        keypoint->position.x = bbox_rect->X.Max;
+    }
+    
+    if (keypoint->position.y < bbox_rect->Y.Min) {
+        keypoint->position.y = bbox_rect->Y.Min;
+    } else if (keypoint->position.y > bbox_rect->Y.Max) {
+        keypoint->position.y = bbox_rect->Y.Max;
+    }
+}
+
+bool is_point_in_bbox(double x, double y, ImPlotRect* bbox_rect) {
+    if (!bbox_rect) return false;
+    return (x >= bbox_rect->X.Min && x <= bbox_rect->X.Max && 
+            y >= bbox_rect->Y.Min && y <= bbox_rect->Y.Max);
+}
+
+// Scale keypoints to maintain relative positions within a bounding box
+void scale_bbox_keypoints(BoundingBox* bbox, render_scene *scene, SkeletonContext* skeleton, 
+                         ImPlotRect* old_rect, ImPlotRect* new_rect) {
+    if (!bbox->has_bbox_keypoints || !old_rect || !new_rect) return;
+    
+    double old_width = old_rect->X.Max - old_rect->X.Min;
+    double old_height = old_rect->Y.Max - old_rect->Y.Min;
+    double new_width = new_rect->X.Max - new_rect->X.Min;
+    double new_height = new_rect->Y.Max - new_rect->Y.Min;
+    
+    if (old_width <= 0 || old_height <= 0) return;
+    
+    double scale_x = new_width / old_width;
+    double scale_y = new_height / old_height;
+    
+    for (u32 j = 0; j < scene->num_cams; j++) {
+        for (u32 node = 0; node < skeleton->num_nodes; node++) {
+            if (bbox->bbox_keypoints2d[j][node].is_labeled) {
+                // Get relative position in old bbox
+                double rel_x = (bbox->bbox_keypoints2d[j][node].position.x - old_rect->X.Min) / old_width;
+                double rel_y = (bbox->bbox_keypoints2d[j][node].position.y - old_rect->Y.Min) / old_height;
+                
+                // Scale to new bbox
+                bbox->bbox_keypoints2d[j][node].position.x = new_rect->X.Min + rel_x * new_width;
+                bbox->bbox_keypoints2d[j][node].position.y = new_rect->Y.Min + rel_y * new_height;
+                
+                constrain_keypoint_to_bbox(&bbox->bbox_keypoints2d[j][node], new_rect);
+            }
+        }
+    }
+}
+
 
 void reinitalize_keypoint_active_animal(Animals *animals, render_scene *scene, SkeletonContext* skeleton) {
     KeyPoints* keypoints = &animals->keypoints[animals->active_id];
     if (keypoints->has_labels) {
         if (skeleton->has_bbox) {
+            for (u32 j = 0; j < scene->num_cams; j++) {
+                for (auto& bbox : keypoints->bbox2d_list[j]) {
+                    free_bbox_keypoints(&bbox, scene, skeleton);
+                }
+            }
+            
             for (u32 j=0; j < scene->num_cams; j++) {
+                free_bbox_keypoints(&keypoints->bbox2d[j], scene, skeleton);
                 if (keypoints->bbox2d[j].rect != NULL) {
                     delete keypoints->bbox2d[j].rect;
                 }
@@ -276,12 +394,22 @@ void reinitalize_keypoint_active_animal(Animals *animals, render_scene *scene, S
 void delete_label_per_animal(KeyPoints* keypoints, render_scene *scene, SkeletonContext* skeleton) {
     keypoints->has_labels = false;
     
+    // Clean up bbox2d_list keypoints
+    for (u32 j = 0; j < scene->num_cams; j++) {
+        for (auto& bbox : keypoints->bbox2d_list[j]) {
+            free_bbox_keypoints(&bbox, scene, skeleton);
+        }
+    }
+    
     // Properly destroy the bbox2d_list vector
     keypoints->bbox2d_list.~vector<std::vector<BoundingBox>>();
     
     if (skeleton->has_bbox) {
         if (keypoints->bbox2d->rect != NULL) {
             delete(keypoints->bbox2d->rect);
+        }
+        for (u32 j = 0; j < scene->num_cams; j++) {
+            free_bbox_keypoints(&keypoints->bbox2d[j], scene, skeleton);
         }
         free(keypoints->bbox2d);
     } 

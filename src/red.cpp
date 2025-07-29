@@ -805,6 +805,13 @@ int main(int, char **)
                                     new_bbox.state = RectTwoPoints;
                                     new_bbox.class_id = yolo_bbox.class_id;
                                     new_bbox.confidence = yolo_bbox.confidence;
+                                    new_bbox.has_bbox_keypoints = false;
+                                    new_bbox.bbox_keypoints2d = nullptr;
+                                    new_bbox.active_kp_id = nullptr;
+                                    
+                                    if (skeleton->has_skeleton) {
+                                        allocate_bbox_keypoints(&new_bbox, scene, skeleton);
+                                    }
                                     
                                     frame_keypoints->bbox2d_list[cam_id].push_back(new_bbox);
                                     frame_keypoints->has_labels = true;
@@ -931,6 +938,14 @@ int main(int, char **)
                                                 frame_keypoints->bbox2d[j].state = RectTwoPoints;
                                                 frame_keypoints->bbox2d[j].class_id = bbox.class_id;
                                                 frame_keypoints->bbox2d[j].confidence = bbox.confidence;
+                                                frame_keypoints->bbox2d[j].has_bbox_keypoints = false;
+                                                frame_keypoints->bbox2d[j].bbox_keypoints2d = nullptr;
+                                                frame_keypoints->bbox2d[j].active_kp_id = nullptr;
+                                                
+                                                if (skeleton->has_skeleton) {
+                                                    allocate_bbox_keypoints(&frame_keypoints->bbox2d[j], scene, skeleton);
+                                                }
+                                                
                                                 frame_keypoints->has_labels = true;
                                                 allow_exit = false;
                                                 
@@ -964,40 +979,93 @@ int main(int, char **)
                                 Animals* current_frame_data = keypoints_map[current_frame_num];
                                 if (skeleton->has_skeleton) {
                                     KeyPoints* frame_keypoints = &current_frame_data->keypoints[current_frame_data->active_id];
-                                    u32* kp = &frame_keypoints->active_kp_id[j];
-                                    u32* count = &frame_keypoints->counter;
-                                    if (ImGui::IsKeyPressed(ImGuiKey_W, false)) {
-                                        if(!frame_keypoints->keypoints2d[j][*kp].is_labeled) {(*count)++;}
-                                        // labeling sequentially each view
-                                        ImPlotPoint mouse = ImPlot::GetPlotMousePos();
-                                        frame_keypoints->keypoints2d[j][*kp].position = {mouse.x,  mouse.y};
-                                        frame_keypoints->keypoints2d[j][*kp].is_labeled = true;
-                                        frame_keypoints->keypoints2d[j][*kp].is_triangulated = false;
-                                        if(*kp < (skeleton->num_nodes - 1)) {(*kp)++;}
-                                        frame_keypoints->has_labels = true;
-                                        allow_exit = false;
-                                    }
-
-                                    if (ImGui::IsKeyPressed(ImGuiKey_A, true))
-                                    {
-                                        if (*kp <= 0) {*kp = 0;}
-                                        else (*kp)--;
-                                    }
-
-                                    if (ImGui::IsKeyPressed(ImGuiKey_D, true))
-                                    {
-                                        if (*kp >= skeleton->num_nodes-1) {*kp = skeleton->num_nodes-1;}
-                                        else (*kp)++;
+                                    
+                                    BoundingBox* active_bbox = nullptr;
+                                    int active_bbox_id = -1;
+                                    ImPlotPoint mouse = ImPlot::GetPlotMousePos();
+                                    
+                                    for (size_t bbox_idx = 0; bbox_idx < frame_keypoints->bbox2d_list[j].size(); ++bbox_idx) {
+                                        BoundingBox& bbox = frame_keypoints->bbox2d_list[j][bbox_idx];
+                                        if (bbox.state != RectNull && bbox.rect != nullptr) {
+                                            if (is_point_in_bbox(mouse.x, mouse.y, bbox.rect)) {
+                                                active_bbox = &bbox;
+                                                active_bbox_id = bbox_idx;
+                                                break;
+                                            }
+                                        }
                                     }
                                     
-                                    if (ImGui::IsKeyPressed(ImGuiKey_E, false))   // skip to the last keypoint
-                                    {
-                                        *kp = skeleton->num_nodes-1;
+                                    if (!active_bbox && frame_keypoints->bbox2d[j].state != RectNull && frame_keypoints->bbox2d[j].rect != nullptr) {
+                                        if (is_point_in_bbox(mouse.x, mouse.y, frame_keypoints->bbox2d[j].rect)) {
+                                            active_bbox = &frame_keypoints->bbox2d[j];
+                                            active_bbox_id = -1; 
+                                        }
                                     }
+                                    
+                                    if (active_bbox && active_bbox->has_bbox_keypoints) {
+                                        u32* kp = &active_bbox->active_kp_id[j];
+                                        if (ImGui::IsKeyPressed(ImGuiKey_W, false)) {
+                                            ImPlotPoint mouse = ImPlot::GetPlotMousePos();
+                                            if (is_point_in_bbox(mouse.x, mouse.y, active_bbox->rect)) {
+                                                active_bbox->bbox_keypoints2d[j][*kp].position = {mouse.x, mouse.y};
+                                                active_bbox->bbox_keypoints2d[j][*kp].is_labeled = true;
+                                                active_bbox->bbox_keypoints2d[j][*kp].is_triangulated = false;
+                                                if (*kp < (skeleton->num_nodes - 1)) {(*kp)++;}
+                                                frame_keypoints->has_labels = true;
+                                                allow_exit = false;
+                                            }
+                                        }
+                                        
+                                        if (ImGui::IsKeyPressed(ImGuiKey_A, true)) {
+                                            if (*kp <= 0) {*kp = 0;}
+                                            else (*kp)--;
+                                        }
 
-                                    if (ImGui::IsKeyPressed(ImGuiKey_Q, false))   // go to the first keypoint
-                                    {
-                                        *kp = 0;
+                                        if (ImGui::IsKeyPressed(ImGuiKey_D, true)) {
+                                            if (*kp >= skeleton->num_nodes-1) {*kp = skeleton->num_nodes-1;}
+                                            else (*kp)++;
+                                        }
+                                        
+                                        if (ImGui::IsKeyPressed(ImGuiKey_E, false)) { // skip to the last keypoint
+                                            *kp = skeleton->num_nodes-1;
+                                        }
+
+                                        if (ImGui::IsKeyPressed(ImGuiKey_Q, false)) { // go to the first keypoint
+                                            *kp = 0;
+                                        }
+                                    } else if (!skeleton->has_bbox || (!active_bbox && frame_keypoints->bbox2d_list[j].empty())) {
+                                        // Use regular keypoints when no bbox is active or no bboxes exist
+                                        u32* kp = &frame_keypoints->active_kp_id[j];
+                                        u32* count = &frame_keypoints->counter;
+                                        if (ImGui::IsKeyPressed(ImGuiKey_W, false)) {
+                                            if(!frame_keypoints->keypoints2d[j][*kp].is_labeled) {(*count)++;}
+                                            // labeling sequentially each view
+                                            ImPlotPoint mouse = ImPlot::GetPlotMousePos();
+                                            frame_keypoints->keypoints2d[j][*kp].position = {mouse.x,  mouse.y};
+                                            frame_keypoints->keypoints2d[j][*kp].is_labeled = true;
+                                            frame_keypoints->keypoints2d[j][*kp].is_triangulated = false;
+                                            if(*kp < (skeleton->num_nodes - 1)) {(*kp)++;}
+                                            frame_keypoints->has_labels = true;
+                                            allow_exit = false;
+                                        }
+
+                                        if (ImGui::IsKeyPressed(ImGuiKey_A, true)) {
+                                            if (*kp <= 0) {*kp = 0;}
+                                            else (*kp)--;
+                                        }
+
+                                        if (ImGui::IsKeyPressed(ImGuiKey_D, true)) {
+                                            if (*kp >= skeleton->num_nodes-1) {*kp = skeleton->num_nodes-1;}
+                                            else (*kp)++;
+                                        }
+                                        
+                                        if (ImGui::IsKeyPressed(ImGuiKey_E, false)) { // skip to the last keypoint
+                                            *kp = skeleton->num_nodes-1;
+                                        }
+
+                                        if (ImGui::IsKeyPressed(ImGuiKey_Q, false)) { // go to the first keypoint
+                                            *kp = 0;
+                                        }
                                     }
                                 }
 
@@ -1025,7 +1093,15 @@ int main(int, char **)
                                         new_bbox.rect = new ImPlotRect(mouse.x, mouse.x, mouse.y, mouse.y);
                                         new_bbox.state = RectOnePoint;
                                         new_bbox.class_id = user_class_id;  
-                                        new_bbox.confidence = 1.0f; 
+                                        new_bbox.confidence = 1.0f;
+                                        new_bbox.has_bbox_keypoints = false;
+                                        new_bbox.bbox_keypoints2d = nullptr;
+                                        new_bbox.active_kp_id = nullptr;
+                                        
+                                        // Allocate keypoints for this bounding box if skeleton is enabled
+                                        if (skeleton->has_skeleton) {
+                                            allocate_bbox_keypoints(&new_bbox, scene, skeleton);
+                                        }
                                         
                                         frame_keypoints->bbox2d_list[j].push_back(new_bbox);
                                         frame_keypoints->has_labels = true;
@@ -1059,6 +1135,14 @@ int main(int, char **)
                                             ImPlotPoint mouse = ImPlot::GetPlotMousePos();
                                             frame_keypoints->bbox2d[j].rect = new ImPlotRect(mouse.x, mouse.x, mouse.y, mouse.y);
                                             frame_keypoints->bbox2d[j].state = RectOnePoint;
+                                            frame_keypoints->bbox2d[j].has_bbox_keypoints = false;
+                                            frame_keypoints->bbox2d[j].bbox_keypoints2d = nullptr;
+                                            frame_keypoints->bbox2d[j].active_kp_id = nullptr;
+                                            
+                                            if (skeleton->has_skeleton) {
+                                                allocate_bbox_keypoints(&frame_keypoints->bbox2d[j], scene, skeleton);
+                                            }
+                                            
                                             frame_keypoints->has_labels = true;
                                         }
                                         allow_exit = false;
@@ -1100,16 +1184,52 @@ int main(int, char **)
                                     KeyPoints* frame_keypoints = &current_frame_data->keypoints[animal_id];
                                     ImColor bbox_color = frame_keypoints->animal_color;
                                     
+                                    ImPlotPoint mouse = ImPlot::GetPlotMousePos();
+                                    int active_bbox_idx = -1;
+                                    BoundingBox* active_bbox = nullptr;
+                                    
+                                    for (size_t bbox_idx = 0; bbox_idx < frame_keypoints->bbox2d_list[j].size(); ++bbox_idx) {
+                                        BoundingBox& bbox = frame_keypoints->bbox2d_list[j][bbox_idx];
+                                        if (bbox.state != RectNull && bbox.rect != nullptr) {
+                                            if (is_point_in_bbox(mouse.x, mouse.y, bbox.rect)) {
+                                                active_bbox_idx = bbox_idx;
+                                                active_bbox = &bbox;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    
+                                    bool single_bbox_active = false;
+                                    if (!active_bbox && frame_keypoints->bbox2d[j].state != RectNull && frame_keypoints->bbox2d[j].rect != nullptr) {
+                                        if (is_point_in_bbox(mouse.x, mouse.y, frame_keypoints->bbox2d[j].rect)) {
+                                            active_bbox = &frame_keypoints->bbox2d[j];
+                                            single_bbox_active = true;
+                                        }
+                                    }
+                                    
                                     // Only show single bbox if there are no multiple bboxes
                                     bool has_multiple_bboxes = j < frame_keypoints->bbox2d_list.size() && 
                                                              !frame_keypoints->bbox2d_list[j].empty();
                                     
                                     if (!has_multiple_bboxes && frame_keypoints->bbox2d[j].state != RectNull) {
                                         ImPlotRect* my_rect = frame_keypoints->bbox2d[j].rect;
+                                        ImPlotRect old_rect = *my_rect;
+                                        bool single_bbox_modified = false;
+                                        
                                         if (current_frame_data->active_id == animal_id) {
-                                            ImPlot::DragRect(0,&my_rect->X.Min,&my_rect->Y.Min,&my_rect->X.Max,&my_rect->Y.Max, bbox_color, ImPlotDragToolFlags_None);
+                                            single_bbox_modified = ImPlot::DragRect(0,&my_rect->X.Min,&my_rect->Y.Min,&my_rect->X.Max,&my_rect->Y.Max, bbox_color, ImPlotDragToolFlags_None);
                                         }
                                         ImPlot::DragRect(0,&my_rect->X.Min,&my_rect->Y.Min,&my_rect->X.Max,&my_rect->Y.Max, bbox_color, ImPlotDragToolFlags_NoInputs);
+                                        
+                                        // Scale keypoints if bbox was modified
+                                        if (single_bbox_modified && frame_keypoints->bbox2d[j].has_bbox_keypoints) {
+                                            scale_bbox_keypoints(&frame_keypoints->bbox2d[j], scene, skeleton, &old_rect, my_rect);
+                                        }
+                                        
+                                        if (frame_keypoints->bbox2d[j].has_bbox_keypoints && skeleton->has_skeleton) {
+                                            gui_plot_bbox_keypoints(&frame_keypoints->bbox2d[j], skeleton, j, animal_id, 
+                                                                   scene->num_cams, current_frame_data->active_id == animal_id && single_bbox_active, allow_exit, -1);
+                                        }
                                     }
                                     
                                     if (j < frame_keypoints->bbox2d_list.size()) {
@@ -1125,16 +1245,28 @@ int main(int, char **)
                                                 bool bbox_modified = false;
                                                 
                                                 if (current_frame_data->active_id == animal_id) {
+                                                    ImPlotRect old_rect = *bbox.rect;
+                                                    
                                                     bbox_modified = ImPlot::DragRect(multi_bbox_id,
                                                                                    &bbox.rect->X.Min, &bbox.rect->Y.Min,
                                                                                    &bbox.rect->X.Max, &bbox.rect->Y.Max,
                                                                                    multi_bbox_color, ImPlotDragToolFlags_None,
                                                                                    &bbox_clicked, &bbox_hovered, &bbox_held);
+                                                    
+                                                    if (bbox_modified && bbox.has_bbox_keypoints) {
+                                                        scale_bbox_keypoints(&bbox, scene, skeleton, &old_rect, bbox.rect);
+                                                    }
                                                 } else {
                                                     ImPlot::DragRect(multi_bbox_id,
                                                                    &bbox.rect->X.Min, &bbox.rect->Y.Min,
                                                                    &bbox.rect->X.Max, &bbox.rect->Y.Max,
                                                                    multi_bbox_color, ImPlotDragToolFlags_NoInputs);
+                                                }
+                                                
+                                                if (bbox.has_bbox_keypoints && skeleton->has_skeleton) {
+                                                    bool is_active_bbox = (active_bbox_idx == (int)bbox_idx);
+                                                    gui_plot_bbox_keypoints(&bbox, skeleton, j, animal_id, 
+                                                                           scene->num_cams, current_frame_data->active_id == animal_id && is_active_bbox, allow_exit, bbox_idx);
                                                 }
                                                 
                                                 if (bbox_hovered || bbox_held) {
@@ -1146,6 +1278,8 @@ int main(int, char **)
                                                     
                                                     // Delete bounding box from current camera when 'r' key is pressed while hovering
                                                     if (ImGui::IsKeyPressed(ImGuiKey_T, false)) {
+                                                        // Clean up bbox keypoints before deletion
+                                                        free_bbox_keypoints(&bbox, scene, skeleton);
                                                         // Mark for deletion by setting state to RectNull
                                                         delete bbox.rect;
                                                         bbox.rect = nullptr;
@@ -1163,6 +1297,8 @@ int main(int, char **)
                                                                 if (other_bbox.class_id == target_class_id && 
                                                                     other_bbox.state != RectNull && 
                                                                     other_bbox.rect != nullptr) {
+                                                                    // Clean up bbox keypoints before deletion
+                                                                    free_bbox_keypoints(&other_bbox, scene, skeleton);
                                                                     delete other_bbox.rect;
                                                                     other_bbox.rect = nullptr;
                                                                     other_bbox.state = RectNull;
