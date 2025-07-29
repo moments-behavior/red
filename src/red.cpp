@@ -1717,8 +1717,8 @@ int main(int, char **)
                         ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "(Auto mode ON)");
                     }
 
-                    ImGui::SliderFloat("Confidence Threshold", &confidence_threshold, 0.0f, 1.0f, "%.2f");
-                    ImGui::SliderFloat("NMS Threshold", &iou_threshold, 0.0f, 1.0f, "%.2f");
+                    ImGui::SliderFloat("Confidence Threshold", &confidence_threshold, 0.01f, 0.99f, "%.2f");
+                    // ImGui::SliderFloat("NMS Threshold", &iou_threshold, 0.1f, 0.9f, "%.2f");
                 }
                 else
                 {
