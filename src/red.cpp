@@ -32,6 +32,8 @@ simplelogger::Logger *logger = simplelogger::LoggerFactory::CreateConsoleLogger(
 std::map<int, int> global_class_to_animal; // Global mapping from class_id to animal_id
 std::map<int, int> global_animal_to_class; // Reverse mapping from animal_id to class_id
 int next_class_id = 0; // For assigning new class IDs
+float confidence_threshold = 0.25f;
+float iou_threshold = 0.45f; 
 
 struct YoloPrediction {
     float x, y, w, h;
@@ -87,7 +89,11 @@ float calculateIoU(const YoloPrediction& a, const YoloPrediction& b) {
     return intersection / union_area;
 }
 
-std::vector<YoloPrediction> applyNMS(std::vector<YoloPrediction>& predictions, float iou_threshold = 0.5f) {
+std::vector<YoloPrediction> applyNMS(std::vector<YoloPrediction>& predictions, float iou_threshold = 0.5f, float confidence_threshold = 0.25f) {
+    predictions.erase(std::remove_if(predictions.begin(), predictions.end(),
+        [confidence_threshold](const YoloPrediction& pred) {
+            return pred.confidence < confidence_threshold;
+        }), predictions.end());
     std::sort(predictions.begin(), predictions.end(), 
               [](const YoloPrediction& a, const YoloPrediction& b) {
                   return a.confidence > b.confidence;
@@ -253,7 +259,7 @@ std::vector<YoloPrediction> runYoloInference(const std::string& model_path, unsi
         
         std::cout << "Found " << predictions.size() << " raw detections before NMS" << std::endl;
         
-        predictions = applyNMS(predictions, 0.45f);  
+        predictions = applyNMS(predictions, iou_threshold, confidence_threshold); 
         
         std::cout << "YOLO inference completed. Found " << predictions.size() << " detections after NMS." << std::endl;
         
@@ -1457,6 +1463,47 @@ int main(int, char **)
                     {
                         std::cout << "Running YOLO prediction on frame " << current_frame_num << std::endl;
                         
+                        if (keypoints_find) {
+                            // Clear previous predictions for this frame
+                            for (int cam_id = 0; cam_id < scene->num_cams; cam_id++) {
+                                yolo_predictions[cam_id].clear();
+                                yolo_bboxes[cam_id].clear();
+                            }
+                            
+                            // remove all bounding boxes from the current frame
+                            Animals* current_frame_data = keypoints_map[current_frame_num];
+
+                            for (u32 animal_id = 0; animal_id < number_of_animals; animal_id++) {
+                                KeyPoints* frame_keypoints = &current_frame_data->keypoints[animal_id];
+                                
+                                // Clear single bounding box for each camera
+                                for (int cam_id = 0; cam_id < scene->num_cams; cam_id++) {
+                                    if (frame_keypoints->bbox2d[cam_id].state != RectNull && 
+                                        frame_keypoints->bbox2d[cam_id].rect != nullptr) {
+                                        delete frame_keypoints->bbox2d[cam_id].rect;
+                                        frame_keypoints->bbox2d[cam_id].rect = nullptr;
+                                        frame_keypoints->bbox2d[cam_id].state = RectNull;
+                                    }
+                                    
+                                    // Clear all bounding boxes in the list for this camera
+                                    if (cam_id < frame_keypoints->bbox2d_list.size()) {
+                                        for (auto& bbox : frame_keypoints->bbox2d_list[cam_id]) {
+                                            if (bbox.rect != nullptr) {
+                                                delete bbox.rect;
+                                                bbox.rect = nullptr;
+                                            }
+                                            bbox.state = RectNull;
+                                        }
+                                        frame_keypoints->bbox2d_list[cam_id].clear();
+                                    }
+                                }
+                            }
+                        }
+                        
+                        
+                        // Remove this frame from cache so it gets reprocessed
+                        yolo_frame_cache.erase(current_frame_num);
+                        
                         for (int cam_id = 0; cam_id < scene->num_cams; cam_id++) {
                             unsigned char* frame_data = nullptr;
                             if (play_video && dc_context->decoding_flag) {
@@ -1531,6 +1578,8 @@ int main(int, char **)
                         ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "(Auto mode ON)");
                     }
 
+                    ImGui::SliderFloat("Confidence Threshold", &confidence_threshold, 0.0f, 1.0f, "%.2f");
+                    ImGui::SliderFloat("NMS Threshold", &iou_threshold, 0.0f, 1.0f, "%.2f");
                 }
                 else
                 {
