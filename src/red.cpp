@@ -984,25 +984,28 @@ int main(int, char **)
                                     int active_bbox_id = -1;
                                     ImPlotPoint mouse = ImPlot::GetPlotMousePos();
                                     
-                                    for (size_t bbox_idx = 0; bbox_idx < frame_keypoints->bbox2d_list[j].size(); ++bbox_idx) {
-                                        BoundingBox& bbox = frame_keypoints->bbox2d_list[j][bbox_idx];
-                                        if (bbox.state != RectNull && bbox.rect != nullptr) {
-                                            if (is_point_in_bbox(mouse.x, mouse.y, bbox.rect)) {
-                                                active_bbox = &bbox;
-                                                active_bbox_id = bbox_idx;
-                                                break;
+                                    // Only check for active bounding boxes if bbox is enabled
+                                    if (skeleton->has_bbox) {
+                                        for (size_t bbox_idx = 0; bbox_idx < frame_keypoints->bbox2d_list[j].size(); ++bbox_idx) {
+                                            BoundingBox& bbox = frame_keypoints->bbox2d_list[j][bbox_idx];
+                                            if (bbox.state != RectNull && bbox.rect != nullptr) {
+                                                if (is_point_in_bbox(mouse.x, mouse.y, bbox.rect)) {
+                                                    active_bbox = &bbox;
+                                                    active_bbox_id = bbox_idx;
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                        
+                                        if (!active_bbox && frame_keypoints->bbox2d[j].state != RectNull && frame_keypoints->bbox2d[j].rect != nullptr) {
+                                            if (is_point_in_bbox(mouse.x, mouse.y, frame_keypoints->bbox2d[j].rect)) {
+                                                active_bbox = &frame_keypoints->bbox2d[j];
+                                                active_bbox_id = -1; 
                                             }
                                         }
                                     }
                                     
-                                    if (!active_bbox && skeleton->has_bbox && frame_keypoints->bbox2d[j].state != RectNull && frame_keypoints->bbox2d[j].rect != nullptr) {
-                                        if (is_point_in_bbox(mouse.x, mouse.y, frame_keypoints->bbox2d[j].rect)) {
-                                            active_bbox = &frame_keypoints->bbox2d[j];
-                                            active_bbox_id = -1; 
-                                        }
-                                    }
-                                    
-                                    if (active_bbox && active_bbox->has_bbox_keypoints) {
+                                    if (skeleton->has_bbox && active_bbox && active_bbox->has_bbox_keypoints) {
                                         u32* kp = &active_bbox->active_kp_id[j];
                                         if (ImGui::IsKeyPressed(ImGuiKey_W, false)) {
                                             ImPlotPoint mouse = ImPlot::GetPlotMousePos();
@@ -1033,8 +1036,8 @@ int main(int, char **)
                                         if (ImGui::IsKeyPressed(ImGuiKey_Q, false)) { // go to the first keypoint
                                             *kp = 0;
                                         }
-                                    } else if (!skeleton->has_bbox || (!active_bbox && frame_keypoints->bbox2d_list[j].empty())) {
-                                        // Use regular keypoints when no bbox is active or no bboxes exist
+                                    } else if (!skeleton->has_bbox) {
+                                        // Use regular keypoints only when no bbox is required
                                         u32* kp = &frame_keypoints->active_kp_id[j];
                                         u32* count = &frame_keypoints->counter;
                                         if (ImGui::IsKeyPressed(ImGuiKey_W, false)) {
@@ -1200,7 +1203,7 @@ int main(int, char **)
                                     }
                                     
                                     bool single_bbox_active = false;
-                                    if (!active_bbox && frame_keypoints->bbox2d[j].state != RectNull && frame_keypoints->bbox2d[j].rect != nullptr) {
+                                    if (skeleton->has_bbox && !active_bbox && frame_keypoints->bbox2d[j].state != RectNull && frame_keypoints->bbox2d[j].rect != nullptr) {
                                         if (is_point_in_bbox(mouse.x, mouse.y, frame_keypoints->bbox2d[j].rect)) {
                                             active_bbox = &frame_keypoints->bbox2d[j];
                                             single_bbox_active = true;
@@ -1208,10 +1211,10 @@ int main(int, char **)
                                     }
                                     
                                     // Only show single bbox if there are no multiple bboxes
-                                    bool has_multiple_bboxes = j < frame_keypoints->bbox2d_list.size() && 
+                                    bool has_multiple_bboxes = skeleton->has_bbox && j < frame_keypoints->bbox2d_list.size() && 
                                                              !frame_keypoints->bbox2d_list[j].empty();
                                     
-                                    if (!has_multiple_bboxes && frame_keypoints->bbox2d[j].state != RectNull) {
+                                    if (skeleton->has_bbox && !has_multiple_bboxes && frame_keypoints->bbox2d[j].state != RectNull) {
                                         ImPlotRect* my_rect = frame_keypoints->bbox2d[j].rect;
                                         ImPlotRect old_rect = *my_rect;
                                         bool single_bbox_modified = false;
@@ -1226,13 +1229,13 @@ int main(int, char **)
                                             scale_bbox_keypoints(&frame_keypoints->bbox2d[j], scene, skeleton, &old_rect, my_rect);
                                         }
                                         
-                                        if (frame_keypoints->bbox2d[j].has_bbox_keypoints && skeleton->has_skeleton) {
+                                        if (skeleton->has_bbox && frame_keypoints->bbox2d[j].has_bbox_keypoints && skeleton->has_skeleton) {
                                             gui_plot_bbox_keypoints(&frame_keypoints->bbox2d[j], skeleton, j, animal_id, 
                                                                    scene->num_cams, current_frame_data->active_id == animal_id && single_bbox_active, allow_exit, -1);
                                         }
                                     }
                                     
-                                    if (j < frame_keypoints->bbox2d_list.size()) {
+                                    if (skeleton->has_bbox && j < frame_keypoints->bbox2d_list.size()) {
                                         for (size_t bbox_idx = 0; bbox_idx < frame_keypoints->bbox2d_list[j].size(); ++bbox_idx) {
                                             BoundingBox& bbox = frame_keypoints->bbox2d_list[j][bbox_idx];
                                             if (bbox.state != RectNull && bbox.rect != nullptr) {
@@ -1263,7 +1266,7 @@ int main(int, char **)
                                                                    multi_bbox_color, ImPlotDragToolFlags_NoInputs);
                                                 }
                                                 
-                                                if (bbox.has_bbox_keypoints && skeleton->has_skeleton) {
+                                                if (skeleton->has_bbox && bbox.has_bbox_keypoints && skeleton->has_skeleton) {
                                                     bool is_active_bbox = (active_bbox_idx == (int)bbox_idx);
                                                     gui_plot_bbox_keypoints(&bbox, skeleton, j, animal_id, 
                                                                            scene->num_cams, current_frame_data->active_id == animal_id && is_active_bbox, allow_exit, bbox_idx);
