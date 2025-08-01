@@ -1,11 +1,15 @@
 #ifndef RED_SKELETON
 #define RED_SKELETON
 #include "imgui.h"
+#include "implot.h"
 #include "json.hpp"
 #include "types.h"
+#include "render.h"
+#include <fstream>
 #include <map>
 #include <string>
 #include <vector>
+
 using json = nlohmann::json;
 
 struct KeyPoints2D {
@@ -14,10 +18,28 @@ struct KeyPoints2D {
     bool is_triangulated;
 };
 
+enum RectState {
+    RectNull,
+    RectOnePoint,
+    RectTwoPoints
+};
+
+struct BoundingBox {
+    ImPlotRect *rect;
+    RectState state;
+    int class_id;
+    float confidence;
+
+    KeyPoints2D **bbox_keypoints2d; // Per-camera keypoints for this bbox
+    bool has_bbox_keypoints;
+    u32 *active_kp_id; // Active keypoint ID per camera for this bbox
+};
+
 struct KeyPoints {
     triple_d *keypoints3d;
     KeyPoints2D **keypoints2d;
     u32 *active_id;
+    std::vector<std::vector<BoundingBox>> bbox2d_list;
 };
 
 struct SkeletonContext {
@@ -27,6 +49,8 @@ struct SkeletonContext {
     std::vector<tuple_i> edges;
     std::vector<std::string> node_names;
     std::string name;
+    bool has_bbox;
+    bool has_skeleton;
 };
 
 enum SkeletonPrimitive {
@@ -48,8 +72,12 @@ enum SkeletonPrimitive {
     Rat24,
     Rat20Target,
     Rat24Target,
+    SP_BBOX,
+    SP_SIMPLE_BBOX_SKELETON,
     SP_LOAD
 };
+
+
 
 std::map<std::string, SkeletonPrimitive> skeleton_get_all() {
     std::map<std::string, SkeletonPrimitive> skeleton_all = {
@@ -71,6 +99,8 @@ std::map<std::string, SkeletonPrimitive> skeleton_get_all() {
         {"Rat24", Rat24},
         {"Rat20Target", Rat20Target},
         {"Rat24Target", Rat24Target},
+        {"BoundingBox", SP_BBOX},
+        {"Simple BBox+Skeleton", SP_SIMPLE_BBOX_SKELETON},
         {"Load from json", SP_LOAD}};
     return skeleton_all;
 }
@@ -79,6 +109,8 @@ void load_skeleton_json(std::string file_name, SkeletonContext *skeleton) {
     std::ifstream f(file_name);
     json s_config = json::parse(f);
     skeleton->name = file_name;
+    skeleton->has_skeleton = s_config.contains("has_skeleton") ? s_config["has_skeleton"].get<bool>() : true;
+    skeleton->has_bbox = s_config.contains("has_bbox") ? s_config["has_bbox"].get<bool>() : false;
     skeleton->num_nodes = s_config["num_nodes"];
     skeleton->num_edges = s_config["num_edges"];
 
@@ -96,9 +128,14 @@ void load_skeleton_json(std::string file_name, SkeletonContext *skeleton) {
 void skeleton_initialize(std::string name, std::string skeleton_file_name,
                          SkeletonContext *skeleton,
                          SkeletonPrimitive skeleton_type) {
+    skeleton->has_skeleton = true;
+    skeleton->has_bbox = false;
+    
     switch (skeleton_type) {
     case Table3Corners:
         skeleton->name = name;
+        skeleton->has_skeleton = true;
+        skeleton->has_bbox = false;
         skeleton->num_nodes = 3;
         skeleton->num_edges = 2;
 
@@ -118,6 +155,8 @@ void skeleton_initialize(std::string name, std::string skeleton_file_name,
 
     case Target:
         skeleton->name = name;
+        skeleton->has_skeleton = true;
+        skeleton->has_bbox = false;
         skeleton->num_nodes = 1;
         skeleton->num_edges = 0;
         skeleton->node_names = {"Target"};
@@ -132,6 +171,8 @@ void skeleton_initialize(std::string name, std::string skeleton_file_name,
 
     case Rat7Target:
         skeleton->name = name;
+        skeleton->has_skeleton = true;
+        skeleton->has_bbox = false;
         skeleton->num_nodes = 9;
         skeleton->num_edges = 8;
         skeleton->node_names = {"Snout",  "EarL",     "EarR",
@@ -150,6 +191,8 @@ void skeleton_initialize(std::string name, std::string skeleton_file_name,
 
     case RatTarget:
         skeleton->name = name;
+        skeleton->has_skeleton = true;
+        skeleton->has_bbox = false;
         skeleton->num_nodes = 2;
         skeleton->num_edges = 1;
         skeleton->node_names = {"Snout", "Target"};
@@ -165,6 +208,8 @@ void skeleton_initialize(std::string name, std::string skeleton_file_name,
 
     case Rat3Target:
         skeleton->name = name;
+        skeleton->has_skeleton = true;
+        skeleton->has_bbox = false;
         skeleton->num_nodes = 4;
         skeleton->num_edges = 2;
         skeleton->node_names = {"Snout", "EarL", "EarR", "Target"};
@@ -418,6 +463,29 @@ void skeleton_initialize(std::string name, std::string skeleton_file_name,
                            {14, 15}, {15, 16}, {16, 17}, {4, 18},  {18, 19},
                            {19, 20}, {20, 21}};
         break;
+
+    case SP_BBOX:
+        skeleton->name = name;
+        skeleton->has_bbox = true;
+        skeleton->has_skeleton = false;
+        break;
+    
+    case SP_SIMPLE_BBOX_SKELETON:
+        skeleton->name = name;
+        skeleton->has_skeleton = true;
+        skeleton->has_bbox = true;
+        skeleton->num_nodes = 2;
+        skeleton->num_edges = 1;
+        skeleton->node_names = {"Point1", "Point2"};
+
+        for (int i = 0; i < skeleton->num_nodes; i++) {
+            ImVec4 color = (ImVec4)ImColor::HSV(i / (float)skeleton->num_nodes, 1.0f, 1.0f);
+            skeleton->node_colors.push_back(color);
+        }
+
+        skeleton->edges = {{0, 1}};
+        break;
+
     case SP_LOAD:
         load_skeleton_json(skeleton_file_name, skeleton);
         for (int i = 0; i < skeleton->num_nodes; i++) {
@@ -433,31 +501,80 @@ void allocate_keypoints(KeyPoints *keypoints, render_scene *scene,
                         SkeletonContext *skeleton) {
     // allocate memory for storing keypoints
     keypoints->active_id = (u32 *)malloc(sizeof(u32) * scene->num_cams);
-    keypoints->keypoints3d =
-        (triple_d *)malloc(sizeof(triple_d) * skeleton->num_nodes);
-    keypoints->keypoints2d =
-        (KeyPoints2D **)malloc(sizeof(KeyPoints2D *) * scene->num_cams);
-    for (u32 j = 0; j < scene->num_cams; j++) {
-        keypoints->keypoints2d[j] =
-            (KeyPoints2D *)malloc(sizeof(KeyPoints2D) * skeleton->num_nodes);
+    
+    new (&keypoints->bbox2d_list) std::vector<std::vector<BoundingBox>>();
+    
+    if (skeleton->has_bbox) {
+        keypoints->bbox2d_list.resize(scene->num_cams);
+        for (u32 j = 0; j < scene->num_cams; j++) {
+            // Initialize with a default BoundingBox
+            BoundingBox default_bbox;
+            default_bbox.rect = NULL;
+            default_bbox.state = RectNull;
+            default_bbox.class_id = -1;
+            default_bbox.confidence = 0.0f;
+            default_bbox.has_bbox_keypoints = false;
+            default_bbox.bbox_keypoints2d = nullptr;
+            default_bbox.active_kp_id = nullptr;
+            keypoints->bbox2d_list[j].push_back(default_bbox);
+        }
+    } else {
+        keypoints->bbox2d_list.resize(scene->num_cams);
     }
 
-    // initialize to big number
-    for (u32 j = 0; j < scene->num_cams; j++) {
-        keypoints->active_id[j] = 0;
+    if (skeleton->has_skeleton) {
+        keypoints->keypoints3d =
+            (triple_d *)malloc(sizeof(triple_d) * skeleton->num_nodes);
+        keypoints->keypoints2d =
+            (KeyPoints2D **)malloc(sizeof(KeyPoints2D *) * scene->num_cams);
+        for (u32 j = 0; j < scene->num_cams; j++) {
+            keypoints->keypoints2d[j] =
+                (KeyPoints2D *)malloc(sizeof(KeyPoints2D) * skeleton->num_nodes);
+        }
+
+        // initialize to big number
+        for (u32 j = 0; j < scene->num_cams; j++) {
+            keypoints->active_id[j] = 0;
+            for (u32 k = 0; k < skeleton->num_nodes; k++) {
+                keypoints->keypoints2d[j][k].is_labeled = false;
+                keypoints->keypoints2d[j][k].is_triangulated = false;
+                keypoints->keypoints2d[j][k].position.x = 1E7;
+                keypoints->keypoints2d[j][k].position.y = 1E7;
+            }
+        }
+
         for (u32 k = 0; k < skeleton->num_nodes; k++) {
-            keypoints->keypoints2d[j][k].is_labeled = false;
-            keypoints->keypoints2d[j][k].is_triangulated = false;
-            keypoints->keypoints2d[j][k].position.x = 1E7;
-            keypoints->keypoints2d[j][k].position.y = 1E7;
+            keypoints->keypoints3d[k].x = 1E7;
+            keypoints->keypoints3d[k].y = 1E7;
+            keypoints->keypoints3d[k].z = 1E7;
+        }
+    } else {
+        keypoints->keypoints3d = nullptr;
+        keypoints->keypoints2d = nullptr;
+        // Still need to initialize active_id array even without skeleton
+        for (u32 j = 0; j < scene->num_cams; j++) {
+            keypoints->active_id[j] = 0;
         }
     }
+}
 
-    for (u32 k = 0; k < skeleton->num_nodes; k++) {
-        keypoints->keypoints3d[k].x = 1E7;
-        keypoints->keypoints3d[k].y = 1E7;
-        keypoints->keypoints3d[k].z = 1E7;
+void free_bbox_keypoints(BoundingBox* bbox, render_scene *scene) {
+    if (!bbox->has_bbox_keypoints) return;
+    
+    if (bbox->bbox_keypoints2d) {
+        for (u32 j = 0; j < scene->num_cams; j++) {
+            if (bbox->bbox_keypoints2d[j]) {
+                free(bbox->bbox_keypoints2d[j]);
+            }
+        }
+        free(bbox->bbox_keypoints2d);
+        bbox->bbox_keypoints2d = nullptr;
     }
+    if (bbox->active_kp_id) {
+        free(bbox->active_kp_id);
+        bbox->active_kp_id = nullptr;
+    }
+    bbox->has_bbox_keypoints = false;
 }
 
 void free_keypoints(KeyPoints *keypoints, render_scene *scene) {
@@ -473,7 +590,65 @@ void free_keypoints(KeyPoints *keypoints, render_scene *scene) {
 
     free(keypoints->active_id);
     free(keypoints->keypoints3d);
+    
+    // Free bounding boxes
+    for (u32 j = 0; j < scene->num_cams; j++) {
+        for (auto& bbox : keypoints->bbox2d_list[j]) {
+            if (bbox.rect) {
+                delete bbox.rect;
+            }
+            free_bbox_keypoints(&bbox, scene);
+        }
+    }
+    
+    keypoints->bbox2d_list.clear();
+    
     free(keypoints); // finally free the KeyPoints struct itself
+}
+
+void allocate_bbox_keypoints(BoundingBox* bbox, render_scene *scene, SkeletonContext* skeleton) {
+    if (!skeleton->has_skeleton) {
+        bbox->has_bbox_keypoints = false;
+        return;
+    }
+    
+    bbox->has_bbox_keypoints = true;
+    bbox->active_kp_id = (u32 *)malloc(sizeof(u32) * scene->num_cams);
+    bbox->bbox_keypoints2d = (KeyPoints2D **)malloc(sizeof(KeyPoints2D*) * scene->num_cams);
+    
+    for (u32 j = 0; j < scene->num_cams; j++) {
+        bbox->bbox_keypoints2d[j] = (KeyPoints2D *)malloc(sizeof(KeyPoints2D) * skeleton->num_nodes);
+        bbox->active_kp_id[j] = 0;
+        
+        for (u32 k = 0; k < skeleton->num_nodes; k++) {
+            bbox->bbox_keypoints2d[j][k].is_labeled = false;
+            bbox->bbox_keypoints2d[j][k].is_triangulated = false;
+            bbox->bbox_keypoints2d[j][k].position.x = 1E7;
+            bbox->bbox_keypoints2d[j][k].position.y = 1E7;
+        }
+    }
+}
+
+void constrain_keypoint_to_bbox(KeyPoints2D* keypoint, ImPlotRect* bbox_rect) {
+    if (!bbox_rect || !keypoint->is_labeled) return;
+    
+    if (keypoint->position.x < bbox_rect->X.Min) {
+        keypoint->position.x = bbox_rect->X.Min;
+    } else if (keypoint->position.x > bbox_rect->X.Max) {
+        keypoint->position.x = bbox_rect->X.Max;
+    }
+    
+    if (keypoint->position.y < bbox_rect->Y.Min) {
+        keypoint->position.y = bbox_rect->Y.Min;
+    } else if (keypoint->position.y > bbox_rect->Y.Max) {
+        keypoint->position.y = bbox_rect->Y.Max;
+    }
+}
+
+bool is_point_in_bbox(double x, double y, ImPlotRect* bbox_rect) {
+    if (!bbox_rect) return false;
+    return (x >= bbox_rect->X.Min && x <= bbox_rect->X.Max && 
+            y >= bbox_rect->Y.Min && y <= bbox_rect->Y.Max);
 }
 
 void free_all_keypoints(std::map<u32, KeyPoints *> &keypoints_map,

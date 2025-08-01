@@ -3,6 +3,7 @@
 #include "filesystem"
 #include "global.h"
 #include "gui.h"
+#include "gx_helper.h"
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
@@ -17,6 +18,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <thread>
+
+#define STB_IMAGE_IMPLEMENTATION
+#include "../lib/ImGuiFileDialog/stb/stb_image.h"
 
 #if defined(_MSC_VER) && (_MSC_VER >= 1900) &&                                 \
     !defined(IMGUI_DISABLE_WIN32_FUNCTIONS)
@@ -98,6 +102,42 @@ int main(int, char **) {
 
     ImPlotStyle &style = ImPlot::GetStyle();
     ImVec4 *colors = style.Colors;
+    
+    // Skeleton Creator variables
+    bool show_skeleton_creator = false;
+    struct SkeletonCreatorNode {
+        ImPlotPoint position;
+        std::string name;
+        ImVec4 color;
+        int id;
+        
+        SkeletonCreatorNode() : position(0.5, 0.5), name(""), color(1.0f, 1.0f, 1.0f, 1.0f), id(-1) {}
+        SkeletonCreatorNode(double x, double y, int node_id) : position(x, y), id(node_id) {
+            name = "Node" + std::to_string(node_id);
+            color = (ImVec4)ImColor::HSV(node_id / 10.0f, 1.0f, 1.0f);
+        }
+    };
+    
+    struct SkeletonCreatorEdge {
+        int node1_id;
+        int node2_id;
+        
+        SkeletonCreatorEdge() : node1_id(-1), node2_id(-1) {}
+        SkeletonCreatorEdge(int n1, int n2) : node1_id(n1), node2_id(n2) {}
+    };
+    
+    std::vector<SkeletonCreatorNode> creator_nodes;
+    std::vector<SkeletonCreatorEdge> creator_edges;
+    int next_node_id = 0;
+    int selected_node_for_edge = -1;
+    std::string skeleton_creator_name = "CustomSkeleton";
+    bool skeleton_creator_has_bbox = false;
+    bool skeleton_creator_has_skeleton = true;
+    
+    std::string background_image_path = "";
+    bool background_image_selected = false;
+    GLuint background_texture = 0;
+    int background_width = 0, background_height = 0;
     colors[ImPlotCol_Crosshairs] = ImVec4(0.3f, 0.10f, 0.64f, 1.00f);
 
     bool yolo_detection = false;
@@ -244,6 +284,14 @@ int main(int, char **) {
                         ImGui::EndMenu();
                     }
                 }
+                
+                if (ImGui::BeginMenu("Tools")) {
+                    if (ImGui::MenuItem("Skeleton Creator")) {
+                        show_skeleton_creator = true;
+                    }
+                    ImGui::EndMenu();
+                }
+                
                 ImGui::EndMenuBar();
             }
 
@@ -457,6 +505,117 @@ int main(int, char **) {
                 }
             }
             // close
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        // Handle background image selection for skeleton creator
+        if (ImGuiFileDialog::Instance()->Display("ChooseBackgroundImage")) {
+            if (ImGuiFileDialog::Instance()->IsOk()) {
+                auto file_selection = ImGuiFileDialog::Instance()->GetSelection();
+                if (!file_selection.empty()) {
+                    background_image_path = file_selection.begin()->second;
+                    background_image_selected = true;
+                    
+                    // Load the background image texture
+                    if (background_texture != 0) {
+                        glDeleteTextures(1, &background_texture);
+                        background_texture = 0;
+                    }
+                    
+                    // Load image using stb_image
+                    int channels;
+                    unsigned char* image_data = stbi_load(background_image_path.c_str(), 
+                                                        &background_width, &background_height, &channels, 0);
+                    if (image_data) {
+                        glGenTextures(1, &background_texture);
+                        glBindTexture(GL_TEXTURE_2D, background_texture);
+                        
+                        GLenum format = GL_RGB;
+                        if (channels == 4) format = GL_RGBA;
+                        else if (channels == 1) format = GL_RED;
+                        
+                        glTexImage2D(GL_TEXTURE_2D, 0, format, background_width, background_height, 
+                                   0, format, GL_UNSIGNED_BYTE, image_data);
+                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+                        
+                        stbi_image_free(image_data);
+                    }
+                }
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        // Handle skeleton load dialog for editing
+        if (ImGuiFileDialog::Instance()->Display("LoadSkeletonForEdit")) {
+            if (ImGuiFileDialog::Instance()->IsOk()) {
+                std::string file_path = ImGuiFileDialog::Instance()->GetFilePathName();
+                
+                std::ifstream file(file_path);
+                if (file.is_open()) {
+                    nlohmann::json skeleton_json;
+                    file >> skeleton_json;
+                    file.close();
+                    
+                    // Clear existing data
+                    creator_nodes.clear();
+                    creator_edges.clear();
+                    selected_node_for_edge = -1;
+                    next_node_id = 0;
+                    
+                    // Load skeleton data
+                    if (skeleton_json.contains("name")) {
+                        skeleton_creator_name = skeleton_json["name"];
+                    }
+                    
+                    if (skeleton_json.contains("has_bbox")) {
+                        skeleton_creator_has_bbox = skeleton_json["has_bbox"];
+                    }
+                    
+                    if (skeleton_json.contains("node_names") && skeleton_json.contains("node_positions")) {
+                        std::vector<std::string> node_names = skeleton_json["node_names"];
+                        std::vector<std::vector<double>> node_positions = skeleton_json["node_positions"];
+                        
+                        for (size_t i = 0; i < node_names.size() && i < node_positions.size(); i++) {
+                            if (node_positions[i].size() >= 2) {
+                                SkeletonCreatorNode node;
+                                node.id = next_node_id++;
+                                node.name = node_names[i];
+                                node.position = ImPlotPoint(node_positions[i][0], node_positions[i][1]);
+                                node.color = (ImVec4)ImColor::HSV(node.id / 10.0f, 1.0f, 1.0f);
+                                creator_nodes.push_back(node);
+                            }
+                        }
+                    } else if (skeleton_json.contains("node_names")) {
+                        // Fallback for skeletons without saved positions
+                        std::vector<std::string> node_names = skeleton_json["node_names"];
+                        double spacing = 0.8 / (node_names.size() + 1);
+                        
+                        for (size_t i = 0; i < node_names.size(); i++) {
+                            SkeletonCreatorNode node;
+                            node.id = next_node_id++;
+                            node.name = node_names[i];
+                            node.position = ImPlotPoint(0.1 + spacing * (i + 1), 0.5);
+                            node.color = (ImVec4)ImColor::HSV(node.id / 10.0f, 1.0f, 1.0f);
+                            creator_nodes.push_back(node);
+                        }
+                    }
+                    
+                    if (skeleton_json.contains("edges")) {
+                        std::vector<std::vector<int>> edges_array = skeleton_json["edges"];
+                        for (const auto& edge : edges_array) {
+                            if (edge.size() >= 2 && edge[0] < creator_nodes.size() && edge[1] < creator_nodes.size()) {
+                                SkeletonCreatorEdge creator_edge;
+                                creator_edge.node1_id = creator_nodes[edge[0]].id;
+                                creator_edge.node2_id = creator_nodes[edge[1]].id;
+                                creator_edges.push_back(creator_edge);
+                            }
+                        }
+                    }
+                    
+                    std::cout << "Skeleton loaded from: " << file_path << " (with " << creator_nodes.size() << " nodes)" << std::endl;
+                }
+            }
             ImGuiFileDialog::Instance()->Close();
         }
 
@@ -768,6 +927,42 @@ int main(int, char **) {
                                     keypoints_find = false;
                                 }
                             }
+                            
+                            // Bounding box input handling
+                            if (skeleton->has_bbox) {
+                                if (ImGui::IsMouseClicked(ImGuiMouseButton_Middle, false)) {
+                                    ImPlotPoint mouse = ImPlot::GetPlotMousePos();
+                                    BoundingBox new_bbox;
+                                    new_bbox.rect = new ImPlotRect(mouse.x, mouse.x, mouse.y, mouse.y);
+                                    new_bbox.state = RectOnePoint;
+                                    new_bbox.class_id = 0;  // Default class
+                                    new_bbox.confidence = 1.0f;
+                                    new_bbox.has_bbox_keypoints = false;
+                                    new_bbox.bbox_keypoints2d = nullptr;
+                                    new_bbox.active_kp_id = nullptr;
+                                    
+                                    // Allocate keypoints for this bounding box if skeleton is enabled
+                                    if (skeleton->has_skeleton) {
+                                        allocate_bbox_keypoints(&new_bbox, scene, skeleton);
+                                    }
+                                    
+                                    keypoints_map[current_frame_num]->bbox2d_list[j].push_back(new_bbox);
+                                }
+                                
+                                // Handle dragging for multiple bounding boxes
+                                for (auto& bbox : keypoints_map[current_frame_num]->bbox2d_list[j]) {
+                                    if (bbox.state == RectOnePoint && ImGui::IsMouseDragging(ImGuiMouseButton_Middle)) {
+                                        ImPlotPoint mouse = ImPlot::GetPlotMousePos();
+                                        bbox.rect->X.Max = mouse.x;
+                                        bbox.rect->Y.Min = mouse.y;
+                                    }
+                                    
+                                    if (bbox.state == RectOnePoint && ImGui::IsMouseReleased(ImGuiMouseButton_Middle)) {
+                                        bbox.state = RectTwoPoints;
+                                    }
+                                }
+                                
+                            }
                         } else {
                             is_view_focused[j] = false;
                         }
@@ -776,6 +971,41 @@ int main(int, char **) {
                             gui_plot_keypoints(
                                 keypoints_map.at(current_frame_num), skeleton,
                                 j, scene->num_cams);
+                                
+                            // Plot bounding boxes and their keypoints
+                            if (skeleton->has_bbox) {
+                                // Plot multiple bounding boxes
+                                for (int bbox_idx = 0; bbox_idx < keypoints_map[current_frame_num]->bbox2d_list[j].size(); bbox_idx++) {
+                                    BoundingBox& bbox = keypoints_map[current_frame_num]->bbox2d_list[j][bbox_idx];
+                                    if (bbox.state == RectTwoPoints && bbox.rect) {
+                                        ImVec4 bbox_color = ImVec4(0.5f, 1.0f, 1.0f, 1.0f);
+                                        ImPlot::DragRect(1000 + bbox_idx, &bbox.rect->X.Min, &bbox.rect->Y.Min, 
+                                                       &bbox.rect->X.Max, &bbox.rect->Y.Max, bbox_color, ImPlotDragToolFlags_None);
+                                        
+                                        // Plot keypoints within this bounding box
+                                        bool is_saved = true;
+                                        gui_plot_bbox_keypoints(&bbox, skeleton, j, scene->num_cams, true, is_saved, bbox_idx);
+                                        
+                                        // Handle keypoint labeling with W key for bounding box keypoints
+                                        if (ImGui::IsKeyPressed(ImGuiKey_W, false) && bbox.has_bbox_keypoints) {
+                                            ImPlotPoint mouse = ImPlot::GetPlotMousePos();
+                                            if (is_point_in_bbox(mouse.x, mouse.y, bbox.rect)) {
+                                                u32 active_kp = bbox.active_kp_id[j];
+                                                if (active_kp < skeleton->num_nodes) {
+                                                    bbox.bbox_keypoints2d[j][active_kp].position = {mouse.x, mouse.y};
+                                                    bbox.bbox_keypoints2d[j][active_kp].is_labeled = true;
+                                                    bbox.bbox_keypoints2d[j][active_kp].is_triangulated = false;
+                                                    constrain_keypoint_to_bbox(&bbox.bbox_keypoints2d[j][active_kp], bbox.rect);
+                                                    if (active_kp < (skeleton->num_nodes - 1)) {
+                                                        bbox.active_kp_id[j]++;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            
                             // think more general solution of multiple sets
                             // of keypoints
                             if (skeleton->name == "Rat4Box" ||
@@ -1203,6 +1433,275 @@ int main(int, char **) {
                 ImGui::Text("<r>: delete active keypoint");
                 ImGui::Text("<f>: delete active keypoint on all cameras");
                 ImGui::Text("Click keypoint to active it");
+            }
+            ImGui::End();
+        }
+
+        // Skeleton Creator Window
+        if (show_skeleton_creator)
+        {
+            ImGui::SetNextWindowSize(ImVec2(800, 600), ImGuiCond_FirstUseEver);
+            if (ImGui::Begin("Skeleton Creator", &show_skeleton_creator))
+            {
+                ImGui::SeparatorText("Skeleton Configuration");
+                
+                char name_buffer[256];
+                strncpy(name_buffer, skeleton_creator_name.c_str(), sizeof(name_buffer));
+                name_buffer[sizeof(name_buffer) - 1] = '\0';
+                if (ImGui::InputText("Skeleton Name", name_buffer, sizeof(name_buffer))) {
+                    skeleton_creator_name = std::string(name_buffer);
+                }
+                
+                ImGui::Checkbox("Has Bounding Box", &skeleton_creator_has_bbox);
+                
+                if (ImGui::Button("Select Background Image")) {
+                    IGFD::FileDialogConfig config;
+                    config.countSelectionMax = 1;
+                    config.path = std::filesystem::current_path().string();
+                    config.flags = ImGuiFileDialogFlags_Modal;
+                    ImGuiFileDialog::Instance()->OpenDialog(
+                        "ChooseBackgroundImage", "Choose Background Image",
+                        ".png,.jpg,.jpeg,.tiff,.bmp,.tga", config);
+                }
+                ImGui::SameLine();
+                if (background_image_selected && background_texture != 0) {
+                    std::filesystem::path path(background_image_path);
+                    ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "Image: %s (%dx%d)", path.filename().string().c_str(), background_width, background_height);
+                    ImGui::SameLine();
+                    if (ImGui::Button("Clear Background")) {
+                        if (background_texture != 0) {
+                            glDeleteTextures(1, &background_texture);
+                            background_texture = 0;
+                        }
+                        background_image_path = "";
+                        background_image_selected = false;
+                        background_width = 0;
+                        background_height = 0;
+                        std::cout << "Background image cleared" << std::endl;
+                    }
+                } else {
+                    ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "No background image");
+                }
+                
+                ImGui::SeparatorText("Interactive Editor");
+                
+                if (ImPlot::BeginPlot("Skeleton Creator", ImVec2(-1, 400), ImPlotFlags_Equal))
+                {
+                    ImPlot::SetupAxes("", "");
+                    ImPlot::SetupAxisLimits(ImAxis_X1, 0.0, 1.0, ImGuiCond_Always);
+                    ImPlot::SetupAxisLimits(ImAxis_Y1, 0.0, 1.0, ImGuiCond_Always);
+
+                    ImPlot::SetupAxisTicks(ImAxis_X1, nullptr, 0);
+                    ImPlot::SetupAxisTicks(ImAxis_Y1, nullptr, 0);
+                    
+                    if (background_image_selected && background_texture != 0) {
+                        ImPlot::PlotImage("##background", (void*)(intptr_t)background_texture, 
+                                         ImPlotPoint(0, 0), ImPlotPoint(1, 1));
+                    }
+                    
+                    if (ImPlot::IsPlotHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::GetIO().KeyCtrl) {
+                        if (selected_node_for_edge < 0) {
+                            ImPlotPoint mouse_pos = ImPlot::GetPlotMousePos();
+                            creator_nodes.emplace_back(mouse_pos.x, mouse_pos.y, next_node_id++);
+                        }
+                    }
+                    
+                    if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+                        selected_node_for_edge = -1;
+                    }
+                    
+                    for (const auto& edge : creator_edges) {
+                        const SkeletonCreatorNode* node1 = nullptr;
+                        const SkeletonCreatorNode* node2 = nullptr;
+                        
+                        for (const auto& node : creator_nodes) {
+                            if (node.id == edge.node1_id) node1 = &node;
+                            if (node.id == edge.node2_id) node2 = &node;
+                        }
+                        
+                        if (node1 && node2) {
+                            double xs[2] = {node1->position.x, node2->position.x};
+                            double ys[2] = {node1->position.y, node2->position.y};
+                            ImPlot::SetNextLineStyle(ImVec4(0.8f, 0.8f, 0.8f, 1.0f), 2.0f);
+                            ImPlot::PlotLine("##edge", xs, ys, 2);
+                        }
+                    }
+                    
+                    for (size_t i = 0; i < creator_nodes.size(); i++) {
+                        auto& node = creator_nodes[i];
+                        
+                        bool clicked = false, hovered = false, held = false;
+                        ImVec4 node_color = node.color;
+                        
+                        if (selected_node_for_edge == node.id) {
+                            node_color = ImVec4(1.0f, 1.0f, 0.0f, 1.0f); 
+                        }
+                        
+                        bool modified = ImPlot::DragPoint(node.id, &node.position.x, &node.position.y, 
+                                                        node_color, 8.0f, ImPlotDragToolFlags_None, 
+                                                        &clicked, &hovered, &held);
+                        
+                        if (hovered) {
+                            ImPlot::PlotText(node.name.c_str(), node.position.x, node.position.y + 0.03);
+                            
+                            if (ImGui::IsKeyPressed(ImGuiKey_R, false)) {
+                                int node_id_to_delete = node.id;
+                                
+                                creator_nodes.erase(creator_nodes.begin() + i);
+                                
+                                creator_edges.erase(std::remove_if(creator_edges.begin(), creator_edges.end(),
+                                    [node_id_to_delete](const SkeletonCreatorEdge& edge) {
+                                        return edge.node1_id == node_id_to_delete || edge.node2_id == node_id_to_delete;
+                                    }), creator_edges.end());
+                                
+                                if (selected_node_for_edge == node_id_to_delete) {
+                                    selected_node_for_edge = -1;
+                                }
+                                
+                                break;
+                            }
+                        }
+
+                        if (clicked && ImGui::GetIO().KeyCtrl) {
+                            if (selected_node_for_edge < 0) {
+                                selected_node_for_edge = node.id;
+                            } else if (selected_node_for_edge != node.id) {
+                                bool edge_exists = false;
+                                for (const auto& existing_edge : creator_edges) {
+                                    if ((existing_edge.node1_id == selected_node_for_edge && existing_edge.node2_id == node.id) ||
+                                        (existing_edge.node1_id == node.id && existing_edge.node2_id == selected_node_for_edge)) {
+                                        edge_exists = true;
+                                        break;
+                                    }
+                                }
+                                
+                                if (!edge_exists) {
+                                    creator_edges.emplace_back(selected_node_for_edge, node.id);
+                                } else {
+                                    // Delete the existing edge
+                                    creator_edges.erase(std::remove_if(creator_edges.begin(), creator_edges.end(),
+                                        [selected_node_for_edge, node_id = node.id](const SkeletonCreatorEdge& edge) {
+                                            return (edge.node1_id == selected_node_for_edge && edge.node2_id == node_id) || (edge.node1_id == node_id && edge.node2_id == selected_node_for_edge);
+                                        }), creator_edges.end());
+                                }
+                                 
+                                selected_node_for_edge = -1;
+                            } else {
+                                selected_node_for_edge = -1; 
+                            }
+                        }
+                    }
+                    
+                    ImPlot::EndPlot();
+                }
+                
+                if (selected_node_for_edge >= 0) {
+                    ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "Selected node for edge creation. Ctrl+Click another node to create edge or remove existing edge, or press ESC to cancel.");
+                }
+                
+                ImGui::SeparatorText("Help");
+                ImGui::BulletText("Left-click in the plot area to add a new node");
+                ImGui::BulletText("Drag nodes to reposition them");
+                ImGui::BulletText("Ctrl+Click a node to select it for edge creation");
+                ImGui::BulletText("Ctrl+Click another node to create an edge or remove an existing edge between them");
+                ImGui::BulletText("Press ESC to cancel edge creation");
+                ImGui::BulletText("Press R while hovering a node to delete it and its edges");
+                
+                ImGui::SeparatorText("Actions");
+                
+                if (ImGui::Button("Clear All")) {
+                    creator_nodes.clear();
+                    creator_edges.clear();
+                    next_node_id = 0;
+                    selected_node_for_edge = -1;
+                }
+                
+                ImGui::SameLine();
+                if (ImGui::Button("Load from JSON")) {
+                    IGFD::FileDialogConfig config;
+                    config.countSelectionMax = 1;
+                    config.path = std::filesystem::current_path().string() + "/skeleton";
+                    config.flags = ImGuiFileDialogFlags_Modal;
+                    ImGuiFileDialog::Instance()->OpenDialog(
+                        "LoadSkeletonForEdit", "Load Skeleton",
+                        ".json", config);
+                }
+                
+                ImGui::SameLine();
+                if (ImGui::Button("Save to JSON")) {
+                    if (!creator_nodes.empty()) {
+                        nlohmann::json skeleton_json;
+                        skeleton_json["name"] = skeleton_creator_name;
+                        skeleton_json["has_skeleton"] = true;
+                        skeleton_json["has_bbox"] = skeleton_creator_has_bbox;
+                        skeleton_json["num_nodes"] = (int)creator_nodes.size();
+                        skeleton_json["num_edges"] = (int)creator_edges.size();
+                        
+                        std::vector<std::string> node_names;
+                        std::vector<std::vector<double>> node_positions;
+                        for (const auto& node : creator_nodes) {
+                            node_names.push_back(node.name);
+                            node_positions.push_back({node.position.x, node.position.y});
+                        }
+                        skeleton_json["node_names"] = node_names;
+                        skeleton_json["node_positions"] = node_positions;
+                        
+                        std::vector<std::vector<int>> edges_array;
+                        for (const auto& edge : creator_edges) {
+                            int idx1 = -1, idx2 = -1;
+                            for (size_t i = 0; i < creator_nodes.size(); i++) {
+                                if (creator_nodes[i].id == edge.node1_id) idx1 = (int)i;
+                                if (creator_nodes[i].id == edge.node2_id) idx2 = (int)i;
+                            }
+                            if (idx1 >= 0 && idx2 >= 0) {
+                                edges_array.push_back({idx1, idx2});
+                            }
+                        }
+                        skeleton_json["edges"] = edges_array;
+
+                        std::string skeleton_dir = std::filesystem::current_path().string() + "/skeleton";
+                        
+                        std::string filename;
+                        filename = skeleton_dir + "/" + skeleton_creator_name + ".json";
+                        
+                        std::ofstream file(filename);
+                        file << skeleton_json.dump(4);
+                        file.close();
+                        std::cout << "Skeleton saved to: " << filename << " (with node positions)" << std::endl;
+                    }
+                }
+                
+                if (!creator_nodes.empty()) {
+                    ImGui::SeparatorText("Nodes");
+                    if (ImGui::BeginTable("NodeTable", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg))
+                    {
+                        ImGui::TableSetupColumn("ID", ImGuiTableColumnFlags_WidthFixed, 40.0f);
+                        ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch);
+                        ImGui::TableSetupColumn("Position", ImGuiTableColumnFlags_WidthFixed, 120.0f);
+                        ImGui::TableHeadersRow();
+                        
+                        for (size_t i = 0; i < creator_nodes.size(); i++)
+                        {
+                            ImGui::TableNextRow();
+                            ImGui::TableSetColumnIndex(0);
+                            ImGui::Text("%d", creator_nodes[i].id);
+                            
+                            ImGui::TableSetColumnIndex(1);
+                            char node_name_buffer[128];
+                            strncpy(node_name_buffer, creator_nodes[i].name.c_str(), sizeof(node_name_buffer));
+                            node_name_buffer[sizeof(node_name_buffer) - 1] = '\0';
+                            ImGui::PushID(i);
+                            if (ImGui::InputText("##name", node_name_buffer, sizeof(node_name_buffer))) {
+                                creator_nodes[i].name = std::string(node_name_buffer);
+                            }
+                            ImGui::PopID();
+                            
+                            ImGui::TableSetColumnIndex(2);
+                            ImGui::Text("(%.2f, %.2f)", creator_nodes[i].position.x, creator_nodes[i].position.y);
+                        }
+                        ImGui::EndTable();
+                    }
+                }
             }
             ImGui::End();
         }
