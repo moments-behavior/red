@@ -1,4 +1,6 @@
 #include "decoder.h"
+#include "AppDecUtils.h"
+#include "global.h"
 
 void decoder_get_image_from_gpu(CUdeviceptr dpSrc, uint8_t *pDst, int nWidth,
                                 int nHeight) {
@@ -53,8 +55,9 @@ inline void decoder_check_input_files(const char *sz_in_file_path) {
 }
 
 void decoder_process(DecoderContext *dc_context, FFmpegDemuxer *demuxer,
-                     PictureBuffer *display_buffer, int size_of_buffer,
-                     SeekInfo *seek_info, bool use_cpu_buffer) {
+                     std::string cam_name, PictureBuffer *display_buffer,
+                     int size_of_buffer, SeekInfo *seek_info,
+                     bool use_cpu_buffer) {
     CUdeviceptr pTmpImage = 0;
     ck(cuInit(0));
     CUcontext cuContext = NULL;
@@ -171,83 +174,101 @@ void decoder_process(DecoderContext *dc_context, FFmpegDemuxer *demuxer,
             // std::cout << "seek thread done " << temp_nFrameReturned <<
             // std::endl;
         } else {
-            if (!skip_first_decode_after_seek) {
-                demux_success = demuxer->Demux(pVideo, nVideoBytes, pktinfo);
-                if (!demux_success) {
-                    // end of stream
-                    // std::cout << "Demux error..." << std::endl;
-                    nFrameReturned =
-                        dec.Decode(NULL, 0, CUVID_PKT_DISCONTINUITY);
-                    dc_context->total_num_frame = nFrame + nFrameReturned;
-                } else {
-                    nFrameReturned = dec.Decode(pVideo, nVideoBytes);
-                }
-            } else {
-                skip_first_decode_after_seek = false;
-            }
+            if (window_need_decoding[cam_name].load()) {
 
-            if (!nFrame && nFrameReturned) {
-                LOG(INFO) << dec.GetVideoInfo();
-                // Get output frame size from decoder
-                nWidth = dec.GetWidth();
-                nHeight = dec.GetHeight();
-                size_in_bytes = nWidth * nHeight * 4;
-                cuMemAlloc(&pTmpImage, size_in_bytes);
-            }
-
-            for (int i = 0; i < nFrameReturned; i++) {
-                // decode frame and conversion
-                pFrame = dec.GetFrame();
-                iMatrix = dec.GetVideoFormatInfo()
-                              .video_signal_description.matrix_coefficients;
-                Nv12ToColor32<RGBA32>(pFrame, dec.GetWidth(),
-                                      (uint8_t *)pTmpImage, 4 * dec.GetWidth(),
-                                      dec.GetWidth(), dec.GetHeight(), iMatrix);
-
-                if (nFrame == 0) {
-                    if (use_cpu_buffer) {
-                        decoder_get_image_from_gpu(
-                            pTmpImage, display_buffer[buffer_head].frame,
-                            4 * dec.GetWidth(), dec.GetHeight());
+                if (!skip_first_decode_after_seek) {
+                    demux_success =
+                        demuxer->Demux(pVideo, nVideoBytes, pktinfo);
+                    if (!demux_success) {
+                        // end of stream
+                        // std::cout << "Demux error..." << std::endl;
+                        nFrameReturned =
+                            dec.Decode(NULL, 0, CUVID_PKT_DISCONTINUITY);
+                        dc_context->total_num_frame = nFrame + nFrameReturned;
                     } else {
-                        cudaMemcpy(display_buffer[buffer_head].frame,
-                                   (uint8_t *)pTmpImage, size_in_bytes,
-                                   cudaMemcpyDeviceToDevice);
+                        nFrameReturned = dec.Decode(pVideo, nVideoBytes);
                     }
-                    display_buffer[buffer_head].available_to_write = false;
-                    dc_context->decoding_flag = true;
-                    display_buffer[buffer_head].frame_number = nFrame;
                 } else {
-                    while (!display_buffer[buffer_head].available_to_write &&
-                           !(dc_context->stop_flag) && !(seek_info->use_seek)) {
-                        // if the next frame hasn't been displayed, the queue is
-                        // full, sleep std::cout << "thread wait, " <<
-                        // display_buffer[buffer_head].available_to_write << ",
-                        // " << buffer_head << ", " <<
-                        // display_buffer[buffer_head].frame_number <<
-                        // std::endl;
-                        std::this_thread::sleep_for(
-                            std::chrono::milliseconds(1));
-                    }
-                    if (use_cpu_buffer) {
-                        decoder_get_image_from_gpu(
-                            pTmpImage, display_buffer[buffer_head].frame,
-                            4 * dec.GetWidth(), dec.GetHeight());
-                    } else {
-                        cudaMemcpy(display_buffer[buffer_head].frame,
-                                   (uint8_t *)pTmpImage, size_in_bytes,
-                                   cudaMemcpyDeviceToDevice);
-                    }
-                    display_buffer[buffer_head].available_to_write = false;
-                    display_buffer[buffer_head].frame_number = nFrame;
+                    skip_first_decode_after_seek = false;
                 }
-                nFrame = nFrame + 1;
-                buffer_head = (buffer_head + 1) % size_of_buffer;
-                // for debugging purpose
-                if (!demux_success) {
-                    std::cout
-                        << "total_num_frame: " << dc_context->total_num_frame
-                        << std::endl;
+
+                if (!nFrame && nFrameReturned) {
+                    LOG(INFO) << dec.GetVideoInfo();
+                    // Get output frame size from decoder
+                    nWidth = dec.GetWidth();
+                    nHeight = dec.GetHeight();
+                    size_in_bytes = nWidth * nHeight * 4;
+                    cuMemAlloc(&pTmpImage, size_in_bytes);
+                }
+
+                for (int i = 0; i < nFrameReturned; i++) {
+                    // decode frame and conversion
+                    pFrame = dec.GetFrame();
+                    iMatrix = dec.GetVideoFormatInfo()
+                                  .video_signal_description.matrix_coefficients;
+                    if (nFrame == 0) {
+                        if (use_cpu_buffer) {
+                            Nv12ToColor32<RGBA32>(
+                                pFrame, dec.GetWidth(), (uint8_t *)pTmpImage,
+                                4 * dec.GetWidth(), dec.GetWidth(),
+                                dec.GetHeight(), iMatrix);
+                            decoder_get_image_from_gpu(
+                                pTmpImage, display_buffer[buffer_head].frame,
+                                4 * dec.GetWidth(), dec.GetHeight());
+                        } else {
+                            Nv12ToColor32<RGBA32>(
+                                pFrame, dec.GetWidth(), (uint8_t *)pTmpImage,
+                                4 * dec.GetWidth(), dec.GetWidth(),
+                                dec.GetHeight(), iMatrix);
+                            cudaMemcpy(display_buffer[buffer_head].frame,
+                                       (uint8_t *)pTmpImage, size_in_bytes,
+                                       cudaMemcpyDeviceToDevice);
+                        }
+                        display_buffer[buffer_head].available_to_write = false;
+                        dc_context->decoding_flag = true;
+                        display_buffer[buffer_head].frame_number = nFrame;
+                    } else {
+                        while (
+                            !display_buffer[buffer_head].available_to_write &&
+                            !(dc_context->stop_flag) &&
+                            !(seek_info->use_seek)) {
+                            // if the next frame hasn't been displayed, the
+                            // queue is full, sleep std::cout << "thread wait, "
+                            // << display_buffer[buffer_head].available_to_write
+                            // << ", " << buffer_head << ", " <<
+                            // display_buffer[buffer_head].frame_number <<
+                            // std::endl;
+                            std::this_thread::sleep_for(
+                                std::chrono::milliseconds(1));
+                        }
+                        if (use_cpu_buffer) {
+                            Nv12ToColor32<RGBA32>(
+                                pFrame, dec.GetWidth(), (uint8_t *)pTmpImage,
+                                4 * dec.GetWidth(), dec.GetWidth(),
+                                dec.GetHeight(), iMatrix);
+                            decoder_get_image_from_gpu(
+                                pTmpImage, display_buffer[buffer_head].frame,
+                                4 * dec.GetWidth(), dec.GetHeight());
+                        } else {
+                            Nv12ToColor32<RGBA32>(
+                                pFrame, dec.GetWidth(), (uint8_t *)pTmpImage,
+                                4 * dec.GetWidth(), dec.GetWidth(),
+                                dec.GetHeight(), iMatrix);
+                            cudaMemcpy(display_buffer[buffer_head].frame,
+                                       (uint8_t *)pTmpImage, size_in_bytes,
+                                       cudaMemcpyDeviceToDevice);
+                        }
+
+                        display_buffer[buffer_head].available_to_write = false;
+                        display_buffer[buffer_head].frame_number = nFrame;
+                    }
+                    nFrame = nFrame + 1;
+                    buffer_head = (buffer_head + 1) % size_of_buffer;
+                    // for debugging purpose
+                    if (!demux_success) {
+                        std::cout << "total_num_frame: "
+                                  << dc_context->total_num_frame << std::endl;
+                    }
                 }
             }
         }
