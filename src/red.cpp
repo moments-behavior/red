@@ -134,6 +134,24 @@ int main(int, char **) {
     bool skeleton_creator_has_bbox = false;
     bool skeleton_creator_has_skeleton = true;
     
+    // Bounding box stuff
+    std::vector<std::string> bbox_class_names = {"Class_1"};
+    std::vector<ImVec4> bbox_class_colors = {
+        ImVec4(0.3f, 1.0f, 1.0f, 1.0f)
+    };
+    int current_bbox_class = 0;
+    static char new_class_name_buffer[64] = "";
+    
+    auto create_new_bbox_class = [&]() {
+        std::string new_class_name = "Class_" + std::to_string(bbox_class_names.size() + 1);
+        bbox_class_names.push_back(new_class_name);
+        float hue = (bbox_class_colors.size() * 0.618034f); // ^_^
+        while (hue > 1.0f) hue -= 1.0f;
+        ImVec4 new_color = (ImVec4)ImColor::HSV(hue, 0.8f, 1.0f);
+        bbox_class_colors.push_back(new_color);
+        current_bbox_class = bbox_class_names.size() - 1;
+    };
+    
     std::string background_image_path = "";
     bool background_image_selected = false;
     GLuint background_texture = 0;
@@ -180,6 +198,15 @@ int main(int, char **) {
                     if (ImGui::BeginMenu("Skeleton")) {
                         if (!skeleton_chosen) {
                             skeleton = new SkeletonContext;
+                            skeleton->num_nodes = 0;
+                            skeleton->num_edges = 0;
+                            skeleton->name = "";
+                            skeleton->has_bbox = false;
+                            skeleton->has_skeleton = true;
+                            skeleton->node_colors.clear();
+                            skeleton->edges.clear();
+                            skeleton->node_names.clear();
+                            
                             skeleton_map = skeleton_get_all();
                         }
 
@@ -868,7 +895,7 @@ int main(int, char **) {
                                 }
                             }
 
-                            if (keypoints_find) {
+                            if (keypoints_find && skeleton->has_skeleton) {
                                 u32 *kp = &(keypoints_map[current_frame_num]
                                                 ->active_id[j]);
                                 if (ImGui::IsKeyPressed(ImGuiKey_W, false)) {
@@ -931,18 +958,26 @@ int main(int, char **) {
                             // Bounding box input handling
                             if (skeleton->has_bbox) {
                                 if (ImGui::IsMouseClicked(ImGuiMouseButton_Middle, false)) {
+                                    // Ensure keypoints structure exists for bounding boxes
+                                    bool keypoints_find = keypoints_map.find(current_frame_num) != keypoints_map.end();
+                                    if (!keypoints_find) {
+                                        KeyPoints *keypoints = (KeyPoints *)malloc(sizeof(KeyPoints));
+                                        allocate_keypoints(keypoints, scene, skeleton);
+                                        keypoints_map[current_frame_num] = keypoints;
+                                    }
+                                    
                                     ImPlotPoint mouse = ImPlot::GetPlotMousePos();
                                     BoundingBox new_bbox;
                                     new_bbox.rect = new ImPlotRect(mouse.x, mouse.x, mouse.y, mouse.y);
                                     new_bbox.state = RectOnePoint;
-                                    new_bbox.class_id = 0;  // Default class
+                                    new_bbox.class_id = current_bbox_class;  
                                     new_bbox.confidence = 1.0f;
                                     new_bbox.has_bbox_keypoints = false;
                                     new_bbox.bbox_keypoints2d = nullptr;
                                     new_bbox.active_kp_id = nullptr;
                                     
-                                    // Allocate keypoints for this bounding box if skeleton is enabled
-                                    if (skeleton->has_skeleton) {
+                                    // Allocate keypoints for this bounding box only if skeleton has keypoints enabled
+                                    if (skeleton->has_skeleton && skeleton->num_nodes > 0) {
                                         allocate_bbox_keypoints(&new_bbox, scene, skeleton);
                                     }
                                     
@@ -967,27 +1002,79 @@ int main(int, char **) {
                             is_view_focused[j] = false;
                         }
 
-                        if (keypoints_find) {
-                            gui_plot_keypoints(
-                                keypoints_map.at(current_frame_num), skeleton,
-                                j, scene->num_cams);
-                                
-                            // Plot bounding boxes and their keypoints
-                            if (skeleton->has_bbox) {
-                                // Plot multiple bounding boxes
-                                for (int bbox_idx = 0; bbox_idx < keypoints_map[current_frame_num]->bbox2d_list[j].size(); bbox_idx++) {
-                                    BoundingBox& bbox = keypoints_map[current_frame_num]->bbox2d_list[j][bbox_idx];
-                                    if (bbox.state == RectTwoPoints && bbox.rect) {
-                                        ImVec4 bbox_color = ImVec4(0.5f, 1.0f, 1.0f, 1.0f);
+                        // Plot bounding boxes (both with and without keypoints)
+                        if (skeleton->has_bbox) {
+                            bool keypoints_find = keypoints_map.find(current_frame_num) != keypoints_map.end();
+                            if (!keypoints_find) {
+                                KeyPoints *keypoints = (KeyPoints *)malloc(sizeof(KeyPoints));
+                                allocate_keypoints(keypoints, scene, skeleton);
+                                keypoints_map[current_frame_num] = keypoints;
+                            }
+                            
+                            for (int bbox_idx = 0; bbox_idx < keypoints_map[current_frame_num]->bbox2d_list[j].size(); bbox_idx++) {
+                                BoundingBox& bbox = keypoints_map[current_frame_num]->bbox2d_list[j][bbox_idx];
+                                if (bbox.rect) {
+                                    ImVec4 bbox_color = ImVec4(0.5f, 1.0f, 1.0f, 1.0f); // Default fallback
+                                    if (bbox.class_id >= 0 && bbox.class_id < bbox_class_colors.size()) {
+                                        bbox_color = bbox_class_colors[bbox.class_id];
+                                    }
+                                    
+                                    if (bbox.state == RectTwoPoints) {
+                                        static bool bbox_clicked, bbox_hovered, bbox_held;
                                         ImPlot::DragRect(1000 + bbox_idx, &bbox.rect->X.Min, &bbox.rect->Y.Min, 
-                                                       &bbox.rect->X.Max, &bbox.rect->Y.Max, bbox_color, ImPlotDragToolFlags_None);
+                                                       &bbox.rect->X.Max, &bbox.rect->Y.Max, bbox_color, ImPlotDragToolFlags_None,
+                                                       &bbox_clicked, &bbox_hovered, &bbox_held);
                                         
-                                        // Plot keypoints within this bounding box
+                                        if (bbox_hovered) {
+                                            if (ImGui::IsKeyPressed(ImGuiKey_T, false)) {
+                                                if (bbox.has_bbox_keypoints && bbox.bbox_keypoints2d) {
+                                                    free(bbox.bbox_keypoints2d);
+                                                    bbox.bbox_keypoints2d = nullptr;
+                                                    free(bbox.active_kp_id);
+                                                    bbox.active_kp_id = nullptr;
+                                                }
+                                                delete bbox.rect;
+                                                bbox.rect = nullptr;
+                                                bbox.state = RectNull;
+                                                bbox.has_bbox_keypoints = false;
+                                            }
+                                            
+                                            if (ImGui::IsKeyPressed(ImGuiKey_F, false)) {
+                                                int target_class_id = bbox.class_id;
+                                                for (int cam_idx = 0; cam_idx < scene->num_cams; cam_idx++) {
+                                                    auto& bbox_list = keypoints_map[current_frame_num]->bbox2d_list[cam_idx];
+                                                    for (auto& other_bbox : bbox_list) {
+                                                        if (other_bbox.class_id == target_class_id && 
+                                                            other_bbox.state != RectNull && 
+                                                            other_bbox.rect != nullptr) {
+                                                            if (other_bbox.has_bbox_keypoints && other_bbox.bbox_keypoints2d) {
+                                                                free(other_bbox.bbox_keypoints2d);
+                                                                other_bbox.bbox_keypoints2d = nullptr;
+                                                                free(other_bbox.active_kp_id);
+                                                                other_bbox.active_kp_id = nullptr;
+                                                            }
+                                                            delete other_bbox.rect;
+                                                            other_bbox.rect = nullptr;
+                                                            other_bbox.state = RectNull;
+                                                            other_bbox.has_bbox_keypoints = false;
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    else if (bbox.state == RectOnePoint) {
+                                        double xs[5] = {bbox.rect->X.Min, bbox.rect->X.Max, bbox.rect->X.Max, bbox.rect->X.Min, bbox.rect->X.Min};
+                                        double ys[5] = {bbox.rect->Y.Max, bbox.rect->Y.Max, bbox.rect->Y.Min, bbox.rect->Y.Min, bbox.rect->Y.Max};
+                                        ImPlot::SetNextLineStyle(bbox_color, 2.0f);
+                                        ImPlot::PlotLine("##bbox_preview", xs, ys, 5);
+                                    }
+                                    
+                                    if (bbox.state == RectTwoPoints && keypoints_find && skeleton->has_skeleton && bbox.has_bbox_keypoints) {
                                         bool is_saved = true;
                                         gui_plot_bbox_keypoints(&bbox, skeleton, j, scene->num_cams, true, is_saved, bbox_idx);
                                         
-                                        // Handle keypoint labeling with W key for bounding box keypoints
-                                        if (ImGui::IsKeyPressed(ImGuiKey_W, false) && bbox.has_bbox_keypoints) {
+                                        if (ImGui::IsKeyPressed(ImGuiKey_W, false)) {
                                             ImPlotPoint mouse = ImPlot::GetPlotMousePos();
                                             if (is_point_in_bbox(mouse.x, mouse.y, bbox.rect)) {
                                                 u32 active_kp = bbox.active_kp_id[j];
@@ -1004,6 +1091,14 @@ int main(int, char **) {
                                         }
                                     }
                                 }
+                            }
+                        }
+
+                        if (keypoints_find) {
+                            if (skeleton->has_skeleton) {
+                                gui_plot_keypoints(
+                                    keypoints_map.at(current_frame_num), skeleton,
+                                    j, scene->num_cams);
                             }
                             
                             // think more general solution of multiple sets
@@ -1123,6 +1218,22 @@ int main(int, char **) {
                     pause_selected = 0;
                 }
             }
+            
+            // Bounding box class switching keybinds
+            if (ImGui::IsKeyPressed(ImGuiKey_Z, false)) {
+                if (bbox_class_names.size() > 0) {
+                    current_bbox_class = (current_bbox_class - 1 + bbox_class_names.size()) % bbox_class_names.size();
+                }
+            }
+            
+            if (ImGui::IsKeyPressed(ImGuiKey_X, false)) {
+                if (bbox_class_names.size() > 0) {
+                    current_bbox_class = (current_bbox_class + 1) % bbox_class_names.size();
+                }
+            }
+            if (ImGui::IsKeyPressed(ImGuiKey_N, false)) {
+                create_new_bbox_class();
+            }
         }
 
         if (plot_keypoints_flag) {
@@ -1130,7 +1241,61 @@ int main(int, char **) {
 
                 const float TEXT_BASE_HEIGHT =
                     ImGui::GetTextLineHeightWithSpacing();
-                {
+                
+                ImGui::SeparatorText("Bounding Box Classes");
+                
+                if (ImGui::BeginCombo("Current Class", bbox_class_names[current_bbox_class].c_str())) {
+                    for (int i = 0; i < bbox_class_names.size(); i++) {
+                        bool is_selected = (current_bbox_class == i);
+                        
+                        ImGui::ColorButton("##color", bbox_class_colors[i], ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoBorder, ImVec2(15, 15));
+                        ImGui::SameLine();
+                        
+                        if (ImGui::Selectable(bbox_class_names[i].c_str(), is_selected)) {
+                            current_bbox_class = i;
+                        }
+                        if (is_selected) {
+                            ImGui::SetItemDefaultFocus();
+                        }
+                    }
+                    ImGui::EndCombo();
+                }
+                
+                ImGui::SetNextItemWidth(200);
+                if (ImGui::InputTextWithHint("##new_class", "Enter new class name...", new_class_name_buffer, sizeof(new_class_name_buffer))) {
+                    // Input changed
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Add Class") && strlen(new_class_name_buffer) > 0) {
+                    bbox_class_names.push_back(std::string(new_class_name_buffer));
+                    float hue = (bbox_class_colors.size() * 0.618034f); 
+                    while (hue > 1.0f) hue -= 1.0f;
+                    ImVec4 new_color = (ImVec4)ImColor::HSV(hue, 0.8f, 1.0f);
+                    bbox_class_colors.push_back(new_color);
+                    current_bbox_class = bbox_class_names.size() - 1;
+                    memset(new_class_name_buffer, 0, sizeof(new_class_name_buffer));
+                }
+                
+                if (current_bbox_class >= 0 && current_bbox_class < bbox_class_colors.size()) {
+                    ImGui::SetNextItemWidth(200);
+                    ImGui::ColorEdit3("Class Color", (float*)&bbox_class_colors[current_bbox_class], ImGuiColorEditFlags_NoInputs);
+                }
+                
+                if (bbox_class_names.size() > 1) {
+                    ImGui::SameLine();
+                    if (ImGui::Button("Delete Class")) {
+                        bbox_class_names.erase(bbox_class_names.begin() + current_bbox_class);
+                        bbox_class_colors.erase(bbox_class_colors.begin() + current_bbox_class);
+                        if (current_bbox_class >= bbox_class_names.size()) {
+                            current_bbox_class = bbox_class_names.size() - 1;
+                        }
+                    }
+                }
+                
+                ImGui::Separator();
+                
+                // Check if skeleton is valid and has nodes before creating the table
+                if (skeleton && skeleton->num_nodes > 0) {
                     const int rows_count = scene->num_cams;
                     const int columns_count = skeleton->num_nodes + 1;
 
@@ -1222,6 +1387,8 @@ int main(int, char **) {
                         }
                         ImGui::EndTable();
                     }
+                } else {
+                    ImGui::Text("No keypoints in this skeleton!");
                 }
             }
             ImGui::End();
@@ -1279,6 +1446,8 @@ int main(int, char **) {
                                          skeleton, camera_params, scene);
                         }
                     }
+                } else {
+                    ImGui::Text("Please load a skeleton to view keypoints.");
                 }
 
                 if (ImGui::Button("Update keypoints working directory")) {
@@ -1428,6 +1597,15 @@ int main(int, char **) {
                 ImGui::Text("<Backspace>: delete all keypoints");
                 ImGui::Text("<Right Arrow>: next labeled frame");
                 ImGui::Text("CTRL-S: save labels");
+
+                ImGui::SeparatorText("Bounding box");
+                ImGui::Text("<mouse middle button>: draw bbox, drag then release to finish drawing the bbox");
+                ImGui::Text("Bboxes are created with the currently selected class in Keypoints panel");
+                ImGui::Text("While hovering bounding boxes");
+                ImGui::Text("<t>: delete bounding box from current camera");
+                ImGui::Text("<f>: delete bounding box from all cameras");
+                ImGui::Text("<z>: switch to previous bbox class");
+                ImGui::Text("<x>: switch to next bbox class (creates new class if at end)");
 
                 ImGui::SeparatorText("While hovering keypoints");
                 ImGui::Text("<r>: delete active keypoint");
