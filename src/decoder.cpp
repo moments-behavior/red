@@ -102,7 +102,7 @@ void decoder_process(DecoderContext *dc_context, FFmpegDemuxer *demuxer,
             // like that
             uint64_t key_frame_num = demuxer->FindClosestKeyFrameFNI(
                 seek_info->seek_frame, dc_context->seek_interval);
-            std::cout << "seeking to: " << key_frame_num << std::endl;
+            // std::cout << "seeking to: " << key_frame_num << std::endl;
             SeekContext s = SeekContext(key_frame_num);
 
             seek_success_flag = demuxer->Seek(s, pVideo, nVideoBytes, pktinfo);

@@ -111,6 +111,12 @@ int main(int, char **) {
     bool input_is_imgs = false;
     bool show_error = false;
     std::string error_message;
+    std::unordered_map<std::string, bool> window_was_decoding;
+    double accumulated_play_time = 0.0; // in seconds
+    std::chrono::steady_clock::time_point last_play_time_start;
+    int last_frame_num_playspeed = 0;
+    double last_time_playspeed = 0.0;
+    double inst_speed = 1.0;
 
     while (!glfwWindowShouldClose(window->render_target)) {
         // Poll and handle events (inputs, window resize, etc.)
@@ -120,6 +126,16 @@ int main(int, char **) {
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
+
+        // --- Update playback time ---
+        auto now = std::chrono::steady_clock::now();
+
+        if (play_video) {
+            accumulated_play_time +=
+                std::chrono::duration<double>(now - last_play_time_start)
+                    .count();
+            last_play_time_start = now;
+        }
 
         if (ImGui::Begin("File Browser", NULL, ImGuiWindowFlags_MenuBar)) {
 
@@ -310,6 +326,21 @@ int main(int, char **) {
                     pause_selected = 0;
                     slider_frame_number = to_display_frame_number;
                 }
+
+                double now = accumulated_play_time;
+                int frame_delta = current_frame_num - last_frame_num_playspeed;
+                double time_delta = now - last_time_playspeed;
+
+                if (time_delta > 0.1 && play_video) {
+                    inst_speed = frame_delta / (180.0 * time_delta);
+                    last_frame_num_playspeed = current_frame_num;
+                    last_time_playspeed = now;
+                }
+
+                // Always draw the latest value
+                if (play_video) {
+                    ImGui::Text("Playback speed: %.2fx", inst_speed);
+                }
             }
         }
         ImGui::End();
@@ -334,8 +365,8 @@ int main(int, char **) {
                         camera_names.push_back(cam_string);
                         std::cout << "camera names: " << cam_string
                                   << std::endl;
-                        window_need_decoding[cam_string] = false;
-
+                        window_need_decoding[cam_string].store(true);
+                        window_was_decoding[cam_string] = true;
                         std::map<std::string, std::string> m;
                         FFmpegDemuxer *demuxer =
                             new FFmpegDemuxer(elem.second.c_str(), m);
@@ -553,9 +584,35 @@ int main(int, char **) {
 
                 ImGui::SetNextWindowPos(window_pos, ImGuiCond_FirstUseEver);
                 bool is_visible = ImGui::Begin(win_name.c_str());
+
+                if (!window_was_decoding[win_name] && is_visible &&
+                    play_video) {
+                    // seek if visibility has changed
+                    for (int i = 0; i < scene->num_cams; i++) {
+                        scene->seek_context[i].seek_frame =
+                            (uint64_t)current_frame_num;
+                        scene->seek_context[i].use_seek = true;
+                        scene->seek_context[i].seek_accurate = true;
+                    }
+
+                    for (int i = 0; i < scene->num_cams; i++) {
+                        while (!(scene->seek_context[i].seek_done)) {
+                            std::this_thread::sleep_for(
+                                std::chrono::milliseconds(1));
+                        }
+                    }
+                    for (int i = 0; i < scene->num_cams; i++) {
+                        scene->seek_context[i].seek_done = false;
+                    }
+                    to_display_frame_number = scene->seek_context[0].seek_frame;
+                    read_head = 0;
+                    just_seeked = true;
+                    pause_selected = 0;
+                    slider_frame_number = to_display_frame_number;
+                }
+
                 if (play_video) {
-                    window_need_decoding[win_name].store(
-                        is_visible && !ImGui::IsWindowCollapsed());
+                    window_need_decoding[win_name].store(is_visible);
                 } else {
                     window_need_decoding[win_name].store(true);
                 }
@@ -567,12 +624,11 @@ int main(int, char **) {
                         while (
                             scene->display_buffer[j][read_head].frame_number !=
                             to_display_frame_number) {
-                            // std::cout << "main wait, " << read_head << ", "
-                            // <<
-                            // scene->display_buffer[j][read_head].frame_number
-                            // <<
-                            // ", "
-                            // << to_display_frame_number << std::endl;
+                            std::cout << "main wait, " << read_head << ", "
+                                      << scene->display_buffer[j][read_head]
+                                             .frame_number
+                                      << ", " << to_display_frame_number
+                                      << std::endl;
                             std::this_thread::sleep_for(
                                 std::chrono::milliseconds(1));
                         }
@@ -588,12 +644,6 @@ int main(int, char **) {
                                 scene->image_width[j] * scene->image_height[j] *
                                     4,
                                 cudaMemcpyHostToDevice));
-                            bind_pbo(&scene->pbo_cuda[j].pbo);
-                            bind_texture(&scene->image_texture[j]);
-                            upload_image_pbo_to_texture(scene->image_width[j],
-                                                        scene->image_height[j]);
-                            unbind_pbo();
-                            unbind_texture();
                         } else {
                             ck(cudaMemcpy(
                                 scene->pbo_cuda[j].cuda_buffer,
@@ -601,14 +651,7 @@ int main(int, char **) {
                                 scene->image_width[j] * scene->image_height[j] *
                                     4,
                                 cudaMemcpyDeviceToDevice));
-                            bind_pbo(&scene->pbo_cuda[j].pbo);
-                            bind_texture(&scene->image_texture[j]);
-                            upload_image_pbo_to_texture(scene->image_width[j],
-                                                        scene->image_height[j]);
-                            unbind_pbo();
-                            unbind_texture();
                         }
-
                     } else {
                         if (scene->use_cpu_buffer) {
                             // upload_texture(&scene->image_texture[j],
@@ -621,15 +664,6 @@ int main(int, char **) {
                                 scene->image_width[j] * scene->image_height[j] *
                                     4,
                                 cudaMemcpyHostToDevice));
-                            bind_pbo(&scene->pbo_cuda[j].pbo);
-                            bind_texture(&scene->image_texture[j]);
-                            upload_image_pbo_to_texture(
-                                scene->image_width[j],
-                                scene->image_height[j]); // Needs no arguments
-                                                         // because texture and
-                                                         // PBO are bound
-                            unbind_pbo();
-                            unbind_texture();
                         } else {
                             ck(cudaMemcpy(
                                 scene->pbo_cuda[j].cuda_buffer,
@@ -638,17 +672,14 @@ int main(int, char **) {
                                 scene->image_width[j] * scene->image_height[j] *
                                     4,
                                 cudaMemcpyDeviceToDevice));
-                            bind_pbo(&scene->pbo_cuda[j].pbo);
-                            bind_texture(&scene->image_texture[j]);
-                            upload_image_pbo_to_texture(
-                                scene->image_width[j],
-                                scene->image_height[j]); // Needs no arguments
-                                                         // because texture and
-                                                         // PBO are bound
-                            unbind_pbo();
-                            unbind_texture();
                         }
                     }
+                    bind_pbo(&scene->pbo_cuda[j].pbo);
+                    bind_texture(&scene->image_texture[j]);
+                    upload_image_pbo_to_texture(scene->image_width[j],
+                                                scene->image_height[j]);
+                    unbind_pbo();
+                    unbind_texture();
 
                     // sync yolo detection
                     if (yolo_detection) {
@@ -842,32 +873,48 @@ int main(int, char **) {
                         if (ImGui::Button(play_video ? ICON_FK_PAUSE
                                                      : ICON_FK_PLAY)) {
                             play_video = !play_video;
-                            if (!play_video) {
-                                // need seeking here
-                                for (int i = 0; i < scene->num_cams; i++) {
-                                    scene->seek_context[i].seek_frame =
-                                        (uint64_t)current_frame_num;
-                                    scene->seek_context[i].use_seek = true;
-                                    scene->seek_context[i].seek_accurate = true;
-                                }
-
-                                for (int i = 0; i < scene->num_cams; i++) {
-                                    while (
-                                        !(scene->seek_context[i].seek_done)) {
-                                        std::this_thread::sleep_for(
-                                            std::chrono::milliseconds(1));
+                            if (play_video) {
+                                last_play_time_start =
+                                    std::chrono::steady_clock::now();
+                            } else {
+                                bool any_false = false;
+                                for (const auto &[name, was_decoding] :
+                                     window_was_decoding) {
+                                    if (!was_decoding) {
+                                        any_false = true;
+                                        break;
                                     }
                                 }
-
-                                for (int i = 0; i < scene->num_cams; i++) {
-                                    scene->seek_context[i].seek_done = false;
+                                if (any_false) {
+                                    // seek if there are hidden views
+                                    for (int i = 0; i < scene->num_cams; i++) {
+                                        scene->seek_context[i].seek_frame =
+                                            (uint64_t)current_frame_num;
+                                        scene->seek_context[i].use_seek = true;
+                                        scene->seek_context[i].seek_accurate =
+                                            true;
+                                    }
+                                    for (int i = 0; i < scene->num_cams; i++) {
+                                        while (!(
+                                            scene->seek_context[i].seek_done)) {
+                                            std::this_thread::sleep_for(
+                                                std::chrono::milliseconds(1));
+                                        }
+                                    }
+                                    for (int i = 0; i < scene->num_cams; i++) {
+                                        scene->seek_context[i].seek_done =
+                                            false;
+                                    }
+                                    to_display_frame_number =
+                                        scene->seek_context[0].seek_frame;
+                                    read_head = 0;
+                                    just_seeked = true;
+                                    pause_selected = 0;
+                                    slider_frame_number =
+                                        to_display_frame_number;
+                                } else {
+                                    pause_selected = 0;
                                 }
-                                to_display_frame_number =
-                                    scene->seek_context[0].seek_frame;
-                                read_head = 0;
-                                just_seeked = true;
-                                pause_selected = 0;
-                                slider_frame_number = to_display_frame_number;
                             }
                         }
                     }
@@ -931,18 +978,50 @@ int main(int, char **) {
 
             if (ImGui::IsKeyPressed(ImGuiKey_Space, false)) {
                 play_video = !play_video;
-                if (!play_video) {
-                    pause_selected = 0;
+                if (play_video) {
+                    last_play_time_start = std::chrono::steady_clock::now();
+                } else {
+                    bool any_false = false;
+                    for (const auto &[name, was_decoding] :
+                         window_was_decoding) {
+                        if (!was_decoding) {
+                            any_false = true;
+                            break;
+                        }
+                    }
+                    if (any_false) {
+                        // seek if there are hidden views
+                        for (int i = 0; i < scene->num_cams; i++) {
+                            scene->seek_context[i].seek_frame =
+                                (uint64_t)current_frame_num;
+                            scene->seek_context[i].use_seek = true;
+                            scene->seek_context[i].seek_accurate = true;
+                        }
+                        for (int i = 0; i < scene->num_cams; i++) {
+                            while (!(scene->seek_context[i].seek_done)) {
+                                std::this_thread::sleep_for(
+                                    std::chrono::milliseconds(1));
+                            }
+                        }
+                        for (int i = 0; i < scene->num_cams; i++) {
+                            scene->seek_context[i].seek_done = false;
+                        }
+                        to_display_frame_number =
+                            scene->seek_context[0].seek_frame;
+                        read_head = 0;
+                        just_seeked = true;
+                        pause_selected = 0;
+                        slider_frame_number = to_display_frame_number;
+                    } else {
+                        pause_selected = 0;
+                    }
                 }
             }
-        }
 
-        ImGui::Begin("Visibility Debug");
-        for (const auto &[name, visible] : window_need_decoding) {
-            ImGui::Text("%s: %s", name.c_str(),
-                        visible.load() ? "Visible" : "Hidden");
+            for (const auto &[name, flag] : window_need_decoding) {
+                window_was_decoding[name] = flag.load();
+            }
         }
-        ImGui::End();
 
         if (plot_keypoints_flag) {
             if (ImGui::Begin("Keypoints")) {
@@ -998,7 +1077,7 @@ int main(int, char **) {
 
                             ImGui::TableSetColumnIndex(0);
                             ImGui::AlignTextToFramePadding();
-                            ImGui::Text(camera_names[row].c_str());
+                            ImGui::Text("%s", camera_names[row].c_str());
                             for (int column = 1; column < columns_count;
                                  column++)
                                 if (ImGui::TableSetColumnIndex(column)) {
