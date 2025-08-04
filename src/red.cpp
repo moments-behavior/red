@@ -1,3 +1,4 @@
+#include "IconsForkAwesome.h"
 #include "Logger.h"
 #include "camera.h"
 #include "filesystem"
@@ -6,6 +7,7 @@
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
+#include "imgui_internal.h"
 #include "implot.h"
 #include "render.h"
 #include "skeleton.h"
@@ -64,7 +66,7 @@ void seek_all_cameras(render_scene *scene, int frame_number, double video_fps,
     // Wait for seek to complete
     for (int i = 0; i < scene->num_cams; i++) {
         while (!scene->seek_context[i].seek_done) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            std::this_thread::sleep_for(std::chrono::microseconds(10));
         }
     }
 
@@ -156,7 +158,6 @@ int main(int, char **) {
     double inst_speed = 1.0;
     double video_fps = 60.0f;
     float set_playback_speed = 1.0f;
-
     PlaybackState ps;
 
     while (!glfwWindowShouldClose(window->render_target)) {
@@ -181,7 +182,6 @@ int main(int, char **) {
         double playback_time_now = ps.accumulated_play_time;
 
         if (ImGui::Begin("File Browser", NULL, ImGuiWindowFlags_MenuBar)) {
-
             if (ImGui::BeginMenuBar()) {
                 if (ImGui::BeginMenu("File")) {
                     if (ImGui::MenuItem("Open")) {
@@ -306,7 +306,6 @@ int main(int, char **) {
                 }
                 ImGui::EndMenuBar();
             }
-
             ImGui::Text("Application average %.3f ms/frame (%.1f FPS)",
                         1000.0f / ImGui::GetIO().Framerate,
                         ImGui::GetIO().Framerate);
@@ -322,7 +321,7 @@ int main(int, char **) {
                 {
                     const char *items[] = {"CPU Buffer", "GPU Buffer"};
                     static int item_current = 0;
-                    ImGui::Combo("Buffer type", &item_current, items,
+                    ImGui::Combo("Buffer Type", &item_current, items,
                                  IM_ARRAYSIZE(items));
                     if (item_current == 0) {
                         scene->use_cpu_buffer = true;
@@ -845,13 +844,54 @@ int main(int, char **) {
 
                     ImGui::EndChild();
 
+                    float spacing = ImGui::GetStyle().ItemInnerSpacing.x;
+                    if (ImGui::Button(ICON_FK_FAST_BACKWARD)) {
+                        int clamped_frame =
+                            std::max(0, current_frame_num -
+                                            10 * dc_context->seek_interval);
+                        seek_all_cameras(scene, clamped_frame, video_fps, ps,
+                                         false);
+                    }
+                    ImGui::SameLine(0.0f, spacing);
+                    if (ImGui::Button(ICON_FK_STEP_BACKWARD)) {
+                        int clamped_frame = std::max(
+                            0, current_frame_num - dc_context->seek_interval);
+                        seek_all_cameras(scene, clamped_frame, video_fps, ps,
+                                         false);
+                    }
+                    ImGui::SameLine(0.0f, spacing);
+
                     if (ps.to_display_frame_number ==
                         (dc_context->total_num_frame - 1)) {
+                        ImVec4 repeat_normal = ImVec4(1.0f, 1.0f, 0.2f, 1.0f);
+                        ImVec4 repeat_hover = ImVec4(1.0f, 1.0f, 0.4f, 1.0f);
+                        ImVec4 repeat_active = ImVec4(1.0f, 0.9f, 0.1f, 1.0f);
+                        ImGui::PushStyleColor(ImGuiCol_Button, repeat_normal);
+                        ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                                              repeat_hover);
+                        ImGui::PushStyleColor(ImGuiCol_ButtonActive,
+                                              repeat_active);
+
                         if (ImGui::Button(ICON_FK_REPEAT)) {
                             // seek to zero
                             seek_all_cameras(scene, 0, video_fps, ps, false);
                         }
+                        ImGui::PopStyleColor(3);
                     } else {
+                        ImVec4 normal, hover, active;
+                        if (ps.play_video) {
+                            normal = ImVec4(0.8f, 0.3f, 0.3f, 1.0f);
+                            hover = ImVec4(0.9f, 0.4f, 0.4f, 1.0f);
+                            active = ImVec4(0.7f, 0.2f, 0.2f, 1.0f);
+                        } else {
+                            // green
+                            normal = ImVec4(0.2f, 0.6f, 0.2f, 1.0f);
+                            hover = ImVec4(0.4f, 0.9f, 0.4f, 1.0f);
+                            active = ImVec4(0.3f, 0.75f, 0.3f, 1.0f);
+                        }
+                        ImGui::PushStyleColor(ImGuiCol_Button, normal);
+                        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, hover);
+                        ImGui::PushStyleColor(ImGuiCol_ButtonActive, active);
                         if (ImGui::Button(ps.play_video ? ICON_FK_PAUSE
                                                         : ICON_FK_PLAY)) {
                             ps.play_video = !ps.play_video;
@@ -877,16 +917,26 @@ int main(int, char **) {
                                 }
                             }
                         }
+                        ImGui::PopStyleColor(3);
                     }
 
-                    ImGui::SameLine();
-                    // Arrow buttons with Repeater
-                    float spacing = ImGui::GetStyle().ItemInnerSpacing.x;
-                    ImGui::PushButtonRepeat(true);
                     ImGui::SameLine(0.0f, spacing);
-                    ImGui::PopButtonRepeat();
+                    if (ImGui::Button(ICON_FK_STEP_FORWARD)) {
+                        int clamped_frame = std::min(
+                            dc_context->total_num_frame,
+                            current_frame_num + dc_context->seek_interval);
+                        seek_all_cameras(scene, clamped_frame, video_fps, ps,
+                                         false);
+                    }
+                    ImGui::SameLine(0.0f, spacing);
+                    if (ImGui::Button(ICON_FK_FAST_FORWARD)) {
+                        int clamped_frame = std::min(
+                            dc_context->total_num_frame,
+                            current_frame_num + 10 * dc_context->seek_interval);
+                        seek_all_cameras(scene, clamped_frame, video_fps, ps,
+                                         false);
+                    }
                     ImGui::SameLine();
-
                     ps.slider_just_changed = ImGui::SliderInt(
                         "##frame count", &ps.slider_frame_number, 0,
                         dc_context->estimated_num_frames);
@@ -933,6 +983,36 @@ int main(int, char **) {
                     } else {
                         ps.pause_selected = 0;
                     }
+                }
+            }
+
+            if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow, false)) {
+                if (ImGui::GetIO().KeyShift) {
+                    int clamped_frame = std::max(
+                        0, current_frame_num - 10 * dc_context->seek_interval);
+                    seek_all_cameras(scene, clamped_frame, video_fps, ps,
+                                     false);
+                } else {
+                    int clamped_frame = std::max(
+                        0, current_frame_num - dc_context->seek_interval);
+                    seek_all_cameras(scene, clamped_frame, video_fps, ps,
+                                     false);
+                }
+            }
+
+            if (ImGui::IsKeyPressed(ImGuiKey_RightArrow, false)) {
+                if (ImGui::GetIO().KeyShift) {
+                    int clamped_frame = std::min(
+                        dc_context->total_num_frame,
+                        current_frame_num + 10 * dc_context->seek_interval);
+                    seek_all_cameras(scene, clamped_frame, video_fps, ps,
+                                     false);
+                } else {
+                    int clamped_frame =
+                        std::min(dc_context->total_num_frame,
+                                 current_frame_num + dc_context->seek_interval);
+                    seek_all_cameras(scene, clamped_frame, video_fps, ps,
+                                     false);
                 }
             }
 
@@ -1088,7 +1168,7 @@ int main(int, char **) {
                     }
 
                     if (keypoints_find) {
-                        if (ImGui::IsKeyPressed(ImGuiKey_S,
+                        if (ImGui::IsKeyPressed(ImGuiKey_T,
                                                 false)) // triangulate
                         {
                             reprojection(keypoints_map.at(current_frame_num),
@@ -1209,8 +1289,14 @@ int main(int, char **) {
         if (show_help_window) {
             if (ImGui::Begin("Help Menu")) {
                 ImGui::Text("<Space>: toggle play and pause");
-                ImGui::Text("<,>: previous image");
-                ImGui::Text("<.>: next image");
+                ImGui::Text("<Left Arrow>    : Seek backward");
+                ImGui::Text("<Shift+Left>    : Seek backward (×10)");
+                ImGui::Text("<Right Arrow>   : Seek forward");
+                ImGui::Text("<Shift+Right>   : Seek forward (×10)");
+
+                ImGui::SeparatorText("When paused");
+                ImGui::Text("<,>: previous image in buffer");
+                ImGui::Text("<.>: next image in buffer");
 
                 ImGui::SeparatorText("While hovering image");
                 ImGui::Text("<c>: create keypoints on frame");
@@ -1219,10 +1305,9 @@ int main(int, char **) {
                 ImGui::Text("<d>: active keypoint--");
                 ImGui::Text("<q>: active keypoint set to first node");
                 ImGui::Text("<e>: active keypoint set to last node");
-                ImGui::Text("<s> -> triangulate");
+                ImGui::Text("<t> -> triangulate");
                 ImGui::Text("<Backspace>: delete all keypoints");
-                ImGui::Text("<Right Arrow>: next labeled frame");
-                ImGui::Text("CTRL-S: save labels");
+                ImGui::Text("<Ctrl+s>         : Save labels");
 
                 ImGui::SeparatorText("While hovering keypoints");
                 ImGui::Text("<r>: delete active keypoint");
