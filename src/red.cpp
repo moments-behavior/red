@@ -20,6 +20,7 @@
 #include <thread>
 #include <torch/torch.h>
 #include <torch/script.h>
+#include <set>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "../lib/ImGuiFileDialog/stb/stb_image.h"
@@ -39,6 +40,284 @@ std::vector<std::vector<cv::Rect>> yolo_boxes(MAX_VIEWS);
 std::vector<std::vector<std::string>> yolo_labels(MAX_VIEWS);
 std::vector<std::vector<int>> yolo_classid(MAX_VIEWS);
 std::vector<unsigned char *> yolo_input_frames_rgba(MAX_VIEWS);
+
+std::map<int, int> g_yolo_class_map;
+std::map<int, int> g_reverse_yolo_class_map;
+int next_class_id = 0; 
+float confidence_threshold = 0.5f; 
+float iou_threshold = 0.4f;
+
+struct YoloPrediction {
+    float x, y, w, h;
+    float confidence;
+    int class_id;
+};
+
+struct YoloBBox {
+    double x_min, y_min, x_max, y_max;
+    float confidence;
+    int class_id;
+    bool is_valid;
+
+    YoloBBox() : x_min(0), y_min(0), x_max(0), y_max(0),
+                        confidence(0.0f), class_id(-1), is_valid(false) {}
+    
+    YoloBBox(const YoloPrediction &pred) {
+        x_min = pred.x - pred.w / 2.0;
+        y_min = pred.y - pred.h / 2.0;
+        x_max = pred.x + pred.w / 2.0;
+        y_max = pred.y + pred.h / 2.0;
+        confidence = pred.confidence;
+        class_id = pred.class_id;
+        is_valid = true;
+    }
+};
+
+// YOLO detection variables (declared after struct definitions)
+std::vector<std::vector<YoloBBox>> yolo_bboxes(MAX_VIEWS);
+std::vector<std::vector<YoloPrediction>> yolo_predictions(MAX_VIEWS);
+std::string yolo_model_path = "";
+
+// YOLO DragRect storage - stores BoundingBox objects for interactive manipulation
+std::vector<std::vector<BoundingBox>> yolo_drag_boxes(MAX_VIEWS);
+std::vector<int> yolo_active_bbox_idx(MAX_VIEWS, -1); // Track active YOLO bbox per camera
+
+float calculateIoU(const YoloPrediction& a, const YoloPrediction& b) {
+    float x1_a = a.x - a.w / 2.0f;
+    float y1_a = a.y - a.h / 2.0f;
+    float x2_a = a.x + a.w / 2.0f;
+    float y2_a = a.y + a.h / 2.0f;
+    
+    float x1_b = b.x - b.w / 2.0f;
+    float y1_b = b.y - b.h / 2.0f;
+    float x2_b = b.x + b.w / 2.0f;
+    float y2_b = b.y + b.h / 2.0f;
+    
+    float x1_inter = std::max(x1_a, x1_b);
+    float y1_inter = std::max(y1_a, y1_b);
+    float x2_inter = std::min(x2_a, x2_b);
+    float y2_inter = std::min(y2_a, y2_b);
+    
+    if (x2_inter <= x1_inter || y2_inter <= y1_inter) {
+        return 0.0f;
+    }
+    
+    float intersection = (x2_inter - x1_inter) * (y2_inter - y1_inter);
+    float area_a = a.w * a.h;
+    float area_b = b.w * b.h;
+    float union_area = area_a + area_b - intersection;
+    
+    return intersection / union_area;
+}
+
+std::vector<YoloPrediction> applyNMS(std::vector<YoloPrediction>& predictions, float iou_threshold) {
+    predictions.erase(std::remove_if(predictions.begin(), predictions.end(),
+        [confidence_threshold](const YoloPrediction& pred) {
+            return pred.confidence < confidence_threshold;
+        }), predictions.end());
+    std::sort(predictions.begin(), predictions.end(), 
+              [](const YoloPrediction& a, const YoloPrediction& b) {
+                  return a.confidence > b.confidence;
+              });
+    
+    std::vector<bool> suppressed(predictions.size(), false);
+    std::vector<YoloPrediction> result;
+    
+    for (size_t i = 0; i < predictions.size(); ++i) {
+        if (suppressed[i]) continue;
+        
+        result.push_back(predictions[i]);
+        
+        for (size_t j = i + 1; j < predictions.size(); ++j) {
+            if (suppressed[j]) continue;
+            
+            if (predictions[i].class_id == predictions[j].class_id) {
+                float iou = calculateIoU(predictions[i], predictions[j]);
+                if (iou > iou_threshold) {
+                    suppressed[j] = true;
+                }
+            }
+        }
+    }
+    
+    return result;
+}
+
+std::vector<YoloPrediction> runYoloInference(const std::string& model_path, unsigned char* frame_data, int width, int height) {
+    std::vector<YoloPrediction> predictions;
+    
+    try {
+        if (!std::filesystem::exists(model_path)) {
+            std::cerr << "Model file does not exist: " << model_path << std::endl;
+            throw std::runtime_error("Model file not found");
+        }
+        
+        if (std::filesystem::file_size(model_path) == 0) {
+            std::cerr << "Model file is empty: " << model_path << std::endl;
+            throw std::runtime_error("Model file is empty");
+        }
+        
+        std::cout << "Loading YOLO model from: " << model_path << std::endl;
+        std::cout << "Model file size: " << std::filesystem::file_size(model_path) << " bytes" << std::endl;
+        
+        torch::jit::script::Module module;
+        try {
+            module = torch::jit::load(model_path);
+        } catch (const c10::Error& e) {
+            std::cerr << "Failed to load TorchScript model. This might be caused by:" << std::endl;
+            std::cerr << "1. The file is not a valid TorchScript model (.pt format)" << std::endl;
+            std::cerr << "2. The model was saved with a different PyTorch version" << std::endl;
+            std::cerr << "3. The model file is corrupted" << std::endl;
+            std::cerr << "4. The model is in .pth format (state dict) instead of .pt (TorchScript)" << std::endl;
+            std::cerr << "PyTorch error: " << e.what() << std::endl;
+            throw std::runtime_error("Failed to load TorchScript model");
+        }
+        
+        module.eval();
+        
+        if (!frame_data) {
+            std::cerr << "Frame data is null" << std::endl;
+            throw std::runtime_error("Invalid frame data");
+        }
+        
+        std::cout << "Converting frame data to tensor (size: " << width << "x" << height << ")" << std::endl;
+        
+        torch::Tensor tensor = torch::from_blob(frame_data, {height, width, 4}, torch::kUInt8);
+        tensor = tensor.slice(2, 0, 3); 
+        tensor = tensor.permute({2, 0, 1}); 
+        tensor = tensor.to(torch::kFloat) / 255.0;
+        
+        tensor = torch::nn::functional::interpolate(tensor.unsqueeze(0), 
+            torch::nn::functional::InterpolateFuncOptions().size(std::vector<int64_t>{640, 640}).mode(torch::kBilinear).align_corners(false));
+        
+        std::cout << "Running inference..." << std::endl;
+        
+        // Run inference
+        std::vector<torch::jit::IValue> inputs;
+        inputs.push_back(tensor);
+        
+        torch::Tensor output;
+        try {
+            output = module.forward(inputs).toTensor();
+        } catch (const std::exception& e) {
+            std::cerr << "Inference failed. The model might expect different input format." << std::endl;
+            std::cerr << "Inference error: " << e.what() << std::endl;
+            throw std::runtime_error("Inference failed");
+        }
+        
+        std::cout << "Inference completed. Output shape: [";
+        for (int i = 0; i < output.dim(); ++i) {
+            std::cout << output.size(i);
+            if (i < output.dim() - 1) std::cout << ", ";
+        }
+        std::cout << "]" << std::endl;
+        
+        if (output.dim() == 3) {
+            output = output.permute({0, 2, 1});
+        }
+        output = output.squeeze(0);  
+        
+        if (output.dim() != 2) {
+            std::cerr << "Unexpected output tensor dimensions: " << output.dim() << std::endl;
+            return predictions;
+        }
+        
+        float conf_threshold = 0.25f;
+        float scale_x = static_cast<float>(width) / 640.0f;
+        float scale_y = static_cast<float>(height) / 640.0f;
+        
+        auto output_accessor = output.accessor<float, 2>();
+        int num_detections = output.size(0);
+        int output_features = output.size(1);
+        
+        std::cout << "Processing " << num_detections << " detections with " << output_features << " features per detection" << std::endl;
+        
+        for (int i = 0; i < num_detections; ++i) {
+            float confidence;
+            int class_id;
+            
+            if (output_features == 6) {
+                confidence = output_accessor[i][4];
+                class_id = static_cast<int>(output_accessor[i][5]);
+            } else if (output_features == 5) {
+                confidence = output_accessor[i][4];
+                class_id = 0;
+            } else if (output_features > 5) {
+                float max_score = 0.0f;
+                int max_class = -1;
+                for (int c = 0; c < (output_features - 4); ++c) {
+                    float score = output_accessor[i][4 + c];
+                    if (score > max_score) {
+                        max_score = score;
+                        max_class = c;
+                    }
+                }
+                confidence = max_score;
+                class_id = max_class;
+            } else {
+                std::cerr << "Unexpected output format with " << output_features << " features" << std::endl;
+                continue;
+            }
+            
+            if (confidence > conf_threshold) {
+                float cx_model = output_accessor[i][0];
+                float cy_model = output_accessor[i][1];
+                float w_model = output_accessor[i][2];
+                float h_model = output_accessor[i][3];
+                
+                YoloPrediction pred;
+                // Scale coordinates back to original image size
+                pred.x = cx_model * scale_x;
+                pred.y = height - (cy_model * scale_y); 
+                pred.w = w_model * scale_x;
+                pred.h = h_model * scale_y;
+                pred.confidence = confidence;
+                pred.class_id = class_id;
+                
+                predictions.push_back(pred);
+            }
+        }
+        
+        std::cout << "Found " << predictions.size() << " raw detections before NMS" << std::endl;
+        
+        predictions = applyNMS(predictions, iou_threshold); 
+        
+        std::cout << "YOLO inference completed. Found " << predictions.size() << " detections after NMS." << std::endl;
+        
+        for (size_t i = 0; i < predictions.size(); ++i) {
+            const auto& pred = predictions[i];
+            std::cout << "Final Detection " << i << ": center=(" << pred.x << "," << pred.y 
+                     << ") size=(" << pred.w << "," << pred.h << ") conf=" << pred.confidence 
+                     << " class=" << pred.class_id << std::endl;
+        }
+        
+    } catch (const std::exception& e) {
+        std::cerr << "PyTorch inference error: " << e.what() << std::endl;
+    }
+    
+    return predictions;
+}
+
+// Helper function to check if current frame already has YOLO detections
+bool frameHasYoloDetections(int frame_num, const std::map<u32, KeyPoints*>& keypoints_map, const SkeletonContext* skeleton) {
+    if (!skeleton || !skeleton->has_bbox) return false;
+    
+    auto it = keypoints_map.find(frame_num);
+    if (it == keypoints_map.end() || !it->second) return false;
+    
+    // Check if any camera has bounding boxes with confidence < 1.0 (indicating YOLO detections)
+    // User-drawn bounding boxes typically have confidence = 1.0
+    for (int cam_id = 0; cam_id < MAX_VIEWS && cam_id < it->second->bbox2d_list.size(); cam_id++) {
+        const auto& bbox_list = it->second->bbox2d_list[cam_id];
+        for (const auto& bbox : bbox_list) {
+            if (bbox.confidence < 1.0f && bbox.state == RectTwoPoints) {
+                return true; // Found a YOLO detection (confidence < 1.0)
+            }
+        }
+    }
+    return false;
+}
+
 
 int main(int, char **) {
     gx_context *window = (gx_context *)malloc(sizeof(gx_context));
@@ -157,6 +436,20 @@ int main(int, char **) {
         current_bbox_class = bbox_class_names.size() - 1;
     };
     
+    // Helper function to cleanup YOLO drag boxes
+    auto cleanup_yolo_drag_boxes = [&]() {
+        for (int cam_id = 0; cam_id < MAX_VIEWS; cam_id++) {
+            for (auto& drag_box : yolo_drag_boxes[cam_id]) {
+                if (drag_box.rect) {
+                    delete drag_box.rect;
+                    drag_box.rect = nullptr;
+                }
+            }
+            yolo_drag_boxes[cam_id].clear();
+            yolo_active_bbox_idx[cam_id] = -1;
+        }
+    };
+    
     std::string background_image_path = "";
     bool background_image_selected = false;
     GLuint background_texture = 0;
@@ -173,6 +466,14 @@ int main(int, char **) {
     bool input_is_imgs = false;
     bool show_error = false;
     std::string error_message;
+    
+    int hovered_bbox_cam = -1;
+    int hovered_bbox_idx = -1;
+    float hovered_bbox_confidence = 0.0f;
+    int hovered_bbox_class = -1;
+    
+    bool auto_yolo_labeling = false;
+    std::set<int> yolo_processed_frames; // Track which frames have been processed
 
     while (!glfwWindowShouldClose(window->render_target)) {
         // Poll and handle events (inputs, window resize, etc.)
@@ -182,6 +483,12 @@ int main(int, char **) {
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
+        
+        // Reset hovered bbox info at start of each frame
+        hovered_bbox_cam = -1;
+        hovered_bbox_idx = -1;
+        hovered_bbox_confidence = 0.0f;
+        hovered_bbox_class = -1;
 
         if (ImGui::Begin("File Browser", NULL, ImGuiWindowFlags_MenuBar)) {
 
@@ -712,6 +1019,81 @@ int main(int, char **) {
                 }
             }
             current_frame_num = to_display_frame_number;
+            
+            // Automatic YOLO detection for current frame (playing video)
+            if (auto_yolo_labeling && !yolo_model_path.empty() && skeleton->has_bbox) {
+                if (!frameHasYoloDetections(current_frame_num, keypoints_map, skeleton) && 
+                    yolo_processed_frames.find(current_frame_num) == yolo_processed_frames.end()) {
+                    
+                    // Mark frame as processed to avoid duplicate processing
+                    yolo_processed_frames.insert(current_frame_num);
+                    
+                    // Enable YOLO detection flag
+                    yolo_detection = true;
+                    
+                    std::cout << "Auto YOLO: Processing frame " << current_frame_num << std::endl;
+                    
+                    // Run YOLO inference on all cameras for this frame
+                    for (int cam_id = 0; cam_id < scene->num_cams; cam_id++) {
+                        unsigned char* frame_data = scene->display_buffer[cam_id][read_head].frame;
+                        
+                        if (frame_data) {
+                            yolo_predictions[cam_id] = runYoloInference(
+                                yolo_model_path, frame_data,
+                                scene->image_width[cam_id],
+                                scene->image_height[cam_id]);
+                                
+                            yolo_bboxes[cam_id].clear();
+                            for (const auto& pred : yolo_predictions[cam_id]) {
+                                yolo_bboxes[cam_id].emplace_back(pred);
+                            }
+                        }
+                    }
+                    
+                    // Add YOLO detections to main bounding box system
+                    if (!yolo_bboxes.empty() && std::any_of(yolo_bboxes.begin(), yolo_bboxes.end(), [](const auto& cam_bboxes) { return !cam_bboxes.empty(); })) {
+                        for (int cam_id = 0; cam_id < scene->num_cams; cam_id++) {
+                            if (!yolo_bboxes[cam_id].empty()) {
+                                // Ensure keypoints structure exists
+                                bool keypoints_find = keypoints_map.find(current_frame_num) != keypoints_map.end();
+                                if (!keypoints_find) {
+                                    KeyPoints *keypoints = (KeyPoints *)malloc(sizeof(KeyPoints));
+                                    allocate_keypoints(keypoints, scene, skeleton);
+                                    keypoints_map[current_frame_num] = keypoints;
+                                }
+                                
+                                // Add YOLO detections to main bounding box system
+                                for (const auto& yolo_bbox : yolo_bboxes[cam_id]) {
+                                    if (yolo_bbox.is_valid) {
+                                        BoundingBox bbox;
+                                        
+                                        bbox.rect = new ImPlotRect(
+                                            yolo_bbox.x_min, yolo_bbox.x_max,
+                                            yolo_bbox.y_min, yolo_bbox.y_max
+                                        );
+                                        
+                                        bbox.state = RectTwoPoints;
+                                        bbox.class_id = yolo_bbox.class_id;
+                                        bbox.confidence = yolo_bbox.confidence;
+                                        bbox.has_bbox_keypoints = false;
+                                        bbox.bbox_keypoints2d = nullptr;
+                                        bbox.active_kp_id = nullptr;
+                                        
+                                        if (skeleton->has_bbox && skeleton->has_skeleton && skeleton->num_nodes > 0) {
+                                            allocate_bbox_keypoints(&bbox, scene, skeleton);
+                                        }
+                                        
+                                        keypoints_map[current_frame_num]->bbox2d_list[cam_id].push_back(bbox);
+                                    }
+                                }
+                                
+                                std::cout << "Auto YOLO: Added " << yolo_bboxes[cam_id].size() 
+                                         << " detections for camera " << cam_id << ", frame " << current_frame_num << std::endl;
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         // show frames in the buffer if selected
@@ -760,6 +1142,81 @@ int main(int, char **) {
                 (pause_selected + read_head) % scene->size_of_buffer;
             current_frame_num =
                 scene->display_buffer[0][select_corr_head].frame_number;
+
+            // Automatic YOLO detection for current frame
+            if (auto_yolo_labeling && !yolo_model_path.empty() && skeleton->has_bbox) {
+                if (!frameHasYoloDetections(current_frame_num, keypoints_map, skeleton) && 
+                    yolo_processed_frames.find(current_frame_num) == yolo_processed_frames.end()) {
+                    
+                    // Mark frame as processed to avoid duplicate processing
+                    yolo_processed_frames.insert(current_frame_num);
+                    
+                    // Enable YOLO detection flag
+                    yolo_detection = true;
+                    
+                    std::cout << "Auto YOLO: Processing frame " << current_frame_num << std::endl;
+                    
+                    // Run YOLO inference on all cameras for this frame
+                    for (int cam_id = 0; cam_id < scene->num_cams; cam_id++) {
+                        unsigned char* frame_data = scene->display_buffer[cam_id][select_corr_head].frame;
+                        
+                        if (frame_data) {
+                            yolo_predictions[cam_id] = runYoloInference(
+                                yolo_model_path, frame_data,
+                                scene->image_width[cam_id],
+                                scene->image_height[cam_id]);
+                                
+                            yolo_bboxes[cam_id].clear();
+                            for (const auto& pred : yolo_predictions[cam_id]) {
+                                yolo_bboxes[cam_id].emplace_back(pred);
+                            }
+                        }
+                    }
+                    
+                    // Add YOLO detections to main bounding box system
+                    if (!yolo_bboxes.empty() && std::any_of(yolo_bboxes.begin(), yolo_bboxes.end(), [](const auto& cam_bboxes) { return !cam_bboxes.empty(); })) {
+                        for (int cam_id = 0; cam_id < scene->num_cams; cam_id++) {
+                            if (!yolo_bboxes[cam_id].empty()) {
+                                // Ensure keypoints structure exists
+                                bool keypoints_find = keypoints_map.find(current_frame_num) != keypoints_map.end();
+                                if (!keypoints_find) {
+                                    KeyPoints *keypoints = (KeyPoints *)malloc(sizeof(KeyPoints));
+                                    allocate_keypoints(keypoints, scene, skeleton);
+                                    keypoints_map[current_frame_num] = keypoints;
+                                }
+                                
+                                // Add YOLO detections to main bounding box system
+                                for (const auto& yolo_bbox : yolo_bboxes[cam_id]) {
+                                    if (yolo_bbox.is_valid) {
+                                        BoundingBox bbox;
+                                        
+                                        bbox.rect = new ImPlotRect(
+                                            yolo_bbox.x_min, yolo_bbox.x_max,
+                                            yolo_bbox.y_min, yolo_bbox.y_max
+                                        );
+                                        
+                                        bbox.state = RectTwoPoints;
+                                        bbox.class_id = yolo_bbox.class_id;
+                                        bbox.confidence = yolo_bbox.confidence;
+                                        bbox.has_bbox_keypoints = false;
+                                        bbox.bbox_keypoints2d = nullptr;
+                                        bbox.active_kp_id = nullptr;
+                                        
+                                        if (skeleton->has_bbox && skeleton->has_skeleton && skeleton->num_nodes > 0) {
+                                            allocate_bbox_keypoints(&bbox, scene, skeleton);
+                                        }
+                                        
+                                        keypoints_map[current_frame_num]->bbox2d_list[cam_id].push_back(bbox);
+                                    }
+                                }
+                                
+                                std::cout << "Auto YOLO: Added " << yolo_bboxes[cam_id].size() 
+                                         << " detections for camera " << cam_id << ", frame " << current_frame_num << std::endl;
+                            }
+                        }
+                    }
+                }
+            }
 
             for (int j = 0; j < scene->num_cams; j++) {
                 if (scene->use_cpu_buffer) {
@@ -868,12 +1325,6 @@ int main(int, char **) {
                         (ImTextureID)(intptr_t)scene->image_texture[j],
                         ImVec2(0, 0),
                         ImVec2(scene->image_width[j], scene->image_height[j]));
-
-                    if (yolo_detection) {
-                        draw_cv_contours(yolo_boxes.at(j), yolo_labels.at(j),
-                                         yolo_classid.at(j),
-                                         scene->image_height[j]);
-                    }
 
                     if (plot_keypoints_flag) {
                         // plot arena for testing camera parameters
@@ -1092,6 +1543,12 @@ int main(int, char **) {
                                         
                                         // Handle keyboard shortcuts when hovering over bounding box
                                         if (bbox_hovered) {
+                                            // Update hovered bbox info for display
+                                            hovered_bbox_cam = j;
+                                            hovered_bbox_idx = bbox_idx;
+                                            hovered_bbox_confidence = bbox.confidence;
+                                            hovered_bbox_class = bbox.class_id;
+                                            
                                             // Delete bounding box from current camera when 'T' key is pressed while hovering
                                             if (ImGui::IsKeyPressed(ImGuiKey_T, false)) {
                                                 // Clean up bbox keypoints before deletion
@@ -1636,6 +2093,173 @@ int main(int, char **) {
                     slider_frame_number = to_display_frame_number;
                 }
                 ImGui::Text("Total labeled frames : %zu", keypoints_map.size());
+
+                if (ImGui::Button("Select YOLO")) {
+                    IGFD::FileDialogConfig config;
+                    config.countSelectionMax = 1;
+                    config.path = "/home/user/data"; // fix later
+                    config.flags = ImGuiFileDialogFlags_Modal;
+                    ImGuiFileDialog::Instance()->OpenDialog(
+                        "ChooseYoloModel", "Choose YOLO Model",
+                        ".pt", config);
+                }
+
+                if (ImGuiFileDialog::Instance()->Display("ChooseYoloModel")) {
+                    if (ImGuiFileDialog::Instance()->IsOk()) {
+                        std::string model_path =
+                            ImGuiFileDialog::Instance()->GetFilePathName();
+                        if (!model_path.empty()) {
+                            yolo_model_path = model_path;
+                            std::cout << "Selected YOLO model: "
+                                      << yolo_model_path << std::endl;
+                        }
+                    }
+                    // close
+                    ImGuiFileDialog::Instance()->Close();
+                }
+
+                // Show model path and run prediction button (only if model is selected)
+                if (!yolo_model_path.empty()) {
+                    ImGui::Text("Selected model: %s", yolo_model_path.c_str());
+                    
+                    // Automatic YOLO labeling checkbox
+                    ImGui::Checkbox("Automatic YOLO Labeling", &auto_yolo_labeling);
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip("Automatically run YOLO detection on current and subsequent frames");
+                    }
+                    
+                    // YOLO parameter sliders
+                    ImGui::SliderFloat("Confidence Threshold", &confidence_threshold, 0.01f, 0.99f, "%.2f");
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip("Minimum confidence score for detections");
+                    }
+
+                    ImGui::SliderFloat("NMS IoU Threshold", &iou_threshold, 0.01f, 0.99f, "%.2f");
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip("Non-Maximum Suppression IoU threshold");
+                    }
+                    
+                    if (ImGui::Button("Run YOLO Prediction")) {
+                        std::cout << "Running YOLO prediction on frame " << to_display_frame_number << std::endl;
+                        
+                        yolo_detection = true;
+                        
+                        // Clear existing bounding boxes for current frame before running inference
+                        if (skeleton->has_bbox) {
+                            bool keypoints_find = keypoints_map.find(current_frame_num) != keypoints_map.end();
+                            if (keypoints_find) {
+                                for (int cam_id = 0; cam_id < scene->num_cams; cam_id++) {
+                                    auto& bbox_list = keypoints_map[current_frame_num]->bbox2d_list[cam_id];
+                                    // Clear all bounding boxes for this camera
+                                    for (auto& bbox : bbox_list) {
+                                        if (bbox.rect) {
+                                            delete bbox.rect;
+                                            bbox.rect = nullptr;
+                                        }
+                                        if (bbox.has_bbox_keypoints && bbox.bbox_keypoints2d) {
+                                            free(bbox.bbox_keypoints2d);
+                                            bbox.bbox_keypoints2d = nullptr;
+                                            free(bbox.active_kp_id);
+                                            bbox.active_kp_id = nullptr;
+                                        }
+                                    }
+                                    bbox_list.clear();
+                                }
+                                std::cout << "Cleared existing bounding boxes for frame " << current_frame_num << std::endl;
+                            }
+                        }
+
+                        for (int cam_id=0; cam_id < scene->num_cams; cam_id++) {
+                            unsigned char* frame_data = nullptr;
+                            if (play_video && dc_context->decoding_flag) {
+                                frame_data = scene->display_buffer[cam_id][read_head].frame;
+                            } else if (!play_video) {
+                                int select_corr_head = (pause_selected + read_head) % scene->size_of_buffer;
+                                frame_data = scene->display_buffer[cam_id][select_corr_head].frame;
+                            }
+
+                            if (frame_data) {
+                                yolo_predictions[cam_id] = runYoloInference(
+                                    yolo_model_path, frame_data,
+                                    scene->image_width[cam_id],
+                                    scene->image_height[cam_id]);
+                                    yolo_bboxes[cam_id].clear();
+                                    for (const auto& pred : yolo_predictions[cam_id]) {
+                                        yolo_bboxes[cam_id].emplace_back(pred);
+                                    }
+
+                                    std::cout << "YOLO predictions for camera " << cam_id << ": " << yolo_bboxes[cam_id].size() << " detections." << std::endl;
+                            }
+                        }
+
+                        if (!yolo_bboxes.empty() && std::any_of(yolo_bboxes.begin(), yolo_bboxes.end(), [](const auto& cam_bboxes) { return !cam_bboxes.empty(); })) {
+                            // Convert YOLO detections to main bounding box system
+                            for (int cam_id = 0; cam_id < scene->num_cams; cam_id++) {
+                                if (!yolo_bboxes[cam_id].empty()) {
+                                    // Ensure keypoints structure exists
+                                    bool keypoints_find = keypoints_map.find(current_frame_num) != keypoints_map.end();
+                                    if (!keypoints_find) {
+                                        KeyPoints *keypoints = (KeyPoints *)malloc(sizeof(KeyPoints));
+                                        allocate_keypoints(keypoints, scene, skeleton);
+                                        keypoints_map[current_frame_num] = keypoints;
+                                    }
+                                    
+                                    // Add YOLO detections to main bounding box system
+                                    for (const auto& yolo_bbox : yolo_bboxes[cam_id]) {
+                                        if (yolo_bbox.is_valid) {
+                                            BoundingBox bbox;
+                                            
+                                            // Create ImPlotRect from YOLO coordinates (no Y-axis flipping)
+                                            bbox.rect = new ImPlotRect(
+                                                yolo_bbox.x_min,  // X.Min
+                                                yolo_bbox.x_max,  // X.Max
+                                                yolo_bbox.y_min,  // Y.Min
+                                                yolo_bbox.y_max   // Y.Max
+                                            );
+                                            
+                                            bbox.state = RectTwoPoints;
+                                            bbox.class_id = yolo_bbox.class_id;
+                                            bbox.confidence = yolo_bbox.confidence;
+                                            bbox.has_bbox_keypoints = false;
+                                            bbox.bbox_keypoints2d = nullptr;
+                                            bbox.active_kp_id = nullptr;
+                                            
+                                            // Allocate keypoints if skeleton supports both bbox and skeleton
+                                            if (skeleton->has_bbox && skeleton->has_skeleton && skeleton->num_nodes > 0) {
+                                                allocate_bbox_keypoints(&bbox, scene, skeleton);
+                                            }
+                                            
+                                            // Add to main bounding box system
+                                            keypoints_map[current_frame_num]->bbox2d_list[cam_id].push_back(bbox);
+                                        }
+                                    }
+                                    
+                                    std::cout << "Added " << yolo_bboxes[cam_id].size() 
+                                             << " YOLO detections to main bounding box system for camera " << cam_id << std::endl;
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Display detection info for hovered bounding box
+                    if (skeleton->has_bbox) {
+                        bool keypoints_find = keypoints_map.find(current_frame_num) != keypoints_map.end();
+                        if (keypoints_find) {
+                            ImGui::Separator();
+                            ImGui::Text("Bounding Box Info:");
+                            
+                            if (hovered_bbox_cam >= 0 && hovered_bbox_idx >= 0) {
+                                ImGui::Text("Camera: %d, Box: %d", hovered_bbox_cam, hovered_bbox_idx);
+                                ImGui::Text("Class: %d, Confidence: %.1f%%", 
+                                          hovered_bbox_class, hovered_bbox_confidence * 100.0f);
+                            } else {
+                                ImGui::Text("Hover over a bounding box to see details");
+                            }
+                        }
+                    }
+                }
+
+                
             }
             ImGui::End();
         }
@@ -2034,6 +2658,7 @@ int main(int, char **) {
     }
 
     // Cleanup
+    cleanup_yolo_drag_boxes(); // Clean up YOLO drag boxes memory
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();
