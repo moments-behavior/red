@@ -34,11 +34,12 @@ std::vector<std::vector<std::string>> yolo_labels(MAX_VIEWS);
 std::vector<std::vector<int>> yolo_classid(MAX_VIEWS);
 std::vector<unsigned char *> yolo_input_frames_rgba(MAX_VIEWS);
 std::unordered_map<std::string, std::atomic<bool>> window_need_decoding;
+std::unordered_map<std::string, std::atomic<int>> latest_decoded_frame;
 
 int main(int, char **) {
     gx_context *window = (gx_context *)malloc(sizeof(gx_context));
     *window =
-        (gx_context){.swap_interval = 0, // use vsync
+        (gx_context){.swap_interval = 1, // use vsync
                      .width = 1920,
                      .height = 1080,
                      .render_target_title = (char *)malloc(100), // window title
@@ -74,7 +75,6 @@ int main(int, char **) {
     bool just_seeked = false;
     bool slider_just_changed = false;
     std::time_t last_saved = static_cast<std::time_t>(-1);
-
     bool video_loaded = false;
     bool cpu_buffer_toggle = true;
     bool plot_keypoints_flag = false;
@@ -115,8 +115,11 @@ int main(int, char **) {
     double accumulated_play_time = 0.0; // in seconds
     std::chrono::steady_clock::time_point last_play_time_start;
     int last_frame_num_playspeed = 0;
-    double last_time_playspeed = 0.0;
+    static std::chrono::steady_clock::time_point last_wall_time_playspeed =
+        std::chrono::steady_clock::now();
     double inst_speed = 1.0;
+    double video_fps = 60.0f;
+    float set_playback_speed = 1.0f;
 
     while (!glfwWindowShouldClose(window->render_target)) {
         // Poll and handle events (inputs, window resize, etc.)
@@ -133,9 +136,11 @@ int main(int, char **) {
         if (play_video) {
             accumulated_play_time +=
                 std::chrono::duration<double>(now - last_play_time_start)
-                    .count();
+                    .count() *
+                set_playback_speed;
             last_play_time_start = now;
         }
+        double playback_time_now = accumulated_play_time;
 
         if (ImGui::Begin("File Browser", NULL, ImGuiWindowFlags_MenuBar)) {
 
@@ -327,19 +332,25 @@ int main(int, char **) {
                     slider_frame_number = to_display_frame_number;
                 }
 
-                double now = accumulated_play_time;
+                auto now_wall = std::chrono::steady_clock::now();
+                double wall_seconds = std::chrono::duration<double>(
+                                          now_wall - last_wall_time_playspeed)
+                                          .count();
                 int frame_delta = current_frame_num - last_frame_num_playspeed;
-                double time_delta = now - last_time_playspeed;
-
-                if (time_delta > 0.1 && play_video) {
-                    inst_speed = frame_delta / (180.0 * time_delta);
+                if (wall_seconds > 0.5 && play_video) {
+                    inst_speed =
+                        frame_delta /
+                        (video_fps * wall_seconds); // Real-time normalized
                     last_frame_num_playspeed = current_frame_num;
-                    last_time_playspeed = now;
+                    last_wall_time_playspeed = now_wall;
                 }
 
                 // Always draw the latest value
                 if (play_video) {
-                    ImGui::Text("Playback speed: %.2fx", inst_speed);
+                    ImGui::Text("Videp FPS: %.1f", video_fps);
+                    ImGui::SliderFloat("Playback Speed", &set_playback_speed,
+                                       0.1f, 1.0f, "%.1fx");
+                    ImGui::Text("Playback Speed: %.2fx", inst_speed);
                 }
             }
         }
@@ -378,7 +389,7 @@ int main(int, char **) {
                     dc_context->seek_interval =
                         (int)dummy_dmuxer
                             .FindKeyFrameInterval(); // get the seek interval
-
+                    video_fps = dummy_dmuxer.GetFramerate();
                     scene->num_cams = selected_files.size();
                     scene->image_width =
                         (u32 *)malloc(sizeof(u32) * scene->num_cams);
@@ -621,17 +632,20 @@ int main(int, char **) {
                     if (play_video) {
                         // if the current frame is ready, upload for display,
                         // otherwise wait for the frame to get ready
-                        while (
-                            scene->display_buffer[j][read_head].frame_number !=
-                            to_display_frame_number) {
-                            std::cout << "main wait, " << read_head << ", "
-                                      << scene->display_buffer[j][read_head]
-                                             .frame_number
-                                      << ", " << to_display_frame_number
-                                      << std::endl;
-                            std::this_thread::sleep_for(
-                                std::chrono::milliseconds(1));
-                        }
+                        // while (
+                        //     scene->display_buffer[j][read_head].frame_number
+                        //     != to_display_frame_number) { std::cout <<
+                        //     win_name
+                        //               << " , read head: " << read_head
+                        //               << ", frame_number: "
+                        //               << scene->display_buffer[j][read_head]
+                        //                      .frame_number
+                        //               << ", to_display_frame_number: "
+                        //               << to_display_frame_number <<
+                        //               std::endl;
+                        //     std::this_thread::sleep_for(
+                        //         std::chrono::milliseconds(1));
+                        // }
                         current_frame_num = to_display_frame_number;
                         if (scene->use_cpu_buffer) {
                             // upload_texture(&scene->image_texture[j],
@@ -935,6 +949,15 @@ int main(int, char **) {
                     slider_just_changed =
                         ImGui::SliderInt("##frame count", &slider_frame_number,
                                          0, dc_context->estimated_num_frames);
+                    ImGui::SameLine();
+                    float current_time_sec = slider_frame_number / video_fps;
+                    float total_time_sec =
+                        dc_context->estimated_num_frames / video_fps;
+
+                    std::string current_str = format_time(current_time_sec);
+                    std::string total_str = format_time(total_time_sec);
+                    ImGui::Text("%s / %s", current_str.c_str(),
+                                total_str.c_str());
 
                     if (slider_just_changed) {
                         std::cout << "main, seeking: " << slider_frame_number
@@ -1381,17 +1404,43 @@ int main(int, char **) {
         if (just_seeked) {
             just_seeked = false;
         } else {
-            if (dc_context->decoding_flag && play_video &&
-                (to_display_frame_number < (dc_context->total_num_frame - 1))) {
-                to_display_frame_number++;
+            if (dc_context->decoding_flag && play_video) {
+                // always round up, mimimum 1
+                int frame_to_show =
+                    static_cast<int>(std::ceil(playback_time_now * video_fps));
 
-                for (int j = 0; j < scene->num_cams; j++) {
-                    scene->display_buffer[j][read_head].available_to_write =
-                        true;
+                int min_decoded_frame = INT_MAX;
+                for (const auto &[cam_name, visible] : window_need_decoding) {
+                    if (visible.load()) {
+                        int decoded = latest_decoded_frame[cam_name].load();
+                        min_decoded_frame =
+                            std::min(min_decoded_frame, decoded);
+                    }
                 }
+                frame_to_show = std::min(frame_to_show, min_decoded_frame);
 
-                read_head = (read_head + 1) % scene->size_of_buffer;
-                slider_frame_number = to_display_frame_number;
+                int frame_delta = frame_to_show - to_display_frame_number;
+                if (frame_delta > 0) {
+                    // Update frame number
+                    to_display_frame_number = frame_to_show;
+
+                    // Mark all intermediate frames as available
+                    for (int offset = 0; offset < frame_delta; ++offset) {
+                        int index =
+                            (read_head + offset) % scene->size_of_buffer;
+                        for (int j = 0; j < scene->num_cams; j++) {
+                            scene->display_buffer[j][index].available_to_write =
+                                true;
+                        }
+                    }
+
+                    // Advance the read head
+                    read_head =
+                        (read_head + frame_delta) % scene->size_of_buffer;
+
+                    // Optional: update slider/UI sync
+                    slider_frame_number = to_display_frame_number;
+                }
             }
         }
     }

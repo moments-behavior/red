@@ -168,6 +168,7 @@ void decoder_process(DecoderContext *dc_context, FFmpegDemuxer *demuxer,
             // dec.setReconfigParams(NULL, NULL);
             buffer_head = 0;
             nFrame = seek_info->seek_frame;
+            latest_decoded_frame[cam_name].store(seek_info->seek_frame);
             display_buffer[0].frame_number = -1;
             seek_info->use_seek = false;
             seek_info->seek_done = true;
@@ -175,7 +176,6 @@ void decoder_process(DecoderContext *dc_context, FFmpegDemuxer *demuxer,
             // std::endl;
         } else {
             if (window_need_decoding[cam_name].load()) {
-
                 if (!skip_first_decode_after_seek) {
                     demux_success =
                         demuxer->Demux(pVideo, nVideoBytes, pktinfo);
@@ -261,6 +261,7 @@ void decoder_process(DecoderContext *dc_context, FFmpegDemuxer *demuxer,
 
                         display_buffer[buffer_head].available_to_write = false;
                         display_buffer[buffer_head].frame_number = nFrame;
+                        latest_decoded_frame[cam_name].store(nFrame);
                     }
                     nFrame = nFrame + 1;
                     buffer_head = (buffer_head + 1) % size_of_buffer;
