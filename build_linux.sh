@@ -13,6 +13,13 @@ DIR_IMGUI="lib/imgui"
 DIR_IMPLOT="lib/implot"
 DIR_FFMPEG=$HOME/nvidia/ffmpeg/build
 DIR_TENSORRT=$HOME/nvidia/TensorRT
+DIR_LIBTORCH="lib/libtorch"
+
+LIBTORCH_INCLUDE="$DIR_LIBTORCH/include"
+LIBTORCH_LIB="$DIR_LIBTORCH/lib"
+LIBTORCH_CXX_FLAGS="-I$LIBTORCH_INCLUDE -I$LIBTORCH_INCLUDE/torch/csrc/api/include"
+LIBTORCH_LD_FLAGS="-L$LIBTORCH_LIB -ltorch -lc10 -ltorch_cpu"
+LIBTORCH_RPATH="-Wl,-rpath,$LIBTORCH_LIB"
 
 g++ -std=c++11 -I$DIR_IMGUI -g -Wall -Wformat `pkg-config --cflags glfw3` -c -o release/imgui.o $DIR_IMGUI/imgui.cpp
 g++ -std=c++11 -I$DIR_IMGUI -g -Wall -Wformat `pkg-config --cflags glfw3` -c -o release/imgui_demo.o $DIR_IMGUI/imgui_demo.cpp
@@ -26,7 +33,7 @@ g++ -std=c++17 -I$DIR_IMPLOT -I$DIR_IMGUI -g -Wall -c -o release/implot.o $DIR_I
 g++ -std=c++17 -I$DIR_IMPLOT -I$DIR_IMGUI -g -Wall -c -o release/implot_items.o $DIR_IMPLOT/implot_items.cpp
 g++ -std=c++17 -I$DIR_IMPLOT -I$DIR_IMGUI -g -Wall -c -o release/implot_demo.o $DIR_IMPLOT/implot_demo.cpp
 
-g++ -Ofast -mssse3 -ffast-math -std=c++17 \
+g++ -Ofast -g -mssse3 -ffast-math -std=c++17 \
     release/ColorSpace.o \
     -o release/*.o \
     -Ilib/nvcodec \
@@ -47,6 +54,7 @@ g++ -Ofast -mssse3 -ffast-math -std=c++17 \
     -L/usr/local/lib \
     -lopencv_sfm -lopencv_core -lopencv_bgsegm -lopencv_imgcodecs -lopencv_imgproc -lopencv_video -lopencv_highgui -lopencv_videoio -lopencv_calib3d -lopencv_dnn \
     -I$DIR_TENSORRT/include \
-    -L$DIR_TENSORRT/lib/ -lnvinfer -lnvinfer_plugin
+    -L$DIR_TENSORRT/lib/ -lnvinfer -lnvinfer_plugin \
+    $LIBTORCH_CXX_FLAGS $LIBTORCH_LD_FLAGS $LIBTORCH_RPATH 
 
-./release/redgui
+# ./release/redgui

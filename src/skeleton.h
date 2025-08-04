@@ -651,11 +651,145 @@ bool is_point_in_bbox(double x, double y, ImPlotRect* bbox_rect) {
             y >= bbox_rect->Y.Min && y <= bbox_rect->Y.Max);
 }
 
+// Scale keypoints to maintain relative positions within a bounding box
+void scale_bbox_keypoints(BoundingBox* bbox, render_scene *scene, SkeletonContext* skeleton, 
+                         ImPlotRect* old_rect, ImPlotRect* new_rect) {
+    if (!bbox->has_bbox_keypoints || !old_rect || !new_rect) return;
+    
+    double old_width = old_rect->X.Max - old_rect->X.Min;
+    double old_height = old_rect->Y.Max - old_rect->Y.Min;
+    double new_width = new_rect->X.Max - new_rect->X.Min;
+    double new_height = new_rect->Y.Max - new_rect->Y.Min;
+    
+    if (old_width <= 0 || old_height <= 0) return;
+
+    double old_min_x = std::min(old_rect->X.Min, old_rect->X.Max);
+    double old_min_y = std::min(old_rect->Y.Min, old_rect->Y.Max);
+    double old_max_x = std::max(old_rect->X.Min, old_rect->X.Max);
+    double old_max_y = std::max(old_rect->Y.Min, old_rect->Y.Max);
+
+    double new_min_x = std::min(new_rect->X.Min, new_rect->X.Max); 
+    double new_min_y = std::min(new_rect->Y.Min, new_rect->Y.Max);
+    double new_max_x = std::max(new_rect->X.Min, new_rect->X.Max);
+    double new_max_y = std::max(new_rect->Y.Min, new_rect->Y.Max);
+
+    double normalized_old_width = old_max_x - old_min_x;
+    double normalized_old_height = old_max_y - old_min_y;
+    
+    double normalized_new_width = new_max_x - new_min_x;
+    double normalized_new_height = new_max_y - new_min_y;
+
+    if (normalized_old_width <= 0 || normalized_old_height <= 0) return;
+
+    
+    double scale_x = normalized_new_width / normalized_old_width;
+    double scale_y = normalized_new_height / normalized_old_height;
+    
+    for (u32 j = 0; j < scene->num_cams; j++) {
+        for (u32 node = 0; node < skeleton->num_nodes; node++) {
+            if (bbox->bbox_keypoints2d[j][node].is_labeled) {
+                // Get relative position in old bbox
+                double rel_x = (bbox->bbox_keypoints2d[j][node].position.x - old_min_x) / normalized_old_width;
+                double rel_y = (bbox->bbox_keypoints2d[j][node].position.y - old_min_y) / normalized_old_height;
+                
+                // Scale to new bbox
+                bbox->bbox_keypoints2d[j][node].position.x = new_min_x + rel_x * normalized_new_width;
+                bbox->bbox_keypoints2d[j][node].position.y = new_min_y + rel_y * normalized_new_height;
+                
+                constrain_keypoint_to_bbox(&bbox->bbox_keypoints2d[j][node], new_rect);
+            }
+        }
+    }
+}
+
 void free_all_keypoints(std::map<u32, KeyPoints *> &keypoints_map,
                         render_scene *scene) {
     for (auto &[frame, kp] : keypoints_map)
         free_keypoints(kp, scene);
     keypoints_map.clear();
+}
+
+// Render keypoints within a bounding box
+void gui_plot_bbox_keypoints(BoundingBox* bbox, SkeletonContext *skeleton, int view_idx, int num_cams, bool is_active, bool& is_saved, int bbox_id) {
+    if (!bbox->has_bbox_keypoints || !skeleton->has_skeleton) return;
+    
+    float pt_size = 4.0f; 
+    for (u32 node = 0; node < skeleton->num_nodes; node++) {
+        if (bbox->bbox_keypoints2d[view_idx][node].is_labeled) {
+            ImVec4 node_color; 
+            ImPlotDragToolFlags flag;
+            if (is_active) {
+                flag = ImPlotDragToolFlags_None;
+                if (bbox->active_kp_id[view_idx] == node) {
+                    node_color = (ImVec4)ImColor::HSV(0.2, 0.9f, 0.9f); // Different active color for bbox keypoints
+                } else {
+                    node_color = skeleton->node_colors[node];
+                }
+            } else {
+                flag = ImPlotDragToolFlags_NoInputs;
+                // Gray out inactive bbox keypoints
+                node_color = ImVec4(0.5f, 0.5f, 0.5f, 0.7f);
+            }
+            
+            int id = 10000 + bbox_id * 1000 + skeleton->num_nodes * view_idx + node;
+            bool drag_point_clicked = false;
+            bool drag_point_hovered = false;
+            bool drag_point_modified = false;
+            
+            drag_point_modified = ImPlot::DragPoint(id, 
+                &bbox->bbox_keypoints2d[view_idx][node].position.x, 
+                &bbox->bbox_keypoints2d[view_idx][node].position.y, 
+                node_color, pt_size, flag, &drag_point_clicked, &drag_point_hovered);
+                
+            if (drag_point_modified && is_active) {
+                constrain_keypoint_to_bbox(&bbox->bbox_keypoints2d[view_idx][node], bbox->rect);
+                bbox->bbox_keypoints2d[view_idx][node].is_triangulated = false;
+                is_saved = false;
+            }
+            
+            if (drag_point_hovered && is_active) {
+                if (ImGui::IsKeyPressed(ImGuiKey_R, false)) { // delete hovered keypoint
+                    bbox->bbox_keypoints2d[view_idx][node].position = {1E7, 1E7};
+                    bbox->bbox_keypoints2d[view_idx][node].is_labeled = false;                                        
+                    bbox->bbox_keypoints2d[view_idx][node].is_triangulated = false;
+                    bbox->active_kp_id[view_idx] = node;
+                    is_saved = false;
+                }
+                
+                if (ImGui::IsKeyPressed(ImGuiKey_F, false)) { 
+                    for (int cam_idx = 0; cam_idx < num_cams; cam_idx++) {
+                        bbox->bbox_keypoints2d[cam_idx][node].position = {1E7, 1E7};
+                        bbox->bbox_keypoints2d[cam_idx][node].is_labeled = false;                                        
+                        bbox->bbox_keypoints2d[cam_idx][node].is_triangulated = false;
+                        bbox->active_kp_id[cam_idx] = node;
+                    }
+                    is_saved = false;
+                }
+            }
+
+            if (drag_point_clicked && is_active) {
+                bbox->active_kp_id[view_idx] = node;
+            }
+        }
+    }
+
+    // Draw skeleton edges within bbox
+    for (u32 edge = 0; edge < skeleton->num_edges; edge++) {
+        auto[a, b] = skeleton->edges[edge];
+
+        if (bbox->bbox_keypoints2d[view_idx][a].is_labeled && bbox->bbox_keypoints2d[view_idx][b].is_labeled) {
+            double xs[2] {bbox->bbox_keypoints2d[view_idx][a].position.x, bbox->bbox_keypoints2d[view_idx][b].position.x};
+            double ys[2] {bbox->bbox_keypoints2d[view_idx][a].position.y, bbox->bbox_keypoints2d[view_idx][b].position.y};
+            
+            // Gray out edges for inactive bboxes
+            if (is_active) {
+                ImPlot::SetNextLineStyle(ImVec4(0.8f, 0.8f, 0.2f, 0.8f), 1.5f); 
+            } else {
+                ImPlot::SetNextLineStyle(ImVec4(0.4f, 0.4f, 0.4f, 0.5f), 1.0f);  // Grayed out edges
+            }
+            ImPlot::PlotLine("##bbox_line", xs, ys, 2);
+        }
+    }
 }
 
 #endif
