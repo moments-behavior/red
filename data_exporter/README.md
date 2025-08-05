@@ -10,6 +10,80 @@ conda install -c conda-forge opencv
 pip install pyyaml
 pip install PyNvVideoCodec
 ```
+
+## YOLO Detection Dataset Export
+
+Export bounding box data for YOLO object detection training:
+
+```bash
+python export_yolo_detection.py -i /path/to/labeled/data -v /path/to/videos -o /path/to/output -c class_names.txt
+```
+
+Parameters:
+- `-i, --label_dir`: Directory containing timestamped label folders from RED
+- `-v, --video_dir`: Directory containing video files (should match camera names)
+- `-o, --output_dir`: Output directory for YOLO dataset
+- `-c, --class_file`: Optional text file containing class names (one per line)
+- `--train_ratio`: Fraction of data for training (default: 0.7)
+- `--val_ratio`: Fraction of data for validation (default: 0.2) 
+- `--test_ratio`: Fraction of data for testing (default: 0.1)
+- `--seed`: Random seed for reproducible splits (default: 42)
+
+This creates a YOLO-format dataset with:
+- Train/val/test splits with images and labels
+- `data.yaml` configuration file
+- Normalized bounding box coordinates in YOLO format
+
+## YOLO Pose Dataset Export
+
+Export bounding box and keypoint data for YOLOv8 pose estimation training:
+
+```bash
+python export_yolo_pose.py -i /path/to/labeled/data -v /path/to/videos -o /path/to/output -s skeleton.json
+```
+
+Parameters:
+- `-i, --label_dir`: Directory containing timestamped label folders from RED
+- `-v, --video_dir`: Directory containing video files (should match camera names)  
+- `-o, --output_dir`: Output directory for YOLO pose dataset
+- `-s, --skeleton_file`: JSON file defining skeleton structure (from RED skeleton creator)
+- `--train_ratio`: Fraction of data for training (default: 0.7)
+- `--val_ratio`: Fraction of data for validation (default: 0.2)
+- `--test_ratio`: Fraction of data for testing (default: 0.1)
+- `--seed`: Random seed for reproducible splits (default: 42)
+
+This creates a YOLO pose dataset with:
+- Train/val/test splits with images and labels
+- `data.yaml` configuration file for pose training
+- Normalized bounding boxes and keypoint coordinates
+- Skeleton configuration file
+- README with keypoint names and format documentation
+
+### Example Usage
+
+```bash
+# Export detection dataset
+python export_yolo_detection.py \
+    -i /path/to/red/exports \
+    -v /path/to/videos \
+    -o /path/to/yolo_detection_dataset \
+    -c class_names.txt
+
+# Export pose dataset  
+python export_yolo_pose.py \
+    -i /path/to/red/exports \
+    -v /path/to/videos \
+    -o /path/to/yolo_pose_dataset \
+    -s /path/to/skeleton.json
+```
+
+### Requirements
+
+Both export scripts require:
+- Video files named to match camera names (e.g., `cam1.mp4`, `cam2.mp4`)
+- Exported label data from RED (with bounding boxes and/or keypoints)
+- PyNvVideoCodec for GPU-accelerated video decoding (optional, falls back to OpenCV)
+
 ## Jarvis
 ### Generate training data 
 
