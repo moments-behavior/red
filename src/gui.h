@@ -8,6 +8,9 @@
 #include <regex>
 #include <thread>
 #include <vector>
+#include <opencv2/sfm.hpp>
+#include <iostream>
+#include <algorithm>
 
 struct ProjectContext {
     std::string root_dir;
@@ -1029,6 +1032,162 @@ static void gui_plot_perimeter(CameraParams *cvp, int image_height) {
     ImPlot::SetNextLineStyle(ImVec4(1.0, 1.0, 1.0, 1.0), 3.0);
     std::string name = "arena";
     ImPlot::PlotLine(name.c_str(), arena_x, arena_y, 100);
+}
+
+static void triangulate_bounding_boxes(KeyPoints *keypoints, SkeletonContext *skeleton,
+                                      std::vector<CameraParams> camera_params,
+                                      render_scene *scene, int current_frame_num) {
+    if (!skeleton->has_bbox || keypoints->bbox2d_list.empty()) {
+        return;
+    }
+
+    try {
+        std::vector<int> source_cameras;
+        for (int cam_id = 0; cam_id < scene->num_cams && cam_id < keypoints->bbox2d_list.size(); cam_id++) {
+            for (const auto& bbox : keypoints->bbox2d_list[cam_id]) {
+                if (bbox.state == RectTwoPoints && bbox.confidence >= 1.0f) {
+                    source_cameras.push_back(cam_id);
+                    break;
+                }
+            }
+        }
+
+        if (source_cameras.size() != 2) {
+            std::cout << "Triangulation requires exactly 2 cameras with user-drawn bounding boxes. Found: " 
+                     << source_cameras.size() << " cameras." << std::endl;
+            return;
+        }
+
+        int cam1_id = source_cameras[0];
+        int cam2_id = source_cameras[1];
+
+        BoundingBox* bbox1 = nullptr;
+        BoundingBox* bbox2 = nullptr;
+
+        for (auto& bbox : keypoints->bbox2d_list[cam1_id]) {
+            if (bbox.state == RectTwoPoints && bbox.confidence >= 1.0f) {
+                bbox1 = &bbox;
+                break;
+            }
+        }
+
+        for (auto& bbox : keypoints->bbox2d_list[cam2_id]) {
+            if (bbox.state == RectTwoPoints && bbox.confidence >= 1.0f) {
+                bbox2 = &bbox;
+                break;
+            }
+        }
+
+        if (!bbox1 || !bbox2) {
+            std::cout << "Could not find user-drawn bounding boxes in source cameras." << std::endl;
+            return;
+        }
+
+        double center1_x = (bbox1->rect->X.Min + bbox1->rect->X.Max) / 2.0;
+        double center1_y = (bbox1->rect->Y.Min + bbox1->rect->Y.Max) / 2.0;
+        
+        double center2_x = (bbox2->rect->X.Min + bbox2->rect->X.Max) / 2.0;
+        double center2_y = (bbox2->rect->Y.Min + bbox2->rect->Y.Max) / 2.0;
+
+        std::cout << "Center 1: (" << center1_x << ", " << center1_y << ")" << std::endl;
+        std::cout << "Center 2: (" << center2_x << ", " << center2_y << ")" << std::endl;
+
+        std::vector<cv::Mat> sfmPoints2d;
+        std::vector<cv::Mat> projection_matrices;
+
+        cv::Mat point1 = (cv::Mat_<double>(2, 1) << center1_x, 
+                         (double)scene->image_height[cam1_id] - center1_y);
+        cv::Mat point2 = (cv::Mat_<double>(2, 1) << center2_x, 
+                         (double)scene->image_height[cam2_id] - center2_y);
+
+        cv::Mat point1_undistort, point2_undistort;
+        cv::undistortPoints(point1, point1_undistort, camera_params[cam1_id].k,
+                           camera_params[cam1_id].dist_coeffs, cv::noArray(),
+                           camera_params[cam1_id].k);
+        cv::undistortPoints(point2, point2_undistort, camera_params[cam2_id].k,
+                           camera_params[cam2_id].dist_coeffs, cv::noArray(),
+                           camera_params[cam2_id].k);
+
+        sfmPoints2d.push_back(point1_undistort.reshape(1, 2));
+        sfmPoints2d.push_back(point2_undistort.reshape(1, 2));
+        projection_matrices.push_back(camera_params[cam1_id].projection_mat);
+        projection_matrices.push_back(camera_params[cam2_id].projection_mat);
+
+        cv::Mat triangulated_center;
+        cv::sfm::triangulatePoints(sfmPoints2d, projection_matrices, triangulated_center);
+
+        std::cout << "Triangulated 3D center: (" << triangulated_center.at<double>(0) 
+                 << ", " << triangulated_center.at<double>(1) 
+                 << ", " << triangulated_center.at<double>(2) << ")" << std::endl;
+
+        double width1 = bbox1->rect->X.Max - bbox1->rect->X.Min;
+        double height1 = bbox1->rect->Y.Max - bbox1->rect->Y.Min;
+        double width2 = bbox2->rect->X.Max - bbox2->rect->X.Min;
+        double height2 = bbox2->rect->Y.Max - bbox2->rect->Y.Min;
+
+        double long1 = std::max(width1, height1);
+        double short1 = std::min(width1, height1);
+        double long2 = std::max(width2, height2);
+        double short2 = std::min(width2, height2);
+
+        double avg_long_side = (long1 + long2) / 2.0;
+        double avg_short_side = (short1 + short2) / 2.0;
+
+        std::cout << "Average long side: " << avg_long_side << ", Average short side: " << avg_short_side << std::endl;
+
+        for (int target_cam = 0; target_cam < scene->num_cams; target_cam++) {
+            if (target_cam == cam1_id || target_cam == cam2_id) {
+                continue; 
+            }
+
+            if (!is_in_camera_fov(triangulated_center, camera_params[target_cam].rvec,
+                                 camera_params[target_cam].tvec, camera_params[target_cam].k,
+                                 scene->image_width[target_cam], scene->image_height[target_cam])) {
+                std::cout << "3D center not in FOV of camera " << target_cam << std::endl;
+                continue;
+            }
+
+            cv::Mat reprojected_points;
+            cv::projectPoints(triangulated_center, camera_params[target_cam].rvec,
+                             camera_params[target_cam].tvec, camera_params[target_cam].k,
+                             camera_params[target_cam].dist_coeffs, reprojected_points);
+
+            double proj_x = reprojected_points.at<double>(0, 0);
+            double proj_y = (double)scene->image_height[target_cam] - reprojected_points.at<double>(0, 1);
+
+            std::cout << "Reprojected center in camera " << target_cam << ": (" << proj_x << ", " << proj_y << ")" << std::endl;
+
+            double half_width = avg_long_side / 2.0;
+            double half_height = avg_short_side / 2.0;
+
+            BoundingBox new_bbox;
+            new_bbox.rect = new ImPlotRect(
+                proj_x - half_width,  
+                proj_x + half_width,  
+                proj_y - half_height, 
+                proj_y + half_height 
+            );
+            new_bbox.state = RectTwoPoints;
+            new_bbox.class_id = bbox1->class_id; 
+            new_bbox.confidence = 1.0f; 
+            new_bbox.has_bbox_keypoints = false;
+            new_bbox.bbox_keypoints2d = nullptr;
+            new_bbox.active_kp_id = nullptr;
+
+            keypoints->bbox2d_list[target_cam].push_back(new_bbox);
+
+            std::cout << "Added reprojected bounding box to camera " << target_cam 
+                     << " at (" << proj_x - half_width << ", " << proj_y - half_height 
+                     << ") to (" << proj_x + half_width << ", " << proj_y + half_height << ")" << std::endl;
+        }
+
+        std::cout << "Bounding box triangulation and reprojection completed successfully." << std::endl;
+
+    } catch (const cv::Exception& e) {
+        std::cerr << "OpenCV error in bounding box triangulation: " << e.what() << std::endl;
+    } catch (const std::exception& e) {
+        std::cerr << "Error in bounding box triangulation: " << e.what() << std::endl;
+    }
 }
 
 #endif

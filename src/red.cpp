@@ -1461,7 +1461,6 @@ int main(int, char **) {
 
                         // Plot bounding boxes (both with and without keypoints)
                         if (skeleton->has_bbox) {
-                            // Ensure keypoints structure exists for bounding boxes, even if skeleton has 0 keypoints
                             bool keypoints_find = keypoints_map.find(current_frame_num) != keypoints_map.end();
                             if (!keypoints_find) {
                                 KeyPoints *keypoints = (KeyPoints *)malloc(sizeof(KeyPoints));
@@ -1978,6 +1977,14 @@ int main(int, char **) {
                     }
                     ImGui::EndDisabled();
 
+                    if (skeleton->has_bbox && keypoints_find) {
+                        if (ImGui::Button("Triangulate Bounding Boxes") || 
+                            ImGui::IsKeyPressed(ImGuiKey_B, false)) {
+                            triangulate_bounding_boxes(keypoints_map.at(current_frame_num),
+                                                      skeleton, camera_params, scene, current_frame_num);
+                        }
+                    }
+
                     if (apply_color) {
                         ImGui::PopStyleColor(3);
                     }
@@ -2060,39 +2067,153 @@ int main(int, char **) {
                         config);
                 }
 
-                auto upper_it = keypoints_map.upper_bound(current_frame_num);
-                if (upper_it == keypoints_map.end()) {
-                    upper_it = keypoints_map.begin();
+                // Find next frame with actual labeled keypoints
+                auto next_labeled_frame_it = keypoints_map.end();
+                for (auto it = keypoints_map.upper_bound(current_frame_num); it != keypoints_map.end(); ++it) {
+                    const auto& [frame_num, keypoints] = *it;
+                    if (!keypoints) continue;
+                    
+                    bool has_labels = false;
+                    
+                    if (skeleton->has_skeleton) {
+                        for (int cam_id = 0; cam_id < scene->num_cams && cam_id < MAX_VIEWS && !has_labels; cam_id++) {
+                            for (int kp_id = 0; kp_id < skeleton->num_nodes && !has_labels; kp_id++) {
+                                if (keypoints->keypoints2d[cam_id][kp_id].is_labeled) {
+                                    has_labels = true;
+                                }
+                            }
+                        }
+                    }
+                    
+                    if (!has_labels && skeleton->has_bbox) {
+                        for (int cam_id = 0; cam_id < scene->num_cams && cam_id < MAX_VIEWS && !has_labels; cam_id++) {
+                            for (const auto& bbox : keypoints->bbox2d_list[cam_id]) {
+                                if (bbox.confidence >= 1.0f) {
+                                    for (int kp_id = 0; kp_id < skeleton->num_nodes && !has_labels; kp_id++) {
+                                        if (bbox.bbox_keypoints2d && bbox.bbox_keypoints2d[cam_id] && bbox.bbox_keypoints2d[cam_id][kp_id].is_labeled) {
+                                            has_labels = true;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    
+                    if (has_labels) {
+                        next_labeled_frame_it = it;
+                        break;
+                    }
+                }
+                
+                // If no labeled frame found after current, wrap around to beginning
+                if (next_labeled_frame_it == keypoints_map.end()) {
+                    for (auto it = keypoints_map.begin(); it != keypoints_map.upper_bound(current_frame_num); ++it) {
+                        const auto& [frame_num, keypoints] = *it;
+                        if (!keypoints) continue;
+                        
+                        bool has_labels = false;
+                        
+                        if (skeleton->has_skeleton) {
+                            for (int cam_id = 0; cam_id < scene->num_cams && cam_id < MAX_VIEWS && !has_labels; cam_id++) {
+                                for (int kp_id = 0; kp_id < skeleton->num_nodes && !has_labels; kp_id++) {
+                                    if (keypoints->keypoints2d[cam_id][kp_id].is_labeled) {
+                                        has_labels = true;
+                                    }
+                                }
+                            }
+                        }
+                        
+                        if (!has_labels && skeleton->has_bbox) {
+                            for (int cam_id = 0; cam_id < scene->num_cams && cam_id < MAX_VIEWS && !has_labels; cam_id++) {
+                                for (const auto& bbox : keypoints->bbox2d_list[cam_id]) {
+                                    if (bbox.confidence >= 1.0f) {
+                                        for (int kp_id = 0; kp_id < skeleton->num_nodes && !has_labels; kp_id++) {
+                                            if (bbox.bbox_keypoints2d && bbox.bbox_keypoints2d[cam_id] && bbox.bbox_keypoints2d[cam_id][kp_id].is_labeled) {
+                                                has_labels = true;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        
+                        if (has_labels) {
+                            next_labeled_frame_it = it;
+                            break;
+                        }
+                    }
                 }
 
                 ImGui::Separator();
-                ImGui::Text("Next labeled frame : %d", (*upper_it).first);
+                if (next_labeled_frame_it != keypoints_map.end()) {
+                    ImGui::Text("Next labeled frame : %d", (*next_labeled_frame_it).first);
+                } else {
+                    ImGui::Text("Next labeled frame : none");
+                }
                 if (ImGui::Button("Jump to Next Labeled Frame") ||
                     ImGui::IsKeyPressed(ImGuiKey_RightArrow, false)) {
-                    for (int i = 0; i < scene->num_cams; i++) {
-                        scene->seek_context[i].seek_frame =
-                            (uint64_t)(*upper_it).first;
-                        scene->seek_context[i].use_seek = true;
-                        scene->seek_context[i].seek_accurate = true;
-                    }
+                    if (next_labeled_frame_it != keypoints_map.end()) {
+                        for (int i = 0; i < scene->num_cams; i++) {
+                            scene->seek_context[i].seek_frame =
+                                (uint64_t)(*next_labeled_frame_it).first;
+                            scene->seek_context[i].use_seek = true;
+                            scene->seek_context[i].seek_accurate = true;
+                        }
 
-                    for (int i = 0; i < scene->num_cams; i++) {
-                        while (!(scene->seek_context[i].seek_done)) {
-                            std::this_thread::sleep_for(
-                                std::chrono::milliseconds(1));
+                        for (int i = 0; i < scene->num_cams; i++) {
+                            while (!(scene->seek_context[i].seek_done)) {
+                                std::this_thread::sleep_for(
+                                    std::chrono::milliseconds(1));
+                            }
+                        }
+
+                        for (int i = 0; i < scene->num_cams; i++) {
+                            scene->seek_context[i].seek_done = false;
+                        }
+                        to_display_frame_number = scene->seek_context[0].seek_frame;
+                        read_head = 0;
+                        just_seeked = true;
+                        pause_selected = 0;
+                        slider_frame_number = to_display_frame_number;
+                    }
+                }
+                
+                size_t labeled_count = 0;
+                for (const auto& [frame_num, keypoints] : keypoints_map) {
+                    if (!keypoints) continue;
+                    
+                    bool has_labels = false;
+                    
+                    if (skeleton->has_skeleton) {
+                        for (int cam_id = 0; cam_id < scene->num_cams && cam_id < MAX_VIEWS && !has_labels; cam_id++) {
+                            for (int kp_id = 0; kp_id < skeleton->num_nodes && !has_labels; kp_id++) {
+                                if (keypoints->keypoints2d[cam_id][kp_id].is_labeled) {
+                                    has_labels = true;
+                                }
+                            }
                         }
                     }
-
-                    for (int i = 0; i < scene->num_cams; i++) {
-                        scene->seek_context[i].seek_done = false;
+                    
+                    if (!has_labels && skeleton->has_bbox) {
+                        for (int cam_id = 0; cam_id < scene->num_cams && cam_id < MAX_VIEWS && !has_labels; cam_id++) {
+                            for (const auto& bbox : keypoints->bbox2d_list[cam_id]) {
+                                if (bbox.confidence >= 1.0f) {
+                                    for (int kp_id = 0; kp_id < skeleton->num_nodes && !has_labels; kp_id++) {
+                                        if (bbox.bbox_keypoints2d && bbox.bbox_keypoints2d[cam_id] && bbox.bbox_keypoints2d[cam_id][kp_id].is_labeled) {
+                                            has_labels = true;
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
-                    to_display_frame_number = scene->seek_context[0].seek_frame;
-                    read_head = 0;
-                    just_seeked = true;
-                    pause_selected = 0;
-                    slider_frame_number = to_display_frame_number;
+                    
+                    if (has_labels) {
+                        labeled_count++;
+                    }
                 }
-                ImGui::Text("Total labeled frames : %zu", keypoints_map.size());
+                
+                ImGui::Text("Total labeled frames : %zu", labeled_count);
 
                 if (ImGui::Button("Select YOLO")) {
                     IGFD::FileDialogConfig config;
