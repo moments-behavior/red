@@ -93,6 +93,7 @@ int main(int, char **) {
     std::vector<std::string> tokenized_path = string_split(cwd, delimiter);
     std::string start_folder_name = "/home/" + tokenized_path[2] + "/data";
     start_folder_name = "/nfs/exports/ratlv";
+    start_folder_name = "/media/ro/LaCie/orma";
     ImVec4 clear_color = ImVec4(0.0f, 0.0f, 0.0f, 1.00f);
     ImGuiIO &io = ImGui::GetIO();
 
@@ -199,7 +200,10 @@ int main(int, char **) {
                     }
 
                     if (ImGui::BeginMenu("Detection")) {
-                        if (cpu_buffer_toggle) {
+                        std::cout << "buffer type: "
+                                  << (scene->use_cpu_buffer ? "CPU" : "GPU")
+                                  << std::endl;
+                        if (scene->use_cpu_buffer) {
                             if (ImGui::MenuItem("YOLOv5")) {
                                 std::string yolov5_onnx =
                                     root_dir + "/yolo/v5/best.onnx";
@@ -220,6 +224,8 @@ int main(int, char **) {
                                 std::string engine_file_path =
                                     root_dir +
                                     "/yolo/yolorat_bbox/rat_bbox.engine";
+                                std::cout << "Using engine file: "
+                                          << engine_file_path << std::endl;
                                 for (int i = 0; i < scene->num_cams; i++) {
                                     yolo_threads.push_back(std::thread(
                                         &yolo_process_trt, engine_file_path, i,
@@ -268,6 +274,7 @@ int main(int, char **) {
                         scene->use_cpu_buffer = true;
                     } else {
                         scene->use_cpu_buffer = false;
+                        // std::cout << "Using GPU Buffer" << std::endl;
                     }
                 }
 
@@ -564,10 +571,12 @@ int main(int, char **) {
             }
             ImGui::End();
 
-            select_corr_head =
-                (pause_selected + read_head) % scene->size_of_buffer;
-            current_frame_num =
-                scene->display_buffer[0][select_corr_head].frame_number;
+            select_corr_head = (pause_selected + read_head) % scene->size_of_buffer;
+            current_frame_num = scene->display_buffer[0][select_corr_head].frame_number;
+
+            // std::cout << "current frame num: " << current_frame_num
+            //             << ", select_corr_head: " << select_corr_head
+            //           << std::endl;
 
             for (int j = 0; j < scene->num_cams; j++) {
                 if (scene->use_cpu_buffer) {
@@ -605,6 +614,30 @@ int main(int, char **) {
                     unbind_texture();
                 }
             }
+
+
+            if (ImGui::Button("Export current frame") || ImGui::IsKeyPressed(ImGuiKey_Z, true)){
+                std::string export_folder = root_dir + "/exported_frames";                
+                std::filesystem::create_directory(export_folder);
+                for (int j = 0; j < scene->num_cams; j++)
+                {
+
+                    std::string export_file = export_folder + "/" + camera_names[j] + "_" + std::to_string(current_frame_num) + ".png";
+                    std::cout << "Exporting to " << export_file << std::endl;                    
+
+                    
+                    cv::Mat frame = cv::Mat(2200, 3208, CV_8UC4, scene->display_buffer[j][select_corr_head].frame);
+                    cv::Mat frame_3ch;
+                    cv::cvtColor(frame, frame_3ch, cv::COLOR_RGBA2BGRA);
+                    // cv::cvtColor(frame, frame_bgra, cv::COLOR_RGBA2BGRA);
+                    // frame = cv::cvtColor(frame, cv::COLOR_RGBA2BGRA);
+                    cv::imwrite(export_file, frame_3ch);
+
+                    
+                }    
+            }
+
+
         }
 
         if (toggle_play_status && play_video) {
@@ -783,7 +816,16 @@ int main(int, char **) {
                                 gui_plot_bbox_from_keypoints(
                                     keypoints_map.at(current_frame_num),
                                     skeleton, j, 4, 5);
-                            }
+                                }
+
+                            if (skeleton->name == "TwoBBoxes") {
+                                gui_plot_bbox_from_keypoints(
+                                    keypoints_map.at(current_frame_num),
+                                    skeleton, j, 0, 1);
+                                gui_plot_bbox_from_keypoints(
+                                    keypoints_map.at(current_frame_num),
+                                    skeleton, j, 2, 3);                            
+                                }
                         }
                     }
                     ImPlot::EndPlot();
@@ -1000,6 +1042,7 @@ int main(int, char **) {
         if (plot_keypoints_flag) {
             if (ImGui::Begin("Labeling Tool")) {
 
+
                 if (scene->num_cams > 1) {
                     bool keypoint_triangulated_all = true;
                     if (keypoints_find) {
@@ -1049,6 +1092,10 @@ int main(int, char **) {
                                          skeleton, camera_params, scene);
                         }
                     }
+
+
+                    
+
                 }
 
                 if (ImGui::Button("Update keypoints working directory")) {
@@ -1120,6 +1167,13 @@ int main(int, char **) {
                 if (upper_it == keypoints_map.end()) {
                     upper_it = keypoints_map.begin();
                 }
+                auto lower_it = keypoints_map.lower_bound(current_frame_num);
+                if (lower_it == keypoints_map.begin()) {
+                    lower_it = keypoints_map.end();
+                }
+                std::cout << "Current frame: " << current_frame_num
+                          << ", lower: " << (*lower_it).first
+                          << ", upper: " << (*upper_it).first << std::endl;
 
                 ImGui::Separator();
                 ImGui::Text("Next labeled frame : %d", (*upper_it).first);
@@ -1148,6 +1202,7 @@ int main(int, char **) {
                     pause_selected = 0;
                     slider_frame_number = to_display_frame_number;
                 }
+                
                 ImGui::Text("Total labeled frames : %zu", keypoints_map.size());
             }
             ImGui::End();

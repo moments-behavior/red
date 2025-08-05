@@ -130,7 +130,8 @@ static void gui_plot_keypoints(KeyPoints *keypoints, SkeletonContext *skeleton,
 static void gui_plot_bbox_from_keypoints(KeyPoints *keypoints,
                                          SkeletonContext *skeleton,
                                          int view_idx, int top_left_idx,
-                                         int bottom_right_idx) {
+                                         int bottom_right_idx,
+                                         int id_box = 0) {
     if (keypoints->keypoints2d[view_idx][top_left_idx].is_labeled &&
         keypoints->keypoints2d[view_idx][bottom_right_idx].is_labeled) {
         double xs[5]{
@@ -146,8 +147,14 @@ static void gui_plot_bbox_from_keypoints(KeyPoints *keypoints,
             keypoints->keypoints2d[view_idx][bottom_right_idx].position.y,
             keypoints->keypoints2d[view_idx][bottom_right_idx].position.y,
             keypoints->keypoints2d[view_idx][top_left_idx].position.y};
+        
+        ImVec4 my_color;
+        my_color.w = 0.8f;
+        my_color.x = skeleton->node_colors[id_box].x;
+        my_color.y = skeleton->node_colors[id_box].y;
+        my_color.z = skeleton->node_colors[id_box].z;
 
-        ImPlot::SetNextLineStyle(ImVec4(0.5, 1.0, 1.0, 1.0), 3.0);
+        ImPlot::SetNextLineStyle(my_color, 3.0);
         ImPlot::PlotLine("##line", xs, ys, 5);
     }
 }
