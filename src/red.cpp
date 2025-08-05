@@ -1179,20 +1179,25 @@ int main(int, char **) {
                     upper_it = keypoints_map.begin();
                 }
                 auto lower_it = keypoints_map.lower_bound(current_frame_num);
-                if (lower_it == keypoints_map.begin()) {
-                    lower_it = keypoints_map.end();
+                // if (lower_it == keypoints_map.end()) {
+                //     lower_it = keypoints_map.begin();
+                // }
+                if(lower_it != keypoints_map.begin()) {
+                    --lower_it; // Move to the previous element
                 }
+                
                 // std::cout << "Current frame: " << current_frame_num
                 //           << ", lower: " << (*lower_it).first
                 //           << ", upper: " << (*upper_it).first << std::endl;
 
                 ImGui::Separator();
+                ImGui::Text("Prev. labeled frame : %d", (*lower_it).first);
                 ImGui::Text("Next labeled frame : %d", (*upper_it).first);
-                if (ImGui::Button("Jump to Next Labeled Frame") ||
-                    ImGui::IsKeyPressed(ImGuiKey_RightArrow, false)) {
+                if (ImGui::Button("Jump to Prev. Labeled Frame") ||
+                    ImGui::IsKeyPressed(ImGuiKey_LeftArrow, false)) {
                     for (int i = 0; i < scene->num_cams; i++) {
                         scene->seek_context[i].seek_frame =
-                            (uint64_t)(*upper_it).first;
+                            (uint64_t)(*lower_it).first;
                         scene->seek_context[i].use_seek = true;
                         scene->seek_context[i].seek_accurate = true;
                     }
@@ -1213,6 +1218,35 @@ int main(int, char **) {
                     pause_selected = 0;
                     slider_frame_number = to_display_frame_number;
                 }
+
+
+                if (ImGui::Button("Jump to Next Labeled Frame") ||
+                ImGui::IsKeyPressed(ImGuiKey_RightArrow, false)) {
+                for (int i = 0; i < scene->num_cams; i++) {
+                    scene->seek_context[i].seek_frame =
+                        (uint64_t)(*upper_it).first;
+                    scene->seek_context[i].use_seek = true;
+                    scene->seek_context[i].seek_accurate = true;
+                }
+
+                for (int i = 0; i < scene->num_cams; i++) {
+                    while (!(scene->seek_context[i].seek_done)) {
+                        std::this_thread::sleep_for(
+                            std::chrono::milliseconds(1));
+                    }
+                }
+
+                for (int i = 0; i < scene->num_cams; i++) {
+                    scene->seek_context[i].seek_done = false;
+                }
+                to_display_frame_number = scene->seek_context[0].seek_frame;
+                read_head = 0;
+                just_seeked = true;
+                pause_selected = 0;
+                slider_frame_number = to_display_frame_number;
+            }
+                
+                
                 
                 ImGui::Text("Total labeled frames : %zu", keypoints_map.size());
             }
