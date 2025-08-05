@@ -73,14 +73,15 @@ struct YoloBBox {
     }
 };
 
-// YOLO detection variables (declared after struct definitions)
 std::vector<std::vector<YoloBBox>> yolo_bboxes(MAX_VIEWS);
 std::vector<std::vector<YoloPrediction>> yolo_predictions(MAX_VIEWS);
 std::string yolo_model_path = "";
 
-// YOLO DragRect storage - stores BoundingBox objects for interactive manipulation
 std::vector<std::vector<BoundingBox>> yolo_drag_boxes(MAX_VIEWS);
-std::vector<int> yolo_active_bbox_idx(MAX_VIEWS, -1); // Track active YOLO bbox per camera
+std::vector<int> yolo_active_bbox_idx(MAX_VIEWS, -1); 
+
+// User-drawn bbox tracking
+std::vector<int> user_active_bbox_idx(MAX_VIEWS, -1); // Track active user-drawn bbox per camera
 
 float calculateIoU(const YoloPrediction& a, const YoloPrediction& b) {
     float x1_a = a.x - a.w / 2.0f;
@@ -1481,6 +1482,11 @@ int main(int, char **) {
                                 }
                             }
                             
+                            // Update global active bbox tracking for this camera
+                            if (j < user_active_bbox_idx.size()) {
+                                user_active_bbox_idx[j] = active_bbox_idx;
+                            }
+                            
                             // Plot multiple bounding boxes
                             for (int bbox_idx = 0; bbox_idx < keypoints_map[current_frame_num]->bbox2d_list[j].size(); bbox_idx++) {
                                 BoundingBox& bbox = keypoints_map[current_frame_num]->bbox2d_list[j][bbox_idx];
@@ -1621,6 +1627,26 @@ int main(int, char **) {
                                                 }
                                             }
                                         }
+                                        
+                                        if (is_active_bbox) {
+                                            u32 *active_kp = &(bbox.active_kp_id[j]);
+                                            
+                                            if (ImGui::IsKeyPressed(ImGuiKey_A, true)) {
+                                                if (*active_kp <= 0) {
+                                                    *active_kp = 0;
+                                                } else {
+                                                    (*active_kp)--;
+                                                }
+                                            }
+
+                                            if (ImGui::IsKeyPressed(ImGuiKey_D, true)) {
+                                                if (*active_kp >= skeleton->num_nodes - 1) {
+                                                    *active_kp = skeleton->num_nodes - 1;
+                                                } else {
+                                                    (*active_kp)++;
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -1710,7 +1736,6 @@ int main(int, char **) {
                 if (slider_just_changed) {
                     std::cout << "main, seeking: " << slider_frame_number
                               << std::endl;
-
                     for (int i = 0; i < scene->num_cams; i++) {
                         scene->seek_context[i].seek_frame =
                             (uint64_t)slider_frame_number;
@@ -1838,96 +1863,250 @@ int main(int, char **) {
                 
                 // Check if skeleton is valid and has nodes before creating the table
                 if (skeleton && skeleton->num_nodes > 0) {
-                    const int rows_count = scene->num_cams;
-                    const int columns_count = skeleton->num_nodes + 1;
-
-                    static ImGuiTableFlags table_flags =
-                        ImGuiTableFlags_ScrollX | ImGuiTableFlags_ScrollY |
-                        ImGuiTableFlags_SizingFixedFit |
-                        ImGuiTableFlags_BordersOuter |
-                        ImGuiTableFlags_BordersInnerH |
-                        ImGuiTableFlags_Hideable | ImGuiTableFlags_Resizable |
-                        ImGuiTableFlags_HighlightHoveredColumn;
-
-                    if (ImGui::BeginTable(
-                            "table_angled_headers", columns_count, table_flags,
-                            ImVec2(0.0f, TEXT_BASE_HEIGHT * 12))) {
-                        ImGui::TableSetupColumn(
-                            "Name", ImGuiTableColumnFlags_NoHide |
-                                        ImGuiTableColumnFlags_NoReorder);
-                        for (int column = 1; column < columns_count; column++)
-                            ImGui::TableSetupColumn(
-                                skeleton->node_names[column - 1].c_str(),
-                                ImGuiTableColumnFlags_AngledHeader |
-                                    ImGuiTableColumnFlags_WidthFixed);
-                        ImGui::TableSetupScrollFreeze(1, 2);
-
-                        ImGui::
-                            TableAngledHeadersRow(); // Draw angled headers
-                                                     // for all columns with
-                                                     // the
-                                                     // ImGuiTableColumnFlags_AngledHeader
-                                                     // flag.
-                        ImGui::TableHeadersRow(); // Draw remaining headers
-                                                  // and allow access to
-                                                  // context-menu and other
-                                                  // functions.
-
-                        for (int row = 0; row < rows_count; row++) {
-                            ImGui::PushID(row);
-                            ImGui::TableNextRow();
-
-                            if (is_view_focused[row] && keypoints_find) {
-                                ImU32 row_bg_color = ImGui::GetColorU32(
-                                    ImVec4(0.7f, 0.3f, 0.3f, 0.65f));
-                                ImGui::TableSetBgColor(
-                                    ImGuiTableBgTarget_RowBg0, row_bg_color);
+                    // Different table behavior based on skeleton configuration
+                    if (skeleton->has_skeleton && skeleton->has_bbox && keypoints_find) {
+                        // Show bounding box keypoints table
+                        int bbox_count = 0;
+                        
+                        // Count total bounding boxes across all cameras
+                        for (int cam = 0; cam < scene->num_cams; cam++) {
+                            if (keypoints_map[current_frame_num]->bbox2d_list[cam].size() > 0) {
+                                bbox_count += keypoints_map[current_frame_num]->bbox2d_list[cam].size();
                             }
+                        }
+                        
+                        if (bbox_count > 0) {
+                            const int columns_count = skeleton->num_nodes + 1;
 
-                            ImGui::TableSetColumnIndex(0);
-                            ImGui::AlignTextToFramePadding();
-                            ImGui::Text(camera_names[row].c_str());
-                            for (int column = 1; column < columns_count;
-                                 column++)
-                                if (ImGui::TableSetColumnIndex(column)) {
-                                    if (keypoints_find) {
-                                        ImVec4 node_color;
-                                        if (keypoints_map[current_frame_num]
-                                                ->active_id[row] ==
-                                            column - 1) {
-                                            node_color = (ImVec4)ImColor::HSV(
-                                                0.8, 1.0f, 1.0f);
-                                        } else {
-                                            if (keypoints_map[current_frame_num]
-                                                    ->keypoints2d[row]
-                                                                 [column - 1]
-                                                    .is_labeled) {
-                                                node_color =
-                                                    skeleton
-                                                        ->node_colors[column -
-                                                                      1];
-                                                node_color.w = 0.9;
+                            static ImGuiTableFlags table_flags =
+                                ImGuiTableFlags_ScrollX | ImGuiTableFlags_ScrollY |
+                                ImGuiTableFlags_SizingFixedFit |
+                                ImGuiTableFlags_BordersOuter |
+                                ImGuiTableFlags_BordersInnerH |
+                                ImGuiTableFlags_Hideable | ImGuiTableFlags_Resizable |
+                                ImGuiTableFlags_HighlightHoveredColumn;
+
+                            if (ImGui::BeginTable(
+                                    "table_bbox_keypoints", columns_count, table_flags,
+                                    ImVec2(0.0f, TEXT_BASE_HEIGHT * 12))) {
+                                ImGui::TableSetupColumn(
+                                    "Bbox", ImGuiTableColumnFlags_NoHide |
+                                                ImGuiTableColumnFlags_NoReorder);
+                                for (int column = 1; column < columns_count; column++)
+                                    ImGui::TableSetupColumn(
+                                        skeleton->node_names[column - 1].c_str(),
+                                        ImGuiTableColumnFlags_AngledHeader |
+                                            ImGuiTableColumnFlags_WidthFixed);
+                                ImGui::TableSetupScrollFreeze(1, 2);
+
+                                ImGui::TableAngledHeadersRow();
+                                ImGui::TableHeadersRow();
+
+                                // Iterate through all bounding boxes
+                                int bbox_row = 0;
+                                
+                                // Use stored active bbox information from plot context
+                                int active_cam = -1;
+                                int active_bbox_global = -1;
+                                
+                                // Find the focused camera with an active bbox
+                                for (int cam = 0; cam < scene->num_cams && cam < user_active_bbox_idx.size(); cam++) {
+                                    if (is_view_focused[cam] && user_active_bbox_idx[cam] != -1) {
+                                        // Verify the active bbox still exists and has keypoints
+                                        if (user_active_bbox_idx[cam] < keypoints_map[current_frame_num]->bbox2d_list[cam].size()) {
+                                            BoundingBox& bbox = keypoints_map[current_frame_num]->bbox2d_list[cam][user_active_bbox_idx[cam]];
+                                            if (bbox.state == RectTwoPoints && bbox.has_bbox_keypoints && bbox.bbox_keypoints2d) {
+                                                active_cam = cam;
+                                                active_bbox_global = user_active_bbox_idx[cam];
+                                                break;
                                             }
                                         }
-
-                                        if (keypoints_map[current_frame_num]
-                                                ->keypoints2d[row][column - 1]
-                                                .is_triangulated) {
-                                            ImGui::TextColored(
-                                                ImVec4(1.0f, 1.0f, 1.0f, 1.0f),
-                                                "T");
-                                        }
-
-                                        ImU32 cell_bg_color =
-                                            ImGui::GetColorU32(node_color);
-                                        ImGui::TableSetBgColor(
-                                            ImGuiTableBgTarget_CellBg,
-                                            cell_bg_color);
                                     }
                                 }
-                            ImGui::PopID();
+                                
+                                // If no active bbox found from tracking, fall back to first bbox in focused camera
+                                if (active_cam == -1) {
+                                    for (int cam = 0; cam < scene->num_cams; cam++) {
+                                        if (is_view_focused[cam] && keypoints_map[current_frame_num]->bbox2d_list[cam].size() > 0) {
+                                            for (int bbox_idx = 0; bbox_idx < keypoints_map[current_frame_num]->bbox2d_list[cam].size(); bbox_idx++) {
+                                                BoundingBox& bbox = keypoints_map[current_frame_num]->bbox2d_list[cam][bbox_idx];
+                                                if (bbox.state == RectTwoPoints && bbox.has_bbox_keypoints && bbox.bbox_keypoints2d) {
+                                                    active_cam = cam;
+                                                    active_bbox_global = bbox_idx;
+                                                    break;
+                                                }
+                                            }
+                                            break;
+                                        }
+                                    }
+                                }
+                                
+                                // Render the table with highlighting
+                                bbox_row = 0;
+                                for (int cam = 0; cam < scene->num_cams; cam++) {
+                                    for (int bbox_idx = 0; bbox_idx < keypoints_map[current_frame_num]->bbox2d_list[cam].size(); bbox_idx++) {
+                                        BoundingBox& bbox = keypoints_map[current_frame_num]->bbox2d_list[cam][bbox_idx];
+                                        
+                                        // Only show completed bboxes with keypoints
+                                        if (bbox.state == RectTwoPoints && bbox.has_bbox_keypoints && bbox.bbox_keypoints2d) {
+                                            ImGui::PushID(bbox_row);
+                                            ImGui::TableNextRow();
+
+                                            // Highlight row for active bounding box
+                                            bool is_active_bbox_row = (cam == active_cam && bbox_idx == active_bbox_global);
+                                            if (is_active_bbox_row) {
+                                                // Bright blue background for active bbox row
+                                                ImU32 row_bg_color = ImGui::GetColorU32(
+                                                    ImVec4(0.2f, 0.4f, 0.8f, 0.7f)); // Vibrant blue
+                                                ImGui::TableSetBgColor(
+                                                    ImGuiTableBgTarget_RowBg0, row_bg_color);
+                                            } else if (is_view_focused[cam]) {
+                                                // Red background for focused camera (when not active bbox)
+                                                ImU32 row_bg_color = ImGui::GetColorU32(
+                                                    ImVec4(0.7f, 0.3f, 0.3f, 0.65f));
+                                                ImGui::TableSetBgColor(
+                                                    ImGuiTableBgTarget_RowBg0, row_bg_color);
+                                            }
+
+                                            ImGui::TableSetColumnIndex(0);
+                                            ImGui::AlignTextToFramePadding();
+                                            // Show bbox number with camera identifier
+                                            ImGui::Text("C%d-B%d", cam, bbox_idx);
+                                            
+                                            for (int column = 1; column < columns_count; column++) {
+                                                if (ImGui::TableSetColumnIndex(column)) {
+                                                    ImVec4 node_color = ImVec4(0, 0, 0, 0); // Transparent by default
+                                                    
+                                                    // Check if this is the active keypoint for this bbox
+                                                    if (bbox.active_kp_id && bbox.active_kp_id[cam] == column - 1) {
+                                                        // Vibrant blue color for active keypoint
+                                                        node_color = (ImVec4)ImColor::HSV(0.6f, 1.0f, 1.0f); // Vibrant blue (HSV: 216°, 100%, 100%)
+                                                    } else {
+                                                        // Check if keypoint is labeled
+                                                        if (bbox.bbox_keypoints2d[cam][column - 1].is_labeled) {
+                                                            node_color = skeleton->node_colors[column - 1];
+                                                            node_color.w = 0.9;
+                                                        }
+                                                    }
+
+                                                    // Show triangulation status
+                                                    if (bbox.bbox_keypoints2d[cam][column - 1].is_triangulated) {
+                                                        ImGui::TextColored(
+                                                            ImVec4(1.0f, 1.0f, 1.0f, 1.0f),
+                                                            "T");
+                                                    }
+
+                                                    ImU32 cell_bg_color = ImGui::GetColorU32(node_color);
+                                                    ImGui::TableSetBgColor(
+                                                        ImGuiTableBgTarget_CellBg,
+                                                        cell_bg_color);
+                                                }
+                                            }
+                                            ImGui::PopID();
+                                            bbox_row++;
+                                        }
+                                    }
+                                }
+                                ImGui::EndTable();
+                            }
+                        } else {
+                            ImGui::Text("No bounding boxes with keypoints found");
                         }
-                        ImGui::EndTable();
+                    } else if (skeleton->has_skeleton && !skeleton->has_bbox) {
+                        // Show regular camera keypoints table
+                        const int rows_count = scene->num_cams;
+                        const int columns_count = skeleton->num_nodes + 1;
+
+                        static ImGuiTableFlags table_flags =
+                            ImGuiTableFlags_ScrollX | ImGuiTableFlags_ScrollY |
+                            ImGuiTableFlags_SizingFixedFit |
+                            ImGuiTableFlags_BordersOuter |
+                            ImGuiTableFlags_BordersInnerH |
+                            ImGuiTableFlags_Hideable | ImGuiTableFlags_Resizable |
+                            ImGuiTableFlags_HighlightHoveredColumn;
+
+                        if (ImGui::BeginTable(
+                                "table_angled_headers", columns_count, table_flags,
+                                ImVec2(0.0f, TEXT_BASE_HEIGHT * 12))) {
+                            ImGui::TableSetupColumn(
+                                "Name", ImGuiTableColumnFlags_NoHide |
+                                            ImGuiTableColumnFlags_NoReorder);
+                            for (int column = 1; column < columns_count; column++)
+                                ImGui::TableSetupColumn(
+                                    skeleton->node_names[column - 1].c_str(),
+                                    ImGuiTableColumnFlags_AngledHeader |
+                                        ImGuiTableColumnFlags_WidthFixed);
+                            ImGui::TableSetupScrollFreeze(1, 2);
+
+                            ImGui::
+                                TableAngledHeadersRow(); // Draw angled headers
+                                                         // for all columns with
+                                                         // the
+                                                         // ImGuiTableColumnFlags_AngledHeader
+                                                         // flag.
+                            ImGui::TableHeadersRow(); // Draw remaining headers
+                                                      // and allow access to
+                                                      // context-menu and other
+                                                      // functions.
+
+                            for (int row = 0; row < rows_count; row++) {
+                                ImGui::PushID(row);
+                                ImGui::TableNextRow();
+
+                                if (is_view_focused[row] && keypoints_find) {
+                                    ImU32 row_bg_color = ImGui::GetColorU32(
+                                        ImVec4(0.7f, 0.3f, 0.3f, 0.65f));
+                                    ImGui::TableSetBgColor(
+                                        ImGuiTableBgTarget_RowBg0, row_bg_color);
+                                }
+
+                                ImGui::TableSetColumnIndex(0);
+                                ImGui::AlignTextToFramePadding();
+                                ImGui::Text(camera_names[row].c_str());
+                                for (int column = 1; column < columns_count;
+                                     column++)
+                                    if (ImGui::TableSetColumnIndex(column)) {
+                                        if (keypoints_find) {
+                                            ImVec4 node_color;
+                                            if (keypoints_map[current_frame_num]
+                                                    ->active_id[row] ==
+                                                column - 1) {
+                                                node_color = (ImVec4)ImColor::HSV(
+                                                    0.8, 1.0f, 1.0f);
+                                            } else {
+                                                if (keypoints_map[current_frame_num]
+                                                        ->keypoints2d[row]
+                                                                     [column - 1]
+                                                        .is_labeled) {
+                                                    node_color =
+                                                        skeleton
+                                                            ->node_colors[column -
+                                                                          1];
+                                                    node_color.w = 0.9;
+                                                }
+                                            }
+
+                                            if (keypoints_map[current_frame_num]
+                                                    ->keypoints2d[row][column - 1]
+                                                    .is_triangulated) {
+                                                ImGui::TextColored(
+                                                    ImVec4(1.0f, 1.0f, 1.0f, 1.0f),
+                                                    "T");
+                                            }
+
+                                            ImU32 cell_bg_color =
+                                                ImGui::GetColorU32(node_color);
+                                            ImGui::TableSetBgColor(
+                                                ImGuiTableBgTarget_CellBg,
+                                                cell_bg_color);
+                                        }
+                                    }
+                                ImGui::PopID();
+                            }
+                            ImGui::EndTable();
+                        }
+                    } else {
+                        ImGui::Text("Bounding box mode: No keypoints to display");
                     }
                 } else {
                     ImGui::Text("Bounding box mode: No keypoints to display");
@@ -2016,9 +2195,61 @@ int main(int, char **) {
                 if (ImGui::Button("Save Labeled Data") ||
                     (ImGui::GetIO().KeyCtrl &&
                      ImGui::IsKeyPressed(ImGuiKey_S, false))) {
-                    save_keypoints(keypoints_map, skeleton,
-                                   keypoints_root_folder, scene->num_cams,
-                                   camera_names, &input_is_imgs, imgs_names);
+                    
+                    // Detect what type of data we have and save accordingly
+                    if (skeleton->has_skeleton && !skeleton->has_bbox) {
+                        save_keypoints(keypoints_map, skeleton,
+                                       keypoints_root_folder, scene->num_cams,
+                                       camera_names, &input_is_imgs, imgs_names);
+                        std::cout << "Saved skeleton keypoints data" << std::endl;
+                    }
+                    else if (!skeleton->has_skeleton && skeleton->has_bbox) {
+                        save_bboxes(keypoints_map, skeleton,
+                                    keypoints_root_folder, scene->num_cams,
+                                    camera_names, &input_is_imgs, imgs_names);
+                        std::cout << "Saved bounding boxes data" << std::endl;
+                    }
+                    else if (skeleton->has_skeleton && skeleton->has_bbox) {
+                        bool has_bbox_keypoints = false;
+                        for (const auto& [frame_num, keypoints] : keypoints_map) {
+                            if (!keypoints) continue;
+                            for (int cam_id = 0; cam_id < scene->num_cams && cam_id < MAX_VIEWS && !has_bbox_keypoints; cam_id++) {
+                                for (const auto& bbox : keypoints->bbox2d_list[cam_id]) {
+                                    if (bbox.state == RectTwoPoints && bbox.has_bbox_keypoints) {
+                                        has_bbox_keypoints = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (has_bbox_keypoints) break;
+                        }
+                        
+                        if (has_bbox_keypoints) {
+                            // Save both skeleton keypoints and bbox keypoints
+                            save_keypoints(keypoints_map, skeleton,
+                                           keypoints_root_folder, scene->num_cams,
+                                           camera_names, &input_is_imgs, imgs_names);
+                            save_bbox_keypoints(keypoints_map, skeleton,
+                                                keypoints_root_folder, scene->num_cams,
+                                                camera_names, &input_is_imgs, imgs_names);
+                            std::cout << "Saved skeleton keypoints and bounding box keypoints data" << std::endl;
+                        } else {
+                            save_keypoints(keypoints_map, skeleton,
+                                           keypoints_root_folder, scene->num_cams,
+                                           camera_names, &input_is_imgs, imgs_names);
+                            save_bboxes(keypoints_map, skeleton,
+                                        keypoints_root_folder, scene->num_cams,
+                                        camera_names, &input_is_imgs, imgs_names);
+                            std::cout << "Saved skeleton keypoints and bounding boxes data" << std::endl;
+                        }
+                    }
+                    else {
+                        save_keypoints(keypoints_map, skeleton,
+                                       keypoints_root_folder, scene->num_cams,
+                                       camera_names, &input_is_imgs, imgs_names);
+                        std::cout << "Saved skeleton keypoints data (fallback)" << std::endl;
+                    }
+                    
                     last_saved = time(NULL);
                 }
                 if (last_saved != static_cast<std::time_t>(-1)) {
@@ -2226,14 +2457,17 @@ int main(int, char **) {
                 
                 ImGui::Text("Total labeled frames : %zu", labeled_count);
 
-                if (ImGui::Button("Select YOLO")) {
-                    IGFD::FileDialogConfig config;
-                    config.countSelectionMax = 1;
-                    config.path = "/home/user/data"; // fix later
-                    config.flags = ImGuiFileDialogFlags_Modal;
-                    ImGuiFileDialog::Instance()->OpenDialog(
-                        "ChooseYoloModel", "Choose YOLO Model",
-                        ".pt", config);
+                // Only show YOLO button when current skeleton has bounding boxes
+                if (skeleton->has_bbox) {
+                    if (ImGui::Button("Select YOLO")) {
+                        IGFD::FileDialogConfig config;
+                        config.countSelectionMax = 1;
+                        config.path = "/home/user/data"; // fix later
+                        config.flags = ImGuiFileDialogFlags_Modal;
+                        ImGuiFileDialog::Instance()->OpenDialog(
+                            "ChooseYoloModel", "Choose YOLO Model",
+                            ".pt", config);
+                    }
                 }
 
                 if (ImGuiFileDialog::Instance()->Display("ChooseYoloModel")) {

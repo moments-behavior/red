@@ -11,12 +11,21 @@
 #include <opencv2/sfm.hpp>
 #include <iostream>
 #include <algorithm>
+#include <sstream>
 
 struct ProjectContext {
     std::string root_dir;
     std::vector<std::string> input_file_names;
     std::vector<std::string> camera_names;
 };
+
+int load_bboxes(std::map<u32, KeyPoints *> &keypoints_map,
+                SkeletonContext *skeleton, std::string bbox_file,
+                int cam_idx, render_scene *scene, std::string &error_message);
+
+int load_bbox_keypoints(std::map<u32, KeyPoints *> &keypoints_map,
+                        SkeletonContext *skeleton, std::string bbox_kp_file,
+                        int cam_idx, render_scene *scene, std::string &error_message);
 
 static void draw_cv_contours(std::vector<cv::Rect> boxes,
                              std::vector<std::string> labels,
@@ -428,6 +437,176 @@ void save_keypoints(std::map<u32, KeyPoints *> keypoints_map,
     }
 }
 
+// Save bounding boxes to CSV files
+void save_bboxes(std::map<u32, KeyPoints *> keypoints_map,
+                 SkeletonContext *skeleton, std::string root_dir,
+                 int num_cameras, std::vector<std::string> &camera_names,
+                 bool *input_is_imgs,
+                 const std::vector<std::string> &input_files) {
+    std::string now = current_date_time();
+    std::string save_folder = root_dir + "/" + now;
+    std::filesystem::create_directories(save_folder);
+    
+    // Create keypoints3d.csv (empty for bbox-only workflows)
+    std::string keypoints3d_filename = save_folder + "/keypoints3d.csv";
+    std::ofstream keypoints3d_file(keypoints3d_filename);
+    keypoints3d_file << skeleton->name << "\n";
+    keypoints3d_file.close();
+    
+    std::vector<std::ofstream> bbox_files;
+    
+    for (uint i = 0; i < num_cameras; i++) {
+        std::string filename_cam = save_folder + "/" + camera_names[i] + "_bboxes.csv";
+        std::ofstream output_file_cam(filename_cam);
+        bbox_files.push_back(std::move(output_file_cam));
+    }
+
+    // Write header for bbox files
+    for (uint i = 0; i < num_cameras; i++) {
+        bbox_files[i] << skeleton->name << "\n";
+        bbox_files[i] << "frame,bbox_id,class_id,confidence,x_min,y_min,x_max,y_max\n";
+    }
+
+    std::map<u32, KeyPoints *>::iterator it = keypoints_map.begin();
+    while (it != keypoints_map.end()) {
+        uint frame = it->first;
+        KeyPoints *keypoints = it->second;
+
+        for (int cam = 0; cam < num_cameras; cam++) {
+            bool frame_written = false;
+            
+            for (size_t bbox_idx = 0; bbox_idx < keypoints->bbox2d_list[cam].size(); bbox_idx++) {
+                const auto& bbox = keypoints->bbox2d_list[cam][bbox_idx];
+                
+                // Only save completed bounding boxes
+                if (bbox.state == RectTwoPoints && bbox.rect != nullptr) {
+                    if (!frame_written) {
+                        // Write frame identifier only once per camera per frame
+                        frame_written = true;
+                    }
+                    
+                    // Write frame number or filename
+                    if (*input_is_imgs) {
+                        bbox_files[cam] << input_files[frame];
+                    } else {
+                        bbox_files[cam] << frame;
+                    }
+                    
+                    // Write bbox data: frame,bbox_id,class_id,confidence,x_min,y_min,x_max,y_max
+                    bbox_files[cam] << "," << bbox_idx << "," << bbox.class_id 
+                                   << "," << bbox.confidence 
+                                   << "," << bbox.rect->X.Min << "," << bbox.rect->Y.Min
+                                   << "," << bbox.rect->X.Max << "," << bbox.rect->Y.Max << "\n";
+                }
+            }
+        }
+        it++;
+    }
+    
+    for (uint i = 0; i < num_cameras; i++) {
+        bbox_files[i].close();
+    }
+}
+
+// Save bounding boxes with keypoints to CSV files
+void save_bbox_keypoints(std::map<u32, KeyPoints *> keypoints_map,
+                        SkeletonContext *skeleton, std::string root_dir,
+                        int num_cameras, std::vector<std::string> &camera_names,
+                        bool *input_is_imgs,
+                        const std::vector<std::string> &input_files) {
+    std::string now = current_date_time();
+    std::string save_folder = root_dir + "/" + now;
+    std::filesystem::create_directories(save_folder);
+    
+    // Create keypoints3d.csv (empty for bbox workflows without 3D triangulation)
+    std::string keypoints3d_filename = save_folder + "/keypoints3d.csv";
+    std::ofstream keypoints3d_file(keypoints3d_filename);
+    keypoints3d_file << skeleton->name << "\n";
+    keypoints3d_file.close();
+    
+    // Create camera CSV files for 2D keypoints (from bbox keypoints)
+    std::vector<std::ofstream> cam_files;
+    for (uint i = 0; i < num_cameras; i++) {
+        std::string cam_filename = save_folder + "/" + camera_names[i] + ".csv";
+        std::ofstream cam_file(cam_filename);
+        cam_file << skeleton->name << "\n";
+        cam_files.push_back(std::move(cam_file));
+    }
+    
+    std::vector<std::ofstream> bbox_kp_files;
+    
+    for (uint i = 0; i < num_cameras; i++) {
+        std::string filename_cam = save_folder + "/" + camera_names[i] + "_bbox_keypoints.csv";
+        std::ofstream output_file_cam(filename_cam);
+        bbox_kp_files.push_back(std::move(output_file_cam));
+    }
+
+    // Write header for bbox keypoint files
+    for (uint i = 0; i < num_cameras; i++) {
+        bbox_kp_files[i] << skeleton->name << "\n";
+        bbox_kp_files[i] << "frame,bbox_id,class_id,confidence,x_min,y_min,x_max,y_max,keypoint_id,kp_x,kp_y,is_labeled\n";
+    }
+
+    std::map<u32, KeyPoints *>::iterator it = keypoints_map.begin();
+    while (it != keypoints_map.end()) {
+        uint frame = it->first;
+        KeyPoints *keypoints = it->second;
+
+        for (int cam = 0; cam < num_cameras; cam++) {
+            for (size_t bbox_idx = 0; bbox_idx < keypoints->bbox2d_list[cam].size(); bbox_idx++) {
+                const auto& bbox = keypoints->bbox2d_list[cam][bbox_idx];
+                
+                // Only save completed bounding boxes with keypoints
+                if (bbox.state == RectTwoPoints && bbox.rect != nullptr && 
+                    bbox.has_bbox_keypoints && bbox.bbox_keypoints2d != nullptr) {
+                    
+                    // Write 2D keypoints to camera CSV files (for loading compatibility)
+                    for (int kp_id = 0; kp_id < skeleton->num_nodes; kp_id++) {
+                        if (bbox.bbox_keypoints2d[cam][kp_id].is_labeled) {
+                            // Write frame number or filename
+                            if (*input_is_imgs) {
+                                cam_files[cam] << input_files[frame];
+                            } else {
+                                cam_files[cam] << frame;
+                            }
+                            
+                            cam_files[cam] << "," << kp_id 
+                                          << "," << bbox.bbox_keypoints2d[cam][kp_id].position.x
+                                          << "," << bbox.bbox_keypoints2d[cam][kp_id].position.y << "\n";
+                        }
+                    }
+                    
+                    for (int kp_id = 0; kp_id < skeleton->num_nodes; kp_id++) {
+                        // Write frame number or filename
+                        if (*input_is_imgs) {
+                            bbox_kp_files[cam] << input_files[frame];
+                        } else {
+                            bbox_kp_files[cam] << frame;
+                        }
+                        
+                        // Write bbox and keypoint data
+                        bbox_kp_files[cam] << "," << bbox_idx << "," << bbox.class_id 
+                                          << "," << bbox.confidence 
+                                          << "," << bbox.rect->X.Min << "," << bbox.rect->Y.Min
+                                          << "," << bbox.rect->X.Max << "," << bbox.rect->Y.Max
+                                          << "," << kp_id 
+                                          << "," << bbox.bbox_keypoints2d[cam][kp_id].position.x
+                                          << "," << bbox.bbox_keypoints2d[cam][kp_id].position.y
+                                          << "," << (bbox.bbox_keypoints2d[cam][kp_id].is_labeled ? 1 : 0) << "\n";
+                    }
+                }
+            }
+        }
+        it++;
+    }
+    
+    // Close all files
+    for (uint i = 0; i < num_cameras; i++) {
+        cam_files[i].close();
+        bbox_kp_files[i].close();
+    }
+}
+
 void load_2d_keypoints_depreciated(std::map<u32, KeyPoints *> &keypoints_map,
                                    SkeletonContext *skeleton,
                                    std::string root_dir, int cam_idx,
@@ -780,8 +959,12 @@ int load_keypoints(std::string keypoints_folder,
                    std::vector<std::string> &camera_names,
                    std::string &error_message) {
 
-    if (scene->num_cams > 1) {
-        // load 3d keypoints
+    // Intelligent loading based on skeleton configuration
+    bool has_skeleton = skeleton->has_skeleton;
+    bool has_bbox = skeleton->has_bbox;
+    
+    // Load 3D keypoints if skeleton supports them and multi-camera setup
+    if (has_skeleton && scene->num_cams > 1) {
         std::string kp_3d = keypoints_folder + "/keypoints3d.csv";
         std::ifstream fin(kp_3d);
         if (!fin) {
@@ -856,9 +1039,6 @@ int load_keypoints(std::string keypoints_folder,
                                     .is_triangulated = true;
                             }
                         }
-
-                        // std::cout << "frame: " << frame_num << "  node: " << node << "  x: " << keypoints_map[frame_num]->keypoints3d[node].x \
-                        //  << "  y: " << keypoints_map[frame_num]->keypoints3d[node].y << "  z: " << keypoints_map[frame_num]->keypoints3d[node].z << std::endl;
                     }
                 }
             }
@@ -867,23 +1047,65 @@ int load_keypoints(std::string keypoints_folder,
         fin.close();
     }
 
+    // Load appropriate files based on skeleton configuration
     std::vector<std::thread> handles;
     std::vector<std::promise<int>> promises(scene->num_cams);
     std::vector<std::future<int>> results;
     std::vector<std::string> error_messages(scene->num_cams);
 
     for (int i = 0; i < scene->num_cams; i++) {
-        std::string kp2d = keypoints_folder + "/" + camera_names[i] + ".csv";
         results.push_back(promises[i].get_future());
 
-        handles.emplace_back(
-            [&keypoints_map, skeleton, kp2d, i, scene, &error_messages,
-             &promises](int cam_idx) {
-                int ret = load_2d_keypoints(keypoints_map, skeleton, kp2d, i,
-                                            scene, error_messages[i]);
-                promises[cam_idx].set_value(ret);
-            },
-            i);
+        // Determine which files to load based on skeleton configuration
+        if (has_skeleton && has_bbox) {
+            std::string bbox_kp_file = keypoints_folder + "/" + camera_names[i] + "_bbox_keypoints.csv";
+            std::string kp2d_file = keypoints_folder + "/" + camera_names[i] + ".csv";
+            
+            handles.emplace_back(
+                [&keypoints_map, skeleton, bbox_kp_file, kp2d_file, i, scene, &error_messages,
+                 &promises](int cam_idx) {
+                    int ret = load_bbox_keypoints(keypoints_map, skeleton, bbox_kp_file, i, scene, error_messages[i]);
+                    if (ret != 0) {
+                        // Fallback to regular 2D keypoints
+                        ret = load_2d_keypoints(keypoints_map, skeleton, kp2d_file, i, scene, error_messages[i]);
+                    }
+                    promises[cam_idx].set_value(ret);
+                },
+                i);
+        } else if (has_bbox && !has_skeleton) {
+            std::string bbox_kp_file = keypoints_folder + "/" + camera_names[i] + "_bbox_keypoints.csv";
+            std::string bbox_file = keypoints_folder + "/" + camera_names[i] + "_bboxes.csv";
+            
+            handles.emplace_back(
+                [&keypoints_map, skeleton, bbox_kp_file, bbox_file, i, scene, &error_messages,
+                 &promises](int cam_idx) {
+                    // Try bbox keypoints first
+                    int ret = load_bbox_keypoints(keypoints_map, skeleton, bbox_kp_file, i, scene, error_messages[i]);
+                    if (ret != 0) {
+                        // Fallback to bbox only
+                        ret = load_bboxes(keypoints_map, skeleton, bbox_file, i, scene, error_messages[i]);
+                    }
+                    promises[cam_idx].set_value(ret);
+                },
+                i);
+        } else if (has_skeleton && !has_bbox) {
+            std::string kp2d_file = keypoints_folder + "/" + camera_names[i] + ".csv";
+            
+            handles.emplace_back(
+                [&keypoints_map, skeleton, kp2d_file, i, scene, &error_messages,
+                 &promises](int cam_idx) {
+                    int ret = load_2d_keypoints(keypoints_map, skeleton, kp2d_file, i, scene, error_messages[i]);
+                    promises[cam_idx].set_value(ret);
+                },
+                i);
+        } else {
+            handles.emplace_back(
+                [&error_messages, &promises](int cam_idx) {
+                    error_messages[cam_idx] = "Skeleton configuration has neither skeleton nor bbox support";
+                    promises[cam_idx].set_value(1);
+                },
+                i);
+        }
     }
 
     // Join threads
@@ -904,6 +1126,209 @@ int load_keypoints(std::string keypoints_folder,
         return 1;
     }
 
+    return 0;
+}
+
+int load_bboxes(std::map<u32, KeyPoints *> &keypoints_map,
+                SkeletonContext *skeleton, std::string bbox_file,
+                int cam_idx, render_scene *scene, std::string &error_message) {
+    std::ifstream fin;
+    fin.open(bbox_file);
+    if (fin.fail()) {
+        error_message = "Could not open file: " + bbox_file;
+        return 1;
+    }
+
+    std::string line;
+    std::string delimeter = ",";
+    size_t pos = 0;
+    std::string token;
+    int line_num = 0;
+
+    while (std::getline(fin, line)) {
+        if (line.empty()) continue;
+        
+        if (line_num == 0) {
+            // Check skeleton name
+            if (line.compare(skeleton->name) != 0) {
+                error_message = "Skeleton doesn't match. Expected: " + skeleton->name + " Got: " + line;
+                fin.close();
+                return 1;
+            }
+        } else if (line_num == 1) {
+            // Skip header line
+        } else {
+            std::vector<std::string> tokens;
+            std::stringstream ss(line);
+            std::string item;
+            
+            while (std::getline(ss, item, ',')) {
+                tokens.push_back(item);
+            }
+            
+            if (tokens.size() >= 8) {
+                uint frame_num;
+                try {
+                    frame_num = std::stoul(tokens[0]);
+                } catch (const std::exception& e) {
+                    continue;
+                }
+                
+                int bbox_id = std::stoi(tokens[1]);
+                int class_id = std::stoi(tokens[2]);
+                float confidence = std::stof(tokens[3]);
+                double x_min = std::stod(tokens[4]);
+                double y_min = std::stod(tokens[5]);
+                double x_max = std::stod(tokens[6]);
+                double y_max = std::stod(tokens[7]);
+                
+                // Create keypoints entry if it doesn't exist
+                if (keypoints_map.find(frame_num) == keypoints_map.end()) {
+                    KeyPoints *keypoints = (KeyPoints *)malloc(sizeof(KeyPoints));
+                    allocate_keypoints(keypoints, scene, skeleton);
+                    keypoints_map[frame_num] = keypoints;
+                }
+                
+                // Create bounding box
+                BoundingBox bbox;
+                bbox.rect = new ImPlotRect(x_min, x_max, y_min, y_max);
+                bbox.state = RectTwoPoints;
+                bbox.class_id = class_id;
+                bbox.confidence = confidence;
+                bbox.has_bbox_keypoints = false;
+                bbox.bbox_keypoints2d = nullptr;
+                bbox.active_kp_id = nullptr;
+                
+                while (keypoints_map[frame_num]->bbox2d_list[cam_idx].size() <= bbox_id) {
+                    BoundingBox default_bbox;
+                    default_bbox.rect = nullptr;
+                    default_bbox.state = RectNull;
+                    default_bbox.class_id = -1;
+                    default_bbox.confidence = 0.0f;
+                    default_bbox.has_bbox_keypoints = false;
+                    default_bbox.bbox_keypoints2d = nullptr;
+                    default_bbox.active_kp_id = nullptr;
+                    keypoints_map[frame_num]->bbox2d_list[cam_idx].push_back(default_bbox);
+                }
+                
+                if (bbox_id < keypoints_map[frame_num]->bbox2d_list[cam_idx].size()) {
+                    keypoints_map[frame_num]->bbox2d_list[cam_idx][bbox_id] = bbox;
+                } else {
+                    keypoints_map[frame_num]->bbox2d_list[cam_idx].push_back(bbox);
+                }
+            }
+        }
+        line_num++;
+    }
+    
+    fin.close();
+    return 0;
+}
+
+// Load bounding boxes with keypoints from CSV files
+int load_bbox_keypoints(std::map<u32, KeyPoints *> &keypoints_map,
+                       SkeletonContext *skeleton, std::string bbox_kp_file,
+                       int cam_idx, render_scene *scene, std::string &error_message) {
+    std::ifstream fin;
+    fin.open(bbox_kp_file);
+    if (fin.fail()) {
+        error_message = "Could not open file: " + bbox_kp_file;
+        return 1;
+    }
+
+    std::string line;
+    int line_num = 0;
+
+    while (std::getline(fin, line)) {
+        if (line.empty()) continue;
+        
+        if (line_num == 0) {
+            // Check skeleton name
+            if (line.compare(skeleton->name) != 0) {
+                error_message = "Skeleton doesn't match. Expected: " + skeleton->name + " Got: " + line;
+                fin.close();
+                return 1;
+            }
+        } else if (line_num == 1) {
+            // Skip header line
+        } else {
+            std::vector<std::string> tokens;
+            std::stringstream ss(line);
+            std::string item;
+            
+            while (std::getline(ss, item, ',')) {
+                tokens.push_back(item);
+            }
+            
+            if (tokens.size() >= 12) {
+                uint frame_num;
+                try {
+                    frame_num = std::stoul(tokens[0]);
+                } catch (const std::exception& e) {
+                    continue;
+                }
+                
+                int bbox_id = std::stoi(tokens[1]);
+                int class_id = std::stoi(tokens[2]);
+                float confidence = std::stof(tokens[3]);
+                double x_min = std::stod(tokens[4]);
+                double y_min = std::stod(tokens[5]);
+                double x_max = std::stod(tokens[6]);
+                double y_max = std::stod(tokens[7]);
+                int keypoint_id = std::stoi(tokens[8]);
+                double kp_x = std::stod(tokens[9]);
+                double kp_y = std::stod(tokens[10]);
+                bool is_labeled = std::stoi(tokens[11]) != 0;
+                
+                // Create keypoints entry if it doesn't exist
+                if (keypoints_map.find(frame_num) == keypoints_map.end()) {
+                    KeyPoints *keypoints = (KeyPoints *)malloc(sizeof(KeyPoints));
+                    allocate_keypoints(keypoints, scene, skeleton);
+                    keypoints_map[frame_num] = keypoints;
+                }
+                
+                // Ensure the bbox list is large enough
+                while (keypoints_map[frame_num]->bbox2d_list[cam_idx].size() <= bbox_id) {
+                    BoundingBox default_bbox;
+                    default_bbox.rect = nullptr;
+                    default_bbox.state = RectNull;
+                    default_bbox.class_id = -1;
+                    default_bbox.confidence = 0.0f;
+                    default_bbox.has_bbox_keypoints = false;
+                    default_bbox.bbox_keypoints2d = nullptr;
+                    default_bbox.active_kp_id = nullptr;
+                    keypoints_map[frame_num]->bbox2d_list[cam_idx].push_back(default_bbox);
+                }
+                
+                // Get reference to the bounding box
+                BoundingBox* bbox = &keypoints_map[frame_num]->bbox2d_list[cam_idx][bbox_id];
+                
+                // Initialize bounding box if it's the first keypoint
+                if (keypoint_id == 0 || bbox->rect == nullptr) {
+                    bbox->rect = new ImPlotRect(x_min, x_max, y_min, y_max);
+                    bbox->state = RectTwoPoints;
+                    bbox->class_id = class_id;
+                    bbox->confidence = confidence;
+                    
+                    // Allocate keypoints if not already done
+                    if (!bbox->has_bbox_keypoints) {
+                        allocate_bbox_keypoints(bbox, scene, skeleton);
+                    }
+                }
+                
+                // Set keypoint data
+                if (keypoint_id < skeleton->num_nodes && bbox->bbox_keypoints2d != nullptr) {
+                    bbox->bbox_keypoints2d[cam_idx][keypoint_id].position.x = kp_x;
+                    bbox->bbox_keypoints2d[cam_idx][keypoint_id].position.y = kp_y;
+                    bbox->bbox_keypoints2d[cam_idx][keypoint_id].is_labeled = is_labeled;
+                    bbox->bbox_keypoints2d[cam_idx][keypoint_id].is_triangulated = false;
+                }
+            }
+        }
+        line_num++;
+    }
+    
+    fin.close();
     return 0;
 }
 
