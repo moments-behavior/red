@@ -96,6 +96,8 @@ int main(int, char **) {
     start_folder_name = "/media/ro/LaCie/orma";
     ImVec4 clear_color = ImVec4(0.0f, 0.0f, 0.0f, 1.00f);
     ImGuiIO &io = ImGui::GetIO();
+    bool trigger_image_save  = false;
+    bool do_save_images_realtime = false;
 
     ImPlotStyle &style = ImPlot::GetStyle();
     ImVec4 *colors = style.Colors;
@@ -616,7 +618,9 @@ int main(int, char **) {
             }
 
 
-            if (ImGui::Button("Export current frame") || ImGui::IsKeyPressed(ImGuiKey_Z, true)){
+            // ImGui::Checkbox("Trigger image save", &do_save_images_realtime);
+
+            if (ImGui::Button("Export current frame") || ImGui::IsKeyPressed(ImGuiKey_Z, true) || trigger_image_save) {
                 std::string export_folder = root_dir + "/exported_frames";                
                 std::filesystem::create_directory(export_folder);
                 for (int j = 0; j < scene->num_cams; j++)
@@ -627,14 +631,14 @@ int main(int, char **) {
 
                     
                     cv::Mat frame = cv::Mat(2200, 3208, CV_8UC4, scene->display_buffer[j][select_corr_head].frame);
-                    cv::Mat frame_3ch;
-                    cv::cvtColor(frame, frame_3ch, cv::COLOR_RGBA2BGRA);
-                    // cv::cvtColor(frame, frame_bgra, cv::COLOR_RGBA2BGRA);
-                    // frame = cv::cvtColor(frame, cv::COLOR_RGBA2BGRA);
-                    cv::imwrite(export_file, frame_3ch);
+                    cv::Mat frame_out;
+                    cv::cvtColor(frame, frame_out, cv::COLOR_RGBA2BGRA);
+                    cv::imwrite(export_file, frame_out);
 
                     
                 }    
+
+                trigger_image_save = false;
             }
 
 
@@ -740,6 +744,13 @@ int main(int, char **) {
                                     keypoints_map[current_frame_num] =
                                         keypoints;
                                 }
+
+                                trigger_image_save = true;
+                                if(trigger_image_save)  {
+                                    std::cout << "Triggering image save for "
+                                              << current_frame_num << std::endl;
+                                }
+
                             }
 
                             if (keypoints_find) {
@@ -1171,9 +1182,9 @@ int main(int, char **) {
                 if (lower_it == keypoints_map.begin()) {
                     lower_it = keypoints_map.end();
                 }
-                std::cout << "Current frame: " << current_frame_num
-                          << ", lower: " << (*lower_it).first
-                          << ", upper: " << (*upper_it).first << std::endl;
+                // std::cout << "Current frame: " << current_frame_num
+                //           << ", lower: " << (*lower_it).first
+                //           << ", upper: " << (*upper_it).first << std::endl;
 
                 ImGui::Separator();
                 ImGui::Text("Next labeled frame : %d", (*upper_it).first);
