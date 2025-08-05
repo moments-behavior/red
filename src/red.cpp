@@ -306,12 +306,11 @@ bool frameHasYoloDetections(int frame_num, const std::map<u32, KeyPoints*>& keyp
     if (it == keypoints_map.end() || !it->second) return false;
     
     // Check if any camera has bounding boxes with confidence < 1.0 (indicating YOLO detections)
-    // User-drawn bounding boxes typically have confidence = 1.0
     for (int cam_id = 0; cam_id < MAX_VIEWS && cam_id < it->second->bbox2d_list.size(); cam_id++) {
         const auto& bbox_list = it->second->bbox2d_list[cam_id];
         for (const auto& bbox : bbox_list) {
             if (bbox.confidence < 1.0f && bbox.state == RectTwoPoints) {
-                return true; // Found a YOLO detection (confidence < 1.0)
+                return true; 
             }
         }
     }
@@ -2088,7 +2087,11 @@ int main(int, char **) {
                     if (!has_labels && skeleton->has_bbox) {
                         for (int cam_id = 0; cam_id < scene->num_cams && cam_id < MAX_VIEWS && !has_labels; cam_id++) {
                             for (const auto& bbox : keypoints->bbox2d_list[cam_id]) {
-                                if (bbox.confidence >= 1.0f) {
+                                if (bbox.confidence >= 1.0f && bbox.state == RectTwoPoints) {
+                                    has_labels = true;
+                                    break;
+                                }
+                                if (bbox.confidence >= 1.0f && bbox.has_bbox_keypoints) {
                                     for (int kp_id = 0; kp_id < skeleton->num_nodes && !has_labels; kp_id++) {
                                         if (bbox.bbox_keypoints2d && bbox.bbox_keypoints2d[cam_id] && bbox.bbox_keypoints2d[cam_id][kp_id].is_labeled) {
                                             has_labels = true;
@@ -2126,7 +2129,11 @@ int main(int, char **) {
                         if (!has_labels && skeleton->has_bbox) {
                             for (int cam_id = 0; cam_id < scene->num_cams && cam_id < MAX_VIEWS && !has_labels; cam_id++) {
                                 for (const auto& bbox : keypoints->bbox2d_list[cam_id]) {
-                                    if (bbox.confidence >= 1.0f) {
+                                    if (bbox.confidence >= 1.0f && bbox.state == RectTwoPoints) {
+                                        has_labels = true;
+                                        break;
+                                    }
+                                    if (bbox.confidence >= 1.0f && bbox.has_bbox_keypoints) {
                                         for (int kp_id = 0; kp_id < skeleton->num_nodes && !has_labels; kp_id++) {
                                             if (bbox.bbox_keypoints2d && bbox.bbox_keypoints2d[cam_id] && bbox.bbox_keypoints2d[cam_id][kp_id].is_labeled) {
                                                 has_labels = true;
@@ -2197,7 +2204,11 @@ int main(int, char **) {
                     if (!has_labels && skeleton->has_bbox) {
                         for (int cam_id = 0; cam_id < scene->num_cams && cam_id < MAX_VIEWS && !has_labels; cam_id++) {
                             for (const auto& bbox : keypoints->bbox2d_list[cam_id]) {
-                                if (bbox.confidence >= 1.0f) {
+                                if (bbox.confidence >= 1.0f && bbox.state == RectTwoPoints) {
+                                    has_labels = true;
+                                    break;
+                                }
+                                if (bbox.confidence >= 1.0f && bbox.has_bbox_keypoints) {
                                     for (int kp_id = 0; kp_id < skeleton->num_nodes && !has_labels; kp_id++) {
                                         if (bbox.bbox_keypoints2d && bbox.bbox_keypoints2d[cam_id] && bbox.bbox_keypoints2d[cam_id][kp_id].is_labeled) {
                                             has_labels = true;
