@@ -737,8 +737,7 @@ int main(int, char **) {
                                 // create keypoints
                                 if (!keypoints_find) {
                                     // not found
-                                    KeyPoints *keypoints =
-                                        (KeyPoints *)malloc(sizeof(KeyPoints));
+                                    KeyPoints *keypoints =(KeyPoints *)malloc(sizeof(KeyPoints));
                                     allocate_keypoints(keypoints, scene,
                                                        skeleton);
                                     keypoints_map[current_frame_num] =
@@ -753,22 +752,31 @@ int main(int, char **) {
 
                             }
 
+                            if (ImGui::IsKeyPressed(ImGuiKey_X, false)) {
+
+  
+
+                                KeyPoints *keypoints = (KeyPoints *)malloc(sizeof(KeyPoints));
+                                allocate_keypoints_to_previous_label(keypoints, scene,skeleton,keypoints_map,current_frame_num);
+                                keypoints_map[current_frame_num] = keypoints;
+
+                                trigger_image_save = true;
+                                if(trigger_image_save)  {
+                                    std::cout << "Triggering image save for "
+                                              << current_frame_num << std::endl;
+                                }
+
+                            }
+
                             if (keypoints_find) {
-                                u32 *kp = &(keypoints_map[current_frame_num]
-                                                ->active_id[j]);
+                                u32 *kp = &(keypoints_map[current_frame_num]->active_id[j]);
+
                                 if (ImGui::IsKeyPressed(ImGuiKey_W, false)) {
                                     // labeling sequentially each view
-                                    ImPlotPoint mouse =
-                                        ImPlot::GetPlotMousePos();
-                                    keypoints_map[current_frame_num]
-                                        ->keypoints2d[j][*kp]
-                                        .position = {mouse.x, mouse.y};
-                                    keypoints_map[current_frame_num]
-                                        ->keypoints2d[j][*kp]
-                                        .is_labeled = true;
-                                    keypoints_map[current_frame_num]
-                                        ->keypoints2d[j][*kp]
-                                        .is_triangulated = false;
+                                    ImPlotPoint mouse = ImPlot::GetPlotMousePos();
+                                    keypoints_map[current_frame_num]->keypoints2d[j][*kp].position = {mouse.x, mouse.y};
+                                    keypoints_map[current_frame_num]->keypoints2d[j][*kp].is_labeled = true;
+                                    keypoints_map[current_frame_num]->keypoints2d[j][*kp].is_triangulated = false;
                                     if (*kp < (skeleton->num_nodes - 1)) {
                                         (*kp)++;
                                     }
@@ -1179,17 +1187,11 @@ int main(int, char **) {
                     upper_it = keypoints_map.begin();
                 }
                 auto lower_it = keypoints_map.lower_bound(current_frame_num);
-                // if (lower_it == keypoints_map.end()) {
-                //     lower_it = keypoints_map.begin();
-                // }
+                
                 if(lower_it != keypoints_map.begin()) {
                     --lower_it; // Move to the previous element
-                }
+                }                
                 
-                // std::cout << "Current frame: " << current_frame_num
-                //           << ", lower: " << (*lower_it).first
-                //           << ", upper: " << (*upper_it).first << std::endl;
-
                 ImGui::Separator();
                 ImGui::Text("Prev. labeled frame : %d", (*lower_it).first);
                 ImGui::Text("Next labeled frame : %d", (*upper_it).first);

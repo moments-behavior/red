@@ -479,6 +479,53 @@ void allocate_keypoints(KeyPoints *keypoints, render_scene *scene,
     }
 }
 
+
+void allocate_keypoints_to_previous_label(  KeyPoints *keypoints, 
+                                            render_scene *scene, 
+                                            SkeletonContext *skeleton, 
+                                            std::map<u32, KeyPoints *> &keypoints_map, 
+                                            int current_frame_num
+                                        ) {
+    // does not do triangulation  -- just allocates keypoints from previous label
+    // allocate memory for storing keypoints
+    keypoints->active_id = (u32 *)malloc(sizeof(u32) * scene->num_cams);
+    keypoints->keypoints3d = (triple_d *)malloc(sizeof(triple_d) * skeleton->num_nodes);
+    keypoints->keypoints2d = (KeyPoints2D **)malloc(sizeof(KeyPoints2D *) * scene->num_cams);
+    for (u32 j = 0; j < scene->num_cams; j++) {
+        keypoints->keypoints2d[j] = (KeyPoints2D *)malloc(sizeof(KeyPoints2D) * skeleton->num_nodes);
+    }
+
+    auto lower_it = keypoints_map.lower_bound(current_frame_num);                
+    if(lower_it != keypoints_map.begin()) {
+        --lower_it; // Move to the previous element
+    }  
+    int previous_frame_num = (*lower_it).first;
+    
+
+
+    // initialize to previous label number
+    for (u32 j = 0; j < scene->num_cams; j++) {
+        keypoints->active_id[j] = 0;
+        
+        u32 *kp = &(keypoints_map[previous_frame_num]->active_id[j]);
+
+        for (u32 k = 0; k < skeleton->num_nodes; k++) {
+            keypoints->keypoints2d[j][k].is_labeled = true;
+            keypoints->keypoints2d[j][k].is_triangulated = false;
+            keypoints->keypoints2d[j][k].position.x = keypoints_map[previous_frame_num]->keypoints2d[j][k].position.x;
+            keypoints->keypoints2d[j][k].position.y = keypoints_map[previous_frame_num]->keypoints2d[j][k].position.y;
+        }
+    }
+
+    // triangulation data will not be copied
+    for (u32 k = 0; k < skeleton->num_nodes; k++) {
+        keypoints->keypoints3d[k].x = 1E7;
+        keypoints->keypoints3d[k].y = 1E7;
+        keypoints->keypoints3d[k].z = 1E7;
+    }
+}
+
+
 void free_keypoints(KeyPoints *keypoints, render_scene *scene) {
     if (!keypoints)
         return;
