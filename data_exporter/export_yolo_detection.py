@@ -26,6 +26,65 @@ except ImportError:
 from utils import *
 
 
+def resize_image_for_yolo(image, target_size=640):
+    """
+    Resize image to YOLO training format (square with padding).
+    
+    Args:
+        image: Input image (numpy array)
+        target_size: Target square size (default: 640)
+    
+    Returns:
+        Resized image and scaling factors for bounding box adjustment
+    """
+    h, w = image.shape[:2]
+    
+    # Calculate scaling factor to fit image in square while maintaining aspect ratio
+    scale = target_size / max(h, w)
+    
+    # Calculate new dimensions
+    new_w = int(w * scale)
+    new_h = int(h * scale)
+    
+    # Resize image
+    resized = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+    
+    # Create square canvas and center the resized image
+    canvas = np.zeros((target_size, target_size, 3), dtype=np.uint8)
+    
+    # Calculate padding offsets to center the image
+    y_offset = (target_size - new_h) // 2
+    x_offset = (target_size - new_w) // 2
+    
+    canvas[y_offset:y_offset + new_h, x_offset:x_offset + new_w] = resized
+    
+    return canvas, scale, x_offset, y_offset
+
+
+def adjust_bbox_for_resize(bbox, original_width, original_height, scale, x_offset, y_offset):
+    """
+    Adjust bounding box coordinates after image resizing.
+    
+    Args:
+        bbox: Original bounding box [x_min, y_min, x_max, y_max]
+        original_width, original_height: Original image dimensions
+        scale: Scaling factor used for resizing
+        x_offset, y_offset: Padding offsets in the resized image
+    
+    Returns:
+        Adjusted bounding box coordinates
+    """
+    x_min, y_min, x_max, y_max = bbox
+    
+    # Scale coordinates
+    x_min_new = x_min * scale + x_offset
+    y_min_new = y_min * scale + y_offset
+    x_max_new = x_max * scale + x_offset
+    y_max_new = y_max * scale + y_offset
+    
+    return [x_min_new, y_min_new, x_max_new, y_max_new]
+
+
 def cast_address_to_1d_bytearray(base_address, size):
     """Convert CUDA memory address to numpy array for PyNvVideoCodec."""
     return np.ctypeslib.as_array(
@@ -97,16 +156,14 @@ def parse_bbox_csv(csv_path):
             x_max = float(parts[6])
             y_max = float(parts[7])
             
-            # Only include high-confidence detections (manual labels have confidence = 1.0)
-            if confidence >= 0.5:
-                if frame_id not in labels:
-                    labels[frame_id] = []
-                
-                labels[frame_id].append({
-                    'class_id': class_id,
-                    'bbox': [x_min, y_min, x_max, y_max],
-                    'confidence': confidence
-                })
+            if frame_id not in labels:
+                labels[frame_id] = []
+            
+            labels[frame_id].append({
+                'class_id': class_id,
+                'bbox': [x_min, y_min, x_max, y_max],
+                'confidence': confidence
+            })
     
     return labels
 
@@ -124,6 +181,8 @@ def convert_to_yolo_format(bbox, img_width, img_height):
     # Normalize to image dimensions
     x_center /= img_width
     y_center /= img_height
+    # reflect y coordinate across x axis
+    y_center = 1.0 - y_center
     width /= img_width
     height /= img_height
     
@@ -195,7 +254,7 @@ def create_data_yaml(output_dir, class_names, splits):
 
 
 def export_yolo_detection_dataset(label_dir, video_dir, output_dir, class_file=None, 
-                                 train_ratio=0.7, val_ratio=0.2, test_ratio=0.1):
+                                 train_ratio=0.7, val_ratio=0.2, test_ratio=0.1, image_size=640):
     """Export complete YOLO detection dataset."""
     
     # Load class names
@@ -322,13 +381,24 @@ def export_yolo_detection_dataset(label_dir, video_dir, output_dir, class_file=N
                 print(f"Failed to extract frame {frame_id}")
                 continue
             
-            # Save image
+            # Store original dimensions
+            original_height, original_width = frame.shape[:2]
+            
+            # Resize image for YOLO training
+            if image_size != original_width or image_size != original_height:
+                resized_frame, scale, x_offset, y_offset = resize_image_for_yolo(frame, image_size)
+            else:
+                resized_frame = frame
+                scale = 1.0
+                x_offset = 0
+                y_offset = 0
+            
+            # Save resized image
             img_filename = f"{frame_id}.jpg"
             img_path = os.path.join(images_dir, img_filename)
-            cv2.imwrite(img_path, frame)
+            cv2.imwrite(img_path, resized_frame)
             
-            # Generate YOLO format labels
-            img_height, img_width = frame.shape[:2]
+            # Generate YOLO format labels with adjusted coordinates
             label_filename = f"{frame_id}.txt"
             label_path = os.path.join(labels_dir, label_filename)
             
@@ -337,9 +407,14 @@ def export_yolo_detection_dataset(label_dir, video_dir, output_dir, class_file=N
                     class_id = label['class_id']
                     bbox = label['bbox']
                     
-                    # Convert to YOLO format
+                    # Adjust bounding box for resizing
+                    adjusted_bbox = adjust_bbox_for_resize(
+                        bbox, original_width, original_height, scale, x_offset, y_offset
+                    )
+                    
+                    # Convert to YOLO format using resized image dimensions
                     x_center, y_center, width, height = convert_to_yolo_format(
-                        bbox, img_width, img_height
+                        adjusted_bbox, image_size, image_size
                     )
                     
                     # Write YOLO format: class_id x_center y_center width height
@@ -402,6 +477,8 @@ def main():
                        help='Ratio of data for testing (default: 0.1)')
     parser.add_argument('--seed', type=int, default=42,
                        help='Random seed for reproducible splits')
+    parser.add_argument('--image_size', type=int, default=640,
+                       help='Square image size for YOLO training (default: 640)')
     
     args = parser.parse_args()
     
@@ -433,7 +510,8 @@ def main():
             class_file=args.class_file,
             train_ratio=args.train_ratio,
             val_ratio=args.val_ratio,
-            test_ratio=args.test_ratio
+            test_ratio=args.test_ratio,
+            image_size=args.image_size
         )
     except Exception as e:
         print(f"Error during export: {e}")

@@ -27,6 +27,103 @@ except ImportError:
 from utils import *
 
 
+def resize_image_for_yolo(image, target_size=640):
+    """
+    Resize image to YOLO training format (square with padding).
+    
+    Args:
+        image: Input image (numpy array)
+        target_size: Target square size (default: 640)
+    
+    Returns:
+        Resized image and scaling factors for bounding box adjustment
+    """
+    h, w = image.shape[:2]
+    
+    # Calculate scaling factor to fit image in square while maintaining aspect ratio
+    scale = target_size / max(h, w)
+    
+    # Calculate new dimensions
+    new_w = int(w * scale)
+    new_h = int(h * scale)
+    
+    # Resize image
+    resized = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+    
+    # Create square canvas and center the resized image
+    canvas = np.zeros((target_size, target_size, 3), dtype=np.uint8)
+    
+    # Calculate padding offsets to center the image
+    y_offset = (target_size - new_h) // 2
+    x_offset = (target_size - new_w) // 2
+    
+    canvas[y_offset:y_offset + new_h, x_offset:x_offset + new_w] = resized
+    
+    return canvas, scale, x_offset, y_offset
+
+
+def adjust_bbox_for_resize(bbox, original_width, original_height, scale, x_offset, y_offset):
+    """
+    Adjust bounding box coordinates after image resizing.
+    
+    Args:
+        bbox: Original bounding box [x_min, y_min, x_max, y_max]
+        original_width, original_height: Original image dimensions
+        scale: Scaling factor used for resizing
+        x_offset, y_offset: Padding offsets in the resized image
+    
+    Returns:
+        Adjusted bounding box coordinates
+    """
+    x_min, y_min, x_max, y_max = bbox
+    
+    # Scale coordinates
+    x_min_new = x_min * scale + x_offset
+    y_min_new = y_min * scale + y_offset
+    x_max_new = x_max * scale + x_offset
+    y_max_new = y_max * scale + y_offset
+
+    # Reflect bounding box across x axis
+    y_min_new = original_height - y_min_new
+    y_max_new = original_height - y_max_new
+    
+    return [x_min_new, y_min_new, x_max_new, y_max_new]
+
+
+def adjust_keypoints_for_resize(keypoints, original_width, original_height, scale, x_offset, y_offset):
+    """
+    Adjust keypoint coordinates after image resizing.
+    
+    Args:
+        keypoints: List of keypoints with 'x', 'y', 'visible' fields
+        original_width, original_height: Original image dimensions
+        scale: Scaling factor used for resizing
+        x_offset, y_offset: Padding offsets in the resized image
+    
+    Returns:
+        Adjusted keypoints
+    """
+    adjusted_keypoints = []
+    for kp in keypoints:
+        if kp['visible'] > 0:
+            # Scale and offset coordinates
+            new_x = kp['x'] * scale + x_offset
+            new_y = kp['y'] * scale + y_offset
+        else:
+            # Keep original coordinates for non-visible keypoints
+            new_x = kp['x']
+            new_y = kp['y']
+        
+        adjusted_keypoints.append({
+            'id': kp['id'],
+            'x': new_x,
+            'y': new_y,
+            'visible': kp['visible']
+        })
+    
+    return adjusted_keypoints
+
+
 def cast_address_to_1d_bytearray(base_address, size):
     """Convert CUDA memory address to numpy array for PyNvVideoCodec."""
     return np.ctypeslib.as_array(
@@ -122,18 +219,16 @@ def parse_bbox_csv(csv_path):
             x_max = float(parts[6])
             y_max = float(parts[7])
             
-            # Only include high-confidence detections (manual labels have confidence = 1.0)
-            if confidence >= 0.5:
-                if frame_id not in labels:
-                    labels[frame_id] = []
-                
-                labels[frame_id].append({
-                    'bbox_id': bbox_id,
-                    'class_id': class_id,
-                    'bbox': [x_min, y_min, x_max, y_max],
-                    'confidence': confidence,
-                    'keypoints': None  # Will be filled from keypoint data
-                })
+            if frame_id not in labels:
+                labels[frame_id] = []
+            
+            labels[frame_id].append({
+                'bbox_id': bbox_id,
+                'class_id': class_id,
+                'bbox': [x_min, y_min, x_max, y_max],
+                'confidence': confidence,
+                'keypoints': None  # Will be filled from keypoint data
+            })
     
     return labels
 
@@ -217,6 +312,7 @@ def convert_bbox_to_yolo_format(bbox, img_width, img_height):
     # Normalize to image dimensions
     x_center /= img_width
     y_center /= img_height
+    y_center = 1.0 - y_center  # Reflect y coordinate across x axis
     width /= img_width
     height /= img_height
     
@@ -229,7 +325,8 @@ def convert_keypoints_to_yolo_format(keypoints, img_width, img_height):
     
     for kp in keypoints:
         x = kp['x'] / img_width if kp['visible'] > 0 else 0
-        y = kp['y'] / img_height if kp['visible'] > 0 else 0
+        y = 1.0 - kp['y'] / img_height if kp['visible'] > 0 else 0
+        # Reflect y coordinate across x axis
         v = kp['visible']
         yolo_keypoints.extend([x, y, v])
     
@@ -304,7 +401,7 @@ def create_data_yaml(output_dir, skeleton_config, splits):
 
 
 def export_yolo_pose_dataset(label_dir, video_dir, output_dir, skeleton_file=None,
-                            train_ratio=0.7, val_ratio=0.2, test_ratio=0.1):
+                            train_ratio=0.7, val_ratio=0.2, test_ratio=0.1, image_size=640):
     """Export complete YOLO pose dataset."""
     
     # Load skeleton configuration
@@ -446,13 +543,18 @@ def export_yolo_pose_dataset(label_dir, video_dir, output_dir, skeleton_file=Non
                 print(f"Failed to extract frame {frame_id}")
                 continue
             
+            # Resize image for YOLO if needed
+            original_height, original_width = frame.shape[:2]
+            if original_width != image_size or original_height != image_size:
+                frame = resize_image_for_yolo(frame, image_size)
+            
             # Save image
             img_filename = f"{frame_id}.jpg"
             img_path = os.path.join(images_dir, img_filename)
             cv2.imwrite(img_path, frame)
             
             # Generate YOLO pose format labels
-            img_height, img_width = frame.shape[:2]
+            img_height, img_width = frame.shape[:2]  # Use resized dimensions
             label_filename = f"{frame_id}.txt"
             label_path = os.path.join(labels_dir, label_filename)
             
@@ -461,6 +563,12 @@ def export_yolo_pose_dataset(label_dir, video_dir, output_dir, skeleton_file=Non
                     class_id = bbox_data['class_id']
                     bbox = bbox_data['bbox']
                     keypoints = bbox_data.get('keypoints', [])
+                    
+                    # Adjust bbox coordinates for resized image
+                    if original_width != image_size or original_height != image_size:
+                        bbox = adjust_bbox_for_resize(bbox, original_width, original_height, image_size)
+                        if keypoints:
+                            keypoints = adjust_keypoints_for_resize(keypoints, original_width, original_height, image_size)
                     
                     # Convert bbox to YOLO format
                     x_center, y_center, width, height = convert_bbox_to_yolo_format(
@@ -560,6 +668,8 @@ def main():
                        help='Ratio of data for testing (default: 0.1)')
     parser.add_argument('--seed', type=int, default=42,
                        help='Random seed for reproducible splits')
+    parser.add_argument('--image_size', type=int, default=640,
+                       help='Size of output images (will be resized to image_size x image_size, default: 640)')
     
     args = parser.parse_args()
     
@@ -591,7 +701,8 @@ def main():
             skeleton_file=args.skeleton_file,
             train_ratio=args.train_ratio,
             val_ratio=args.val_ratio,
-            test_ratio=args.test_ratio
+            test_ratio=args.test_ratio,
+            image_size=args.image_size
         )
     except Exception as e:
         print(f"Error during export: {e}")

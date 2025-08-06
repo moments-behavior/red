@@ -12,6 +12,7 @@
 #include "skeleton.h"
 #include "utils.h"
 #include "yolo_detection.h"
+#include "yolo_export.h"
 #include <ImGuiFileDialog.h>
 #include <chrono>
 #include <iostream>
@@ -415,6 +416,23 @@ int main(int, char **) {
     std::string skeleton_creator_name = "CustomSkeleton";
     bool skeleton_creator_has_bbox = false;
     bool skeleton_creator_has_skeleton = true;
+    std::string skeleton_file_path = "";  // Track currently loaded skeleton file
+    
+    // YOLO Export Tool variables
+    bool show_yolo_export_tool = false;
+    char yolo_export_label_dir[512] = "/home/user/data/labels";
+    char yolo_export_video_dir[512] = "/home/user/data/videos";
+    char yolo_export_output_dir[512] = "/home/user/data/yolo_datasets";
+    char yolo_export_skeleton_file[512] = "";
+    char yolo_export_class_names_file[512] = "";
+    int yolo_export_image_size = 640;
+    float yolo_export_train_ratio = 0.7f;
+    float yolo_export_val_ratio = 0.2f;
+    float yolo_export_test_ratio = 0.1f;
+    int yolo_export_seed = 42;
+    int yolo_export_mode = 0; // 0 = detection, 1 = pose
+    bool yolo_export_in_progress = false;
+    std::string yolo_export_status = "";
     
     // Bounding box class management
     std::vector<std::string> bbox_class_names = {"Class_1"};
@@ -629,6 +647,9 @@ int main(int, char **) {
                     if (ImGui::MenuItem("Skeleton Creator")) {
                         show_skeleton_creator = true;
                     }
+                    if (ImGui::MenuItem("YOLO Export Tool")) {
+                        show_yolo_export_tool = true;
+                    }
                     ImGui::EndMenu();
                 }
                 
@@ -836,6 +857,7 @@ int main(int, char **) {
                     if (load_calibration) {
                         skeleton_dir =
                             ImGuiFileDialog::Instance()->GetCurrentPath();
+                        skeleton_file_path = skeleton_file.begin()->second;  // Store the skeleton file path
                         skeleton_initialize("", skeleton_file.begin()->second,
                                             skeleton, SP_LOAD);
                         plot_keypoints_flag = true;
@@ -2422,7 +2444,8 @@ int main(int, char **) {
                     
                     bool has_labels = false;
                     
-                    if (skeleton->has_skeleton) {
+                    // Check for skeleton keypoint labels
+                    if (skeleton->has_skeleton && !has_labels) {
                         for (int cam_id = 0; cam_id < scene->num_cams && cam_id < MAX_VIEWS && !has_labels; cam_id++) {
                             for (int kp_id = 0; kp_id < skeleton->num_nodes && !has_labels; kp_id++) {
                                 if (keypoints->keypoints2d[cam_id][kp_id].is_labeled) {
@@ -2432,14 +2455,21 @@ int main(int, char **) {
                         }
                     }
                     
-                    if (!has_labels && skeleton->has_bbox) {
+                    // Check for bounding box labels (both manual and YOLO detections)
+                    if (skeleton->has_bbox && !has_labels) {
                         for (int cam_id = 0; cam_id < scene->num_cams && cam_id < MAX_VIEWS && !has_labels; cam_id++) {
                             for (const auto& bbox : keypoints->bbox2d_list[cam_id]) {
                                 if (bbox.confidence >= 1.0f && bbox.state == RectTwoPoints) {
                                     has_labels = true;
                                     break;
                                 }
-                                if (bbox.confidence >= 1.0f && bbox.has_bbox_keypoints) {
+                                // Count YOLO detections (confidence < 1.0 but > threshold)
+                                if (bbox.confidence >= 0.5f && bbox.confidence < 1.0f && bbox.state == RectTwoPoints) {
+                                    has_labels = true;
+                                    break;
+                                }
+                                // Check for bbox keypoint labels
+                                if (bbox.has_bbox_keypoints) {
                                     for (int kp_id = 0; kp_id < skeleton->num_nodes && !has_labels; kp_id++) {
                                         if (bbox.bbox_keypoints2d && bbox.bbox_keypoints2d[cam_id] && bbox.bbox_keypoints2d[cam_id][kp_id].is_labeled) {
                                             has_labels = true;
@@ -2651,6 +2681,52 @@ int main(int, char **) {
                 }
             }
             // close
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        // YOLO Export Tool Dialog Handlers
+        if (ImGuiFileDialog::Instance()->Display("ChooseYoloExportLabelDir")) {
+            if (ImGuiFileDialog::Instance()->IsOk()) {
+                std::string selected_path = ImGuiFileDialog::Instance()->GetCurrentPath();
+                strncpy(yolo_export_label_dir, selected_path.c_str(), sizeof(yolo_export_label_dir) - 1);
+                yolo_export_label_dir[sizeof(yolo_export_label_dir) - 1] = '\0';
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        if (ImGuiFileDialog::Instance()->Display("ChooseYoloExportVideoDir")) {
+            if (ImGuiFileDialog::Instance()->IsOk()) {
+                std::string selected_path = ImGuiFileDialog::Instance()->GetCurrentPath();
+                strncpy(yolo_export_video_dir, selected_path.c_str(), sizeof(yolo_export_video_dir) - 1);
+                yolo_export_video_dir[sizeof(yolo_export_video_dir) - 1] = '\0';
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        if (ImGuiFileDialog::Instance()->Display("ChooseYoloExportOutputDir")) {
+            if (ImGuiFileDialog::Instance()->IsOk()) {
+                std::string selected_path = ImGuiFileDialog::Instance()->GetCurrentPath();
+                strncpy(yolo_export_output_dir, selected_path.c_str(), sizeof(yolo_export_output_dir) - 1);
+                yolo_export_output_dir[sizeof(yolo_export_output_dir) - 1] = '\0';
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        if (ImGuiFileDialog::Instance()->Display("ChooseYoloExportSkeletonFile")) {
+            if (ImGuiFileDialog::Instance()->IsOk()) {
+                std::string selected_file = ImGuiFileDialog::Instance()->GetFilePathName();
+                strncpy(yolo_export_skeleton_file, selected_file.c_str(), sizeof(yolo_export_skeleton_file) - 1);
+                yolo_export_skeleton_file[sizeof(yolo_export_skeleton_file) - 1] = '\0';
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        if (ImGuiFileDialog::Instance()->Display("ChooseYoloExportClassFile")) {
+            if (ImGuiFileDialog::Instance()->IsOk()) {
+                std::string selected_file = ImGuiFileDialog::Instance()->GetFilePathName();
+                strncpy(yolo_export_class_names_file, selected_file.c_str(), sizeof(yolo_export_class_names_file) - 1);
+                yolo_export_class_names_file[sizeof(yolo_export_class_names_file) - 1] = '\0';
+            }
             ImGuiFileDialog::Instance()->Close();
         }
 
@@ -2957,6 +3033,258 @@ int main(int, char **) {
                         }
                         ImGui::EndTable();
                     }
+                }
+            }
+            ImGui::End();
+        }
+
+        // YOLO Export Tool Window
+        if (show_yolo_export_tool)
+        {
+            ImGui::SetNextWindowSize(ImVec2(600, 700), ImGuiCond_FirstUseEver);
+            if (ImGui::Begin("YOLO Export Tool", &show_yolo_export_tool))
+            {
+                ImGui::SeparatorText("Export Configuration");
+                
+                // Export mode selection
+                const char* export_modes[] = { "Detection Dataset", "Pose Dataset" };
+                if (ImGui::Combo("Export Mode", &yolo_export_mode, export_modes, IM_ARRAYSIZE(export_modes))) {
+                    // Update default values based on mode
+                    if (yolo_export_mode == 0) { // Detection
+                        strcpy(yolo_export_output_dir, "/home/user/data/yolo_detection_dataset");
+                    } else { // Pose
+                        strcpy(yolo_export_output_dir, "/home/user/data/yolo_pose_dataset");
+                        // Set skeleton file to current one if available
+                        if (!skeleton_file_path.empty()) {
+                            strncpy(yolo_export_skeleton_file, skeleton_file_path.c_str(), sizeof(yolo_export_skeleton_file) - 1);
+                            yolo_export_skeleton_file[sizeof(yolo_export_skeleton_file) - 1] = '\0';
+                        }
+                    }
+                }
+                
+                ImGui::Separator();
+                
+                // Directory and file inputs
+                ImGui::Text("Input Directories:");
+                ImGui::InputText("Label Directory", yolo_export_label_dir, sizeof(yolo_export_label_dir));
+                ImGui::SameLine();
+                if (ImGui::Button("Browse##labels")) {
+                    IGFD::FileDialogConfig config;
+                    config.countSelectionMax = 1;
+                    config.path = "/home/user/data";
+                    config.flags = ImGuiFileDialogFlags_Modal;
+                    ImGuiFileDialog::Instance()->OpenDialog(
+                        "ChooseYoloExportLabelDir", "Choose Label Directory",
+                        nullptr, config);
+                }
+                
+                ImGui::InputText("Video Directory", yolo_export_video_dir, sizeof(yolo_export_video_dir));
+                ImGui::SameLine();
+                if (ImGui::Button("Browse##videos")) {
+                    IGFD::FileDialogConfig config;
+                    config.countSelectionMax = 1;
+                    config.path = "/home/user/data";
+                    config.flags = ImGuiFileDialogFlags_Modal;
+                    ImGuiFileDialog::Instance()->OpenDialog(
+                        "ChooseYoloExportVideoDir", "Choose Video Directory",
+                        nullptr, config);
+                }
+                
+                ImGui::InputText("Output Directory", yolo_export_output_dir, sizeof(yolo_export_output_dir));
+                ImGui::SameLine();
+                if (ImGui::Button("Browse##output")) {
+                    IGFD::FileDialogConfig config;
+                    config.countSelectionMax = 1;
+                    config.path = "/home/user/data";
+                    config.flags = ImGuiFileDialogFlags_Modal;
+                    ImGuiFileDialog::Instance()->OpenDialog(
+                        "ChooseYoloExportOutputDir", "Choose Output Directory",
+                        nullptr, config);
+                }
+                
+                ImGui::Separator();
+                
+                // Configuration files
+                if (yolo_export_mode == 1) { // Pose mode
+                    ImGui::Text("Skeleton Configuration:");
+                    ImGui::InputText("Skeleton File", yolo_export_skeleton_file, sizeof(yolo_export_skeleton_file));
+                    ImGui::SameLine();
+                    if (ImGui::Button("Browse##skeleton")) {
+                        IGFD::FileDialogConfig config;
+                        config.countSelectionMax = 1;
+                        config.path = "/home/user/data";
+                        config.flags = ImGuiFileDialogFlags_Modal;
+                        ImGuiFileDialog::Instance()->OpenDialog(
+                            "ChooseYoloExportSkeletonFile", "Choose Skeleton File",
+                            ".json", config);
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button("Use Current")) {
+                        if (!skeleton_file_path.empty()) {
+                            strncpy(yolo_export_skeleton_file, skeleton_file_path.c_str(), sizeof(yolo_export_skeleton_file) - 1);
+                            yolo_export_skeleton_file[sizeof(yolo_export_skeleton_file) - 1] = '\0';
+                        }
+                    }
+                }
+                
+                if (yolo_export_mode == 0) { // Detection mode
+                    ImGui::Text("Class Names (Optional):");
+                    ImGui::InputText("Class Names File", yolo_export_class_names_file, sizeof(yolo_export_class_names_file));
+                    ImGui::SameLine();
+                    if (ImGui::Button("Browse##classes")) {
+                        IGFD::FileDialogConfig config;
+                        config.countSelectionMax = 1;
+                        config.path = "/home/user/data";
+                        config.flags = ImGuiFileDialogFlags_Modal;
+                        ImGuiFileDialog::Instance()->OpenDialog(
+                            "ChooseYoloExportClassFile", "Choose Class Names File",
+                            ".txt", config);
+                    }
+                }
+                
+                ImGui::Separator();
+                
+                // Export parameters
+                ImGui::Text("Export Parameters:");
+                ImGui::SliderInt("Image Size", &yolo_export_image_size, 320, 1280, "%d");
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("Images will be resized to this square size (e.g., 640x640)");
+                }
+                
+                ImGui::SliderFloat("Train Ratio", &yolo_export_train_ratio, 0.1f, 0.9f, "%.2f");
+                ImGui::SliderFloat("Val Ratio", &yolo_export_val_ratio, 0.05f, 0.5f, "%.2f");
+                ImGui::SliderFloat("Test Ratio", &yolo_export_test_ratio, 0.05f, 0.5f, "%.2f");
+                
+                // Ensure ratios sum to 1.0
+                float total_ratio = yolo_export_train_ratio + yolo_export_val_ratio + yolo_export_test_ratio;
+                if (total_ratio > 0.001f) {
+                    ImGui::Text("Total: %.2f", total_ratio);
+                    if (total_ratio > 1.001f || total_ratio < 0.999f) {
+                        ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.0f, 1.0f), "Warning: Ratios should sum to 1.0");
+                        if (ImGui::Button("Normalize Ratios")) {
+                            yolo_export_train_ratio /= total_ratio;
+                            yolo_export_val_ratio /= total_ratio;
+                            yolo_export_test_ratio /= total_ratio;
+                        }
+                    }
+                }
+                
+                ImGui::InputInt("Random Seed", &yolo_export_seed);
+                
+                ImGui::Separator();
+                
+                // Export buttons and status
+                if (!yolo_export_in_progress) {
+                    if (ImGui::Button("Start Export", ImVec2(150, 30))) {
+                        // Validate inputs
+                        bool valid = true;
+                        std::string validation_error;
+                        
+                        if (strlen(yolo_export_label_dir) == 0) {
+                            valid = false;
+                            validation_error = "Label directory is required";
+                        } else if (strlen(yolo_export_video_dir) == 0) {
+                            valid = false;
+                            validation_error = "Video directory is required";
+                        } else if (strlen(yolo_export_output_dir) == 0) {
+                            valid = false;
+                            validation_error = "Output directory is required";
+                        } else if (yolo_export_mode == 1 && strlen(yolo_export_skeleton_file) == 0) {
+                            valid = false;
+                            validation_error = "Skeleton file is required for pose datasets";
+                        }
+                        
+                        if (valid) {
+                            yolo_export_in_progress = true;
+                            yolo_export_status = "Starting export...";
+                            
+                            // Setup export configuration
+                            YoloExport::ExportConfig config;
+                            config.label_dir = std::string(yolo_export_label_dir);
+                            config.video_dir = std::string(yolo_export_video_dir);
+                            config.output_dir = std::string(yolo_export_output_dir);
+                            config.skeleton_file = std::string(yolo_export_skeleton_file);
+                            config.class_names_file = std::string(yolo_export_class_names_file);
+                            config.image_size = yolo_export_image_size;
+                            config.split.train_ratio = yolo_export_train_ratio;
+                            config.split.val_ratio = yolo_export_val_ratio;
+                            config.split.test_ratio = yolo_export_test_ratio;
+                            config.split.seed = yolo_export_seed;
+                            
+                            // Run export in background thread
+                            std::thread export_thread([config, yolo_export_mode, &yolo_export_status, &yolo_export_in_progress]() {
+                                bool success = false;
+                                if (yolo_export_mode == 0) {
+                                    success = YoloExport::export_yolo_detection_dataset(config);
+                                } else {
+                                    success = YoloExport::export_yolo_pose_dataset(config);
+                                }
+                                
+                                // Update status (note: this is not thread-safe, but for simple status updates it should be okay)
+                                if (success) {
+                                    yolo_export_status = "Export completed successfully!";
+                                } else {
+                                    yolo_export_status = "Export failed! Check console for details.";
+                                }
+                                yolo_export_in_progress = false;
+                            });
+                            export_thread.detach();
+                        } else {
+                            yolo_export_status = "Error: " + validation_error;
+                        }
+                    }
+                } else {
+                    ImGui::Text("Export in progress...");
+                    // Simple spinning indicator
+                    static float progress_time = 0.0f;
+                    progress_time += ImGui::GetIO().DeltaTime;
+                    const char* spinner = "|/-\\";
+                    int spinner_index = (int)(progress_time / 0.1f) % 4;
+                    ImGui::SameLine();
+                    ImGui::Text("%c", spinner[spinner_index]);
+                }
+                
+                if (!yolo_export_status.empty()) {
+                    if (yolo_export_status.find("Error") != std::string::npos || yolo_export_status.find("failed") != std::string::npos) {
+                        ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "%s", yolo_export_status.c_str());
+                    } else if (yolo_export_status.find("completed") != std::string::npos) {
+                        ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "%s", yolo_export_status.c_str());
+                    } else {
+                        ImGui::Text("%s", yolo_export_status.c_str());
+                    }
+                }
+                
+                ImGui::Separator();
+                
+                // Quick setup buttons
+                ImGui::Text("Quick Setup:");
+                if (ImGui::Button("Use Current Data")) {
+                    // Set label dir to current keypoints folder
+                    if (!keypoints_root_folder.empty()) {
+                        strncpy(yolo_export_label_dir, keypoints_root_folder.c_str(), sizeof(yolo_export_label_dir) - 1);
+                        yolo_export_label_dir[sizeof(yolo_export_label_dir) - 1] = '\0';
+                    }
+                    
+                    // Set skeleton file to current one
+                    if (!skeleton_file_path.empty()) {
+                        strncpy(yolo_export_skeleton_file, skeleton_file_path.c_str(), sizeof(yolo_export_skeleton_file) - 1);
+                        yolo_export_skeleton_file[sizeof(yolo_export_skeleton_file) - 1] = '\0';
+                    }
+                }
+                
+                ImGui::SameLine();
+                if (ImGui::Button("Reset to Defaults")) {
+                    strcpy(yolo_export_label_dir, "/home/user/data/labels");
+                    strcpy(yolo_export_video_dir, "/home/user/data/videos");
+                    strcpy(yolo_export_output_dir, "/home/user/data/yolo_datasets");
+                    strcpy(yolo_export_skeleton_file, "");
+                    strcpy(yolo_export_class_names_file, "");
+                    yolo_export_image_size = 640;
+                    yolo_export_train_ratio = 0.7f;
+                    yolo_export_val_ratio = 0.2f;
+                    yolo_export_test_ratio = 0.1f;
+                    yolo_export_seed = 42;
+                    yolo_export_status = "";
                 }
             }
             ImGui::End();
