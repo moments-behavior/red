@@ -95,8 +95,8 @@ void decoder_process(DecoderContext *dc_context, FFmpegDemuxer *demuxer,
     do {
         if (seek_info->use_seek) {
             // demuxer.Flush();
-            std::cout << "target_frame_number:" << seek_info->seek_frame
-                      << std::endl;
+            // std::cout << "target_frame_number:" << seek_info->seek_frame
+            //           << std::endl;
 
             // assume every 10s is a keyframe, double check if your video is
             // like that

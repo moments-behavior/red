@@ -7,7 +7,6 @@
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
-#include "imgui_internal.h"
 #include "implot.h"
 #include "render.h"
 #include "skeleton.h"
@@ -45,6 +44,7 @@ struct PlaybackState {
     int to_display_frame_number = 0;
     int read_head = 0;
     bool just_seeked = false;
+    bool pause_seeked = false;
     int slider_frame_number = 0;
     double accumulated_play_time = 0.0;
     std::chrono::steady_clock::time_point last_play_time_start =
@@ -522,6 +522,16 @@ int main(int, char **) {
 
         static int select_corr_head = 0;
         if (video_loaded && (!ps.play_video)) {
+            int visible_idx = 0;
+            if (!ps.pause_seeked) {
+                for (int i = 0; i < scene->num_cams; i++) {
+                    if (window_was_decoding[camera_names[i]]) {
+                        visible_idx = i;
+                        break;
+                    }
+                }
+            }
+
             ImGui::SetNextWindowSize(ImVec2(500, 440), ImGuiCond_FirstUseEver);
             if (ImGui::Begin("Frames in the buffer")) {
                 {
@@ -530,14 +540,17 @@ int main(int, char **) {
                             (i + ps.read_head) % scene->size_of_buffer;
                         char label[32];
                         if (input_is_imgs) {
-                            snprintf(
-                                label, sizeof(label), "%d: %s",
-                                scene->display_buffer[0][seletable_frame_id]
-                                    .frame_number,
-                                imgs_names[i].c_str());
+                            snprintf(label, sizeof(label), "%d: %s",
+                                     scene
+                                         ->display_buffer[visible_idx]
+                                                         [seletable_frame_id]
+                                         .frame_number,
+                                     imgs_names[i].c_str());
                         } else {
                             sprintf(label, "Frame %d",
-                                    scene->display_buffer[0][seletable_frame_id]
+                                    scene
+                                        ->display_buffer[visible_idx]
+                                                        [seletable_frame_id]
                                         .frame_number);
                         }
                         if (ImGui::Selectable(label, ps.pause_selected == i)) {
@@ -563,7 +576,8 @@ int main(int, char **) {
             select_corr_head =
                 (ps.pause_selected + ps.read_head) % scene->size_of_buffer;
             current_frame_num =
-                scene->display_buffer[0][select_corr_head].frame_number;
+                scene->display_buffer[visible_idx][select_corr_head]
+                    .frame_number;
         }
 
         // Render a video frame
@@ -614,30 +628,39 @@ int main(int, char **) {
                                      true);
                 }
 
+                if (!window_was_decoding[win_name] && is_visible &&
+                    !ps.play_video && !ps.pause_seeked) {
+                    // seek if visibility has changed
+                    seek_all_cameras(scene, current_frame_num, video_fps, ps,
+                                     true);
+                    for (auto &[key, value] : window_need_decoding) {
+                        value.store(true);
+                    }
+                }
+
                 if (ps.play_video) {
                     window_need_decoding[win_name].store(is_visible);
-                } else {
-                    window_need_decoding[win_name].store(true);
-                }
+                };
 
                 if (is_visible) {
                     if (ps.play_video) {
                         // if the current frame is ready, upload for display,
                         // otherwise wait for the frame to get ready
-                        // while (
-                        //     scene->display_buffer[j][read_head].frame_number
-                        //     != to_display_frame_number) { std::cout <<
-                        //     win_name
-                        //               << " , read head: " << read_head
-                        //               << ", frame_number: "
-                        //               << scene->display_buffer[j][read_head]
-                        //                      .frame_number
-                        //               << ", to_display_frame_number: "
-                        //               << to_display_frame_number <<
-                        //               std::endl;
+                        // while (scene->display_buffer[j][ps.read_head]
+                        //            .frame_number !=
+                        //        ps.to_display_frame_number) {
+                        //     std::cout
+                        //         << win_name << " , read head: " <<
+                        //         ps.read_head
+                        //         << ", frame_number: "
+                        //         << scene->display_buffer[j][ps.read_head]
+                        //                .frame_number
+                        //         << ", to_display_frame_number: "
+                        //         << ps.to_display_frame_number << std::endl;
                         //     std::this_thread::sleep_for(
                         //         std::chrono::milliseconds(1));
                         // }
+
                         current_frame_num = ps.to_display_frame_number;
                         if (scene->use_cpu_buffer) {
                             // upload_texture(&scene->image_texture[j],
@@ -896,25 +919,11 @@ int main(int, char **) {
                                                         : ICON_FK_PLAY)) {
                             ps.play_video = !ps.play_video;
                             if (ps.play_video) {
+                                ps.pause_seeked = false;
                                 ps.last_play_time_start =
                                     std::chrono::steady_clock::now();
                             } else {
-                                bool any_false = false;
-                                for (const auto &[name, was_decoding] :
-                                     window_was_decoding) {
-                                    if (!was_decoding) {
-                                        any_false = true;
-                                        break;
-                                    }
-                                }
-                                if (any_false) {
-                                    // seek if there are hidden views
-                                    seek_all_cameras(scene, current_frame_num,
-                                                     video_fps, ps, true);
-
-                                } else {
-                                    ps.pause_selected = 0;
-                                }
+                                ps.pause_selected = 0;
                             }
                         }
                         ImGui::PopStyleColor(3);
@@ -966,23 +975,10 @@ int main(int, char **) {
             if (ImGui::IsKeyPressed(ImGuiKey_Space, false)) {
                 ps.play_video = !ps.play_video;
                 if (ps.play_video) {
+                    ps.pause_seeked = false;
                     ps.last_play_time_start = std::chrono::steady_clock::now();
                 } else {
-                    bool any_false = false;
-                    for (const auto &[name, was_decoding] :
-                         window_was_decoding) {
-                        if (!was_decoding) {
-                            any_false = true;
-                            break;
-                        }
-                    }
-                    if (any_false) {
-                        // seek if there are hidden views
-                        seek_all_cameras(scene, current_frame_num, video_fps,
-                                         ps, true);
-                    } else {
-                        ps.pause_selected = 0;
-                    }
+                    ps.pause_selected = 0;
                 }
             }
 
