@@ -1,3 +1,4 @@
+#include "IconsForkAwesome.h"
 #include "Logger.h"
 #include "camera.h"
 #include "filesystem"
@@ -33,6 +34,58 @@ std::vector<std::vector<cv::Rect>> yolo_boxes(MAX_VIEWS);
 std::vector<std::vector<std::string>> yolo_labels(MAX_VIEWS);
 std::vector<std::vector<int>> yolo_classid(MAX_VIEWS);
 std::vector<unsigned char *> yolo_input_frames_rgba(MAX_VIEWS);
+std::unordered_map<std::string, std::atomic<bool>> window_need_decoding;
+std::unordered_map<std::string, std::atomic<int>> latest_decoded_frame;
+
+struct PlaybackState {
+    int pause_selected = 0;
+    bool slider_just_changed = false;
+    bool play_video = false;
+    int to_display_frame_number = 0;
+    int read_head = 0;
+    bool just_seeked = false;
+    bool pause_seeked = false;
+    int slider_frame_number = 0;
+    double accumulated_play_time = 0.0;
+    std::chrono::steady_clock::time_point last_play_time_start =
+        std::chrono::steady_clock::now();
+    int last_frame_num_playspeed = 0;
+    std::chrono::steady_clock::time_point last_wall_time_playspeed =
+        std::chrono::steady_clock::now();
+};
+
+void seek_all_cameras(render_scene *scene, int frame_number, double video_fps,
+                      PlaybackState &state, bool seek_accurate) {
+    // Trigger seek request
+    for (int i = 0; i < scene->num_cams; i++) {
+        scene->seek_context[i].seek_frame = (uint64_t)frame_number;
+        scene->seek_context[i].use_seek = true;
+        scene->seek_context[i].seek_accurate = seek_accurate;
+    }
+
+    // Wait for seek to complete
+    for (int i = 0; i < scene->num_cams; i++) {
+        while (!scene->seek_context[i].seek_done) {
+            std::this_thread::sleep_for(std::chrono::microseconds(10));
+        }
+    }
+
+    // Reset seek_done flags
+    for (int i = 0; i < scene->num_cams; i++) {
+        scene->seek_context[i].seek_done = false;
+    }
+
+    // Update playback state
+    state.to_display_frame_number = scene->seek_context[0].seek_frame;
+    state.read_head = 0;
+    state.just_seeked = true;
+    state.slider_frame_number = state.to_display_frame_number;
+
+    state.accumulated_play_time = frame_number / video_fps;
+    state.last_play_time_start = std::chrono::steady_clock::now();
+    state.last_frame_num_playspeed = frame_number;
+    state.last_wall_time_playspeed = std::chrono::steady_clock::now();
+}
 
 int main(int, char **) {
     gx_context *window = (gx_context *)malloc(sizeof(gx_context));
@@ -64,16 +117,7 @@ int main(int, char **) {
                                    .seek_interval = 250};
 
     // gui states, todo: bundle this later
-    int to_display_frame_number = 0;
-    int pause_selected = 0;
-    int read_head = 0;
-    bool play_video = false;
-    bool toggle_play_status = false;
-    int slider_frame_number = 0;
-    bool just_seeked = false;
-    bool slider_just_changed = false;
     std::time_t last_saved = static_cast<std::time_t>(-1);
-
     bool video_loaded = false;
     bool cpu_buffer_toggle = true;
     bool plot_keypoints_flag = false;
@@ -110,6 +154,11 @@ int main(int, char **) {
     bool input_is_imgs = false;
     bool show_error = false;
     std::string error_message;
+    std::unordered_map<std::string, bool> window_was_decoding;
+    double inst_speed = 1.0;
+    double video_fps = 60.0f;
+    float set_playback_speed = 1.0f;
+    PlaybackState ps;
 
     while (!glfwWindowShouldClose(window->render_target)) {
         // Poll and handle events (inputs, window resize, etc.)
@@ -120,8 +169,19 @@ int main(int, char **) {
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
 
-        if (ImGui::Begin("File Browser", NULL, ImGuiWindowFlags_MenuBar)) {
+        // --- Update playback time ---
+        auto now = std::chrono::steady_clock::now();
 
+        if (ps.play_video) {
+            ps.accumulated_play_time +=
+                std::chrono::duration<double>(now - ps.last_play_time_start)
+                    .count() *
+                set_playback_speed;
+            ps.last_play_time_start = now;
+        }
+        double playback_time_now = ps.accumulated_play_time;
+
+        if (ImGui::Begin("File Browser", NULL, ImGuiWindowFlags_MenuBar)) {
             if (ImGui::BeginMenuBar()) {
                 if (ImGui::BeginMenu("File")) {
                     if (ImGui::MenuItem("Open")) {
@@ -246,10 +306,9 @@ int main(int, char **) {
                 }
                 ImGui::EndMenuBar();
             }
-
-            // ImGui::Text("Application average %.3f ms/frame (%.1f FPS)",
-            //             1000.0f / ImGui::GetIO().Framerate,
-            //             ImGui::GetIO().Framerate);
+            ImGui::Text("Application average %.3f ms/frame (%.1f FPS)",
+                        1000.0f / ImGui::GetIO().Framerate,
+                        ImGui::GetIO().Framerate);
 
             // if (video_loaded) {
             //     ImGui::Text("Frame number %d ",
@@ -262,7 +321,7 @@ int main(int, char **) {
                 {
                     const char *items[] = {"CPU Buffer", "GPU Buffer"};
                     static int item_current = 0;
-                    ImGui::Combo("Buffer type", &item_current, items,
+                    ImGui::Combo("Buffer Type", &item_current, items,
                                  IM_ARRAYSIZE(items));
                     if (item_current == 0) {
                         scene->use_cpu_buffer = true;
@@ -271,43 +330,43 @@ int main(int, char **) {
                     }
                 }
 
-                ImGui::InputInt("Buffer size", &label_buffer_size);
+                ImGui::InputInt("Buffer Size", &label_buffer_size);
             }
             if (video_loaded) {
-                if (ImGui::InputInt("Seek step", &dc_context->seek_interval, 10,
-                                    100)) {
-                    std::cout << "Seek step: " << dc_context->seek_interval
-                              << std::endl;
-                }
-
+                ImGui::InputInt("Seek Step", &dc_context->seek_interval, 10,
+                                100);
                 static int seek_accurate_frame_num = 0;
                 ImGui::InputInt("Seek Accurate", &seek_accurate_frame_num, 1,
                                 100);
                 if (ImGui::IsItemDeactivatedAfterEdit()) {
-                    std::cout << "Seek accurate to: " << seek_accurate_frame_num
-                              << std::endl;
-                    for (int i = 0; i < scene->num_cams; i++) {
-                        scene->seek_context[i].seek_frame =
-                            (uint64_t)seek_accurate_frame_num;
-                        scene->seek_context[i].use_seek = true;
-                        scene->seek_context[i].seek_accurate = true;
-                    }
+                    seek_all_cameras(scene, seek_accurate_frame_num, video_fps,
+                                     ps, true);
+                }
 
-                    for (int i = 0; i < scene->num_cams; i++) {
-                        while (!(scene->seek_context[i].seek_done)) {
-                            std::this_thread::sleep_for(
-                                std::chrono::milliseconds(1));
-                        }
-                    }
+                auto now_wall = std::chrono::steady_clock::now();
+                double wall_seconds =
+                    std::chrono::duration<double>(now_wall -
+                                                  ps.last_wall_time_playspeed)
+                        .count();
+                int frame_delta =
+                    current_frame_num - ps.last_frame_num_playspeed;
+                if (wall_seconds > 0.5 && ps.play_video) {
+                    inst_speed =
+                        frame_delta /
+                        (video_fps * wall_seconds); // Real-time normalized
+                    ps.last_frame_num_playspeed = current_frame_num;
+                    ps.last_wall_time_playspeed = now_wall;
+                }
 
-                    for (int i = 0; i < scene->num_cams; i++) {
-                        scene->seek_context[i].seek_done = false;
-                    }
-                    to_display_frame_number = scene->seek_context[0].seek_frame;
-                    read_head = 0;
-                    just_seeked = true;
-                    pause_selected = 0;
-                    slider_frame_number = to_display_frame_number;
+                // Always draw the latest value
+                if (ps.play_video) {
+                    ImGui::Text("Video FPS: %.1f", video_fps);
+                    ImGui::SliderFloat("Set Playback Speed",
+                                       &set_playback_speed, 0.1f, 1.0f,
+                                       "%.1fx");
+                    ImGui::Text("Current Playback Speed: %.2fx", inst_speed);
+                    ImGui::Text("Tip: If playback is slower than real-time, \n"
+                                "collapse camera views to improve speed.");
                 }
             }
         }
@@ -333,7 +392,8 @@ int main(int, char **) {
                         camera_names.push_back(cam_string);
                         std::cout << "camera names: " << cam_string
                                   << std::endl;
-
+                        window_need_decoding[cam_string].store(true);
+                        window_was_decoding[cam_string] = true;
                         std::map<std::string, std::string> m;
                         FFmpegDemuxer *demuxer =
                             new FFmpegDemuxer(elem.second.c_str(), m);
@@ -345,7 +405,7 @@ int main(int, char **) {
                     dc_context->seek_interval =
                         (int)dummy_dmuxer
                             .FindKeyFrameInterval(); // get the seek interval
-
+                    video_fps = dummy_dmuxer.GetFramerate();
                     scene->num_cams = selected_files.size();
                     scene->image_width =
                         (u32 *)malloc(sizeof(u32) * scene->num_cams);
@@ -356,13 +416,13 @@ int main(int, char **) {
                         scene->image_height[j] = demuxers[j]->GetHeight();
                     }
                     render_allocate_scene_memory(scene, label_buffer_size);
-
                     // multiple threads for decoding for selected videos
                     for (int i = 0; i < scene->num_cams; i++) {
                         decoder_threads.push_back(std::thread(
                             &decoder_process, dc_context, demuxers[i],
-                            scene->display_buffer[i], scene->size_of_buffer,
-                            &scene->seek_context[i], scene->use_cpu_buffer));
+                            camera_names[i], scene->display_buffer[i],
+                            scene->size_of_buffer, &scene->seek_context[i],
+                            scene->use_cpu_buffer));
                         is_view_focused.push_back(false);
                     }
                     video_loaded = true;
@@ -460,169 +520,70 @@ int main(int, char **) {
             ImGuiFileDialog::Instance()->Close();
         }
 
-        if (dc_context->decoding_flag && play_video) {
-            for (u32 j = 0; j < scene->num_cams; j++) {
-                // if the current frame is ready, upload for display,
-                // otherwise wait for the frame to get ready
-                while (scene->display_buffer[j][read_head].frame_number !=
-                       to_display_frame_number) {
-                    // std::cout << "main wait, " << read_head << ", " <<
-                    // scene->display_buffer[j][read_head].frame_number <<
-                    // ", "
-                    // << to_display_frame_number << std::endl;
-                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                }
-
-                if (scene->use_cpu_buffer) {
-                    // upload_texture(&scene->image_texture[j],
-                    // scene->display_buffer[j][read_head].frame,
-                    // scene->image_width[j], scene->image_height[j]); // 2x
-                    // slower than pbo copy frame to cuda buffer
-                    ck(cudaMemcpy(scene->pbo_cuda[j].cuda_buffer,
-                                  scene->display_buffer[j][read_head].frame,
-                                  scene->image_width[j] *
-                                      scene->image_height[j] * 4,
-                                  cudaMemcpyHostToDevice));
-                    bind_pbo(&scene->pbo_cuda[j].pbo);
-                    bind_texture(&scene->image_texture[j]);
-                    upload_image_pbo_to_texture(
-                        scene->image_width[j],
-                        scene->image_height[j]); // Needs no arguments
-                                                 // because texture and PBO
-                                                 // are bound
-                    unbind_pbo();
-                    unbind_texture();
-                } else {
-                    ck(cudaMemcpy(scene->pbo_cuda[j].cuda_buffer,
-                                  scene->display_buffer[j][read_head].frame,
-                                  scene->image_width[j] *
-                                      scene->image_height[j] * 4,
-                                  cudaMemcpyDeviceToDevice));
-                    bind_pbo(&scene->pbo_cuda[j].pbo);
-                    bind_texture(&scene->image_texture[j]);
-                    upload_image_pbo_to_texture(
-                        scene->image_width[j],
-                        scene->image_height[j]); // Needs no arguments
-                                                 // because texture and PBO
-                                                 // are bound
-                    unbind_pbo();
-                    unbind_texture();
-                }
-
-                // sync yolo detection
-                if (yolo_detection) {
-                    std::unique_lock<std::mutex> lck(g_mutexes[j]);
-                    // std::cout << "main_thread: acquire lock" <<
-                    // std::endl;
-                    yolo_input_frames_rgba[j] = scene->pbo_cuda[j].cuda_buffer;
-                    g_ready[j] = true;
-                    g_cvs[j].notify_one();
+        static int select_corr_head = 0;
+        if (video_loaded && (!ps.play_video)) {
+            int visible_idx = 0;
+            if (!ps.pause_seeked) {
+                for (int i = 0; i < scene->num_cams; i++) {
+                    if (window_was_decoding[camera_names[i]]) {
+                        visible_idx = i;
+                        break;
+                    }
                 }
             }
-            current_frame_num = to_display_frame_number;
-        }
 
-        // show frames in the buffer if selected
-        if (video_loaded && (!play_video)) {
-            static int select_corr_head = 0;
             ImGui::SetNextWindowSize(ImVec2(500, 440), ImGuiCond_FirstUseEver);
             if (ImGui::Begin("Frames in the buffer")) {
                 {
                     for (u32 i = 0; i < scene->size_of_buffer; i++) {
                         int seletable_frame_id =
-                            (i + read_head) % scene->size_of_buffer;
+                            (i + ps.read_head) % scene->size_of_buffer;
                         char label[32];
                         if (input_is_imgs) {
-                            snprintf(
-                                label, sizeof(label), "%d: %s",
-                                scene->display_buffer[0][seletable_frame_id]
-                                    .frame_number,
-                                imgs_names[i].c_str());
+                            snprintf(label, sizeof(label), "%d: %s",
+                                     scene
+                                         ->display_buffer[visible_idx]
+                                                         [seletable_frame_id]
+                                         .frame_number,
+                                     imgs_names[i].c_str());
                         } else {
                             sprintf(label, "Frame %d",
-                                    scene->display_buffer[0][seletable_frame_id]
+                                    scene
+                                        ->display_buffer[visible_idx]
+                                                        [seletable_frame_id]
                                         .frame_number);
                         }
-                        if (ImGui::Selectable(label, pause_selected == i)) {
+                        if (ImGui::Selectable(label, ps.pause_selected == i)) {
                             // start from the lowest frame
-                            pause_selected = i;
+                            ps.pause_selected = i;
                         }
                     }
                 }
 
                 if (ImGui::IsKeyPressed(ImGuiKey_Comma, true)) {
-                    if (pause_selected > 0) {
-                        pause_selected--;
+                    if (ps.pause_selected > 0) {
+                        ps.pause_selected--;
                     }
                 };
 
                 if (ImGui::IsKeyPressed(ImGuiKey_Period, true)) {
-                    if (pause_selected < (scene->size_of_buffer - 1)) {
-                        pause_selected++;
+                    if (ps.pause_selected < (scene->size_of_buffer - 1)) {
+                        ps.pause_selected++;
                     }
                 };
             }
             ImGui::End();
-
             select_corr_head =
-                (pause_selected + read_head) % scene->size_of_buffer;
+                (ps.pause_selected + ps.read_head) % scene->size_of_buffer;
             current_frame_num =
-                scene->display_buffer[0][select_corr_head].frame_number;
-
-            for (int j = 0; j < scene->num_cams; j++) {
-                if (scene->use_cpu_buffer) {
-                    // upload_texture(&scene->image_texture[j],
-                    // scene->display_buffer[j][select_corr_head].frame,
-                    // scene->image_width[j], scene->image_height[j]);
-                    ck(cudaMemcpy(
-                        scene->pbo_cuda[j].cuda_buffer,
-                        scene->display_buffer[j][select_corr_head].frame,
-                        scene->image_width[j] * scene->image_height[j] * 4,
-                        cudaMemcpyHostToDevice));
-                    bind_pbo(&scene->pbo_cuda[j].pbo);
-                    bind_texture(&scene->image_texture[j]);
-                    upload_image_pbo_to_texture(
-                        scene->image_width[j],
-                        scene->image_height[j]); // Needs no arguments
-                                                 // because texture and PBO
-                                                 // are bound
-                    unbind_pbo();
-                    unbind_texture();
-                } else {
-                    ck(cudaMemcpy(
-                        scene->pbo_cuda[j].cuda_buffer,
-                        scene->display_buffer[j][select_corr_head].frame,
-                        scene->image_width[j] * scene->image_height[j] * 4,
-                        cudaMemcpyDeviceToDevice));
-                    bind_pbo(&scene->pbo_cuda[j].pbo);
-                    bind_texture(&scene->image_texture[j]);
-                    upload_image_pbo_to_texture(
-                        scene->image_width[j],
-                        scene->image_height[j]); // Needs no arguments
-                                                 // because texture and PBO
-                                                 // are bound
-                    unbind_pbo();
-                    unbind_texture();
-                }
-            }
-        }
-
-        if (toggle_play_status && play_video) {
-            play_video = false;
-            toggle_play_status = false;
-        }
-
-        if (plot_keypoints_flag) {
-            if (keypoints_map.find(current_frame_num) == keypoints_map.end()) {
-                keypoints_find = false;
-            } else {
-                keypoints_find = true;
-            }
+                scene->display_buffer[visible_idx][select_corr_head]
+                    .frame_number;
         }
 
         // Render a video frame
         if (video_loaded) {
             for (int j = 0; j < scene->num_cams; j++) {
+                const std::string &win_name = camera_names[j];
 
                 // layout
                 ImGui::SetNextWindowSize(ImVec2(500, 400),
@@ -638,260 +599,421 @@ int main(int, char **) {
                         window_pos.x = (j - 1) / 2.0 * 500;
                     }
                 } else {
-                    if (j % 4 == 0) {
-                        window_pos.y = 200.0;
-                        window_pos.x = (j / 4.0) * 500;
-                    } else if (j % 4 == 1) {
-                        window_pos.y = 600.0;
-                        window_pos.x = (j - 1) / 4.0 * 500;
-                    } else if (j % 4 == 2) {
-                        window_pos.y = 1000.0;
-                        window_pos.x = (j - 1) / 4.0 * 500;
-                    } else {
-                        window_pos.y = 1400.0;
-                        window_pos.x = (j - 1) / 4.0 * 500;
+                    int row = j % 4;
+                    float base_x = (row == 0) ? j : (j - 1);
+                    float x_group = (base_x / 4.0f) * 500;
+                    switch (row) {
+                    case 0:
+                        window_pos = {x_group, 200.0f};
+                        break;
+                    case 1:
+                        window_pos = {x_group, 600.0f};
+                        break;
+                    case 2:
+                        window_pos = {x_group, 1000.0f};
+                        break;
+                    case 3:
+                        window_pos = {x_group, 1400.0f};
+                        break;
                     }
                 }
 
                 ImGui::SetNextWindowPos(window_pos, ImGuiCond_FirstUseEver);
-                ImGui::Begin(camera_names[j].c_str());
-                ImGui::BeginGroup();
-                std::string scene_name = "scene view" + std::to_string(j);
-                ImGui::BeginChild(
-                    scene_name.c_str(),
-                    ImVec2(0,
-                           -ImGui::GetFrameHeightWithSpacing())); // Leave room
-                                                                  // for 1 line
-                                                                  // below
-                ImVec2 avail_size = ImGui::GetContentRegionAvail();
+                bool is_visible = ImGui::Begin(win_name.c_str());
 
-                // ImGui::Image((void*)(intptr_t)image_texture[j],
-                // avail_size);
-                if (ImPlot::BeginPlot("##no_plot_name", avail_size,
-                                      ImPlotFlags_Equal |
-                                          ImPlotAxisFlags_AutoFit |
-                                          ImPlotFlags_Crosshairs)) {
-                    ImPlot::PlotImage(
-                        "##no_image_name",
-                        (ImTextureID)(intptr_t)scene->image_texture[j],
-                        ImVec2(0, 0),
-                        ImVec2(scene->image_width[j], scene->image_height[j]));
+                if (!window_was_decoding[win_name] && is_visible &&
+                    ps.play_video) {
+                    // seek if visibility has changed
+                    seek_all_cameras(scene, current_frame_num, video_fps, ps,
+                                     true);
+                }
 
-                    if (yolo_detection) {
-                        draw_cv_contours(yolo_boxes.at(j), yolo_labels.at(j),
-                                         yolo_classid.at(j),
-                                         scene->image_height[j]);
+                if (!window_was_decoding[win_name] && is_visible &&
+                    !ps.play_video && !ps.pause_seeked) {
+                    // seek if visibility has changed
+                    seek_all_cameras(scene, current_frame_num, video_fps, ps,
+                                     true);
+                    for (auto &[key, value] : window_need_decoding) {
+                        value.store(true);
                     }
+                }
 
-                    if (plot_keypoints_flag) {
-                        // plot arena for testing camera parameters
-                        // gui_plot_perimeter(&camera_params[j],
-                        // scene->image_height[j]); if (scene->num_cams > 1)
-                        // {
-                        //     gui_plot_world_coordinates(&camera_params[j],
-                        //     j, scene->image_height[j]);
+                if (ps.play_video) {
+                    window_need_decoding[win_name].store(is_visible);
+                };
+
+                if (is_visible) {
+                    if (ps.play_video) {
+                        // if the current frame is ready, upload for display,
+                        // otherwise wait for the frame to get ready
+                        // while (scene->display_buffer[j][ps.read_head]
+                        //            .frame_number !=
+                        //        ps.to_display_frame_number) {
+                        //     std::cout
+                        //         << win_name << " , read head: " <<
+                        //         ps.read_head
+                        //         << ", frame_number: "
+                        //         << scene->display_buffer[j][ps.read_head]
+                        //                .frame_number
+                        //         << ", to_display_frame_number: "
+                        //         << ps.to_display_frame_number << std::endl;
+                        //     std::this_thread::sleep_for(
+                        //         std::chrono::milliseconds(1));
                         // }
 
-                        // labeling
-                        if (ImPlot::IsPlotHovered()) {
-                            is_view_focused[j] = true;
+                        current_frame_num = ps.to_display_frame_number;
+                        if (scene->use_cpu_buffer) {
+                            // upload_texture(&scene->image_texture[j],
+                            // scene->display_buffer[j][read_head].frame,
+                            // scene->image_width[j], scene->image_height[j]);
+                            // // 2x slower than pbo copy frame to cuda buffer
+                            ck(cudaMemcpy(
+                                scene->pbo_cuda[j].cuda_buffer,
+                                scene->display_buffer[j][ps.read_head].frame,
+                                scene->image_width[j] * scene->image_height[j] *
+                                    4,
+                                cudaMemcpyHostToDevice));
+                        } else {
+                            ck(cudaMemcpy(
+                                scene->pbo_cuda[j].cuda_buffer,
+                                scene->display_buffer[j][ps.read_head].frame,
+                                scene->image_width[j] * scene->image_height[j] *
+                                    4,
+                                cudaMemcpyDeviceToDevice));
+                        }
+                    } else {
+                        if (scene->use_cpu_buffer) {
+                            // upload_texture(&scene->image_texture[j],
+                            // scene->display_buffer[j][select_corr_head].frame,
+                            // scene->image_width[j], scene->image_height[j]);
+                            ck(cudaMemcpy(
+                                scene->pbo_cuda[j].cuda_buffer,
+                                scene->display_buffer[j][select_corr_head]
+                                    .frame,
+                                scene->image_width[j] * scene->image_height[j] *
+                                    4,
+                                cudaMemcpyHostToDevice));
+                        } else {
+                            ck(cudaMemcpy(
+                                scene->pbo_cuda[j].cuda_buffer,
+                                scene->display_buffer[j][select_corr_head]
+                                    .frame,
+                                scene->image_width[j] * scene->image_height[j] *
+                                    4,
+                                cudaMemcpyDeviceToDevice));
+                        }
+                    }
+                    bind_pbo(&scene->pbo_cuda[j].pbo);
+                    bind_texture(&scene->image_texture[j]);
+                    upload_image_pbo_to_texture(scene->image_width[j],
+                                                scene->image_height[j]);
+                    unbind_pbo();
+                    unbind_texture();
 
-                            if (ImGui::IsKeyPressed(ImGuiKey_C, false)) {
-                                // create keypoints
-                                if (!keypoints_find) {
-                                    // not found
-                                    KeyPoints *keypoints =
-                                        (KeyPoints *)malloc(sizeof(KeyPoints));
-                                    allocate_keypoints(keypoints, scene,
-                                                       skeleton);
-                                    keypoints_map[current_frame_num] =
-                                        keypoints;
-                                }
-                            }
+                    // sync yolo detection
+                    if (yolo_detection) {
+                        std::unique_lock<std::mutex> lck(g_mutexes[j]);
+                        // std::cout << "main_thread: acquire lock" <<
+                        // std::endl;
+                        yolo_input_frames_rgba[j] =
+                            scene->pbo_cuda[j].cuda_buffer;
+                        g_ready[j] = true;
+                        g_cvs[j].notify_one();
+                    }
 
-                            if (keypoints_find) {
-                                u32 *kp = &(keypoints_map[current_frame_num]
-                                                ->active_id[j]);
-                                if (ImGui::IsKeyPressed(ImGuiKey_W, false)) {
-                                    // labeling sequentially each view
-                                    ImPlotPoint mouse =
-                                        ImPlot::GetPlotMousePos();
-                                    keypoints_map[current_frame_num]
-                                        ->keypoints2d[j][*kp]
-                                        .position = {mouse.x, mouse.y};
-                                    keypoints_map[current_frame_num]
-                                        ->keypoints2d[j][*kp]
-                                        .is_labeled = true;
-                                    keypoints_map[current_frame_num]
-                                        ->keypoints2d[j][*kp]
-                                        .is_triangulated = false;
-                                    if (*kp < (skeleton->num_nodes - 1)) {
-                                        (*kp)++;
+                    ImGui::BeginGroup();
+                    std::string scene_name = "scene view" + std::to_string(j);
+                    ImGui::BeginChild(
+                        scene_name.c_str(),
+                        ImVec2(0, -ImGui::GetFrameHeightWithSpacing()));
+                    ImVec2 avail_size = ImGui::GetContentRegionAvail();
+
+                    // ImGui::Image((void*)(intptr_t)image_texture[j],
+                    // avail_size);
+                    //
+                    if (plot_keypoints_flag) {
+                        if (keypoints_map.find(current_frame_num) ==
+                            keypoints_map.end()) {
+                            keypoints_find = false;
+                        } else {
+                            keypoints_find = true;
+                        }
+                    }
+
+                    if (ImPlot::BeginPlot("##no_plot_name", avail_size,
+                                          ImPlotFlags_Equal |
+                                              ImPlotAxisFlags_AutoFit |
+                                              ImPlotFlags_Crosshairs)) {
+                        ImPlot::PlotImage(
+                            "##no_image_name",
+                            (ImTextureID)(intptr_t)scene->image_texture[j],
+                            ImVec2(0, 0),
+                            ImVec2(scene->image_width[j],
+                                   scene->image_height[j]));
+
+                        if (yolo_detection) {
+                            draw_cv_contours(
+                                yolo_boxes.at(j), yolo_labels.at(j),
+                                yolo_classid.at(j), scene->image_height[j]);
+                        }
+
+                        if (plot_keypoints_flag) {
+                            // plot arena for testing camera parameters
+                            // gui_plot_perimeter(&camera_params[j],
+                            // scene->image_height[j]); if (scene->num_cams > 1)
+                            // {
+                            //     gui_plot_world_coordinates(&camera_params[j],
+                            //     j, scene->image_height[j]);
+                            // }
+
+                            // labeling
+                            if (ImPlot::IsPlotHovered()) {
+                                is_view_focused[j] = true;
+
+                                if (ImGui::IsKeyPressed(ImGuiKey_C, false)) {
+                                    // create keypoints
+                                    if (!keypoints_find) {
+                                        // not found
+                                        KeyPoints *keypoints =
+                                            (KeyPoints *)malloc(
+                                                sizeof(KeyPoints));
+                                        allocate_keypoints(keypoints, scene,
+                                                           skeleton);
+                                        keypoints_map[current_frame_num] =
+                                            keypoints;
                                     }
                                 }
 
-                                if (ImGui::IsKeyPressed(ImGuiKey_A, true)) {
-                                    if (*kp <= 0) {
-                                        *kp = 0;
-                                    } else
-                                        (*kp)--;
-                                }
+                                if (keypoints_find) {
+                                    u32 *kp = &(keypoints_map[current_frame_num]
+                                                    ->active_id[j]);
+                                    if (ImGui::IsKeyPressed(ImGuiKey_W,
+                                                            false)) {
+                                        // labeling sequentially each view
+                                        ImPlotPoint mouse =
+                                            ImPlot::GetPlotMousePos();
+                                        keypoints_map[current_frame_num]
+                                            ->keypoints2d[j][*kp]
+                                            .position = {mouse.x, mouse.y};
+                                        keypoints_map[current_frame_num]
+                                            ->keypoints2d[j][*kp]
+                                            .is_labeled = true;
+                                        keypoints_map[current_frame_num]
+                                            ->keypoints2d[j][*kp]
+                                            .is_triangulated = false;
+                                        if (*kp < (skeleton->num_nodes - 1)) {
+                                            (*kp)++;
+                                        }
+                                    }
 
-                                if (ImGui::IsKeyPressed(ImGuiKey_D, true)) {
-                                    if (*kp >= skeleton->num_nodes - 1) {
+                                    if (ImGui::IsKeyPressed(ImGuiKey_A, true)) {
+                                        if (*kp <= 0) {
+                                            *kp = 0;
+                                        } else
+                                            (*kp)--;
+                                    }
+
+                                    if (ImGui::IsKeyPressed(ImGuiKey_D, true)) {
+                                        if (*kp >= skeleton->num_nodes - 1) {
+                                            *kp = skeleton->num_nodes - 1;
+                                        } else
+                                            (*kp)++;
+                                    }
+
+                                    if (ImGui::IsKeyPressed(
+                                            ImGuiKey_E,
+                                            false)) // skip to the last keypoint
+                                    {
                                         *kp = skeleton->num_nodes - 1;
-                                    } else
-                                        (*kp)++;
-                                }
+                                    }
 
-                                if (ImGui::IsKeyPressed(
-                                        ImGuiKey_E,
-                                        false)) // skip to the last keypoint
-                                {
-                                    *kp = skeleton->num_nodes - 1;
-                                }
+                                    if (ImGui::IsKeyPressed(
+                                            ImGuiKey_Q,
+                                            false)) // go to the first keypoint
+                                    {
+                                        *kp = 0;
+                                    }
 
-                                if (ImGui::IsKeyPressed(
-                                        ImGuiKey_Q,
-                                        false)) // go to the first keypoint
-                                {
-                                    *kp = 0;
+                                    // delete all keypoint on a frame
+                                    if (ImGui::IsKeyPressed(ImGuiKey_Backspace,
+                                                            false)) {
+                                        free_keypoints(
+                                            keypoints_map[current_frame_num],
+                                            scene);
+                                        keypoints_map.erase(current_frame_num);
+                                        keypoints_find = false;
+                                    }
                                 }
-
-                                // delete all keypoint on a frame
-                                if (ImGui::IsKeyPressed(ImGuiKey_Backspace,
-                                                        false)) {
-                                    free_keypoints(
-                                        keypoints_map[current_frame_num],
-                                        scene);
-                                    keypoints_map.erase(current_frame_num);
-                                    keypoints_find = false;
-                                }
+                            } else {
+                                is_view_focused[j] = false;
                             }
-                        } else {
-                            is_view_focused[j] = false;
-                        }
 
-                        if (keypoints_find) {
-                            gui_plot_keypoints(
-                                keypoints_map.at(current_frame_num), skeleton,
-                                j, scene->num_cams);
-                            // think more general solution of multiple sets
-                            // of keypoints
-                            if (skeleton->name == "Rat4Box" ||
-                                skeleton->name == "Rat4Box3Ball") {
-                                gui_plot_bbox_from_keypoints(
+                            if (keypoints_find) {
+                                gui_plot_keypoints(
                                     keypoints_map.at(current_frame_num),
-                                    skeleton, j, 4, 5);
+                                    skeleton, j, scene->num_cams);
+                                // think more general solution of multiple sets
+                                // of keypoints
+                                if (skeleton->name == "Rat4Box" ||
+                                    skeleton->name == "Rat4Box3Ball") {
+                                    gui_plot_bbox_from_keypoints(
+                                        keypoints_map.at(current_frame_num),
+                                        skeleton, j, 4, 5);
+                                }
                             }
                         }
+                        ImPlot::EndPlot();
                     }
-                    ImPlot::EndPlot();
-                }
 
-                ImGui::EndChild();
+                    ImGui::EndChild();
 
-                if (to_display_frame_number ==
-                    (dc_context->total_num_frame - 1)) {
-                    if (ImGui::Button(ICON_FK_REPEAT)) {
-                        // seek to zero
-                        for (int i = 0; i < scene->num_cams; i++) {
-                            scene->seek_context[i].seek_frame = 0;
-                            scene->seek_context[i].use_seek = true;
-                            scene->seek_context[i].seek_accurate = false;
+                    float spacing = ImGui::GetStyle().ItemInnerSpacing.x;
+                    if (ImGui::Button(ICON_FK_FAST_BACKWARD)) {
+                        int clamped_frame =
+                            std::max(0, current_frame_num -
+                                            10 * dc_context->seek_interval);
+                        seek_all_cameras(scene, clamped_frame, video_fps, ps,
+                                         false);
+                    }
+                    ImGui::SameLine(0.0f, spacing);
+                    if (ImGui::Button(ICON_FK_STEP_BACKWARD)) {
+                        int clamped_frame = std::max(
+                            0, current_frame_num - dc_context->seek_interval);
+                        seek_all_cameras(scene, clamped_frame, video_fps, ps,
+                                         false);
+                    }
+                    ImGui::SameLine(0.0f, spacing);
+
+                    if (ps.to_display_frame_number ==
+                        (dc_context->total_num_frame - 1)) {
+                        ImVec4 repeat_normal = ImVec4(1.0f, 1.0f, 0.2f, 1.0f);
+                        ImVec4 repeat_hover = ImVec4(1.0f, 1.0f, 0.4f, 1.0f);
+                        ImVec4 repeat_active = ImVec4(1.0f, 0.9f, 0.1f, 1.0f);
+                        ImGui::PushStyleColor(ImGuiCol_Button, repeat_normal);
+                        ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                                              repeat_hover);
+                        ImGui::PushStyleColor(ImGuiCol_ButtonActive,
+                                              repeat_active);
+
+                        if (ImGui::Button(ICON_FK_REPEAT)) {
+                            // seek to zero
+                            seek_all_cameras(scene, 0, video_fps, ps, false);
                         }
-
-                        for (int i = 0; i < scene->num_cams; i++) {
-                            // synchronize seeking
-                            while (!(scene->seek_context[i].seek_done)) {
-                                std::this_thread::sleep_for(
-                                    std::chrono::milliseconds(1));
-                                // std::cout << "Seeking Cam" << i << ", "
-                                // << scene->seek_context[i].seek_done <<
-                                // std::endl;
+                        ImGui::PopStyleColor(3);
+                    } else {
+                        ImVec4 normal, hover, active;
+                        if (ps.play_video) {
+                            normal = ImVec4(0.8f, 0.3f, 0.3f, 1.0f);
+                            hover = ImVec4(0.9f, 0.4f, 0.4f, 1.0f);
+                            active = ImVec4(0.7f, 0.2f, 0.2f, 1.0f);
+                        } else {
+                            // green
+                            normal = ImVec4(0.2f, 0.6f, 0.2f, 1.0f);
+                            hover = ImVec4(0.4f, 0.9f, 0.4f, 1.0f);
+                            active = ImVec4(0.3f, 0.75f, 0.3f, 1.0f);
+                        }
+                        ImGui::PushStyleColor(ImGuiCol_Button, normal);
+                        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, hover);
+                        ImGui::PushStyleColor(ImGuiCol_ButtonActive, active);
+                        if (ImGui::Button(ps.play_video ? ICON_FK_PAUSE
+                                                        : ICON_FK_PLAY)) {
+                            ps.play_video = !ps.play_video;
+                            if (ps.play_video) {
+                                ps.pause_seeked = false;
+                                ps.last_play_time_start =
+                                    std::chrono::steady_clock::now();
+                            } else {
+                                ps.pause_selected = 0;
                             }
                         }
-
-                        for (int i = 0; i < scene->num_cams; i++) {
-                            scene->seek_context[i].seek_done = false;
-                        }
-
-                        to_display_frame_number =
-                            scene->seek_context[0].seek_frame;
-                        read_head = 0;
-                        just_seeked = true;
-                        slider_frame_number = to_display_frame_number;
+                        ImGui::PopStyleColor(3);
                     }
-                } else {
-                    if (ImGui::Button(play_video ? ICON_FK_PAUSE
-                                                 : ICON_FK_PLAY)) {
-                        play_video = !play_video;
-                        if (!play_video) {
-                            pause_selected = 0;
-                        }
+
+                    ImGui::SameLine(0.0f, spacing);
+                    if (ImGui::Button(ICON_FK_STEP_FORWARD)) {
+                        int clamped_frame = std::min(
+                            dc_context->total_num_frame,
+                            current_frame_num + dc_context->seek_interval);
+                        seek_all_cameras(scene, clamped_frame, video_fps, ps,
+                                         false);
                     }
+                    ImGui::SameLine(0.0f, spacing);
+                    if (ImGui::Button(ICON_FK_FAST_FORWARD)) {
+                        int clamped_frame = std::min(
+                            dc_context->total_num_frame,
+                            current_frame_num + 10 * dc_context->seek_interval);
+                        seek_all_cameras(scene, clamped_frame, video_fps, ps,
+                                         false);
+                    }
+                    ImGui::SameLine();
+                    ps.slider_just_changed = ImGui::SliderInt(
+                        "##frame count", &ps.slider_frame_number, 0,
+                        dc_context->estimated_num_frames);
+                    ImGui::SameLine();
+                    float current_time_sec = ps.slider_frame_number / video_fps;
+                    float total_time_sec =
+                        dc_context->estimated_num_frames / video_fps;
+
+                    std::string current_str = format_time(current_time_sec);
+                    std::string total_str = format_time(total_time_sec);
+                    ImGui::Text("%s / %s", current_str.c_str(),
+                                total_str.c_str());
+
+                    if (ps.slider_just_changed) {
+                        // std::cout << "main, seeking: " <<
+                        // ps.slider_frame_number
+                        //           << std::endl;
+                        seek_all_cameras(scene, ps.slider_frame_number,
+                                         video_fps, ps, false);
+                    }
+
+                    ImGui::EndGroup();
                 }
-
-                ImGui::SameLine();
-                // Arrow buttons with Repeater
-                float spacing = ImGui::GetStyle().ItemInnerSpacing.x;
-                ImGui::PushButtonRepeat(true);
-                ImGui::SameLine(0.0f, spacing);
-                if (ImGui::Button(ICON_FK_PLUS)) {
-                    // advance_clicks++;
-                    play_video = true;
-                    toggle_play_status = true;
-                }
-                ImGui::PopButtonRepeat();
-                ImGui::SameLine();
-
-                slider_just_changed =
-                    ImGui::SliderInt("##frame count", &slider_frame_number, 0,
-                                     dc_context->estimated_num_frames);
-
-                if (slider_just_changed) {
-                    std::cout << "main, seeking: " << slider_frame_number
-                              << std::endl;
-
-                    for (int i = 0; i < scene->num_cams; i++) {
-                        scene->seek_context[i].seek_frame =
-                            (uint64_t)slider_frame_number;
-                        scene->seek_context[i].use_seek = true;
-                        scene->seek_context[i].seek_accurate = false;
-                    }
-
-                    for (int i = 0; i < scene->num_cams; i++) {
-                        // synchronize seeking
-                        while (!(scene->seek_context[i].seek_done)) {
-                            std::this_thread::sleep_for(
-                                std::chrono::milliseconds(1));
-                            // std::cout << "Seeking Cam" << i << ", " <<
-                            // scene->seek_context[i].seek_done <<
-                            // std::endl;
-                        }
-                    }
-
-                    for (int i = 0; i < scene->num_cams; i++) {
-                        scene->seek_context[i].seek_done = false;
-                    }
-
-                    // std::cout << "Main thread seeking done to frame: " <<
-                    // scene->seek_context[0].seek_frame << std::endl;
-                    to_display_frame_number = scene->seek_context[0].seek_frame;
-                    read_head = 0;
-                    just_seeked = true;
-                    slider_frame_number = to_display_frame_number;
-                }
-
-                ImGui::EndGroup();
                 ImGui::End();
             }
 
             if (ImGui::IsKeyPressed(ImGuiKey_Space, false)) {
-                play_video = !play_video;
-                if (!play_video) {
-                    pause_selected = 0;
+                ps.play_video = !ps.play_video;
+                if (ps.play_video) {
+                    ps.pause_seeked = false;
+                    ps.last_play_time_start = std::chrono::steady_clock::now();
+                } else {
+                    ps.pause_selected = 0;
                 }
+            }
+
+            if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow, false)) {
+                if (ImGui::GetIO().KeyShift) {
+                    int clamped_frame = std::max(
+                        0, current_frame_num - 10 * dc_context->seek_interval);
+                    seek_all_cameras(scene, clamped_frame, video_fps, ps,
+                                     false);
+                } else {
+                    int clamped_frame = std::max(
+                        0, current_frame_num - dc_context->seek_interval);
+                    seek_all_cameras(scene, clamped_frame, video_fps, ps,
+                                     false);
+                }
+            }
+
+            if (ImGui::IsKeyPressed(ImGuiKey_RightArrow, false)) {
+                if (ImGui::GetIO().KeyShift) {
+                    int clamped_frame = std::min(
+                        dc_context->total_num_frame,
+                        current_frame_num + 10 * dc_context->seek_interval);
+                    seek_all_cameras(scene, clamped_frame, video_fps, ps,
+                                     false);
+                } else {
+                    int clamped_frame =
+                        std::min(dc_context->total_num_frame,
+                                 current_frame_num + dc_context->seek_interval);
+                    seek_all_cameras(scene, clamped_frame, video_fps, ps,
+                                     false);
+                }
+            }
+
+            for (const auto &[name, flag] : window_need_decoding) {
+                window_was_decoding[name] = flag.load();
             }
         }
 
@@ -949,7 +1071,7 @@ int main(int, char **) {
 
                             ImGui::TableSetColumnIndex(0);
                             ImGui::AlignTextToFramePadding();
-                            ImGui::Text(camera_names[row].c_str());
+                            ImGui::Text("%s", camera_names[row].c_str());
                             for (int column = 1; column < columns_count;
                                  column++)
                                 if (ImGui::TableSetColumnIndex(column)) {
@@ -1042,7 +1164,7 @@ int main(int, char **) {
                     }
 
                     if (keypoints_find) {
-                        if (ImGui::IsKeyPressed(ImGuiKey_S,
+                        if (ImGui::IsKeyPressed(ImGuiKey_T,
                                                 false)) // triangulate
                         {
                             reprojection(keypoints_map.at(current_frame_num),
@@ -1123,30 +1245,9 @@ int main(int, char **) {
 
                 ImGui::Separator();
                 ImGui::Text("Next labeled frame : %d", (*upper_it).first);
-                if (ImGui::Button("Jump to Next Labeled Frame") ||
-                    ImGui::IsKeyPressed(ImGuiKey_RightArrow, false)) {
-                    for (int i = 0; i < scene->num_cams; i++) {
-                        scene->seek_context[i].seek_frame =
-                            (uint64_t)(*upper_it).first;
-                        scene->seek_context[i].use_seek = true;
-                        scene->seek_context[i].seek_accurate = true;
-                    }
-
-                    for (int i = 0; i < scene->num_cams; i++) {
-                        while (!(scene->seek_context[i].seek_done)) {
-                            std::this_thread::sleep_for(
-                                std::chrono::milliseconds(1));
-                        }
-                    }
-
-                    for (int i = 0; i < scene->num_cams; i++) {
-                        scene->seek_context[i].seek_done = false;
-                    }
-                    to_display_frame_number = scene->seek_context[0].seek_frame;
-                    read_head = 0;
-                    just_seeked = true;
-                    pause_selected = 0;
-                    slider_frame_number = to_display_frame_number;
+                if (ImGui::Button("Jump to Next Labeled Frame")) {
+                    seek_all_cameras(scene, (*upper_it).first, video_fps, ps,
+                                     true);
                 }
                 ImGui::Text("Total labeled frames : %zu", keypoints_map.size());
             }
@@ -1184,8 +1285,14 @@ int main(int, char **) {
         if (show_help_window) {
             if (ImGui::Begin("Help Menu")) {
                 ImGui::Text("<Space>: toggle play and pause");
-                ImGui::Text("<,>: previous image");
-                ImGui::Text("<.>: next image");
+                ImGui::Text("<Left Arrow>    : Seek backward");
+                ImGui::Text("<Shift+Left>    : Seek backward (×10)");
+                ImGui::Text("<Right Arrow>   : Seek forward");
+                ImGui::Text("<Shift+Right>   : Seek forward (×10)");
+
+                ImGui::SeparatorText("When paused");
+                ImGui::Text("<,>: previous image in buffer");
+                ImGui::Text("<.>: next image in buffer");
 
                 ImGui::SeparatorText("While hovering image");
                 ImGui::Text("<c>: create keypoints on frame");
@@ -1194,10 +1301,9 @@ int main(int, char **) {
                 ImGui::Text("<d>: active keypoint--");
                 ImGui::Text("<q>: active keypoint set to first node");
                 ImGui::Text("<e>: active keypoint set to last node");
-                ImGui::Text("<s> -> triangulate");
+                ImGui::Text("<t> -> triangulate");
                 ImGui::Text("<Backspace>: delete all keypoints");
-                ImGui::Text("<Right Arrow>: next labeled frame");
-                ImGui::Text("CTRL-S: save labels");
+                ImGui::Text("<Ctrl+s>         : Save labels");
 
                 ImGui::SeparatorText("While hovering keypoints");
                 ImGui::Text("<r>: delete active keypoint");
@@ -1250,20 +1356,46 @@ int main(int, char **) {
 
         glfwSwapBuffers(window->render_target);
 
-        if (just_seeked) {
-            just_seeked = false;
+        if (ps.just_seeked) {
+            ps.just_seeked = false;
         } else {
-            if (dc_context->decoding_flag && play_video &&
-                (to_display_frame_number < (dc_context->total_num_frame - 1))) {
-                to_display_frame_number++;
+            if (dc_context->decoding_flag && ps.play_video) {
+                // always round up, mimimum 1
+                int frame_to_show =
+                    static_cast<int>(std::ceil(playback_time_now * video_fps));
 
-                for (int j = 0; j < scene->num_cams; j++) {
-                    scene->display_buffer[j][read_head].available_to_write =
-                        true;
+                int min_decoded_frame = INT_MAX;
+                for (const auto &[cam_name, visible] : window_need_decoding) {
+                    if (visible.load()) {
+                        int decoded = latest_decoded_frame[cam_name].load();
+                        min_decoded_frame =
+                            std::min(min_decoded_frame, decoded);
+                    }
                 }
+                frame_to_show = std::min(frame_to_show, min_decoded_frame);
 
-                read_head = (read_head + 1) % scene->size_of_buffer;
-                slider_frame_number = to_display_frame_number;
+                int frame_delta = frame_to_show - ps.to_display_frame_number;
+                if (frame_delta > 0) {
+                    // Update frame number
+                    ps.to_display_frame_number = frame_to_show;
+
+                    // Mark all intermediate frames as available
+                    for (int offset = 0; offset < frame_delta; ++offset) {
+                        int index =
+                            (ps.read_head + offset) % scene->size_of_buffer;
+                        for (int j = 0; j < scene->num_cams; j++) {
+                            scene->display_buffer[j][index].available_to_write =
+                                true;
+                        }
+                    }
+
+                    // Advance the read head
+                    ps.read_head =
+                        (ps.read_head + frame_delta) % scene->size_of_buffer;
+
+                    // Optional: update slider/UI sync
+                    ps.slider_frame_number = ps.to_display_frame_number;
+                }
             }
         }
     }
