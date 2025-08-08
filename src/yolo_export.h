@@ -83,11 +83,11 @@ void create_data_yaml(const std::string& output_dir,
                      int num_keypoints = 0);
 
 // Main export functions
-bool export_yolo_detection_dataset(const ExportConfig& config);
-bool export_yolo_pose_dataset(const ExportConfig& config);
+bool export_yolo_detection_dataset(const ExportConfig& config, std::string* status = nullptr);
+bool export_yolo_pose_dataset(const ExportConfig& config, std::string* status = nullptr);
 
 // Utility functions
-void print_progress(int current, int total, const std::string& message = "Processing");
+void print_progress(int current, int total, const std::string& message = "Processing", std::string* status = nullptr);
 std::string sanitize_class_name(const std::string& name);
 
 } // namespace YoloExport

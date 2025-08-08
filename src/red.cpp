@@ -420,9 +420,9 @@ int main(int, char **) {
     
     // YOLO Export Tool variables
     bool show_yolo_export_tool = false;
-    char yolo_export_label_dir[512] = "/home/user/data/labels";
-    char yolo_export_video_dir[512] = "/home/user/data/videos";
-    char yolo_export_output_dir[512] = "/home/user/data/yolo_datasets";
+    char yolo_export_label_dir[512] = "/home/user/data/movies/labeled_data";
+    char yolo_export_video_dir[512] = "/home/user/data/movies";
+    char yolo_export_output_dir[512] = "/home/user/data/export";
     char yolo_export_skeleton_file[512] = "";
     char yolo_export_class_names_file[512] = "";
     int yolo_export_image_size = 640;
@@ -3215,9 +3215,9 @@ int main(int, char **) {
                             std::thread export_thread([config, yolo_export_mode, &yolo_export_status, &yolo_export_in_progress]() {
                                 bool success = false;
                                 if (yolo_export_mode == 0) {
-                                    success = YoloExport::export_yolo_detection_dataset(config);
+                                    success = YoloExport::export_yolo_detection_dataset(config, &yolo_export_status);
                                 } else {
-                                    success = YoloExport::export_yolo_pose_dataset(config);
+                                    success = YoloExport::export_yolo_pose_dataset(config, &yolo_export_status);
                                 }
                                 
                                 // Update status (note: this is not thread-safe, but for simple status updates it should be okay)
@@ -3235,13 +3235,7 @@ int main(int, char **) {
                     }
                 } else {
                     ImGui::Text("Export in progress...");
-                    // Simple spinning indicator
-                    static float progress_time = 0.0f;
-                    progress_time += ImGui::GetIO().DeltaTime;
-                    const char* spinner = "|/-\\";
-                    int spinner_index = (int)(progress_time / 0.1f) % 4;
                     ImGui::SameLine();
-                    ImGui::Text("%c", spinner[spinner_index]);
                 }
                 
                 if (!yolo_export_status.empty()) {

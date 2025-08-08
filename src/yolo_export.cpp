@@ -97,21 +97,20 @@ std::vector<float> convert_bbox_to_yolo_format(const std::vector<float>& bbox,
     float y_max = bbox[3];
     
     float x_center = (x_min + x_max) / 2.0f / img_width;
-    float y_center = (y_min + y_max) / 2.0f / img_height;
+    float y_center = 1.0f - (y_min + y_max) / 2.0f / img_height;
     float width = (x_max - x_min) / img_width;
     float height = (y_max - y_min) / img_height;
     
     return {x_center, y_center, width, height};
 }
 
-std::vector<float> convert_keypoints_to_yolo_format(const std::vector<std::vector<float>>& keypoints,
-                                                   int img_width, int img_height) {
+std::vector<float> convert_keypoints_to_yolo_format(const std::vector<std::vector<float>>& keypoints, int img_width, int img_height) {
     std::vector<float> yolo_keypoints;
     
     for (const auto& kp : keypoints) {
         if (kp.size() >= 2) {
             float x = kp[0] / img_width;
-            float y = kp[1] / img_height;
+            float y = 1.0f - kp[1] / img_height;
             float visibility = (kp.size() >= 3) ? kp[2] : 2.0f;  // Default to visible
             
             yolo_keypoints.push_back(x);
@@ -530,9 +529,16 @@ void create_data_yaml(const std::string& output_dir,
     }
 }
 
-void print_progress(int current, int total, const std::string& message) {
-    if ((current + 1) % 10 == 0 || current == total - 1) {
-        std::cout << message << ": " << (current + 1) << "/" << total << " frames" << std::endl;
+void print_progress(int current, int total, const std::string& message, std::string* status) {
+    std::cout << "\r" << message << ": " << (current + 1) << "/" << total << " frames";
+    if (current == total - 1) {
+        std::cout << std::endl;  // New line at the end
+    }
+    std::cout.flush();  // Ensure immediate output
+    
+    // Update GUI status if provided
+    if (status) {
+        *status = message + ": " + std::to_string(current + 1) + "/" + std::to_string(total) + " frames";
     }
 }
 
@@ -542,7 +548,7 @@ std::string sanitize_class_name(const std::string& name) {
     return sanitized;
 }
 
-bool export_yolo_detection_dataset(const ExportConfig& config) {
+bool export_yolo_detection_dataset(const ExportConfig& config, std::string* status) {
     std::cout << "Starting YOLO Detection Dataset Export..." << std::endl;
     
     // Validate input directories
@@ -699,7 +705,7 @@ bool export_yolo_detection_dataset(const ExportConfig& config) {
                 
                 // Convert bbox to YOLO format
                 auto yolo_bbox = convert_bbox_to_yolo_format(bbox, img_width, img_height);
-                
+
                 if (yolo_bbox.size() == 4) {
                     label_file << bbox_data.class_id << " " 
                               << std::fixed << std::setprecision(6)
@@ -708,7 +714,7 @@ bool export_yolo_detection_dataset(const ExportConfig& config) {
                 }
             }
             
-            print_progress(i, split_frames.size(), "  Processed");
+            print_progress(i, split_frames.size(), "  Processed", status);
         }
     }
     
@@ -720,7 +726,7 @@ bool export_yolo_detection_dataset(const ExportConfig& config) {
     return true;
 }
 
-bool export_yolo_pose_dataset(const ExportConfig& config) {
+bool export_yolo_pose_dataset(const ExportConfig& config, std::string* status) {
     std::cout << "Starting YOLO Pose Dataset Export..." << std::endl;
     
     // Validate input directories
@@ -906,7 +912,7 @@ bool export_yolo_pose_dataset(const ExportConfig& config) {
                 }
             }
             
-            print_progress(i, split_frames.size(), "  Processed");
+            print_progress(i, split_frames.size(), "  Processed", status);
         }
     }
     
