@@ -9,6 +9,14 @@
 #include <iomanip>
 #include <cstdlib>
 #include <ctime>
+#include <thread>
+#include <chrono>
+#include <memory>
+#include "FFmpegDemuxer.h"
+#include "decoder.h"
+#include "NvDecoder.h"
+#include "NvCodecUtils.h"
+#include "ColorSpace.h"
 
 namespace YoloExport {
 
@@ -122,43 +130,223 @@ std::vector<float> convert_keypoints_to_yolo_format(const std::vector<std::vecto
     return yolo_keypoints;
 }
 
-cv::Mat extract_frame_ffmpeg(const std::string& video_path, int frame_number) {
-    // Create a temporary directory for frame extraction
-    std::string temp_dir = "/tmp/frame_extraction_" + std::to_string(std::time(nullptr));
-    std::string mkdir_cmd = "mkdir -p " + temp_dir;
-    if (system(mkdir_cmd.c_str()) != 0) {
-        std::cerr << "Error: Failed to create temporary directory: " << temp_dir << std::endl;
+struct BufferBasedExtractor {
+    FFmpegDemuxer* demuxer;
+    NvDecoder* decoder;
+    CUcontext cuContext;
+    CUdeviceptr pTmpImage;
+    int keyframe_interval;
+    int width, height;
+    std::vector<std::pair<int, cv::Mat>> frame_buffer; 
+    int buffer_keyframe_start;
+    bool initialized;
+    std::set<int> processed_frames; 
+    
+    BufferBasedExtractor() : demuxer(nullptr), decoder(nullptr), cuContext(nullptr),
+                           pTmpImage(0), keyframe_interval(0), width(0), height(0), 
+                           buffer_keyframe_start(-1), initialized(false) {}
+    
+    ~BufferBasedExtractor() {
+        cleanup();
+    }
+    
+    void cleanup() {
+        frame_buffer.clear();
+        processed_frames.clear();
+        if (pTmpImage) {
+            cuMemFree(pTmpImage);
+            pTmpImage = 0;
+        }
+        if (decoder) {
+            delete decoder;
+            decoder = nullptr;
+        }
+        if (demuxer) {
+            delete demuxer;
+            demuxer = nullptr;
+        }
+        if (cuContext) {
+            cuCtxDestroy(cuContext);
+            cuContext = nullptr;
+        }
+        initialized = false;
+    }
+    
+    bool initialize(const std::string& video_path) {
+        cleanup();
+        
+        try {
+            ck(cuInit(0));
+            createCudaContext(&cuContext, 0, 0);
+            
+            // Initialize demuxer with empty options map
+            std::map<std::string, std::string> ffmpeg_options;
+            demuxer = new FFmpegDemuxer(video_path.c_str(), ffmpeg_options);
+            
+            keyframe_interval = demuxer->FindKeyFrameInterval();
+            if (keyframe_interval <= 0) {
+                keyframe_interval = 60; 
+            }
+            
+            // Get video dimensions
+            width = demuxer->GetWidth();
+            height = demuxer->GetHeight();
+            
+            // Initialize decoder
+            decoder = new NvDecoder(cuContext, true, FFmpeg2NvCodecId(demuxer->GetVideoCodec()));
+            
+            ck(cuMemAlloc(&pTmpImage, width * height * 4)); 
+            
+            initialized = true;
+            buffer_keyframe_start = -1;
+            
+            return true;
+        } catch (const std::exception& e) {
+            std::cerr << "Error initializing BufferBasedExtractor: " << e.what() << std::endl;
+            cleanup();
+            return false;
+        }
+    }
+    
+    cv::Mat extract_frame(int target_frame) {
+        if (!initialized) {
+            std::cerr << "BufferBasedExtractor not initialized" << std::endl;
+            return cv::Mat();
+        }
+        
+        std::cout << "Extracting frame " << target_frame << std::endl;
+        int keyframe_start = (target_frame / keyframe_interval) * keyframe_interval;
+        if (keyframe_start != buffer_keyframe_start) {
+            if (!fill_buffer_from_keyframe(keyframe_start, target_frame)) {
+                return cv::Mat();
+            }
+        }
+        
+        for (const auto& buffered_frame : frame_buffer) {
+            if (buffered_frame.first == target_frame) {
+                processed_frames.insert(target_frame);
+                return buffered_frame.second.clone();
+            }
+        }
+        
+        std::cerr << "Frame " << target_frame << " not found in buffer after loading" << std::endl;
         return cv::Mat();
     }
     
-    // Extract the specific frame using FFmpeg
-    std::string output_path = temp_dir + "/frame.png";
-    std::string ffmpeg_cmd = "ffmpeg -i \"" + video_path + "\" -vf \"select=eq(n\\," + 
-                            std::to_string(frame_number) + ")\" -vframes 1 \"" + output_path + "\" -y 2>/dev/null";
-    
-    std::cout << "Extracting frame " << frame_number << " using FFmpeg..." << std::endl;
-    
-    int result = system(ffmpeg_cmd.c_str());
-    if (result != 0) {
-        std::cerr << "Error: FFmpeg frame extraction failed for frame " << frame_number << std::endl;
-        system(("rm -rf " + temp_dir).c_str());
-        return cv::Mat();
+private:
+    bool fill_buffer_from_keyframe(int keyframe_start, int target_frame) {
+        
+        // Clear previous buffer
+        frame_buffer.clear();
+        
+        try {
+            // Seek to the keyframe
+            SeekContext seek_ctx;
+            seek_ctx.use_seek = true;
+            seek_ctx.seek_frame = keyframe_start;
+            seek_ctx.mode = EXACT_FRAME; 
+            seek_ctx.crit = BY_NUMBER;
+            
+            uint8_t *pVideo = nullptr;
+            size_t nVideoBytes = 0;
+            PacketData pktData;
+            
+            if (!demuxer->Seek(seek_ctx, pVideo, nVideoBytes, pktData)) {
+                std::cerr << "Failed to seek to keyframe " << keyframe_start << std::endl;
+                return false;
+            }
+            
+            
+            int frames_needed = keyframe_interval;
+            int frames_decoded = 0;
+            int current_frame_number = keyframe_start;
+            
+            while (frames_decoded < frames_needed && frame_buffer.size() < static_cast<size_t>(keyframe_interval)) {
+                if (!demuxer->Demux(pVideo, nVideoBytes, pktData)) {
+                    break; 
+                }
+                
+                if (nVideoBytes > 0) {
+                    // Decode frame
+                    int nFrameReturned = decoder->Decode(pVideo, nVideoBytes);
+                    
+                    for (int i = 0; i < nFrameReturned; i++) {
+                        uint8_t* pFrame = decoder->GetFrame();
+                        if (pFrame) {
+                            cv::Mat frame = convert_frame_to_mat(pFrame);
+                            if (!frame.empty()) {
+                                // Store frame with sequential numbering from keyframe start
+                                frame_buffer.push_back({current_frame_number, frame});
+                                current_frame_number++;
+                            }
+                        }
+                        frames_decoded++;
+                        
+                        // Stop if buffer is full
+                        if (frame_buffer.size() >= static_cast<size_t>(keyframe_interval)) {
+                            break;
+                        }
+                    }
+                }
+                
+                if (frames_decoded > keyframe_interval * 2) {
+                    std::cout << "Decoded more frames than expected, stopping" << std::endl;
+                    break;
+                }
+            }
+            
+            buffer_keyframe_start = keyframe_start;
+            return true;
+            
+        } catch (const std::exception& e) {
+            std::cerr << "Error loading frames around " << target_frame << ": " << e.what() << std::endl;
+            return false;
+        }
     }
     
-    // Load the extracted frame using OpenCV
-    cv::Mat frame = cv::imread(output_path, cv::IMREAD_COLOR);
-    if (frame.empty()) {
-        std::cerr << "Error: Could not load extracted frame from " << output_path << std::endl;
-        system(("rm -rf " + temp_dir).c_str());
-        return cv::Mat();
+    cv::Mat convert_frame_to_mat(uint8_t* pFrame) {
+        try {
+            // Get matrix coefficients for color conversion
+            int iMatrix = decoder->GetVideoFormatInfo().video_signal_description.matrix_coefficients;
+            Nv12ToColor32<RGBA32>(pFrame, width, (uint8_t *)pTmpImage, 4 * width, width, height, iMatrix);
+            
+            // Allocate CPU buffer for the converted frame and copy
+            uint8_t* cpu_buffer = new uint8_t[width * height * 4];
+            decoder_get_image_from_gpu(pTmpImage, cpu_buffer, 4 * width, height);
+
+            cv::Mat rgba_frame(height, width, CV_8UC4, cpu_buffer);
+            cv::Mat bgr_frame;
+            cv::cvtColor(rgba_frame, bgr_frame, cv::COLOR_RGBA2BGR);
+            
+            cv::Mat result = bgr_frame.clone();
+            
+            delete[] cpu_buffer;
+            
+            return result;
+            
+        } catch (const std::exception& e) {
+            std::cerr << "Error converting frame to Mat: " << e.what() << std::endl;
+            return cv::Mat();
+        }
+    }
+};
+
+cv::Mat extract_frame(const std::string& video_path, int frame_number) {
+    static std::map<std::string, std::unique_ptr<BufferBasedExtractor>> extractors;
+    
+    // Get or create extractor for this video
+    auto it = extractors.find(video_path);
+    if (it == extractors.end()) {
+        auto extractor = std::make_unique<BufferBasedExtractor>();
+        if (!extractor->initialize(video_path)) {
+            std::cerr << "Failed to initialize extractor for " << video_path << std::endl;
+            return cv::Mat();
+        }
+        extractors[video_path] = std::move(extractor);
+        it = extractors.find(video_path);
     }
     
-    std::cout << "Successfully extracted frame " << frame_number << " (" << frame.cols << "x" << frame.rows << ")" << std::endl;
-    
-    // Clean up temporary files
-    system(("rm -rf " + temp_dir).c_str());
-    
-    return frame;
+    return it->second->extract_frame(frame_number);
 }
 
 std::vector<FrameAnnotation> load_frame_annotations(const std::string& label_dir) {
@@ -230,7 +418,6 @@ std::map<std::string, std::vector<BoundingBox>> parse_bbox_csv(const std::string
                 std::string frame_id = tokens[0];
                 BoundingBox bbox;
                 bbox.class_id = std::stoi(tokens[2]);
-                // bbox.confidence = std::stof(tokens[3]); // We don't use confidence in BoundingBox struct
                 bbox.bbox = {
                     std::stof(tokens[4]),  // x_min
                     std::stof(tokens[5]),  // y_min
@@ -283,23 +470,22 @@ std::map<std::string, std::vector<std::vector<float>>> parse_keypoint_csv(const 
             tokens.push_back(token);
         }
         
-        if (tokens.size() >= 1 + num_nodes * 4) {  // frame_id + num_nodes * (id,x,y,z)
+        if (tokens.size() >= 1 + num_nodes * 4) { 
             try {
                 std::string frame_id = tokens[0];
                 std::vector<std::vector<float>> keypoints;
                 
                 for (int i = 0; i < num_nodes; ++i) {
-                    int base_idx = 1 + i * 4;  // Skip frame_id, then groups of 4 (id, x, y, z)
+                    int base_idx = 1 + i * 4;  
                     
                     if (base_idx + 3 < tokens.size()) {
                         float x = std::stof(tokens[base_idx + 1]);
                         float y = std::stof(tokens[base_idx + 2]);
-                        // z coordinate is stored but not used for YOLO format
                         
                         // Check if keypoint is labeled (not NaN or invalid)
-                        float visibility = 0;  // Not labeled
+                        float visibility = 0;  
                         if (!(std::isnan(x) || std::isnan(y) || x == 1e7 || y == 1e7)) {
-                            visibility = 2;  // Visible and labeled
+                            visibility = 2; 
                         } else {
                             x = 0;
                             y = 0;
@@ -400,7 +586,7 @@ std::vector<FrameAnnotation> load_pose_annotations(const std::string& label_dir,
         if (annotation.bboxes.empty() && all_camera_keypoints.find(frame_id) != all_camera_keypoints.end()) {
             BoundingBox default_bbox;
             default_bbox.class_id = 0;  // Default to class 0 (e.g., person)
-            default_bbox.bbox = {0, 0, 100, 100};  // Default bbox, will be adjusted later
+            default_bbox.bbox = {0, 0, 100, 100};  
             default_bbox.keypoints = all_camera_keypoints[frame_id];
             annotation.bboxes.push_back(default_bbox);
         }
@@ -532,11 +718,10 @@ void create_data_yaml(const std::string& output_dir,
 void print_progress(int current, int total, const std::string& message, std::string* status) {
     std::cout << "\r" << message << ": " << (current + 1) << "/" << total << " frames";
     if (current == total - 1) {
-        std::cout << std::endl;  // New line at the end
+        std::cout << std::endl;  
     }
-    std::cout.flush();  // Ensure immediate output
+    std::cout.flush();  
     
-    // Update GUI status if provided
     if (status) {
         *status = message + ": " + std::to_string(current + 1) + "/" + std::to_string(total) + " frames";
     }
@@ -645,7 +830,6 @@ bool export_yolo_detection_dataset(const ExportConfig& config, std::string* stat
                 camera_name = frame_id.substr(0, underscore_pos);
                 original_frame_id = frame_id.substr(underscore_pos + 1);
             } else {
-                // Fallback: assume frame_id is just the frame number and find matching video
                 original_frame_id = frame_id;
                 // Try to find any video file that might match
                 if (!video_files.empty()) {
@@ -670,7 +854,7 @@ bool export_yolo_detection_dataset(const ExportConfig& config, std::string* stat
             }
             
             // Extract frame
-            cv::Mat frame = extract_frame_ffmpeg(video_it->second, frame_number);
+            cv::Mat frame = extract_frame(video_it->second, frame_number);
             if (frame.empty()) {
                 std::cerr << "Failed to extract frame " << frame_id << std::endl;
                 continue;
@@ -767,7 +951,6 @@ bool export_yolo_pose_dataset(const ExportConfig& config, std::string* status) {
         return false;
     }
     
-    // Extract class names (for pose, typically just "person" or similar)
     std::set<std::string> unique_classes;
     for (const auto& annotation : annotations) {
         for (const auto& bbox : annotation.bboxes) {
@@ -827,22 +1010,18 @@ bool export_yolo_pose_dataset(const ExportConfig& config, std::string* status) {
                 camera_name = frame_id.substr(0, underscore_pos);
                 original_frame_id = frame_id.substr(underscore_pos + 1);
             } else {
-                // Fallback: assume frame_id is just the frame number and find matching video
                 original_frame_id = frame_id;
-                // Try to find any video file that might match
                 if (!video_files.empty()) {
                     camera_name = video_files.begin()->first;
                 }
             }
             
-            // Find video file
             auto video_it = video_files.find(camera_name);
             if (video_it == video_files.end()) {
                 std::cerr << "Warning: Video file not found for camera: " << camera_name << std::endl;
                 continue;
             }
             
-            // Convert frame ID to frame number
             int frame_number;
             try {
                 frame_number = std::stoi(original_frame_id);
@@ -852,7 +1031,7 @@ bool export_yolo_pose_dataset(const ExportConfig& config, std::string* status) {
             }
             
             // Extract frame
-            cv::Mat frame = extract_frame_ffmpeg(video_it->second, frame_number);
+            cv::Mat frame = extract_frame(video_it->second, frame_number);
             if (frame.empty()) {
                 std::cerr << "Failed to extract frame " << frame_id << std::endl;
                 continue;
@@ -924,4 +1103,4 @@ bool export_yolo_pose_dataset(const ExportConfig& config, std::string* status) {
     return true;
 }
 
-} // namespace YoloExport
+} 
