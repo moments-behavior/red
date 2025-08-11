@@ -32,11 +32,11 @@ elif command -v python3 -m venv &> /dev/null; then
     echo "Using Python venv to create environment..."
     
     # Create virtual environment
-    python3 -m venv red_exporter_env
+    python3 -m venv red_yolo_exporter_env
     
     # Activate environment
-    source red_exporter_env/bin/activate
-    
+    source red_yolo_exporter_env/bin/activate
+
     # Upgrade pip
     pip install --upgrade pip
     
@@ -45,11 +45,11 @@ elif command -v python3 -m venv &> /dev/null; then
     pip install -r requirements.txt
     
     echo ""
-    echo "✓ Virtual environment 'red_exporter_env' created successfully!"
+    echo "✓ Virtual environment 'red_yolo_exporter_env' created successfully!"
     echo ""
     echo "To activate the environment, run:"
-    echo "  source red_exporter_env/bin/activate"
-    
+    echo "  source red_yolo_exporter_env/bin/activate"
+
 else
     echo "Neither conda nor python3 venv is available."
     echo "Please install conda or ensure python3-venv is installed."
