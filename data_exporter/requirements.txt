@@ -1,10 +1,4 @@
-# RED Data Exporter - Python Requirements
-# Install with: pip install -r requirements.txt
-
-# Core data processing libraries
 numpy>=1.21.0,<2.0.0
 opencv-python>=4.5.0,<5.0.0
 PyYAML>=6.0,<7.0.0
-
-# Uncomment if you plan to train YOLO models with the exported datasets:
 ultralytics>=8.0.0
