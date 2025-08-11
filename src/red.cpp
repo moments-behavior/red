@@ -1179,7 +1179,7 @@ int main(int, char **) {
 
             // Automatic YOLO detection for current frame
             if (auto_yolo_labeling && !yolo_model_path.empty() &&
-                skeleton->has_bbox && ps.pause_seeked) {
+                skeleton->has_bbox) {
                 if (!frameHasYoloDetections(current_frame_num, keypoints_map,
                                             skeleton) &&
                     yolo_processed_frames.find(current_frame_num) ==
@@ -1196,20 +1196,43 @@ int main(int, char **) {
 
                     // Run YOLO inference on all cameras for this frame
                     for (int cam_id = 0; cam_id < scene->num_cams; cam_id++) {
-                        unsigned char *frame_data =
-                            scene->display_buffer[cam_id][select_corr_head]
-                                .frame;
+                        if (ps.pause_seeked) {
+                            unsigned char *frame_data =
+                                scene->display_buffer[cam_id][select_corr_head]
+                                    .frame;
 
-                        if (frame_data) {
-                            yolo_predictions[cam_id] =
-                                runYoloInference(yolo_model_path, frame_data,
-                                                 scene->image_width[cam_id],
-                                                 scene->image_height[cam_id]);
+                            if (frame_data) {
+                                yolo_predictions[cam_id] =
+                                    runYoloInference(yolo_model_path, frame_data,
+                                                    scene->image_width[cam_id],
+                                                    scene->image_height[cam_id]);
 
-                            yolo_bboxes[cam_id].clear();
-                            for (const auto &pred : yolo_predictions[cam_id]) {
-                                yolo_bboxes[cam_id].emplace_back(pred);
+                                yolo_bboxes[cam_id].clear();
+                                for (const auto &pred : yolo_predictions[cam_id]) {
+                                    yolo_bboxes[cam_id].emplace_back(pred);
+                                }
                             }
+                        } else {
+                            if (window_was_decoding[camera_names[cam_id]]) {
+                                unsigned char *frame_data =
+                                    scene->display_buffer[cam_id]
+                                        [select_corr_head]
+                                        .frame;
+
+                                if (frame_data) {
+                                    yolo_predictions[cam_id] =
+                                        runYoloInference(
+                                            yolo_model_path, frame_data,
+                                            scene->image_width[cam_id],
+                                            scene->image_height[cam_id]);
+
+                                    yolo_bboxes[cam_id].clear();
+                                    for (const auto &pred :
+                                         yolo_predictions[cam_id]) {
+                                        yolo_bboxes[cam_id].emplace_back(pred);
+                                    }
+                                }
+                            } 
                         }
                     }
 
@@ -3278,6 +3301,7 @@ int main(int, char **) {
                 }
                 ImGui::End();
             }
+        }
 
             if (ImGuiFileDialog::Instance()->Display("ChooseKeypointsFolder")) {
                 if (ImGuiFileDialog::Instance()->IsOk()) {
@@ -4185,7 +4209,6 @@ int main(int, char **) {
                 }
             }
         }
-
         // Cleanup
         cleanup_yolo_drag_boxes(); // Clean up YOLO drag boxes memory
         ImGui_ImplOpenGL3_Shutdown();
@@ -4201,5 +4224,4 @@ int main(int, char **) {
             t.join();
 
         return 0;
-    }
 }

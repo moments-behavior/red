@@ -3,10 +3,6 @@ project(redgui LANGUAGES CXX CUDA)
 
 # Set CUDA architecture and options
 set(CMAKE_CUDA_ARCHITECTURES 80)
-set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -arch=sm_80")
-
-set(CMAKE_CXX_STANDARD 20)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 add_compile_options(-msse4.1)
 
@@ -14,9 +10,15 @@ add_compile_options(-msse4.1)
 set(DIR_IMGUI "${CMAKE_SOURCE_DIR}/lib/imgui")
 set(DIR_IMPLOT "${CMAKE_SOURCE_DIR}/lib/implot")
 set(DIR_FFMPEG "$ENV{HOME}/nvidia/ffmpeg/build")
-set(DIR_TENSORRT "$ENV{HOME}/build/TensorRT-8.6.1.6")
+set(DIR_TENSORRT "$ENV{HOME}/nvidia/TensorRT-8.6.1.6")
 set(DIR_FILEBROWSER "${CMAKE_SOURCE_DIR}/lib/ImGuiFileDialog")
 set(DIR_ICONFONT "${CMAKE_SOURCE_DIR}/lib/IconFontCppHeaders")
+
+# Added for LibTorch
+set(DIR_LIBTORCH "${CMAKE_SOURCE_DIR}/lib/libtorch")
+set(LIBTORCH_INCLUDE "${DIR_LIBTORCH}/include")
+set(LIBTORCH_INCLUDE_API "${DIR_LIBTORCH}/include/torch/csrc/api/include")
+set(LIBTORCH_LIB "${DIR_LIBTORCH}/lib")
 
 # Source Files
 file(GLOB SRC_FILES src/*.cpp lib/ImGuiFileDialog/ImGuiFileDialog.cpp)
@@ -41,6 +43,7 @@ add_executable(redgui
     ${IMPLOT_SRC}
     ${CUDA_SRC_FILES}
 )
+
 # Include Directories
 target_include_directories(redgui PRIVATE
         ${SRC_DIR}
@@ -54,6 +57,8 @@ target_include_directories(redgui PRIVATE
         ${DIR_FFMPEG}/include
         ${DIR_TENSORRT}/include
         /usr/local/cuda/include
+        ${LIBTORCH_INCLUDE}
+        ${LIBTORCH_INCLUDE_API}
 )
 
 # Link Libraries
@@ -67,6 +72,13 @@ target_link_libraries(redgui PRIVATE
     pthread
     -L/usr/local/cuda/lib64/ -lcudart -lcuda -lnvcuvid -lnppicc -lnppidei -lnvidia-encode -lnppc -lnppig -lnppial
     -L${DIR_FFMPEG}/lib/ -lavformat -lswscale -lswresample -lavutil -lavcodec
-        -lopencv_sfm -lopencv_core -lopencv_bgsegm -lopencv_imgcodecs -lopencv_imgproc -lopencv_video -lopencv_highgui -lopencv_videoio -lopencv_calib3d -lopencv_dnn
+    -lopencv_sfm -lopencv_core -lopencv_bgsegm -lopencv_imgcodecs -lopencv_imgproc -lopencv_video -lopencv_highgui -lopencv_videoio -lopencv_calib3d -lopencv_dnn
     -L${DIR_TENSORRT}/lib/ -lnvinfer -lnvinfer_plugin
+    -L${LIBTORCH_LIB} -ltorch -lc10 -ltorch_cpu
+)
+
+# Set RPATH so runtime finds libtorch
+set_target_properties(redgui PROPERTIES
+    BUILD_RPATH ${LIBTORCH_LIB}
+    INSTALL_RPATH ${LIBTORCH_LIB}
 )

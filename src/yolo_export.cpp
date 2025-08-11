@@ -17,6 +17,7 @@
 #include "NvDecoder.h"
 #include "NvCodecUtils.h"
 #include "ColorSpace.h"
+#include "AppDecUtils.h"
 
 namespace YoloExport {
 
