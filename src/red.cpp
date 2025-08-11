@@ -169,7 +169,8 @@ float calculateIoU(const YoloPrediction &a, const YoloPrediction &b) {
 }
 
 std::vector<YoloPrediction> applyNMS(std::vector<YoloPrediction> &predictions,
-                                     float iou_threshold) {
+                                     float iou_threshold,
+                                     float confidence_threshold) {
     predictions.erase(
         std::remove_if(predictions.begin(), predictions.end(),
                        [confidence_threshold](const YoloPrediction &pred) {
@@ -368,7 +369,8 @@ std::vector<YoloPrediction> runYoloInference(const std::string &model_path,
         std::cout << "Found " << predictions.size()
                   << " raw detections before NMS" << std::endl;
 
-        predictions = applyNMS(predictions, iou_threshold);
+        predictions =
+            applyNMS(predictions, iou_threshold, confidence_threshold);
 
         std::cout << "YOLO inference completed. Found " << predictions.size()
                   << " detections after NMS." << std::endl;
@@ -503,7 +505,6 @@ int main(int, char **) {
     int selected_node_for_edge = -1;
     std::string skeleton_creator_name = "CustomSkeleton";
     bool skeleton_creator_has_bbox = false;
-    bool skeleton_creator_has_skeleton = true;
     std::string skeleton_file_path = ""; // Track currently loaded skeleton file
 
     // YOLO Export Tool variables
@@ -1202,29 +1203,30 @@ int main(int, char **) {
                                     .frame;
 
                             if (frame_data) {
-                                yolo_predictions[cam_id] =
-                                    runYoloInference(yolo_model_path, frame_data,
-                                                    scene->image_width[cam_id],
-                                                    scene->image_height[cam_id]);
+                                yolo_predictions[cam_id] = runYoloInference(
+                                    yolo_model_path, frame_data,
+                                    scene->image_width[cam_id],
+                                    scene->image_height[cam_id]);
 
                                 yolo_bboxes[cam_id].clear();
-                                for (const auto &pred : yolo_predictions[cam_id]) {
+                                for (const auto &pred :
+                                     yolo_predictions[cam_id]) {
                                     yolo_bboxes[cam_id].emplace_back(pred);
                                 }
                             }
                         } else {
                             if (window_was_decoding[camera_names[cam_id]]) {
                                 unsigned char *frame_data =
-                                    scene->display_buffer[cam_id]
-                                        [select_corr_head]
+                                    scene
+                                        ->display_buffer[cam_id]
+                                                        [select_corr_head]
                                         .frame;
 
                                 if (frame_data) {
-                                    yolo_predictions[cam_id] =
-                                        runYoloInference(
-                                            yolo_model_path, frame_data,
-                                            scene->image_width[cam_id],
-                                            scene->image_height[cam_id]);
+                                    yolo_predictions[cam_id] = runYoloInference(
+                                        yolo_model_path, frame_data,
+                                        scene->image_width[cam_id],
+                                        scene->image_height[cam_id]);
 
                                     yolo_bboxes[cam_id].clear();
                                     for (const auto &pred :
@@ -1232,7 +1234,7 @@ int main(int, char **) {
                                         yolo_bboxes[cam_id].emplace_back(pred);
                                     }
                                 }
-                            } 
+                            }
                         }
                     }
 
@@ -3087,1011 +3089,711 @@ int main(int, char **) {
                     if (has_labels) {
                         labeled_count++;
                     }
+                }
+                ImGui::Text("Total labeled frames : %zu", labeled_count);
 
-                    ImGui::Text("Total labeled frames : %zu", labeled_count);
+                // Only show YOLO button when current skeleton has bounding
+                // boxes
+                if (skeleton->has_bbox) {
+                    if (ImGui::Button("Select YOLO")) {
+                        IGFD::FileDialogConfig config;
+                        config.countSelectionMax = 1;
+                        config.path = "/home/user/data"; // fix later
+                        config.flags = ImGuiFileDialogFlags_Modal;
+                        ImGuiFileDialog::Instance()->OpenDialog(
+                            "ChooseYoloModel", "Choose YOLO Model", ".pt",
+                            config);
+                    }
+                }
 
-                    // Only show YOLO button when current skeleton has bounding
-                    // boxes
-                    if (skeleton->has_bbox) {
-                        if (ImGui::Button("Select YOLO")) {
-                            IGFD::FileDialogConfig config;
-                            config.countSelectionMax = 1;
-                            config.path = "/home/user/data"; // fix later
-                            config.flags = ImGuiFileDialogFlags_Modal;
-                            ImGuiFileDialog::Instance()->OpenDialog(
-                                "ChooseYoloModel", "Choose YOLO Model", ".pt",
-                                config);
+                if (ImGuiFileDialog::Instance()->Display("ChooseYoloModel")) {
+                    if (ImGuiFileDialog::Instance()->IsOk()) {
+                        std::string model_path =
+                            ImGuiFileDialog::Instance()->GetFilePathName();
+                        if (!model_path.empty()) {
+                            yolo_model_path = model_path;
+                            std::cout
+                                << "Selected YOLO model: " << yolo_model_path
+                                << std::endl;
                         }
                     }
+                    // close
+                    ImGuiFileDialog::Instance()->Close();
+                }
 
-                    if (ImGuiFileDialog::Instance()->Display(
-                            "ChooseYoloModel")) {
-                        if (ImGuiFileDialog::Instance()->IsOk()) {
-                            std::string model_path =
-                                ImGuiFileDialog::Instance()->GetFilePathName();
-                            if (!model_path.empty()) {
-                                yolo_model_path = model_path;
-                                std::cout << "Selected YOLO model: "
-                                          << yolo_model_path << std::endl;
-                            }
-                        }
-                        // close
-                        ImGuiFileDialog::Instance()->Close();
+                // Show model path and run prediction button (only if model
+                // is selected)
+                if (!yolo_model_path.empty()) {
+                    ImGui::Text("Selected model: %s", yolo_model_path.c_str());
+
+                    // Automatic YOLO labeling checkbox
+                    ImGui::Checkbox("Automatic YOLO Labeling",
+                                    &auto_yolo_labeling);
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "Automatically run YOLO detection on current "
+                            "and subsequent frames");
                     }
 
-                    // Show model path and run prediction button (only if model
-                    // is selected)
-                    if (!yolo_model_path.empty()) {
-                        ImGui::Text("Selected model: %s",
-                                    yolo_model_path.c_str());
+                    // YOLO parameter sliders
+                    ImGui::SliderFloat("Confidence Threshold",
+                                       &confidence_threshold, 0.01f, 0.99f,
+                                       "%.2f");
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "Minimum confidence score for detections");
+                    }
 
-                        // Automatic YOLO labeling checkbox
-                        ImGui::Checkbox("Automatic YOLO Labeling",
-                                        &auto_yolo_labeling);
-                        if (ImGui::IsItemHovered()) {
-                            ImGui::SetTooltip(
-                                "Automatically run YOLO detection on current "
-                                "and subsequent frames");
-                        }
+                    ImGui::SliderFloat("NMS IoU Threshold", &iou_threshold,
+                                       0.01f, 0.99f, "%.2f");
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip(
+                            "Non-Maximum Suppression IoU threshold");
+                    }
 
-                        // YOLO parameter sliders
-                        ImGui::SliderFloat("Confidence Threshold",
-                                           &confidence_threshold, 0.01f, 0.99f,
-                                           "%.2f");
-                        if (ImGui::IsItemHovered()) {
-                            ImGui::SetTooltip(
-                                "Minimum confidence score for detections");
-                        }
+                    if (ImGui::Button("Run YOLO Prediction")) {
+                        std::cout << "Running YOLO prediction on frame "
+                                  << ps.to_display_frame_number << std::endl;
 
-                        ImGui::SliderFloat("NMS IoU Threshold", &iou_threshold,
-                                           0.01f, 0.99f, "%.2f");
-                        if (ImGui::IsItemHovered()) {
-                            ImGui::SetTooltip(
-                                "Non-Maximum Suppression IoU threshold");
-                        }
+                        yolo_detection = true;
 
-                        if (ImGui::Button("Run YOLO Prediction")) {
-                            std::cout << "Running YOLO prediction on frame "
-                                      << ps.to_display_frame_number
-                                      << std::endl;
-
-                            yolo_detection = true;
-
-                            // Clear existing bounding boxes for current frame
-                            // before running inference
-                            if (skeleton->has_bbox) {
-                                bool keypoints_find =
-                                    keypoints_map.find(current_frame_num) !=
-                                    keypoints_map.end();
-                                if (keypoints_find) {
-                                    for (int cam_id = 0;
-                                         cam_id < scene->num_cams; cam_id++) {
-                                        auto &bbox_list =
-                                            keypoints_map[current_frame_num]
-                                                ->bbox2d_list[cam_id];
-                                        // Clear all bounding boxes for this
-                                        // camera
-                                        for (auto &bbox : bbox_list) {
-                                            if (bbox.rect) {
-                                                delete bbox.rect;
-                                                bbox.rect = nullptr;
-                                            }
-                                            if (bbox.has_bbox_keypoints &&
-                                                bbox.bbox_keypoints2d) {
-                                                free(bbox.bbox_keypoints2d);
-                                                bbox.bbox_keypoints2d = nullptr;
-                                                free(bbox.active_kp_id);
-                                                bbox.active_kp_id = nullptr;
-                                            }
-                                        }
-                                        bbox_list.clear();
-                                    }
-                                    std::cout << "Cleared existing bounding "
-                                                 "boxes for frame "
-                                              << current_frame_num << std::endl;
-                                }
-                            }
-
-                            if (!yolo_bboxes.empty() &&
-                                std::any_of(yolo_bboxes.begin(),
-                                            yolo_bboxes.end(),
-                                            [](const auto &cam_bboxes) {
-                                                return !cam_bboxes.empty();
-                                            })) {
-                                // Convert YOLO detections to main bounding box
-                                // system
-                                for (int cam_id = 0; cam_id < scene->num_cams;
-                                     cam_id++) {
-                                    if (!yolo_bboxes[cam_id].empty()) {
-                                        // Ensure keypoints structure exists
-                                        bool keypoints_find =
-                                            keypoints_map.find(
-                                                current_frame_num) !=
-                                            keypoints_map.end();
-                                        if (!keypoints_find) {
-                                            KeyPoints *keypoints =
-                                                (KeyPoints *)malloc(
-                                                    sizeof(KeyPoints));
-                                            allocate_keypoints(keypoints, scene,
-                                                               skeleton);
-                                            keypoints_map[current_frame_num] =
-                                                keypoints;
-                                        }
-
-                                        // Add YOLO detections to main bounding
-                                        // box system
-                                        for (const auto &yolo_bbox :
-                                             yolo_bboxes[cam_id]) {
-                                            if (yolo_bbox.is_valid) {
-                                                BoundingBox bbox;
-
-                                                // Create ImPlotRect from YOLO
-                                                // coordinates (no Y-axis
-                                                // flipping)
-                                                bbox.rect = new ImPlotRect(
-                                                    yolo_bbox.x_min, // X.Min
-                                                    yolo_bbox.x_max, // X.Max
-                                                    yolo_bbox.y_min, // Y.Min
-                                                    yolo_bbox.y_max  // Y.Max
-                                                );
-
-                                                bbox.state = RectTwoPoints;
-                                                bbox.class_id =
-                                                    yolo_bbox.class_id;
-                                                bbox.confidence =
-                                                    yolo_bbox.confidence;
-                                                bbox.has_bbox_keypoints = false;
-                                                bbox.bbox_keypoints2d = nullptr;
-                                                bbox.active_kp_id = nullptr;
-
-                                                // Allocate keypoints if
-                                                // skeleton supports both bbox
-                                                // and skeleton
-                                                if (skeleton->has_bbox &&
-                                                    skeleton->has_skeleton &&
-                                                    skeleton->num_nodes > 0) {
-                                                    allocate_bbox_keypoints(
-                                                        &bbox, scene, skeleton);
-                                                }
-
-                                                // Add to main bounding box
-                                                // system
-                                                keypoints_map[current_frame_num]
-                                                    ->bbox2d_list[cam_id]
-                                                    .push_back(bbox);
-                                            }
-                                        }
-
-                                        std::cout << "Added "
-                                                  << yolo_bboxes[cam_id].size()
-                                                  << " YOLO detections to main "
-                                                     "bounding "
-                                                     "box system for camera "
-                                                  << cam_id << std::endl;
-                                    }
-                                }
-                            }
-                        }
-
-                        // Display detection info for hovered bounding box
+                        // Clear existing bounding boxes for current frame
+                        // before running inference
                         if (skeleton->has_bbox) {
                             bool keypoints_find =
                                 keypoints_map.find(current_frame_num) !=
                                 keypoints_map.end();
                             if (keypoints_find) {
-                                ImGui::Separator();
-                                ImGui::Text("Bounding Box Info:");
+                                for (int cam_id = 0; cam_id < scene->num_cams;
+                                     cam_id++) {
+                                    auto &bbox_list =
+                                        keypoints_map[current_frame_num]
+                                            ->bbox2d_list[cam_id];
+                                    // Clear all bounding boxes for this
+                                    // camera
+                                    for (auto &bbox : bbox_list) {
+                                        if (bbox.rect) {
+                                            delete bbox.rect;
+                                            bbox.rect = nullptr;
+                                        }
+                                        if (bbox.has_bbox_keypoints &&
+                                            bbox.bbox_keypoints2d) {
+                                            free(bbox.bbox_keypoints2d);
+                                            bbox.bbox_keypoints2d = nullptr;
+                                            free(bbox.active_kp_id);
+                                            bbox.active_kp_id = nullptr;
+                                        }
+                                    }
+                                    bbox_list.clear();
+                                }
+                                std::cout << "Cleared existing bounding "
+                                             "boxes for frame "
+                                          << current_frame_num << std::endl;
+                            }
+                        }
 
-                                if (hovered_bbox_cam >= 0 &&
-                                    hovered_bbox_idx >= 0) {
-                                    ImGui::Text("Camera: %d, Box: %d",
-                                                hovered_bbox_cam,
-                                                hovered_bbox_idx);
-                                    ImGui::Text("Class: %d, Confidence: %.1f%%",
-                                                hovered_bbox_class,
-                                                hovered_bbox_confidence *
-                                                    100.0f);
-                                } else {
-                                    ImGui::Text("Hover over a bounding box to "
-                                                "see details");
+                        if (!yolo_bboxes.empty() &&
+                            std::any_of(yolo_bboxes.begin(), yolo_bboxes.end(),
+                                        [](const auto &cam_bboxes) {
+                                            return !cam_bboxes.empty();
+                                        })) {
+                            // Convert YOLO detections to main bounding box
+                            // system
+                            for (int cam_id = 0; cam_id < scene->num_cams;
+                                 cam_id++) {
+                                if (!yolo_bboxes[cam_id].empty()) {
+                                    // Ensure keypoints structure exists
+                                    bool keypoints_find =
+                                        keypoints_map.find(current_frame_num) !=
+                                        keypoints_map.end();
+                                    if (!keypoints_find) {
+                                        KeyPoints *keypoints =
+                                            (KeyPoints *)malloc(
+                                                sizeof(KeyPoints));
+                                        allocate_keypoints(keypoints, scene,
+                                                           skeleton);
+                                        keypoints_map[current_frame_num] =
+                                            keypoints;
+                                    }
+
+                                    // Add YOLO detections to main bounding
+                                    // box system
+                                    for (const auto &yolo_bbox :
+                                         yolo_bboxes[cam_id]) {
+                                        if (yolo_bbox.is_valid) {
+                                            BoundingBox bbox;
+
+                                            // Create ImPlotRect from YOLO
+                                            // coordinates (no Y-axis
+                                            // flipping)
+                                            bbox.rect = new ImPlotRect(
+                                                yolo_bbox.x_min, // X.Min
+                                                yolo_bbox.x_max, // X.Max
+                                                yolo_bbox.y_min, // Y.Min
+                                                yolo_bbox.y_max  // Y.Max
+                                            );
+
+                                            bbox.state = RectTwoPoints;
+                                            bbox.class_id = yolo_bbox.class_id;
+                                            bbox.confidence =
+                                                yolo_bbox.confidence;
+                                            bbox.has_bbox_keypoints = false;
+                                            bbox.bbox_keypoints2d = nullptr;
+                                            bbox.active_kp_id = nullptr;
+
+                                            // Allocate keypoints if
+                                            // skeleton supports both bbox
+                                            // and skeleton
+                                            if (skeleton->has_bbox &&
+                                                skeleton->has_skeleton &&
+                                                skeleton->num_nodes > 0) {
+                                                allocate_bbox_keypoints(
+                                                    &bbox, scene, skeleton);
+                                            }
+
+                                            // Add to main bounding box
+                                            // system
+                                            keypoints_map[current_frame_num]
+                                                ->bbox2d_list[cam_id]
+                                                .push_back(bbox);
+                                        }
+                                    }
+
+                                    std::cout << "Added "
+                                              << yolo_bboxes[cam_id].size()
+                                              << " YOLO detections to main "
+                                                 "bounding "
+                                                 "box system for camera "
+                                              << cam_id << std::endl;
                                 }
                             }
                         }
                     }
+
+                    // Display detection info for hovered bounding box
+                    if (skeleton->has_bbox) {
+                        bool keypoints_find =
+                            keypoints_map.find(current_frame_num) !=
+                            keypoints_map.end();
+                        if (keypoints_find) {
+                            ImGui::Separator();
+                            ImGui::Text("Bounding Box Info:");
+
+                            if (hovered_bbox_cam >= 0 &&
+                                hovered_bbox_idx >= 0) {
+                                ImGui::Text("Camera: %d, Box: %d",
+                                            hovered_bbox_cam, hovered_bbox_idx);
+                                ImGui::Text("Class: %d, Confidence: %.1f%%",
+                                            hovered_bbox_class,
+                                            hovered_bbox_confidence * 100.0f);
+                            } else {
+                                ImGui::Text("Hover over a bounding box to "
+                                            "see details");
+                            }
+                        }
+                    }
                 }
-                ImGui::End();
             }
+            ImGui::End();
         }
 
-            if (ImGuiFileDialog::Instance()->Display("ChooseKeypointsFolder")) {
-                if (ImGuiFileDialog::Instance()->IsOk()) {
-                    keypoints_root_folder =
-                        ImGuiFileDialog::Instance()->GetCurrentPath();
-                }
-                // close
-                ImGuiFileDialog::Instance()->Close();
+        if (ImGuiFileDialog::Instance()->Display("ChooseKeypointsFolder")) {
+            if (ImGuiFileDialog::Instance()->IsOk()) {
+                keypoints_root_folder =
+                    ImGuiFileDialog::Instance()->GetCurrentPath();
             }
+            // close
+            ImGuiFileDialog::Instance()->Close();
+        }
 
-            if (ImGuiFileDialog::Instance()->Display("LoadFromSelected")) {
-                if (ImGuiFileDialog::Instance()->IsOk()) {
-                    auto selected_folder =
-                        ImGuiFileDialog::Instance()->GetCurrentPath();
+        if (ImGuiFileDialog::Instance()->Display("LoadFromSelected")) {
+            if (ImGuiFileDialog::Instance()->IsOk()) {
+                auto selected_folder =
+                    ImGuiFileDialog::Instance()->GetCurrentPath();
+                free_all_keypoints(keypoints_map, scene);
+                if (load_keypoints(selected_folder, keypoints_map, skeleton,
+                                   scene, camera_names, error_message)) {
                     free_all_keypoints(keypoints_map, scene);
-                    if (load_keypoints(selected_folder, keypoints_map, skeleton,
-                                       scene, camera_names, error_message)) {
-                        free_all_keypoints(keypoints_map, scene);
-                        show_error = true;
-                    }
+                    show_error = true;
                 }
-                // close
-                ImGuiFileDialog::Instance()->Close();
             }
+            // close
+            ImGuiFileDialog::Instance()->Close();
+        }
 
-            // YOLO Export Tool Dialog Handlers
-            if (ImGuiFileDialog::Instance()->Display(
-                    "ChooseYoloExportLabelDir")) {
-                if (ImGuiFileDialog::Instance()->IsOk()) {
-                    std::string selected_path =
-                        ImGuiFileDialog::Instance()->GetCurrentPath();
-                    strncpy(yolo_export_label_dir, selected_path.c_str(),
-                            sizeof(yolo_export_label_dir) - 1);
-                    yolo_export_label_dir[sizeof(yolo_export_label_dir) - 1] =
-                        '\0';
+        // YOLO Export Tool Dialog Handlers
+        if (ImGuiFileDialog::Instance()->Display("ChooseYoloExportLabelDir")) {
+            if (ImGuiFileDialog::Instance()->IsOk()) {
+                std::string selected_path =
+                    ImGuiFileDialog::Instance()->GetCurrentPath();
+                strncpy(yolo_export_label_dir, selected_path.c_str(),
+                        sizeof(yolo_export_label_dir) - 1);
+                yolo_export_label_dir[sizeof(yolo_export_label_dir) - 1] = '\0';
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        if (ImGuiFileDialog::Instance()->Display("ChooseYoloExportVideoDir")) {
+            if (ImGuiFileDialog::Instance()->IsOk()) {
+                std::string selected_path =
+                    ImGuiFileDialog::Instance()->GetCurrentPath();
+                strncpy(yolo_export_video_dir, selected_path.c_str(),
+                        sizeof(yolo_export_video_dir) - 1);
+                yolo_export_video_dir[sizeof(yolo_export_video_dir) - 1] = '\0';
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        if (ImGuiFileDialog::Instance()->Display("ChooseYoloExportOutputDir")) {
+            if (ImGuiFileDialog::Instance()->IsOk()) {
+                std::string selected_path =
+                    ImGuiFileDialog::Instance()->GetCurrentPath();
+                strncpy(yolo_export_output_dir, selected_path.c_str(),
+                        sizeof(yolo_export_output_dir) - 1);
+                yolo_export_output_dir[sizeof(yolo_export_output_dir) - 1] =
+                    '\0';
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        if (ImGuiFileDialog::Instance()->Display(
+                "ChooseYoloExportSkeletonFile")) {
+            if (ImGuiFileDialog::Instance()->IsOk()) {
+                std::string selected_file =
+                    ImGuiFileDialog::Instance()->GetFilePathName();
+                strncpy(yolo_export_skeleton_file, selected_file.c_str(),
+                        sizeof(yolo_export_skeleton_file) - 1);
+                yolo_export_skeleton_file[sizeof(yolo_export_skeleton_file) -
+                                          1] = '\0';
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        if (ImGuiFileDialog::Instance()->Display("ChooseYoloExportClassFile")) {
+            if (ImGuiFileDialog::Instance()->IsOk()) {
+                std::string selected_file =
+                    ImGuiFileDialog::Instance()->GetFilePathName();
+                strncpy(yolo_export_class_names_file, selected_file.c_str(),
+                        sizeof(yolo_export_class_names_file) - 1);
+                yolo_export_class_names_file[sizeof(
+                                                 yolo_export_class_names_file) -
+                                             1] = '\0';
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        if (ImGui::IsKeyPressed(ImGuiKey_H, false)) {
+            show_help_window = !show_help_window;
+        }
+
+        if (show_help_window) {
+            if (ImGui::Begin("Help Menu")) {
+                ImGui::Text("<Space>: toggle play and pause");
+                ImGui::Text("<Left Arrow>    : Seek backward");
+                ImGui::Text("<Shift+Left>    : Seek backward (×10)");
+                ImGui::Text("<Right Arrow>   : Seek forward");
+                ImGui::Text("<Shift+Right>   : Seek forward (×10)");
+
+                ImGui::SeparatorText("When paused");
+                ImGui::Text("<,>: previous image in buffer");
+                ImGui::Text("<.>: next image in buffer");
+
+                ImGui::SeparatorText("While hovering image");
+                ImGui::Text("<c>: create keypoints on frame");
+                ImGui::Text("<w>: drop active keypoint");
+                ImGui::Text("<a>: active keypoint++ ");
+                ImGui::Text("<d>: active keypoint--");
+                ImGui::Text("<q>: active keypoint set to first node");
+                ImGui::Text("<e>: active keypoint set to last node");
+                ImGui::Text("<t> -> triangulate");
+                ImGui::Text("<Backspace>: delete all keypoints");
+                ImGui::Text("<Ctrl+s>         : Save labels");
+
+                ImGui::SeparatorText("Bounding box");
+                ImGui::Text("<mouse middle button>: draw bbox, drag then "
+                            "release to "
+                            "finish drawing the bbox");
+                ImGui::Text("Bboxes are created with the currently "
+                            "selected class in "
+                            "Keypoints panel");
+                ImGui::Text("While hovering bounding boxes");
+                ImGui::Text("<t>: delete bounding box from current camera");
+                ImGui::Text("<f>: delete bounding box from all cameras");
+                ImGui::Text("<z>: switch to previous bbox class");
+                ImGui::Text("<x>: switch to next bbox class (creates new "
+                            "class if at end)");
+
+                ImGui::SeparatorText("While hovering keypoints");
+                ImGui::Text("<r>: delete active keypoint");
+                ImGui::Text("<f>: delete active keypoint on all cameras");
+                ImGui::Text("Click keypoint to active it");
+            }
+            ImGui::End();
+        }
+
+        // Skeleton Creator Window
+        if (show_skeleton_creator) {
+            ImGui::SetNextWindowSize(ImVec2(800, 600), ImGuiCond_FirstUseEver);
+            if (ImGui::Begin("Skeleton Creator", &show_skeleton_creator)) {
+                ImGui::SeparatorText("Skeleton Configuration");
+
+                char name_buffer[256];
+                strncpy(name_buffer, skeleton_creator_name.c_str(),
+                        sizeof(name_buffer));
+                name_buffer[sizeof(name_buffer) - 1] = '\0';
+                if (ImGui::InputText("Skeleton Name", name_buffer,
+                                     sizeof(name_buffer))) {
+                    skeleton_creator_name = std::string(name_buffer);
                 }
-                ImGuiFileDialog::Instance()->Close();
-            }
 
-            if (ImGuiFileDialog::Instance()->Display(
-                    "ChooseYoloExportVideoDir")) {
-                if (ImGuiFileDialog::Instance()->IsOk()) {
-                    std::string selected_path =
-                        ImGuiFileDialog::Instance()->GetCurrentPath();
-                    strncpy(yolo_export_video_dir, selected_path.c_str(),
-                            sizeof(yolo_export_video_dir) - 1);
-                    yolo_export_video_dir[sizeof(yolo_export_video_dir) - 1] =
-                        '\0';
+                ImGui::Checkbox("Has Bounding Box", &skeleton_creator_has_bbox);
+
+                if (ImGui::Button("Select Background Image")) {
+                    IGFD::FileDialogConfig config;
+                    config.countSelectionMax = 1;
+                    config.path = std::filesystem::current_path().string();
+                    config.flags = ImGuiFileDialogFlags_Modal;
+                    ImGuiFileDialog::Instance()->OpenDialog(
+                        "ChooseBackgroundImage", "Choose Background Image",
+                        ".png,.jpg,.jpeg,.tiff,.bmp,.tga", config);
                 }
-                ImGuiFileDialog::Instance()->Close();
-            }
-
-            if (ImGuiFileDialog::Instance()->Display(
-                    "ChooseYoloExportOutputDir")) {
-                if (ImGuiFileDialog::Instance()->IsOk()) {
-                    std::string selected_path =
-                        ImGuiFileDialog::Instance()->GetCurrentPath();
-                    strncpy(yolo_export_output_dir, selected_path.c_str(),
-                            sizeof(yolo_export_output_dir) - 1);
-                    yolo_export_output_dir[sizeof(yolo_export_output_dir) - 1] =
-                        '\0';
-                }
-                ImGuiFileDialog::Instance()->Close();
-            }
-
-            if (ImGuiFileDialog::Instance()->Display(
-                    "ChooseYoloExportSkeletonFile")) {
-                if (ImGuiFileDialog::Instance()->IsOk()) {
-                    std::string selected_file =
-                        ImGuiFileDialog::Instance()->GetFilePathName();
-                    strncpy(yolo_export_skeleton_file, selected_file.c_str(),
-                            sizeof(yolo_export_skeleton_file) - 1);
-                    yolo_export_skeleton_file[sizeof(
-                                                  yolo_export_skeleton_file) -
-                                              1] = '\0';
-                }
-                ImGuiFileDialog::Instance()->Close();
-            }
-
-            if (ImGuiFileDialog::Instance()->Display(
-                    "ChooseYoloExportClassFile")) {
-                if (ImGuiFileDialog::Instance()->IsOk()) {
-                    std::string selected_file =
-                        ImGuiFileDialog::Instance()->GetFilePathName();
-                    strncpy(yolo_export_class_names_file, selected_file.c_str(),
-                            sizeof(yolo_export_class_names_file) - 1);
-                    yolo_export_class_names_file
-                        [sizeof(yolo_export_class_names_file) - 1] = '\0';
-                }
-                ImGuiFileDialog::Instance()->Close();
-            }
-
-            if (ImGui::IsKeyPressed(ImGuiKey_H, false)) {
-                show_help_window = !show_help_window;
-            }
-
-            if (show_help_window) {
-                if (ImGui::Begin("Help Menu")) {
-                    ImGui::Text("<Space>: toggle play and pause");
-                    ImGui::Text("<Left Arrow>    : Seek backward");
-                    ImGui::Text("<Shift+Left>    : Seek backward (×10)");
-                    ImGui::Text("<Right Arrow>   : Seek forward");
-                    ImGui::Text("<Shift+Right>   : Seek forward (×10)");
-
-                    ImGui::SeparatorText("When paused");
-                    ImGui::Text("<,>: previous image in buffer");
-                    ImGui::Text("<.>: next image in buffer");
-
-                    ImGui::SeparatorText("While hovering image");
-                    ImGui::Text("<c>: create keypoints on frame");
-                    ImGui::Text("<w>: drop active keypoint");
-                    ImGui::Text("<a>: active keypoint++ ");
-                    ImGui::Text("<d>: active keypoint--");
-                    ImGui::Text("<q>: active keypoint set to first node");
-                    ImGui::Text("<e>: active keypoint set to last node");
-                    ImGui::Text("<t> -> triangulate");
-                    ImGui::Text("<Backspace>: delete all keypoints");
-                    ImGui::Text("<Ctrl+s>         : Save labels");
-
-                    ImGui::SeparatorText("Bounding box");
-                    ImGui::Text("<mouse middle button>: draw bbox, drag then "
-                                "release to "
-                                "finish drawing the bbox");
-                    ImGui::Text("Bboxes are created with the currently "
-                                "selected class in "
-                                "Keypoints panel");
-                    ImGui::Text("While hovering bounding boxes");
-                    ImGui::Text("<t>: delete bounding box from current camera");
-                    ImGui::Text("<f>: delete bounding box from all cameras");
-                    ImGui::Text("<z>: switch to previous bbox class");
-                    ImGui::Text("<x>: switch to next bbox class (creates new "
-                                "class if at end)");
-
-                    ImGui::SeparatorText("While hovering keypoints");
-                    ImGui::Text("<r>: delete active keypoint");
-                    ImGui::Text("<f>: delete active keypoint on all cameras");
-                    ImGui::Text("Click keypoint to active it");
-                }
-                ImGui::End();
-            }
-
-            // Skeleton Creator Window
-            if (show_skeleton_creator) {
-                ImGui::SetNextWindowSize(ImVec2(800, 600),
-                                         ImGuiCond_FirstUseEver);
-                if (ImGui::Begin("Skeleton Creator", &show_skeleton_creator)) {
-                    ImGui::SeparatorText("Skeleton Configuration");
-
-                    char name_buffer[256];
-                    strncpy(name_buffer, skeleton_creator_name.c_str(),
-                            sizeof(name_buffer));
-                    name_buffer[sizeof(name_buffer) - 1] = '\0';
-                    if (ImGui::InputText("Skeleton Name", name_buffer,
-                                         sizeof(name_buffer))) {
-                        skeleton_creator_name = std::string(name_buffer);
-                    }
-
-                    ImGui::Checkbox("Has Bounding Box",
-                                    &skeleton_creator_has_bbox);
-
-                    if (ImGui::Button("Select Background Image")) {
-                        IGFD::FileDialogConfig config;
-                        config.countSelectionMax = 1;
-                        config.path = std::filesystem::current_path().string();
-                        config.flags = ImGuiFileDialogFlags_Modal;
-                        ImGuiFileDialog::Instance()->OpenDialog(
-                            "ChooseBackgroundImage", "Choose Background Image",
-                            ".png,.jpg,.jpeg,.tiff,.bmp,.tga", config);
-                    }
+                ImGui::SameLine();
+                if (background_image_selected && background_texture != 0) {
+                    std::filesystem::path path(background_image_path);
+                    ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f),
+                                       "Image: %s (%dx%d)",
+                                       path.filename().string().c_str(),
+                                       background_width, background_height);
                     ImGui::SameLine();
-                    if (background_image_selected && background_texture != 0) {
-                        std::filesystem::path path(background_image_path);
-                        ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f),
-                                           "Image: %s (%dx%d)",
-                                           path.filename().string().c_str(),
-                                           background_width, background_height);
-                        ImGui::SameLine();
-                        if (ImGui::Button("Clear Background")) {
-                            if (background_texture != 0) {
-                                glDeleteTextures(1, &background_texture);
-                                background_texture = 0;
-                            }
-                            background_image_path = "";
-                            background_image_selected = false;
-                            background_width = 0;
-                            background_height = 0;
-                            std::cout << "Background image cleared"
-                                      << std::endl;
+                    if (ImGui::Button("Clear Background")) {
+                        if (background_texture != 0) {
+                            glDeleteTextures(1, &background_texture);
+                            background_texture = 0;
                         }
-                    } else {
-                        ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f),
-                                           "No background image");
+                        background_image_path = "";
+                        background_image_selected = false;
+                        background_width = 0;
+                        background_height = 0;
+                        std::cout << "Background image cleared" << std::endl;
+                    }
+                } else {
+                    ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f),
+                                       "No background image");
+                }
+
+                ImGui::SeparatorText("Interactive Editor");
+
+                if (ImPlot::BeginPlot("Skeleton Creator", ImVec2(-1, 400),
+                                      ImPlotFlags_Equal)) {
+                    ImPlot::SetupAxes("", "");
+                    ImPlot::SetupAxisLimits(ImAxis_X1, 0.0, 1.0,
+                                            ImGuiCond_Always);
+                    ImPlot::SetupAxisLimits(ImAxis_Y1, 0.0, 1.0,
+                                            ImGuiCond_Always);
+
+                    ImPlot::SetupAxisTicks(ImAxis_X1, nullptr, 0);
+                    ImPlot::SetupAxisTicks(ImAxis_Y1, nullptr, 0);
+
+                    if (background_image_selected && background_texture != 0) {
+                        ImPlot::PlotImage(
+                            "##background",
+                            (ImTextureID)(intptr_t)background_texture,
+                            ImPlotPoint(0, 0), ImPlotPoint(1, 1));
                     }
 
-                    ImGui::SeparatorText("Interactive Editor");
+                    if (ImPlot::IsPlotHovered() &&
+                        ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+                        !ImGui::GetIO().KeyCtrl) {
+                        if (selected_node_for_edge < 0) {
+                            ImPlotPoint mouse_pos = ImPlot::GetPlotMousePos();
+                            creator_nodes.emplace_back(mouse_pos.x, mouse_pos.y,
+                                                       next_node_id++);
+                        }
+                    }
 
-                    if (ImPlot::BeginPlot("Skeleton Creator", ImVec2(-1, 400),
-                                          ImPlotFlags_Equal)) {
-                        ImPlot::SetupAxes("", "");
-                        ImPlot::SetupAxisLimits(ImAxis_X1, 0.0, 1.0,
-                                                ImGuiCond_Always);
-                        ImPlot::SetupAxisLimits(ImAxis_Y1, 0.0, 1.0,
-                                                ImGuiCond_Always);
+                    if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+                        selected_node_for_edge = -1;
+                    }
 
-                        ImPlot::SetupAxisTicks(ImAxis_X1, nullptr, 0);
-                        ImPlot::SetupAxisTicks(ImAxis_Y1, nullptr, 0);
+                    for (const auto &edge : creator_edges) {
+                        const SkeletonCreatorNode *node1 = nullptr;
+                        const SkeletonCreatorNode *node2 = nullptr;
 
-                        if (background_image_selected &&
-                            background_texture != 0) {
-                            ImPlot::PlotImage(
-                                "##background",
-                                (void *)(intptr_t)background_texture,
-                                ImPlotPoint(0, 0), ImPlotPoint(1, 1));
+                        for (const auto &node : creator_nodes) {
+                            if (node.id == edge.node1_id)
+                                node1 = &node;
+                            if (node.id == edge.node2_id)
+                                node2 = &node;
                         }
 
-                        if (ImPlot::IsPlotHovered() &&
-                            ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
-                            !ImGui::GetIO().KeyCtrl) {
+                        if (node1 && node2) {
+                            double xs[2] = {node1->position.x,
+                                            node2->position.x};
+                            double ys[2] = {node1->position.y,
+                                            node2->position.y};
+                            ImPlot::SetNextLineStyle(
+                                ImVec4(0.8f, 0.8f, 0.8f, 1.0f), 2.0f);
+                            ImPlot::PlotLine("##edge", xs, ys, 2);
+                        }
+                    }
+
+                    for (size_t i = 0; i < creator_nodes.size(); i++) {
+                        auto &node = creator_nodes[i];
+
+                        bool clicked = false, hovered = false, held = false;
+                        ImVec4 node_color = node.color;
+
+                        if (selected_node_for_edge == node.id) {
+                            node_color = ImVec4(1.0f, 1.0f, 0.0f, 1.0f);
+                        }
+
+                        bool modified = ImPlot::DragPoint(
+                            node.id, &node.position.x, &node.position.y,
+                            node_color, 8.0f, ImPlotDragToolFlags_None,
+                            &clicked, &hovered, &held);
+
+                        if (hovered) {
+                            ImPlot::PlotText(node.name.c_str(), node.position.x,
+                                             node.position.y + 0.03);
+
+                            if (ImGui::IsKeyPressed(ImGuiKey_R, false)) {
+                                int node_id_to_delete = node.id;
+
+                                creator_nodes.erase(creator_nodes.begin() + i);
+
+                                creator_edges.erase(
+                                    std::remove_if(
+                                        creator_edges.begin(),
+                                        creator_edges.end(),
+                                        [node_id_to_delete](
+                                            const SkeletonCreatorEdge &edge) {
+                                            return edge.node1_id ==
+                                                       node_id_to_delete ||
+                                                   edge.node2_id ==
+                                                       node_id_to_delete;
+                                        }),
+                                    creator_edges.end());
+
+                                if (selected_node_for_edge ==
+                                    node_id_to_delete) {
+                                    selected_node_for_edge = -1;
+                                }
+
+                                break;
+                            }
+                        }
+
+                        if (clicked && ImGui::GetIO().KeyCtrl) {
                             if (selected_node_for_edge < 0) {
-                                ImPlotPoint mouse_pos =
-                                    ImPlot::GetPlotMousePos();
-                                creator_nodes.emplace_back(
-                                    mouse_pos.x, mouse_pos.y, next_node_id++);
-                            }
-                        }
+                                selected_node_for_edge = node.id;
+                            } else if (selected_node_for_edge != node.id) {
+                                bool edge_exists = false;
+                                for (const auto &existing_edge :
+                                     creator_edges) {
+                                    if ((existing_edge.node1_id ==
+                                             selected_node_for_edge &&
+                                         existing_edge.node2_id == node.id) ||
+                                        (existing_edge.node1_id == node.id &&
+                                         existing_edge.node2_id ==
+                                             selected_node_for_edge)) {
+                                        edge_exists = true;
+                                        break;
+                                    }
+                                }
 
-                        if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
-                            selected_node_for_edge = -1;
-                        }
-
-                        for (const auto &edge : creator_edges) {
-                            const SkeletonCreatorNode *node1 = nullptr;
-                            const SkeletonCreatorNode *node2 = nullptr;
-
-                            for (const auto &node : creator_nodes) {
-                                if (node.id == edge.node1_id)
-                                    node1 = &node;
-                                if (node.id == edge.node2_id)
-                                    node2 = &node;
-                            }
-
-                            if (node1 && node2) {
-                                double xs[2] = {node1->position.x,
-                                                node2->position.x};
-                                double ys[2] = {node1->position.y,
-                                                node2->position.y};
-                                ImPlot::SetNextLineStyle(
-                                    ImVec4(0.8f, 0.8f, 0.8f, 1.0f), 2.0f);
-                                ImPlot::PlotLine("##edge", xs, ys, 2);
-                            }
-                        }
-
-                        for (size_t i = 0; i < creator_nodes.size(); i++) {
-                            auto &node = creator_nodes[i];
-
-                            bool clicked = false, hovered = false, held = false;
-                            ImVec4 node_color = node.color;
-
-                            if (selected_node_for_edge == node.id) {
-                                node_color = ImVec4(1.0f, 1.0f, 0.0f, 1.0f);
-                            }
-
-                            bool modified = ImPlot::DragPoint(
-                                node.id, &node.position.x, &node.position.y,
-                                node_color, 8.0f, ImPlotDragToolFlags_None,
-                                &clicked, &hovered, &held);
-
-                            if (hovered) {
-                                ImPlot::PlotText(node.name.c_str(),
-                                                 node.position.x,
-                                                 node.position.y + 0.03);
-
-                                if (ImGui::IsKeyPressed(ImGuiKey_R, false)) {
-                                    int node_id_to_delete = node.id;
-
-                                    creator_nodes.erase(creator_nodes.begin() +
-                                                        i);
-
+                                if (!edge_exists) {
+                                    creator_edges.emplace_back(
+                                        selected_node_for_edge, node.id);
+                                } else {
+                                    // Delete the existing edge
                                     creator_edges.erase(
                                         std::remove_if(
                                             creator_edges.begin(),
                                             creator_edges.end(),
-                                            [node_id_to_delete](
+                                            [selected_node_for_edge,
+                                             node_id = node.id](
                                                 const SkeletonCreatorEdge
                                                     &edge) {
-                                                return edge.node1_id ==
-                                                           node_id_to_delete ||
-                                                       edge.node2_id ==
-                                                           node_id_to_delete;
+                                                return (edge.node1_id ==
+                                                            selected_node_for_edge &&
+                                                        edge.node2_id ==
+                                                            node_id) ||
+                                                       (edge.node1_id ==
+                                                            node_id &&
+                                                        edge.node2_id ==
+                                                            selected_node_for_edge);
                                             }),
                                         creator_edges.end());
-
-                                    if (selected_node_for_edge ==
-                                        node_id_to_delete) {
-                                        selected_node_for_edge = -1;
-                                    }
-
-                                    break;
                                 }
-                            }
 
-                            if (clicked && ImGui::GetIO().KeyCtrl) {
-                                if (selected_node_for_edge < 0) {
-                                    selected_node_for_edge = node.id;
-                                } else if (selected_node_for_edge != node.id) {
-                                    bool edge_exists = false;
-                                    for (const auto &existing_edge :
-                                         creator_edges) {
-                                        if ((existing_edge.node1_id ==
-                                                 selected_node_for_edge &&
-                                             existing_edge.node2_id ==
-                                                 node.id) ||
-                                            (existing_edge.node1_id ==
-                                                 node.id &&
-                                             existing_edge.node2_id ==
-                                                 selected_node_for_edge)) {
-                                            edge_exists = true;
-                                            break;
-                                        }
-                                    }
-
-                                    if (!edge_exists) {
-                                        creator_edges.emplace_back(
-                                            selected_node_for_edge, node.id);
-                                    } else {
-                                        // Delete the existing edge
-                                        creator_edges.erase(
-                                            std::remove_if(
-                                                creator_edges.begin(),
-                                                creator_edges.end(),
-                                                [selected_node_for_edge,
-                                                 node_id = node.id](
-                                                    const SkeletonCreatorEdge
-                                                        &edge) {
-                                                    return (edge.node1_id ==
-                                                                selected_node_for_edge &&
-                                                            edge.node2_id ==
-                                                                node_id) ||
-                                                           (edge.node1_id ==
-                                                                node_id &&
-                                                            edge.node2_id ==
-                                                                selected_node_for_edge);
-                                                }),
-                                            creator_edges.end());
-                                    }
-
-                                    selected_node_for_edge = -1;
-                                } else {
-                                    selected_node_for_edge = -1;
-                                }
+                                selected_node_for_edge = -1;
+                            } else {
+                                selected_node_for_edge = -1;
                             }
                         }
-
-                        ImPlot::EndPlot();
                     }
 
-                    if (selected_node_for_edge >= 0) {
-                        ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f),
-                                           "Selected node for edge creation. "
-                                           "Ctrl+Click another node to "
-                                           "create edge or remove existing "
-                                           "edge, or press ESC to cancel.");
-                    }
+                    ImPlot::EndPlot();
+                }
 
-                    ImGui::SeparatorText("Help");
-                    ImGui::BulletText(
-                        "Left-click in the plot area to add a new node");
-                    ImGui::BulletText("Drag nodes to reposition them");
-                    ImGui::BulletText(
-                        "Ctrl+Click a node to select it for edge creation");
-                    ImGui::BulletText(
-                        "Ctrl+Click another node to create an edge or remove "
-                        "an existing edge between them");
-                    ImGui::BulletText("Press ESC to cancel edge creation");
-                    ImGui::BulletText("Press R while hovering a node to delete "
-                                      "it and its edges");
+                if (selected_node_for_edge >= 0) {
+                    ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f),
+                                       "Selected node for edge creation. "
+                                       "Ctrl+Click another node to "
+                                       "create edge or remove existing "
+                                       "edge, or press ESC to cancel.");
+                }
 
-                    ImGui::SeparatorText("Actions");
+                ImGui::SeparatorText("Help");
+                ImGui::BulletText(
+                    "Left-click in the plot area to add a new node");
+                ImGui::BulletText("Drag nodes to reposition them");
+                ImGui::BulletText(
+                    "Ctrl+Click a node to select it for edge creation");
+                ImGui::BulletText(
+                    "Ctrl+Click another node to create an edge or remove "
+                    "an existing edge between them");
+                ImGui::BulletText("Press ESC to cancel edge creation");
+                ImGui::BulletText("Press R while hovering a node to delete "
+                                  "it and its edges");
 
-                    if (ImGui::Button("Clear All")) {
-                        creator_nodes.clear();
-                        creator_edges.clear();
-                        next_node_id = 0;
-                        selected_node_for_edge = -1;
-                    }
+                ImGui::SeparatorText("Actions");
 
-                    ImGui::SameLine();
-                    if (ImGui::Button("Load from JSON")) {
-                        IGFD::FileDialogConfig config;
-                        config.countSelectionMax = 1;
-                        config.path = std::filesystem::current_path().string() +
-                                      "/skeleton";
-                        config.flags = ImGuiFileDialogFlags_Modal;
-                        ImGuiFileDialog::Instance()->OpenDialog(
-                            "LoadSkeletonForEdit", "Load Skeleton", ".json",
-                            config);
-                    }
+                if (ImGui::Button("Clear All")) {
+                    creator_nodes.clear();
+                    creator_edges.clear();
+                    next_node_id = 0;
+                    selected_node_for_edge = -1;
+                }
 
-                    ImGui::SameLine();
-                    if (ImGui::Button("Save to JSON")) {
-                        if (!creator_nodes.empty()) {
-                            nlohmann::json skeleton_json;
-                            skeleton_json["name"] = skeleton_creator_name;
-                            skeleton_json["has_skeleton"] = true;
-                            skeleton_json["has_bbox"] =
-                                skeleton_creator_has_bbox;
-                            skeleton_json["num_nodes"] =
-                                (int)creator_nodes.size();
-                            skeleton_json["num_edges"] =
-                                (int)creator_edges.size();
+                ImGui::SameLine();
+                if (ImGui::Button("Load from JSON")) {
+                    IGFD::FileDialogConfig config;
+                    config.countSelectionMax = 1;
+                    config.path =
+                        std::filesystem::current_path().string() + "/skeleton";
+                    config.flags = ImGuiFileDialogFlags_Modal;
+                    ImGuiFileDialog::Instance()->OpenDialog(
+                        "LoadSkeletonForEdit", "Load Skeleton", ".json",
+                        config);
+                }
 
-                            std::vector<std::string> node_names;
-                            std::vector<std::vector<double>> node_positions;
-                            for (const auto &node : creator_nodes) {
-                                node_names.push_back(node.name);
-                                node_positions.push_back(
-                                    {node.position.x, node.position.y});
-                            }
-                            skeleton_json["node_names"] = node_names;
-                            skeleton_json["node_positions"] = node_positions;
-
-                            std::vector<std::vector<int>> edges_array;
-                            for (const auto &edge : creator_edges) {
-                                int idx1 = -1, idx2 = -1;
-                                for (size_t i = 0; i < creator_nodes.size();
-                                     i++) {
-                                    if (creator_nodes[i].id == edge.node1_id)
-                                        idx1 = (int)i;
-                                    if (creator_nodes[i].id == edge.node2_id)
-                                        idx2 = (int)i;
-                                }
-                                if (idx1 >= 0 && idx2 >= 0) {
-                                    edges_array.push_back({idx1, idx2});
-                                }
-                            }
-                            skeleton_json["edges"] = edges_array;
-
-                            std::string skeleton_dir =
-                                std::filesystem::current_path().string() +
-                                "/skeleton";
-
-                            std::string filename;
-                            filename = skeleton_dir + "/" +
-                                       skeleton_creator_name + ".json";
-
-                            std::ofstream file(filename);
-                            file << skeleton_json.dump(4);
-                            file.close();
-                            std::cout << "Skeleton saved to: " << filename
-                                      << " (with node positions)" << std::endl;
-                        }
-                    }
-
+                ImGui::SameLine();
+                if (ImGui::Button("Save to JSON")) {
                     if (!creator_nodes.empty()) {
-                        ImGui::SeparatorText("Nodes");
-                        if (ImGui::BeginTable("NodeTable", 3,
-                                              ImGuiTableFlags_Borders |
-                                                  ImGuiTableFlags_RowBg)) {
-                            ImGui::TableSetupColumn(
-                                "ID", ImGuiTableColumnFlags_WidthFixed, 40.0f);
-                            ImGui::TableSetupColumn(
-                                "Name", ImGuiTableColumnFlags_WidthStretch);
-                            ImGui::TableSetupColumn(
-                                "Position", ImGuiTableColumnFlags_WidthFixed,
-                                120.0f);
-                            ImGui::TableHeadersRow();
+                        nlohmann::json skeleton_json;
+                        skeleton_json["name"] = skeleton_creator_name;
+                        skeleton_json["has_skeleton"] = true;
+                        skeleton_json["has_bbox"] = skeleton_creator_has_bbox;
+                        skeleton_json["num_nodes"] = (int)creator_nodes.size();
+                        skeleton_json["num_edges"] = (int)creator_edges.size();
 
-                            for (size_t i = 0; i < creator_nodes.size(); i++) {
-                                ImGui::TableNextRow();
-                                ImGui::TableSetColumnIndex(0);
-                                ImGui::Text("%d", creator_nodes[i].id);
-
-                                ImGui::TableSetColumnIndex(1);
-                                char node_name_buffer[128];
-                                strncpy(node_name_buffer,
-                                        creator_nodes[i].name.c_str(),
-                                        sizeof(node_name_buffer));
-                                node_name_buffer[sizeof(node_name_buffer) - 1] =
-                                    '\0';
-                                ImGui::PushID(i);
-                                if (ImGui::InputText(
-                                        "##name", node_name_buffer,
-                                        sizeof(node_name_buffer))) {
-                                    creator_nodes[i].name =
-                                        std::string(node_name_buffer);
-                                }
-                                ImGui::PopID();
-
-                                ImGui::TableSetColumnIndex(2);
-                                ImGui::Text("(%.2f, %.2f)",
-                                            creator_nodes[i].position.x,
-                                            creator_nodes[i].position.y);
-                            }
-                            ImGui::EndTable();
+                        std::vector<std::string> node_names;
+                        std::vector<std::vector<double>> node_positions;
+                        for (const auto &node : creator_nodes) {
+                            node_names.push_back(node.name);
+                            node_positions.push_back(
+                                {node.position.x, node.position.y});
                         }
+                        skeleton_json["node_names"] = node_names;
+                        skeleton_json["node_positions"] = node_positions;
+
+                        std::vector<std::vector<int>> edges_array;
+                        for (const auto &edge : creator_edges) {
+                            int idx1 = -1, idx2 = -1;
+                            for (size_t i = 0; i < creator_nodes.size(); i++) {
+                                if (creator_nodes[i].id == edge.node1_id)
+                                    idx1 = (int)i;
+                                if (creator_nodes[i].id == edge.node2_id)
+                                    idx2 = (int)i;
+                            }
+                            if (idx1 >= 0 && idx2 >= 0) {
+                                edges_array.push_back({idx1, idx2});
+                            }
+                        }
+                        skeleton_json["edges"] = edges_array;
+
+                        std::string skeleton_dir =
+                            std::filesystem::current_path().string() +
+                            "/skeleton";
+
+                        std::string filename;
+                        filename = skeleton_dir + "/" + skeleton_creator_name +
+                                   ".json";
+
+                        std::ofstream file(filename);
+                        file << skeleton_json.dump(4);
+                        file.close();
+                        std::cout << "Skeleton saved to: " << filename
+                                  << " (with node positions)" << std::endl;
                     }
                 }
-                ImGui::End();
+
+                if (!creator_nodes.empty()) {
+                    ImGui::SeparatorText("Nodes");
+                    if (ImGui::BeginTable("NodeTable", 3,
+                                          ImGuiTableFlags_Borders |
+                                              ImGuiTableFlags_RowBg)) {
+                        ImGui::TableSetupColumn(
+                            "ID", ImGuiTableColumnFlags_WidthFixed, 40.0f);
+                        ImGui::TableSetupColumn(
+                            "Name", ImGuiTableColumnFlags_WidthStretch);
+                        ImGui::TableSetupColumn(
+                            "Position", ImGuiTableColumnFlags_WidthFixed,
+                            120.0f);
+                        ImGui::TableHeadersRow();
+
+                        for (size_t i = 0; i < creator_nodes.size(); i++) {
+                            ImGui::TableNextRow();
+                            ImGui::TableSetColumnIndex(0);
+                            ImGui::Text("%d", creator_nodes[i].id);
+
+                            ImGui::TableSetColumnIndex(1);
+                            char node_name_buffer[128];
+                            strncpy(node_name_buffer,
+                                    creator_nodes[i].name.c_str(),
+                                    sizeof(node_name_buffer));
+                            node_name_buffer[sizeof(node_name_buffer) - 1] =
+                                '\0';
+                            ImGui::PushID(i);
+                            if (ImGui::InputText("##name", node_name_buffer,
+                                                 sizeof(node_name_buffer))) {
+                                creator_nodes[i].name =
+                                    std::string(node_name_buffer);
+                            }
+                            ImGui::PopID();
+
+                            ImGui::TableSetColumnIndex(2);
+                            ImGui::Text("(%.2f, %.2f)",
+                                        creator_nodes[i].position.x,
+                                        creator_nodes[i].position.y);
+                        }
+                        ImGui::EndTable();
+                    }
+                }
             }
+            ImGui::End();
+        }
 
-            // YOLO Export Tool Window
-            if (show_yolo_export_tool) {
-                ImGui::SetNextWindowSize(ImVec2(600, 700),
-                                         ImGuiCond_FirstUseEver);
-                if (ImGui::Begin("YOLO Export Tool", &show_yolo_export_tool)) {
-                    ImGui::SeparatorText("Export Configuration");
+        // YOLO Export Tool Window
+        if (show_yolo_export_tool) {
+            ImGui::SetNextWindowSize(ImVec2(600, 700), ImGuiCond_FirstUseEver);
+            if (ImGui::Begin("YOLO Export Tool", &show_yolo_export_tool)) {
+                ImGui::SeparatorText("Export Configuration");
 
-                    // Export mode selection
-                    const char *export_modes[] = {"Detection Dataset",
-                                                  "Pose Dataset"};
-                    if (ImGui::Combo("Export Mode", &yolo_export_mode,
-                                     export_modes,
-                                     IM_ARRAYSIZE(export_modes))) {
-                        // Update default values based on mode
-                        if (yolo_export_mode == 0) { // Detection
-                            strcpy(yolo_export_output_dir,
-                                   "/home/user/data/yolo_detection_dataset");
-                        } else { // Pose
-                            strcpy(yolo_export_output_dir,
-                                   "/home/user/data/yolo_pose_dataset");
-                            // Set skeleton file to current one if available
-                            if (!skeleton_file_path.empty()) {
-                                strncpy(yolo_export_skeleton_file,
-                                        skeleton_file_path.c_str(),
-                                        sizeof(yolo_export_skeleton_file) - 1);
-                                yolo_export_skeleton_file
-                                    [sizeof(yolo_export_skeleton_file) - 1] =
-                                        '\0';
-                            }
-                        }
-                    }
-
-                    ImGui::Separator();
-
-                    // Directory and file inputs
-                    ImGui::Text("Input Directories:");
-                    ImGui::InputText("Label Directory", yolo_export_label_dir,
-                                     sizeof(yolo_export_label_dir));
-                    ImGui::SameLine();
-                    if (ImGui::Button("Browse##labels")) {
-                        IGFD::FileDialogConfig config;
-                        config.countSelectionMax = 1;
-                        config.path = "/home/user/data";
-                        config.flags = ImGuiFileDialogFlags_Modal;
-                        ImGuiFileDialog::Instance()->OpenDialog(
-                            "ChooseYoloExportLabelDir",
-                            "Choose Label Directory", nullptr, config);
-                    }
-
-                    ImGui::InputText("Video Directory", yolo_export_video_dir,
-                                     sizeof(yolo_export_video_dir));
-                    ImGui::SameLine();
-                    if (ImGui::Button("Browse##videos")) {
-                        IGFD::FileDialogConfig config;
-                        config.countSelectionMax = 1;
-                        config.path = "/home/user/data";
-                        config.flags = ImGuiFileDialogFlags_Modal;
-                        ImGuiFileDialog::Instance()->OpenDialog(
-                            "ChooseYoloExportVideoDir",
-                            "Choose Video Directory", nullptr, config);
-                    }
-
-                    ImGui::InputText("Output Directory", yolo_export_output_dir,
-                                     sizeof(yolo_export_output_dir));
-                    ImGui::SameLine();
-                    if (ImGui::Button("Browse##output")) {
-                        IGFD::FileDialogConfig config;
-                        config.countSelectionMax = 1;
-                        config.path = "/home/user/data";
-                        config.flags = ImGuiFileDialogFlags_Modal;
-                        ImGuiFileDialog::Instance()->OpenDialog(
-                            "ChooseYoloExportOutputDir",
-                            "Choose Output Directory", nullptr, config);
-                    }
-
-                    ImGui::Separator();
-
-                    // Configuration files
-                    if (yolo_export_mode == 1) { // Pose mode
-                        ImGui::Text("Skeleton Configuration:");
-                        ImGui::InputText("Skeleton File",
-                                         yolo_export_skeleton_file,
-                                         sizeof(yolo_export_skeleton_file));
-                        ImGui::SameLine();
-                        if (ImGui::Button("Browse##skeleton")) {
-                            IGFD::FileDialogConfig config;
-                            config.countSelectionMax = 1;
-                            config.path = "/home/user/data";
-                            config.flags = ImGuiFileDialogFlags_Modal;
-                            ImGuiFileDialog::Instance()->OpenDialog(
-                                "ChooseYoloExportSkeletonFile",
-                                "Choose Skeleton File", ".json", config);
-                        }
-                        ImGui::SameLine();
-                        if (ImGui::Button("Use Current")) {
-                            if (!skeleton_file_path.empty()) {
-                                strncpy(yolo_export_skeleton_file,
-                                        skeleton_file_path.c_str(),
-                                        sizeof(yolo_export_skeleton_file) - 1);
-                                yolo_export_skeleton_file
-                                    [sizeof(yolo_export_skeleton_file) - 1] =
-                                        '\0';
-                            }
-                        }
-                    }
-
-                    if (yolo_export_mode == 0) { // Detection mode
-                        ImGui::Text("Class Names (Optional):");
-                        ImGui::InputText("Class Names File",
-                                         yolo_export_class_names_file,
-                                         sizeof(yolo_export_class_names_file));
-                        ImGui::SameLine();
-                        if (ImGui::Button("Browse##classes")) {
-                            IGFD::FileDialogConfig config;
-                            config.countSelectionMax = 1;
-                            config.path = "/home/user/data";
-                            config.flags = ImGuiFileDialogFlags_Modal;
-                            ImGuiFileDialog::Instance()->OpenDialog(
-                                "ChooseYoloExportClassFile",
-                                "Choose Class Names File", ".txt", config);
-                        }
-                    }
-
-                    ImGui::Separator();
-
-                    // Export parameters
-                    ImGui::Text("Export Parameters:");
-                    ImGui::SliderInt("Image Size", &yolo_export_image_size, 320,
-                                     1280, "%d");
-                    if (ImGui::IsItemHovered()) {
-                        ImGui::SetTooltip("Images will be resized to this "
-                                          "square size (e.g., 640x640)");
-                    }
-
-                    ImGui::SliderFloat("Train Ratio", &yolo_export_train_ratio,
-                                       0.1f, 0.9f, "%.2f");
-                    ImGui::SliderFloat("Val Ratio", &yolo_export_val_ratio,
-                                       0.05f, 0.5f, "%.2f");
-                    ImGui::SliderFloat("Test Ratio", &yolo_export_test_ratio,
-                                       0.05f, 0.5f, "%.2f");
-
-                    // Ensure ratios sum to 1.0
-                    float total_ratio = yolo_export_train_ratio +
-                                        yolo_export_val_ratio +
-                                        yolo_export_test_ratio;
-                    if (total_ratio > 0.001f) {
-                        ImGui::Text("Total: %.2f", total_ratio);
-                        if (total_ratio > 1.001f || total_ratio < 0.999f) {
-                            ImGui::TextColored(
-                                ImVec4(1.0f, 0.6f, 0.0f, 1.0f),
-                                "Warning: Ratios should sum to 1.0");
-                            if (ImGui::Button("Normalize Ratios")) {
-                                yolo_export_train_ratio /= total_ratio;
-                                yolo_export_val_ratio /= total_ratio;
-                                yolo_export_test_ratio /= total_ratio;
-                            }
-                        }
-                    }
-
-                    ImGui::InputInt("Random Seed", &yolo_export_seed);
-
-                    ImGui::Separator();
-
-                    // Export buttons and status
-                    if (!yolo_export_in_progress) {
-                        if (ImGui::Button("Start Export", ImVec2(150, 30))) {
-                            // Validate inputs
-                            bool valid = true;
-                            std::string validation_error;
-
-                            if (strlen(yolo_export_label_dir) == 0) {
-                                valid = false;
-                                validation_error =
-                                    "Label directory is required";
-                            } else if (strlen(yolo_export_video_dir) == 0) {
-                                valid = false;
-                                validation_error =
-                                    "Video directory is required";
-                            } else if (strlen(yolo_export_output_dir) == 0) {
-                                valid = false;
-                                validation_error =
-                                    "Output directory is required";
-                            } else if (yolo_export_mode == 1 &&
-                                       strlen(yolo_export_skeleton_file) == 0) {
-                                valid = false;
-                                validation_error = "Skeleton file is required "
-                                                   "for pose datasets";
-                            }
-
-                            if (valid) {
-                                yolo_export_in_progress = true;
-                                yolo_export_status = "Starting export...";
-
-                                // Setup export configuration
-                                YoloExport::ExportConfig config;
-                                config.label_dir =
-                                    std::string(yolo_export_label_dir);
-                                config.video_dir =
-                                    std::string(yolo_export_video_dir);
-                                config.output_dir =
-                                    std::string(yolo_export_output_dir);
-                                config.skeleton_file =
-                                    std::string(yolo_export_skeleton_file);
-                                config.class_names_file =
-                                    std::string(yolo_export_class_names_file);
-                                config.image_size = yolo_export_image_size;
-                                config.split.train_ratio =
-                                    yolo_export_train_ratio;
-                                config.split.val_ratio = yolo_export_val_ratio;
-                                config.split.test_ratio =
-                                    yolo_export_test_ratio;
-                                config.split.seed = yolo_export_seed;
-
-                                // Run export in background thread
-                                std::thread export_thread(
-                                    [config, yolo_export_mode,
-                                     &yolo_export_status,
-                                     &yolo_export_in_progress]() {
-                                        bool success = false;
-                                        if (yolo_export_mode == 0) {
-                                            success = YoloExport::
-                                                export_yolo_detection_dataset(
-                                                    config,
-                                                    &yolo_export_status);
-                                        } else {
-                                            success = YoloExport::
-                                                export_yolo_pose_dataset(
-                                                    config,
-                                                    &yolo_export_status);
-                                        }
-
-                                        // Update status (note: this is not
-                                        // thread-safe, but for simple status
-                                        // updates it should be okay)
-                                        if (success) {
-                                            yolo_export_status =
-                                                "Export completed "
-                                                "successfully!";
-                                        } else {
-                                            yolo_export_status =
-                                                "Export failed! Check console "
-                                                "for details.";
-                                        }
-                                        yolo_export_in_progress = false;
-                                    });
-                                export_thread.detach();
-                            } else {
-                                yolo_export_status =
-                                    "Error: " + validation_error;
-                            }
-                        }
-                    } else {
-                        ImGui::Text("Export in progress...");
-                        ImGui::SameLine();
-                    }
-
-                    if (!yolo_export_status.empty()) {
-                        if (yolo_export_status.find("Error") !=
-                                std::string::npos ||
-                            yolo_export_status.find("failed") !=
-                                std::string::npos) {
-                            ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f),
-                                               "%s",
-                                               yolo_export_status.c_str());
-                        } else if (yolo_export_status.find("completed") !=
-                                   std::string::npos) {
-                            ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f),
-                                               "%s",
-                                               yolo_export_status.c_str());
-                        } else {
-                            ImGui::Text("%s", yolo_export_status.c_str());
-                        }
-                    }
-
-                    ImGui::Separator();
-
-                    // Quick setup buttons
-                    ImGui::Text("Quick Setup:");
-                    if (ImGui::Button("Use Current Data")) {
-                        // Set label dir to current keypoints folder
-                        if (!keypoints_root_folder.empty()) {
-                            strncpy(yolo_export_label_dir,
-                                    keypoints_root_folder.c_str(),
-                                    sizeof(yolo_export_label_dir) - 1);
-                            yolo_export_label_dir[sizeof(
-                                                      yolo_export_label_dir) -
-                                                  1] = '\0';
-                        }
-
-                        // Set skeleton file to current one
+                // Export mode selection
+                const char *export_modes[] = {"Detection Dataset",
+                                              "Pose Dataset"};
+                if (ImGui::Combo("Export Mode", &yolo_export_mode, export_modes,
+                                 IM_ARRAYSIZE(export_modes))) {
+                    // Update default values based on mode
+                    if (yolo_export_mode == 0) { // Detection
+                        strcpy(yolo_export_output_dir,
+                               "/home/user/data/yolo_detection_dataset");
+                    } else { // Pose
+                        strcpy(yolo_export_output_dir,
+                               "/home/user/data/yolo_pose_dataset");
+                        // Set skeleton file to current one if available
                         if (!skeleton_file_path.empty()) {
                             strncpy(yolo_export_skeleton_file,
                                     skeleton_file_path.c_str(),
@@ -4100,128 +3802,376 @@ int main(int, char **) {
                                 [sizeof(yolo_export_skeleton_file) - 1] = '\0';
                         }
                     }
-
-                    ImGui::SameLine();
-                    if (ImGui::Button("Reset to Defaults")) {
-                        strcpy(yolo_export_label_dir, "/home/user/data/labels");
-                        strcpy(yolo_export_video_dir, "/home/user/data/videos");
-                        strcpy(yolo_export_output_dir,
-                               "/home/user/data/yolo_datasets");
-                        strcpy(yolo_export_skeleton_file, "");
-                        strcpy(yolo_export_class_names_file, "");
-                        yolo_export_image_size = 640;
-                        yolo_export_train_ratio = 0.7f;
-                        yolo_export_val_ratio = 0.2f;
-                        yolo_export_test_ratio = 0.1f;
-                        yolo_export_seed = 42;
-                        yolo_export_status = "";
-                    }
                 }
-                ImGui::End();
-            }
 
-            if (show_error) {
-                ImGui::OpenPopup("Error");
-                show_error = false; // Reset the flag so it only opens once
-            }
-
-            if (ImGui::BeginPopupModal("Error", NULL,
-                                       ImGuiWindowFlags_AlwaysAutoResize)) {
-                ImGui::Text("%s", error_message.c_str());
                 ImGui::Separator();
 
-                if (ImGui::Button("OK")) {
-                    ImGui::CloseCurrentPopup();
-                    show_error = false;
+                // Directory and file inputs
+                ImGui::Text("Input Directories:");
+                ImGui::InputText("Label Directory", yolo_export_label_dir,
+                                 sizeof(yolo_export_label_dir));
+                ImGui::SameLine();
+                if (ImGui::Button("Browse##labels")) {
+                    IGFD::FileDialogConfig config;
+                    config.countSelectionMax = 1;
+                    config.path = "/home/user/data";
+                    config.flags = ImGuiFileDialogFlags_Modal;
+                    ImGuiFileDialog::Instance()->OpenDialog(
+                        "ChooseYoloExportLabelDir", "Choose Label Directory",
+                        nullptr, config);
                 }
 
-                ImGui::EndPopup();
-            }
+                ImGui::InputText("Video Directory", yolo_export_video_dir,
+                                 sizeof(yolo_export_video_dir));
+                ImGui::SameLine();
+                if (ImGui::Button("Browse##videos")) {
+                    IGFD::FileDialogConfig config;
+                    config.countSelectionMax = 1;
+                    config.path = "/home/user/data";
+                    config.flags = ImGuiFileDialogFlags_Modal;
+                    ImGuiFileDialog::Instance()->OpenDialog(
+                        "ChooseYoloExportVideoDir", "Choose Video Directory",
+                        nullptr, config);
+                }
 
-            // Rendering
-            ImGui::Render();
-            int display_w, display_h;
-            glfwGetFramebufferSize(window->render_target, &display_w,
-                                   &display_h);
-            glViewport(0, 0, display_w, display_h);
-            glClearColor(clear_color.x * clear_color.w,
-                         clear_color.y * clear_color.w,
-                         clear_color.z * clear_color.w, clear_color.w);
-            glClear(GL_COLOR_BUFFER_BIT);
-            ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+                ImGui::InputText("Output Directory", yolo_export_output_dir,
+                                 sizeof(yolo_export_output_dir));
+                ImGui::SameLine();
+                if (ImGui::Button("Browse##output")) {
+                    IGFD::FileDialogConfig config;
+                    config.countSelectionMax = 1;
+                    config.path = "/home/user/data";
+                    config.flags = ImGuiFileDialogFlags_Modal;
+                    ImGuiFileDialog::Instance()->OpenDialog(
+                        "ChooseYoloExportOutputDir", "Choose Output Directory",
+                        nullptr, config);
+                }
 
-            // Update and Render additional Platform Windows
-            // (Platform functions may change the current OpenGL context, so we
-            // save/restore it to make it easier to paste this code elsewhere.
-            //  For this specific demo app we could also call
-            //  glfwMakeContextCurrent(window) directly)
-            if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
-                GLFWwindow *backup_current_context = glfwGetCurrentContext();
-                ImGui::UpdatePlatformWindows();
-                ImGui::RenderPlatformWindowsDefault();
-                glfwMakeContextCurrent(backup_current_context);
-            }
+                ImGui::Separator();
 
-            glfwSwapBuffers(window->render_target);
-
-            if (ps.just_seeked) {
-                ps.just_seeked = false;
-            } else {
-                if (dc_context->decoding_flag && ps.play_video) {
-                    // always round up, mimimum 1
-                    int frame_to_show = static_cast<int>(
-                        std::ceil(playback_time_now * video_fps));
-
-                    int min_decoded_frame = INT_MAX;
-                    for (const auto &[cam_name, visible] :
-                         window_need_decoding) {
-                        if (visible.load()) {
-                            int decoded = latest_decoded_frame[cam_name].load();
-                            min_decoded_frame =
-                                std::min(min_decoded_frame, decoded);
+                // Configuration files
+                if (yolo_export_mode == 1) { // Pose mode
+                    ImGui::Text("Skeleton Configuration:");
+                    ImGui::InputText("Skeleton File", yolo_export_skeleton_file,
+                                     sizeof(yolo_export_skeleton_file));
+                    ImGui::SameLine();
+                    if (ImGui::Button("Browse##skeleton")) {
+                        IGFD::FileDialogConfig config;
+                        config.countSelectionMax = 1;
+                        config.path = "/home/user/data";
+                        config.flags = ImGuiFileDialogFlags_Modal;
+                        ImGuiFileDialog::Instance()->OpenDialog(
+                            "ChooseYoloExportSkeletonFile",
+                            "Choose Skeleton File", ".json", config);
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button("Use Current")) {
+                        if (!skeleton_file_path.empty()) {
+                            strncpy(yolo_export_skeleton_file,
+                                    skeleton_file_path.c_str(),
+                                    sizeof(yolo_export_skeleton_file) - 1);
+                            yolo_export_skeleton_file
+                                [sizeof(yolo_export_skeleton_file) - 1] = '\0';
                         }
                     }
-                    frame_to_show = std::min(frame_to_show, min_decoded_frame);
+                }
 
-                    int frame_delta =
-                        frame_to_show - ps.to_display_frame_number;
-                    if (frame_delta > 0) {
-                        // Update frame number
-                        ps.to_display_frame_number = frame_to_show;
+                if (yolo_export_mode == 0) { // Detection mode
+                    ImGui::Text("Class Names (Optional):");
+                    ImGui::InputText("Class Names File",
+                                     yolo_export_class_names_file,
+                                     sizeof(yolo_export_class_names_file));
+                    ImGui::SameLine();
+                    if (ImGui::Button("Browse##classes")) {
+                        IGFD::FileDialogConfig config;
+                        config.countSelectionMax = 1;
+                        config.path = "/home/user/data";
+                        config.flags = ImGuiFileDialogFlags_Modal;
+                        ImGuiFileDialog::Instance()->OpenDialog(
+                            "ChooseYoloExportClassFile",
+                            "Choose Class Names File", ".txt", config);
+                    }
+                }
 
-                        // Mark all intermediate frames as available
-                        for (int offset = 0; offset < frame_delta; ++offset) {
-                            int index =
-                                (ps.read_head + offset) % scene->size_of_buffer;
-                            for (int j = 0; j < scene->num_cams; j++) {
-                                scene->display_buffer[j][index]
-                                    .available_to_write = true;
-                            }
+                ImGui::Separator();
+
+                // Export parameters
+                ImGui::Text("Export Parameters:");
+                ImGui::SliderInt("Image Size", &yolo_export_image_size, 320,
+                                 1280, "%d");
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("Images will be resized to this "
+                                      "square size (e.g., 640x640)");
+                }
+
+                ImGui::SliderFloat("Train Ratio", &yolo_export_train_ratio,
+                                   0.1f, 0.9f, "%.2f");
+                ImGui::SliderFloat("Val Ratio", &yolo_export_val_ratio, 0.05f,
+                                   0.5f, "%.2f");
+                ImGui::SliderFloat("Test Ratio", &yolo_export_test_ratio, 0.05f,
+                                   0.5f, "%.2f");
+
+                // Ensure ratios sum to 1.0
+                float total_ratio = yolo_export_train_ratio +
+                                    yolo_export_val_ratio +
+                                    yolo_export_test_ratio;
+                if (total_ratio > 0.001f) {
+                    ImGui::Text("Total: %.2f", total_ratio);
+                    if (total_ratio > 1.001f || total_ratio < 0.999f) {
+                        ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.0f, 1.0f),
+                                           "Warning: Ratios should sum to 1.0");
+                        if (ImGui::Button("Normalize Ratios")) {
+                            yolo_export_train_ratio /= total_ratio;
+                            yolo_export_val_ratio /= total_ratio;
+                            yolo_export_test_ratio /= total_ratio;
+                        }
+                    }
+                }
+
+                ImGui::InputInt("Random Seed", &yolo_export_seed);
+
+                ImGui::Separator();
+
+                // Export buttons and status
+                if (!yolo_export_in_progress) {
+                    if (ImGui::Button("Start Export", ImVec2(150, 30))) {
+                        // Validate inputs
+                        bool valid = true;
+                        std::string validation_error;
+
+                        if (strlen(yolo_export_label_dir) == 0) {
+                            valid = false;
+                            validation_error = "Label directory is required";
+                        } else if (strlen(yolo_export_video_dir) == 0) {
+                            valid = false;
+                            validation_error = "Video directory is required";
+                        } else if (strlen(yolo_export_output_dir) == 0) {
+                            valid = false;
+                            validation_error = "Output directory is required";
+                        } else if (yolo_export_mode == 1 &&
+                                   strlen(yolo_export_skeleton_file) == 0) {
+                            valid = false;
+                            validation_error = "Skeleton file is required "
+                                               "for pose datasets";
                         }
 
-                        // Advance the read head
-                        ps.read_head = (ps.read_head + frame_delta) %
-                                       scene->size_of_buffer;
+                        if (valid) {
+                            yolo_export_in_progress = true;
+                            yolo_export_status = "Starting export...";
 
-                        // Optional: update slider/UI sync
-                        ps.slider_frame_number = ps.to_display_frame_number;
+                            // Setup export configuration
+                            YoloExport::ExportConfig config;
+                            config.label_dir =
+                                std::string(yolo_export_label_dir);
+                            config.video_dir =
+                                std::string(yolo_export_video_dir);
+                            config.output_dir =
+                                std::string(yolo_export_output_dir);
+                            config.skeleton_file =
+                                std::string(yolo_export_skeleton_file);
+                            config.class_names_file =
+                                std::string(yolo_export_class_names_file);
+                            config.image_size = yolo_export_image_size;
+                            config.split.train_ratio = yolo_export_train_ratio;
+                            config.split.val_ratio = yolo_export_val_ratio;
+                            config.split.test_ratio = yolo_export_test_ratio;
+                            config.split.seed = yolo_export_seed;
+
+                            // Run export in background thread
+                            std::thread export_thread(
+                                [config, yolo_export_mode, &yolo_export_status,
+                                 &yolo_export_in_progress]() {
+                                    bool success = false;
+                                    if (yolo_export_mode == 0) {
+                                        success = YoloExport::
+                                            export_yolo_detection_dataset(
+                                                config, &yolo_export_status);
+                                    } else {
+                                        success = YoloExport::
+                                            export_yolo_pose_dataset(
+                                                config, &yolo_export_status);
+                                    }
+
+                                    // Update status (note: this is not
+                                    // thread-safe, but for simple status
+                                    // updates it should be okay)
+                                    if (success) {
+                                        yolo_export_status = "Export completed "
+                                                             "successfully!";
+                                    } else {
+                                        yolo_export_status =
+                                            "Export failed! Check console "
+                                            "for details.";
+                                    }
+                                    yolo_export_in_progress = false;
+                                });
+                            export_thread.detach();
+                        } else {
+                            yolo_export_status = "Error: " + validation_error;
+                        }
                     }
+                } else {
+                    ImGui::Text("Export in progress...");
+                    ImGui::SameLine();
+                }
+
+                if (!yolo_export_status.empty()) {
+                    if (yolo_export_status.find("Error") != std::string::npos ||
+                        yolo_export_status.find("failed") !=
+                            std::string::npos) {
+                        ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "%s",
+                                           yolo_export_status.c_str());
+                    } else if (yolo_export_status.find("completed") !=
+                               std::string::npos) {
+                        ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "%s",
+                                           yolo_export_status.c_str());
+                    } else {
+                        ImGui::Text("%s", yolo_export_status.c_str());
+                    }
+                }
+
+                ImGui::Separator();
+
+                // Quick setup buttons
+                ImGui::Text("Quick Setup:");
+                if (ImGui::Button("Use Current Data")) {
+                    // Set label dir to current keypoints folder
+                    if (!keypoints_root_folder.empty()) {
+                        strncpy(yolo_export_label_dir,
+                                keypoints_root_folder.c_str(),
+                                sizeof(yolo_export_label_dir) - 1);
+                        yolo_export_label_dir[sizeof(yolo_export_label_dir) -
+                                              1] = '\0';
+                    }
+
+                    // Set skeleton file to current one
+                    if (!skeleton_file_path.empty()) {
+                        strncpy(yolo_export_skeleton_file,
+                                skeleton_file_path.c_str(),
+                                sizeof(yolo_export_skeleton_file) - 1);
+                        yolo_export_skeleton_file
+                            [sizeof(yolo_export_skeleton_file) - 1] = '\0';
+                    }
+                }
+
+                ImGui::SameLine();
+                if (ImGui::Button("Reset to Defaults")) {
+                    strcpy(yolo_export_label_dir, "/home/user/data/labels");
+                    strcpy(yolo_export_video_dir, "/home/user/data/videos");
+                    strcpy(yolo_export_output_dir,
+                           "/home/user/data/yolo_datasets");
+                    strcpy(yolo_export_skeleton_file, "");
+                    strcpy(yolo_export_class_names_file, "");
+                    yolo_export_image_size = 640;
+                    yolo_export_train_ratio = 0.7f;
+                    yolo_export_val_ratio = 0.2f;
+                    yolo_export_test_ratio = 0.1f;
+                    yolo_export_seed = 42;
+                    yolo_export_status = "";
+                }
+            }
+            ImGui::End();
+        }
+
+        if (show_error) {
+            ImGui::OpenPopup("Error");
+            show_error = false; // Reset the flag so it only opens once
+        }
+
+        if (ImGui::BeginPopupModal("Error", NULL,
+                                   ImGuiWindowFlags_AlwaysAutoResize)) {
+            ImGui::Text("%s", error_message.c_str());
+            ImGui::Separator();
+
+            if (ImGui::Button("OK")) {
+                ImGui::CloseCurrentPopup();
+                show_error = false;
+            }
+
+            ImGui::EndPopup();
+        }
+
+        // Rendering
+        ImGui::Render();
+        int display_w, display_h;
+        glfwGetFramebufferSize(window->render_target, &display_w, &display_h);
+        glViewport(0, 0, display_w, display_h);
+        glClearColor(clear_color.x * clear_color.w,
+                     clear_color.y * clear_color.w,
+                     clear_color.z * clear_color.w, clear_color.w);
+        glClear(GL_COLOR_BUFFER_BIT);
+        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+
+        // Update and Render additional Platform Windows
+        // (Platform functions may change the current OpenGL context, so we
+        // save/restore it to make it easier to paste this code elsewhere.
+        //  For this specific demo app we could also call
+        //  glfwMakeContextCurrent(window) directly)
+        if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
+            GLFWwindow *backup_current_context = glfwGetCurrentContext();
+            ImGui::UpdatePlatformWindows();
+            ImGui::RenderPlatformWindowsDefault();
+            glfwMakeContextCurrent(backup_current_context);
+        }
+
+        glfwSwapBuffers(window->render_target);
+
+        if (ps.just_seeked) {
+            ps.just_seeked = false;
+        } else {
+            if (dc_context->decoding_flag && ps.play_video) {
+                // always round up, mimimum 1
+                int frame_to_show =
+                    static_cast<int>(std::ceil(playback_time_now * video_fps));
+
+                int min_decoded_frame = INT_MAX;
+                for (const auto &[cam_name, visible] : window_need_decoding) {
+                    if (visible.load()) {
+                        int decoded = latest_decoded_frame[cam_name].load();
+                        min_decoded_frame =
+                            std::min(min_decoded_frame, decoded);
+                    }
+                }
+                frame_to_show = std::min(frame_to_show, min_decoded_frame);
+
+                int frame_delta = frame_to_show - ps.to_display_frame_number;
+                if (frame_delta > 0) {
+                    // Update frame number
+                    ps.to_display_frame_number = frame_to_show;
+
+                    // Mark all intermediate frames as available
+                    for (int offset = 0; offset < frame_delta; ++offset) {
+                        int index =
+                            (ps.read_head + offset) % scene->size_of_buffer;
+                        for (int j = 0; j < scene->num_cams; j++) {
+                            scene->display_buffer[j][index].available_to_write =
+                                true;
+                        }
+                    }
+
+                    // Advance the read head
+                    ps.read_head =
+                        (ps.read_head + frame_delta) % scene->size_of_buffer;
+
+                    // Optional: update slider/UI sync
+                    ps.slider_frame_number = ps.to_display_frame_number;
                 }
             }
         }
-        // Cleanup
-        cleanup_yolo_drag_boxes(); // Clean up YOLO drag boxes memory
-        ImGui_ImplOpenGL3_Shutdown();
-        ImGui_ImplGlfw_Shutdown();
-        ImGui::DestroyContext();
+    }
+    // Cleanup
+    cleanup_yolo_drag_boxes(); // Clean up YOLO drag boxes memory
+    ImGui_ImplOpenGL3_Shutdown();
+    ImGui_ImplGlfw_Shutdown();
+    ImGui::DestroyContext();
 
-        glfwDestroyWindow(window->render_target);
-        glfwTerminate();
+    glfwDestroyWindow(window->render_target);
+    glfwTerminate();
 
-        dc_context->stop_flag = true;
-        // wait for threads to join
-        for (auto &t : decoder_threads)
-            t.join();
+    dc_context->stop_flag = true;
+    // wait for threads to join
+    for (auto &t : decoder_threads)
+        t.join();
 
-        return 0;
+    return 0;
 }
