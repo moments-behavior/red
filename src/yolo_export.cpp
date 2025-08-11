@@ -214,7 +214,6 @@ struct BufferBasedExtractor {
             return cv::Mat();
         }
         
-        std::cout << "Extracting frame " << target_frame << std::endl;
         int keyframe_start = (target_frame / keyframe_interval) * keyframe_interval;
         if (keyframe_start != buffer_keyframe_start) {
             if (!fill_buffer_from_keyframe(keyframe_start, target_frame)) {
