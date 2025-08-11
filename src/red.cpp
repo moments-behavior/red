@@ -876,6 +876,7 @@ int main(int, char **) {
                     }
                     render_allocate_scene_memory(scene, label_buffer_size);
                     // multiple threads for decoding for selected videos
+
                     for (int i = 0; i < scene->num_cams; i++) {
                         decoder_threads.push_back(std::thread(
                             &decoder_process, dc_context, demuxers[i],
