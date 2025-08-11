@@ -2993,7 +2993,7 @@ int main(int, char **) {
                 if (ImGui::Button("Jump to Next Labeled Frame") ||
                     ImGui::IsKeyPressed(ImGuiKey_RightArrow, false)) {
                     if (next_labeled_frame_it != keypoints_map.end()) {
-                        seek_all_cameras(scene, next_labeled_frame_it.first,
+                        seek_all_cameras(scene, (*next_labeled_frame_it).first,
                                          video_fps, ps, true);
                     }
                 }
@@ -3128,7 +3128,8 @@ int main(int, char **) {
 
                         if (ImGui::Button("Run YOLO Prediction")) {
                             std::cout << "Running YOLO prediction on frame "
-                                      << to_display_frame_number << std::endl;
+                                      << ps.to_display_frame_number
+                                      << std::endl;
 
                             yolo_detection = true;
 
@@ -3164,42 +3165,6 @@ int main(int, char **) {
                                     std::cout << "Cleared existing bounding "
                                                  "boxes for frame "
                                               << current_frame_num << std::endl;
-                                }
-                            }
-
-                            for (int cam_id = 0; cam_id < scene->num_cams;
-                                 cam_id++) {
-                                unsigned char *frame_data = nullptr;
-                                if (play_video && dc_context->decoding_flag) {
-                                    frame_data =
-                                        scene->display_buffer[cam_id][read_head]
-                                            .frame;
-                                } else if (!play_video) {
-                                    int select_corr_head =
-                                        (pause_selected + read_head) %
-                                        scene->size_of_buffer;
-                                    frame_data =
-                                        scene
-                                            ->display_buffer[cam_id]
-                                                            [select_corr_head]
-                                            .frame;
-                                }
-
-                                if (frame_data) {
-                                    yolo_predictions[cam_id] = runYoloInference(
-                                        yolo_model_path, frame_data,
-                                        scene->image_width[cam_id],
-                                        scene->image_height[cam_id]);
-                                    yolo_bboxes[cam_id].clear();
-                                    for (const auto &pred :
-                                         yolo_predictions[cam_id]) {
-                                        yolo_bboxes[cam_id].emplace_back(pred);
-                                    }
-
-                                    std::cout << "YOLO predictions for camera "
-                                              << cam_id << ": "
-                                              << yolo_bboxes[cam_id].size()
-                                              << " detections." << std::endl;
                                 }
                             }
 
@@ -4236,3 +4201,4 @@ int main(int, char **) {
 
         return 0;
     }
+}
