@@ -1574,24 +1574,20 @@ int main(int, char **) {
                                     static bool shift_was_pressed = false;
                                     bool shift_pressed = ImGui::GetIO().KeyShift;
                                     
+                                    bool keypoints_find =
+                                        keypoints_map.find(current_frame_num) !=
+                                        keypoints_map.end();
+                                    if (!keypoints_find) {
+                                        KeyPoints *keypoints =
+                                            (KeyPoints *)malloc(
+                                                sizeof(KeyPoints));
+                                        allocate_keypoints(keypoints, scene,
+                                                           skeleton);
+                                        keypoints_map[current_frame_num] =
+                                            keypoints;
+                                    }
+                                    
                                     if (shift_pressed && !shift_was_pressed) {
-                                        // Ensure keypoints structure exists for
-                                        // bounding boxes, even if skeleton has
-                                        // 0 keypoints
-                                        bool keypoints_find =
-                                            keypoints_map.find(
-                                                current_frame_num) !=
-                                            keypoints_map.end();
-                                        if (!keypoints_find) {
-                                            KeyPoints *keypoints =
-                                                (KeyPoints *)malloc(
-                                                    sizeof(KeyPoints));
-                                            allocate_keypoints(keypoints, scene,
-                                                               skeleton);
-                                            keypoints_map[current_frame_num] =
-                                                keypoints;
-                                        }
-
                                         ImPlotPoint mouse =
                                             ImPlot::GetPlotMousePos();
                                         BoundingBox new_bbox;
@@ -1622,20 +1618,23 @@ int main(int, char **) {
                                             .push_back(new_bbox);
                                     }
 
-                                    for (auto &bbox :
-                                         keypoints_map[current_frame_num]
-                                             ->bbox2d_list[j]) {
-                                        if (bbox.state == RectOnePoint &&
-                                            shift_pressed) {
-                                            ImPlotPoint mouse =
-                                                ImPlot::GetPlotMousePos();
-                                            bbox.rect->X.Max = mouse.x;
-                                            bbox.rect->Y.Min = mouse.y;
-                                        }
+                                    // Only process bbox operations if keypoints exist for this frame
+                                    if (keypoints_map.find(current_frame_num) != keypoints_map.end()) {
+                                        for (auto &bbox :
+                                             keypoints_map[current_frame_num]
+                                                 ->bbox2d_list[j]) {
+                                            if (bbox.state == RectOnePoint &&
+                                                shift_pressed) {
+                                                ImPlotPoint mouse =
+                                                    ImPlot::GetPlotMousePos();
+                                                bbox.rect->X.Max = mouse.x;
+                                                bbox.rect->Y.Min = mouse.y;
+                                            }
 
-                                        if (bbox.state == RectOnePoint &&
-                                            !shift_pressed && shift_was_pressed) {
-                                            bbox.state = RectTwoPoints;
+                                            if (bbox.state == RectOnePoint &&
+                                                !shift_pressed && shift_was_pressed) {
+                                                bbox.state = RectTwoPoints;
+                                            }
                                         }
                                     }
                                     
