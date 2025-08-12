@@ -1571,8 +1571,10 @@ int main(int, char **) {
                                     }
                                 }
                                 if (skeleton->has_bbox) {
-                                    if (ImGui::IsMouseClicked(
-                                            ImGuiMouseButton_Middle, false)) {
+                                    static bool shift_was_pressed = false;
+                                    bool shift_pressed = ImGui::GetIO().KeyShift;
+                                    
+                                    if (shift_pressed && !shift_was_pressed) {
                                         // Ensure keypoints structure exists for
                                         // bounding boxes, even if skeleton has
                                         // 0 keypoints
@@ -1620,14 +1622,11 @@ int main(int, char **) {
                                             .push_back(new_bbox);
                                     }
 
-                                    // Handle dragging for multiple bounding
-                                    // boxes
                                     for (auto &bbox :
                                          keypoints_map[current_frame_num]
                                              ->bbox2d_list[j]) {
                                         if (bbox.state == RectOnePoint &&
-                                            ImGui::IsMouseDragging(
-                                                ImGuiMouseButton_Middle)) {
+                                            shift_pressed) {
                                             ImPlotPoint mouse =
                                                 ImPlot::GetPlotMousePos();
                                             bbox.rect->X.Max = mouse.x;
@@ -1635,11 +1634,12 @@ int main(int, char **) {
                                         }
 
                                         if (bbox.state == RectOnePoint &&
-                                            ImGui::IsMouseReleased(
-                                                ImGuiMouseButton_Middle)) {
+                                            !shift_pressed && shift_was_pressed) {
                                             bbox.state = RectTwoPoints;
                                         }
                                     }
+                                    
+                                    shift_was_pressed = shift_pressed;
                                 }
                             } else {
                                 is_view_focused[j] = false;
