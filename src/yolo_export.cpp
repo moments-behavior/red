@@ -514,18 +514,18 @@ std::vector<FrameAnnotation> load_pose_annotations(const std::string& label_dir,
     std::map<std::string, std::vector<BoundingBox>> all_camera_bboxes;
     std::map<std::string, std::vector<std::vector<float>>> all_camera_keypoints;
     
-    // Find all bbox CSV files and keypoint CSV files
+    // Find all bbox keypoints CSV files for pose estimation
     std::vector<std::string> camera_names;
     
     for (const auto& entry : std::filesystem::recursive_directory_iterator(label_dir)) {
         if (entry.path().extension() == ".csv") {
             std::string filename = entry.path().filename().string();
             
-            if (filename.find("_bboxes.csv") != std::string::npos) {
+            if (filename.find("_bbox_keypoints.csv") != std::string::npos) {
                 std::string camera_name = entry.path().stem().string();
-                // Remove "_bboxes" suffix
-                if (camera_name.length() > 7 && camera_name.substr(camera_name.length() - 7) == "_bboxes") {
-                    camera_name = camera_name.substr(0, camera_name.length() - 7);
+                // Remove "_bbox_keypoints" suffix
+                if (camera_name.length() > 15 && camera_name.substr(camera_name.length() - 15) == "_bbox_keypoints") {
+                    camera_name = camera_name.substr(0, camera_name.length() - 15);
                 }
                 
                 auto camera_bboxes = parse_bbox_csv(entry.path().string());
