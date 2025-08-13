@@ -1531,7 +1531,7 @@ bool export_yolo_obb_dataset(const ExportConfig& config, std::string* status) {
                         
                         // Normalize to [0, 1] range using the final image dimensions
                         float norm_x = scaled_x / static_cast<float>(img_width);
-                        float norm_y = scaled_y / static_cast<float>(img_height);
+                        float norm_y = 1 - scaled_y / static_cast<float>(img_height);
                         
                         // Clamp to [0, 1] range to handle any edge cases
                         norm_x = std::max(0.0f, std::min(1.0f, norm_x));

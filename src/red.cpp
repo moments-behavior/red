@@ -2469,85 +2469,88 @@ int main(int, char **) {
                 const float TEXT_BASE_HEIGHT =
                     ImGui::GetTextLineHeightWithSpacing();
 
-                // Bounding Box Class Management Section
-                ImGui::SeparatorText("Bounding Box Classes");
+                // Only show bounding box class management if skeleton supports bboxes or obbs
+                if (skeleton && (skeleton->has_bbox || skeleton->has_obb)) {
+                    // Bounding Box Class Management Section
+                    ImGui::SeparatorText("Bounding Box Classes");
 
-                // Current class selection combo
-                if (ImGui::BeginCombo(
-                        "Current Class",
-                        bbox_class_names[current_bbox_class].c_str())) {
-                    for (int i = 0; i < bbox_class_names.size(); i++) {
-                        bool is_selected = (current_bbox_class == i);
+                    // Current class selection combo
+                    if (ImGui::BeginCombo(
+                            "Current Class",
+                            bbox_class_names[current_bbox_class].c_str())) {
+                        for (int i = 0; i < bbox_class_names.size(); i++) {
+                            bool is_selected = (current_bbox_class == i);
 
-                        // Show color indicator next to class name
-                        ImGui::ColorButton("##color", bbox_class_colors[i],
-                                           ImGuiColorEditFlags_NoTooltip |
-                                               ImGuiColorEditFlags_NoBorder,
-                                           ImVec2(15, 15));
-                        ImGui::SameLine();
+                            // Show color indicator next to class name
+                            ImGui::ColorButton("##color", bbox_class_colors[i],
+                                               ImGuiColorEditFlags_NoTooltip |
+                                                   ImGuiColorEditFlags_NoBorder,
+                                               ImVec2(15, 15));
+                            ImGui::SameLine();
 
-                        if (ImGui::Selectable(bbox_class_names[i].c_str(),
-                                              is_selected)) {
-                            current_bbox_class = i;
+                            if (ImGui::Selectable(bbox_class_names[i].c_str(),
+                                                  is_selected)) {
+                                current_bbox_class = i;
+                            }
+                            if (is_selected) {
+                                ImGui::SetItemDefaultFocus();
+                            }
                         }
-                        if (is_selected) {
-                            ImGui::SetItemDefaultFocus();
-                        }
+                        ImGui::EndCombo();
                     }
-                    ImGui::EndCombo();
-                }
 
-                // Add new class
-                ImGui::SetNextItemWidth(200);
-                if (ImGui::InputTextWithHint(
-                        "##new_class", "Enter new class name...",
-                        new_class_name_buffer, sizeof(new_class_name_buffer))) {
-                    // Input changed
-                }
-                ImGui::SameLine();
-                if (ImGui::Button("Add Class") &&
-                    strlen(new_class_name_buffer) > 0) {
-                    bbox_class_names.push_back(
-                        std::string(new_class_name_buffer));
-                    // Generate a unique color for the new class (HSV with
-                    // different hues)
-                    float hue = (bbox_class_colors.size() *
-                                 0.618034f); // Golden ratio for nice color
-                                             // distribution
-                    while (hue > 1.0f)
-                        hue -= 1.0f;
-                    ImVec4 new_color = (ImVec4)ImColor::HSV(hue, 0.8f, 1.0f);
-                    bbox_class_colors.push_back(new_color);
-                    current_bbox_class = bbox_class_names.size() - 1;
-                    memset(new_class_name_buffer, 0,
-                           sizeof(new_class_name_buffer));
-                }
-
-                // Edit current class color
-                if (current_bbox_class >= 0 &&
-                    current_bbox_class < bbox_class_colors.size()) {
+                    // Add new class
                     ImGui::SetNextItemWidth(200);
-                    ImGui::ColorEdit3(
-                        "Class Color",
-                        (float *)&bbox_class_colors[current_bbox_class],
-                        ImGuiColorEditFlags_NoInputs);
-                }
-
-                // Delete class (only if not the last one)
-                if (bbox_class_names.size() > 1) {
+                    if (ImGui::InputTextWithHint(
+                            "##new_class", "Enter new class name...",
+                            new_class_name_buffer, sizeof(new_class_name_buffer))) {
+                        // Input changed
+                    }
                     ImGui::SameLine();
-                    if (ImGui::Button("Delete Class")) {
-                        bbox_class_names.erase(bbox_class_names.begin() +
-                                               current_bbox_class);
-                        bbox_class_colors.erase(bbox_class_colors.begin() +
-                                                current_bbox_class);
-                        if (current_bbox_class >= bbox_class_names.size()) {
-                            current_bbox_class = bbox_class_names.size() - 1;
+                    if (ImGui::Button("Add Class") &&
+                        strlen(new_class_name_buffer) > 0) {
+                        bbox_class_names.push_back(
+                            std::string(new_class_name_buffer));
+                        // Generate a unique color for the new class (HSV with
+                        // different hues)
+                        float hue = (bbox_class_colors.size() *
+                                     0.618034f); // Golden ratio for nice color
+                                                 // distribution
+                        while (hue > 1.0f)
+                            hue -= 1.0f;
+                        ImVec4 new_color = (ImVec4)ImColor::HSV(hue, 0.8f, 1.0f);
+                        bbox_class_colors.push_back(new_color);
+                        current_bbox_class = bbox_class_names.size() - 1;
+                        memset(new_class_name_buffer, 0,
+                               sizeof(new_class_name_buffer));
+                    }
+
+                    // Edit current class color
+                    if (current_bbox_class >= 0 &&
+                        current_bbox_class < bbox_class_colors.size()) {
+                        ImGui::SetNextItemWidth(200);
+                        ImGui::ColorEdit3(
+                            "Class Color",
+                            (float *)&bbox_class_colors[current_bbox_class],
+                            ImGuiColorEditFlags_NoInputs);
+                    }
+
+                    // Delete class (only if not the last one)
+                    if (bbox_class_names.size() > 1) {
+                        ImGui::SameLine();
+                        if (ImGui::Button("Delete Class")) {
+                            bbox_class_names.erase(bbox_class_names.begin() +
+                                                   current_bbox_class);
+                            bbox_class_colors.erase(bbox_class_colors.begin() +
+                                                    current_bbox_class);
+                            if (current_bbox_class >= bbox_class_names.size()) {
+                                current_bbox_class = bbox_class_names.size() - 1;
+                            }
                         }
                     }
-                }
 
-                ImGui::Separator();
+                    ImGui::Separator();
+                }
 
                 // Check if skeleton is valid and has nodes before creating
                 // the table
