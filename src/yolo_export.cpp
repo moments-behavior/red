@@ -256,38 +256,52 @@ private:
                 return false;
             }
             
+            int nFrameReturned = decoder->Decode(nullptr, 0, CUVID_PKT_DISCONTINUITY);
+            
+            for (int i = 0; i < nFrameReturned; i++) {
+                decoder->GetFrame();
+            }
+            
+            int temp_nFrameReturned = decoder->Decode(pVideo, nVideoBytes);
             
             int frames_needed = keyframe_interval;
             int frames_decoded = 0;
             int current_frame_number = keyframe_start;
+            bool skip_first_decode = true; 
             
             while (frames_decoded < frames_needed && frame_buffer.size() < static_cast<size_t>(keyframe_interval)) {
-                if (!demuxer->Demux(pVideo, nVideoBytes, pktData)) {
-                    break; 
+                if (!skip_first_decode) {
+                    if (!demuxer->Demux(pVideo, nVideoBytes, pktData)) {
+                        // End of stream, flush decoder
+                        nFrameReturned = decoder->Decode(nullptr, 0, CUVID_PKT_DISCONTINUITY);
+                    } else {
+                        nFrameReturned = decoder->Decode(pVideo, nVideoBytes);
+                    }
+                } else {
+                    // Use the frames from initial decode
+                    nFrameReturned = temp_nFrameReturned;
+                    skip_first_decode = false;
                 }
                 
-                if (nVideoBytes > 0) {
-                    // Decode frame
-                    int nFrameReturned = decoder->Decode(pVideo, nVideoBytes);
-                    
-                    for (int i = 0; i < nFrameReturned; i++) {
-                        uint8_t* pFrame = decoder->GetFrame();
-                        if (pFrame) {
-                            cv::Mat frame = convert_frame_to_mat(pFrame);
-                            if (!frame.empty()) {
-                                // Store frame with sequential numbering from keyframe start
-                                frame_buffer.push_back({current_frame_number, frame});
-                                current_frame_number++;
-                            }
-                        }
-                        frames_decoded++;
-                        
-                        // Stop if buffer is full
-                        if (frame_buffer.size() >= static_cast<size_t>(keyframe_interval)) {
-                            break;
+                for (int i = 0; i < nFrameReturned; i++) {
+                    uint8_t* pFrame = decoder->GetFrame();
+                    if (pFrame) {
+                        cv::Mat frame = convert_frame_to_mat(pFrame);
+                        if (!frame.empty()) {
+                            // Store frame with sequential numbering from keyframe start
+                            frame_buffer.push_back({current_frame_number, frame});
+                            current_frame_number++;
                         }
                     }
+                    frames_decoded++;
+                    
+                    // Stop if buffer is full
+                    if (frame_buffer.size() >= static_cast<size_t>(keyframe_interval)) {
+                        break;
+                    }
                 }
+                
+                std::this_thread::sleep_for(std::chrono::microseconds(100));
                 
                 if (frames_decoded > keyframe_interval * 2) {
                     std::cout << "Decoded more frames than expected, stopping" << std::endl;
