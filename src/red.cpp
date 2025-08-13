@@ -580,6 +580,12 @@ int main(int, char **) {
     float hovered_bbox_confidence = 0.0f;
     int hovered_bbox_class = -1;
 
+    // Hovered OBB tracking variables
+    int hovered_obb_cam = -1;
+    int hovered_obb_idx = -1;
+    float hovered_obb_confidence = 0.0f;
+    int hovered_obb_class = -1;
+
     bool auto_yolo_labeling = false;
     std::set<int>
         yolo_processed_frames; // Track which frames have been processed
@@ -603,6 +609,12 @@ int main(int, char **) {
         hovered_bbox_idx = -1;
         hovered_bbox_confidence = 0.0f;
         hovered_bbox_class = -1;
+        
+        // Reset hovered OBB info at start of each frame
+        hovered_obb_cam = -1;
+        hovered_obb_idx = -1;
+        hovered_obb_confidence = 0.0f;
+        hovered_obb_class = -1;
 
         // --- Update playback time ---
         auto now = std::chrono::steady_clock::now();
@@ -2018,6 +2030,175 @@ int main(int, char **) {
                                 }
                             }
 
+                            // Plot oriented bounding boxes
+                            if (skeleton->has_obb) {
+                                bool keypoints_find =
+                                    keypoints_map.find(current_frame_num) !=
+                                    keypoints_map.end();
+                                if (!keypoints_find) {
+                                    KeyPoints *keypoints =
+                                        (KeyPoints *)malloc(sizeof(KeyPoints));
+                                    allocate_keypoints(keypoints, scene,
+                                                       skeleton);
+                                    keypoints_map[current_frame_num] =
+                                        keypoints;
+                                }
+
+                                // ESC key cancels OBB creation
+                                if (is_view_focused[j] && ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+                                    // Find and cancel any incomplete OBB
+                                    for (auto &obb : keypoints_map[current_frame_num]->obb2d_list[j]) {
+                                        if (obb.state == OBBFirstAxisPoint || obb.state == OBBSecondAxisPoint) {
+                                            obb.state = OBBNull;
+                                            break;
+                                        }
+                                    }
+                                }
+
+                                // Handle OBB interaction with W key
+                                if (is_view_focused[j] && 
+                                    ImGui::IsKeyPressed(ImGuiKey_W, false)) {
+                                    ImPlotPoint mouse = ImPlot::GetPlotMousePos();
+                                    
+                                    // Find an OBB to continue or create a new one
+                                    bool found_incomplete_obb = false;
+                                    for (auto &obb : keypoints_map[current_frame_num]->obb2d_list[j]) {
+                                        if (obb.state == OBBNull) {
+                                            // Start new OBB - place first axis point
+                                            obb.axis_point1 = ImVec2(mouse.x, mouse.y);
+                                            obb.state = OBBFirstAxisPoint;
+                                            obb.class_id = current_bbox_class; // Use currently selected class
+                                            obb.confidence = 1.0f;
+                                            found_incomplete_obb = true;
+                                            break;
+                                        } else if (obb.state == OBBFirstAxisPoint) {
+                                            // Place second axis point
+                                            obb.axis_point2 = ImVec2(mouse.x, mouse.y);
+                                            obb.state = OBBSecondAxisPoint;
+                                            found_incomplete_obb = true;
+                                            break;
+                                        } else if (obb.state == OBBSecondAxisPoint) {
+                                            // Place corner point and complete the OBB
+                                            obb.corner_point = ImVec2(mouse.x, mouse.y);
+                                            obb.state = OBBThirdPoint;
+                                            calculate_obb_properties(&obb);
+                                            obb.state = OBBComplete;
+                                            
+                                            // Clear the construction points after completion
+                                            obb.axis_point1 = ImVec2(0, 0);
+                                            obb.axis_point2 = ImVec2(0, 0);
+                                            obb.corner_point = ImVec2(0, 0);
+                                            
+                                            found_incomplete_obb = true;
+                                            break;
+                                        }
+                                    }
+                                    
+                                    // If no incomplete OBB found, create a new one
+                                    if (!found_incomplete_obb) {
+                                        OrientedBoundingBox new_obb;
+                                        new_obb.axis_point1 = ImVec2(mouse.x, mouse.y);
+                                        new_obb.axis_point2 = ImVec2(0, 0);
+                                        new_obb.corner_point = ImVec2(0, 0);
+                                        new_obb.center = ImVec2(0, 0);
+                                        new_obb.width = 0;
+                                        new_obb.height = 0;
+                                        new_obb.rotation = 0;
+                                        new_obb.state = OBBFirstAxisPoint;
+                                        new_obb.class_id = current_bbox_class;  // Use currently selected class
+                                        new_obb.confidence = 1.0f;
+                                        keypoints_map[current_frame_num]->obb2d_list[j].push_back(new_obb);
+                                    }
+                                }
+
+                                // Handle OBB manipulation and interaction
+                                static bool obb_dragging = false;
+                                static size_t dragged_obb_idx = 0;
+                                
+                                // Track which OBB is being hovered
+                                int current_hovered_obb = -1;
+                                
+                                // Check for hover when not dragging
+                                if (!obb_dragging && ImPlot::IsPlotHovered()) {
+                                    ImPlotPoint mouse = ImPlot::GetPlotMousePos();
+                                    
+                                    // Check if hovering over any OBB
+                                    for (size_t obb_idx = 0; 
+                                         obb_idx < keypoints_map[current_frame_num]->obb2d_list[j].size(); 
+                                         obb_idx++) {
+                                        auto &obb = keypoints_map[current_frame_num]->obb2d_list[j][obb_idx];
+                                        
+                                        // Check if mouse is inside the OBB
+                                        if (is_point_inside_obb(ImVec2(mouse.x, mouse.y), obb)) {
+                                            current_hovered_obb = obb_idx;
+                                            hovered_obb_cam = j;
+                                            hovered_obb_idx = obb_idx;
+                                            hovered_obb_class = obb.class_id;
+                                            hovered_obb_confidence = obb.confidence;
+                                            
+                                            // Handle key presses for OBB manipulation (similar to bbox)
+                                            // Delete OBB from current camera when 'T' key is pressed while hovering
+                                            if (ImGui::IsKeyPressed(ImGuiKey_T, false)) {
+                                                obb.state = OBBNull;
+                                            }
+                                            
+                                            // Delete OBB from all cameras when 'F' key is pressed while hovering
+                                            if (ImGui::IsKeyPressed(ImGuiKey_F, false)) {
+                                                int target_class_id = obb.class_id;
+                                                for (int cam = 0; cam < scene->num_cams; cam++) {
+                                                    if (keypoints_map.count(current_frame_num) > 0) {
+                                                        auto& obb_list = keypoints_map[current_frame_num]->obb2d_list[cam];
+                                                        for (auto& other_obb : obb_list) {
+                                                            if (other_obb.class_id == target_class_id) {
+                                                                other_obb.state = OBBNull;
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            
+                                            // Switch OBB class when 'A' or 'D' key is pressed while hovering
+                                            if (ImGui::IsKeyPressed(ImGuiKey_A, true)) {
+                                                obb.class_id = (obb.class_id - 1 + bbox_class_names.size()) % bbox_class_names.size();
+                                            }
+                                            if (ImGui::IsKeyPressed(ImGuiKey_D, true)) {
+                                                obb.class_id = (obb.class_id + 1) % bbox_class_names.size();
+                                            }
+                                            
+                                            break;
+                                        }
+                                    }
+                                }
+
+                                // Draw all OBBs for this camera
+                                ImPlotPoint current_mouse = ImPlot::GetPlotMousePos();
+                                for (size_t obb_idx = 0; 
+                                     obb_idx < keypoints_map[current_frame_num]->obb2d_list[j].size(); 
+                                     obb_idx++) {
+                                    auto& obb = keypoints_map[current_frame_num]->obb2d_list[j][obb_idx];
+                                    
+                                    if (obb.state != OBBNull) {
+                                        // Get color based on class_id (same system as bboxes)
+                                        ImVec4 obb_color = ImVec4(0.3f, 1.0f, 1.0f, 1.0f);  // Default color
+                                        if (obb.class_id >= 0 && obb.class_id < bbox_class_colors.size()) {
+                                            obb_color = bbox_class_colors[obb.class_id];
+                                        }
+                                        
+                                        // Highlight when hovering, dragging, or during construction
+                                        bool is_active = (obb_dragging && dragged_obb_idx == obb_idx) || 
+                                                        (current_hovered_obb == (int)obb_idx) ||
+                                                        (!obb_dragging && obb.state < OBBComplete);
+                                        
+                                        // Show preview when we have first two points and mouse is in plot area
+                                        bool show_preview = (obb.state == OBBSecondAxisPoint && 
+                                                           ImPlot::IsPlotHovered() && 
+                                                           !obb_dragging && current_hovered_obb == -1);
+                                        
+                                        draw_obb(obb, is_active, obb_color, ImVec2(current_mouse.x, current_mouse.y), show_preview);
+                                    }
+                                }
+                            }
+
                             if (keypoints_find) {
                                 // Only plot keypoints if skeleton has keypoints
                                 // and we're not in bbox+keypoints mode
@@ -2773,6 +2954,12 @@ int main(int, char **) {
                                     keypoints_root_folder, scene->num_cams,
                                     camera_names, &input_is_imgs, imgs_names);
                         std::cout << "Saved bounding boxes data" << std::endl;
+                    } else if (skeleton->has_obb) {
+                        save_obb(keypoints_map, skeleton,
+                                 keypoints_root_folder, camera_names,
+                                 scene->num_cams, &imgs_names, &input_is_imgs,
+                                 bbox_class_names);
+                        std::cout << "Saved oriented bounding boxes data" << std::endl;
                     } else if (skeleton->has_skeleton && skeleton->has_bbox) {
                         bool has_bbox_keypoints = false;
                         for (const auto &[frame_num, keypoints] :
@@ -2860,7 +3047,7 @@ int main(int, char **) {
                         } else {
                             if (load_keypoints(most_recent_folder,
                                                keypoints_map, skeleton, scene,
-                                               camera_names, error_message)) {
+                                               camera_names, error_message, bbox_class_names)) {
                                 free_all_keypoints(keypoints_map, scene);
                                 show_error = true;
                             }
@@ -3289,6 +3476,18 @@ int main(int, char **) {
                                 ImGui::Text("Hover over a bounding box to "
                                             "see details");
                             }
+                            
+                            // Add OBB hover info
+                            ImGui::Separator();
+                            ImGui::Text("Oriented Bounding Box Info:");
+                            
+                            if (hovered_obb_class >= 0) {
+                                ImGui::Text("Class: %d, Confidence: %.1f%%",
+                                            hovered_obb_class,
+                                            hovered_obb_confidence * 100.0f);
+                            } else {
+                                ImGui::Text("Hover over an OBB to see details");
+                            }
                         }
                     }
                 }
@@ -3311,7 +3510,7 @@ int main(int, char **) {
                     ImGuiFileDialog::Instance()->GetCurrentPath();
                 free_all_keypoints(keypoints_map, scene);
                 if (load_keypoints(selected_folder, keypoints_map, skeleton,
-                                   scene, camera_names, error_message)) {
+                                   scene, camera_names, error_message, bbox_class_names)) {
                     free_all_keypoints(keypoints_map, scene);
                     show_error = true;
                 }

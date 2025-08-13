@@ -27,7 +27,10 @@ int load_bbox_keypoints(std::map<u32, KeyPoints *> &keypoints_map,
                         SkeletonContext *skeleton, std::string bbox_kp_file,
                         int cam_idx, render_scene *scene, std::string &error_message);
 
-static void draw_cv_contours(std::vector<cv::Rect> boxes,
+int load_obb(std::map<u32, KeyPoints *> &keypoints_map,
+              SkeletonContext *skeleton, std::string obb_file,
+              int cam_idx, render_scene *scene, std::string &error_message,
+              std::vector<std::string> &class_names);static void draw_cv_contours(std::vector<cv::Rect> boxes,
                              std::vector<std::string> labels,
                              std::vector<int> class_ids, int image_height) {
     for (int i = 0; i < boxes.size(); i++) {
@@ -607,6 +610,86 @@ void save_bbox_keypoints(std::map<u32, KeyPoints *> keypoints_map,
     }
 }
 
+void save_obb(std::map<u32, KeyPoints *> keypoints_map,
+              SkeletonContext *skeleton,
+              std::string root_dir,
+              std::vector<std::string> &camera_names,
+              int num_cameras,
+              std::vector<std::string> *input_files,
+              bool *input_is_imgs,
+              std::vector<std::string> &class_names) {
+    if (!skeleton->has_obb) return;
+    
+    std::string now = current_date_time();
+    std::string save_folder = root_dir + "/" + now;
+    std::filesystem::create_directories(save_folder);
+    
+    // Save class names file
+    std::string class_names_file = save_folder + "/class_names.txt";
+    std::ofstream class_file(class_names_file);
+    for (const auto& class_name : class_names) {
+        class_file << class_name << "\n";
+    }
+    class_file.close();
+    
+    std::vector<std::ofstream> obb_files;
+    
+    for (uint i = 0; i < num_cameras; i++) {
+        std::string filename_cam = save_folder + "/" + camera_names[i] + "_obb.csv";
+        std::ofstream output_file_cam(filename_cam);
+        obb_files.push_back(std::move(output_file_cam));
+    }
+
+    // Write header for OBB files
+    for (uint i = 0; i < num_cameras; i++) {
+        obb_files[i] << skeleton->name << "\n";
+        obb_files[i] << "frame,obb_id,class_id,class_name,confidence,axis_x1,axis_y1,axis_x2,axis_y2,corner_x,corner_y,center_x,center_y,width,height,rotation\n";
+    }
+
+    std::map<u32, KeyPoints *>::iterator it = keypoints_map.begin();
+    while (it != keypoints_map.end()) {
+        u32 frame = it->first;
+        KeyPoints *keypoints = it->second;
+
+        if (keypoints != nullptr) {
+            for (uint cam = 0; cam < num_cameras; cam++) {
+                for (size_t obb_idx = 0; obb_idx < keypoints->obb2d_list[cam].size(); obb_idx++) {
+                    const auto& obb = keypoints->obb2d_list[cam][obb_idx];
+                    
+                    if (obb.state == OBBComplete) {
+                        // Write frame number or filename
+                        if (*input_is_imgs) {
+                            obb_files[cam] << (*input_files)[frame];
+                        } else {
+                            obb_files[cam] << frame;
+                        }
+                        
+                        // Write OBB data with class name
+                        std::string class_name = (obb.class_id >= 0 && obb.class_id < class_names.size()) 
+                                                ? class_names[obb.class_id] : "unknown";
+                        
+                        obb_files[cam] << "," << obb_idx << "," << obb.class_id 
+                                      << "," << class_name
+                                      << "," << obb.confidence 
+                                      << "," << obb.axis_point1.x << "," << obb.axis_point1.y
+                                      << "," << obb.axis_point2.x << "," << obb.axis_point2.y
+                                      << "," << obb.corner_point.x << "," << obb.corner_point.y
+                                      << "," << obb.center.x << "," << obb.center.y
+                                      << "," << obb.width << "," << obb.height
+                                      << "," << obb.rotation << "\n";
+                    }
+                }
+            }
+        }
+        it++;
+    }
+    
+    // Close all files
+    for (uint i = 0; i < num_cameras; i++) {
+        obb_files[i].close();
+    }
+}
+
 void load_2d_keypoints_depreciated(std::map<u32, KeyPoints *> &keypoints_map,
                                    SkeletonContext *skeleton,
                                    std::string root_dir, int cam_idx,
@@ -957,7 +1040,8 @@ int load_keypoints(std::string keypoints_folder,
                    std::map<u32, KeyPoints *> &keypoints_map,
                    SkeletonContext *skeleton, render_scene *scene,
                    std::vector<std::string> &camera_names,
-                   std::string &error_message) {
+                   std::string &error_message,
+                   std::vector<std::string> &class_names) {
 
     // Intelligent loading based on skeleton configuration
     bool has_skeleton = skeleton->has_skeleton;
@@ -1069,6 +1153,16 @@ int load_keypoints(std::string keypoints_folder,
                         // Fallback to regular 2D keypoints
                         ret = load_2d_keypoints(keypoints_map, skeleton, kp2d_file, i, scene, error_messages[i]);
                     }
+                    promises[cam_idx].set_value(ret);
+                },
+                i);
+        } else if (skeleton->has_obb) {
+            std::string obb_file = keypoints_folder + "/" + camera_names[i] + "_obb.csv";
+            
+            handles.emplace_back(
+                [&keypoints_map, skeleton, obb_file, i, scene, &error_messages,
+                 &promises, &class_names](int cam_idx) {
+                    int ret = load_obb(keypoints_map, skeleton, obb_file, i, scene, error_messages[i], class_names);
                     promises[cam_idx].set_value(ret);
                 },
                 i);
@@ -1323,6 +1417,135 @@ int load_bbox_keypoints(std::map<u32, KeyPoints *> &keypoints_map,
                     bbox->bbox_keypoints2d[cam_idx][keypoint_id].is_labeled = is_labeled;
                     bbox->bbox_keypoints2d[cam_idx][keypoint_id].is_triangulated = false;
                 }
+            }
+        }
+        line_num++;
+    }
+    
+    fin.close();
+    return 0;
+}
+
+// Load oriented bounding boxes from CSV files
+int load_obb(std::map<u32, KeyPoints *> &keypoints_map,
+             SkeletonContext *skeleton, std::string obb_file,
+             int cam_idx, render_scene *scene, std::string &error_message,
+             std::vector<std::string> &class_names) {
+    std::ifstream fin;
+    fin.open(obb_file);
+    if (fin.fail()) {
+        error_message = "Could not open file: " + obb_file;
+        return 1;
+    }
+
+    std::string line;
+    int line_num = 0;
+
+    while (std::getline(fin, line)) {
+        if (line.empty()) continue;
+        
+        if (line_num == 0) {
+            // Check skeleton name
+            if (line.compare(skeleton->name) != 0) {
+                error_message = "Skeleton doesn't match. Expected: " + skeleton->name + " Got: " + line;
+                fin.close();
+                return 1;
+            }
+        } else if (line_num == 1) {
+            // Skip header line
+        } else {
+            std::vector<std::string> tokens;
+            std::stringstream ss(line);
+            std::string item;
+            
+            while (std::getline(ss, item, ',')) {
+                tokens.push_back(item);
+            }
+            
+            if (tokens.size() >= 15) {  // Support both old (15) and new (16) formats
+                uint frame_num;
+                try {
+                    frame_num = std::stoul(tokens[0]);
+                } catch (const std::exception& e) {
+                    continue;
+                }
+                
+                int obb_id = std::stoi(tokens[1]);
+                int class_id = std::stoi(tokens[2]);
+                
+                // Handle both old and new CSV formats
+                std::string class_name;
+                float confidence;
+                int data_offset = 0;
+                
+                if (tokens.size() >= 16) {
+                    // New format with class name
+                    class_name = tokens[3];
+                    confidence = std::stof(tokens[4]);
+                    data_offset = 1;
+                    
+                    // Update class_names vector if needed
+                    while (class_names.size() <= class_id) {
+                        class_names.push_back("Class_" + std::to_string(class_names.size()));
+                    }
+                    if (class_id >= 0 && class_id < class_names.size()) {
+                        class_names[class_id] = class_name;
+                    }
+                } else {
+                    // Old format without class name
+                    confidence = std::stof(tokens[3]);
+                    data_offset = 0;
+                }
+                
+                float axis_x1 = std::stof(tokens[4 + data_offset]);
+                float axis_y1 = std::stof(tokens[5 + data_offset]);
+                float axis_x2 = std::stof(tokens[6 + data_offset]);
+                float axis_y2 = std::stof(tokens[7 + data_offset]);
+                float corner_x = std::stof(tokens[8 + data_offset]);
+                float corner_y = std::stof(tokens[9 + data_offset]);
+                float center_x = std::stof(tokens[10 + data_offset]);
+                float center_y = std::stof(tokens[11 + data_offset]);
+                float width = std::stof(tokens[12 + data_offset]);
+                float height = std::stof(tokens[13 + data_offset]);
+                float rotation = std::stof(tokens[14 + data_offset]);
+                
+                // Create keypoints entry if it doesn't exist
+                if (keypoints_map.find(frame_num) == keypoints_map.end()) {
+                    KeyPoints *keypoints = (KeyPoints *)malloc(sizeof(KeyPoints));
+                    allocate_keypoints(keypoints, scene, skeleton);
+                    keypoints_map[frame_num] = keypoints;
+                }
+                
+                // Ensure the OBB list is large enough
+                while (keypoints_map[frame_num]->obb2d_list[cam_idx].size() <= obb_id) {
+                    OrientedBoundingBox default_obb;
+                    default_obb.axis_point1 = ImVec2(0, 0);
+                    default_obb.axis_point2 = ImVec2(0, 0);
+                    default_obb.corner_point = ImVec2(0, 0);
+                    default_obb.center = ImVec2(0, 0);
+                    default_obb.width = 0;
+                    default_obb.height = 0;
+                    default_obb.rotation = 0;
+                    default_obb.state = OBBNull;
+                    default_obb.class_id = -1;
+                    default_obb.confidence = 0.0f;
+                    keypoints_map[frame_num]->obb2d_list[cam_idx].push_back(default_obb);
+                }
+                
+                // Get reference to the oriented bounding box
+                OrientedBoundingBox* obb = &keypoints_map[frame_num]->obb2d_list[cam_idx][obb_id];
+                
+                // Set OBB data
+                obb->axis_point1 = ImVec2(axis_x1, axis_y1);
+                obb->axis_point2 = ImVec2(axis_x2, axis_y2);
+                obb->corner_point = ImVec2(corner_x, corner_y);
+                obb->center = ImVec2(center_x, center_y);
+                obb->width = width;
+                obb->height = height;
+                obb->rotation = rotation;
+                obb->state = OBBComplete;
+                obb->class_id = class_id;
+                obb->confidence = confidence;
             }
         }
         line_num++;
