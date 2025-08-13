@@ -113,18 +113,41 @@ std::vector<float> convert_bbox_to_yolo_format(const std::vector<float>& bbox,
     return {x_center, y_center, width, height};
 }
 
-std::vector<float> convert_keypoints_to_yolo_format(const std::vector<std::vector<float>>& keypoints, int img_width, int img_height) {
+std::vector<float> convert_keypoints_to_yolo_format(const std::vector<std::vector<float>>& keypoints, 
+                                                   int img_width, int img_height,
+                                                   int expected_num_keypoints) {
     std::vector<float> yolo_keypoints;
     
-    for (const auto& kp : keypoints) {
-        if (kp.size() >= 2) {
-            float x = kp[0] / img_width;
-            float y = 1.0f - kp[1] / img_height;
-            float visibility = (kp.size() >= 3) ? kp[2] : 2.0f;  // Default to visible
-            
-            yolo_keypoints.push_back(x);
-            yolo_keypoints.push_back(y);
-            yolo_keypoints.push_back(visibility);
+    // If expected_num_keypoints is specified, ensure we output exactly that many keypoints
+    if (expected_num_keypoints > 0) {
+        // Initialize all keypoints as invisible (0, 0, 0)
+        yolo_keypoints.resize(expected_num_keypoints * 3, 0.0f);
+        
+        // Fill in the actual keypoints we have
+        for (size_t i = 0; i < keypoints.size() && i < expected_num_keypoints; ++i) {
+            const auto& kp = keypoints[i];
+            if (kp.size() >= 2) {
+                float x = kp[0] / img_width;
+                float y = 1.0f - kp[1] / img_height;
+                float visibility = (kp.size() >= 3) ? kp[2] : 2.0f;  // Default to visible
+                
+                yolo_keypoints[i * 3] = x;
+                yolo_keypoints[i * 3 + 1] = y;
+                yolo_keypoints[i * 3 + 2] = visibility;
+            }
+        }
+    } else {
+        // Original behavior: output only available keypoints
+        for (const auto& kp : keypoints) {
+            if (kp.size() >= 2) {
+                float x = kp[0] / img_width;
+                float y = 1.0f - kp[1] / img_height;
+                float visibility = (kp.size() >= 3) ? kp[2] : 2.0f;  // Default to visible
+                
+                yolo_keypoints.push_back(x);
+                yolo_keypoints.push_back(y);
+                yolo_keypoints.push_back(visibility);
+            }
         }
     }
     
@@ -449,6 +472,108 @@ std::map<std::string, std::vector<BoundingBox>> parse_bbox_csv(const std::string
     return frame_bboxes;
 }
 
+// Parse bbox_keypoints CSV files that contain both bboxes and keypoints
+std::pair<std::map<std::string, std::vector<BoundingBox>>, std::map<std::string, std::vector<std::vector<float>>>> 
+parse_bbox_keypoints_csv(const std::string& csv_path, const nlohmann::json& skeleton_config) {
+    std::map<std::string, std::vector<BoundingBox>> frame_bboxes;
+    std::map<std::string, std::vector<std::vector<float>>> frame_keypoints;
+    
+    std::ifstream file(csv_path);
+    if (!file.is_open()) {
+        std::cerr << "Failed to open bbox keypoints CSV file: " << csv_path << std::endl;
+        return {frame_bboxes, frame_keypoints};
+    }
+    
+    int num_nodes = 17;  // Default for COCO
+    if (skeleton_config.contains("num_nodes")) {
+        num_nodes = skeleton_config["num_nodes"];
+    } else if (skeleton_config.contains("node_names") && skeleton_config["node_names"].is_array()) {
+        num_nodes = skeleton_config["node_names"].size();
+    }
+    
+    // Temporary storage to group keypoints by frame and bbox
+    std::map<std::string, std::map<int, BoundingBox>> temp_bboxes;
+    std::map<std::string, std::map<int, std::map<int, std::vector<float>>>> temp_keypoints;
+    
+    std::string line;
+    while (std::getline(file, line)) {
+        // Skip empty lines and header lines
+        if (line.empty() || line.find("skeleton") == 0 || line.find("frame,bbox_id") == 0) {
+            continue;
+        }
+        
+        // Parse CSV: frame,bbox_id,class_id,confidence,x_min,y_min,x_max,y_max,keypoint_id,kp_x,kp_y,is_labeled
+        std::stringstream ss(line);
+        std::string token;
+        std::vector<std::string> tokens;
+        
+        while (std::getline(ss, token, ',')) {
+            tokens.push_back(token);
+        }
+        
+        if (tokens.size() >= 12) {
+            try {
+                std::string frame_id = tokens[0];
+                int bbox_id = std::stoi(tokens[1]);
+                int class_id = std::stoi(tokens[2]);
+                float x_min = std::stof(tokens[4]);
+                float y_min = std::stof(tokens[5]);
+                float x_max = std::stof(tokens[6]);
+                float y_max = std::stof(tokens[7]);
+                int keypoint_id = std::stoi(tokens[8]);
+                float kp_x = std::stof(tokens[9]);
+                float kp_y = std::stof(tokens[10]);
+                int is_labeled = std::stoi(tokens[11]);
+                
+                // Store bbox (will be the same for all keypoints of this bbox)
+                BoundingBox bbox;
+                bbox.class_id = class_id;
+                bbox.bbox = {x_min, y_min, x_max, y_max};
+                temp_bboxes[frame_id][bbox_id] = bbox;
+                
+                // Store keypoint
+                float visibility = is_labeled ? 2.0f : 0.0f;  // 2 = visible, 0 = not labeled
+                temp_keypoints[frame_id][bbox_id][keypoint_id] = {kp_x, kp_y, visibility};
+                
+            } catch (const std::exception& e) {
+                std::cerr << "Error parsing bbox keypoints CSV line: " << line << " - " << e.what() << std::endl;
+            }
+        }
+    }
+    
+    // Convert to final format
+    for (const auto& frame_data : temp_bboxes) {
+        const std::string& frame_id = frame_data.first;
+        
+        for (const auto& bbox_data : frame_data.second) {
+            int bbox_id = bbox_data.first;
+            BoundingBox bbox = bbox_data.second;
+            
+            // Assemble keypoints for this bbox
+            std::vector<std::vector<float>> keypoints(num_nodes, {0, 0, 0});
+            
+            if (temp_keypoints[frame_id].find(bbox_id) != temp_keypoints[frame_id].end()) {
+                for (const auto& kp_data : temp_keypoints[frame_id][bbox_id]) {
+                    int kp_id = kp_data.first;
+                    if (kp_id >= 0 && kp_id < num_nodes) {
+                        keypoints[kp_id] = kp_data.second;
+                    }
+                }
+            }
+            
+            bbox.keypoints = keypoints;
+            frame_bboxes[frame_id].push_back(bbox);
+        }
+        
+        // Also store keypoints separately for the frame (using the first bbox's keypoints)
+        if (!frame_bboxes[frame_id].empty()) {
+            frame_keypoints[frame_id] = frame_bboxes[frame_id][0].keypoints;
+        }
+    }
+    
+    return {frame_bboxes, frame_keypoints};
+}
+
 std::map<std::string, std::vector<BoundingBox>> parse_obb_csv(const std::string& csv_path) {
     std::map<std::string, std::vector<BoundingBox>> frame_obbs;
     
@@ -523,20 +648,22 @@ std::map<std::string, std::vector<std::vector<float>>> parse_keypoint_csv(const 
     int num_nodes = 17;  // Default for COCO
     if (skeleton_config.contains("num_nodes")) {
         num_nodes = skeleton_config["num_nodes"];
-    } else if (skeleton_config.contains("keypoints") && skeleton_config["keypoints"].is_array()) {
-        num_nodes = skeleton_config["keypoints"].size();
+    } else if (skeleton_config.contains("node_names") && skeleton_config["node_names"].is_array()) {
+        num_nodes = skeleton_config["node_names"].size();
     }
     
     std::string line;
     bool first_line = true;
+    std::map<std::string, std::map<int, std::vector<float>>> temp_frame_keypoints;
+    
     while (std::getline(file, line)) {
-        // Skip empty lines and first line (skeleton name)
+        // Skip empty lines and first line (skeleton file path)
         if (line.empty() || first_line) {
             first_line = false;
             continue;
         }
         
-        // Parse CSV: frame_id,kp_id_0,x_0,y_0,z_0,kp_id_1,x_1,y_1,z_1,...
+        // Parse CSV: frame_id,keypoint_id,x,y
         std::stringstream ss(line);
         std::string token;
         std::vector<std::string> tokens;
@@ -545,40 +672,48 @@ std::map<std::string, std::vector<std::vector<float>>> parse_keypoint_csv(const 
             tokens.push_back(token);
         }
         
-        if (tokens.size() >= 1 + num_nodes * 4) { 
+        if (tokens.size() >= 4) { 
             try {
                 std::string frame_id = tokens[0];
-                std::vector<std::vector<float>> keypoints;
+                int keypoint_id = std::stoi(tokens[1]);
+                float x = std::stof(tokens[2]);
+                float y = std::stof(tokens[3]);
                 
-                for (int i = 0; i < num_nodes; ++i) {
-                    int base_idx = 1 + i * 4;  
-                    
-                    if (base_idx + 3 < tokens.size()) {
-                        float x = std::stof(tokens[base_idx + 1]);
-                        float y = std::stof(tokens[base_idx + 2]);
-                        
-                        // Check if keypoint is labeled (not NaN or invalid)
-                        float visibility = 0;  
-                        if (!(std::isnan(x) || std::isnan(y) || x == 1e7 || y == 1e7)) {
-                            visibility = 2; 
-                        } else {
-                            x = 0;
-                            y = 0;
-                        }
-                        
-                        keypoints.push_back({x, y, visibility});
-                    } else {
-                        // Not enough data, mark as not labeled
-                        keypoints.push_back({0, 0, 0});
-                    }
+                // Check if keypoint is labeled (not NaN or invalid)
+                float visibility = 0;  
+                if (!(std::isnan(x) || std::isnan(y) || x == 1e7 || y == 1e7)) {
+                    visibility = 2; 
+                } else {
+                    x = 0;
+                    y = 0;
                 }
                 
-                frame_keypoints[frame_id] = keypoints;
+                temp_frame_keypoints[frame_id][keypoint_id] = {x, y, visibility};
+                
             } catch (const std::exception& e) {
                 std::cerr << "Error parsing keypoint CSV line: " << line << " - " << e.what() << std::endl;
             }
         }
     }
+    
+    // Convert to final format: ensure all frames have all keypoints
+    for (const auto& frame_data : temp_frame_keypoints) {
+        const std::string& frame_id = frame_data.first;
+        const auto& keypoints_map = frame_data.second;
+        
+        std::vector<std::vector<float>> keypoints(num_nodes, {0, 0, 0});
+        
+        for (const auto& kp_data : keypoints_map) {
+            int kp_id = kp_data.first;
+            if (kp_id >= 0 && kp_id < num_nodes) {
+                keypoints[kp_id] = kp_data.second;
+            }
+        }
+        
+        frame_keypoints[frame_id] = keypoints;
+    }
+    
+    return frame_keypoints;
     
     return frame_keypoints;
 }
@@ -590,8 +725,6 @@ std::vector<FrameAnnotation> load_pose_annotations(const std::string& label_dir,
     std::map<std::string, std::vector<std::vector<float>>> all_camera_keypoints;
     
     // Find all bbox keypoints CSV files for pose estimation
-    std::vector<std::string> camera_names;
-    
     for (const auto& entry : std::filesystem::recursive_directory_iterator(label_dir)) {
         if (entry.path().extension() == ".csv") {
             std::string filename = entry.path().filename().string();
@@ -603,7 +736,9 @@ std::vector<FrameAnnotation> load_pose_annotations(const std::string& label_dir,
                     camera_name = camera_name.substr(0, camera_name.length() - 15);
                 }
                 
-                auto camera_bboxes = parse_bbox_csv(entry.path().string());
+                // Parse both bboxes and keypoints from the same file
+                auto [camera_bboxes, camera_keypoints] = parse_bbox_keypoints_csv(entry.path().string(), skeleton_config);
+                
                 for (const auto& frame_data : camera_bboxes) {
                     std::string original_frame_id = frame_data.first;
                     std::string full_frame_id = camera_name + "_" + original_frame_id;
@@ -612,23 +747,11 @@ std::vector<FrameAnnotation> load_pose_annotations(const std::string& label_dir,
                     }
                 }
                 
-                // Add to camera names if not already present
-                if (std::find(camera_names.begin(), camera_names.end(), camera_name) == camera_names.end()) {
-                    camera_names.push_back(camera_name);
+                for (const auto& frame_data : camera_keypoints) {
+                    std::string original_frame_id = frame_data.first;
+                    std::string full_frame_id = camera_name + "_" + original_frame_id;
+                    all_camera_keypoints[full_frame_id] = frame_data.second;
                 }
-            }
-        }
-    }
-    
-    // Load keypoints for each camera
-    for (const std::string& camera_name : camera_names) {
-        std::string keypoint_file = label_dir + "/" + camera_name + ".csv";
-        if (std::filesystem::exists(keypoint_file)) {
-            auto camera_keypoints = parse_keypoint_csv(keypoint_file, skeleton_config);
-            for (const auto& frame_data : camera_keypoints) {
-                std::string original_frame_id = frame_data.first;
-                std::string full_frame_id = camera_name + "_" + original_frame_id;
-                all_camera_keypoints[full_frame_id] = frame_data.second;
             }
         }
     }
@@ -805,7 +928,8 @@ void split_dataset(const std::vector<std::string>& frame_ids,
 
 void create_data_yaml(const std::string& output_dir, 
                      const std::vector<std::string>& class_names,
-                     int num_keypoints) {
+                     int num_keypoints,
+                     const nlohmann::json& skeleton_config) {
     std::ofstream yaml_file(output_dir + "/data.yaml");
     
     yaml_file << "# YOLO Dataset Configuration\n";
@@ -826,6 +950,28 @@ void create_data_yaml(const std::string& output_dir,
     if (num_keypoints > 0) {
         yaml_file << "\n# Keypoints for pose estimation\n";
         yaml_file << "kpt_shape: [" << num_keypoints << ", 3]  # number of keypoints, number of dimensions (x, y, visibility)\n";
+        
+        // Add keypoint names if available
+        if (!skeleton_config.empty() && skeleton_config.contains("node_names") && skeleton_config["node_names"].is_array()) {
+            yaml_file << "\n# Keypoint names\n";
+            yaml_file << "names_kpt:\n";
+            auto node_names = skeleton_config["node_names"];
+            for (size_t i = 0; i < node_names.size() && i < num_keypoints; ++i) {
+                yaml_file << "  " << i << ": " << node_names[i] << "\n";
+            }
+        }
+        
+        // Add skeleton connections if available
+        if (!skeleton_config.empty() && skeleton_config.contains("edges") && skeleton_config["edges"].is_array()) {
+            yaml_file << "\n# Skeleton connections for visualization\n";
+            yaml_file << "skeleton:\n";
+            auto edges = skeleton_config["edges"];
+            for (size_t i = 0; i < edges.size(); ++i) {
+                if (edges[i].is_array() && edges[i].size() >= 2) {
+                    yaml_file << "  - [" << edges[i][0] << ", " << edges[i][1] << "]\n";
+                }
+            }
+        }
     }
 }
 
@@ -1043,8 +1189,8 @@ bool export_yolo_pose_dataset(const ExportConfig& config, std::string* status) {
     int num_keypoints = 0;
     if (!config.skeleton_file.empty()) {
         skeleton_config = load_skeleton_config(config.skeleton_file);
-        if (skeleton_config.contains("keypoints") && skeleton_config["keypoints"].is_array()) {
-            num_keypoints = skeleton_config["keypoints"].size();
+        if (skeleton_config.contains("node_names") && skeleton_config["node_names"].is_array()) {
+            num_keypoints = skeleton_config["node_names"].size();
         }
     }
     
@@ -1186,7 +1332,7 @@ bool export_yolo_pose_dataset(const ExportConfig& config, std::string* status) {
                 auto yolo_bbox = convert_bbox_to_yolo_format(bbox, img_width, img_height);
                 
                 // Convert keypoints to YOLO format
-                auto yolo_keypoints = convert_keypoints_to_yolo_format(keypoints, img_width, img_height);
+                auto yolo_keypoints = convert_keypoints_to_yolo_format(keypoints, img_width, img_height, num_keypoints);
                 
                 if (yolo_bbox.size() == 4) {
                     label_file << bbox_data.class_id << " " 
@@ -1211,7 +1357,7 @@ bool export_yolo_pose_dataset(const ExportConfig& config, std::string* status) {
     
     // Create data.yaml
     std::cout << "Creating data.yaml..." << std::endl;
-    create_data_yaml(config.output_dir, class_names, num_keypoints);
+    create_data_yaml(config.output_dir, class_names, num_keypoints, skeleton_config);
     
     std::cout << "YOLO Pose Dataset export completed successfully!" << std::endl;
     return true;

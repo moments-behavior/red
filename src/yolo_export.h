@@ -56,7 +56,8 @@ std::vector<std::vector<float>> adjust_keypoints_for_resize(const std::vector<st
 std::vector<float> convert_bbox_to_yolo_format(const std::vector<float>& bbox, 
                                               int img_width, int img_height);
 std::vector<float> convert_keypoints_to_yolo_format(const std::vector<std::vector<float>>& keypoints,
-                                                   int img_width, int img_height);
+                                                   int img_width, int img_height,
+                                                   int expected_num_keypoints = -1);
 
 // Frame extraction
 cv::Mat extract_frame_opencv(const std::string& video_path, int frame_number);
@@ -67,6 +68,8 @@ std::vector<FrameAnnotation> load_pose_annotations(const std::string& label_dir,
                                                   const nlohmann::json& skeleton_config);
 std::vector<FrameAnnotation> load_obb_annotations(const std::string& label_dir);
 std::map<std::string, std::vector<BoundingBox>> parse_bbox_csv(const std::string& csv_path);
+std::pair<std::map<std::string, std::vector<BoundingBox>>, std::map<std::string, std::vector<std::vector<float>>>> 
+parse_bbox_keypoints_csv(const std::string& csv_path, const nlohmann::json& skeleton_config);
 std::map<std::string, std::vector<std::vector<float>>> parse_keypoint_csv(const std::string& csv_path, 
                                                                          const nlohmann::json& skeleton_config);
 std::map<std::string, std::vector<BoundingBox>> parse_obb_csv(const std::string& csv_path);
@@ -83,7 +86,8 @@ void split_dataset(const std::vector<std::string>& frame_ids,
                   std::vector<std::string>& test_frames);
 void create_data_yaml(const std::string& output_dir, 
                      const std::vector<std::string>& class_names,
-                     int num_keypoints = 0);
+                     int num_keypoints = 0,
+                     const nlohmann::json& skeleton_config = nlohmann::json());
 
 // Main export functions
 bool export_yolo_detection_dataset(const ExportConfig& config, std::string* status = nullptr);
