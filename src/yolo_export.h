@@ -14,6 +14,7 @@ struct BoundingBox {
     int class_id;
     std::vector<float> bbox;  // [x_min, y_min, x_max, y_max]
     std::vector<std::vector<float>> keypoints;  // For pose: [[x, y, visibility], ...]
+    std::vector<float> obb_corners;  // For OBB: [x1, y1, x2, y2, x3, y3, x4, y4] normalized
 };
 
 // Structure to hold frame annotation data
@@ -64,9 +65,11 @@ cv::Mat extract_frame_opencv(const std::string& video_path, int frame_number);
 std::vector<FrameAnnotation> load_frame_annotations(const std::string& label_dir);
 std::vector<FrameAnnotation> load_pose_annotations(const std::string& label_dir, 
                                                   const nlohmann::json& skeleton_config);
+std::vector<FrameAnnotation> load_obb_annotations(const std::string& label_dir);
 std::map<std::string, std::vector<BoundingBox>> parse_bbox_csv(const std::string& csv_path);
 std::map<std::string, std::vector<std::vector<float>>> parse_keypoint_csv(const std::string& csv_path, 
                                                                          const nlohmann::json& skeleton_config);
+std::map<std::string, std::vector<BoundingBox>> parse_obb_csv(const std::string& csv_path);
 std::map<std::string, std::string> find_video_files(const std::string& video_dir);
 std::vector<std::string> load_class_names(const std::string& class_names_file);
 nlohmann::json load_skeleton_config(const std::string& skeleton_file);
@@ -85,6 +88,7 @@ void create_data_yaml(const std::string& output_dir,
 // Main export functions
 bool export_yolo_detection_dataset(const ExportConfig& config, std::string* status = nullptr);
 bool export_yolo_pose_dataset(const ExportConfig& config, std::string* status = nullptr);
+bool export_yolo_obb_dataset(const ExportConfig& config, std::string* status = nullptr);
 
 // Utility functions
 void print_progress(int current, int total, const std::string& message = "Processing", std::string* status = nullptr);

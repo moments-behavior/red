@@ -449,6 +449,67 @@ std::map<std::string, std::vector<BoundingBox>> parse_bbox_csv(const std::string
     return frame_bboxes;
 }
 
+std::map<std::string, std::vector<BoundingBox>> parse_obb_csv(const std::string& csv_path) {
+    std::map<std::string, std::vector<BoundingBox>> frame_obbs;
+    
+    std::ifstream file(csv_path);
+    if (!file.is_open()) {
+        std::cerr << "Failed to open OBB CSV file: " << csv_path << std::endl;
+        return frame_obbs;
+    }
+    
+    std::string line;
+    int line_num = 0;
+    
+    while (std::getline(file, line)) {
+        if (line.empty()) continue;
+        
+        if (line_num == 0) {
+            // Skip skeleton name line
+            line_num++;
+            continue;
+        } else if (line_num == 1) {
+            // Skip header line
+            line_num++;
+            continue;
+        }
+        
+        // Parse CSV - new simplified format: frame,obb_id,class_id,corner_x1,corner_y1,corner_x2,corner_y2,corner_x3,corner_y3,corner_x4,corner_y4
+        std::stringstream ss(line);
+        std::string token;
+        std::vector<std::string> tokens;
+        
+        while (std::getline(ss, token, ',')) {
+            tokens.push_back(token);
+        }
+        
+        // Handle new simplified format (11 fields)
+        if (tokens.size() >= 11) {
+            try {
+                std::string frame_id = tokens[0];
+                BoundingBox obb;
+                obb.class_id = std::stoi(tokens[2]);
+                
+                // Extract the four corners directly
+                obb.obb_corners.clear();
+                for (int i = 0; i < 4; i++) {
+                    float corner_x = std::stof(tokens[3 + i * 2]);     // x coordinate
+                    float corner_y = std::stof(tokens[4 + i * 2]);     // y coordinate
+                    obb.obb_corners.push_back(corner_x);
+                    obb.obb_corners.push_back(corner_y);
+                }
+                
+                frame_obbs[frame_id].push_back(obb);
+            } catch (const std::exception& e) {
+                std::cerr << "Error parsing OBB CSV line: " << line << " - " << e.what() << std::endl;
+            }
+        }
+        line_num++;
+    }
+    
+    return frame_obbs;
+}
+
 std::map<std::string, std::vector<std::vector<float>>> parse_keypoint_csv(const std::string& csv_path, 
                                                                          const nlohmann::json& skeleton_config) {
     std::map<std::string, std::vector<std::vector<float>>> frame_keypoints;
@@ -608,6 +669,45 @@ std::vector<FrameAnnotation> load_pose_annotations(const std::string& label_dir,
         if (!annotation.bboxes.empty()) {
             annotations.push_back(annotation);
         }
+    }
+    
+    return annotations;
+}
+
+std::vector<FrameAnnotation> load_obb_annotations(const std::string& label_dir) {
+    std::vector<FrameAnnotation> annotations;
+    std::map<std::string, std::vector<BoundingBox>> all_camera_obbs;
+    
+    // Find all OBB CSV files
+    for (const auto& entry : std::filesystem::recursive_directory_iterator(label_dir)) {
+        if (entry.path().extension() == ".csv" && 
+            entry.path().filename().string().find("_obb.csv") != std::string::npos) {
+            
+            std::string camera_name = entry.path().stem().string();
+            // Remove "_obb" suffix
+            if (camera_name.length() > 4 && camera_name.substr(camera_name.length() - 4) == "_obb") {
+                camera_name = camera_name.substr(0, camera_name.length() - 4);
+            }
+            
+            auto camera_obbs = parse_obb_csv(entry.path().string());
+            
+            // Convert per-camera OBBs to frame annotations with camera prefix
+            for (const auto& frame_data : camera_obbs) {
+                std::string original_frame_id = frame_data.first;
+                std::string full_frame_id = camera_name + "_" + original_frame_id;
+                for (const auto& obb : frame_data.second) {
+                    all_camera_obbs[full_frame_id].push_back(obb);
+                }
+            }
+        }
+    }
+    
+    // Convert to FrameAnnotation format
+    for (const auto& frame_data : all_camera_obbs) {
+        FrameAnnotation annotation;
+        annotation.frame_id = frame_data.first;
+        annotation.bboxes = frame_data.second;
+        annotations.push_back(annotation);
     }
     
     return annotations;
@@ -1114,6 +1214,200 @@ bool export_yolo_pose_dataset(const ExportConfig& config, std::string* status) {
     create_data_yaml(config.output_dir, class_names, num_keypoints);
     
     std::cout << "YOLO Pose Dataset export completed successfully!" << std::endl;
+    return true;
+}
+
+bool export_yolo_obb_dataset(const ExportConfig& config, std::string* status) {
+    std::cout << "Starting YOLO OBB Dataset Export..." << std::endl;
+    
+    // Validate input directories
+    if (!std::filesystem::exists(config.label_dir)) {
+        std::cerr << "Error: Label directory does not exist: " << config.label_dir << std::endl;
+        return false;
+    }
+    
+    if (!std::filesystem::exists(config.video_dir)) {
+        std::cerr << "Error: Video directory does not exist: " << config.video_dir << std::endl;
+        return false;
+    }
+    
+    // Load annotations and find videos
+    std::cout << "Loading OBB annotations..." << std::endl;
+    auto annotations = load_obb_annotations(config.label_dir);
+    
+    if (annotations.empty()) {
+        std::cerr << "Error: No OBB annotations found in " << config.label_dir << std::endl;
+        return false;
+    }
+    
+    std::cout << "Finding video files..." << std::endl;
+    auto video_files = find_video_files(config.video_dir);
+    
+    if (video_files.empty()) {
+        std::cerr << "Error: No video files found in " << config.video_dir << std::endl;
+        return false;
+    }
+    
+    // Load class names
+    std::vector<std::string> class_names;
+    if (!config.class_names_file.empty()) {
+        class_names = load_class_names(config.class_names_file);
+    } else {
+        // Extract unique class names from annotations
+        std::set<std::string> unique_classes;
+        for (const auto& annotation : annotations) {
+            for (const auto& obb : annotation.bboxes) {
+                unique_classes.insert("class_" + std::to_string(obb.class_id));
+            }
+        }
+        class_names.assign(unique_classes.begin(), unique_classes.end());
+    }
+    
+    // Create output directories
+    std::cout << "Creating output directories..." << std::endl;
+    create_dataset_directories(config.output_dir);
+    
+    // Split dataset
+    std::vector<std::string> frame_ids;
+    for (const auto& annotation : annotations) {
+        frame_ids.push_back(annotation.frame_id);
+    }
+    
+    std::vector<std::string> train_frames, val_frames, test_frames;
+    split_dataset(frame_ids, config.split, train_frames, val_frames, test_frames);
+    
+    std::cout << "Dataset split: " << train_frames.size() << " train, " 
+              << val_frames.size() << " val, " << test_frames.size() << " test" << std::endl;
+    
+    // Process each split
+    std::vector<std::pair<std::string, std::vector<std::string>>> splits = {
+        {"train", train_frames},
+        {"val", val_frames},
+        {"test", test_frames}
+    };
+    
+    for (const auto& [split_name, split_frames] : splits) {
+        if (split_frames.empty()) continue;
+        
+        std::cout << "Processing " << split_name << " split..." << std::endl;
+        
+        std::string images_dir = config.output_dir + "/" + split_name + "/images";
+        std::string labels_dir = config.output_dir + "/" + split_name + "/labels";
+        
+        for (size_t i = 0; i < split_frames.size(); ++i) {
+            const std::string& frame_id = split_frames[i];
+            
+            // Find corresponding annotation
+            auto it = std::find_if(annotations.begin(), annotations.end(),
+                                 [&frame_id](const FrameAnnotation& ann) {
+                                     return ann.frame_id == frame_id;
+                                 });
+            
+            if (it == annotations.end()) continue;
+            
+            // Parse frame ID: format is {camera_name}_{original_frame_id}
+            std::string camera_name;
+            std::string original_frame_id;
+            size_t underscore_pos = frame_id.find_last_of('_');
+            
+            if (underscore_pos != std::string::npos) {
+                camera_name = frame_id.substr(0, underscore_pos);
+                original_frame_id = frame_id.substr(underscore_pos + 1);
+            } else {
+                original_frame_id = frame_id;
+                // Try to find any video file that might match
+                if (!video_files.empty()) {
+                    camera_name = video_files.begin()->first;
+                }
+            }
+            
+            // Find video file
+            auto video_it = video_files.find(camera_name);
+            if (video_it == video_files.end()) {
+                std::cerr << "Warning: Video file not found for camera: " << camera_name << std::endl;
+                continue;
+            }
+            
+            int frame_number;
+            try {
+                frame_number = std::stoi(original_frame_id);
+            } catch (const std::exception& e) {
+                std::cerr << "Error parsing frame number: " << original_frame_id << std::endl;
+                continue;
+            }
+            
+            // Extract frame
+            cv::Mat frame = extract_frame(video_it->second, frame_number);
+            if (frame.empty()) {
+                std::cerr << "Warning: Could not extract frame " << frame_number 
+                         << " from video " << video_it->second << std::endl;
+                continue;
+            }
+            
+            // Resize frame
+            float scale_factor = 1.0f;
+            if (config.image_size > 0) {
+                int target_size = config.image_size;
+                scale_factor = static_cast<float>(target_size) / std::max(frame.rows, frame.cols);
+                int new_width = static_cast<int>(frame.cols * scale_factor);
+                int new_height = static_cast<int>(frame.rows * scale_factor);
+                cv::resize(frame, frame, cv::Size(new_width, new_height));
+            }
+            
+            // Save image
+            std::string img_filename = frame_id + ".jpg";
+            std::string img_path = images_dir + "/" + img_filename;
+            cv::imwrite(img_path, frame);
+            
+            // Generate YOLO OBB format labels
+            int img_height = frame.rows;
+            int img_width = frame.cols;
+            std::string label_filename = frame_id + ".txt";
+            std::string label_path = labels_dir + "/" + label_filename;
+            
+            std::ofstream label_file(label_path);
+            if (!label_file.is_open()) {
+                std::cerr << "Warning: Could not create label file: " << label_path << std::endl;
+                continue;
+            }
+            
+            // Write OBB annotations in YOLO OBB format: class_index x1 y1 x2 y2 x3 y3 x4 y4
+            for (const auto& obb : it->bboxes) {
+                if (obb.obb_corners.size() == 8) {  // 4 corners with x,y coordinates each
+                    label_file << obb.class_id;
+                    
+                    // Normalize coordinates to [0, 1] and write the 4 corner points
+                    for (size_t j = 0; j < 8; j += 2) {
+                        // OBB coordinates are already in original image pixel space
+                        // Apply the same scaling as applied to the image
+                        float scaled_x = obb.obb_corners[j] * scale_factor;
+                        float scaled_y = obb.obb_corners[j + 1] * scale_factor;
+                        
+                        // Normalize to [0, 1] range using the final image dimensions
+                        float norm_x = scaled_x / static_cast<float>(img_width);
+                        float norm_y = scaled_y / static_cast<float>(img_height);
+                        
+                        // Clamp to [0, 1] range to handle any edge cases
+                        norm_x = std::max(0.0f, std::min(1.0f, norm_x));
+                        norm_y = std::max(0.0f, std::min(1.0f, norm_y));
+                        
+                        label_file << " " << norm_x << " " << norm_y;
+                    }
+                    label_file << "\n";
+                }
+            }
+            
+            label_file.close();
+            
+            print_progress(i + 1, split_frames.size(), "Exporting " + split_name + " split", status);
+        }
+    }
+    
+    // Create data.yaml
+    std::cout << "Creating data.yaml..." << std::endl;
+    create_data_yaml(config.output_dir, class_names);
+    
+    std::cout << "YOLO OBB Dataset export completed successfully!" << std::endl;
     return true;
 }
 

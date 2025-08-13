@@ -940,6 +940,79 @@ void calculate_obb_preview(OrientedBoundingBox* obb, ImVec2 mouse_pos) {
     obb->corner_point = original_corner;
 }
 
+// Helper function to check if a point is near another point (for dragging hit detection)
+bool is_point_near(ImVec2 point1, ImVec2 point2, float threshold = 15.0f) {
+    float dx = point1.x - point2.x;
+    float dy = point1.y - point2.y;
+    float distance_sq = dx * dx + dy * dy;
+    return distance_sq < (threshold * threshold);
+}
+
+// Helper function to get the four corners of an OBB for saving/loading
+void get_obb_corners(const OrientedBoundingBox* obb, ImVec2 corners[4]) {
+    if (obb->state != OBBComplete) {
+        // If OBB is not complete, set all corners to zero
+        for (int i = 0; i < 4; i++) {
+            corners[i] = ImVec2(0, 0);
+        }
+        return;
+    }
+    
+    // Use the stored properties to calculate corners
+    float cos_rot = cosf(obb->rotation);
+    float sin_rot = sinf(obb->rotation);
+    
+    // Half-width and half-height
+    float half_w = obb->width * 0.5f;
+    float half_h = obb->height * 0.5f;
+    
+    // Calculate the four corners relative to center, then translate
+    // Corner order: bottom-left, bottom-right, top-right, top-left (in local coordinates)
+    ImVec2 local_corners[4] = {
+        {-half_w, -half_h},  // bottom-left
+        { half_w, -half_h},  // bottom-right  
+        { half_w,  half_h},  // top-right
+        {-half_w,  half_h}   // top-left
+    };
+    
+    // Rotate and translate each corner
+    for (int i = 0; i < 4; i++) {
+        float x = local_corners[i].x;
+        float y = local_corners[i].y;
+        
+        // Apply rotation
+        float rotated_x = x * cos_rot - y * sin_rot;
+        float rotated_y = x * sin_rot + y * cos_rot;
+        
+        // Translate to world position
+        corners[i].x = rotated_x + obb->center.x;
+        corners[i].y = rotated_y + obb->center.y;
+    }
+}
+
+void set_obb_from_corners(OrientedBoundingBox* obb, const ImVec2 corners[4], int class_id) {
+    obb->axis_point1 = corners[0];
+    obb->axis_point2 = corners[1];
+    obb->corner_point = corners[3];
+    
+    obb->center.x = (corners[0].x + corners[1].x + corners[2].x + corners[3].x) / 4.0f;
+    obb->center.y = (corners[0].y + corners[1].y + corners[2].y + corners[3].y) / 4.0f;
+    
+    float dx = corners[1].x - corners[0].x;
+    float dy = corners[1].y - corners[0].y;
+    obb->width = sqrtf(dx * dx + dy * dy);
+    
+    dx = corners[3].x - corners[0].x;
+    dy = corners[3].y - corners[0].y;
+    obb->height = sqrtf(dx * dx + dy * dy);
+    
+    obb->rotation = atan2f(corners[1].y - corners[0].y, corners[1].x - corners[0].x);
+    
+    obb->state = OBBComplete;
+    obb->class_id = class_id;
+    obb->confidence = 1.0f; 
+}
+
 void draw_obb(OrientedBoundingBox& obb, bool is_active, ImVec4 class_color = ImVec4(1, 1, 1, 0.7f), ImVec2 mouse_pos = ImVec2(0, 0), bool show_preview = false) {
     if (obb.state == OBBNull) return;
     
@@ -950,6 +1023,13 @@ void draw_obb(OrientedBoundingBox& obb, bool is_active, ImVec4 class_color = ImV
             double x1 = obb.axis_point1.x, y1 = obb.axis_point1.y;
             ImPlot::SetNextMarkerStyle(ImPlotMarker_Circle, 6, ImVec4(1, 0, 0, 1), IMPLOT_AUTO, ImVec4(1, 0, 0, 1));
             ImPlot::PlotScatter("##obb_vertex1", &x1, &y1, 1);
+            
+            if (show_preview && obb.state == OBBFirstAxisPoint) {
+                double xs_preview[2] = {obb.axis_point1.x, mouse_pos.x};
+                double ys_preview[2] = {obb.axis_point1.y, mouse_pos.y};
+                ImPlot::SetNextLineStyle(ImVec4(1, 0, 0, 0.6f), 2.0f);
+                ImPlot::PlotLine("##obb_preview_line", xs_preview, ys_preview, 2);
+            }
         }
         
         // Draw second vertex and the edge between them

@@ -519,7 +519,7 @@ int main(int, char **) {
     float yolo_export_val_ratio = 0.2f;
     float yolo_export_test_ratio = 0.1f;
     int yolo_export_seed = 42;
-    int yolo_export_mode = 0; // 0 = detection, 1 = pose
+    YoloExportMode yolo_export_mode = YOLO_DETECTION;
     bool yolo_export_in_progress = false;
     std::string yolo_export_status = "";
 
@@ -2115,11 +2115,81 @@ int main(int, char **) {
                                 static bool obb_dragging = false;
                                 static size_t dragged_obb_idx = 0;
                                 
+                                // Handle OBB construction point dragging
+                                static bool obb_point_dragging = false;
+                                static size_t dragged_point_obb_idx = 0;
+                                static int dragged_point_type = 0; // 0 = axis_point1, 1 = axis_point2, 2 = corner_point
+                                
+                                // Handle construction point dragging
+                                if (is_view_focused[j] && ImPlot::IsPlotHovered()) {
+                                    ImPlotPoint mouse = ImPlot::GetPlotMousePos();
+                                    ImVec2 mouse_vec = ImVec2(mouse.x, mouse.y);
+                                    
+                                    // Start dragging construction points
+                                    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !obb_point_dragging && !obb_dragging) {
+                                        for (size_t obb_idx = 0; 
+                                             obb_idx < keypoints_map[current_frame_num]->obb2d_list[j].size(); 
+                                             obb_idx++) {
+                                            auto &obb = keypoints_map[current_frame_num]->obb2d_list[j][obb_idx];
+                                            
+                                            // Only allow dragging for incomplete OBBs
+                                            if (obb.state >= OBBFirstAxisPoint && obb.state < OBBComplete) {
+                                                // Check if clicking near axis_point1
+                                                if (obb.state >= OBBFirstAxisPoint && 
+                                                    is_point_near(mouse_vec, obb.axis_point1)) {
+                                                    obb_point_dragging = true;
+                                                    dragged_point_obb_idx = obb_idx;
+                                                    dragged_point_type = 0;
+                                                    break;
+                                                }
+                                                // Check if clicking near axis_point2
+                                                if (obb.state >= OBBSecondAxisPoint && 
+                                                    is_point_near(mouse_vec, obb.axis_point2)) {
+                                                    obb_point_dragging = true;
+                                                    dragged_point_obb_idx = obb_idx;
+                                                    dragged_point_type = 1;
+                                                    break;
+                                                }
+                                                // Check if clicking near corner_point
+                                                if (obb.state >= OBBThirdPoint && 
+                                                    is_point_near(mouse_vec, obb.corner_point)) {
+                                                    obb_point_dragging = true;
+                                                    dragged_point_obb_idx = obb_idx;
+                                                    dragged_point_type = 2;
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    
+                                    // Continue dragging
+                                    if (obb_point_dragging && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+                                        auto &obb = keypoints_map[current_frame_num]->obb2d_list[j][dragged_point_obb_idx];
+                                        
+                                        if (dragged_point_type == 0) {
+                                            obb.axis_point1 = mouse_vec;
+                                        } else if (dragged_point_type == 1) {
+                                            obb.axis_point2 = mouse_vec;
+                                        } else if (dragged_point_type == 2) {
+                                            obb.corner_point = mouse_vec;
+                                            // Recalculate OBB properties if dragging corner point
+                                            if (obb.state == OBBThirdPoint) {
+                                                calculate_obb_properties(&obb);
+                                            }
+                                        }
+                                    }
+                                    
+                                    // Stop dragging
+                                    if (obb_point_dragging && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+                                        obb_point_dragging = false;
+                                    }
+                                }
+                                
                                 // Track which OBB is being hovered
                                 int current_hovered_obb = -1;
                                 
                                 // Check for hover when not dragging
-                                if (!obb_dragging && ImPlot::IsPlotHovered()) {
+                                if (!obb_dragging && !obb_point_dragging && ImPlot::IsPlotHovered()) {
                                     ImPlotPoint mouse = ImPlot::GetPlotMousePos();
                                     
                                     // Check if hovering over any OBB
@@ -2189,10 +2259,10 @@ int main(int, char **) {
                                                         (current_hovered_obb == (int)obb_idx) ||
                                                         (!obb_dragging && obb.state < OBBComplete);
                                         
-                                        // Show preview when we have first two points and mouse is in plot area
-                                        bool show_preview = (obb.state == OBBSecondAxisPoint && 
+                                        // Show preview when we have at least one point and mouse is in plot area
+                                        bool show_preview = ((obb.state == OBBFirstAxisPoint || obb.state == OBBSecondAxisPoint) && 
                                                            ImPlot::IsPlotHovered() && 
-                                                           !obb_dragging && current_hovered_obb == -1);
+                                                           !obb_dragging && !obb_point_dragging && current_hovered_obb == -1);
                                         
                                         draw_obb(obb, is_active, obb_color, ImVec2(current_mouse.x, current_mouse.y), show_preview);
                                     }
@@ -3121,6 +3191,20 @@ int main(int, char **) {
                         }
                     }
 
+                    // Check for OBB labels
+                    if (!has_labels && skeleton->has_obb) {
+                        for (int cam_id = 0; cam_id < scene->num_cams &&
+                                             cam_id < MAX_VIEWS && !has_labels;
+                             cam_id++) {
+                            for (const auto &obb : keypoints->obb2d_list[cam_id]) {
+                                if (obb.state == OBBComplete) {
+                                    has_labels = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
                     if (has_labels) {
                         next_labeled_frame_it = it;
                         break;
@@ -3182,6 +3266,21 @@ int main(int, char **) {
                                                 has_labels = true;
                                             }
                                         }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Check for OBB labels
+                        if (!has_labels && skeleton->has_obb) {
+                            for (int cam_id = 0;
+                                 cam_id < scene->num_cams &&
+                                 cam_id < MAX_VIEWS && !has_labels;
+                                 cam_id++) {
+                                for (const auto &obb : keypoints->obb2d_list[cam_id]) {
+                                    if (obb.state == OBBComplete) {
+                                        has_labels = true;
+                                        break;
                                     }
                                 }
                             }
@@ -3267,6 +3366,20 @@ int main(int, char **) {
                                             has_labels = true;
                                         }
                                     }
+                                }
+                            }
+                        }
+                    }
+
+                    // Check for OBB labels
+                    if (skeleton->has_obb && !has_labels) {
+                        for (int cam_id = 0; cam_id < scene->num_cams &&
+                                             cam_id < MAX_VIEWS && !has_labels;
+                             cam_id++) {
+                            for (const auto &obb : keypoints->obb2d_list[cam_id]) {
+                                if (obb.state == OBBComplete) {
+                                    has_labels = true;
+                                    break;
                                 }
                             }
                         }
@@ -3981,14 +4094,17 @@ int main(int, char **) {
 
                 // Export mode selection
                 const char *export_modes[] = {"Detection Dataset",
-                                              "Pose Dataset"};
-                if (ImGui::Combo("Export Mode", &yolo_export_mode, export_modes,
+                                              "Pose Dataset",
+                                              "OBB Dataset"};
+                int current_mode = static_cast<int>(yolo_export_mode);
+                if (ImGui::Combo("Export Mode", &current_mode, export_modes,
                                  IM_ARRAYSIZE(export_modes))) {
+                    yolo_export_mode = static_cast<YoloExportMode>(current_mode);
                     // Update default values based on mode
-                    if (yolo_export_mode == 0) { // Detection
+                    if (yolo_export_mode == YOLO_DETECTION) {
                         strcpy(yolo_export_output_dir,
                                "/home/user/data/yolo_detection_dataset");
-                    } else { // Pose
+                    } else if (yolo_export_mode == YOLO_POSE) {
                         strcpy(yolo_export_output_dir,
                                "/home/user/data/yolo_pose_dataset");
                         // Set skeleton file to current one if available
@@ -3999,6 +4115,9 @@ int main(int, char **) {
                             yolo_export_skeleton_file
                                 [sizeof(yolo_export_skeleton_file) - 1] = '\0';
                         }
+                    } else {
+                        strcpy(yolo_export_output_dir,
+                               "/home/user/data/yolo_obb_dataset");
                     }
                 }
 
@@ -4048,7 +4167,7 @@ int main(int, char **) {
                 ImGui::Separator();
 
                 // Configuration files
-                if (yolo_export_mode == 1) { // Pose mode
+                if (yolo_export_mode == YOLO_POSE) {
                     ImGui::Text("Skeleton Configuration:");
                     ImGui::InputText("Skeleton File", yolo_export_skeleton_file,
                                      sizeof(yolo_export_skeleton_file));
@@ -4074,7 +4193,7 @@ int main(int, char **) {
                     }
                 }
 
-                if (yolo_export_mode == 0) { // Detection mode
+                if (yolo_export_mode == YOLO_DETECTION || yolo_export_mode == YOLO_OBB) {
                     ImGui::Text("Class Names (Optional):");
                     ImGui::InputText("Class Names File",
                                      yolo_export_class_names_file,
@@ -4146,7 +4265,7 @@ int main(int, char **) {
                         } else if (strlen(yolo_export_output_dir) == 0) {
                             valid = false;
                             validation_error = "Output directory is required";
-                        } else if (yolo_export_mode == 1 &&
+                        } else if (yolo_export_mode == YOLO_POSE &&
                                    strlen(yolo_export_skeleton_file) == 0) {
                             valid = false;
                             validation_error = "Skeleton file is required "
@@ -4180,13 +4299,17 @@ int main(int, char **) {
                                 [config, yolo_export_mode, &yolo_export_status,
                                  &yolo_export_in_progress]() {
                                     bool success = false;
-                                    if (yolo_export_mode == 0) {
+                                    if (yolo_export_mode == YOLO_DETECTION) {
                                         success = YoloExport::
                                             export_yolo_detection_dataset(
                                                 config, &yolo_export_status);
-                                    } else {
+                                    } else if (yolo_export_mode == YOLO_POSE) {
                                         success = YoloExport::
                                             export_yolo_pose_dataset(
+                                                config, &yolo_export_status);
+                                    } else { 
+                                        success = YoloExport::
+                                            export_yolo_obb_dataset(
                                                 config, &yolo_export_status);
                                     }
 

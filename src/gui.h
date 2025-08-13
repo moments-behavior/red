@@ -643,7 +643,7 @@ void save_obb(std::map<u32, KeyPoints *> keypoints_map,
     // Write header for OBB files
     for (uint i = 0; i < num_cameras; i++) {
         obb_files[i] << skeleton->name << "\n";
-        obb_files[i] << "frame,obb_id,class_id,class_name,confidence,axis_x1,axis_y1,axis_x2,axis_y2,corner_x,corner_y,center_x,center_y,width,height,rotation\n";
+        obb_files[i] << "frame,obb_id,class_id,corner_x1,corner_y1,corner_x2,corner_y2,corner_x3,corner_y3,corner_x4,corner_y4\n";
     }
 
     std::map<u32, KeyPoints *>::iterator it = keypoints_map.begin();
@@ -657,6 +657,10 @@ void save_obb(std::map<u32, KeyPoints *> keypoints_map,
                     const auto& obb = keypoints->obb2d_list[cam][obb_idx];
                     
                     if (obb.state == OBBComplete) {
+                        // Get the four corners of the OBB
+                        ImVec2 corners[4];
+                        get_obb_corners(&obb, corners);
+                        
                         // Write frame number or filename
                         if (*input_is_imgs) {
                             obb_files[cam] << (*input_files)[frame];
@@ -664,19 +668,12 @@ void save_obb(std::map<u32, KeyPoints *> keypoints_map,
                             obb_files[cam] << frame;
                         }
                         
-                        // Write OBB data with class name
-                        std::string class_name = (obb.class_id >= 0 && obb.class_id < class_names.size()) 
-                                                ? class_names[obb.class_id] : "unknown";
-                        
+                        // Write simplified OBB data: frame, obb_id, class_id, and four corner coordinates
                         obb_files[cam] << "," << obb_idx << "," << obb.class_id 
-                                      << "," << class_name
-                                      << "," << obb.confidence 
-                                      << "," << obb.axis_point1.x << "," << obb.axis_point1.y
-                                      << "," << obb.axis_point2.x << "," << obb.axis_point2.y
-                                      << "," << obb.corner_point.x << "," << obb.corner_point.y
-                                      << "," << obb.center.x << "," << obb.center.y
-                                      << "," << obb.width << "," << obb.height
-                                      << "," << obb.rotation << "\n";
+                                      << "," << corners[0].x << "," << corners[0].y
+                                      << "," << corners[1].x << "," << corners[1].y
+                                      << "," << corners[2].x << "," << corners[2].y
+                                      << "," << corners[3].x << "," << corners[3].y << "\n";
                     }
                 }
             }
@@ -1462,7 +1459,8 @@ int load_obb(std::map<u32, KeyPoints *> &keypoints_map,
                 tokens.push_back(item);
             }
             
-            if (tokens.size() >= 15) {  // Support both old (15) and new (16) formats
+            // Check for new simplified format (11 fields: frame, obb_id, class_id, 8 corner coordinates)
+            if (tokens.size() >= 11) {
                 uint frame_num;
                 try {
                     frame_num = std::stoul(tokens[0]);
@@ -1473,41 +1471,12 @@ int load_obb(std::map<u32, KeyPoints *> &keypoints_map,
                 int obb_id = std::stoi(tokens[1]);
                 int class_id = std::stoi(tokens[2]);
                 
-                // Handle both old and new CSV formats
-                std::string class_name;
-                float confidence;
-                int data_offset = 0;
-                
-                if (tokens.size() >= 16) {
-                    // New format with class name
-                    class_name = tokens[3];
-                    confidence = std::stof(tokens[4]);
-                    data_offset = 1;
-                    
-                    // Update class_names vector if needed
-                    while (class_names.size() <= class_id) {
-                        class_names.push_back("Class_" + std::to_string(class_names.size()));
-                    }
-                    if (class_id >= 0 && class_id < class_names.size()) {
-                        class_names[class_id] = class_name;
-                    }
-                } else {
-                    // Old format without class name
-                    confidence = std::stof(tokens[3]);
-                    data_offset = 0;
-                }
-                
-                float axis_x1 = std::stof(tokens[4 + data_offset]);
-                float axis_y1 = std::stof(tokens[5 + data_offset]);
-                float axis_x2 = std::stof(tokens[6 + data_offset]);
-                float axis_y2 = std::stof(tokens[7 + data_offset]);
-                float corner_x = std::stof(tokens[8 + data_offset]);
-                float corner_y = std::stof(tokens[9 + data_offset]);
-                float center_x = std::stof(tokens[10 + data_offset]);
-                float center_y = std::stof(tokens[11 + data_offset]);
-                float width = std::stof(tokens[12 + data_offset]);
-                float height = std::stof(tokens[13 + data_offset]);
-                float rotation = std::stof(tokens[14 + data_offset]);
+                // Parse the four corners
+                ImVec2 corners[4];
+                corners[0] = ImVec2(std::stof(tokens[3]), std::stof(tokens[4]));  // corner 1
+                corners[1] = ImVec2(std::stof(tokens[5]), std::stof(tokens[6]));  // corner 2
+                corners[2] = ImVec2(std::stof(tokens[7]), std::stof(tokens[8]));  // corner 3
+                corners[3] = ImVec2(std::stof(tokens[9]), std::stof(tokens[10])); // corner 4
                 
                 // Create keypoints entry if it doesn't exist
                 if (keypoints_map.find(frame_num) == keypoints_map.end()) {
@@ -1535,17 +1504,8 @@ int load_obb(std::map<u32, KeyPoints *> &keypoints_map,
                 // Get reference to the oriented bounding box
                 OrientedBoundingBox* obb = &keypoints_map[frame_num]->obb2d_list[cam_idx][obb_id];
                 
-                // Set OBB data
-                obb->axis_point1 = ImVec2(axis_x1, axis_y1);
-                obb->axis_point2 = ImVec2(axis_x2, axis_y2);
-                obb->corner_point = ImVec2(corner_x, corner_y);
-                obb->center = ImVec2(center_x, center_y);
-                obb->width = width;
-                obb->height = height;
-                obb->rotation = rotation;
-                obb->state = OBBComplete;
-                obb->class_id = class_id;
-                obb->confidence = confidence;
+                // Set OBB data from corners using the helper function
+                set_obb_from_corners(obb, corners, class_id);
             }
         }
         line_num++;
