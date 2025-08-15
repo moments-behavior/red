@@ -2982,7 +2982,7 @@ int main(int, char **) {
                     ImGui::Text("Bounding box mode: No keypoints to display");
                 }
             }
-            ImGui::End();
+            ImGui::Enounding Box;
         }
 
         if (plot_keypoints_flag) {
@@ -3766,29 +3766,28 @@ int main(int, char **) {
                 ImGui::Text("<.>: next image in buffer");
 
                 ImGui::SeparatorText("While hovering image");
-                ImGui::Text("<c>: create keypoints on frame");
+                ImGui::Text("<b>: create keypoints on frame");
                 ImGui::Text("<w>: drop active keypoint");
-                ImGui::Text("<a>: active keypoint++ ");
-                ImGui::Text("<d>: active keypoint--");
+                ImGui::Text("<a>: active keypoint-- ");
+                ImGui::Text("<d>: active keypoint++");
                 ImGui::Text("<q>: active keypoint set to first node");
                 ImGui::Text("<e>: active keypoint set to last node");
-                ImGui::Text("<t> -> triangulate");
+                ImGui::Text("<t>: triangulate");
                 ImGui::Text("<Backspace>: delete all keypoints");
-                ImGui::Text("<Ctrl+s>         : Save labels");
+                ImGui::Text("<Ctrl+s>: Save labels");
 
                 ImGui::SeparatorText("Bounding box");
-                ImGui::Text("<mouse middle button>: draw bbox, drag then "
+                ImGui::Text("<Shift + drag mouse>: draw bbox, drag then "
                             "release to "
                             "finish drawing the bbox");
-                ImGui::Text("Bboxes are created with the currently "
-                            "selected class in "
-                            "Keypoints panel");
-                ImGui::Text("While hovering bounding boxes");
                 ImGui::Text("<t>: delete bounding box from current camera");
-                ImGui::Text("<f>: delete bounding box from all cameras");
+                ImGui::Text("<f>: delete all instances of current class");
                 ImGui::Text("<z>: switch to previous bbox class");
                 ImGui::Text("<x>: switch to next bbox class (creates new "
                             "class if at end)");
+                ImGui::Text("<n>: create new bbox class");
+                ImGui::Text("<c>: bbox id--");
+                ImGui::Text("<v>: bbox id++");
 
                 ImGui::SeparatorText("While hovering keypoints");
                 ImGui::Text("<r>: delete active keypoint");
