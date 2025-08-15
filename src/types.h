@@ -33,4 +33,10 @@ struct tuple_i{
     int y;
 };
 
+enum YoloExportMode {
+    YOLO_DETECTION = 0,
+    YOLO_POSE = 1,
+    YOLO_OBB = 2
+};
+
 #endif

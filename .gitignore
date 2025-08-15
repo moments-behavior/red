@@ -16,3 +16,14 @@ build/
 cmake-build-debug/
 
 __pycache__
+
+lib/libtorch/
+
+skeleton/*.json
+
+# Python virtual environments
+red_exporter_env/
+.venv/
+venv/
+env/
+ENV/
