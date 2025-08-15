@@ -417,6 +417,51 @@ bool frameHasYoloDetections(int frame_num,
     return false;
 }
 
+bool has_labeled_frames(const std::map<u32, KeyPoints *> &keypoints_map, SkeletonContext *skeleton) {
+    for (const auto &[frame_num, keypoints] : keypoints_map) {
+        if (!keypoints) continue;
+
+        if (skeleton->has_skeleton) {
+            for (size_t cam_id = 0; cam_id < keypoints->bbox2d_list.size() && cam_id < MAX_VIEWS; cam_id++) {
+                for (int kp_id = 0; kp_id < skeleton->num_nodes; kp_id++) {
+                    if (keypoints->keypoints2d[cam_id][kp_id].is_labeled) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        if (skeleton->has_bbox) {
+            for (size_t cam_id = 0; cam_id < keypoints->bbox2d_list.size(); cam_id++) {
+                for (const auto &bbox : keypoints->bbox2d_list[cam_id]) {
+                    if (bbox.state == RectTwoPoints) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        if (skeleton->has_obb) {
+            for (size_t cam_id = 0; cam_id < keypoints->obb2d_list.size(); cam_id++) {
+                for (const auto &obb : keypoints->obb2d_list[cam_id]) {
+                    if (obb.state == OBBComplete) {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    return false;
+}
+
+void cleanup_skeleton_data(std::map<u32, KeyPoints *> &keypoints_map, render_scene *scene) {
+    // Free all existing keypoints
+    if (!keypoints_map.empty()) {
+        free_all_keypoints(keypoints_map, scene);
+        keypoints_map.clear();
+    }
+}
+
 int main(int, char **) {
     gx_context *window = (gx_context *)malloc(sizeof(gx_context));
     *window =
@@ -669,10 +714,17 @@ int main(int, char **) {
                         }
 
                         for (auto &element : skeleton_map) {
+                            // Allow skeleton selection if no skeleton is chosen OR if there are no labeled frames
+                            bool can_switch_skeleton = !skeleton_chosen || !has_labeled_frames(keypoints_map, skeleton);
 
                             if (ImGui::MenuItem(element.first.c_str(), NULL,
                                                 skeleton->name == element.first,
-                                                !skeleton_chosen)) {
+                                                can_switch_skeleton)) {
+                                // Clean up existing skeleton data when switching
+                                if (skeleton_chosen) {
+                                    cleanup_skeleton_data(keypoints_map, scene);
+                                }
+                                
                                 if (element.second == SP_LOAD) {
                                     IGFD::FileDialogConfig config;
                                     config.countSelectionMax = 1;
@@ -986,6 +1038,10 @@ int main(int, char **) {
                     }
 
                     if (load_calibration) {
+                        if (skeleton_chosen) {
+                            cleanup_skeleton_data(keypoints_map, scene);
+                        }
+                        
                         skeleton_dir =
                             ImGuiFileDialog::Instance()->GetCurrentPath();
                         skeleton_file_path =
