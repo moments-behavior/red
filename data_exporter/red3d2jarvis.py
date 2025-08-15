@@ -27,6 +27,7 @@ parser.add_argument(
     "--margin",
     type=float,
     help="Margin in pixel to add when deciding bounding box.",
+    required=True,
 )
 
 args = parser.parse_args()

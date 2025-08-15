@@ -2725,6 +2725,8 @@ int main(int, char **) {
                                         }
                                     }
                                 }
+                            } else {
+                                is_view_focused[j] = false;
                             }
 
                             if (keypoints_find) {
