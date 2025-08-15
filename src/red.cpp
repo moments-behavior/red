@@ -1677,7 +1677,6 @@ int main(int, char **) {
                                                 !shift_pressed && shift_was_pressed) {
                                                 bbox.state = RectTwoPoints;
                                                 
-                                                // Normalize bbox coordinates to ensure Min <= Max
                                                 double x_min = std::min(bbox.rect->X.Min, bbox.rect->X.Max);
                                                 double x_max = std::max(bbox.rect->X.Min, bbox.rect->X.Max);
                                                 double y_min = std::min(bbox.rect->Y.Min, bbox.rect->Y.Max);
