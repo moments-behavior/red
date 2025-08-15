@@ -12,14 +12,13 @@ Please see this [link](https://www.youtube.com/watch?v=9eOJaadE1Nc) for a video 
 1. Real-time GPU accelerated decoding (h264, h265)
 2. Synchronized decoding
 3. Multi-view keypoints labeling and triangulation  
-4. YOLOv5 (OpenCV cuDNN ONNX model) and YOLOv8 (TensoRT) inference  
 
 ## Dependencies
 1. NVIDIA Video Codec SDK
 1. CUDA Toolkit and cuDNN
 2. FFmpeg 
 3. OpenCV
-4. TensorRT
+4. LibTorch
 5. OpenGL
 
 ## Build instructions 
@@ -127,9 +126,6 @@ this is based on [these instructions](https://docs.nvidia.com/deeplearning/tenso
     ./trtexec
     ```
 
-
-
-
 ### Install RED 
 
 - Clone the repo and submodules
@@ -149,6 +145,9 @@ Once built, it will make a folder called `release`. The executable `redgui` is t
 ```
 ./run.sh
 ```
+
+### Install LibTorch
+Download libtorch cpu version from [PyTorch] (https://pytorch.org/get-started/locally/) selecting Linux, LibTorch, C++. Unzip it into `lib` folder.
 
 ## Format data for Deep Learning
 Currently we are saving labeled keypoints simply as a plain csv file. We provide python scripts for formating data as [COCO format](https://docs.aws.amazon.com/rekognition/latest/customlabels-dg/md-coco-overview.html), which is used by [JARVIS](https://github.com/JARVIS-MoCap/JARVIS-HybridNet). Please refer to [data_exporter](https://github.com/JohnsonLabJanelia/red/tree/main/data_exporter).
