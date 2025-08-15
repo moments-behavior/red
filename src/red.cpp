@@ -529,6 +529,7 @@ int main(int, char **) {
     std::vector<ImVec4> bbox_class_colors = {ImVec4(0.3f, 1.0f, 1.0f, 1.0f)};
     int current_bbox_class = 0;
     int current_bbox_id = 0;  // Track the currently selected bbox ID within the class
+    bool show_bbox_ids = true;  // Toggle for displaying bbox IDs on frame
     static char new_class_name_buffer[64] = "";
 
     // Helper function to create a new bbox class
@@ -581,12 +582,14 @@ int main(int, char **) {
     int hovered_bbox_idx = -1;
     float hovered_bbox_confidence = 0.0f;
     int hovered_bbox_class = -1;
+    int hovered_bbox_id = -1;  // Track the ID of the hovered bbox
 
     // Hovered OBB tracking variables
     int hovered_obb_cam = -1;
     int hovered_obb_idx = -1;
     float hovered_obb_confidence = 0.0f;
     int hovered_obb_class = -1;
+    int hovered_obb_id = -1;  // Track the ID of the hovered OBB
 
     bool auto_yolo_labeling = false;
     std::set<int>
@@ -611,12 +614,14 @@ int main(int, char **) {
         hovered_bbox_idx = -1;
         hovered_bbox_confidence = 0.0f;
         hovered_bbox_class = -1;
+        hovered_bbox_id = -1;
         
         // Reset hovered OBB info at start of each frame
         hovered_obb_cam = -1;
         hovered_obb_idx = -1;
         hovered_obb_confidence = 0.0f;
         hovered_obb_class = -1;
+        hovered_obb_id = -1;
 
         // --- Update playback time ---
         auto now = std::chrono::steady_clock::now();
@@ -1801,6 +1806,15 @@ int main(int, char **) {
                                                     &bbox_clicked,
                                                     &bbox_hovered, &bbox_held);
 
+                                            // Display bbox ID on frame if enabled
+                                            if (show_bbox_ids) {
+                                                // Position text above top-right corner of bbox
+                                                double text_x = bbox.rect->X.Max - 10.0; // Offset to the left
+                                                double text_y = bbox.rect->Y.Max - 10.0; // Offset above the box
+                                                ImPlot::PushStyleColor(ImPlotCol_InlayText, ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
+                                                ImPlot::PlotText(std::to_string(bbox.id).c_str(), text_x, text_y);
+                                            }
+
                                             if (bbox_clicked || bbox_held ||
                                                 bbox_modified) {
                                                 active_bbox_idx = bbox_idx;
@@ -1842,6 +1856,7 @@ int main(int, char **) {
                                                     bbox.confidence;
                                                 hovered_bbox_class =
                                                     bbox.class_id;
+                                                hovered_bbox_id = bbox.id;
 
                                                 // Delete bounding box from
                                                 // current camera when 'T' key
@@ -2239,6 +2254,7 @@ int main(int, char **) {
                                             hovered_obb_idx = obb_idx;
                                             hovered_obb_class = obb.class_id;
                                             hovered_obb_confidence = obb.confidence;
+                                            hovered_obb_id = obb.id;
                                             
                                             // Handle key presses for OBB manipulation (similar to bbox)
                                             // Delete OBB from current camera when 'T' key is pressed while hovering
@@ -2299,6 +2315,14 @@ int main(int, char **) {
                                                            !obb_dragging && !obb_point_dragging && current_hovered_obb == -1);
                                         
                                         draw_obb(obb, is_active, obb_color, ImVec2(current_mouse.x, current_mouse.y), show_preview);
+                                        
+                                        // Display OBB ID on frame if enabled and OBB is complete
+                                        if (show_bbox_ids && obb.state == OBBComplete) {
+                                            // Position text above top-right corner of OBB
+                                            double text_x = obb.center.x + obb.width/2 + 5.0; // Right side of OBB
+                                            double text_y = obb.center.y + obb.height/2 + 5.0; // Above the OBB
+                                            ImPlot::PlotText(std::to_string(obb.id).c_str(), text_x, text_y);
+                                        }
                                     }
                                 }
                             }
@@ -2475,6 +2499,8 @@ int main(int, char **) {
             }
             if (ImGui::IsKeyPressed(ImGuiKey_N, false)) {
                 create_new_bbox_class();
+                // reset bbox id to 0
+                current_bbox_id = 0;
             }
 
             if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow, false)) {
@@ -2550,7 +2576,17 @@ int main(int, char **) {
                     }
                     
                     // Display current bbox ID
-                    ImGui::Text("Current Bounding Box ID: %d", current_bbox_id);
+                    ImGui::Text("Current Bounding Box ID: %d", current_bbox_id);  
+                    
+                    // Checkbox to toggle bbox ID display on frame
+                    ImGui::Checkbox("Show Bbox IDs on Frame", &show_bbox_ids);
+                    
+                    // Display hovered bbox ID if any bbox is being hovered
+                    if (hovered_bbox_cam >= 0 && hovered_bbox_idx >= 0) {
+                        ImGui::Text("Hovered Bbox ID: %d", hovered_bbox_id);
+                    } else if (hovered_obb_cam >= 0 && hovered_obb_idx >= 0) {
+                        ImGui::Text("Hovered OBB ID: %d", hovered_obb_id);
+                    }  
 
                     // Add new class
                     ImGui::SetNextItemWidth(200);
