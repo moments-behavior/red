@@ -1670,12 +1670,24 @@ int main(int, char **) {
                                                 double clamped_x = std::max(0.0, std::min((double)scene->image_width[j], mouse.x));
                                                 double clamped_y = std::max(0.0, std::min((double)scene->image_height[j], mouse.y));
                                                 bbox.rect->X.Max = clamped_x;
-                                                bbox.rect->Y.Min = clamped_y;
+                                                bbox.rect->Y.Max = clamped_y;
                                             }
 
                                             if (bbox.state == RectOnePoint &&
                                                 !shift_pressed && shift_was_pressed) {
                                                 bbox.state = RectTwoPoints;
+                                                
+                                                // Normalize bbox coordinates to ensure Min <= Max
+                                                double x_min = std::min(bbox.rect->X.Min, bbox.rect->X.Max);
+                                                double x_max = std::max(bbox.rect->X.Min, bbox.rect->X.Max);
+                                                double y_min = std::min(bbox.rect->Y.Min, bbox.rect->Y.Max);
+                                                double y_max = std::max(bbox.rect->Y.Min, bbox.rect->Y.Max);
+                                                
+                                                bbox.rect->X.Min = x_min;
+                                                bbox.rect->X.Max = x_max;
+                                                bbox.rect->Y.Min = y_min;
+                                                bbox.rect->Y.Max = y_max;
+                                                
                                                 // Auto-increment bbox ID after finishing drawing
                                                 current_bbox_id++;
                                             }
