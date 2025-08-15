@@ -19,6 +19,8 @@ __pycache__
 
 lib/libtorch/
 
+skeleton/*.json
+
 # Python virtual environments
 red_exporter_env/
 .venv/
