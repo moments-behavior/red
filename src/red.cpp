@@ -15,6 +15,7 @@
 #include "yolo_detection.h"
 #include "yolo_export.h"
 #include <ImGuiFileDialog.h>
+#include <algorithm>
 #include <chrono>
 #include <iostream>
 #include <set>
@@ -527,6 +528,7 @@ int main(int, char **) {
     std::vector<std::string> bbox_class_names = {"Class_1"};
     std::vector<ImVec4> bbox_class_colors = {ImVec4(0.3f, 1.0f, 1.0f, 1.0f)};
     int current_bbox_class = 0;
+    int current_bbox_id = 0;  // Track the currently selected bbox ID within the class
     static char new_class_name_buffer[64] = "";
 
     // Helper function to create a new bbox class
@@ -1505,7 +1507,7 @@ int main(int, char **) {
                             if (ImPlot::IsPlotHovered()) {
                                 is_view_focused[j] = true;
 
-                                if (ImGui::IsKeyPressed(ImGuiKey_C, false)) {
+                                if (ImGui::IsKeyPressed(ImGuiKey_B, false)) {
                                     // create keypoints
                                     if (!keypoints_find) {
                                         // not found
@@ -1602,6 +1604,21 @@ int main(int, char **) {
                                     if (shift_pressed && !shift_was_pressed) {
                                         ImPlotPoint mouse =
                                             ImPlot::GetPlotMousePos();
+                                            
+                                        // Delete existing bbox with the same class_id and id
+                                        if (keypoints_map.find(current_frame_num) != keypoints_map.end()) {
+                                            auto &bbox_list = keypoints_map[current_frame_num]->bbox2d_list[j];
+                                            
+                                            // Find and remove bbox with same class_id and id
+                                            bbox_list.erase(
+                                                std::remove_if(bbox_list.begin(), bbox_list.end(),
+                                                    [current_bbox_class, current_bbox_id](const BoundingBox& bbox) {
+                                                        return bbox.class_id == current_bbox_class && bbox.id == current_bbox_id;
+                                                    }),
+                                                bbox_list.end()
+                                            );
+                                        }
+                                            
                                         BoundingBox new_bbox;
                                         new_bbox.rect = new ImPlotRect(
                                             mouse.x, mouse.x, mouse.y, mouse.y);
@@ -1610,6 +1627,7 @@ int main(int, char **) {
                                             current_bbox_class; // Use currently
                                                                 // selected
                                                                 // class
+                                        new_bbox.id = current_bbox_id;  // Set bbox ID
                                         new_bbox.confidence = 1.0f;
                                         new_bbox.has_bbox_keypoints = false;
                                         new_bbox.bbox_keypoints2d = nullptr;
@@ -1646,6 +1664,8 @@ int main(int, char **) {
                                             if (bbox.state == RectOnePoint &&
                                                 !shift_pressed && shift_was_pressed) {
                                                 bbox.state = RectTwoPoints;
+                                                // Auto-increment bbox ID after finishing drawing
+                                                current_bbox_id++;
                                             }
                                         }
                                     }
@@ -2089,6 +2109,9 @@ int main(int, char **) {
                                             obb.axis_point2 = ImVec2(0, 0);
                                             obb.corner_point = ImVec2(0, 0);
                                             
+                                            // Auto-increment bbox ID after finishing drawing OBB
+                                            current_bbox_id++;
+                                            
                                             found_incomplete_obb = true;
                                             break;
                                         }
@@ -2096,6 +2119,16 @@ int main(int, char **) {
                                     
                                     // If no incomplete OBB found, create a new one
                                     if (!found_incomplete_obb) {
+                                        // Delete existing OBB with the same class_id and id
+                                        auto &obb_list = keypoints_map[current_frame_num]->obb2d_list[j];
+                                        obb_list.erase(
+                                            std::remove_if(obb_list.begin(), obb_list.end(),
+                                                [current_bbox_class, current_bbox_id](const OrientedBoundingBox& obb) {
+                                                    return obb.class_id == current_bbox_class && obb.id == current_bbox_id;
+                                                }),
+                                            obb_list.end()
+                                        );
+                                        
                                         OrientedBoundingBox new_obb;
                                         new_obb.axis_point1 = ImVec2(mouse.x, mouse.y);
                                         new_obb.axis_point2 = ImVec2(0, 0);
@@ -2106,6 +2139,7 @@ int main(int, char **) {
                                         new_obb.rotation = 0;
                                         new_obb.state = OBBFirstAxisPoint;
                                         new_obb.class_id = current_bbox_class;  // Use currently selected class
+                                        new_obb.id = current_bbox_id;  // Set OBB ID
                                         new_obb.confidence = 1.0f;
                                         keypoints_map[current_frame_num]->obb2d_list[j].push_back(new_obb);
                                     }
@@ -2414,6 +2448,7 @@ int main(int, char **) {
                     current_bbox_class =
                         (current_bbox_class - 1 + bbox_class_names.size()) %
                         bbox_class_names.size();
+                    current_bbox_id = 0;  // Reset bbox ID when switching classes
                 }
             }
 
@@ -2422,7 +2457,21 @@ int main(int, char **) {
                     // Switch to next class
                     current_bbox_class =
                         (current_bbox_class + 1) % bbox_class_names.size();
+                    current_bbox_id = 0;  // Reset bbox ID when switching classes
                 }
+            }
+            
+            // Bounding box ID switching keybinds within current class
+            if (ImGui::IsKeyPressed(ImGuiKey_C, false)) {
+                // Decrease bbox ID, stop at 0
+                if (current_bbox_id > 0) {
+                    current_bbox_id--;
+                }
+            }
+
+            if (ImGui::IsKeyPressed(ImGuiKey_V, false)) {
+                // Increment bbox ID (no wrap around)
+                current_bbox_id++;
             }
             if (ImGui::IsKeyPressed(ImGuiKey_N, false)) {
                 create_new_bbox_class();
@@ -2491,6 +2540,7 @@ int main(int, char **) {
                             if (ImGui::Selectable(bbox_class_names[i].c_str(),
                                                   is_selected)) {
                                 current_bbox_class = i;
+                                current_bbox_id = 0;  // Reset bbox ID when switching classes
                             }
                             if (is_selected) {
                                 ImGui::SetItemDefaultFocus();
@@ -2498,6 +2548,9 @@ int main(int, char **) {
                         }
                         ImGui::EndCombo();
                     }
+                    
+                    // Display current bbox ID
+                    ImGui::Text("Current Bounding Box ID: %d", current_bbox_id);
 
                     // Add new class
                     ImGui::SetNextItemWidth(200);
@@ -2972,14 +3025,14 @@ int main(int, char **) {
                     }
                     ImGui::EndDisabled();
 
-                    if (skeleton->has_bbox && keypoints_find) {
-                        if (ImGui::Button("Triangulate Bounding Boxes") ||
-                            ImGui::IsKeyPressed(ImGuiKey_B, false)) {
-                            triangulate_bounding_boxes(
-                                keypoints_map.at(current_frame_num), skeleton,
-                                camera_params, scene, current_frame_num);
-                        }
-                    }
+                    // if (skeleton->has_bbox && keypoints_find) {
+                    //     if (ImGui::Button("Triangulate Bounding Boxes") ||
+                    //         ImGui::IsKeyPressed(ImGuiKey_B, false)) {
+                    //         triangulate_bounding_boxes(
+                    //             keypoints_map.at(current_frame_num), skeleton,
+                    //             camera_params, scene, current_frame_num);
+                    //     }
+                    // }
 
                     if (apply_color) {
                         ImGui::PopStyleColor(3);

@@ -36,6 +36,7 @@ struct BoundingBox {
     ImPlotRect *rect;
     RectState state;
     int class_id;
+    int id;  
     float confidence;
 
     KeyPoints2D **bbox_keypoints2d; // Per-camera keypoints for this bbox
@@ -53,6 +54,7 @@ struct OrientedBoundingBox {
     float rotation;          // Rotation angle in radians
     OBBState state;          // Current drawing state
     int class_id;
+    int id;  
     float confidence;
 };
 
