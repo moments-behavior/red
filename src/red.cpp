@@ -1944,7 +1944,7 @@ int main(int, char **) {
                                                 // current camera when 'T' key
                                                 // is pressed while hovering
                                                 if (ImGui::IsKeyPressed(
-                                                        ImGuiKey_T, false)) {
+                                                        ImGuiKey_F, false)) {
                                                     // Clean up bbox keypoints
                                                     // before deletion
                                                     if (bbox.has_bbox_keypoints &&
@@ -1967,10 +1967,10 @@ int main(int, char **) {
                                                 }
 
                                                 // Delete bounding box from all
-                                                // cameras when 'F' key is
+                                                // cameras when 'O' key is
                                                 // pressed while hovering
                                                 if (ImGui::IsKeyPressed(
-                                                        ImGuiKey_F, false)) {
+                                                        ImGuiKey_O, false)) {
                                                     // Find this bbox's class_id
                                                     // and delete all bboxes
                                                     // with same class from all
@@ -3919,8 +3919,8 @@ int main(int, char **) {
                 ImGui::Text("<Shift + drag mouse>: draw bbox, drag then "
                             "release to "
                             "finish drawing the bbox");
-                ImGui::Text("<t>: delete bounding box from current camera");
-                ImGui::Text("<f>: delete all instances of current class");
+                ImGui::Text("<f>: delete bounding box from current camera");
+                ImGui::Text("<o>: delete all instances of current class");
                 ImGui::Text("<z>: switch to previous bbox class");
                 ImGui::Text("<x>: switch to next bbox class (creates new "
                             "class if at end)");
