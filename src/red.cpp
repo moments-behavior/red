@@ -529,7 +529,7 @@ int main(int, char **) {
     std::vector<ImVec4> bbox_class_colors = {ImVec4(0.3f, 1.0f, 1.0f, 1.0f)};
     int current_bbox_class = 0;
     int current_bbox_id = 0;  // Track the currently selected bbox ID within the class
-    bool show_bbox_ids = true;  // Toggle for displaying bbox IDs on frame
+    bool show_bbox_ids = false;  // Toggle for displaying bbox IDs on frame
     static char new_class_name_buffer[64] = "";
 
     // Helper function to create a new bbox class
@@ -1609,6 +1609,10 @@ int main(int, char **) {
                                     if (shift_pressed && !shift_was_pressed) {
                                         ImPlotPoint mouse =
                                             ImPlot::GetPlotMousePos();
+                                        
+                                        // Clamp mouse coordinates to frame bounds
+                                        double clamped_x = std::max(0.0, std::min((double)scene->image_width[j], mouse.x));
+                                        double clamped_y = std::max(0.0, std::min((double)scene->image_height[j], mouse.y));
                                             
                                         // Delete existing bbox with the same class_id and id
                                         if (keypoints_map.find(current_frame_num) != keypoints_map.end()) {
@@ -1626,7 +1630,7 @@ int main(int, char **) {
                                             
                                         BoundingBox new_bbox;
                                         new_bbox.rect = new ImPlotRect(
-                                            mouse.x, mouse.x, mouse.y, mouse.y);
+                                            clamped_x, clamped_x, clamped_y, clamped_y);
                                         new_bbox.state = RectOnePoint;
                                         new_bbox.class_id =
                                             current_bbox_class; // Use currently
@@ -1662,8 +1666,11 @@ int main(int, char **) {
                                                 shift_pressed) {
                                                 ImPlotPoint mouse =
                                                     ImPlot::GetPlotMousePos();
-                                                bbox.rect->X.Max = mouse.x;
-                                                bbox.rect->Y.Min = mouse.y;
+                                                // Clamp mouse coordinates to frame bounds
+                                                double clamped_x = std::max(0.0, std::min((double)scene->image_width[j], mouse.x));
+                                                double clamped_y = std::max(0.0, std::min((double)scene->image_height[j], mouse.y));
+                                                bbox.rect->X.Max = clamped_x;
+                                                bbox.rect->Y.Min = clamped_y;
                                             }
 
                                             if (bbox.state == RectOnePoint &&
@@ -1805,6 +1812,14 @@ int main(int, char **) {
                                                     bbox_color, drag_flags,
                                                     &bbox_clicked,
                                                     &bbox_hovered, &bbox_held);
+
+                                            // Clamp bbox coordinates to frame bounds after any modification
+                                            if (bbox_modified || bbox_held) {
+                                                bbox.rect->X.Min = std::max(0.0, std::min((double)scene->image_width[j], bbox.rect->X.Min));
+                                                bbox.rect->Y.Min = std::max(0.0, std::min((double)scene->image_height[j], bbox.rect->Y.Min));
+                                                bbox.rect->X.Max = std::max(0.0, std::min((double)scene->image_width[j], bbox.rect->X.Max));
+                                                bbox.rect->Y.Max = std::max(0.0, std::min((double)scene->image_height[j], bbox.rect->Y.Max));
+                                            }
 
                                             // Display bbox ID on frame if enabled
                                             if (show_bbox_ids) {
@@ -2100,7 +2115,10 @@ int main(int, char **) {
                                     for (auto &obb : keypoints_map[current_frame_num]->obb2d_list[j]) {
                                         if (obb.state == OBBNull) {
                                             // Start new OBB - place first axis point
-                                            obb.axis_point1 = ImVec2(mouse.x, mouse.y);
+                                            // Clamp mouse coordinates to frame bounds
+                                            double clamped_x = std::max(0.0, std::min((double)scene->image_width[j], (double)mouse.x));
+                                            double clamped_y = std::max(0.0, std::min((double)scene->image_height[j], (double)mouse.y));
+                                            obb.axis_point1 = ImVec2(clamped_x, clamped_y);
                                             obb.state = OBBFirstAxisPoint;
                                             obb.class_id = current_bbox_class; // Use currently selected class
                                             obb.confidence = 1.0f;
@@ -2108,13 +2126,19 @@ int main(int, char **) {
                                             break;
                                         } else if (obb.state == OBBFirstAxisPoint) {
                                             // Place second axis point
-                                            obb.axis_point2 = ImVec2(mouse.x, mouse.y);
+                                            // Clamp mouse coordinates to frame bounds
+                                            double clamped_x = std::max(0.0, std::min((double)scene->image_width[j], (double)mouse.x));
+                                            double clamped_y = std::max(0.0, std::min((double)scene->image_height[j], (double)mouse.y));
+                                            obb.axis_point2 = ImVec2(clamped_x, clamped_y);
                                             obb.state = OBBSecondAxisPoint;
                                             found_incomplete_obb = true;
                                             break;
                                         } else if (obb.state == OBBSecondAxisPoint) {
                                             // Place corner point and complete the OBB
-                                            obb.corner_point = ImVec2(mouse.x, mouse.y);
+                                            // Clamp mouse coordinates to frame bounds
+                                            double clamped_x = std::max(0.0, std::min((double)scene->image_width[j], (double)mouse.x));
+                                            double clamped_y = std::max(0.0, std::min((double)scene->image_height[j], (double)mouse.y));
+                                            obb.corner_point = ImVec2(clamped_x, clamped_y);
                                             obb.state = OBBThirdPoint;
                                             calculate_obb_properties(&obb);
                                             obb.state = OBBComplete;
@@ -2145,7 +2169,10 @@ int main(int, char **) {
                                         );
                                         
                                         OrientedBoundingBox new_obb;
-                                        new_obb.axis_point1 = ImVec2(mouse.x, mouse.y);
+                                        // Clamp mouse coordinates to frame bounds for new OBB
+                                        double clamped_x = std::max(0.0, std::min((double)scene->image_width[j], (double)mouse.x));
+                                        double clamped_y = std::max(0.0, std::min((double)scene->image_height[j], (double)mouse.y));
+                                        new_obb.axis_point1 = ImVec2(clamped_x, clamped_y);
                                         new_obb.axis_point2 = ImVec2(0, 0);
                                         new_obb.corner_point = ImVec2(0, 0);
                                         new_obb.center = ImVec2(0, 0);
@@ -2215,12 +2242,17 @@ int main(int, char **) {
                                     if (obb_point_dragging && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
                                         auto &obb = keypoints_map[current_frame_num]->obb2d_list[j][dragged_point_obb_idx];
                                         
+                                        // Clamp mouse coordinates to frame bounds
+                                        double clamped_x = std::max(0.0, std::min((double)scene->image_width[j], (double)mouse_vec.x));
+                                        double clamped_y = std::max(0.0, std::min((double)scene->image_height[j], (double)mouse_vec.y));
+                                        ImVec2 clamped_mouse = ImVec2(clamped_x, clamped_y);
+                                        
                                         if (dragged_point_type == 0) {
-                                            obb.axis_point1 = mouse_vec;
+                                            obb.axis_point1 = clamped_mouse;
                                         } else if (dragged_point_type == 1) {
-                                            obb.axis_point2 = mouse_vec;
+                                            obb.axis_point2 = clamped_mouse;
                                         } else if (dragged_point_type == 2) {
-                                            obb.corner_point = mouse_vec;
+                                            obb.corner_point = clamped_mouse;
                                             // Recalculate OBB properties if dragging corner point
                                             if (obb.state == OBBThirdPoint) {
                                                 calculate_obb_properties(&obb);
@@ -2292,6 +2324,10 @@ int main(int, char **) {
 
                                 // Draw all OBBs for this camera
                                 ImPlotPoint current_mouse = ImPlot::GetPlotMousePos();
+                                // Clamp mouse coordinates for preview to frame bounds
+                                double clamped_mouse_x = std::max(0.0, std::min((double)scene->image_width[j], current_mouse.x));
+                                double clamped_mouse_y = std::max(0.0, std::min((double)scene->image_height[j], current_mouse.y));
+                                ImVec2 clamped_preview_mouse = ImVec2(clamped_mouse_x, clamped_mouse_y);
                                 for (size_t obb_idx = 0; 
                                      obb_idx < keypoints_map[current_frame_num]->obb2d_list[j].size(); 
                                      obb_idx++) {
@@ -2314,7 +2350,7 @@ int main(int, char **) {
                                                            ImPlot::IsPlotHovered() && 
                                                            !obb_dragging && !obb_point_dragging && current_hovered_obb == -1);
                                         
-                                        draw_obb(obb, is_active, obb_color, ImVec2(current_mouse.x, current_mouse.y), show_preview);
+                                        draw_obb(obb, is_active, obb_color, clamped_preview_mouse, show_preview);
                                         
                                         // Display OBB ID on frame if enabled and OBB is complete
                                         if (show_bbox_ids && obb.state == OBBComplete) {
