@@ -1,0 +1,1 @@
+This folder is the default place for skeleton files to be saved. 
