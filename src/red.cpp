@@ -2982,7 +2982,7 @@ int main(int, char **) {
                     ImGui::Text("Bounding box mode: No keypoints to display");
                 }
             }
-            ImGui::Enounding Box;
+            ImGui::End();
         }
 
         if (plot_keypoints_flag) {
