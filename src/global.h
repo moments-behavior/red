@@ -1,19 +1,29 @@
 #ifndef RED_GLOBAL
 #define RED_GLOBAL
-#include "opencv2/core/types.hpp"
+
+#define MAX_VIEWS 20
+
+#include "skeleton.h"
+#include "yolo_torch.h"
 #include <atomic>
 #include <condition_variable>
+#include <map>
 #include <mutex>
+#include <set>
 #include <unordered_map>
 #include <vector>
-#define MAX_VIEWS 17
-extern std::vector<std::mutex> g_mutexes;
-extern std::vector<std::condition_variable> g_cvs;
-extern std::vector<bool> g_ready;
-extern std::vector<std::vector<cv::Rect>> yolo_boxes;
-extern std::vector<std::vector<std::string>> yolo_labels;
-extern std::vector<std::vector<int>> yolo_classid;
-extern std::vector<unsigned char *> yolo_input_frames_rgba;
+
 extern std::unordered_map<std::string, std::atomic<bool>> window_need_decoding;
 extern std::unordered_map<std::string, std::atomic<int>> latest_decoded_frame;
+extern std::map<int, int> g_yolo_class_map;
+extern std::map<int, int> g_reverse_yolo_class_map;
+extern int next_class_id;
+extern float confidence_threshold;
+extern float iou_threshold;
+extern std::vector<std::vector<YoloBBox>> yolo_bboxes;
+extern std::vector<std::vector<YoloPrediction>> yolo_predictions;
+extern std::string yolo_model_path;
+extern std::vector<std::vector<BoundingBox>> yolo_drag_boxes;
+extern std::vector<int> yolo_active_bbox_idx;
+extern std::vector<int> user_active_bbox_idx;
 #endif

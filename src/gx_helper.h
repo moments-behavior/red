@@ -32,16 +32,17 @@ static void gx_glew_error_callback(GLenum glew_error) {
     }
 }
 
-void gx_init(gx_context *context, GLFWwindow *render_target) {
+inline void gx_init(gx_context *context, GLFWwindow *render_target) {
     context->render_target = render_target;
     glfwMakeContextCurrent(render_target);
     gx_glew_error_callback(glewInit());
     glfwSwapInterval(context->swap_interval); // Enable vsync
 }
 
-GLFWwindow *gx_glfw_init_render_target(u32 marjor_version, u32 minor_version,
-                                       u32 width, u32 height, const char *title,
-                                       char *glsl_version) {
+inline GLFWwindow *gx_glfw_init_render_target(u32 marjor_version,
+                                              u32 minor_version, u32 width,
+                                              u32 height, const char *title,
+                                              char *glsl_version) {
     // Setup window
     glfwSetErrorCallback(gx_glfw_error_callback);
     if (!glfwInit()) {
@@ -64,7 +65,7 @@ GLFWwindow *gx_glfw_init_render_target(u32 marjor_version, u32 minor_version,
     return window;
 }
 
-void gx_imgui_init(gx_context *context) {
+inline void gx_imgui_init(gx_context *context) {
     // ************* Dear Imgui ********************//
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();

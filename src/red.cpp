@@ -1,473 +1,26 @@
 #include "IconsForkAwesome.h"
-#include "Logger.h"
 #include "camera.h"
 #include "filesystem"
 #include "global.h"
 #include "gui.h"
-#include "gx_helper.h"
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
 #include "implot.h"
+#include "live_table.h"
 #include "render.h"
 #include "skeleton.h"
 #include "utils.h"
-#include "yolo_detection.h"
 #include "yolo_export.h"
+#include "yolo_torch.h"
 #include <ImGuiFileDialog.h>
 #include <algorithm>
-#include <chrono>
 #include <iostream>
-#include <set>
 #include <stdio.h>
 #include <stdlib.h>
 #include <thread>
-#include <torch/script.h>
-#include <torch/torch.h>
-
 #define STB_IMAGE_IMPLEMENTATION
 #include "../lib/ImGuiFileDialog/stb/stb_image.h"
-
-#if defined(_MSC_VER) && (_MSC_VER >= 1900) &&                                 \
-    !defined(IMGUI_DISABLE_WIN32_FUNCTIONS)
-#pragma comment(lib, "legacy_stdio_definitions")
-#endif
-
-simplelogger::Logger *logger =
-    simplelogger::LoggerFactory::CreateConsoleLogger();
-
-std::vector<std::mutex> g_mutexes(MAX_VIEWS);
-std::vector<std::condition_variable> g_cvs(MAX_VIEWS);
-std::vector<bool> g_ready(MAX_VIEWS);
-std::vector<std::vector<cv::Rect>> yolo_boxes(MAX_VIEWS);
-std::vector<std::vector<std::string>> yolo_labels(MAX_VIEWS);
-std::vector<std::vector<int>> yolo_classid(MAX_VIEWS);
-std::vector<unsigned char *> yolo_input_frames_rgba(MAX_VIEWS);
-std::unordered_map<std::string, std::atomic<bool>> window_need_decoding;
-std::unordered_map<std::string, std::atomic<int>> latest_decoded_frame;
-
-struct PlaybackState {
-    int pause_selected = 0;
-    bool slider_just_changed = false;
-    bool play_video = false;
-    int to_display_frame_number = 0;
-    int read_head = 0;
-    bool just_seeked = false;
-    bool pause_seeked = false;
-    int slider_frame_number = 0;
-    double accumulated_play_time = 0.0;
-    std::chrono::steady_clock::time_point last_play_time_start =
-        std::chrono::steady_clock::now();
-    int last_frame_num_playspeed = 0;
-    std::chrono::steady_clock::time_point last_wall_time_playspeed =
-        std::chrono::steady_clock::now();
-};
-
-void seek_all_cameras(render_scene *scene, int frame_number, double video_fps,
-                      PlaybackState &state, bool seek_accurate) {
-    // Trigger seek request
-    for (int i = 0; i < scene->num_cams; i++) {
-        scene->seek_context[i].seek_frame = (uint64_t)frame_number;
-        scene->seek_context[i].use_seek = true;
-        scene->seek_context[i].seek_accurate = seek_accurate;
-    }
-
-    // Wait for seek to complete
-    for (int i = 0; i < scene->num_cams; i++) {
-        while (!scene->seek_context[i].seek_done) {
-            std::this_thread::sleep_for(std::chrono::microseconds(10));
-        }
-    }
-
-    // Reset seek_done flags
-    for (int i = 0; i < scene->num_cams; i++) {
-        scene->seek_context[i].seek_done = false;
-    }
-
-    // Update playback state
-    state.to_display_frame_number = scene->seek_context[0].seek_frame;
-    state.read_head = 0;
-    state.just_seeked = true;
-    state.slider_frame_number = state.to_display_frame_number;
-
-    state.accumulated_play_time = frame_number / video_fps;
-    state.last_play_time_start = std::chrono::steady_clock::now();
-    state.last_frame_num_playspeed = frame_number;
-    state.last_wall_time_playspeed = std::chrono::steady_clock::now();
-}
-
-std::map<int, int> g_yolo_class_map;
-std::map<int, int> g_reverse_yolo_class_map;
-int next_class_id = 0;
-float confidence_threshold = 0.5f;
-float iou_threshold = 0.4f;
-
-struct YoloPrediction {
-    float x, y, w, h;
-    float confidence;
-    int class_id;
-};
-
-struct YoloBBox {
-    double x_min, y_min, x_max, y_max;
-    float confidence;
-    int class_id;
-    bool is_valid;
-
-    YoloBBox()
-        : x_min(0), y_min(0), x_max(0), y_max(0), confidence(0.0f),
-          class_id(-1), is_valid(false) {}
-
-    YoloBBox(const YoloPrediction &pred) {
-        x_min = pred.x - pred.w / 2.0;
-        y_min = pred.y - pred.h / 2.0;
-        x_max = pred.x + pred.w / 2.0;
-        y_max = pred.y + pred.h / 2.0;
-        confidence = pred.confidence;
-        class_id = pred.class_id;
-        is_valid = true;
-    }
-};
-
-std::vector<std::vector<YoloBBox>> yolo_bboxes(MAX_VIEWS);
-std::vector<std::vector<YoloPrediction>> yolo_predictions(MAX_VIEWS);
-std::string yolo_model_path = "";
-
-std::vector<std::vector<BoundingBox>> yolo_drag_boxes(MAX_VIEWS);
-std::vector<int> yolo_active_bbox_idx(MAX_VIEWS, -1);
-
-// User-drawn bbox tracking
-std::vector<int>
-    user_active_bbox_idx(MAX_VIEWS,
-                         -1); // Track active user-drawn bbox per camera
-
-float calculateIoU(const YoloPrediction &a, const YoloPrediction &b) {
-    float x1_a = a.x - a.w / 2.0f;
-    float y1_a = a.y - a.h / 2.0f;
-    float x2_a = a.x + a.w / 2.0f;
-    float y2_a = a.y + a.h / 2.0f;
-
-    float x1_b = b.x - b.w / 2.0f;
-    float y1_b = b.y - b.h / 2.0f;
-    float x2_b = b.x + b.w / 2.0f;
-    float y2_b = b.y + b.h / 2.0f;
-
-    float x1_inter = std::max(x1_a, x1_b);
-    float y1_inter = std::max(y1_a, y1_b);
-    float x2_inter = std::min(x2_a, x2_b);
-    float y2_inter = std::min(y2_a, y2_b);
-
-    if (x2_inter <= x1_inter || y2_inter <= y1_inter) {
-        return 0.0f;
-    }
-
-    float intersection = (x2_inter - x1_inter) * (y2_inter - y1_inter);
-    float area_a = a.w * a.h;
-    float area_b = b.w * b.h;
-    float union_area = area_a + area_b - intersection;
-
-    return intersection / union_area;
-}
-
-std::vector<YoloPrediction> applyNMS(std::vector<YoloPrediction> &predictions,
-                                     float iou_threshold,
-                                     float confidence_threshold) {
-    predictions.erase(
-        std::remove_if(predictions.begin(), predictions.end(),
-                       [confidence_threshold](const YoloPrediction &pred) {
-                           return pred.confidence < confidence_threshold;
-                       }),
-        predictions.end());
-    std::sort(predictions.begin(), predictions.end(),
-              [](const YoloPrediction &a, const YoloPrediction &b) {
-                  return a.confidence > b.confidence;
-              });
-
-    std::vector<bool> suppressed(predictions.size(), false);
-    std::vector<YoloPrediction> result;
-
-    for (size_t i = 0; i < predictions.size(); ++i) {
-        if (suppressed[i])
-            continue;
-
-        result.push_back(predictions[i]);
-
-        for (size_t j = i + 1; j < predictions.size(); ++j) {
-            if (suppressed[j])
-                continue;
-
-            if (predictions[i].class_id == predictions[j].class_id) {
-                float iou = calculateIoU(predictions[i], predictions[j]);
-                if (iou > iou_threshold) {
-                    suppressed[j] = true;
-                }
-            }
-        }
-    }
-
-    return result;
-}
-
-std::vector<YoloPrediction> runYoloInference(const std::string &model_path,
-                                             unsigned char *frame_data,
-                                             int width, int height) {
-    std::vector<YoloPrediction> predictions;
-
-    try {
-        if (!std::filesystem::exists(model_path)) {
-            std::cerr << "Model file does not exist: " << model_path
-                      << std::endl;
-            throw std::runtime_error("Model file not found");
-        }
-
-        if (std::filesystem::file_size(model_path) == 0) {
-            std::cerr << "Model file is empty: " << model_path << std::endl;
-            throw std::runtime_error("Model file is empty");
-        }
-
-        std::cout << "Loading YOLO model from: " << model_path << std::endl;
-        std::cout << "Model file size: "
-                  << std::filesystem::file_size(model_path) << " bytes"
-                  << std::endl;
-
-        torch::jit::script::Module module;
-        try {
-            module = torch::jit::load(model_path);
-        } catch (const c10::Error &e) {
-            std::cerr
-                << "Failed to load TorchScript model. This might be caused by:"
-                << std::endl;
-            std::cerr
-                << "1. The file is not a valid TorchScript model (.pt format)"
-                << std::endl;
-            std::cerr
-                << "2. The model was saved with a different PyTorch version"
-                << std::endl;
-            std::cerr << "3. The model file is corrupted" << std::endl;
-            std::cerr << "4. The model is in .pth format (state dict) instead "
-                         "of .pt (TorchScript)"
-                      << std::endl;
-            std::cerr << "PyTorch error: " << e.what() << std::endl;
-            throw std::runtime_error("Failed to load TorchScript model");
-        }
-
-        module.eval();
-
-        if (!frame_data) {
-            std::cerr << "Frame data is null" << std::endl;
-            throw std::runtime_error("Invalid frame data");
-        }
-
-        std::cout << "Converting frame data to tensor (size: " << width << "x"
-                  << height << ")" << std::endl;
-
-        torch::Tensor tensor =
-            torch::from_blob(frame_data, {height, width, 4}, torch::kUInt8);
-        tensor = tensor.slice(2, 0, 3);
-        tensor = tensor.permute({2, 0, 1});
-        tensor = tensor.to(torch::kFloat) / 255.0;
-
-        tensor = torch::nn::functional::interpolate(
-            tensor.unsqueeze(0), torch::nn::functional::InterpolateFuncOptions()
-                                     .size(std::vector<int64_t>{640, 640})
-                                     .mode(torch::kBilinear)
-                                     .align_corners(false));
-
-        std::cout << "Running inference..." << std::endl;
-
-        // Run inference
-        std::vector<torch::jit::IValue> inputs;
-        inputs.push_back(tensor);
-
-        torch::Tensor output;
-        try {
-            output = module.forward(inputs).toTensor();
-        } catch (const std::exception &e) {
-            std::cerr << "Inference failed. The model might expect different "
-                         "input format."
-                      << std::endl;
-            std::cerr << "Inference error: " << e.what() << std::endl;
-            throw std::runtime_error("Inference failed");
-        }
-
-        std::cout << "Inference completed. Output shape: [";
-        for (int i = 0; i < output.dim(); ++i) {
-            std::cout << output.size(i);
-            if (i < output.dim() - 1)
-                std::cout << ", ";
-        }
-        std::cout << "]" << std::endl;
-
-        if (output.dim() == 3) {
-            output = output.permute({0, 2, 1});
-        }
-        output = output.squeeze(0);
-
-        if (output.dim() != 2) {
-            std::cerr << "Unexpected output tensor dimensions: " << output.dim()
-                      << std::endl;
-            return predictions;
-        }
-
-        float conf_threshold = 0.25f;
-        float scale_x = static_cast<float>(width) / 640.0f;
-        float scale_y = static_cast<float>(height) / 640.0f;
-
-        auto output_accessor = output.accessor<float, 2>();
-        int num_detections = output.size(0);
-        int output_features = output.size(1);
-
-        std::cout << "Processing " << num_detections << " detections with "
-                  << output_features << " features per detection" << std::endl;
-
-        for (int i = 0; i < num_detections; ++i) {
-            float confidence;
-            int class_id;
-
-            if (output_features == 6) {
-                confidence = output_accessor[i][4];
-                class_id = static_cast<int>(output_accessor[i][5]);
-            } else if (output_features == 5) {
-                confidence = output_accessor[i][4];
-                class_id = 0;
-            } else if (output_features > 5) {
-                float max_score = 0.0f;
-                int max_class = -1;
-                for (int c = 0; c < (output_features - 4); ++c) {
-                    float score = output_accessor[i][4 + c];
-                    if (score > max_score) {
-                        max_score = score;
-                        max_class = c;
-                    }
-                }
-                confidence = max_score;
-                class_id = max_class;
-            } else {
-                std::cerr << "Unexpected output format with " << output_features
-                          << " features" << std::endl;
-                continue;
-            }
-
-            if (confidence > conf_threshold) {
-                float cx_model = output_accessor[i][0];
-                float cy_model = output_accessor[i][1];
-                float w_model = output_accessor[i][2];
-                float h_model = output_accessor[i][3];
-
-                YoloPrediction pred;
-                // Scale coordinates back to original image size
-                pred.x = cx_model * scale_x;
-                pred.y = height - (cy_model * scale_y);
-                pred.w = w_model * scale_x;
-                pred.h = h_model * scale_y;
-                pred.confidence = confidence;
-                pred.class_id = class_id;
-
-                predictions.push_back(pred);
-            }
-        }
-
-        std::cout << "Found " << predictions.size()
-                  << " raw detections before NMS" << std::endl;
-
-        predictions =
-            applyNMS(predictions, iou_threshold, confidence_threshold);
-
-        std::cout << "YOLO inference completed. Found " << predictions.size()
-                  << " detections after NMS." << std::endl;
-
-        for (size_t i = 0; i < predictions.size(); ++i) {
-            const auto &pred = predictions[i];
-            std::cout << "Final Detection " << i << ": center=(" << pred.x
-                      << "," << pred.y << ") size=(" << pred.w << "," << pred.h
-                      << ") conf=" << pred.confidence
-                      << " class=" << pred.class_id << std::endl;
-        }
-
-    } catch (const std::exception &e) {
-        std::cerr << "PyTorch inference error: " << e.what() << std::endl;
-    }
-
-    return predictions;
-}
-
-// Helper function to check if current frame already has YOLO detections
-bool frameHasYoloDetections(int frame_num,
-                            const std::map<u32, KeyPoints *> &keypoints_map,
-                            const SkeletonContext *skeleton) {
-    if (!skeleton || !skeleton->has_bbox)
-        return false;
-
-    auto it = keypoints_map.find(frame_num);
-    if (it == keypoints_map.end() || !it->second)
-        return false;
-
-    // Check if any camera has bounding boxes with confidence < 1.0 (indicating
-    // YOLO detections)
-    for (int cam_id = 0;
-         cam_id < MAX_VIEWS && cam_id < it->second->bbox2d_list.size();
-         cam_id++) {
-        const auto &bbox_list = it->second->bbox2d_list[cam_id];
-        for (const auto &bbox : bbox_list) {
-            if (bbox.confidence < 1.0f && bbox.state == RectTwoPoints) {
-                return true;
-            }
-        }
-    }
-    return false;
-}
-
-bool has_labeled_frames(const std::map<u32, KeyPoints *> &keypoints_map,
-                        SkeletonContext *skeleton) {
-    for (const auto &[frame_num, keypoints] : keypoints_map) {
-        if (!keypoints)
-            continue;
-
-        if (skeleton->has_skeleton) {
-            for (size_t cam_id = 0;
-                 cam_id < keypoints->bbox2d_list.size() && cam_id < MAX_VIEWS;
-                 cam_id++) {
-                for (int kp_id = 0; kp_id < skeleton->num_nodes; kp_id++) {
-                    if (keypoints->keypoints2d[cam_id][kp_id].is_labeled) {
-                        return true;
-                    }
-                }
-            }
-        }
-
-        if (skeleton->has_bbox) {
-            for (size_t cam_id = 0; cam_id < keypoints->bbox2d_list.size();
-                 cam_id++) {
-                for (const auto &bbox : keypoints->bbox2d_list[cam_id]) {
-                    if (bbox.state == RectTwoPoints) {
-                        return true;
-                    }
-                }
-            }
-        }
-
-        if (skeleton->has_obb) {
-            for (size_t cam_id = 0; cam_id < keypoints->obb2d_list.size();
-                 cam_id++) {
-                for (const auto &obb : keypoints->obb2d_list[cam_id]) {
-                    if (obb.state == OBBComplete) {
-                        return true;
-                    }
-                }
-            }
-        }
-    }
-    return false;
-}
-
-void cleanup_skeleton_data(std::map<u32, KeyPoints *> &keypoints_map,
-                           render_scene *scene) {
-    // Free all existing keypoints
-    if (!keypoints_map.empty()) {
-        free_all_keypoints(keypoints_map, scene);
-        keypoints_map.clear();
-    }
-}
 
 int main(int, char **) {
     gx_context *window = (gx_context *)malloc(sizeof(gx_context));
@@ -622,7 +175,6 @@ int main(int, char **) {
 
     bool yolo_detection = false;
     std::vector<std::thread> yolo_threads;
-    yolo_param yolo_setting = yolo_param();
     std::string keypoints_root_folder;
     int label_buffer_size = 64;
     bool show_help_window = false;
@@ -652,6 +204,8 @@ int main(int, char **) {
     double video_fps = 60.0f;
     float set_playback_speed = 1.0f;
     PlaybackState ps;
+
+    static LiveTable table;
 
     while (!glfwWindowShouldClose(window->render_target)) {
         // Poll and handle events (inputs, window resize, etc.)
@@ -789,59 +343,6 @@ int main(int, char **) {
                         }
                         ImGui::EndMenu();
                     }
-
-                    //     if (ImGui::BeginMenu("Detection")) {
-                    //         if (cpu_buffer_toggle) {
-                    //             if (ImGui::MenuItem("YOLOv5")) {
-                    //                 std::string yolov5_onnx =
-                    //                     root_dir + "/yolo/v5/best.onnx";
-                    //                 std::string yolov5_labelname =
-                    //                     root_dir + "/yolo/v5/label.names";
-                    //                 read_yolo_labels(yolov5_labelname,
-                    //                                  &yolo_setting);
-
-                    //                 for (int i = 0; i < scene->num_cams; i++)
-                    //                 {
-                    //                     yolo_threads.push_back(
-                    //                         std::thread(&yolo_process,
-                    //                         yolov5_onnx,
-                    //                                     &yolo_setting, i));
-                    //                 }
-                    //                 yolo_detection = true;
-                    //             }
-                    //         } else {
-                    //             if (ImGui::MenuItem("YOLOv8")) {
-                    //                 std::string engine_file_path =
-                    //                     root_dir +
-                    //                     "/yolo/yolorat_bbox/rat_bbox.engine";
-                    //                 for (int i = 0; i < scene->num_cams; i++)
-                    //                 {
-                    //                     yolo_threads.push_back(std::thread(
-                    //                         &yolo_process_trt,
-                    //                         engine_file_path, i,
-                    //                         scene->image_width[i],
-                    //                         scene->image_height[i]));
-                    //                 }
-                    //                 yolo_detection = true;
-                    //             }
-
-                    //             if (ImGui::MenuItem("YOLOv8Pose")) {
-                    //                 std::string engine_file_path =
-                    //                     root_dir +
-                    //                     "/yolo/yolopose/rat_pose.engine";
-                    //                 for (int i = 0; i < scene->num_cams; i++)
-                    //                 {
-                    //                     yolo_threads.push_back(std::thread(
-                    //                         &yolo_process_v8pose,
-                    //                         engine_file_path, i,
-                    //                         scene->image_width[i],
-                    //                         scene->image_height[i]));
-                    //                 }
-                    //                 yolo_detection = true;
-                    //             }
-                    //         }
-                    //         ImGui::EndMenu();
-                    //     }
                 }
 
                 if (ImGui::BeginMenu("Tools")) {
@@ -850,6 +351,9 @@ int main(int, char **) {
                     }
                     if (ImGui::MenuItem("YOLO Export Tool")) {
                         show_yolo_export_tool = true;
+                    }
+                    if (ImGui::MenuItem("Live Table")) {
+                        table.is_open = true;
                     }
                     ImGui::EndMenu();
                 }
@@ -860,13 +364,6 @@ int main(int, char **) {
                         1000.0f / ImGui::GetIO().Framerate,
                         ImGui::GetIO().Framerate);
 
-            // if (video_loaded) {
-            //     ImGui::Text("Frame number %d ",
-            //     scene->display_buffer[0][read_head].frame_number);
-            //     ImGui::Text("To Display frame number %d ",
-            //     to_display_frame_number); ImGui::Text("Readhead %d",
-            //     read_head);
-            // }
             if (!video_loaded) {
                 {
                     const char *items[] = {"CPU Buffer", "GPU Buffer"};
@@ -1253,13 +750,15 @@ int main(int, char **) {
                     }
                 }
 
-                if (ImGui::IsKeyPressed(ImGuiKey_Comma, true)) {
+                if (ImGui::IsKeyPressed(ImGuiKey_Comma, true) &&
+                    !io.WantTextInput) {
                     if (ps.pause_selected > 0) {
                         ps.pause_selected--;
                     }
                 };
 
-                if (ImGui::IsKeyPressed(ImGuiKey_Period, true)) {
+                if (ImGui::IsKeyPressed(ImGuiKey_Period, true) &&
+                    !io.WantTextInput) {
                     if (ps.pause_selected < (scene->size_of_buffer - 1)) {
                         ps.pause_selected++;
                     }
@@ -1527,17 +1026,6 @@ int main(int, char **) {
                     unbind_pbo();
                     unbind_texture();
 
-                    // sync yolo detection
-                    if (yolo_detection) {
-                        std::unique_lock<std::mutex> lck(g_mutexes[j]);
-                        // std::cout << "main_thread: acquire lock" <<
-                        // std::endl;
-                        yolo_input_frames_rgba[j] =
-                            scene->pbo_cuda[j].cuda_buffer;
-                        g_ready[j] = true;
-                        g_cvs[j].notify_one();
-                    }
-
                     ImGui::BeginGroup();
                     std::string scene_name = "scene view" + std::to_string(j);
                     ImGui::BeginChild(
@@ -1568,12 +1056,6 @@ int main(int, char **) {
                             ImVec2(scene->image_width[j],
                                    scene->image_height[j]));
 
-                        if (yolo_detection) {
-                            draw_cv_contours(
-                                yolo_boxes.at(j), yolo_labels.at(j),
-                                yolo_classid.at(j), scene->image_height[j]);
-                        }
-
                         if (plot_keypoints_flag) {
                             // plot arena for testing camera parameters
                             // gui_plot_perimeter(&camera_params[j],
@@ -1587,7 +1069,8 @@ int main(int, char **) {
                             if (ImPlot::IsPlotHovered()) {
                                 is_view_focused[j] = true;
 
-                                if (ImGui::IsKeyPressed(ImGuiKey_B, false)) {
+                                if (ImGui::IsKeyPressed(ImGuiKey_B, false) &&
+                                    !io.WantTextInput) {
                                     // create keypoints
                                     if (!keypoints_find) {
                                         // not found
@@ -1606,7 +1089,8 @@ int main(int, char **) {
                                     u32 *kp = &(keypoints_map[current_frame_num]
                                                     ->active_id[j]);
                                     if (ImGui::IsKeyPressed(ImGuiKey_W,
-                                                            false)) {
+                                                            false) &&
+                                        !io.WantTextInput) {
                                         // labeling sequentially each view
                                         ImPlotPoint mouse =
                                             ImPlot::GetPlotMousePos();
@@ -1624,39 +1108,38 @@ int main(int, char **) {
                                         }
                                     }
 
-                                    if (ImGui::IsKeyPressed(ImGuiKey_A, true)) {
+                                    if (ImGui::IsKeyPressed(ImGuiKey_A, true) &&
+                                        !io.WantTextInput) {
                                         if (*kp <= 0) {
                                             *kp = 0;
                                         } else
                                             (*kp)--;
                                     }
 
-                                    if (ImGui::IsKeyPressed(ImGuiKey_D, true)) {
+                                    if (ImGui::IsKeyPressed(ImGuiKey_D, true) &&
+                                        !io.WantTextInput) {
                                         if (*kp >= skeleton->num_nodes - 1) {
                                             *kp = skeleton->num_nodes - 1;
                                         } else
                                             (*kp)++;
                                     }
 
-                                    if (ImGui::IsKeyPressed(
-                                            ImGuiKey_E,
-                                            false)) // skip to the last
-                                                    // keypoint
-                                    {
+                                    if (ImGui::IsKeyPressed(ImGuiKey_E,
+                                                            false) &&
+                                        !io.WantTextInput) {
                                         *kp = skeleton->num_nodes - 1;
                                     }
 
-                                    if (ImGui::IsKeyPressed(
-                                            ImGuiKey_Q,
-                                            false)) // go to the first
-                                                    // keypoint
-                                    {
+                                    if (ImGui::IsKeyPressed(ImGuiKey_Q,
+                                                            false) &&
+                                        !io.WantTextInput) {
                                         *kp = 0;
                                     }
 
                                     // delete all keypoint on a frame
                                     if (ImGui::IsKeyPressed(ImGuiKey_Backspace,
-                                                            false)) {
+                                                            false) &&
+                                        !io.WantTextInput) {
                                         free_keypoints(
                                             keypoints_map[current_frame_num],
                                             scene);
@@ -2043,7 +1526,8 @@ int main(int, char **) {
                                                 // current camera when 'T' key
                                                 // is pressed while hovering
                                                 if (ImGui::IsKeyPressed(
-                                                        ImGuiKey_F, false)) {
+                                                        ImGuiKey_F, false) &&
+                                                    !io.WantTextInput) {
                                                     // Clean up bbox keypoints
                                                     // before deletion
                                                     if (bbox.has_bbox_keypoints &&
@@ -2069,7 +1553,8 @@ int main(int, char **) {
                                                 // cameras when 'O' key is
                                                 // pressed while hovering
                                                 if (ImGui::IsKeyPressed(
-                                                        ImGuiKey_O, false)) {
+                                                        ImGuiKey_O, false) &&
+                                                    !io.WantTextInput) {
                                                     // Find this bbox's class_id
                                                     // and delete all bboxes
                                                     // with same class from all
@@ -2176,7 +1661,8 @@ int main(int, char **) {
                                             // (only on active bbox)
                                             if (is_active_bbox &&
                                                 ImGui::IsKeyPressed(ImGuiKey_W,
-                                                                    false)) {
+                                                                    false) &&
+                                                !io.WantTextInput) {
                                                 ImPlotPoint mouse =
                                                     ImPlot::GetPlotMousePos();
                                                 if (is_point_in_bbox(
@@ -2219,7 +1705,8 @@ int main(int, char **) {
                                                     &(bbox.active_kp_id[j]);
 
                                                 if (ImGui::IsKeyPressed(
-                                                        ImGuiKey_A, true)) {
+                                                        ImGuiKey_A, true) &&
+                                                    !io.WantTextInput) {
                                                     if (*active_kp <= 0) {
                                                         *active_kp = 0;
                                                     } else {
@@ -2228,7 +1715,8 @@ int main(int, char **) {
                                                 }
 
                                                 if (ImGui::IsKeyPressed(
-                                                        ImGuiKey_D, true)) {
+                                                        ImGuiKey_D, true) &&
+                                                    !io.WantTextInput) {
                                                     if (*active_kp >=
                                                         skeleton->num_nodes -
                                                             1) {
@@ -2263,7 +1751,8 @@ int main(int, char **) {
                                 // ESC key cancels OBB creation
                                 if (is_view_focused[j] &&
                                     ImGui::IsKeyPressed(ImGuiKey_Escape,
-                                                        false)) {
+                                                        false) &&
+                                    !io.WantTextInput) {
                                     // Find and cancel any incomplete OBB
                                     for (auto &obb :
                                          keypoints_map[current_frame_num]
@@ -2278,7 +1767,8 @@ int main(int, char **) {
 
                                 // Handle OBB interaction with W key
                                 if (is_view_focused[j] &&
-                                    ImGui::IsKeyPressed(ImGuiKey_W, false)) {
+                                    ImGui::IsKeyPressed(ImGuiKey_W, false) &&
+                                    !io.WantTextInput) {
                                     ImPlotPoint mouse =
                                         ImPlot::GetPlotMousePos();
 
@@ -2591,14 +2081,16 @@ int main(int, char **) {
                                             // when 'T' key is pressed while
                                             // hovering
                                             if (ImGui::IsKeyPressed(ImGuiKey_T,
-                                                                    false)) {
+                                                                    false) &&
+                                                !io.WantTextInput) {
                                                 obb.state = OBBNull;
                                             }
 
                                             // Delete OBB from all cameras when
                                             // 'F' key is pressed while hovering
                                             if (ImGui::IsKeyPressed(ImGuiKey_F,
-                                                                    false)) {
+                                                                    false) &&
+                                                !io.WantTextInput) {
                                                 int target_class_id =
                                                     obb.class_id;
                                                 for (int cam = 0;
@@ -2629,14 +2121,16 @@ int main(int, char **) {
                                             // Switch OBB class when 'A' or 'D'
                                             // key is pressed while hovering
                                             if (ImGui::IsKeyPressed(ImGuiKey_A,
-                                                                    true)) {
+                                                                    true) &&
+                                                !io.WantTextInput) {
                                                 obb.class_id =
                                                     (obb.class_id - 1 +
                                                      bbox_class_names.size()) %
                                                     bbox_class_names.size();
                                             }
                                             if (ImGui::IsKeyPressed(ImGuiKey_D,
-                                                                    true)) {
+                                                                    true) &&
+                                                !io.WantTextInput) {
                                                 obb.class_id =
                                                     (obb.class_id + 1) %
                                                     bbox_class_names.size();
@@ -2857,7 +2351,8 @@ int main(int, char **) {
                 ImGui::End();
             }
 
-            if (ImGui::IsKeyPressed(ImGuiKey_Space, false)) {
+            if (ImGui::IsKeyPressed(ImGuiKey_Space, false) &&
+                !io.WantTextInput) {
                 ps.play_video = !ps.play_video;
                 if (ps.play_video) {
                     ps.pause_seeked = false;
@@ -2868,7 +2363,7 @@ int main(int, char **) {
             }
 
             // Bounding box class switching keybinds
-            if (ImGui::IsKeyPressed(ImGuiKey_Z, false)) {
+            if (ImGui::IsKeyPressed(ImGuiKey_Z, false) && !io.WantTextInput) {
                 // Switch to previous class
                 if (bbox_class_names.size() > 0) {
                     current_bbox_class =
@@ -2878,7 +2373,7 @@ int main(int, char **) {
                 }
             }
 
-            if (ImGui::IsKeyPressed(ImGuiKey_X, false)) {
+            if (ImGui::IsKeyPressed(ImGuiKey_X, false) && !io.WantTextInput) {
                 if (bbox_class_names.size() > 0) {
                     // Switch to next class
                     current_bbox_class =
@@ -2888,24 +2383,25 @@ int main(int, char **) {
             }
 
             // Bounding box ID switching keybinds within current class
-            if (ImGui::IsKeyPressed(ImGuiKey_C, false)) {
+            if (ImGui::IsKeyPressed(ImGuiKey_C, false) && !io.WantTextInput) {
                 // Decrease bbox ID, stop at 0
                 if (current_bbox_id > 0) {
                     current_bbox_id--;
                 }
             }
 
-            if (ImGui::IsKeyPressed(ImGuiKey_V, false)) {
+            if (ImGui::IsKeyPressed(ImGuiKey_V, false) && !io.WantTextInput) {
                 // Increment bbox ID (no wrap around)
                 current_bbox_id++;
             }
-            if (ImGui::IsKeyPressed(ImGuiKey_N, false)) {
+            if (ImGui::IsKeyPressed(ImGuiKey_N, false) && !io.WantTextInput) {
                 create_new_bbox_class();
                 // reset bbox id to 0
                 current_bbox_id = 0;
             }
 
-            if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow, false)) {
+            if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow, false) &&
+                !io.WantTextInput) {
                 if (ImGui::GetIO().KeyShift) {
                     int clamped_frame = std::max(
                         0, current_frame_num - 10 * dc_context->seek_interval);
@@ -2919,7 +2415,8 @@ int main(int, char **) {
                 }
             }
 
-            if (ImGui::IsKeyPressed(ImGuiKey_RightArrow, false)) {
+            if (ImGui::IsKeyPressed(ImGuiKey_RightArrow, false) &&
+                !io.WantTextInput) {
                 if (ImGui::GetIO().KeyShift) {
                     int clamped_frame = std::min(
                         dc_context->total_num_frame,
@@ -3484,7 +2981,8 @@ int main(int, char **) {
 
                     if (keypoints_find) {
                         if (ImGui::IsKeyPressed(ImGuiKey_T,
-                                                false)) // triangulate
+                                                false) &&
+                            !io.WantTextInput) // triangulate
                         {
                             reprojection(keypoints_map.at(current_frame_num),
                                          skeleton, camera_params, scene);
@@ -3509,7 +3007,8 @@ int main(int, char **) {
 
                 if (ImGui::Button("Save Labeled Data") ||
                     (ImGui::GetIO().KeyCtrl &&
-                     ImGui::IsKeyPressed(ImGuiKey_S, false))) {
+                     ImGui::IsKeyPressed(ImGuiKey_S, false) &&
+                     !io.WantTextInput)) {
 
                     // Detect what type of data we have and save accordingly
                     if (skeleton->has_skeleton && !skeleton->has_bbox) {
@@ -3805,7 +3304,8 @@ int main(int, char **) {
                 }
 
                 if (ImGui::Button("Jump to Next Labeled Frame") ||
-                    ImGui::IsKeyPressed(ImGuiKey_RightArrow, false)) {
+                    (ImGui::IsKeyPressed(ImGuiKey_RightArrow, false) &&
+                     !io.WantTextInput)) {
                     if (next_labeled_frame_it != keypoints_map.end()) {
                         seek_all_cameras(scene, (*next_labeled_frame_it).first,
                                          video_fps, ps, true);
@@ -4245,7 +3745,7 @@ int main(int, char **) {
             ImGuiFileDialog::Instance()->Close();
         }
 
-        if (ImGui::IsKeyPressed(ImGuiKey_H, false)) {
+        if (ImGui::IsKeyPressed(ImGuiKey_H, false) && !io.WantTextInput) {
             show_help_window = !show_help_window;
         }
 
@@ -4373,7 +3873,8 @@ int main(int, char **) {
                         }
                     }
 
-                    if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+                    if (ImGui::IsKeyPressed(ImGuiKey_Escape) &&
+                        !io.WantTextInput) {
                         selected_node_for_edge = -1;
                     }
 
@@ -4418,7 +3919,8 @@ int main(int, char **) {
                             ImPlot::PlotText(node.name.c_str(), node.position.x,
                                              node.position.y + 0.03);
 
-                            if (ImGui::IsKeyPressed(ImGuiKey_R, false)) {
+                            if (ImGui::IsKeyPressed(ImGuiKey_R, false) &&
+                                !io.WantTextInput) {
                                 int node_id_to_delete = node.id;
 
                                 creator_nodes.erase(creator_nodes.begin() + i);
@@ -4636,6 +4138,8 @@ int main(int, char **) {
             }
             ImGui::End();
         }
+
+        DrawLiveTable(table);
 
         // YOLO Export Tool Window
         if (show_yolo_export_tool) {

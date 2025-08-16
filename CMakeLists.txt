@@ -26,6 +26,8 @@ file(GLOB IMGUI_SRC
     ${DIR_IMGUI}/*.cpp
     ${DIR_IMGUI}/backends/imgui_impl_glfw.cpp
     ${DIR_IMGUI}/backends/imgui_impl_opengl3.cpp
+    ${DIR_IMGUI}/misc/cpp/imgui_stdlib.cpp
+
 )
 file(GLOB IMPLOT_SRC ${DIR_IMPLOT}/*.cpp)
 
