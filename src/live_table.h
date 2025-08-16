@@ -1,5 +1,7 @@
 #pragma once
+#include <ImGuiFileDialog.h>
 #include <algorithm>
+#include <fstream>
 #include <imgui.h>
 #include <misc/cpp/imgui_stdlib.h> // for InputText(std::string&)
 #include <string>
@@ -9,6 +11,8 @@ struct LiveTable {
     std::vector<std::string> col_names = {"A", "B"};
     std::vector<std::vector<std::string>> rows = {std::vector<std::string>(2)};
     bool is_open = false;
+    bool auto_width = false;
+    float table_height = 0.0f;
 };
 
 inline void EnsureShape(LiveTable &t) {
@@ -54,7 +58,6 @@ inline void RemoveRow(LiveTable &t, int at) {
 inline void DrawLiveTable(LiveTable &t, const char *window_id = "Live Table") {
     if (!t.is_open)
         return;
-
     if (!ImGui::Begin(window_id, &t.is_open, ImGuiWindowFlags_None)) {
         ImGui::End();
         return;
@@ -62,33 +65,167 @@ inline void DrawLiveTable(LiveTable &t, const char *window_id = "Live Table") {
 
     EnsureShape(t);
 
+    // ---------------- Toolbar ----------------
     if (ImGui::Button("+ Row"))
         InsertRow(t, (int)t.rows.size());
     ImGui::SameLine();
     if (ImGui::Button("+ Col"))
         InsertColumn(t, (int)t.col_names.size());
+    ImGui::SameLine();
 
-    // ---- pending structural edits (applied safely after drawing) ----
+    if (ImGui::Button("Load CSV…")) {
+        IGFD::FileDialogConfig cfg;
+        cfg.path = ".";
+        ImGuiFileDialog::Instance()->OpenDialog("LoadCSVDlg", "Load CSV/TSV",
+                                                ".csv,.tsv", cfg);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Save CSV…")) {
+        IGFD::FileDialogConfig cfg;
+        cfg.path = ".";
+        cfg.fileName = "table.csv";
+        cfg.flags = ImGuiFileDialogFlags_ConfirmOverwrite;
+        ImGuiFileDialog::Instance()->OpenDialog("SaveCSVDlg", "Save CSV/TSV",
+                                                ".csv,.tsv", cfg);
+    }
+    ImGui::SameLine();
+    ImGui::Checkbox("Auto width", &t.auto_width);
+
+    // -------- Deferred ops (avoid mutate-while-drawing) --------
     enum class RowOp { None, InsertAbove, InsertBelow, Delete };
     enum class ColOp { None, InsertLeft, InsertRight, Delete };
     RowOp pending_row = RowOp::None;
     int pending_row_idx = -1;
-
     ColOp pending_col = ColOp::None;
     int pending_col_idx = -1;
+    bool need_apply_and_return = false;
 
-    const int C = (int)t.col_names.size();
-    ImGuiTableFlags flags =
-        ImGuiTableFlags_Resizable | ImGuiTableFlags_Reorderable |
-        ImGuiTableFlags_Hideable | ImGuiTableFlags_Borders |
-        ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp |
-        ImGuiTableFlags_ScrollX | ImGuiTableFlags_ScrollY;
+    // -------- CSV LOAD dialog + parse (apply after draw) --------
+    bool csv_apply = false;
+    std::vector<std::string> csv_cols;
+    std::vector<std::vector<std::string>> csv_rows;
 
-    // Flat header background
-    ImVec4 row_bg = ImGui::GetStyleColorVec4(ImGuiCol_TableRowBg);
-    ImGui::PushStyleColor(ImGuiCol_TableHeaderBg, row_bg);
+    if (ImGuiFileDialog::Instance()->Display("LoadCSVDlg")) {
+        if (ImGuiFileDialog::Instance()->IsOk()) {
+            std::string path = ImGuiFileDialog::Instance()->GetFilePathName();
+            auto detect_delim = [](const std::string &s) -> char {
+                size_t c = std::count(s.begin(), s.end(), ',');
+                size_t t = std::count(s.begin(), s.end(), '\t');
+                return (t > c) ? '\t' : ',';
+            };
+            auto split_csv_line = [](const std::string &line, char delim) {
+                std::vector<std::string> out;
+                out.reserve(16);
+                std::string cur;
+                bool inq = false;
+                for (size_t i = 0; i < line.size(); ++i) {
+                    char ch = line[i];
+                    if (ch == '"') {
+                        if (inq && i + 1 < line.size() && line[i + 1] == '"') {
+                            cur.push_back('"');
+                            ++i;
+                        } else
+                            inq = !inq;
+                    } else if (ch == delim && !inq) {
+                        out.push_back(cur);
+                        cur.clear();
+                    } else
+                        cur.push_back(ch);
+                }
+                out.push_back(cur);
+                return out;
+            };
+            auto trim_crlf = [](std::string &s) {
+                while (!s.empty() && (s.back() == '\r' || s.back() == '\n'))
+                    s.pop_back();
+            };
 
-    // Frameless InputText helpers
+            std::ifstream fin(path);
+            if (fin) {
+                std::string line;
+                std::vector<std::vector<std::string>> tmp;
+                char delim = ',';
+                bool first = true;
+                while (std::getline(fin, line)) {
+                    trim_crlf(line);
+                    if (first) {
+                        delim = detect_delim(line);
+                        first = false;
+                    }
+                    tmp.push_back(split_csv_line(line, delim));
+                }
+                fin.close();
+                if (!tmp.empty()) {
+                    csv_cols = tmp.front();
+                    tmp.erase(tmp.begin());
+                    const int C2 = (int)csv_cols.size();
+                    for (auto &r : tmp)
+                        r.resize(C2);
+                    csv_rows = std::move(tmp);
+                    csv_apply = true;
+                }
+            }
+        }
+        ImGuiFileDialog::Instance()->Close();
+    }
+
+    // -------- CSV SAVE dialog + write --------
+    if (ImGuiFileDialog::Instance()->Display("SaveCSVDlg")) {
+        if (ImGuiFileDialog::Instance()->IsOk()) {
+            std::string path = ImGuiFileDialog::Instance()->GetFilePathName();
+            auto ends_with = [](const std::string &s, const char *suf) {
+                size_t n = std::strlen(suf);
+                return s.size() >= n && s.compare(s.size() - n, n, suf) == 0;
+            };
+            char delim = (ends_with(path, ".tsv") || ends_with(path, ".TSV"))
+                             ? '\t'
+                             : ',';
+            auto quote_field = [delim](const std::string &s) {
+                bool need =
+                    s.find('"') != std::string::npos ||
+                    s.find('\n') != std::string::npos ||
+                    s.find('\r') != std::string::npos ||
+                    s.find(delim) != std::string::npos ||
+                    (!s.empty() && (s.front() == ' ' || s.back() == ' '));
+                if (!need)
+                    return s;
+                std::string out;
+                out.reserve(s.size() + 2);
+                out.push_back('"');
+                for (char ch : s)
+                    out += (ch == '"') ? "\"\"" : std::string(1, ch);
+                out.push_back('"');
+                return out;
+            };
+            std::ofstream fout(path, std::ios::binary);
+            if (fout) {
+                // headers
+                for (int c = 0; c < (int)t.col_names.size(); ++c) {
+                    if (c)
+                        fout.put(delim);
+                    fout << quote_field(t.col_names[c]);
+                }
+                fout << "\n";
+                // rows
+                const int Cw = (int)t.col_names.size();
+                for (const auto &row : t.rows) {
+                    for (int c = 0; c < Cw; ++c) {
+                        if (c)
+                            fout.put(delim);
+                        const std::string v =
+                            (c < (int)row.size()) ? row[c] : std::string{};
+                        fout << quote_field(v);
+                    }
+                    fout << "\n";
+                }
+                fout.flush();
+            }
+        }
+        ImGuiFileDialog::Instance()->Close();
+    }
+
+    // ---------------- Visual helpers ----------------
+    ImGuiStyle &style = ImGui::GetStyle();
     auto PushFrameless = []() {
         ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0, 0, 0, 0));
         ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0, 0, 0, 0));
@@ -100,8 +237,6 @@ inline void DrawLiveTable(LiveTable &t, const char *window_id = "Live Table") {
         ImGui::PopStyleVar(2);
         ImGui::PopStyleColor(3);
     };
-
-    // Stronger hover/active highlight on the last item (cell)
     auto HighlightCellFromLastItem = []() {
         const bool hovered = ImGui::IsItemHovered(
             ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
@@ -122,17 +257,61 @@ inline void DrawLiveTable(LiveTable &t, const char *window_id = "Live Table") {
                                ImGui::GetColorU32(active ? act : hov));
     };
 
-    bool need_apply_and_return = false;
+    // ---------------- Auto column sizing ----------------
+    const int C = (int)t.col_names.size();
+    if (t.table_height <= 0.0f) // init height once (~20 rows)
+        t.table_height = ImGui::GetTextLineHeightWithSpacing() * 20.0f;
 
-    if (ImGui::BeginTable(
-            "##tbl", C + 1, flags,
-            ImVec2(0, ImGui::GetTextLineHeightWithSpacing() * 20.0f))) {
+    // width of the header "⋮" button
+    ImVec2 btn_sz = ImGui::CalcTextSize("⋮");
+    btn_sz.x += style.FramePadding.x * 2.0f;
+    btn_sz.y = ImGui::GetFrameHeight();
+
+    std::vector<float> col_widths;
+    if (!t.auto_width) {
+        const float COL_MIN_W = 80.0f, COL_MAX_W = 600.0f;
+        const float cell_pad = style.CellPadding.x * 2.0f;
+        const float frame_pad = style.FramePadding.x * 2.0f;
+        const float inner_sp = style.ItemInnerSpacing.x;
+        col_widths.assign(C, COL_MIN_W);
+        for (int c = 0; c < C; ++c) {
+            float w = ImGui::CalcTextSize(t.col_names[c].c_str()).x;
+            for (const auto &row : t.rows)
+                if (c < (int)row.size())
+                    w = std::max(w, ImGui::CalcTextSize(row[c].c_str()).x);
+            w += cell_pad + frame_pad + inner_sp + btn_sz.x;
+            col_widths[c] = ImClamp(w, COL_MIN_W, COL_MAX_W);
+        }
+    }
+
+    // Flat header background
+    ImVec4 row_bg = ImGui::GetStyleColorVec4(ImGuiCol_TableRowBg);
+    ImGui::PushStyleColor(ImGuiCol_TableHeaderBg, row_bg);
+
+    // ---------------- Table ----------------
+    ImGuiTableFlags flags =
+        ImGuiTableFlags_Resizable | ImGuiTableFlags_Reorderable |
+        ImGuiTableFlags_Hideable | ImGuiTableFlags_Borders |
+        ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp |
+        ImGuiTableFlags_ScrollX | ImGuiTableFlags_ScrollY;
+
+    if (ImGui::BeginTable("##tbl", C + 1, flags, ImVec2(0, t.table_height))) {
         ImGui::TableSetupScrollFreeze(1, 1);
         ImGui::TableSetupColumn("#", ImGuiTableColumnFlags_WidthFixed, 48.0f);
-        for (int c = 0; c < C; ++c)
-            ImGui::TableSetupColumn(t.col_names[c].c_str());
 
-        // ---- Header ----
+        if (t.auto_width) {
+            for (int c = 0; c < C; ++c)
+                ImGui::TableSetupColumn(t.col_names[c].c_str(),
+                                        ImGuiTableColumnFlags_WidthStretch,
+                                        1.0f);
+        } else {
+            for (int c = 0; c < C; ++c)
+                ImGui::TableSetupColumn(t.col_names[c].c_str(),
+                                        ImGuiTableColumnFlags_WidthFixed,
+                                        col_widths[c]);
+        }
+
+        // Header
         ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
         ImGui::TableSetColumnIndex(0);
         ImGui::TextUnformatted("#");
@@ -141,38 +320,26 @@ inline void DrawLiveTable(LiveTable &t, const char *window_id = "Live Table") {
             ImGui::TableSetColumnIndex(c + 1);
             ImGui::PushID(c);
 
-            // measure cell region
-            ImGuiStyle &style = ImGui::GetStyle();
             const float cell_x0 = ImGui::GetCursorPosX();
             const float total_w = ImGui::GetContentRegionAvail().x;
-            const float spacing = style.ItemInnerSpacing.x;
+            const float inner_sp = style.ItemInnerSpacing.x;
+            const float input_w = ImMax(1.0f, total_w - btn_sz.x - inner_sp);
 
-            // size for SmallButton("⋮")
-            ImVec2 btn_sz = ImGui::CalcTextSize("⋮");
-            btn_sz.x += style.FramePadding.x * 2.0f;
-            btn_sz.y = ImGui::GetFrameHeight();
-
-            const float input_w = ImMax(1.0f, total_w - btn_sz.x - spacing);
-
-            // frameless editable header text
             PushFrameless();
             ImGui::SetNextItemWidth(input_w);
             ImGui::InputText("##colname", &t.col_names[c]);
             PopFrameless();
             HighlightCellFromLastItem();
 
-            // right-click on header text opens popup
             if (ImGui::IsItemClicked(ImGuiMouseButton_Right))
                 ImGui::OpenPopup("col_menu");
 
-            // right-align the ⋮ button in the header cell
             const float x_right = cell_x0 + ImMax(0.0f, total_w - btn_sz.x);
-            ImGui::SameLine(0.0f, spacing);
+            ImGui::SameLine(0.0f, inner_sp);
             ImGui::SetCursorPosX(x_right);
             if (ImGui::SmallButton("⋮"))
                 ImGui::OpenPopup("col_menu");
 
-            // per-column popup (unique via PushID)
             if (ImGui::BeginPopup("col_menu")) {
                 ImGui::InputText("Name", &t.col_names[c]);
                 if (ImGui::MenuItem("Insert left")) {
@@ -194,38 +361,30 @@ inline void DrawLiveTable(LiveTable &t, const char *window_id = "Live Table") {
             }
 
             ImGui::PopID();
-
-            // if a column structure change was requested, stop drawing now
             if (need_apply_and_return)
                 break;
         }
 
-        // If column op requested, skip rendering rows this frame
+        // Body
         if (!need_apply_and_return) {
-            // ---- Body ----
             for (int r = 0; r < (int)t.rows.size(); ++r) {
                 ImGui::TableNextRow();
 
-                // Row index: invisible button over text (no highlight)
+                // Index cell: invisible button + tooltip (no highlight)
                 ImGui::TableSetColumnIndex(0);
                 ImGui::PushID(r);
-
                 ImGui::Text("%d", r);
 
-                // overlay an invisible button exactly over the text rect
-                ImVec2 rect_min = ImGui::GetItemRectMin();
-                ImVec2 rect_max = ImGui::GetItemRectMax();
-                ImVec2 rect_size =
-                    ImVec2(rect_max.x - rect_min.x, rect_max.y - rect_min.y);
-
-                ImVec2 saved_cursor = ImGui::GetCursorScreenPos();
-                ImGui::SetCursorScreenPos(rect_min);
-                if (ImGui::InvisibleButton("##row_btn", rect_size)) {
+                ImVec2 min = ImGui::GetItemRectMin(),
+                       max = ImGui::GetItemRectMax();
+                ImVec2 size(max.x - min.x, max.y - min.y);
+                ImVec2 saved = ImGui::GetCursorScreenPos();
+                ImGui::SetCursorScreenPos(min);
+                if (ImGui::InvisibleButton("##row_btn", size))
                     ImGui::OpenPopup("row_menu");
-                }
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Click for row menu");
-                ImGui::SetCursorScreenPos(saved_cursor);
+                ImGui::SetCursorScreenPos(saved);
 
                 if (ImGui::BeginPopup("row_menu")) {
                     if (ImGui::MenuItem("Insert above")) {
@@ -248,11 +407,9 @@ inline void DrawLiveTable(LiveTable &t, const char *window_id = "Live Table") {
                 }
                 ImGui::PopID();
 
-                // if a row structure change was requested, stop drawing now
                 if (need_apply_and_return)
                     break;
 
-                // Row cells
                 for (int c = 0; c < C; ++c) {
                     ImGui::TableSetColumnIndex(c + 1);
                     ImGui::PushID(r * C + c);
@@ -272,48 +429,60 @@ inline void DrawLiveTable(LiveTable &t, const char *window_id = "Live Table") {
     }
     ImGui::PopStyleColor(); // TableHeaderBg
 
-    // ---- Apply pending ops safely AFTER finishing the table draw ----
-    if (need_apply_and_return) {
-        // Close any open popup to avoid dangling ImGui state
-        ImGui::CloseCurrentPopup();
+    // -------- Drag handle to resize table height (below table) --------
+    ImGui::PushID("tbl_resizer");
+    ImGui::InvisibleButton("##tbl_resize_btn", ImVec2(-1, 6.0f));
+    if (ImGui::IsItemActive() &&
+        ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+        t.table_height += ImGui::GetIO().MouseDelta.y;
+        const float row_h = ImGui::GetTextLineHeightWithSpacing();
+        t.table_height = ImClamp(t.table_height, row_h * 6.0f, row_h * 40.0f);
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
+    ImGui::PopID();
 
-        // Column ops
-        if (pending_col != ColOp::None && pending_col_idx >= 0) {
-            switch (pending_col) {
-            case ColOp::InsertLeft:
-                InsertColumn(t, pending_col_idx, "New");
-                break;
-            case ColOp::InsertRight:
-                InsertColumn(t, pending_col_idx + 1, "New");
-                break;
-            case ColOp::Delete:
-                RemoveColumn(t, pending_col_idx);
-                break;
-            default:
-                break;
-            }
+    // -------- Apply deferred ops / CSV replace --------
+    if (pending_col != ColOp::None && pending_col_idx >= 0) {
+        switch (pending_col) {
+        case ColOp::InsertLeft:
+            InsertColumn(t, pending_col_idx, "New");
+            break;
+        case ColOp::InsertRight:
+            InsertColumn(t, pending_col_idx + 1, "New");
+            break;
+        case ColOp::Delete:
+            RemoveColumn(t, pending_col_idx);
+            break;
+        default:
+            break;
         }
-
-        // Row ops
-        if (pending_row != RowOp::None && pending_row_idx >= 0) {
-            switch (pending_row) {
-            case RowOp::InsertAbove:
-                InsertRow(t, pending_row_idx);
-                break;
-            case RowOp::InsertBelow:
-                InsertRow(t, pending_row_idx + 1);
-                break;
-            case RowOp::Delete:
-                RemoveRow(t, pending_row_idx);
-                break;
-            default:
-                break;
-            }
-        }
-
-        // We changed the table shape; end the window now.
         ImGui::End();
-        return; // next frame will redraw with the new shape
+        return;
+    }
+    if (pending_row != RowOp::None && pending_row_idx >= 0) {
+        switch (pending_row) {
+        case RowOp::InsertAbove:
+            InsertRow(t, pending_row_idx);
+            break;
+        case RowOp::InsertBelow:
+            InsertRow(t, pending_row_idx + 1);
+            break;
+        case RowOp::Delete:
+            RemoveRow(t, pending_row_idx);
+            break;
+        default:
+            break;
+        }
+        ImGui::End();
+        return;
+    }
+    if (csv_apply) {
+        t.col_names = std::move(csv_cols);
+        t.rows = std::move(csv_rows);
+        EnsureShape(t);
+        ImGui::End();
+        return;
     }
 
     ImGui::End();
