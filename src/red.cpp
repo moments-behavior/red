@@ -352,7 +352,7 @@ int main(int, char **) {
                     if (ImGui::MenuItem("YOLO Export Tool")) {
                         show_yolo_export_tool = true;
                     }
-                    if (ImGui::MenuItem("Live Table")) {
+                    if (ImGui::MenuItem("Spreadsheet")) {
                         table.is_open = true;
                     }
                     ImGui::EndMenu();
@@ -4139,7 +4139,8 @@ int main(int, char **) {
             ImGui::End();
         }
 
-        DrawLiveTable(table);
+        DrawLiveTable(table, "Spreadsheet", scene, video_fps, ps,
+                      &video_loaded);
 
         // YOLO Export Tool Window
         if (show_yolo_export_tool) {

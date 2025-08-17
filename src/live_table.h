@@ -1,4 +1,6 @@
 #pragma once
+#include "render.h"
+#include "utils.h"
 #include <ImGuiFileDialog.h>
 #include <algorithm>
 #include <fstream>
@@ -55,7 +57,36 @@ inline void RemoveRow(LiveTable &t, int at) {
         t.rows.emplace_back(t.col_names.size());
 }
 
-inline void DrawLiveTable(LiveTable &t, const char *window_id = "Live Table") {
+inline void OnCellShiftClick(int row, int col, const std::string &value,
+                             render_scene *scene, double video_fps,
+                             PlaybackState &ps, bool *video_loaded) {
+
+    if (!(*video_loaded)) {
+        return;
+    }
+
+    if (value.empty()) {
+        printf("Shift+Click on cell (%d, %d): <empty>\n", row, col);
+        return;
+    }
+
+    char *endptr = nullptr;
+    errno = 0;
+    long val = std::strtol(value.c_str(), &endptr, 10);
+
+    if (endptr == value.c_str() || *endptr != '\0' || errno == ERANGE) {
+        // Conversion failed or out of range
+        printf("Shift+Click on cell (%d, %d): \"%s\" (not an integer)\n", row,
+               col, value.c_str());
+    } else {
+        printf("Shift+Click on cell (%d, %d): int=%ld\n", row, col, val);
+        seek_all_cameras(scene, val, video_fps, ps, true);
+    }
+}
+
+inline void DrawLiveTable(LiveTable &t, const char *window_id,
+                          render_scene *scene, double video_fps,
+                          PlaybackState &ps, bool *video_loaded) {
     if (!t.is_open)
         return;
     if (!ImGui::Begin(window_id, &t.is_open, ImGuiWindowFlags_None)) {
@@ -73,14 +104,14 @@ inline void DrawLiveTable(LiveTable &t, const char *window_id = "Live Table") {
         InsertColumn(t, (int)t.col_names.size());
     ImGui::SameLine();
 
-    if (ImGui::Button("Load CSV…")) {
+    if (ImGui::Button("Load CSV")) {
         IGFD::FileDialogConfig cfg;
         cfg.path = ".";
         ImGuiFileDialog::Instance()->OpenDialog("LoadCSVDlg", "Load CSV/TSV",
                                                 ".csv,.tsv", cfg);
     }
     ImGui::SameLine();
-    if (ImGui::Button("Save CSV…")) {
+    if (ImGui::Button("Save CSV")) {
         IGFD::FileDialogConfig cfg;
         cfg.path = ".";
         cfg.fileName = "table.csv";
@@ -90,7 +121,8 @@ inline void DrawLiveTable(LiveTable &t, const char *window_id = "Live Table") {
     }
     ImGui::SameLine();
     ImGui::Checkbox("Auto width", &t.auto_width);
-
+    ImGui::Text(
+        "Hold [Shift] and click a frame number to jump when video is loaded.");
     // -------- Deferred ops (avoid mutate-while-drawing) --------
     enum class RowOp { None, InsertAbove, InsertBelow, Delete };
     enum class ColOp { None, InsertLeft, InsertRight, Delete };
@@ -414,10 +446,55 @@ inline void DrawLiveTable(LiveTable &t, const char *window_id = "Live Table") {
                     ImGui::TableSetColumnIndex(c + 1);
                     ImGui::PushID(r * C + c);
 
+                    ImGuiTable *table = ImGui::GetCurrentTable();
+                    ImRect cell_rect = ImGui::TableGetCellBgRect(table, c + 1);
+
+                    ImGuiIO &io = ImGui::GetIO();
+
+                    // --- 1) Pre-hit test for Shift+click (no extra widget) ---
+                    bool suppress_activation = false;
+                    const bool hovered_cell = ImGui::IsMouseHoveringRect(
+                        cell_rect.Min, cell_rect.Max, false);
+
+                    if (io.KeyShift && hovered_cell &&
+                        (ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
+                         ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))) {
+                        OnCellShiftClick(r, c, t.rows[r][c], scene, video_fps,
+                                         ps, video_loaded);
+                        suppress_activation = true;
+                        // Optional: cursor hint while Shift is held over the
+                        // cell
+                        ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                    }
+
+                    // --- 2) Always render InputText (stable height). If
+                    // Shift+clicked this frame, disable it so it can't
+                    // activate. ---
+                    if (suppress_activation) {
+                        ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);
+                        ImGui::PushStyleVar(ImGuiStyleVar_Alpha,
+                                            1.0f); // keep same visuals (no dim)
+                    }
+
                     PushFrameless();
                     ImGui::SetNextItemWidth(-FLT_MIN);
-                    ImGui::InputText("##cell", &t.rows[r][c]);
+                    ImGui::InputText("##cell",
+                                     &t.rows[r][c]); // same widget every frame
                     PopFrameless();
+
+                    if (suppress_activation) {
+                        ImGui::PopStyleVar();
+                        ImGui::PopItemFlag();
+                        // No need to ClearActiveID: the item never became
+                        // active
+                    } else {
+                        // Optional extra UX: if Shift is held while hovering,
+                        // hint with hand cursor
+                        if (io.KeyShift && ImGui::IsItemHovered())
+                            ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                    }
+
+                    // Your existing cell highlight, etc.
                     HighlightCellFromLastItem();
 
                     ImGui::PopID();
@@ -429,18 +506,64 @@ inline void DrawLiveTable(LiveTable &t, const char *window_id = "Live Table") {
     }
     ImGui::PopStyleColor(); // TableHeaderBg
 
-    // -------- Drag handle to resize table height (below table) --------
-    ImGui::PushID("tbl_resizer");
-    ImGui::InvisibleButton("##tbl_resize_btn", ImVec2(-1, 6.0f));
-    if (ImGui::IsItemActive() &&
-        ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
-        t.table_height += ImGui::GetIO().MouseDelta.y;
-        const float row_h = ImGui::GetTextLineHeightWithSpacing();
-        t.table_height = ImClamp(t.table_height, row_h * 6.0f, row_h * 40.0f);
+    // ---- Visible drag handle under the table ----
+    {
+        ImGui::PushID("tbl_resizer");
+
+        const float grip_h = 8.0f; // height of the grip area
+        const ImVec2 p0 = ImGui::GetCursorScreenPos(); // top-left of grip
+        const ImVec2 p1 = ImVec2(
+            p0.x + ImGui::GetContentRegionAvail().x, // bottom-right of grip
+            p0.y + grip_h);
+
+        ImDrawList *dl = ImGui::GetWindowDrawList();
+
+        // Colors that react to hover/active
+        const bool hovered = ImGui::IsMouseHoveringRect(p0, p1);
+        const bool active =
+            ImGui::IsMouseDown(ImGuiMouseButton_Left) && hovered;
+
+        ImU32 base_col = ImGui::GetColorU32(ImGuiCol_Separator);
+        ImU32 hover_col = ImGui::GetColorU32(ImGuiCol_SeparatorHovered);
+        ImU32 active_col = ImGui::GetColorU32(ImGuiCol_SeparatorActive);
+
+        ImU32 fill_col = hovered ? (active ? active_col : hover_col) : base_col;
+
+        // Background bar (subtle)
+        dl->AddRectFilled(p0, p1, fill_col, 2.0f);
+
+        // “Grabber” dots in the center
+        const float cx = (p0.x + p1.x) * 0.5f;
+        const float cy = (p0.y + p1.y) * 0.5f;
+        const float dot_r = 1.5f;
+        const float dot_dx = 6.0f;
+
+        dl->AddCircleFilled(ImVec2(cx - dot_dx, cy), dot_r,
+                            ImGui::GetColorU32(ImGuiCol_Text));
+        dl->AddCircleFilled(ImVec2(cx, cy), dot_r,
+                            ImGui::GetColorU32(ImGuiCol_Text));
+        dl->AddCircleFilled(ImVec2(cx + dot_dx, cy), dot_r,
+                            ImGui::GetColorU32(ImGuiCol_Text));
+
+        // Interactive area
+        ImGui::SetCursorScreenPos(p0);
+        ImGui::InvisibleButton("##tbl_resize_btn", ImVec2(p1.x - p0.x, grip_h));
+
+        if (ImGui::IsItemHovered())
+            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
+
+        if (ImGui::IsItemActive() &&
+            ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+            t.table_height += ImGui::GetIO().MouseDelta.y;
+            const float row_h = ImGui::GetTextLineHeightWithSpacing();
+            t.table_height =
+                ImClamp(t.table_height, row_h * 6.0f, row_h * 40.0f);
+        }
+
+        // Move cursor past the grip so next widgets are below
+        ImGui::SetCursorScreenPos(p1);
+        ImGui::PopID();
     }
-    if (ImGui::IsItemHovered())
-        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
-    ImGui::PopID();
 
     // -------- Apply deferred ops / CSV replace --------
     if (pending_col != ColOp::None && pending_col_idx >= 0) {
