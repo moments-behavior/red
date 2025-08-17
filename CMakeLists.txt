@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.10)
-project(redgui LANGUAGES CXX CUDA)
+project(red LANGUAGES CXX CUDA)
 
 # Set CUDA architecture and options
 set(CMAKE_CUDA_ARCHITECTURES 80)
@@ -39,7 +39,7 @@ set(CUDA_SRC_FILES
 )
 
 # Main Executable
-add_executable(redgui 
+add_executable(red 
     ${SRC_FILES}
     ${IMGUI_SRC}
     ${IMPLOT_SRC}
@@ -47,7 +47,7 @@ add_executable(redgui
 )
 
 # Include Directories
-target_include_directories(redgui PRIVATE
+target_include_directories(red PRIVATE
         ${SRC_DIR}
         ${DIR_IMGUI}
         ${DIR_IMGUI}/backends
@@ -64,7 +64,7 @@ target_include_directories(redgui PRIVATE
 )
 
 # Link Libraries
-target_link_libraries(redgui PRIVATE
+target_link_libraries(red PRIVATE
     ${OpenCV_LIBS}
     ${CUDA_LIBRARIES}
     ${CMAKE_THREAD_LIBS_INIT}
@@ -80,7 +80,7 @@ target_link_libraries(redgui PRIVATE
 )
 
 # Set RPATH so runtime finds libtorch
-set_target_properties(redgui PROPERTIES
+set_target_properties(red PROPERTIES
     BUILD_RPATH ${LIBTORCH_LIB}
     INSTALL_RPATH ${LIBTORCH_LIB}
 )

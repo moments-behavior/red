@@ -1,1 +1,1 @@
-./release/redgui
+./release/red
