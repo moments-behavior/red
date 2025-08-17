@@ -35,7 +35,12 @@ int main(int, char **) {
 
     render_scene *scene = (render_scene *)malloc(sizeof(render_scene));
 
-    std::string root_dir;
+    // std::filesystem::path cwd = std::filesystem::current_path();
+    // std::string delimiter = "/";
+    // std::vector<std::string> tokenized_path = string_split(cwd, delimiter);
+    // std::string start_folder_name = "/home/" + tokenized_path[2] + "/data";
+    std::string start_folder_name = "/nfs/exports/ratlv";
+    std::string media_dir = start_folder_name;
     std::string skeleton_dir;
     std::vector<std::string> camera_names;
     std::vector<CameraParams> camera_params;
@@ -68,11 +73,6 @@ int main(int, char **) {
     std::map<std::string, SkeletonPrimitive> skeleton_map;
 
     // others
-    std::filesystem::path cwd = std::filesystem::current_path();
-    std::string delimiter = "/";
-    std::vector<std::string> tokenized_path = string_split(cwd, delimiter);
-    std::string start_folder_name = "/home/" + tokenized_path[2] + "/data";
-    start_folder_name = "/nfs/exports/ratlv";
     ImVec4 clear_color = ImVec4(0.0f, 0.0f, 0.0f, 1.00f);
     ImGuiIO &io = ImGui::GetIO();
 
@@ -204,8 +204,7 @@ int main(int, char **) {
     double video_fps = 60.0f;
     float set_playback_speed = 1.0f;
     PlaybackState ps;
-
-    static LiveTable table;
+    LiveTable table;
 
     while (!glfwWindowShouldClose(window->render_target)) {
         // Poll and handle events (inputs, window resize, etc.)
@@ -248,8 +247,7 @@ int main(int, char **) {
                     if (ImGui::MenuItem("Open")) {
                         IGFD::FileDialogConfig config;
                         config.countSelectionMax = 0;
-                        config.path = "/home/user/data/movies"; // temp default
-                                                                // path for test
+                        config.path = media_dir;
                         config.flags = ImGuiFileDialogFlags_Modal;
                         ImGuiFileDialog::Instance()->OpenDialog(
                             "ChooseMedia", "Choose Media",
@@ -309,7 +307,7 @@ int main(int, char **) {
                                         for (u32 i = 0; i < scene->num_cams;
                                              i++) {
                                             std::string cam_file =
-                                                root_dir + "/calibration/" +
+                                                media_dir + "/calibration/" +
                                                 camera_names[i] + ".yaml";
 
                                             CameraParams cam;
@@ -328,11 +326,11 @@ int main(int, char **) {
 
                                     if (load_calibration) {
                                         skeleton_initialize(element.first,
-                                                            root_dir, skeleton,
+                                                            media_dir, skeleton,
                                                             element.second);
                                         plot_keypoints_flag = true;
                                         keypoints_root_folder =
-                                            root_dir + "/labeled_data/";
+                                            media_dir + "/labeled_data/";
                                         // create folders
                                         std::filesystem::create_directory(
                                             keypoints_root_folder);
@@ -424,8 +422,8 @@ int main(int, char **) {
             if (ImGuiFileDialog::Instance()->IsOk()) { // action if OK
                 auto selected_files =
                     ImGuiFileDialog::Instance()->GetSelection();
-                root_dir = ImGuiFileDialog::Instance()->GetCurrentPath();
-                skeleton_dir = root_dir;
+                media_dir = ImGuiFileDialog::Instance()->GetCurrentPath();
+                skeleton_dir = media_dir;
 
                 // check if it is mp4, if it is mp4 files
                 auto first_selection =
@@ -501,7 +499,7 @@ int main(int, char **) {
                     scene->image_height =
                         (u32 *)malloc(sizeof(u32) * scene->num_cams);
                     for (u32 j = 0; j < scene->num_cams; j++) {
-                        std::string file_name = root_dir + "/" +
+                        std::string file_name = media_dir + "/" +
                                                 camera_names[j] + "_" +
                                                 imgs_names[0];
                         cv::Mat image = cv::imread(file_name, cv::IMREAD_COLOR);
@@ -517,7 +515,7 @@ int main(int, char **) {
                             &image_loader, dc_context, imgs_names,
                             scene->display_buffer[i], scene->size_of_buffer,
                             &scene->seek_context[i], scene->use_cpu_buffer,
-                            camera_names[i], root_dir));
+                            camera_names[i], media_dir));
                         is_view_focused.push_back(false);
                     }
                     video_loaded = true;
@@ -537,7 +535,7 @@ int main(int, char **) {
                     bool load_calibration = true;
                     if (scene->num_cams > 1) {
                         for (u32 i = 0; i < scene->num_cams; i++) {
-                            std::string cam_file = root_dir + "/calibration/" +
+                            std::string cam_file = media_dir + "/calibration/" +
                                                    camera_names[i] + ".yaml";
 
                             CameraParams cam;
@@ -566,7 +564,7 @@ int main(int, char **) {
                         skeleton_initialize("", skeleton_file.begin()->second,
                                             skeleton, SP_LOAD);
                         plot_keypoints_flag = true;
-                        keypoints_root_folder = root_dir + "/labeled_data/";
+                        keypoints_root_folder = media_dir + "/labeled_data/";
                         skeleton_chosen = true;
                     }
                 }
@@ -2996,7 +2994,7 @@ int main(int, char **) {
                 if (ImGui::Button("Update keypoints working directory")) {
                     IGFD::FileDialogConfig config;
                     config.countSelectionMax = 1;
-                    config.path = root_dir;
+                    config.path = media_dir;
                     config.flags = ImGuiFileDialogFlags_Modal;
                     ImGuiFileDialog::Instance()->OpenDialog(
                         "ChooseKeypointsFolder",
@@ -3297,19 +3295,21 @@ int main(int, char **) {
 
                 ImGui::Separator();
                 if (next_labeled_frame_it != keypoints_map.end()) {
-                    ImGui::Text("Next labeled frame : %d",
-                                (*next_labeled_frame_it).first);
-                } else {
-                    ImGui::Text("Next labeled frame : none");
-                }
-
-                if (ImGui::Button("Jump to Next Labeled Frame") ||
-                    (ImGui::IsKeyPressed(ImGuiKey_RightArrow, false) &&
-                     !io.WantTextInput)) {
-                    if (next_labeled_frame_it != keypoints_map.end()) {
+                    if (ImGui::Button("Jump to") ||
+                        (ImGui::IsKeyPressed(ImGuiKey_RightArrow, false) &&
+                         !io.WantTextInput)) {
                         seek_all_cameras(scene, (*next_labeled_frame_it).first,
                                          video_fps, ps, true);
                     }
+                    ImGui::SameLine();
+                    ImGui::Text("next labeled frame : %d",
+                                (*next_labeled_frame_it).first);
+                } else {
+                    ImGui::BeginDisabled(); // disable section
+                    ImGui::Button("Jump to");
+                    ImGui::EndDisabled();
+                    ImGui::SameLine();
+                    ImGui::Text("next labeled frame : none");
                 }
 
                 size_t labeled_count = 0;
@@ -4139,8 +4139,8 @@ int main(int, char **) {
             ImGui::End();
         }
 
-        DrawLiveTable(table, "Spreadsheet", scene, video_fps, ps,
-                      &video_loaded);
+        DrawLiveTable(table, "Spreadsheet", scene, video_fps, ps, &video_loaded,
+                      media_dir);
 
         // YOLO Export Tool Window
         if (show_yolo_export_tool) {
