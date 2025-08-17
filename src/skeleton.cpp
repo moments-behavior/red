@@ -30,7 +30,7 @@ std::map<std::string, SkeletonPrimitive> skeleton_get_all() {
 
 void load_skeleton_json(std::string file_name, SkeletonContext *skeleton) {
     std::ifstream f(file_name);
-    json s_config = json::parse(f);
+    nlohmann::json s_config = nlohmann::json::parse(f);
     skeleton->name = file_name;
     skeleton->has_skeleton = s_config.contains("has_skeleton")
                                  ? s_config["has_skeleton"].get<bool>()

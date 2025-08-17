@@ -16,6 +16,7 @@
 #include <ImGuiFileDialog.h>
 #include <algorithm>
 #include <iostream>
+#include <misc/cpp/imgui_stdlib.h> // for InputText(std::string&)
 #include <stdio.h>
 #include <stdlib.h>
 #include <thread>
@@ -35,13 +36,16 @@ int main(int, char **) {
 
     render_scene *scene = (render_scene *)malloc(sizeof(render_scene));
 
-    // std::filesystem::path cwd = std::filesystem::current_path();
-    // std::string delimiter = "/";
-    // std::vector<std::string> tokenized_path = string_split(cwd, delimiter);
-    // std::string start_folder_name = "/home/" + tokenized_path[2] + "/data";
-    std::string start_folder_name = "/nfs/exports/ratlv";
-    std::string media_dir = start_folder_name;
-    std::string skeleton_dir;
+    std::filesystem::path cwd = std::filesystem::current_path();
+    std::string delimiter = "/";
+    std::vector<std::string> tokenized_path = string_split(cwd, delimiter);
+    //
+    std::string red_data_dir = "/home/" + tokenized_path[2] + "/red_data";
+    std::vector<std::string> app_folders = {"yolo_model", "skeleton"};
+    std::string media_dir;
+    prepare_application_folders(red_data_dir, app_folders, media_dir);
+    std::string skeleton_dir = red_data_dir + "/skeleton";
+    std::string yolo_model_dir = red_data_dir + "/yolo_model";
     std::vector<std::string> camera_names;
     std::vector<CameraParams> camera_params;
     std::vector<std::thread> decoder_threads;
@@ -115,11 +119,12 @@ int main(int, char **) {
 
     // YOLO Export Tool variables
     bool show_yolo_export_tool = false;
-    char yolo_export_label_dir[512] = "/home/user/data/movies/labeled_data";
-    char yolo_export_video_dir[512] = "/home/user/data/movies";
-    char yolo_export_output_dir[512] = "/home/user/data/export";
-    char yolo_export_skeleton_file[512] = "";
-    char yolo_export_class_names_file[512] = "";
+    std::string yolo_export_label_dir = media_dir + "/labeled_data";
+    std::string yolo_export_video_dir = media_dir;
+    std::string yolo_export_output_dir = media_dir + "/export";
+    std::string yolo_export_skeleton_file;
+    std::string yolo_export_class_names_file;
+    std::vector<std::string> yolo_export_cam_names;
     int yolo_export_image_size = 640;
     float yolo_export_train_ratio = 0.7f;
     float yolo_export_val_ratio = 0.2f;
@@ -136,7 +141,7 @@ int main(int, char **) {
     int current_bbox_id =
         0; // Track the currently selected bbox ID within the class
     bool show_bbox_ids = false; // Toggle for displaying bbox IDs on frame
-    static char new_class_name_buffer[64] = "";
+    std::string new_class_name = "";
 
     // Helper function to create a new bbox class
     auto create_new_bbox_class = [&]() {
@@ -174,7 +179,6 @@ int main(int, char **) {
     colors[ImPlotCol_Crosshairs] = ImVec4(0.3f, 0.10f, 0.64f, 1.00f);
 
     bool yolo_detection = false;
-    std::vector<std::thread> yolo_threads;
     std::string keypoints_root_folder;
     int label_buffer_size = 64;
     bool show_help_window = false;
@@ -292,10 +296,7 @@ int main(int, char **) {
                                 if (element.second == SP_LOAD) {
                                     IGFD::FileDialogConfig config;
                                     config.countSelectionMax = 1;
-                                    config.path =
-                                        std::filesystem::current_path()
-                                            .string() +
-                                        "/skeleton";
+                                    config.path = skeleton_dir;
                                     config.flags = ImGuiFileDialogFlags_Modal;
                                     ImGuiFileDialog::Instance()->OpenDialog(
                                         "ChooseSkeleton", "Choose Skeleton",
@@ -423,8 +424,6 @@ int main(int, char **) {
                 auto selected_files =
                     ImGuiFileDialog::Instance()->GetSelection();
                 media_dir = ImGuiFileDialog::Instance()->GetCurrentPath();
-                skeleton_dir = media_dir;
-
                 // check if it is mp4, if it is mp4 files
                 auto first_selection =
                     *selected_files.begin(); // Dereferencing iterator
@@ -2489,17 +2488,13 @@ int main(int, char **) {
 
                     // Add new class
                     ImGui::SetNextItemWidth(200);
-                    if (ImGui::InputTextWithHint(
-                            "##new_class", "Enter new class name...",
-                            new_class_name_buffer,
-                            sizeof(new_class_name_buffer))) {
-                        // Input changed
-                    }
+                    ImGui::InputTextWithHint("##new_class",
+                                             "Enter new class name...",
+                                             &new_class_name);
                     ImGui::SameLine();
                     if (ImGui::Button("Add Class") &&
-                        strlen(new_class_name_buffer) > 0) {
-                        bbox_class_names.push_back(
-                            std::string(new_class_name_buffer));
+                        new_class_name.size() > 0) {
+                        bbox_class_names.push_back(std::string(new_class_name));
                         // Generate a unique color for the new class (HSV with
                         // different hues)
                         float hue = (bbox_class_colors.size() *
@@ -2511,8 +2506,7 @@ int main(int, char **) {
                             (ImVec4)ImColor::HSV(hue, 0.8f, 1.0f);
                         bbox_class_colors.push_back(new_color);
                         current_bbox_class = bbox_class_names.size() - 1;
-                        memset(new_class_name_buffer, 0,
-                               sizeof(new_class_name_buffer));
+                        new_class_name.clear();
                     }
 
                     // Edit current class color
@@ -3401,7 +3395,7 @@ int main(int, char **) {
                     if (ImGui::Button("Select YOLO")) {
                         IGFD::FileDialogConfig config;
                         config.countSelectionMax = 1;
-                        config.path = "/home/user/data"; // fix later
+                        config.path = yolo_model_dir;
                         config.flags = ImGuiFileDialogFlags_Modal;
                         ImGuiFileDialog::Instance()->OpenDialog(
                             "ChooseYoloModel", "Choose YOLO Model",
@@ -3689,9 +3683,7 @@ int main(int, char **) {
             if (ImGuiFileDialog::Instance()->IsOk()) {
                 std::string selected_path =
                     ImGuiFileDialog::Instance()->GetCurrentPath();
-                strncpy(yolo_export_label_dir, selected_path.c_str(),
-                        sizeof(yolo_export_label_dir) - 1);
-                yolo_export_label_dir[sizeof(yolo_export_label_dir) - 1] = '\0';
+                yolo_export_label_dir = selected_path;
             }
             ImGuiFileDialog::Instance()->Close();
         }
@@ -3700,9 +3692,7 @@ int main(int, char **) {
             if (ImGuiFileDialog::Instance()->IsOk()) {
                 std::string selected_path =
                     ImGuiFileDialog::Instance()->GetCurrentPath();
-                strncpy(yolo_export_video_dir, selected_path.c_str(),
-                        sizeof(yolo_export_video_dir) - 1);
-                yolo_export_video_dir[sizeof(yolo_export_video_dir) - 1] = '\0';
+                yolo_export_video_dir = selected_path;
             }
             ImGuiFileDialog::Instance()->Close();
         }
@@ -3711,10 +3701,7 @@ int main(int, char **) {
             if (ImGuiFileDialog::Instance()->IsOk()) {
                 std::string selected_path =
                     ImGuiFileDialog::Instance()->GetCurrentPath();
-                strncpy(yolo_export_output_dir, selected_path.c_str(),
-                        sizeof(yolo_export_output_dir) - 1);
-                yolo_export_output_dir[sizeof(yolo_export_output_dir) - 1] =
-                    '\0';
+                yolo_export_output_dir = selected_path;
             }
             ImGuiFileDialog::Instance()->Close();
         }
@@ -3724,10 +3711,7 @@ int main(int, char **) {
             if (ImGuiFileDialog::Instance()->IsOk()) {
                 std::string selected_file =
                     ImGuiFileDialog::Instance()->GetFilePathName();
-                strncpy(yolo_export_skeleton_file, selected_file.c_str(),
-                        sizeof(yolo_export_skeleton_file) - 1);
-                yolo_export_skeleton_file[sizeof(yolo_export_skeleton_file) -
-                                          1] = '\0';
+                yolo_export_skeleton_file = selected_file;
             }
             ImGuiFileDialog::Instance()->Close();
         }
@@ -3736,11 +3720,7 @@ int main(int, char **) {
             if (ImGuiFileDialog::Instance()->IsOk()) {
                 std::string selected_file =
                     ImGuiFileDialog::Instance()->GetFilePathName();
-                strncpy(yolo_export_class_names_file, selected_file.c_str(),
-                        sizeof(yolo_export_class_names_file) - 1);
-                yolo_export_class_names_file[sizeof(
-                                                 yolo_export_class_names_file) -
-                                             1] = '\0';
+                yolo_export_class_names_file = selected_file;
             }
             ImGuiFileDialog::Instance()->Close();
         }
@@ -3798,16 +3778,7 @@ int main(int, char **) {
             ImGui::SetNextWindowSize(ImVec2(800, 600), ImGuiCond_FirstUseEver);
             if (ImGui::Begin("Skeleton Creator", &show_skeleton_creator)) {
                 ImGui::SeparatorText("Skeleton Configuration");
-
-                char name_buffer[256];
-                strncpy(name_buffer, skeleton_creator_name.c_str(),
-                        sizeof(name_buffer));
-                name_buffer[sizeof(name_buffer) - 1] = '\0';
-                if (ImGui::InputText("Skeleton Name", name_buffer,
-                                     sizeof(name_buffer))) {
-                    skeleton_creator_name = std::string(name_buffer);
-                }
-
+                ImGui::InputText("Skeleton Name", &skeleton_creator_name);
                 ImGui::Checkbox("Has Bounding Box", &skeleton_creator_has_bbox);
 
                 if (ImGui::Button("Select Background Image")) {
@@ -4034,8 +4005,7 @@ int main(int, char **) {
                 if (ImGui::Button("Load from JSON")) {
                     IGFD::FileDialogConfig config;
                     config.countSelectionMax = 1;
-                    config.path =
-                        std::filesystem::current_path().string() + "/skeleton";
+                    config.path = skeleton_dir;
                     config.flags = ImGuiFileDialogFlags_Modal;
                     ImGuiFileDialog::Instance()->OpenDialog(
                         "LoadSkeletonForEdit", "Load Skeleton", ".json",
@@ -4077,10 +4047,6 @@ int main(int, char **) {
                         }
                         skeleton_json["edges"] = edges_array;
 
-                        std::string skeleton_dir =
-                            std::filesystem::current_path().string() +
-                            "/skeleton";
-
                         std::string filename;
                         filename = skeleton_dir + "/" + skeleton_creator_name +
                                    ".json";
@@ -4113,18 +4079,8 @@ int main(int, char **) {
                             ImGui::Text("%d", creator_nodes[i].id);
 
                             ImGui::TableSetColumnIndex(1);
-                            char node_name_buffer[128];
-                            strncpy(node_name_buffer,
-                                    creator_nodes[i].name.c_str(),
-                                    sizeof(node_name_buffer));
-                            node_name_buffer[sizeof(node_name_buffer) - 1] =
-                                '\0';
                             ImGui::PushID(i);
-                            if (ImGui::InputText("##name", node_name_buffer,
-                                                 sizeof(node_name_buffer))) {
-                                creator_nodes[i].name =
-                                    std::string(node_name_buffer);
-                            }
+                            ImGui::InputText("##name", &creator_nodes[i].name);
                             ImGui::PopID();
 
                             ImGui::TableSetColumnIndex(2);
@@ -4152,68 +4108,73 @@ int main(int, char **) {
                 const char *export_modes[] = {"Detection Dataset",
                                               "Pose Dataset", "OBB Dataset"};
                 int current_mode = static_cast<int>(yolo_export_mode);
-                if (ImGui::Combo("Export Mode", &current_mode, export_modes,
-                                 IM_ARRAYSIZE(export_modes))) {
+
+                auto apply_defaults = [&]() {
+                    if (media_dir.empty())
+                        return; // guard if config not loaded yet
                     yolo_export_mode =
                         static_cast<YoloExportMode>(current_mode);
-                    // Update default values based on mode
                     if (yolo_export_mode == YOLO_DETECTION) {
-                        strcpy(yolo_export_output_dir,
-                               "/home/user/data/yolo_detection_dataset");
+                        yolo_export_output_dir =
+                            media_dir + "/yolo_detection_dataset";
                     } else if (yolo_export_mode == YOLO_POSE) {
-                        strcpy(yolo_export_output_dir,
-                               "/home/user/data/yolo_pose_dataset");
-                        // Set skeleton file to current one if available
-                        if (!skeleton_file_path.empty()) {
-                            strncpy(yolo_export_skeleton_file,
-                                    skeleton_file_path.c_str(),
-                                    sizeof(yolo_export_skeleton_file) - 1);
-                            yolo_export_skeleton_file
-                                [sizeof(yolo_export_skeleton_file) - 1] = '\0';
-                        }
+                        yolo_export_output_dir =
+                            media_dir + "/yolo_pose_dataset";
+                        if (!skeleton_file_path.empty())
+                            yolo_export_skeleton_file = skeleton_file_path;
                     } else {
-                        strcpy(yolo_export_output_dir,
-                               "/home/user/data/yolo_obb_dataset");
+                        yolo_export_output_dir =
+                            media_dir + "/yolo_obb_dataset";
                     }
+                };
+
+                static bool initialized = false;
+
+                // 1) First-time init (once, when media_dir is known)
+                if (!initialized && !media_dir.empty()) {
+                    apply_defaults();
+                    initialized = true;
+                }
+
+                // 2) UI: apply when user changes mode
+                if (ImGui::Combo("Export Mode", &current_mode, export_modes,
+                                 IM_ARRAYSIZE(export_modes))) {
+                    apply_defaults();
                 }
 
                 ImGui::Separator();
-
                 // Directory and file inputs
                 ImGui::Text("Input Directories:");
-                ImGui::InputText("Label Directory", yolo_export_label_dir,
-                                 sizeof(yolo_export_label_dir));
+                ImGui::InputText("Label Directory", &yolo_export_label_dir);
                 ImGui::SameLine();
                 if (ImGui::Button("Browse##labels")) {
                     IGFD::FileDialogConfig config;
                     config.countSelectionMax = 1;
-                    config.path = "/home/user/data";
+                    config.path = yolo_export_label_dir;
                     config.flags = ImGuiFileDialogFlags_Modal;
                     ImGuiFileDialog::Instance()->OpenDialog(
                         "ChooseYoloExportLabelDir", "Choose Label Directory",
                         nullptr, config);
                 }
 
-                ImGui::InputText("Video Directory", yolo_export_video_dir,
-                                 sizeof(yolo_export_video_dir));
+                ImGui::InputText("Video Directory", &yolo_export_video_dir);
                 ImGui::SameLine();
                 if (ImGui::Button("Browse##videos")) {
                     IGFD::FileDialogConfig config;
                     config.countSelectionMax = 1;
-                    config.path = "/home/user/data";
+                    config.path = yolo_export_video_dir;
                     config.flags = ImGuiFileDialogFlags_Modal;
                     ImGuiFileDialog::Instance()->OpenDialog(
                         "ChooseYoloExportVideoDir", "Choose Video Directory",
                         nullptr, config);
                 }
 
-                ImGui::InputText("Output Directory", yolo_export_output_dir,
-                                 sizeof(yolo_export_output_dir));
+                ImGui::InputText("Output Directory", &yolo_export_output_dir);
                 ImGui::SameLine();
                 if (ImGui::Button("Browse##output")) {
                     IGFD::FileDialogConfig config;
                     config.countSelectionMax = 1;
-                    config.path = "/home/user/data";
+                    config.path = yolo_export_output_dir;
                     config.flags = ImGuiFileDialogFlags_Modal;
                     ImGuiFileDialog::Instance()->OpenDialog(
                         "ChooseYoloExportOutputDir", "Choose Output Directory",
@@ -4225,13 +4186,13 @@ int main(int, char **) {
                 // Configuration files
                 if (yolo_export_mode == YOLO_POSE) {
                     ImGui::Text("Skeleton Configuration:");
-                    ImGui::InputText("Skeleton File", yolo_export_skeleton_file,
-                                     sizeof(yolo_export_skeleton_file));
+                    ImGui::InputText("Skeleton File",
+                                     &yolo_export_skeleton_file);
                     ImGui::SameLine();
                     if (ImGui::Button("Browse##skeleton")) {
                         IGFD::FileDialogConfig config;
                         config.countSelectionMax = 1;
-                        config.path = "/home/user/data";
+                        config.path = skeleton_dir;
                         config.flags = ImGuiFileDialogFlags_Modal;
                         ImGuiFileDialog::Instance()->OpenDialog(
                             "ChooseYoloExportSkeletonFile",
@@ -4240,26 +4201,26 @@ int main(int, char **) {
                     ImGui::SameLine();
                     if (ImGui::Button("Use Current")) {
                         if (!skeleton_file_path.empty()) {
-                            strncpy(yolo_export_skeleton_file,
-                                    skeleton_file_path.c_str(),
-                                    sizeof(yolo_export_skeleton_file) - 1);
-                            yolo_export_skeleton_file
-                                [sizeof(yolo_export_skeleton_file) - 1] = '\0';
+                            yolo_export_skeleton_file = skeleton_file_path;
                         }
                     }
+                }
+
+                ImGui::Text("Camera List:");
+                for (size_t i = 0; i < yolo_export_cam_names.size(); i++) {
+                    ImGui::BulletText("%s", yolo_export_cam_names[i].c_str());
                 }
 
                 if (yolo_export_mode == YOLO_DETECTION ||
                     yolo_export_mode == YOLO_OBB) {
                     ImGui::Text("Class Names (Optional):");
                     ImGui::InputText("Class Names File",
-                                     yolo_export_class_names_file,
-                                     sizeof(yolo_export_class_names_file));
+                                     &yolo_export_class_names_file);
                     ImGui::SameLine();
                     if (ImGui::Button("Browse##classes")) {
                         IGFD::FileDialogConfig config;
                         config.countSelectionMax = 1;
-                        config.path = "/home/user/data";
+                        config.path = yolo_model_dir;
                         config.flags = ImGuiFileDialogFlags_Modal;
                         ImGuiFileDialog::Instance()->OpenDialog(
                             "ChooseYoloExportClassFile",
@@ -4303,6 +4264,15 @@ int main(int, char **) {
                 }
 
                 ImGui::InputInt("Random Seed", &yolo_export_seed);
+                if (ImGui::Button("Reset Defaults")) {
+
+                    yolo_export_image_size = 640;
+                    yolo_export_train_ratio = 0.7f;
+                    yolo_export_val_ratio = 0.2f;
+                    yolo_export_test_ratio = 0.1f;
+                    yolo_export_seed = 42;
+                    yolo_export_status = "";
+                }
 
                 ImGui::Separator();
 
@@ -4313,17 +4283,17 @@ int main(int, char **) {
                         bool valid = true;
                         std::string validation_error;
 
-                        if (strlen(yolo_export_label_dir) == 0) {
+                        if (yolo_export_label_dir.empty()) {
                             valid = false;
                             validation_error = "Label directory is required";
-                        } else if (strlen(yolo_export_video_dir) == 0) {
+                        } else if (yolo_export_video_dir.empty()) {
                             valid = false;
                             validation_error = "Video directory is required";
-                        } else if (strlen(yolo_export_output_dir) == 0) {
+                        } else if (yolo_export_output_dir.empty()) {
                             valid = false;
                             validation_error = "Output directory is required";
                         } else if (yolo_export_mode == YOLO_POSE &&
-                                   strlen(yolo_export_skeleton_file) == 0) {
+                                   yolo_export_skeleton_file.empty()) {
                             valid = false;
                             validation_error = "Skeleton file is required "
                                                "for pose datasets";
@@ -4335,14 +4305,11 @@ int main(int, char **) {
 
                             // Setup export configuration
                             YoloExport::ExportConfig config;
-                            config.label_dir =
-                                std::string(yolo_export_label_dir);
-                            config.video_dir =
-                                std::string(yolo_export_video_dir);
-                            config.output_dir =
-                                std::string(yolo_export_output_dir);
-                            config.skeleton_file =
-                                std::string(yolo_export_skeleton_file);
+                            config.label_dir = yolo_export_label_dir;
+                            config.video_dir = yolo_export_video_dir;
+                            config.output_dir = yolo_export_output_dir;
+                            config.cam_names = yolo_export_cam_names;
+                            config.skeleton_file = yolo_export_skeleton_file;
                             config.class_names_file =
                                 std::string(yolo_export_class_names_file);
                             config.image_size = yolo_export_image_size;
@@ -4413,39 +4380,18 @@ int main(int, char **) {
                 // Quick setup buttons
                 ImGui::Text("Quick Setup:");
                 if (ImGui::Button("Use Current Data")) {
+                    yolo_export_video_dir = media_dir;
+                    yolo_export_output_dir = media_dir + "/export";
+                    yolo_export_cam_names = camera_names;
                     // Set label dir to current keypoints folder
                     if (!keypoints_root_folder.empty()) {
-                        strncpy(yolo_export_label_dir,
-                                keypoints_root_folder.c_str(),
-                                sizeof(yolo_export_label_dir) - 1);
-                        yolo_export_label_dir[sizeof(yolo_export_label_dir) -
-                                              1] = '\0';
+                        yolo_export_label_dir = keypoints_root_folder;
                     }
 
                     // Set skeleton file to current one
                     if (!skeleton_file_path.empty()) {
-                        strncpy(yolo_export_skeleton_file,
-                                skeleton_file_path.c_str(),
-                                sizeof(yolo_export_skeleton_file) - 1);
-                        yolo_export_skeleton_file
-                            [sizeof(yolo_export_skeleton_file) - 1] = '\0';
+                        yolo_export_skeleton_file = skeleton_file_path;
                     }
-                }
-
-                ImGui::SameLine();
-                if (ImGui::Button("Reset to Defaults")) {
-                    strcpy(yolo_export_label_dir, "/home/user/data/labels");
-                    strcpy(yolo_export_video_dir, "/home/user/data/videos");
-                    strcpy(yolo_export_output_dir,
-                           "/home/user/data/yolo_datasets");
-                    strcpy(yolo_export_skeleton_file, "");
-                    strcpy(yolo_export_class_names_file, "");
-                    yolo_export_image_size = 640;
-                    yolo_export_train_ratio = 0.7f;
-                    yolo_export_val_ratio = 0.2f;
-                    yolo_export_test_ratio = 0.1f;
-                    yolo_export_seed = 42;
-                    yolo_export_status = "";
                 }
             }
             ImGui::End();

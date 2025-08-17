@@ -36,4 +36,7 @@ void seek_all_cameras(render_scene *scene, int frame_number, double video_fps,
                       PlaybackState &state, bool seek_accurate);
 bool has_labeled_frames(const std::map<u32, KeyPoints *> &keypoints_map,
                         SkeletonContext *skeleton);
+void prepare_application_folders(const std::string &data_dir,
+                                 const std::vector<std::string> &folders,
+                                 std::string &media_dir);
 #endif

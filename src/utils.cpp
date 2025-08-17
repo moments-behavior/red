@@ -1,7 +1,49 @@
 #include "utils.h"
 #include "Logger.h"
+#include "json.hpp"
+#include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <string>
+#include <vector>
+
 simplelogger::Logger *logger =
     simplelogger::LoggerFactory::CreateConsoleLogger();
+
+void prepare_application_folders(const std::string &data_dir,
+                                 const std::vector<std::string> &folders,
+                                 std::string &media_dir) {
+    // create required folders
+    for (const auto &folder : folders) {
+        std::filesystem::path path = std::filesystem::path(data_dir) / folder;
+        if (!std::filesystem::exists(path)) {
+            if (std::filesystem::create_directories(path)) {
+                std::cout << "Created " << folder << " folder..." << std::endl;
+            }
+        }
+    }
+
+    // default to empty
+    media_dir.clear();
+
+    // check for config.json
+    std::filesystem::path config_path =
+        std::filesystem::path(data_dir) / "config.json";
+    if (std::filesystem::exists(config_path)) {
+        try {
+            std::ifstream f(config_path);
+            nlohmann::json j;
+            f >> j;
+
+            if (j.contains("media_folder") && j["media_folder"].is_string()) {
+                media_dir = j["media_folder"].get<std::string>();
+            }
+        } catch (const std::exception &e) {
+            std::cerr << "Failed to read/parse config.json: " << e.what()
+                      << std::endl;
+        }
+    }
+}
 
 void seek_all_cameras(render_scene *scene, int frame_number, double video_fps,
                       PlaybackState &state, bool seek_accurate) {

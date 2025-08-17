@@ -10,8 +10,6 @@
 #include <string>
 #include <vector>
 
-using json = nlohmann::json;
-
 struct KeyPoints2D {
     tuple_d position;
     bool is_labeled;
