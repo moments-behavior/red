@@ -10,6 +10,7 @@
 #include "live_table.h"
 #include "render.h"
 #include "skeleton.h"
+#include "trial_slicer.h"
 #include "utils.h"
 #include "yolo_export.h"
 #include "yolo_torch.h"
@@ -50,6 +51,7 @@ int main(int, char **) {
     std::vector<CameraParams> camera_params;
     std::vector<std::thread> decoder_threads;
     std::vector<FFmpegDemuxer *> demuxers;
+    std::map<std::string, std::string> camera_video_paths; // Map camera name to full video path
 
     DecoderContext *dc_context =
         (DecoderContext *)malloc(sizeof(DecoderContext));
@@ -133,6 +135,13 @@ int main(int, char **) {
     YoloExportMode yolo_export_mode = YOLO_DETECTION;
     bool yolo_export_in_progress = false;
     std::string yolo_export_status = "";
+
+    // Trial Slicer variables
+    bool show_trial_slicer = false;
+    TrialSlicer trial_slicer;
+    std::string trial_slicer_output_dir = media_dir + "/trials";
+    std::string trial_slicer_prefix = "trial";
+    bool trial_slicer_use_gpu = true;
 
     // Bounding box class management
     std::vector<std::string> bbox_class_names = {"Class_1"};
@@ -351,6 +360,9 @@ int main(int, char **) {
                     if (ImGui::MenuItem("YOLO Export Tool")) {
                         show_yolo_export_tool = true;
                     }
+                    if (ImGui::MenuItem("Trial Slicer")) {
+                        show_trial_slicer = true;
+                    }
                     if (ImGui::MenuItem("Spreadsheet")) {
                         table.is_open = true;
                     }
@@ -427,6 +439,7 @@ int main(int, char **) {
                 // check if it is mp4, if it is mp4 files
                 auto first_selection =
                     *selected_files.begin(); // Dereferencing iterator
+                camera_video_paths.clear(); // Clear previous video paths
                 if (string_ends_with(first_selection.first, ".mp4")) {
                     for (const auto &elem : selected_files) {
                         std::size_t cam_string_mp4_position =
@@ -434,8 +447,10 @@ int main(int, char **) {
                         std::string cam_string =
                             elem.first.substr(0, cam_string_mp4_position - 1);
                         camera_names.push_back(cam_string);
+                        camera_video_paths[cam_string] = elem.second; // Store full path
                         std::cout << "camera names: " << cam_string
                                   << std::endl;
+                        std::cout << "camera video path: " << elem.second << std::endl;
                         window_need_decoding[cam_string].store(true);
                         window_was_decoding[cam_string] = true;
                         std::map<std::string, std::string> m;
@@ -2395,6 +2410,27 @@ int main(int, char **) {
                 create_new_bbox_class();
                 // reset bbox id to 0
                 current_bbox_id = 0;
+            }
+
+            // Trial Slicer keyboard shortcuts
+            if (video_loaded && !ps.play_video) {
+                if (ImGui::IsKeyPressed(ImGuiKey_J, false) && !io.WantTextInput) {
+                    // Mark trial start
+                    trial_slicer.addTrialMark(current_frame_num, "start");
+                    std::cout << "Trial start marked at frame " << current_frame_num << std::endl;
+                }
+                
+                if (ImGui::IsKeyPressed(ImGuiKey_K, false) && !io.WantTextInput) {
+                    // Mark trial end
+                    trial_slicer.addTrialMark(current_frame_num, "end");
+                    std::cout << "Trial end marked at frame " << current_frame_num << std::endl;
+                }
+                
+                if (ImGui::IsKeyPressed(ImGuiKey_U, false) && !io.WantTextInput) {
+                    // Remove last trial mark
+                    trial_slicer.removeLastMark();
+                    std::cout << "Last trial mark removed" << std::endl;
+                }
             }
 
             if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow, false) &&
@@ -4395,6 +4431,209 @@ int main(int, char **) {
                 }
             }
             ImGui::End();
+        }
+
+        // Trial Slicer Window
+        if (show_trial_slicer) {
+            ImGui::SetNextWindowSize(ImVec2(600, 700), ImGuiCond_FirstUseEver);
+            if (ImGui::Begin("Trial Slicer", &show_trial_slicer)) {
+                ImGui::SeparatorText("Trial Marking");
+                
+                if (video_loaded) {
+                    ImGui::Text("Current Frame: %d", current_frame_num);
+                    
+                    if (ImGui::Button("Mark Trial Start (J)") && !ps.play_video) {
+                        trial_slicer.addTrialMark(current_frame_num, "start");
+                        std::cout << "Trial start marked at frame " << current_frame_num << std::endl;
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button("Mark Trial End (K)") && !ps.play_video) {
+                        trial_slicer.addTrialMark(current_frame_num, "end");
+                        std::cout << "Trial end marked at frame " << current_frame_num << std::endl;
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button("Remove Last Mark (U)")) {
+                        trial_slicer.removeLastMark();
+                    }
+                    
+                    if (ps.play_video) {
+                        ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "Pause video to mark trials");
+                    }
+                } else {
+                    ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "No video loaded");
+                }
+                
+                ImGui::Separator();
+                
+                ImGui::SeparatorText("Trial Marks");
+                auto marks = trial_slicer.getTrialMarks();
+                if (marks.empty()) {
+                    ImGui::Text("No trial marks");
+                } else {
+                    ImGui::Columns(2, "TrialMarks");
+                    ImGui::Text("Frame");
+                    ImGui::NextColumn();
+                    ImGui::Text("Type");
+                    ImGui::NextColumn();
+                    ImGui::Separator();
+                    
+                    for (const auto& mark : marks) {
+                        ImGui::Text("%d", mark.frame_number);
+                        ImGui::NextColumn();
+                        ImGui::Text("%s", mark.label.c_str());
+                        ImGui::NextColumn();
+                    }
+                    ImGui::Columns(1);
+                }
+                
+                ImGui::Separator();
+                
+                ImGui::SeparatorText("Generated Trials");
+                auto trials = trial_slicer.getTrials();
+                
+                std::string validation_error = trial_slicer.getValidationError();
+                if (!validation_error.empty()) {
+                    ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "Error: %s", validation_error.c_str());
+                } else if (trials.empty()) {
+                    ImGui::Text("No complete trials");
+                    if (trial_slicer.hasUnpairedMark()) {
+                        ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "Unpaired mark detected");
+                    }
+                } else {
+                    ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "Valid trial sequence - %d trials ready", (int)trials.size());
+                    ImGui::Columns(3, "Trials");
+                    ImGui::Text("Trial Name");
+                    ImGui::NextColumn();
+                    ImGui::Text("Start Frame");
+                    ImGui::NextColumn();
+                    ImGui::Text("End Frame");
+                    ImGui::NextColumn();
+                    ImGui::Separator();
+                    
+                    for (size_t i = 0; i < trials.size(); i++) {
+                        const auto& trial = trials[i];
+                        ImGui::Text("%s", trial.name.c_str());
+                        ImGui::NextColumn();
+                        ImGui::Text("%d", trial.start_frame);
+                        ImGui::NextColumn();
+                        ImGui::Text("%d", trial.end_frame);
+                        ImGui::NextColumn();
+                    }
+                    ImGui::Columns(1);
+                }
+                
+                ImGui::Separator();
+                
+                ImGui::SeparatorText("Export Configuration");
+                
+                if (!media_dir.empty()) {
+                    std::string auto_output_dir = media_dir + "/trials";
+                    if (trial_slicer_output_dir != auto_output_dir) {
+                        trial_slicer_output_dir = auto_output_dir;
+                    }
+                }
+                
+                ImGui::InputText("Output Directory", &trial_slicer_output_dir);
+                ImGui::SameLine();
+                if (ImGui::Button("Browse##trial_output")) {
+                    IGFD::FileDialogConfig config;
+                    config.countSelectionMax = 1;
+                    config.path = trial_slicer_output_dir;
+                    config.flags = ImGuiFileDialogFlags_Modal;
+                    ImGuiFileDialog::Instance()->OpenDialog(
+                        "ChooseTrialSlicerOutputDir", "Choose Output Directory",
+                        nullptr, config);
+                }
+                
+                ImGui::InputText("Video Prefix", &trial_slicer_prefix);
+                
+                if (!trial_slicer.isExportInProgress()) {
+                    bool can_export = !trials.empty() && video_loaded && trial_slicer.getValidationError().empty();
+                    if (!can_export) {
+                        ImGui::BeginDisabled();
+                    }
+                    if (ImGui::Button("Export Trial Videos")) {
+                        TrialSlicerConfig config;
+                        config.output_directory = trial_slicer_output_dir;
+                        config.video_prefix = trial_slicer_prefix;
+                        config.camera_names = camera_names;
+                        config.camera_video_paths = camera_video_paths; 
+                        config.media_directory = media_dir;
+                        config.use_gpu_acceleration = trial_slicer_use_gpu;
+                        config.fps = video_fps;
+                        
+                        trial_slicer.setConfig(config);
+                        trial_slicer.exportTrials();
+                    }
+                    if (!can_export) {
+                        ImGui::EndDisabled();
+                        if (!video_loaded) {
+                            ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "Load a video first");
+                        } else if (trials.empty()) {
+                            ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "Create valid trial pairs first");
+                        } else if (!trial_slicer.getValidationError().empty()) {
+                            ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "Fix validation errors first");
+                        }
+                    }
+                } else {
+                    ImGui::Text("Export in progress...");
+                    auto progress = trial_slicer.getExportProgress();
+                    float progress_fraction = progress.second > 0 ? 
+                        static_cast<float>(progress.first) / progress.second : 0.0f;
+                    ImGui::ProgressBar(progress_fraction, ImVec2(-1.0f, 0.0f), 
+                                      (std::to_string(progress.first) + "/" + 
+                                       std::to_string(progress.second)).c_str());
+                }
+                
+                std::string status = trial_slicer.getExportStatus();
+                if (!status.empty()) {
+                    if (status.find("Error") != std::string::npos) {
+                        ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "%s", status.c_str());
+                    } else if (status.find("completed") != std::string::npos) {
+                        ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "%s", status.c_str());
+                    } else {
+                        ImGui::Text("%s", status.c_str());
+                    }
+                }
+                
+                ImGui::Separator();
+                
+                ImGui::SeparatorText("File Operations");
+                static std::string trial_marks_file = "";
+                ImGui::InputText("Trial Marks File", &trial_marks_file);
+                ImGui::SameLine();
+                if (ImGui::Button("Save Marks")) {
+                    if (!trial_marks_file.empty()) {
+                        trial_slicer.saveTrialMarksToFile(trial_marks_file);
+                    }
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Load Marks")) {
+                    if (!trial_marks_file.empty()) {
+                        trial_slicer.loadTrialMarksFromFile(trial_marks_file);
+                    }
+                }
+                
+                if (ImGui::Button("Clear All Marks and Trials")) {
+                    trial_slicer.clearAllMarks();
+                }
+                
+                ImGui::Separator();
+                ImGui::Text("Quick Setup:");
+                if (ImGui::Button("Reset to Current Media Directory")) {
+                    trial_slicer_output_dir = media_dir + "/trials";
+                    trial_slicer_prefix = "trial";
+                }
+                ImGui::SameLine();
+            }
+            ImGui::End();
+        }
+
+        if (ImGuiFileDialog::Instance()->Display("ChooseTrialSlicerOutputDir")) {
+            if (ImGuiFileDialog::Instance()->IsOk()) {
+                trial_slicer_output_dir = ImGuiFileDialog::Instance()->GetCurrentPath();
+            }
+            ImGuiFileDialog::Instance()->Close();
         }
 
         if (show_error) {
