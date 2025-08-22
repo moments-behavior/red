@@ -7,7 +7,7 @@ APP_NAME="red"
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN_SRC="$SRC_DIR/release/$APP_NAME"
 FONTS_SRC="$SRC_DIR/fonts"
-ICON_SRC="$SRC_DIR/red.png"
+ICON_SRC="$SRC_DIR/icon.png"
 
 # Optional prefix (default to ~/.local)
 PREFIX="${1:-"$HOME/.local"}"
