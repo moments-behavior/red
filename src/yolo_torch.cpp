@@ -37,26 +37,40 @@ std::vector<YoloPrediction> applyNMS(std::vector<YoloPrediction> &predictions,
                            return pred.confidence < confidence_threshold;
                        }),
         predictions.end());
-    std::sort(predictions.begin(), predictions.end(),
-              [](const YoloPrediction &a, const YoloPrediction &b) {
-                  return a.confidence > b.confidence;
-              });
 
-    std::vector<bool> suppressed(predictions.size(), false);
     std::vector<YoloPrediction> result;
+    
+    // Group predictions by class
+    std::map<int, std::vector<YoloPrediction>> class_predictions;
+    for (const auto &pred : predictions) {
+        class_predictions[pred.class_id].push_back(pred);
+    }
+    
+    
+    for (auto &[class_id, class_preds] : class_predictions) {
+        
+        // Sort predictions for this class by confidence
+        std::sort(class_preds.begin(), class_preds.end(),
+                  [](const YoloPrediction &a, const YoloPrediction &b) {
+                      return a.confidence > b.confidence;
+                  });
 
-    for (size_t i = 0; i < predictions.size(); ++i) {
-        if (suppressed[i])
-            continue;
-
-        result.push_back(predictions[i]);
-
-        for (size_t j = i + 1; j < predictions.size(); ++j) {
-            if (suppressed[j])
+        std::vector<bool> suppressed(class_preds.size(), false);
+        int kept_count = 0;
+        
+        for (size_t i = 0; i < class_preds.size(); ++i) {
+            if (suppressed[i])
                 continue;
 
-            if (predictions[i].class_id == predictions[j].class_id) {
-                float iou = calculateIoU(predictions[i], predictions[j]);
+            result.push_back(class_preds[i]);
+            kept_count++;
+
+            // Suppress overlapping detections in the same class
+            for (size_t j = i + 1; j < class_preds.size(); ++j) {
+                if (suppressed[j])
+                    continue;
+
+                float iou = calculateIoU(class_preds[i], class_preds[j]);
                 if (iou > iou_threshold) {
                     suppressed[j] = true;
                 }
@@ -184,12 +198,9 @@ std::vector<YoloPrediction> runYoloInference(const std::string &model_path,
             int class_id;
 
             if (output_features == 6) {
-                confidence = output_accessor[i][4];
-                class_id = static_cast<int>(output_accessor[i][5]);
-            } else if (output_features == 5) {
-                confidence = output_accessor[i][4];
-                class_id = 0;
-            } else if (output_features > 5) {
+                float class0_score = output_accessor[i][4];
+                float class1_score = output_accessor[i][5];
+                
                 float max_score = 0.0f;
                 int max_class = -1;
                 for (int c = 0; c < (output_features - 4); ++c) {

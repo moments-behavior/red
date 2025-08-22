@@ -893,9 +893,14 @@ int main(int, char **) {
 
                                 // Add YOLO detections to main bounding box
                                 // system
+                                int yolo_bbox_id = 0; 
                                 for (const auto &yolo_bbox :
                                      yolo_bboxes[cam_id]) {
                                     if (yolo_bbox.is_valid) {
+                                        while (yolo_bbox.class_id >= bbox_class_colors.size()) {
+                                            create_new_bbox_class();
+                                        }
+
                                         BoundingBox bbox;
 
                                         bbox.rect = new ImPlotRect(
@@ -904,6 +909,7 @@ int main(int, char **) {
 
                                         bbox.state = RectTwoPoints;
                                         bbox.class_id = yolo_bbox.class_id;
+                                        bbox.id = yolo_bbox_id++; 
                                         bbox.confidence = yolo_bbox.confidence;
                                         bbox.has_bbox_keypoints = false;
                                         bbox.bbox_keypoints2d = nullptr;
@@ -2954,6 +2960,32 @@ int main(int, char **) {
                 } else {
                     ImGui::Text("Bounding box mode: No keypoints to display");
                 }
+                
+                bool keypoints_find = keypoints_map.find(current_frame_num) != keypoints_map.end();
+                if (keypoints_find) {
+                    if (skeleton->has_bbox) {
+                        ImGui::Separator();
+                        ImGui::Text("Bounding Box Info:");
+
+                        if (hovered_bbox_cam >= 0 && hovered_bbox_idx >= 0) {
+                            ImGui::Text("Camera: %d, Box: %d", hovered_bbox_cam, hovered_bbox_idx);
+                            ImGui::Text("Class: %d, Confidence: %.1f%%", hovered_bbox_class, hovered_bbox_confidence * 100.0f);
+                        } else {
+                            ImGui::Text("Hover over a bounding box to see details");
+                        }
+                    }
+                    
+                    if (skeleton->has_obb) {
+                        ImGui::Separator();
+                        ImGui::Text("Oriented Bounding Box Info:");
+
+                        if (hovered_obb_class >= 0) {
+                            ImGui::Text("Class: %d, Confidence: %.1f%%", hovered_obb_class, hovered_obb_confidence * 100.0f);
+                        } else {
+                            ImGui::Text("Hover over an OBB to see details");
+                        }
+                    }
+                }
             }
             ImGui::End();
         }
@@ -3206,6 +3238,12 @@ int main(int, char **) {
                                     has_labels = true;
                                     break;
                                 }
+                                if (bbox.confidence >= 0.0f &&
+                                    bbox.confidence < 1.0f &&
+                                    bbox.state == RectTwoPoints) {
+                                    has_labels = true;
+                                    break;
+                                }
                                 if (bbox.confidence >= 1.0f &&
                                     bbox.has_bbox_keypoints) {
                                     for (int kp_id = 0;
@@ -3281,6 +3319,12 @@ int main(int, char **) {
                                 for (const auto &bbox :
                                      keypoints->bbox2d_list[cam_id]) {
                                     if (bbox.confidence >= 1.0f &&
+                                        bbox.state == RectTwoPoints) {
+                                        has_labels = true;
+                                        break;
+                                    }
+                                    if (bbox.confidence >= 0.0f &&
+                                        bbox.confidence < 1.0f &&
                                         bbox.state == RectTwoPoints) {
                                         has_labels = true;
                                         break;
@@ -3603,9 +3647,14 @@ int main(int, char **) {
 
                                     // Add YOLO detections to main bounding
                                     // box system
+                                    int yolo_bbox_id = 0; 
                                     for (const auto &yolo_bbox :
                                          yolo_bboxes[cam_id]) {
                                         if (yolo_bbox.is_valid) {
+                                            while (yolo_bbox.class_id >= bbox_class_colors.size()) {
+                                                create_new_bbox_class();
+                                            }
+
                                             BoundingBox bbox;
 
                                             // Create ImPlotRect from YOLO
@@ -3620,6 +3669,7 @@ int main(int, char **) {
 
                                             bbox.state = RectTwoPoints;
                                             bbox.class_id = yolo_bbox.class_id;
+                                            bbox.id = yolo_bbox_id++;
                                             bbox.confidence =
                                                 yolo_bbox.confidence;
                                             bbox.has_bbox_keypoints = false;
@@ -3655,40 +3705,6 @@ int main(int, char **) {
                         }
                     }
 
-                    // Display detection info for hovered bounding box
-                    if (skeleton->has_bbox) {
-                        bool keypoints_find =
-                            keypoints_map.find(current_frame_num) !=
-                            keypoints_map.end();
-                        if (keypoints_find) {
-                            ImGui::Separator();
-                            ImGui::Text("Bounding Box Info:");
-
-                            if (hovered_bbox_cam >= 0 &&
-                                hovered_bbox_idx >= 0) {
-                                ImGui::Text("Camera: %d, Box: %d",
-                                            hovered_bbox_cam, hovered_bbox_idx);
-                                ImGui::Text("Class: %d, Confidence: %.1f%%",
-                                            hovered_bbox_class,
-                                            hovered_bbox_confidence * 100.0f);
-                            } else {
-                                ImGui::Text("Hover over a bounding box to "
-                                            "see details");
-                            }
-
-                            // Add OBB hover info
-                            ImGui::Separator();
-                            ImGui::Text("Oriented Bounding Box Info:");
-
-                            if (hovered_obb_class >= 0) {
-                                ImGui::Text("Class: %d, Confidence: %.1f%%",
-                                            hovered_obb_class,
-                                            hovered_obb_confidence * 100.0f);
-                            } else {
-                                ImGui::Text("Hover over an OBB to see details");
-                            }
-                        }
-                    }
                 }
             }
             ImGui::End();
