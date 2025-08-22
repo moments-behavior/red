@@ -50,7 +50,7 @@ fi
 if [[ -f "$ICON_SRC" ]]; then
   cp -f "$ICON_SRC" "$APPDIR/$APP_NAME.png"
 else
-  echo "WARN: red.png not found; launcher will have a generic icon."
+  echo "WARN: icon.png not found; launcher will have a generic icon."
 fi
 
 # --- Wrapper in ~/.local/bin so the app runs from its own dir (finds fonts/) ---
