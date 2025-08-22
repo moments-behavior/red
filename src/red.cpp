@@ -449,7 +449,7 @@ int main(int, char **) {
                 project_path = ImGuiFileDialog::Instance()->GetCurrentPath();
                 if (!ensure_dir_exists(project_path, &error_message)) {
                     show_error = true;
-                    project_path = "";
+                    project_path = media_dir;
                 }
             }
             // close
@@ -893,11 +893,12 @@ int main(int, char **) {
 
                                 // Add YOLO detections to main bounding box
                                 // system
-                                int yolo_bbox_id = 0; 
+                                int yolo_bbox_id = 0;
                                 for (const auto &yolo_bbox :
                                      yolo_bboxes[cam_id]) {
                                     if (yolo_bbox.is_valid) {
-                                        while (yolo_bbox.class_id >= bbox_class_colors.size()) {
+                                        while (yolo_bbox.class_id >=
+                                               bbox_class_colors.size()) {
                                             create_new_bbox_class();
                                         }
 
@@ -909,7 +910,7 @@ int main(int, char **) {
 
                                         bbox.state = RectTwoPoints;
                                         bbox.class_id = yolo_bbox.class_id;
-                                        bbox.id = yolo_bbox_id++; 
+                                        bbox.id = yolo_bbox_id++;
                                         bbox.confidence = yolo_bbox.confidence;
                                         bbox.has_bbox_keypoints = false;
                                         bbox.bbox_keypoints2d = nullptr;
@@ -2960,27 +2961,34 @@ int main(int, char **) {
                 } else {
                     ImGui::Text("Bounding box mode: No keypoints to display");
                 }
-                
-                bool keypoints_find = keypoints_map.find(current_frame_num) != keypoints_map.end();
+
+                bool keypoints_find = keypoints_map.find(current_frame_num) !=
+                                      keypoints_map.end();
                 if (keypoints_find) {
                     if (skeleton->has_bbox) {
                         ImGui::Separator();
                         ImGui::Text("Bounding Box Info:");
 
                         if (hovered_bbox_cam >= 0 && hovered_bbox_idx >= 0) {
-                            ImGui::Text("Camera: %d, Box: %d", hovered_bbox_cam, hovered_bbox_idx);
-                            ImGui::Text("Class: %d, Confidence: %.1f%%", hovered_bbox_class, hovered_bbox_confidence * 100.0f);
+                            ImGui::Text("Camera: %d, Box: %d", hovered_bbox_cam,
+                                        hovered_bbox_idx);
+                            ImGui::Text("Class: %d, Confidence: %.1f%%",
+                                        hovered_bbox_class,
+                                        hovered_bbox_confidence * 100.0f);
                         } else {
-                            ImGui::Text("Hover over a bounding box to see details");
+                            ImGui::Text(
+                                "Hover over a bounding box to see details");
                         }
                     }
-                    
+
                     if (skeleton->has_obb) {
                         ImGui::Separator();
                         ImGui::Text("Oriented Bounding Box Info:");
 
                         if (hovered_obb_class >= 0) {
-                            ImGui::Text("Class: %d, Confidence: %.1f%%", hovered_obb_class, hovered_obb_confidence * 100.0f);
+                            ImGui::Text("Class: %d, Confidence: %.1f%%",
+                                        hovered_obb_class,
+                                        hovered_obb_confidence * 100.0f);
                         } else {
                             ImGui::Text("Hover over an OBB to see details");
                         }
@@ -3647,11 +3655,12 @@ int main(int, char **) {
 
                                     // Add YOLO detections to main bounding
                                     // box system
-                                    int yolo_bbox_id = 0; 
+                                    int yolo_bbox_id = 0;
                                     for (const auto &yolo_bbox :
                                          yolo_bboxes[cam_id]) {
                                         if (yolo_bbox.is_valid) {
-                                            while (yolo_bbox.class_id >= bbox_class_colors.size()) {
+                                            while (yolo_bbox.class_id >=
+                                                   bbox_class_colors.size()) {
                                                 create_new_bbox_class();
                                             }
 
@@ -3704,7 +3713,6 @@ int main(int, char **) {
                             }
                         }
                     }
-
                 }
             }
             ImGui::End();
@@ -4172,16 +4180,31 @@ int main(int, char **) {
                     yolo_export_mode =
                         static_cast<YoloExportMode>(current_mode);
                     if (yolo_export_mode == YOLO_DETECTION) {
-                        yolo_export_output_dir =
-                            media_dir + "/yolo_detection_dataset";
+                        if (project_path.empty()) {
+                            yolo_export_output_dir =
+                                media_dir + "/yolo_detection_dataset";
+                        } else {
+                            yolo_export_output_dir =
+                                project_path + "/yolo_detection_dataset";
+                        }
                     } else if (yolo_export_mode == YOLO_POSE) {
-                        yolo_export_output_dir =
-                            media_dir + "/yolo_pose_dataset";
+                        if (project_path.empty()) {
+                            yolo_export_output_dir =
+                                media_dir + "/yolo_pose_dataset";
+                        } else {
+                            yolo_export_output_dir =
+                                project_path + "/yolo_pose_dataset";
+                        }
                         if (!skeleton_file_path.empty())
                             yolo_export_skeleton_file = skeleton_file_path;
                     } else {
-                        yolo_export_output_dir =
-                            media_dir + "/yolo_obb_dataset";
+                        if (project_path.empty()) {
+                            yolo_export_output_dir =
+                                media_dir + "/yolo_obb_dataset";
+                        } else {
+                            yolo_export_output_dir =
+                                project_path + "/yolo_obb_dataset";
+                        }
                     }
                 };
 
@@ -4438,7 +4461,7 @@ int main(int, char **) {
                 ImGui::Text("Quick Setup:");
                 if (ImGui::Button("Use Current Data")) {
                     yolo_export_video_dir = media_dir;
-                    yolo_export_output_dir = media_dir + "/export";
+                    yolo_export_output_dir = project_path + "/export";
                     yolo_export_cam_names = camera_names;
                     // Set label dir to current keypoints folder
                     if (!keypoints_root_folder.empty()) {
