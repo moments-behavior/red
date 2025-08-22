@@ -10,25 +10,109 @@
 simplelogger::Logger *logger =
     simplelogger::LoggerFactory::CreateConsoleLogger();
 
-void prepare_application_folders(const std::string &data_dir,
-                                 const std::vector<std::string> &folders,
-                                 std::string &media_dir) {
-    // create required folders
-    for (const auto &folder : folders) {
-        std::filesystem::path path = std::filesystem::path(data_dir) / folder;
-        if (!std::filesystem::exists(path)) {
-            if (std::filesystem::create_directories(path)) {
-                std::cout << "Created " << folder << " folder..." << std::endl;
-            }
+#if defined(_WIN32)
+#include <shlobj.h>
+#include <windows.h>
+#pragma comment(lib, "shell32.lib")
+#else
+#include <cstdlib>
+#include <pwd.h>
+#include <sys/types.h>
+#include <unistd.h>
+#endif
+
+std::string get_home_directory() {
+#if defined(_WIN32)
+    PWSTR path = nullptr;
+    std::string home;
+    if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Profile, 0, NULL, &path))) {
+        // Convert wide char to UTF-8
+        char buffer[MAX_PATH];
+        WideCharToMultiByte(CP_UTF8, 0, path, -1, buffer, MAX_PATH, NULL, NULL);
+        home = buffer;
+        CoTaskMemFree(path);
+    }
+    return home;
+#else
+    const char *home = std::getenv("HOME");
+    if (home != nullptr)
+        return std::string(home);
+
+    // fallback to passwd database
+    struct passwd *pw = getpwuid(getuid());
+    if (pw != nullptr)
+        return std::string(pw->pw_dir);
+
+    return {};
+#endif
+}
+
+std::string dir_difference(const std::filesystem::path &a,
+                           const std::filesystem::path &b) {
+    auto check =
+        [](const std::filesystem::path &parent,
+           const std::filesystem::path &child) -> std::filesystem::path {
+        std::filesystem::path p = parent.lexically_normal();
+        std::filesystem::path c = child.lexically_normal();
+
+        std::filesystem::path rel = c.lexically_relative(p);
+        if (rel.empty())
+            return {};
+
+        for (const auto &part : rel) {
+            if (part == "..")
+                return {};
+        }
+        return rel; // child is inside parent
+    };
+
+    std::filesystem::path d1 = check(a, b);
+    if (!d1.empty())
+        return d1.string();
+
+    std::filesystem::path d2 = check(b, a);
+    if (!d2.empty())
+        return d2.string();
+
+    return {};
+}
+
+bool ensure_dir_exists(const std::string &path_str, std::string *err) {
+
+    std::filesystem::path p =
+        std::filesystem::path(path_str).lexically_normal();
+
+    std::error_code ec;
+    auto st = std::filesystem::status(p, ec);
+    if (!ec) {
+        if (std::filesystem::is_directory(st))
+            return true; // already there
+        if (std::filesystem::exists(st)) {
+            if (err)
+                *err = "Path exists but is not a directory";
+            return false;
         }
     }
 
-    // default to empty
-    media_dir.clear();
+    // Create parents + leaf; succeeds if it already exists as a dir
+    std::filesystem::create_directories(p, ec);
+    if (ec) {
+        if (err)
+            *err = ec.message();
+        return false;
+    }
+    return true;
+}
+
+void prepare_application_folders(const std::string &data_dir,
+                                 std::string &red_data_dir,
+                                 std::string &media_dir) {
+
+    std::string home_dir = get_home_directory();
 
     // check for config.json
     std::filesystem::path config_path =
-        std::filesystem::path(data_dir) / "config.json";
+        std::filesystem::path(home_dir) / ".config/red/config.json";
     if (std::filesystem::exists(config_path)) {
         try {
             std::ifstream f(config_path);
@@ -38,10 +122,34 @@ void prepare_application_folders(const std::string &data_dir,
             if (j.contains("media_folder") && j["media_folder"].is_string()) {
                 media_dir = j["media_folder"].get<std::string>();
             }
+
+            if (j.contains("project_folder") &&
+                j["project_folder"].is_string()) {
+                red_data_dir = j["project_folder"].get<std::string>();
+            }
         } catch (const std::exception &e) {
             std::cerr << "Failed to read/parse config.json: " << e.what()
                       << std::endl;
         }
+    }
+
+    if (red_data_dir.empty()) {
+        red_data_dir = home_dir + "/red_data";
+    }
+    std::vector<std::string> app_folders = {"yolo_model", "skeleton"};
+    // create required folders
+    for (const auto &folder : app_folders) {
+        std::filesystem::path path =
+            std::filesystem::path(red_data_dir) / folder;
+        if (!std::filesystem::exists(path)) {
+            if (std::filesystem::create_directories(path)) {
+                std::cout << "Created " << folder << " folder..." << std::endl;
+            }
+        }
+    }
+
+    if (media_dir.empty()) {
+        media_dir = red_data_dir;
     }
 }
 

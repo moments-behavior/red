@@ -33,19 +33,16 @@ int main(int, char **) {
                      .glsl_version = (char *)malloc(100)};
 
     render_initialize_target(window);
-
     render_scene *scene = (render_scene *)malloc(sizeof(render_scene));
-
-    std::filesystem::path cwd = std::filesystem::current_path();
-    std::string delimiter = "/";
-    std::vector<std::string> tokenized_path = string_split(cwd, delimiter);
-    //
-    std::string red_data_dir = "/home/" + tokenized_path[2] + "/red_data";
-    std::vector<std::string> app_folders = {"yolo_model", "skeleton"};
+    std::string red_data_dir;
+    std::string media_root_dir;
     std::string media_dir;
-    prepare_application_folders(red_data_dir, app_folders, media_dir);
+    prepare_application_folders(red_data_dir, red_data_dir, media_root_dir);
+    media_dir = media_root_dir;
     std::string skeleton_dir = red_data_dir + "/skeleton";
     std::string yolo_model_dir = red_data_dir + "/yolo_model";
+    std::string project_path;
+    std::string suggest_project_name;
     std::vector<std::string> camera_names;
     std::vector<CameraParams> camera_params;
     std::vector<std::thread> decoder_threads;
@@ -262,85 +259,104 @@ int main(int, char **) {
 
                 if (video_loaded) {
                     if (ImGui::BeginMenu("Skeleton")) {
-                        if (!skeleton_chosen) {
-                            skeleton = new SkeletonContext;
-                            // Initialize skeleton with safe default values
-                            skeleton->num_nodes = 0;
-                            skeleton->num_edges = 0;
-                            skeleton->name = "";
-                            skeleton->has_bbox = false;
-                            skeleton->has_skeleton = true;
-                            skeleton->node_colors.clear();
-                            skeleton->edges.clear();
-                            skeleton->node_names.clear();
+                        if (project_path.empty()) {
+                            if (ImGui::MenuItem("Select project folder")) {
+                                IGFD::FileDialogConfig cfg;
+                                cfg.countSelectionMax = 1;
+                                cfg.path = red_data_dir;
+                                cfg.fileName = suggest_project_name;
+                                cfg.flags = ImGuiFileDialogFlags_Modal;
+                                ImGuiFileDialog::Instance()->OpenDialog(
+                                    "ChooseProjectDir",
+                                    "Choose Project Directory", nullptr, cfg);
+                            }
+                            ImGui::EndMenu();
+                        } else {
+                            if (!skeleton_chosen) {
+                                skeleton = new SkeletonContext;
+                                // Initialize skeleton with safe default values
+                                skeleton->num_nodes = 0;
+                                skeleton->num_edges = 0;
+                                skeleton->name = "";
+                                skeleton->has_bbox = false;
+                                skeleton->has_skeleton = true;
+                                skeleton->node_colors.clear();
+                                skeleton->edges.clear();
+                                skeleton->node_names.clear();
 
-                            skeleton_map = skeleton_get_all();
-                        }
+                                skeleton_map = skeleton_get_all();
+                            }
 
-                        for (auto &element : skeleton_map) {
-                            // Allow skeleton selection if no skeleton is chosen
-                            // OR if there are no labeled frames
-                            bool can_switch_skeleton =
-                                !skeleton_chosen ||
-                                !has_labeled_frames(keypoints_map, skeleton);
+                            for (auto &element : skeleton_map) {
+                                // Allow skeleton selection if no skeleton is
+                                // chosen OR if there are no labeled frames
+                                bool can_switch_skeleton =
+                                    !skeleton_chosen ||
+                                    !has_labeled_frames(keypoints_map,
+                                                        skeleton);
 
-                            if (ImGui::MenuItem(element.first.c_str(), NULL,
-                                                skeleton->name == element.first,
-                                                can_switch_skeleton)) {
-                                // Clean up existing skeleton data when
-                                // switching
-                                if (skeleton_chosen) {
-                                    cleanup_skeleton_data(keypoints_map, scene);
-                                }
-
-                                if (element.second == SP_LOAD) {
-                                    IGFD::FileDialogConfig config;
-                                    config.countSelectionMax = 1;
-                                    config.path = skeleton_dir;
-                                    config.flags = ImGuiFileDialogFlags_Modal;
-                                    ImGuiFileDialog::Instance()->OpenDialog(
-                                        "ChooseSkeleton", "Choose Skeleton",
-                                        ".json", config);
-                                } else {
-
-                                    bool load_calibration = true;
-                                    if (scene->num_cams > 1) {
-                                        for (u32 i = 0; i < scene->num_cams;
-                                             i++) {
-                                            std::string cam_file =
-                                                media_dir + "/calibration/" +
-                                                camera_names[i] + ".yaml";
-
-                                            CameraParams cam;
-                                            if (camera_load_params_from_yaml(
-                                                    cam_file, cam,
-                                                    error_message)) {
-                                                camera_params.push_back(cam);
-                                            } else {
-                                                load_calibration = false;
-                                                camera_params.clear();
-                                                show_error = true;
-                                                break;
-                                            }
-                                        }
+                                if (ImGui::MenuItem(element.first.c_str(), NULL,
+                                                    skeleton->name ==
+                                                        element.first,
+                                                    can_switch_skeleton)) {
+                                    // Clean up existing skeleton data when
+                                    // switching
+                                    if (skeleton_chosen) {
+                                        cleanup_skeleton_data(keypoints_map,
+                                                              scene);
                                     }
 
-                                    if (load_calibration) {
-                                        skeleton_initialize(element.first,
-                                                            media_dir, skeleton,
-                                                            element.second);
-                                        plot_keypoints_flag = true;
-                                        keypoints_root_folder =
-                                            media_dir + "/labeled_data/";
-                                        // create folders
-                                        std::filesystem::create_directory(
-                                            keypoints_root_folder);
-                                        skeleton_chosen = true;
+                                    if (element.second == SP_LOAD) {
+                                        IGFD::FileDialogConfig config;
+                                        config.countSelectionMax = 1;
+                                        config.path = skeleton_dir;
+                                        config.flags =
+                                            ImGuiFileDialogFlags_Modal;
+                                        ImGuiFileDialog::Instance()->OpenDialog(
+                                            "ChooseSkeleton", "Choose Skeleton",
+                                            ".json", config);
+                                    } else {
+                                        bool load_calibration = true;
+                                        if (scene->num_cams > 1) {
+                                            for (u32 i = 0; i < scene->num_cams;
+                                                 i++) {
+                                                std::string cam_file =
+                                                    project_path +
+                                                    "/calibration/" +
+                                                    camera_names[i] + ".yaml";
+
+                                                CameraParams cam;
+                                                if (camera_load_params_from_yaml(
+                                                        cam_file, cam,
+                                                        error_message)) {
+                                                    camera_params.push_back(
+                                                        cam);
+                                                } else {
+                                                    load_calibration = false;
+                                                    camera_params.clear();
+                                                    show_error = true;
+                                                    break;
+                                                }
+                                            }
+                                        }
+
+                                        if (load_calibration) {
+                                            skeleton_initialize(element.first,
+                                                                "", skeleton,
+                                                                element.second);
+                                            plot_keypoints_flag = true;
+                                            keypoints_root_folder =
+                                                project_path + "/labeled_data/";
+                                            // create folders
+                                            std::filesystem::create_directory(
+                                                keypoints_root_folder);
+                                            skeleton_chosen = true;
+                                        }
                                     }
                                 }
                             }
+                            ImGui::EndMenu();
                         }
-                        ImGui::EndMenu();
                     }
                 }
 
@@ -378,6 +394,14 @@ int main(int, char **) {
 
                 ImGui::InputInt("Buffer Size", &label_buffer_size);
             }
+
+            if (!project_path.empty()) {
+                ImGui::TextUnformatted("Project path: ");
+                ImGui::SameLine(0.0f, 0.0f);
+                ImGui::TextColored(ImVec4(0.35f, 0.75f, 1.0f, 1.0f), "%s",
+                                   project_path.c_str());
+            }
+
             if (video_loaded) {
                 ImGui::InputInt("Seek Step", &dc_context->seek_interval, 10,
                                 100);
@@ -419,11 +443,27 @@ int main(int, char **) {
         ImGui::End();
 
         // file explorer display
+        if (ImGuiFileDialog::Instance()->Display("ChooseProjectDir")) {
+            // => will show a dialog
+            if (ImGuiFileDialog::Instance()->IsOk()) {
+                project_path = ImGuiFileDialog::Instance()->GetCurrentPath();
+                if (!ensure_dir_exists(project_path, &error_message)) {
+                    show_error = true;
+                    project_path = "";
+                }
+            }
+            // close
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        // file explorer display
         if (ImGuiFileDialog::Instance()->Display("ChooseMedia")) {
             if (ImGuiFileDialog::Instance()->IsOk()) { // action if OK
                 auto selected_files =
                     ImGuiFileDialog::Instance()->GetSelection();
                 media_dir = ImGuiFileDialog::Instance()->GetCurrentPath();
+                suggest_project_name =
+                    dir_difference(media_dir, media_root_dir);
                 // check if it is mp4, if it is mp4 files
                 auto first_selection =
                     *selected_files.begin(); // Dereferencing iterator
@@ -534,7 +574,8 @@ int main(int, char **) {
                     bool load_calibration = true;
                     if (scene->num_cams > 1) {
                         for (u32 i = 0; i < scene->num_cams; i++) {
-                            std::string cam_file = media_dir + "/calibration/" +
+                            std::string cam_file = project_path +
+                                                   "/calibration/" +
                                                    camera_names[i] + ".yaml";
 
                             CameraParams cam;
@@ -563,7 +604,7 @@ int main(int, char **) {
                         skeleton_initialize("", skeleton_file.begin()->second,
                                             skeleton, SP_LOAD);
                         plot_keypoints_flag = true;
-                        keypoints_root_folder = media_dir + "/labeled_data/";
+                        keypoints_root_folder = project_path + "/labeled_data/";
                         skeleton_chosen = true;
                     }
                 }
@@ -2988,7 +3029,7 @@ int main(int, char **) {
                 if (ImGui::Button("Update keypoints working directory")) {
                     IGFD::FileDialogConfig config;
                     config.countSelectionMax = 1;
-                    config.path = media_dir;
+                    config.path = project_path;
                     config.flags = ImGuiFileDialogFlags_Modal;
                     ImGuiFileDialog::Instance()->OpenDialog(
                         "ChooseKeypointsFolder",
@@ -4096,7 +4137,7 @@ int main(int, char **) {
         }
 
         DrawLiveTable(table, "Spreadsheet", scene, video_fps, ps, &video_loaded,
-                      media_dir);
+                      project_path);
 
         // YOLO Export Tool Window
         if (show_yolo_export_tool) {

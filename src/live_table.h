@@ -86,7 +86,7 @@ inline void OnCellShiftClick(int row, int col, const std::string &value,
 inline void DrawLiveTable(LiveTable &t, const char *window_id,
                           render_scene *scene, double video_fps,
                           PlaybackState &ps, bool *video_loaded,
-                          std::string &media_dir) {
+                          std::string &project_dir) {
     if (!t.is_open)
         return;
     if (!ImGui::Begin(window_id, &t.is_open, ImGuiWindowFlags_None)) {
@@ -106,14 +106,14 @@ inline void DrawLiveTable(LiveTable &t, const char *window_id,
 
     if (ImGui::Button("Load CSV")) {
         IGFD::FileDialogConfig cfg;
-        cfg.path = media_dir;
+        cfg.path = project_dir;
         ImGuiFileDialog::Instance()->OpenDialog("LoadCSVDlg", "Load CSV/TSV",
                                                 ".csv,.tsv", cfg);
     }
     ImGui::SameLine();
     if (ImGui::Button("Save CSV")) {
         IGFD::FileDialogConfig cfg;
-        cfg.path = media_dir;
+        cfg.path = project_dir;
         cfg.fileName = "spreadsheet.csv";
         cfg.flags = ImGuiFileDialogFlags_ConfirmOverwrite;
         ImGuiFileDialog::Instance()->OpenDialog("SaveCSVDlg", "Save CSV/TSV",
