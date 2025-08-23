@@ -41,5 +41,5 @@ void prepare_application_folders(const std::string &data_dir,
                                  std::string &media_dir);
 std::string dir_difference(const std::filesystem::path &a,
                            const std::filesystem::path &b);
-bool ensure_dir_exists(const std::string &path_str, std::string *err);
+bool ensure_dir_exists(std::string path_string, std::string *err);
 #endif

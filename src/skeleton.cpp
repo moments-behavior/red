@@ -23,8 +23,7 @@ std::map<std::string, SkeletonPrimitive> skeleton_get_all() {
         {"Rat24Target", Rat24Target},
         {"BoundingBox", SP_BBOX},
         {"OrientedBoundingBox", SP_OBB},
-        {"Simple BBox+Skeleton", SP_SIMPLE_BBOX_SKELETON},
-        {"Load from json", SP_LOAD}};
+        {"Simple BBox+Skeleton", SP_SIMPLE_BBOX_SKELETON}};
     return skeleton_all;
 }
 
@@ -52,10 +51,14 @@ void load_skeleton_json(std::string file_name, SkeletonContext *skeleton) {
                                   s_config["edges"][i][1]};
         skeleton->edges.push_back(edge_start_end);
     }
+    for (int i = 0; i < skeleton->num_nodes; i++) {
+        ImVec4 color =
+            (ImVec4)ImColor::HSV(i / (float)skeleton->num_nodes, 1.0f, 1.0f);
+        skeleton->node_colors.push_back(color);
+    }
 }
 
-void skeleton_initialize(std::string name, std::string skeleton_file_name,
-                         SkeletonContext *skeleton,
+void skeleton_initialize(std::string name, SkeletonContext *skeleton,
                          SkeletonPrimitive skeleton_type) {
     skeleton->has_skeleton = true;
     skeleton->has_bbox = false;
@@ -425,15 +428,6 @@ void skeleton_initialize(std::string name, std::string skeleton_file_name,
         }
 
         skeleton->edges = {{0, 1}};
-        break;
-
-    case SP_LOAD:
-        load_skeleton_json(skeleton_file_name, skeleton);
-        for (int i = 0; i < skeleton->num_nodes; i++) {
-            ImVec4 color = (ImVec4)ImColor::HSV(i / (float)skeleton->num_nodes,
-                                                1.0f, 1.0f);
-            skeleton->node_colors.push_back(color);
-        }
         break;
     }
 }

@@ -8,6 +8,7 @@
 #include "imgui_impl_opengl3.h"
 #include "implot.h"
 #include "live_table.h"
+#include "project.h"
 #include "render.h"
 #include "skeleton.h"
 #include "utils.h"
@@ -15,6 +16,7 @@
 #include "yolo_torch.h"
 #include <ImGuiFileDialog.h>
 #include <algorithm>
+#include <cstddef>
 #include <iostream>
 #include <misc/cpp/imgui_stdlib.h> // for InputText(std::string&)
 #include <stdio.h>
@@ -41,10 +43,6 @@ int main(int, char **) {
     media_dir = media_root_dir;
     std::string skeleton_dir = red_data_dir + "/skeleton";
     std::string yolo_model_dir = red_data_dir + "/yolo_model";
-    std::string project_path;
-    std::string suggest_project_name;
-    std::vector<std::string> camera_names;
-    std::vector<CameraParams> camera_params;
     std::vector<std::thread> decoder_threads;
     std::vector<FFmpegDemuxer *> demuxers;
 
@@ -61,17 +59,15 @@ int main(int, char **) {
     std::time_t last_saved = static_cast<std::time_t>(-1);
     bool video_loaded = false;
     bool cpu_buffer_toggle = true;
-    bool plot_keypoints_flag = false;
     int current_frame_num = 0;
     int previous_frame_num = -1;
-    bool skeleton_chosen = false;
     std::vector<std::string> imgs_names;
 
     // for labeling
-    SkeletonContext *skeleton;
+    SkeletonContext skeleton;
     std::map<u32, KeyPoints *> keypoints_map;
     bool keypoints_find = false;
-    std::map<std::string, SkeletonPrimitive> skeleton_map;
+    std::map<std::string, SkeletonPrimitive> skeleton_map = skeleton_get_all();
 
     // others
     ImVec4 clear_color = ImVec4(0.0f, 0.0f, 0.0f, 1.00f);
@@ -176,7 +172,6 @@ int main(int, char **) {
     colors[ImPlotCol_Crosshairs] = ImVec4(0.3f, 0.10f, 0.64f, 1.00f);
 
     bool yolo_detection = false;
-    std::string keypoints_root_folder;
     int label_buffer_size = 64;
     bool show_help_window = false;
     std::vector<bool> is_view_focused;
@@ -206,6 +201,10 @@ int main(int, char **) {
     float set_playback_speed = 1.0f;
     PlaybackState ps;
     LiveTable table;
+
+    // variables for project management
+    ProjectManager pm = ProjectManager();
+    pm.project_root_path = red_data_dir;
 
     while (!glfwWindowShouldClose(window->render_target)) {
         // Poll and handle events (inputs, window resize, etc.)
@@ -258,105 +257,11 @@ int main(int, char **) {
                 }
 
                 if (video_loaded) {
-                    if (ImGui::BeginMenu("Skeleton")) {
-                        if (project_path.empty()) {
-                            if (ImGui::MenuItem("Select project folder")) {
-                                IGFD::FileDialogConfig cfg;
-                                cfg.countSelectionMax = 1;
-                                cfg.path = red_data_dir;
-                                cfg.fileName = suggest_project_name;
-                                cfg.flags = ImGuiFileDialogFlags_Modal;
-                                ImGuiFileDialog::Instance()->OpenDialog(
-                                    "ChooseProjectDir",
-                                    "Choose Project Directory", nullptr, cfg);
-                            }
-                            ImGui::EndMenu();
-                        } else {
-                            if (!skeleton_chosen) {
-                                skeleton = new SkeletonContext;
-                                // Initialize skeleton with safe default values
-                                skeleton->num_nodes = 0;
-                                skeleton->num_edges = 0;
-                                skeleton->name = "";
-                                skeleton->has_bbox = false;
-                                skeleton->has_skeleton = true;
-                                skeleton->node_colors.clear();
-                                skeleton->edges.clear();
-                                skeleton->node_names.clear();
-
-                                skeleton_map = skeleton_get_all();
-                            }
-
-                            for (auto &element : skeleton_map) {
-                                // Allow skeleton selection if no skeleton is
-                                // chosen OR if there are no labeled frames
-                                bool can_switch_skeleton =
-                                    !skeleton_chosen ||
-                                    !has_labeled_frames(keypoints_map,
-                                                        skeleton);
-
-                                if (ImGui::MenuItem(element.first.c_str(), NULL,
-                                                    skeleton->name ==
-                                                        element.first,
-                                                    can_switch_skeleton)) {
-                                    // Clean up existing skeleton data when
-                                    // switching
-                                    if (skeleton_chosen) {
-                                        cleanup_skeleton_data(keypoints_map,
-                                                              scene);
-                                    }
-
-                                    if (element.second == SP_LOAD) {
-                                        IGFD::FileDialogConfig config;
-                                        config.countSelectionMax = 1;
-                                        config.path = skeleton_dir;
-                                        config.flags =
-                                            ImGuiFileDialogFlags_Modal;
-                                        ImGuiFileDialog::Instance()->OpenDialog(
-                                            "ChooseSkeleton", "Choose Skeleton",
-                                            ".json", config);
-                                    } else {
-                                        bool load_calibration = true;
-                                        if (scene->num_cams > 1) {
-                                            for (u32 i = 0; i < scene->num_cams;
-                                                 i++) {
-                                                std::string cam_file =
-                                                    project_path +
-                                                    "/calibration/" +
-                                                    camera_names[i] + ".yaml";
-
-                                                CameraParams cam;
-                                                if (camera_load_params_from_yaml(
-                                                        cam_file, cam,
-                                                        error_message)) {
-                                                    camera_params.push_back(
-                                                        cam);
-                                                } else {
-                                                    load_calibration = false;
-                                                    camera_params.clear();
-                                                    show_error = true;
-                                                    break;
-                                                }
-                                            }
-                                        }
-
-                                        if (load_calibration) {
-                                            skeleton_initialize(element.first,
-                                                                "", skeleton,
-                                                                element.second);
-                                            plot_keypoints_flag = true;
-                                            keypoints_root_folder =
-                                                project_path + "/labeled_data/";
-                                            // create folders
-                                            std::filesystem::create_directory(
-                                                keypoints_root_folder);
-                                            skeleton_chosen = true;
-                                        }
-                                    }
-                                }
-                            }
-                            ImGui::EndMenu();
+                    if (ImGui::BeginMenu("Annotate")) {
+                        if (ImGui::MenuItem("Create Project")) {
+                            pm.show_project_window = true;
                         }
+                        ImGui::EndMenu();
                     }
                 }
 
@@ -393,13 +298,6 @@ int main(int, char **) {
                 }
 
                 ImGui::InputInt("Buffer Size", &label_buffer_size);
-            }
-
-            if (!project_path.empty()) {
-                ImGui::TextUnformatted("Project path: ");
-                ImGui::SameLine(0.0f, 0.0f);
-                ImGui::TextColored(ImVec4(0.35f, 0.75f, 1.0f, 1.0f), "%s",
-                                   project_path.c_str());
             }
 
             if (video_loaded) {
@@ -442,27 +340,52 @@ int main(int, char **) {
         }
         ImGui::End();
 
-        // file explorer display
+        DrawProjectWindow(pm, skeleton_map, skeleton, skeleton_dir, show_error,
+                          error_message, scene);
+
         if (ImGuiFileDialog::Instance()->Display("ChooseProjectDir")) {
-            // => will show a dialog
             if (ImGuiFileDialog::Instance()->IsOk()) {
-                project_path = ImGuiFileDialog::Instance()->GetCurrentPath();
-                if (!ensure_dir_exists(project_path, &error_message)) {
-                    show_error = true;
-                    project_path = media_dir;
+                std::filesystem::path chosen;
+
+                auto sel = ImGuiFileDialog::Instance()->GetSelection();
+                if (!sel.empty()) {
+                    chosen = std::filesystem::path(sel.begin()->second);
+                    if (std::filesystem::is_regular_file(chosen)) {
+                        chosen = chosen.parent_path();
+                    }
+                } else {
+                    chosen = std::filesystem::path(
+                        ImGuiFileDialog::Instance()->GetCurrentPath());
                 }
+                pm.project_root_path = chosen.string();
             }
-            // close
             ImGuiFileDialog::Instance()->Close();
         }
 
-        // file explorer display
+        if (ImGuiFileDialog::Instance()->Display("ChooseCalibration")) {
+            if (ImGuiFileDialog::Instance()->IsOk()) {
+                std::filesystem::path chosen;
+                auto sel = ImGuiFileDialog::Instance()->GetSelection();
+                if (!sel.empty()) {
+                    chosen = std::filesystem::path(sel.begin()->second);
+                    if (std::filesystem::is_regular_file(chosen)) {
+                        chosen = chosen.parent_path();
+                    }
+                } else {
+                    chosen = std::filesystem::path(
+                        ImGuiFileDialog::Instance()->GetCurrentPath());
+                }
+                pm.project_calibration_folder = chosen.string();
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
         if (ImGuiFileDialog::Instance()->Display("ChooseMedia")) {
-            if (ImGuiFileDialog::Instance()->IsOk()) { // action if OK
+            if (ImGuiFileDialog::Instance()->IsOk()) {
                 auto selected_files =
                     ImGuiFileDialog::Instance()->GetSelection();
                 media_dir = ImGuiFileDialog::Instance()->GetCurrentPath();
-                suggest_project_name =
+                pm.suggest_project_name =
                     dir_difference(media_dir, media_root_dir);
                 // check if it is mp4, if it is mp4 files
                 auto first_selection =
@@ -473,7 +396,7 @@ int main(int, char **) {
                             elem.first.find("mp4");
                         std::string cam_string =
                             elem.first.substr(0, cam_string_mp4_position - 1);
-                        camera_names.push_back(cam_string);
+                        pm.camera_names.push_back(cam_string);
                         std::cout << "camera names: " << cam_string
                                   << std::endl;
                         window_need_decoding[cam_string].store(true);
@@ -487,8 +410,9 @@ int main(int, char **) {
                     FFmpegDemuxer dummy_dmuxer(
                         selected_files.begin()->second.c_str(), m);
                     dc_context->seek_interval =
-                        (int)dummy_dmuxer
-                            .FindKeyFrameInterval(); // get the seek interval
+                        (int)
+                            dummy_dmuxer.FindKeyFrameInterval(); // get the seek
+                                                                 // interval
                     video_fps = dummy_dmuxer.GetFramerate();
                     scene->num_cams = selected_files.size();
                     scene->image_width =
@@ -505,7 +429,7 @@ int main(int, char **) {
                     for (int i = 0; i < scene->num_cams; i++) {
                         decoder_threads.push_back(std::thread(
                             &decoder_process, dc_context, demuxers[i],
-                            camera_names[i], scene->display_buffer[i],
+                            pm.camera_names[i], scene->display_buffer[i],
                             scene->size_of_buffer, &scene->seek_context[i],
                             scene->use_cpu_buffer));
                         is_view_focused.push_back(false);
@@ -520,9 +444,10 @@ int main(int, char **) {
                         std::string file_name =
                             elem.first.substr(cam_string_position + 1);
 
-                        if (std::find(camera_names.begin(), camera_names.end(),
-                                      cam_name) == camera_names.end()) {
-                            camera_names.push_back(cam_name);
+                        if (std::find(pm.camera_names.begin(),
+                                      pm.camera_names.end(),
+                                      cam_name) == pm.camera_names.end()) {
+                            pm.camera_names.push_back(cam_name);
                         }
 
                         if (std::find(imgs_names.begin(), imgs_names.end(),
@@ -532,14 +457,14 @@ int main(int, char **) {
                     }
 
                     dc_context->seek_interval = 1;
-                    scene->num_cams = camera_names.size();
+                    scene->num_cams = pm.camera_names.size();
                     scene->image_width =
                         (u32 *)malloc(sizeof(u32) * scene->num_cams);
                     scene->image_height =
                         (u32 *)malloc(sizeof(u32) * scene->num_cams);
                     for (u32 j = 0; j < scene->num_cams; j++) {
                         std::string file_name = media_dir + "/" +
-                                                camera_names[j] + "_" +
+                                                pm.camera_names[j] + "_" +
                                                 imgs_names[0];
                         cv::Mat image = cv::imread(file_name, cv::IMREAD_COLOR);
                         scene->image_width[j] = image.cols;
@@ -554,7 +479,7 @@ int main(int, char **) {
                             &image_loader, dc_context, imgs_names,
                             scene->display_buffer[i], scene->size_of_buffer,
                             &scene->seek_context[i], scene->use_cpu_buffer,
-                            camera_names[i], media_dir));
+                            pm.camera_names[i], media_dir));
                         is_view_focused.push_back(false);
                     }
                     video_loaded = true;
@@ -566,48 +491,8 @@ int main(int, char **) {
 
         if (ImGuiFileDialog::Instance()->Display("ChooseSkeleton")) {
             if (ImGuiFileDialog::Instance()->IsOk()) { // action if OK
-                auto skeleton_file =
-                    ImGuiFileDialog::Instance()->GetSelection();
-
-                if (!skeleton_file.empty()) {
-
-                    bool load_calibration = true;
-                    if (scene->num_cams > 1) {
-                        for (u32 i = 0; i < scene->num_cams; i++) {
-                            std::string cam_file = project_path +
-                                                   "/calibration/" +
-                                                   camera_names[i] + ".yaml";
-
-                            CameraParams cam;
-                            if (camera_load_params_from_yaml(cam_file, cam,
-                                                             error_message)) {
-                                camera_params.push_back(cam);
-                            } else {
-                                load_calibration = false;
-                                camera_params.clear();
-                                show_error = true;
-                                break;
-                            }
-                        }
-                    }
-
-                    if (load_calibration) {
-                        if (skeleton_chosen) {
-                            cleanup_skeleton_data(keypoints_map, scene);
-                        }
-
-                        skeleton_dir =
-                            ImGuiFileDialog::Instance()->GetCurrentPath();
-                        skeleton_file_path =
-                            skeleton_file.begin()
-                                ->second; // Store the skeleton file path
-                        skeleton_initialize("", skeleton_file.begin()->second,
-                                            skeleton, SP_LOAD);
-                        plot_keypoints_flag = true;
-                        keypoints_root_folder = project_path + "/labeled_data/";
-                        skeleton_chosen = true;
-                    }
-                }
+                pm.project_skeleton_file =
+                    ImGuiFileDialog::Instance()->GetFilePathName();
             }
             // close
             ImGuiFileDialog::Instance()->Close();
@@ -754,7 +639,7 @@ int main(int, char **) {
             int visible_idx = 0;
             if (!ps.pause_seeked) {
                 for (int i = 0; i < scene->num_cams; i++) {
-                    if (window_was_decoding[camera_names[i]]) {
+                    if (window_was_decoding[pm.camera_names[i]]) {
                         visible_idx = i;
                         break;
                     }
@@ -811,9 +696,9 @@ int main(int, char **) {
 
             // Automatic YOLO detection for current frame
             if (auto_yolo_labeling && !yolo_model_path.empty() &&
-                skeleton->has_bbox) {
+                skeleton.has_bbox) {
                 if (!frameHasYoloDetections(current_frame_num, keypoints_map,
-                                            skeleton) &&
+                                            &skeleton) &&
                     yolo_processed_frames.find(current_frame_num) ==
                         yolo_processed_frames.end()) {
 
@@ -846,7 +731,7 @@ int main(int, char **) {
                                 }
                             }
                         } else {
-                            if (window_was_decoding[camera_names[cam_id]]) {
+                            if (window_was_decoding[pm.camera_names[cam_id]]) {
                                 unsigned char *frame_data =
                                     scene
                                         ->display_buffer[cam_id]
@@ -886,7 +771,7 @@ int main(int, char **) {
                                     KeyPoints *keypoints =
                                         (KeyPoints *)malloc(sizeof(KeyPoints));
                                     allocate_keypoints(keypoints, scene,
-                                                       skeleton);
+                                                       &skeleton);
                                     keypoints_map[current_frame_num] =
                                         keypoints;
                                 }
@@ -916,11 +801,11 @@ int main(int, char **) {
                                         bbox.bbox_keypoints2d = nullptr;
                                         bbox.active_kp_id = nullptr;
 
-                                        if (skeleton->has_bbox &&
-                                            skeleton->has_skeleton &&
-                                            skeleton->num_nodes > 0) {
+                                        if (skeleton.has_bbox &&
+                                            skeleton.has_skeleton &&
+                                            skeleton.num_nodes > 0) {
                                             allocate_bbox_keypoints(
-                                                &bbox, scene, skeleton);
+                                                &bbox, scene, &skeleton);
                                         }
 
                                         keypoints_map[current_frame_num]
@@ -944,7 +829,7 @@ int main(int, char **) {
         // Render a video frame
         if (video_loaded) {
             for (int j = 0; j < scene->num_cams; j++) {
-                const std::string &win_name = camera_names[j];
+                const std::string &win_name = pm.camera_names[j];
 
                 // layout
                 ImGui::SetNextWindowSize(ImVec2(500, 400),
@@ -1005,9 +890,10 @@ int main(int, char **) {
 
                 if (is_visible) {
                     if (ps.play_video) {
-                        // if the current frame is ready, upload for display,
-                        // otherwise wait for the frame to get ready
-                        // while (scene->display_buffer[j][ps.read_head]
+                        // if the current frame is ready, upload for
+                        // display, otherwise wait for the frame to get
+                        // ready while
+                        // (scene->display_buffer[j][ps.read_head]
                         //            .frame_number !=
                         //        ps.to_display_frame_number) {
                         //     std::cout
@@ -1017,7 +903,8 @@ int main(int, char **) {
                         //         << scene->display_buffer[j][ps.read_head]
                         //                .frame_number
                         //         << ", to_display_frame_number: "
-                        //         << ps.to_display_frame_number << std::endl;
+                        //         << ps.to_display_frame_number <<
+                        //         std::endl;
                         //     std::this_thread::sleep_for(
                         //         std::chrono::milliseconds(1));
                         // }
@@ -1026,8 +913,10 @@ int main(int, char **) {
                         if (scene->use_cpu_buffer) {
                             // upload_texture(&scene->image_texture[j],
                             // scene->display_buffer[j][read_head].frame,
-                            // scene->image_width[j], scene->image_height[j]);
-                            // // 2x slower than pbo copy frame to cuda buffer
+                            // scene->image_width[j],
+                            // scene->image_height[j]);
+                            // // 2x slower than pbo copy frame to cuda
+                            // buffer
                             ck(cudaMemcpy(
                                 scene->pbo_cuda[j].cuda_buffer,
                                 scene->display_buffer[j][ps.read_head].frame,
@@ -1046,7 +935,8 @@ int main(int, char **) {
                         if (scene->use_cpu_buffer) {
                             // upload_texture(&scene->image_texture[j],
                             // scene->display_buffer[j][select_corr_head].frame,
-                            // scene->image_width[j], scene->image_height[j]);
+                            // scene->image_width[j],
+                            // scene->image_height[j]);
                             ck(cudaMemcpy(
                                 scene->pbo_cuda[j].cuda_buffer,
                                 scene->display_buffer[j][select_corr_head]
@@ -1081,7 +971,7 @@ int main(int, char **) {
                     // ImGui::Image((void*)(intptr_t)image_texture[j],
                     // avail_size);
                     //
-                    if (plot_keypoints_flag) {
+                    if (pm.plot_keypoints_flag) {
                         if (keypoints_map.find(current_frame_num) ==
                             keypoints_map.end()) {
                             keypoints_find = false;
@@ -1101,10 +991,11 @@ int main(int, char **) {
                             ImVec2(scene->image_width[j],
                                    scene->image_height[j]));
 
-                        if (plot_keypoints_flag) {
+                        if (pm.plot_keypoints_flag) {
                             // plot arena for testing camera parameters
                             // gui_plot_perimeter(&camera_params[j],
-                            // scene->image_height[j]); if (scene->num_cams > 1)
+                            // scene->image_height[j]); if (scene->num_cams
+                            // > 1)
                             // {
                             //     gui_plot_world_coordinates(&camera_params[j],
                             //     j, scene->image_height[j]);
@@ -1123,14 +1014,14 @@ int main(int, char **) {
                                             (KeyPoints *)malloc(
                                                 sizeof(KeyPoints));
                                         allocate_keypoints(keypoints, scene,
-                                                           skeleton);
+                                                           &skeleton);
                                         keypoints_map[current_frame_num] =
                                             keypoints;
                                     }
                                 }
 
-                                if (keypoints_find && skeleton->has_skeleton &&
-                                    !skeleton->has_bbox) {
+                                if (keypoints_find && skeleton.has_skeleton &&
+                                    !skeleton.has_bbox) {
                                     u32 *kp = &(keypoints_map[current_frame_num]
                                                     ->active_id[j]);
                                     if (ImGui::IsKeyPressed(ImGuiKey_W,
@@ -1148,7 +1039,7 @@ int main(int, char **) {
                                         keypoints_map[current_frame_num]
                                             ->keypoints2d[j][*kp]
                                             .is_triangulated = false;
-                                        if (*kp < (skeleton->num_nodes - 1)) {
+                                        if (*kp < (skeleton.num_nodes - 1)) {
                                             (*kp)++;
                                         }
                                     }
@@ -1163,8 +1054,8 @@ int main(int, char **) {
 
                                     if (ImGui::IsKeyPressed(ImGuiKey_D, true) &&
                                         !io.WantTextInput) {
-                                        if (*kp >= skeleton->num_nodes - 1) {
-                                            *kp = skeleton->num_nodes - 1;
+                                        if (*kp >= skeleton.num_nodes - 1) {
+                                            *kp = skeleton.num_nodes - 1;
                                         } else
                                             (*kp)++;
                                     }
@@ -1172,7 +1063,7 @@ int main(int, char **) {
                                     if (ImGui::IsKeyPressed(ImGuiKey_E,
                                                             false) &&
                                         !io.WantTextInput) {
-                                        *kp = skeleton->num_nodes - 1;
+                                        *kp = skeleton.num_nodes - 1;
                                     }
 
                                     if (ImGui::IsKeyPressed(ImGuiKey_Q,
@@ -1192,7 +1083,7 @@ int main(int, char **) {
                                         keypoints_find = false;
                                     }
                                 }
-                                if (skeleton->has_bbox) {
+                                if (skeleton.has_bbox) {
                                     static bool shift_was_pressed = false;
                                     bool shift_pressed =
                                         ImGui::GetIO().KeyShift;
@@ -1205,7 +1096,7 @@ int main(int, char **) {
                                             (KeyPoints *)malloc(
                                                 sizeof(KeyPoints));
                                         allocate_keypoints(keypoints, scene,
-                                                           skeleton);
+                                                           &skeleton);
                                         keypoints_map[current_frame_num] =
                                             keypoints;
                                     }
@@ -1227,8 +1118,8 @@ int main(int, char **) {
                                                 (double)scene->image_height[j],
                                                 mouse.y));
 
-                                        // Delete existing bbox with the same
-                                        // class_id and id
+                                        // Delete existing bbox with the
+                                        // same class_id and id
                                         if (keypoints_map.find(
                                                 current_frame_num) !=
                                             keypoints_map.end()) {
@@ -1236,8 +1127,8 @@ int main(int, char **) {
                                                 keypoints_map[current_frame_num]
                                                     ->bbox2d_list[j];
 
-                                            // Find and remove bbox with same
-                                            // class_id and id
+                                            // Find and remove bbox with
+                                            // same class_id and id
                                             bbox_list.erase(
                                                 std::remove_if(
                                                     bbox_list.begin(),
@@ -1260,7 +1151,8 @@ int main(int, char **) {
                                             clamped_y);
                                         new_bbox.state = RectOnePoint;
                                         new_bbox.class_id =
-                                            current_bbox_class; // Use currently
+                                            current_bbox_class; // Use
+                                                                // currently
                                                                 // selected
                                                                 // class
                                         new_bbox.id =
@@ -1270,14 +1162,14 @@ int main(int, char **) {
                                         new_bbox.bbox_keypoints2d = nullptr;
                                         new_bbox.active_kp_id = nullptr;
 
-                                        // Allocate keypoints for this bounding
-                                        // box only if skeleton has both bbox
-                                        // and skeleton
-                                        if (skeleton->has_bbox &&
-                                            skeleton->has_skeleton &&
-                                            skeleton->num_nodes > 0) {
+                                        // Allocate keypoints for this
+                                        // bounding box only if skeleton has
+                                        // both bbox and skeleton
+                                        if (skeleton.has_bbox &&
+                                            skeleton.has_skeleton &&
+                                            skeleton.num_nodes > 0) {
                                             allocate_bbox_keypoints(
-                                                &new_bbox, scene, skeleton);
+                                                &new_bbox, scene, &skeleton);
                                         }
 
                                         keypoints_map[current_frame_num]
@@ -1285,8 +1177,8 @@ int main(int, char **) {
                                             .push_back(new_bbox);
                                     }
 
-                                    // Only process bbox operations if keypoints
-                                    // exist for this frame
+                                    // Only process bbox operations if
+                                    // keypoints exist for this frame
                                     if (keypoints_map.find(current_frame_num) !=
                                         keypoints_map.end()) {
                                         for (auto &bbox :
@@ -1296,8 +1188,8 @@ int main(int, char **) {
                                                 shift_pressed) {
                                                 ImPlotPoint mouse =
                                                     ImPlot::GetPlotMousePos();
-                                                // Clamp mouse coordinates to
-                                                // frame bounds
+                                                // Clamp mouse coordinates
+                                                // to frame bounds
                                                 double clamped_x = std::max(
                                                     0.0,
                                                     std::min(
@@ -1337,8 +1229,8 @@ int main(int, char **) {
                                                 bbox.rect->Y.Min = y_min;
                                                 bbox.rect->Y.Max = y_max;
 
-                                                // Auto-increment bbox ID after
-                                                // finishing drawing
+                                                // Auto-increment bbox ID
+                                                // after finishing drawing
                                                 current_bbox_id++;
                                             }
                                         }
@@ -1352,7 +1244,7 @@ int main(int, char **) {
 
                             // Plot bounding boxes (both with and without
                             // keypoints)
-                            if (skeleton->has_bbox) {
+                            if (skeleton.has_bbox) {
                                 bool keypoints_find =
                                     keypoints_map.find(current_frame_num) !=
                                     keypoints_map.end();
@@ -1360,17 +1252,18 @@ int main(int, char **) {
                                     KeyPoints *keypoints =
                                         (KeyPoints *)malloc(sizeof(KeyPoints));
                                     allocate_keypoints(keypoints, scene,
-                                                       skeleton);
+                                                       &skeleton);
                                     keypoints_map[current_frame_num] =
                                         keypoints;
                                 }
 
-                                // Determine which bbox is active (under mouse
-                                // cursor)
+                                // Determine which bbox is active (under
+                                // mouse cursor)
                                 ImPlotPoint mouse = ImPlot::GetPlotMousePos();
                                 int active_bbox_idx = -1;
 
-                                // Check which bbox the mouse is hovering over
+                                // Check which bbox the mouse is hovering
+                                // over
                                 for (int bbox_idx = 0;
                                      bbox_idx < keypoints_map[current_frame_num]
                                                     ->bbox2d_list[j]
@@ -1388,8 +1281,8 @@ int main(int, char **) {
                                     }
                                 }
 
-                                // Update global active bbox tracking for this
-                                // camera
+                                // Update global active bbox tracking for
+                                // this camera
                                 if (j < user_active_bbox_idx.size()) {
                                     user_active_bbox_idx[j] = active_bbox_idx;
                                 }
@@ -1415,13 +1308,15 @@ int main(int, char **) {
                                                 [bbox.class_id];
                                         }
 
-                                        // Reduce opacity for inactive bboxes
+                                        // Reduce opacity for inactive
+                                        // bboxes
                                         bool is_active_bbox =
                                             (bbox_idx == active_bbox_idx);
                                         if (!is_active_bbox) {
                                             bbox_color.w =
-                                                0.6f; // Make inactive bboxes
-                                                      // more transparent
+                                                0.6f; // Make inactive
+                                                      // bboxes more
+                                                      // transparent
                                         }
 
                                         // Draw completed bounding boxes
@@ -1437,12 +1332,13 @@ int main(int, char **) {
                                                 bbox_prev_rects; // frame ->
                                                                  // {camera,
                                                                  // bbox_idx}
-                                                                 // -> prev_rect
+                                                                 // ->
+                                                                 // prev_rect
                                             auto bbox_key =
                                                 std::make_pair(j, bbox_idx);
 
-                                            // Initialize previous rect if not
-                                            // exists
+                                            // Initialize previous rect if
+                                            // not exists
                                             if (bbox_prev_rects.find(
                                                     bbox_key) ==
                                                 bbox_prev_rects.end()) {
@@ -1453,9 +1349,9 @@ int main(int, char **) {
                                             ImPlotRect prev_bbox_rect =
                                                 bbox_prev_rects[bbox_key];
 
-                                            // Only allow interaction if this is
-                                            // the active bbox or no bbox is
-                                            // active
+                                            // Only allow interaction if
+                                            // this is the active bbox or no
+                                            // bbox is active
                                             ImPlotDragToolFlags drag_flags =
                                                 ImPlotDragToolFlags_None;
                                             if (!is_active_bbox &&
@@ -1473,8 +1369,9 @@ int main(int, char **) {
                                                 drag_flags, &bbox_clicked,
                                                 &bbox_hovered, &bbox_held);
 
-                                            // Clamp bbox coordinates to frame
-                                            // bounds after any modification
+                                            // Clamp bbox coordinates to
+                                            // frame bounds after any
+                                            // modification
                                             if (bbox_modified || bbox_held) {
                                                 bbox.rect->X.Min = std::max(
                                                     0.0,
@@ -1505,15 +1402,16 @@ int main(int, char **) {
                                             // Display bbox ID on frame if
                                             // enabled
                                             if (show_bbox_ids) {
-                                                // Position text above top-right
-                                                // corner of bbox
+                                                // Position text above
+                                                // top-right corner of bbox
                                                 double text_x =
                                                     bbox.rect->X.Max -
-                                                    10.0; // Offset to the left
+                                                    10.0; // Offset to the
+                                                          // left
                                                 double text_y =
                                                     bbox.rect->Y.Max -
-                                                    10.0; // Offset above the
-                                                          // box
+                                                    10.0; // Offset above
+                                                          // the box
                                                 ImPlot::PushStyleColor(
                                                     ImPlotCol_InlayText,
                                                     ImVec4(1.0f, 1.0f, 1.0f,
@@ -1532,19 +1430,21 @@ int main(int, char **) {
                                             bool is_active_bbox =
                                                 (bbox_idx == active_bbox_idx);
 
-                                            // Scale bbox keypoints if bbox was
-                                            // resized and this is the active
-                                            // bbox
+                                            // Scale bbox keypoints if bbox
+                                            // was resized and this is the
+                                            // active bbox
                                             if (bbox_modified &&
                                                 bbox.has_bbox_keypoints &&
                                                 bbox.bbox_keypoints2d &&
                                                 is_active_bbox) {
                                                 scale_bbox_keypoints(
-                                                    &bbox, scene, skeleton,
+                                                    &bbox, scene, &skeleton,
                                                     &prev_bbox_rect, bbox.rect);
                                                 bbox_prev_rects[bbox_key] =
-                                                    *bbox.rect; // Update stored
-                                                                // previous rect
+                                                    *bbox.rect; // Update
+                                                                // stored
+                                                                // previous
+                                                                // rect
                                             }
 
                                             // Update previous rect when not
@@ -1554,11 +1454,12 @@ int main(int, char **) {
                                                     *bbox.rect;
                                             }
 
-                                            // Handle keyboard shortcuts when
-                                            // hovering over bounding box
+                                            // Handle keyboard shortcuts
+                                            // when hovering over bounding
+                                            // box
                                             if (bbox_hovered) {
-                                                // Update hovered bbox info for
-                                                // display
+                                                // Update hovered bbox info
+                                                // for display
                                                 hovered_bbox_cam = j;
                                                 hovered_bbox_idx = bbox_idx;
                                                 hovered_bbox_confidence =
@@ -1568,13 +1469,15 @@ int main(int, char **) {
                                                 hovered_bbox_id = bbox.id;
 
                                                 // Delete bounding box from
-                                                // current camera when 'T' key
-                                                // is pressed while hovering
+                                                // current camera when 'T'
+                                                // key is pressed while
+                                                // hovering
                                                 if (ImGui::IsKeyPressed(
                                                         ImGuiKey_F, false) &&
                                                     !io.WantTextInput) {
-                                                    // Clean up bbox keypoints
-                                                    // before deletion
+                                                    // Clean up bbox
+                                                    // keypoints before
+                                                    // deletion
                                                     if (bbox.has_bbox_keypoints &&
                                                         bbox.bbox_keypoints2d) {
                                                         free(
@@ -1586,7 +1489,8 @@ int main(int, char **) {
                                                             nullptr;
                                                     }
                                                     // Mark for deletion by
-                                                    // setting state to RectNull
+                                                    // setting state to
+                                                    // RectNull
                                                     delete bbox.rect;
                                                     bbox.rect = nullptr;
                                                     bbox.state = RectNull;
@@ -1594,15 +1498,16 @@ int main(int, char **) {
                                                         false;
                                                 }
 
-                                                // Delete bounding box from all
-                                                // cameras when 'O' key is
-                                                // pressed while hovering
+                                                // Delete bounding box from
+                                                // all cameras when 'O' key
+                                                // is pressed while hovering
                                                 if (ImGui::IsKeyPressed(
                                                         ImGuiKey_O, false) &&
                                                     !io.WantTextInput) {
-                                                    // Find this bbox's class_id
-                                                    // and delete all bboxes
-                                                    // with same class from all
+                                                    // Find this bbox's
+                                                    // class_id and delete
+                                                    // all bboxes with same
+                                                    // class from all
                                                     // cameras
                                                     int target_class_id =
                                                         bbox.class_id;
@@ -1626,7 +1531,8 @@ int main(int, char **) {
                                                                 other_bbox
                                                                         .rect !=
                                                                     nullptr) {
-                                                                // Clean up bbox
+                                                                // Clean up
+                                                                // bbox
                                                                 // keypoints
                                                                 // before
                                                                 // deletion
@@ -1667,8 +1573,8 @@ int main(int, char **) {
                                         // Draw bounding boxes being created
                                         // (one point set)
                                         else if (bbox.state == RectOnePoint) {
-                                            // Draw a preview rectangle while
-                                            // dragging
+                                            // Draw a preview rectangle
+                                            // while dragging
                                             double xs[5] = {bbox.rect->X.Min,
                                                             bbox.rect->X.Max,
                                                             bbox.rect->X.Max,
@@ -1685,25 +1591,27 @@ int main(int, char **) {
                                                              xs, ys, 5);
                                         }
 
-                                        // Plot keypoints within this bounding
-                                        // box (only if keypoints are enabled
-                                        // and skeleton has keypoints)
+                                        // Plot keypoints within this
+                                        // bounding box (only if keypoints
+                                        // are enabled and skeleton has
+                                        // keypoints)
                                         if (bbox.state == RectTwoPoints &&
                                             keypoints_find &&
-                                            skeleton->has_skeleton &&
+                                            skeleton.has_skeleton &&
                                             bbox.has_bbox_keypoints) {
                                             bool is_saved = true;
                                             // Only allow interaction with
-                                            // keypoints if this is the active
-                                            // bbox
+                                            // keypoints if this is the
+                                            // active bbox
                                             gui_plot_bbox_keypoints(
-                                                &bbox, skeleton, j,
+                                                &bbox, &skeleton, j,
                                                 scene->num_cams, is_active_bbox,
                                                 is_saved, bbox_idx);
 
-                                            // Handle keypoint labeling with W
-                                            // key for bounding box keypoints
-                                            // (only on active bbox)
+                                            // Handle keypoint labeling with
+                                            // W key for bounding box
+                                            // keypoints (only on active
+                                            // bbox)
                                             if (is_active_bbox &&
                                                 ImGui::IsKeyPressed(ImGuiKey_W,
                                                                     false) &&
@@ -1716,7 +1624,7 @@ int main(int, char **) {
                                                     u32 active_kp =
                                                         bbox.active_kp_id[j];
                                                     if (active_kp <
-                                                        skeleton->num_nodes) {
+                                                        skeleton.num_nodes) {
                                                         bbox.bbox_keypoints2d
                                                             [j][active_kp]
                                                                 .position = {
@@ -1736,7 +1644,7 @@ int main(int, char **) {
                                                             bbox.rect);
                                                         if (active_kp <
                                                             (skeleton
-                                                                 ->num_nodes -
+                                                                 .num_nodes -
                                                              1)) {
                                                             bbox.active_kp_id
                                                                 [j]++;
@@ -1763,11 +1671,10 @@ int main(int, char **) {
                                                         ImGuiKey_D, true) &&
                                                     !io.WantTextInput) {
                                                     if (*active_kp >=
-                                                        skeleton->num_nodes -
+                                                        skeleton.num_nodes -
                                                             1) {
                                                         *active_kp =
-                                                            skeleton
-                                                                ->num_nodes -
+                                                            skeleton.num_nodes -
                                                             1;
                                                     } else {
                                                         (*active_kp)++;
@@ -1780,7 +1687,7 @@ int main(int, char **) {
                             }
 
                             // Plot oriented bounding boxes
-                            if (skeleton->has_obb) {
+                            if (skeleton.has_obb) {
                                 bool keypoints_find =
                                     keypoints_map.find(current_frame_num) !=
                                     keypoints_map.end();
@@ -1788,7 +1695,7 @@ int main(int, char **) {
                                     KeyPoints *keypoints =
                                         (KeyPoints *)malloc(sizeof(KeyPoints));
                                     allocate_keypoints(keypoints, scene,
-                                                       skeleton);
+                                                       &skeleton);
                                     keypoints_map[current_frame_num] =
                                         keypoints;
                                 }
@@ -1817,16 +1724,16 @@ int main(int, char **) {
                                     ImPlotPoint mouse =
                                         ImPlot::GetPlotMousePos();
 
-                                    // Find an OBB to continue or create a new
-                                    // one
+                                    // Find an OBB to continue or create a
+                                    // new one
                                     bool found_incomplete_obb = false;
                                     for (auto &obb :
                                          keypoints_map[current_frame_num]
                                              ->obb2d_list[j]) {
                                         if (obb.state == OBBNull) {
-                                            // Start new OBB - place first axis
-                                            // point Clamp mouse coordinates to
-                                            // frame bounds
+                                            // Start new OBB - place first
+                                            // axis point Clamp mouse
+                                            // coordinates to frame bounds
                                             double clamped_x = std::max(
                                                 0.0,
                                                 std::min((double)scene
@@ -1851,8 +1758,8 @@ int main(int, char **) {
                                         } else if (obb.state ==
                                                    OBBFirstAxisPoint) {
                                             // Place second axis point
-                                            // Clamp mouse coordinates to frame
-                                            // bounds
+                                            // Clamp mouse coordinates to
+                                            // frame bounds
                                             double clamped_x = std::max(
                                                 0.0,
                                                 std::min((double)scene
@@ -1870,9 +1777,9 @@ int main(int, char **) {
                                             break;
                                         } else if (obb.state ==
                                                    OBBSecondAxisPoint) {
-                                            // Place corner point and complete
-                                            // the OBB Clamp mouse coordinates
-                                            // to frame bounds
+                                            // Place corner point and
+                                            // complete the OBB Clamp mouse
+                                            // coordinates to frame bounds
                                             double clamped_x = std::max(
                                                 0.0,
                                                 std::min((double)scene
@@ -1904,8 +1811,8 @@ int main(int, char **) {
                                         }
                                     }
 
-                                    // If no incomplete OBB found, create a new
-                                    // one
+                                    // If no incomplete OBB found, create a
+                                    // new one
                                     if (!found_incomplete_obb) {
                                         // Delete existing OBB with the same
                                         // class_id and id
@@ -1950,7 +1857,8 @@ int main(int, char **) {
                                         new_obb.rotation = 0;
                                         new_obb.state = OBBFirstAxisPoint;
                                         new_obb.class_id =
-                                            current_bbox_class; // Use currently
+                                            current_bbox_class; // Use
+                                                                // currently
                                                                 // selected
                                                                 // class
                                         new_obb.id =
@@ -1970,8 +1878,8 @@ int main(int, char **) {
                                 static bool obb_point_dragging = false;
                                 static size_t dragged_point_obb_idx = 0;
                                 static int dragged_point_type =
-                                    0; // 0 = axis_point1, 1 = axis_point2, 2 =
-                                       // corner_point
+                                    0; // 0 = axis_point1, 1 = axis_point2,
+                                       // 2 = corner_point
 
                                 // Handle construction point dragging
                                 if (is_view_focused[j] &&
@@ -2121,18 +2029,19 @@ int main(int, char **) {
                                             hovered_obb_id = obb.id;
 
                                             // Handle key presses for OBB
-                                            // manipulation (similar to bbox)
-                                            // Delete OBB from current camera
-                                            // when 'T' key is pressed while
-                                            // hovering
+                                            // manipulation (similar to
+                                            // bbox) Delete OBB from current
+                                            // camera when 'T' key is
+                                            // pressed while hovering
                                             if (ImGui::IsKeyPressed(ImGuiKey_T,
                                                                     false) &&
                                                 !io.WantTextInput) {
                                                 obb.state = OBBNull;
                                             }
 
-                                            // Delete OBB from all cameras when
-                                            // 'F' key is pressed while hovering
+                                            // Delete OBB from all cameras
+                                            // when 'F' key is pressed while
+                                            // hovering
                                             if (ImGui::IsKeyPressed(ImGuiKey_F,
                                                                     false) &&
                                                 !io.WantTextInput) {
@@ -2163,8 +2072,9 @@ int main(int, char **) {
                                                 }
                                             }
 
-                                            // Switch OBB class when 'A' or 'D'
-                                            // key is pressed while hovering
+                                            // Switch OBB class when 'A' or
+                                            // 'D' key is pressed while
+                                            // hovering
                                             if (ImGui::IsKeyPressed(ImGuiKey_A,
                                                                     true) &&
                                                 !io.WantTextInput) {
@@ -2189,8 +2099,8 @@ int main(int, char **) {
                                 // Draw all OBBs for this camera
                                 ImPlotPoint current_mouse =
                                     ImPlot::GetPlotMousePos();
-                                // Clamp mouse coordinates for preview to frame
-                                // bounds
+                                // Clamp mouse coordinates for preview to
+                                // frame bounds
                                 double clamped_mouse_x = std::max(
                                     0.0, std::min((double)scene->image_width[j],
                                                   current_mouse.x));
@@ -2221,8 +2131,8 @@ int main(int, char **) {
                                                 bbox_class_colors[obb.class_id];
                                         }
 
-                                        // Highlight when hovering, dragging, or
-                                        // during construction
+                                        // Highlight when hovering,
+                                        // dragging, or during construction
                                         bool is_active =
                                             (obb_dragging &&
                                              dragged_obb_idx == obb_idx) ||
@@ -2231,8 +2141,9 @@ int main(int, char **) {
                                             (!obb_dragging &&
                                              obb.state < OBBComplete);
 
-                                        // Show preview when we have at least
-                                        // one point and mouse is in plot area
+                                        // Show preview when we have at
+                                        // least one point and mouse is in
+                                        // plot area
                                         bool show_preview =
                                             ((obb.state == OBBFirstAxisPoint ||
                                               obb.state ==
@@ -2246,8 +2157,8 @@ int main(int, char **) {
                                                  clamped_preview_mouse,
                                                  show_preview);
 
-                                        // Display OBB ID on frame if enabled
-                                        // and OBB is complete
+                                        // Display OBB ID on frame if
+                                        // enabled and OBB is complete
                                         if (show_bbox_ids &&
                                             obb.state == OBBComplete) {
                                             // Position text above top-right
@@ -2269,20 +2180,21 @@ int main(int, char **) {
                             }
 
                             if (keypoints_find) {
-                                // Only plot keypoints if skeleton has keypoints
-                                // and we're not in bbox+keypoints mode
-                                if (skeleton->has_skeleton &&
-                                    !skeleton->has_bbox) {
+                                // Only plot keypoints if skeleton has
+                                // keypoints and we're not in bbox+keypoints
+                                // mode
+                                if (skeleton.has_skeleton &&
+                                    !skeleton.has_bbox) {
                                     gui_plot_keypoints(
                                         keypoints_map.at(current_frame_num),
-                                        skeleton, j, scene->num_cams);
+                                        &skeleton, j, scene->num_cams);
                                 }
 
-                                if (skeleton->name == "Rat4Box" ||
-                                    skeleton->name == "Rat4Box3Ball") {
+                                if (skeleton.name == "Rat4Box" ||
+                                    skeleton.name == "Rat4Box3Ball") {
                                     gui_plot_bbox_from_keypoints(
                                         keypoints_map.at(current_frame_num),
-                                        skeleton, j, 4, 5);
+                                        &skeleton, j, 4, 5);
                                 }
                             }
                         }
@@ -2482,15 +2394,15 @@ int main(int, char **) {
             }
         }
 
-        if (plot_keypoints_flag) {
+        if (pm.plot_keypoints_flag) {
             if (ImGui::Begin("Keypoints")) {
 
                 const float TEXT_BASE_HEIGHT =
                     ImGui::GetTextLineHeightWithSpacing();
 
-                // Only show bounding box class management if skeleton supports
-                // bboxes or obbs
-                if (skeleton && (skeleton->has_bbox || skeleton->has_obb)) {
+                // Only show bounding box class management if skeleton
+                // supports bboxes or obbs
+                if (skeleton.has_bbox || skeleton.has_obb) {
                     // Bounding Box Class Management Section
                     ImGui::SeparatorText("Bounding Box Classes");
 
@@ -2511,8 +2423,8 @@ int main(int, char **) {
                             if (ImGui::Selectable(bbox_class_names[i].c_str(),
                                                   is_selected)) {
                                 current_bbox_class = i;
-                                current_bbox_id =
-                                    0; // Reset bbox ID when switching classes
+                                current_bbox_id = 0; // Reset bbox ID when
+                                                     // switching classes
                             }
                             if (is_selected) {
                                 ImGui::SetItemDefaultFocus();
@@ -2543,11 +2455,11 @@ int main(int, char **) {
                     if (ImGui::Button("Add Class") &&
                         new_class_name.size() > 0) {
                         bbox_class_names.push_back(std::string(new_class_name));
-                        // Generate a unique color for the new class (HSV with
-                        // different hues)
+                        // Generate a unique color for the new class (HSV
+                        // with different hues)
                         float hue = (bbox_class_colors.size() *
-                                     0.618034f); // Golden ratio for nice color
-                                                 // distribution
+                                     0.618034f); // Golden ratio for nice
+                                                 // color distribution
                         while (hue > 1.0f)
                             hue -= 1.0f;
                         ImVec4 new_color =
@@ -2587,10 +2499,10 @@ int main(int, char **) {
 
                 // Check if skeleton is valid and has nodes before creating
                 // the table
-                if (skeleton && skeleton->num_nodes > 0) {
+                if (skeleton.num_nodes > 0) {
                     // Different table behavior based on skeleton
                     // configuration
-                    if (skeleton->has_skeleton && skeleton->has_bbox &&
+                    if (skeleton.has_skeleton && skeleton.has_bbox &&
                         keypoints_find) {
                         // Show bounding box keypoints table
                         int bbox_count = 0;
@@ -2607,7 +2519,7 @@ int main(int, char **) {
                         }
 
                         if (bbox_count > 0) {
-                            const int columns_count = skeleton->num_nodes + 1;
+                            const int columns_count = skeleton.num_nodes + 1;
                             static ImGuiTableFlags table_flags =
                                 ImGuiTableFlags_ScrollX |
                                 ImGuiTableFlags_ScrollY |
@@ -2629,8 +2541,7 @@ int main(int, char **) {
                                 for (int column = 1; column < columns_count;
                                      column++)
                                     ImGui::TableSetupColumn(
-                                        skeleton->node_names[column - 1]
-                                            .c_str(),
+                                        skeleton.node_names[column - 1].c_str(),
                                         ImGuiTableColumnFlags_AngledHeader |
                                             ImGuiTableColumnFlags_WidthFixed);
                                 ImGui::TableSetupScrollFreeze(1, 2);
@@ -2813,7 +2724,7 @@ int main(int, char **) {
                                                                 .is_labeled) {
                                                             node_color =
                                                                 skeleton
-                                                                    ->node_colors
+                                                                    .node_colors
                                                                         [column -
                                                                          1];
                                                             node_color.w = 0.9;
@@ -2852,10 +2763,10 @@ int main(int, char **) {
                             ImGui::Text(
                                 "No bounding boxes with keypoints found");
                         }
-                    } else if (skeleton->has_skeleton && !skeleton->has_bbox) {
+                    } else if (skeleton.has_skeleton && !skeleton.has_bbox) {
                         // Show regular camera keypoints table
                         const int rows_count = scene->num_cams;
-                        const int columns_count = skeleton->num_nodes + 1;
+                        const int columns_count = skeleton.num_nodes + 1;
 
                         static ImGuiTableFlags table_flags =
                             ImGuiTableFlags_ScrollX | ImGuiTableFlags_ScrollY |
@@ -2876,7 +2787,7 @@ int main(int, char **) {
                             for (int column = 1; column < columns_count;
                                  column++)
                                 ImGui::TableSetupColumn(
-                                    skeleton->node_names[column - 1].c_str(),
+                                    skeleton.node_names[column - 1].c_str(),
                                     ImGuiTableColumnFlags_AngledHeader |
                                         ImGuiTableColumnFlags_WidthFixed);
                             ImGui::TableSetupScrollFreeze(1, 2);
@@ -2907,7 +2818,7 @@ int main(int, char **) {
 
                                 ImGui::TableSetColumnIndex(0);
                                 ImGui::AlignTextToFramePadding();
-                                ImGui::Text("%s", camera_names[row].c_str());
+                                ImGui::Text("%s", pm.camera_names[row].c_str());
                                 for (int column = 1; column < columns_count;
                                      column++)
                                     if (ImGui::TableSetColumnIndex(column)) {
@@ -2927,7 +2838,7 @@ int main(int, char **) {
                                                                 [column - 1]
                                                             .is_labeled) {
                                                     node_color =
-                                                        skeleton->node_colors
+                                                        skeleton.node_colors
                                                             [column - 1];
                                                     node_color.w = 0.9;
                                                 }
@@ -2965,7 +2876,7 @@ int main(int, char **) {
                 bool keypoints_find = keypoints_map.find(current_frame_num) !=
                                       keypoints_map.end();
                 if (keypoints_find) {
-                    if (skeleton->has_bbox) {
+                    if (skeleton.has_bbox) {
                         ImGui::Separator();
                         ImGui::Text("Bounding Box Info:");
 
@@ -2981,7 +2892,7 @@ int main(int, char **) {
                         }
                     }
 
-                    if (skeleton->has_obb) {
+                    if (skeleton.has_obb) {
                         ImGui::Separator();
                         ImGui::Text("Oriented Bounding Box Info:");
 
@@ -2998,14 +2909,14 @@ int main(int, char **) {
             ImGui::End();
         }
 
-        if (plot_keypoints_flag) {
+        if (pm.plot_keypoints_flag) {
             if (ImGui::Begin("Labeling Tool")) {
 
                 if (scene->num_cams > 1) {
                     bool keypoint_triangulated_all = true;
                     if (keypoints_find) {
                         for (int i = 0; i < scene->num_cams; i++) {
-                            for (int j = 0; j < skeleton->num_nodes; j++) {
+                            for (int j = 0; j < skeleton.num_nodes; j++) {
                                 if (!keypoints_map.at(current_frame_num)
                                          ->keypoints2d[i][j]
                                          .is_triangulated) {
@@ -3034,12 +2945,13 @@ int main(int, char **) {
                     ImGui::BeginDisabled(!enabled);
                     if (ImGui::Button("Triangulate")) {
                         reprojection(keypoints_map.at(current_frame_num),
-                                     skeleton, camera_params, scene);
+                                     &skeleton, pm.camera_params, scene);
                     }
                     ImGui::EndDisabled();
 
                     // if (skeleton->has_bbox && keypoints_find) {
-                    //     if (ImGui::Button("Triangulate Bounding Boxes") ||
+                    //     if (ImGui::Button("Triangulate Bounding Boxes")
+                    //     ||
                     //         ImGui::IsKeyPressed(ImGuiKey_B, false)) {
                     //         triangulate_bounding_boxes(
                     //             keypoints_map.at(current_frame_num),
@@ -3058,7 +2970,7 @@ int main(int, char **) {
                             !io.WantTextInput) // triangulate
                         {
                             reprojection(keypoints_map.at(current_frame_num),
-                                         skeleton, camera_params, scene);
+                                         &skeleton, pm.camera_params, scene);
                         }
                     }
                 } else {
@@ -3069,14 +2981,14 @@ int main(int, char **) {
                 if (ImGui::Button("Update keypoints working directory")) {
                     IGFD::FileDialogConfig config;
                     config.countSelectionMax = 1;
-                    config.path = project_path;
+                    config.path = pm.project_path;
                     config.flags = ImGuiFileDialogFlags_Modal;
                     ImGuiFileDialog::Instance()->OpenDialog(
                         "ChooseKeypointsFolder",
                         "Choose keypoints working directory", nullptr, config);
                 }
                 ImGui::SameLine();
-                ImGui::Text("%s", keypoints_root_folder.c_str());
+                ImGui::Text("%s", pm.keypoints_root_folder.c_str());
 
                 if (ImGui::Button("Save Labeled Data") ||
                     (ImGui::GetIO().KeyCtrl &&
@@ -3084,25 +2996,27 @@ int main(int, char **) {
                      !io.WantTextInput)) {
 
                     // Detect what type of data we have and save accordingly
-                    if (skeleton->has_skeleton && !skeleton->has_bbox) {
-                        save_keypoints(keypoints_map, skeleton,
-                                       keypoints_root_folder, scene->num_cams,
-                                       camera_names, &input_is_imgs,
-                                       imgs_names);
+                    if (skeleton.has_skeleton && !skeleton.has_bbox) {
+                        save_keypoints(keypoints_map, &skeleton,
+                                       pm.keypoints_root_folder,
+                                       scene->num_cams, pm.camera_names,
+                                       &input_is_imgs, imgs_names);
                         std::cout << "Saved skeleton keypoints data"
                                   << std::endl;
-                    } else if (!skeleton->has_skeleton && skeleton->has_bbox) {
-                        save_bboxes(keypoints_map, skeleton,
-                                    keypoints_root_folder, scene->num_cams,
-                                    camera_names, &input_is_imgs, imgs_names);
+                    } else if (!skeleton.has_skeleton && skeleton.has_bbox) {
+                        save_bboxes(keypoints_map, &skeleton,
+                                    pm.keypoints_root_folder, scene->num_cams,
+                                    pm.camera_names, &input_is_imgs,
+                                    imgs_names);
                         std::cout << "Saved bounding boxes data" << std::endl;
-                    } else if (skeleton->has_obb) {
-                        save_obb(keypoints_map, skeleton, keypoints_root_folder,
-                                 camera_names, scene->num_cams, &imgs_names,
-                                 &input_is_imgs, bbox_class_names);
+                    } else if (skeleton.has_obb) {
+                        save_obb(keypoints_map, &skeleton,
+                                 pm.keypoints_root_folder, pm.camera_names,
+                                 scene->num_cams, &imgs_names, &input_is_imgs,
+                                 bbox_class_names);
                         std::cout << "Saved oriented bounding boxes data"
                                   << std::endl;
-                    } else if (skeleton->has_skeleton && skeleton->has_bbox) {
+                    } else if (skeleton.has_skeleton && skeleton.has_bbox) {
                         bool has_bbox_keypoints = false;
                         for (const auto &[frame_num, keypoints] :
                              keypoints_map) {
@@ -3128,36 +3042,36 @@ int main(int, char **) {
                         if (has_bbox_keypoints) {
                             // Save both skeleton keypoints and bbox
                             // keypoints
-                            save_keypoints(keypoints_map, skeleton,
-                                           keypoints_root_folder,
-                                           scene->num_cams, camera_names,
+                            save_keypoints(keypoints_map, &skeleton,
+                                           pm.keypoints_root_folder,
+                                           scene->num_cams, pm.camera_names,
                                            &input_is_imgs, imgs_names);
-                            save_bbox_keypoints(keypoints_map, skeleton,
-                                                keypoints_root_folder,
-                                                scene->num_cams, camera_names,
-                                                &input_is_imgs, imgs_names);
+                            save_bbox_keypoints(
+                                keypoints_map, &skeleton,
+                                pm.keypoints_root_folder, scene->num_cams,
+                                pm.camera_names, &input_is_imgs, imgs_names);
                             std::cout << "Saved skeleton keypoints and "
                                          "bounding box "
                                          "keypoints data"
                                       << std::endl;
                         } else {
-                            save_keypoints(keypoints_map, skeleton,
-                                           keypoints_root_folder,
-                                           scene->num_cams, camera_names,
+                            save_keypoints(keypoints_map, &skeleton,
+                                           pm.keypoints_root_folder,
+                                           scene->num_cams, pm.camera_names,
                                            &input_is_imgs, imgs_names);
-                            save_bboxes(keypoints_map, skeleton,
-                                        keypoints_root_folder, scene->num_cams,
-                                        camera_names, &input_is_imgs,
-                                        imgs_names);
+                            save_bboxes(keypoints_map, &skeleton,
+                                        pm.keypoints_root_folder,
+                                        scene->num_cams, pm.camera_names,
+                                        &input_is_imgs, imgs_names);
                             std::cout << "Saved skeleton keypoints and "
                                          "bounding boxes data"
                                       << std::endl;
                         }
                     } else {
-                        save_keypoints(keypoints_map, skeleton,
-                                       keypoints_root_folder, scene->num_cams,
-                                       camera_names, &input_is_imgs,
-                                       imgs_names);
+                        save_keypoints(keypoints_map, &skeleton,
+                                       pm.keypoints_root_folder,
+                                       scene->num_cams, pm.camera_names,
+                                       &input_is_imgs, imgs_names);
                         std::cout << "Saved skeleton keypoints data (fallback)"
                                   << std::endl;
                     }
@@ -3173,23 +3087,24 @@ int main(int, char **) {
                 if (ImGui::Button("Load Most Recent Labels")) {
                     free_all_keypoints(keypoints_map, scene);
                     if (load_old_format) {
-                        if (load_keypoints_depreciated(
-                                keypoints_map, skeleton, keypoints_root_folder,
-                                scene, camera_names, error_message)) {
+                        if (load_keypoints_depreciated(keypoints_map, &skeleton,
+                                                       pm.keypoints_root_folder,
+                                                       scene, pm.camera_names,
+                                                       error_message)) {
                             free_all_keypoints(keypoints_map, scene);
                             show_error = true;
                         }
 
                     } else {
                         std::string most_recent_folder;
-                        if (find_most_recent_labels(keypoints_root_folder,
+                        if (find_most_recent_labels(pm.keypoints_root_folder,
                                                     most_recent_folder,
                                                     error_message)) {
                             show_error = true;
                         } else {
                             if (load_keypoints(most_recent_folder,
-                                               keypoints_map, skeleton, scene,
-                                               camera_names, error_message,
+                                               keypoints_map, &skeleton, scene,
+                                               pm.camera_names, error_message,
                                                bbox_class_names)) {
                                 free_all_keypoints(keypoints_map, scene);
                                 show_error = true;
@@ -3203,7 +3118,7 @@ int main(int, char **) {
                 if (ImGui::Button("Load From Selected")) {
                     IGFD::FileDialogConfig config;
                     config.countSelectionMax = 1;
-                    config.path = keypoints_root_folder;
+                    config.path = pm.keypoints_root_folder;
                     config.flags = ImGuiFileDialogFlags_Modal;
                     ImGuiFileDialog::Instance()->OpenDialog(
                         "LoadFromSelected", "Load from selected", nullptr,
@@ -3220,12 +3135,12 @@ int main(int, char **) {
 
                     bool has_labels = false;
 
-                    if (skeleton->has_skeleton) {
+                    if (skeleton.has_skeleton) {
                         for (int cam_id = 0; cam_id < scene->num_cams &&
                                              cam_id < MAX_VIEWS && !has_labels;
                              cam_id++) {
                             for (int kp_id = 0;
-                                 kp_id < skeleton->num_nodes && !has_labels;
+                                 kp_id < skeleton.num_nodes && !has_labels;
                                  kp_id++) {
                                 if (keypoints->keypoints2d[cam_id][kp_id]
                                         .is_labeled) {
@@ -3235,7 +3150,7 @@ int main(int, char **) {
                         }
                     }
 
-                    if (!has_labels && skeleton->has_bbox) {
+                    if (!has_labels && skeleton.has_bbox) {
                         for (int cam_id = 0; cam_id < scene->num_cams &&
                                              cam_id < MAX_VIEWS && !has_labels;
                              cam_id++) {
@@ -3255,7 +3170,7 @@ int main(int, char **) {
                                 if (bbox.confidence >= 1.0f &&
                                     bbox.has_bbox_keypoints) {
                                     for (int kp_id = 0;
-                                         kp_id < skeleton->num_nodes &&
+                                         kp_id < skeleton.num_nodes &&
                                          !has_labels;
                                          kp_id++) {
                                         if (bbox.bbox_keypoints2d &&
@@ -3271,7 +3186,7 @@ int main(int, char **) {
                     }
 
                     // Check for OBB labels
-                    if (!has_labels && skeleton->has_obb) {
+                    if (!has_labels && skeleton.has_obb) {
                         for (int cam_id = 0; cam_id < scene->num_cams &&
                                              cam_id < MAX_VIEWS && !has_labels;
                              cam_id++) {
@@ -3303,13 +3218,13 @@ int main(int, char **) {
 
                         bool has_labels = false;
 
-                        if (skeleton->has_skeleton) {
+                        if (skeleton.has_skeleton) {
                             for (int cam_id = 0;
                                  cam_id < scene->num_cams &&
                                  cam_id < MAX_VIEWS && !has_labels;
                                  cam_id++) {
                                 for (int kp_id = 0;
-                                     kp_id < skeleton->num_nodes && !has_labels;
+                                     kp_id < skeleton.num_nodes && !has_labels;
                                      kp_id++) {
                                     if (keypoints->keypoints2d[cam_id][kp_id]
                                             .is_labeled) {
@@ -3319,7 +3234,7 @@ int main(int, char **) {
                             }
                         }
 
-                        if (!has_labels && skeleton->has_bbox) {
+                        if (!has_labels && skeleton.has_bbox) {
                             for (int cam_id = 0;
                                  cam_id < scene->num_cams &&
                                  cam_id < MAX_VIEWS && !has_labels;
@@ -3340,7 +3255,7 @@ int main(int, char **) {
                                     if (bbox.confidence >= 1.0f &&
                                         bbox.has_bbox_keypoints) {
                                         for (int kp_id = 0;
-                                             kp_id < skeleton->num_nodes &&
+                                             kp_id < skeleton.num_nodes &&
                                              !has_labels;
                                              kp_id++) {
                                             if (bbox.bbox_keypoints2d &&
@@ -3358,7 +3273,7 @@ int main(int, char **) {
                         }
 
                         // Check for OBB labels
-                        if (!has_labels && skeleton->has_obb) {
+                        if (!has_labels && skeleton.has_obb) {
                             for (int cam_id = 0;
                                  cam_id < scene->num_cams &&
                                  cam_id < MAX_VIEWS && !has_labels;
@@ -3407,12 +3322,12 @@ int main(int, char **) {
                     bool has_labels = false;
 
                     // Check for skeleton keypoint labels
-                    if (skeleton->has_skeleton && !has_labels) {
+                    if (skeleton.has_skeleton && !has_labels) {
                         for (int cam_id = 0; cam_id < scene->num_cams &&
                                              cam_id < MAX_VIEWS && !has_labels;
                              cam_id++) {
                             for (int kp_id = 0;
-                                 kp_id < skeleton->num_nodes && !has_labels;
+                                 kp_id < skeleton.num_nodes && !has_labels;
                                  kp_id++) {
                                 if (keypoints->keypoints2d[cam_id][kp_id]
                                         .is_labeled) {
@@ -3424,7 +3339,7 @@ int main(int, char **) {
 
                     // Check for bounding box labels (both manual and YOLO
                     // detections)
-                    if (skeleton->has_bbox && !has_labels) {
+                    if (skeleton.has_bbox && !has_labels) {
                         for (int cam_id = 0; cam_id < scene->num_cams &&
                                              cam_id < MAX_VIEWS && !has_labels;
                              cam_id++) {
@@ -3446,7 +3361,7 @@ int main(int, char **) {
                                 // Check for bbox keypoint labels
                                 if (bbox.has_bbox_keypoints) {
                                     for (int kp_id = 0;
-                                         kp_id < skeleton->num_nodes &&
+                                         kp_id < skeleton.num_nodes &&
                                          !has_labels;
                                          kp_id++) {
                                         if (bbox.bbox_keypoints2d &&
@@ -3462,7 +3377,7 @@ int main(int, char **) {
                     }
 
                     // Check for OBB labels
-                    if (skeleton->has_obb && !has_labels) {
+                    if (skeleton.has_obb && !has_labels) {
                         for (int cam_id = 0; cam_id < scene->num_cams &&
                                              cam_id < MAX_VIEWS && !has_labels;
                              cam_id++) {
@@ -3484,7 +3399,7 @@ int main(int, char **) {
 
                 // Only show YOLO button when current skeleton has bounding
                 // boxes
-                if (skeleton->has_bbox) {
+                if (skeleton.has_bbox) {
                     if (ImGui::Button("Select YOLO")) {
                         IGFD::FileDialogConfig config;
                         config.countSelectionMax = 1;
@@ -3549,7 +3464,7 @@ int main(int, char **) {
 
                         // Clear existing bounding boxes for current frame
                         // before running inference
-                        if (skeleton->has_bbox) {
+                        if (skeleton.has_bbox) {
                             bool keypoints_find =
                                 keypoints_map.find(current_frame_num) !=
                                 keypoints_map.end();
@@ -3604,7 +3519,8 @@ int main(int, char **) {
                                     }
                                 }
                             } else {
-                                if (window_was_decoding[camera_names[cam_id]]) {
+                                if (window_was_decoding
+                                        [pm.camera_names[cam_id]]) {
                                     unsigned char *frame_data =
                                         scene
                                             ->display_buffer[cam_id]
@@ -3648,7 +3564,7 @@ int main(int, char **) {
                                             (KeyPoints *)malloc(
                                                 sizeof(KeyPoints));
                                         allocate_keypoints(keypoints, scene,
-                                                           skeleton);
+                                                           &skeleton);
                                         keypoints_map[current_frame_num] =
                                             keypoints;
                                     }
@@ -3688,11 +3604,11 @@ int main(int, char **) {
                                             // Allocate keypoints if
                                             // skeleton supports both bbox
                                             // and skeleton
-                                            if (skeleton->has_bbox &&
-                                                skeleton->has_skeleton &&
-                                                skeleton->num_nodes > 0) {
+                                            if (skeleton.has_bbox &&
+                                                skeleton.has_skeleton &&
+                                                skeleton.num_nodes > 0) {
                                                 allocate_bbox_keypoints(
-                                                    &bbox, scene, skeleton);
+                                                    &bbox, scene, &skeleton);
                                             }
 
                                             // Add to main bounding box
@@ -3720,7 +3636,7 @@ int main(int, char **) {
 
         if (ImGuiFileDialog::Instance()->Display("ChooseKeypointsFolder")) {
             if (ImGuiFileDialog::Instance()->IsOk()) {
-                keypoints_root_folder =
+                pm.keypoints_root_folder =
                     ImGuiFileDialog::Instance()->GetCurrentPath();
             }
             // close
@@ -3732,8 +3648,8 @@ int main(int, char **) {
                 auto selected_folder =
                     ImGuiFileDialog::Instance()->GetCurrentPath();
                 free_all_keypoints(keypoints_map, scene);
-                if (load_keypoints(selected_folder, keypoints_map, skeleton,
-                                   scene, camera_names, error_message,
+                if (load_keypoints(selected_folder, keypoints_map, &skeleton,
+                                   scene, pm.camera_names, error_message,
                                    bbox_class_names)) {
                     free_all_keypoints(keypoints_map, scene);
                     show_error = true;
@@ -4161,7 +4077,7 @@ int main(int, char **) {
         }
 
         DrawLiveTable(table, "Spreadsheet", scene, video_fps, ps, &video_loaded,
-                      project_path);
+                      pm.project_path);
 
         // YOLO Export Tool Window
         if (show_yolo_export_tool) {
@@ -4180,30 +4096,30 @@ int main(int, char **) {
                     yolo_export_mode =
                         static_cast<YoloExportMode>(current_mode);
                     if (yolo_export_mode == YOLO_DETECTION) {
-                        if (project_path.empty()) {
+                        if (pm.project_path.empty()) {
                             yolo_export_output_dir =
                                 media_dir + "/yolo_detection_dataset";
                         } else {
                             yolo_export_output_dir =
-                                project_path + "/yolo_detection_dataset";
+                                pm.project_path + "/yolo_detection_dataset";
                         }
                     } else if (yolo_export_mode == YOLO_POSE) {
-                        if (project_path.empty()) {
+                        if (pm.project_path.empty()) {
                             yolo_export_output_dir =
                                 media_dir + "/yolo_pose_dataset";
                         } else {
                             yolo_export_output_dir =
-                                project_path + "/yolo_pose_dataset";
+                                pm.project_path + "/yolo_pose_dataset";
                         }
                         if (!skeleton_file_path.empty())
                             yolo_export_skeleton_file = skeleton_file_path;
                     } else {
-                        if (project_path.empty()) {
+                        if (pm.project_path.empty()) {
                             yolo_export_output_dir =
                                 media_dir + "/yolo_obb_dataset";
                         } else {
                             yolo_export_output_dir =
-                                project_path + "/yolo_obb_dataset";
+                                pm.project_path + "/yolo_obb_dataset";
                         }
                     }
                 };
@@ -4272,11 +4188,12 @@ int main(int, char **) {
                     if (ImGui::Button("Browse##skeleton")) {
                         IGFD::FileDialogConfig config;
                         config.countSelectionMax = 1;
-                        config.path = skeleton_dir;
+                        config.path = std::filesystem::current_path().string() +
+                                      "/skeleton";
                         config.flags = ImGuiFileDialogFlags_Modal;
                         ImGuiFileDialog::Instance()->OpenDialog(
-                            "ChooseYoloExportSkeletonFile",
-                            "Choose Skeleton File", ".json", config);
+                            "ChooseSkeleton", "Choose Skeleton", ".json",
+                            config);
                     }
                     ImGui::SameLine();
                     if (ImGui::Button("Use Current")) {
@@ -4461,11 +4378,11 @@ int main(int, char **) {
                 ImGui::Text("Quick Setup:");
                 if (ImGui::Button("Use Current Data")) {
                     yolo_export_video_dir = media_dir;
-                    yolo_export_output_dir = project_path + "/export";
-                    yolo_export_cam_names = camera_names;
+                    yolo_export_output_dir = pm.project_path + "/export";
+                    yolo_export_cam_names = pm.camera_names;
                     // Set label dir to current keypoints folder
-                    if (!keypoints_root_folder.empty()) {
-                        yolo_export_label_dir = keypoints_root_folder;
+                    if (!pm.keypoints_root_folder.empty()) {
+                        yolo_export_label_dir = pm.keypoints_root_folder;
                     }
 
                     // Set skeleton file to current one

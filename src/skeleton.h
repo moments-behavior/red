@@ -101,8 +101,7 @@ std::map<std::string, SkeletonPrimitive> skeleton_get_all();
 bool has_labeled_frames(const std::map<u32, KeyPoints *> &keypoints_map,
                         SkeletonContext *skeleton);
 void load_skeleton_json(std::string file_name, SkeletonContext *skeleton);
-void skeleton_initialize(std::string name, std::string skeleton_file_name,
-                         SkeletonContext *skeleton,
+void skeleton_initialize(std::string name, SkeletonContext *skeleton,
                          SkeletonPrimitive skeleton_type);
 void allocate_keypoints(KeyPoints *keypoints, render_scene *scene,
                         SkeletonContext *skeleton);

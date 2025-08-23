@@ -77,11 +77,8 @@ std::string dir_difference(const std::filesystem::path &a,
     return {};
 }
 
-bool ensure_dir_exists(const std::string &path_str, std::string *err) {
-
-    std::filesystem::path p =
-        std::filesystem::path(path_str).lexically_normal();
-
+bool ensure_dir_exists(std::string path_string, std::string *err) {
+    std::filesystem::path p = std::filesystem::path(path_string);
     std::error_code ec;
     auto st = std::filesystem::status(p, ec);
     if (!ec) {
