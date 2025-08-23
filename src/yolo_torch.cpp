@@ -212,6 +212,25 @@ std::vector<YoloPrediction> runYoloInference(const std::string &model_path,
                 }
                 confidence = max_score;
                 class_id = max_class;
+                
+            } else if (output_features == 5) {
+                confidence = output_accessor[i][4];
+                class_id = 0;
+                
+            } else if (output_features > 6) {
+                float max_score = 0.0f;
+                int max_class = -1;
+                
+                for (int c = 0; c < (output_features - 4); ++c) {
+                    float score = output_accessor[i][4 + c];
+                    if (score > max_score) {
+                        max_score = score;
+                        max_class = c;
+                    }
+                }
+                confidence = max_score;
+                class_id = max_class;
+
             } else {
                 std::cerr << "Unexpected output format with " << output_features
                           << " features" << std::endl;
