@@ -218,14 +218,17 @@ int main(int, char **) {
         if (ImGui::Begin("File Browser", NULL, ImGuiWindowFlags_MenuBar)) {
             if (ImGui::BeginMenuBar()) {
                 if (ImGui::BeginMenu("File")) {
-                    if (ImGui::MenuItem("Open")) {
+                    if (ImGui::MenuItem("Open Video(s)")) {
                         IGFD::FileDialogConfig config;
                         config.countSelectionMax = 0;
                         config.path = pm.media_dir;
                         config.flags = ImGuiFileDialogFlags_Modal;
                         ImGuiFileDialog::Instance()->OpenDialog(
                             "ChooseMedia", "Choose Media", ".mp4", config);
-                    };
+                    }
+                    if (ImGui::MenuItem("Create Project")) {
+                        pm.show_project_window = true;
+                    }
                     if (ImGui::MenuItem("Load Project")) {
                         IGFD::FileDialogConfig config;
                         config.countSelectionMax = 1;
@@ -236,15 +239,6 @@ int main(int, char **) {
                             config);
                     }
                     ImGui::EndMenu();
-                }
-
-                if (ps.video_loaded) {
-                    if (ImGui::BeginMenu("Annotate")) {
-                        if (ImGui::MenuItem("Create Project")) {
-                            pm.show_project_window = true;
-                        }
-                        ImGui::EndMenu();
-                    }
                 }
 
                 if (ImGui::BeginMenu("Tools")) {
