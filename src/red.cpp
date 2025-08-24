@@ -226,9 +226,11 @@ int main(int, char **) {
                         ImGuiFileDialog::Instance()->OpenDialog(
                             "ChooseMedia", "Choose Media", ".mp4", config);
                     }
+                    ImGui::BeginDisabled(!ps.video_loaded);
                     if (ImGui::MenuItem("Create Project")) {
                         pm.show_project_window = true;
                     }
+                    ImGui::EndDisabled();
                     if (ImGui::MenuItem("Load Project")) {
                         IGFD::FileDialogConfig config;
                         config.countSelectionMax = 1;
