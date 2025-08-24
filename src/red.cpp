@@ -53,11 +53,11 @@ int main(int, char **) {
                                    .total_num_frame = int(INT_MAX),
                                    .estimated_num_frames = 0,
                                    .gpu_index = 0,
-                                   .seek_interval = 250};
+                                   .seek_interval = 250,
+                                   .video_fps = 60.0f};
 
     // gui states, todo: bundle this later
     std::time_t last_saved = static_cast<std::time_t>(-1);
-    bool video_loaded = false;
     bool cpu_buffer_toggle = true;
     int current_frame_num = 0;
     int previous_frame_num = -1;
@@ -197,7 +197,6 @@ int main(int, char **) {
         yolo_processed_frames; // Track which frames have been processed
     std::unordered_map<std::string, bool> window_was_decoding;
     double inst_speed = 1.0;
-    double video_fps = 60.0f;
     float set_playback_speed = 1.0f;
     PlaybackState ps;
     LiveTable table;
@@ -250,13 +249,14 @@ int main(int, char **) {
                         config.path = media_dir;
                         config.flags = ImGuiFileDialogFlags_Modal;
                         ImGuiFileDialog::Instance()->OpenDialog(
-                            "ChooseMedia", "Choose Media",
-                            ".mp4,.tiff,.jpeg,.jpg,.png", config);
+                            "ChooseMedia", "Choose Media", ".mp4", config);
                     };
+                    if (ImGui::MenuItem("Load Project")) {
+                    }
                     ImGui::EndMenu();
                 }
 
-                if (video_loaded) {
+                if (ps.video_loaded) {
                     if (ImGui::BeginMenu("Annotate")) {
                         if (ImGui::MenuItem("Create Project")) {
                             pm.show_project_window = true;
@@ -284,7 +284,7 @@ int main(int, char **) {
                         1000.0f / ImGui::GetIO().Framerate,
                         ImGui::GetIO().Framerate);
 
-            if (!video_loaded) {
+            if (!ps.video_loaded) {
                 {
                     const char *items[] = {"CPU Buffer", "GPU Buffer"};
                     static int item_current = 0;
@@ -300,15 +300,15 @@ int main(int, char **) {
                 ImGui::InputInt("Buffer Size", &label_buffer_size);
             }
 
-            if (video_loaded) {
+            if (ps.video_loaded) {
                 ImGui::InputInt("Seek Step", &dc_context->seek_interval, 10,
                                 100);
                 static int seek_accurate_frame_num = 0;
                 ImGui::InputInt("Seek Accurate", &seek_accurate_frame_num, 1,
                                 100);
                 if (ImGui::IsItemDeactivatedAfterEdit()) {
-                    seek_all_cameras(scene, seek_accurate_frame_num, video_fps,
-                                     ps, true);
+                    seek_all_cameras(scene, seek_accurate_frame_num,
+                                     dc_context->video_fps, ps, true);
                 }
 
                 auto now_wall = std::chrono::steady_clock::now();
@@ -320,15 +320,15 @@ int main(int, char **) {
                     current_frame_num - ps.last_frame_num_playspeed;
                 if (wall_seconds > 0.5 && ps.play_video) {
                     inst_speed =
-                        frame_delta /
-                        (video_fps * wall_seconds); // Real-time normalized
+                        frame_delta / (dc_context->video_fps *
+                                       wall_seconds); // Real-time normalized
                     ps.last_frame_num_playspeed = current_frame_num;
                     ps.last_wall_time_playspeed = now_wall;
                 }
 
                 // Always draw the latest value
                 if (ps.play_video) {
-                    ImGui::Text("Video FPS: %.1f", video_fps);
+                    ImGui::Text("Video FPS: %.1f", dc_context->video_fps);
                     ImGui::SliderFloat("Set Playback Speed",
                                        &set_playback_speed, 0.1f, 1.0f,
                                        "%.1fx");
@@ -385,105 +385,10 @@ int main(int, char **) {
                 auto selected_files =
                     ImGuiFileDialog::Instance()->GetSelection();
                 media_dir = ImGuiFileDialog::Instance()->GetCurrentPath();
-                pm.suggest_project_name =
-                    dir_difference(media_dir, media_root_dir);
-                // check if it is mp4, if it is mp4 files
-                auto first_selection =
-                    *selected_files.begin(); // Dereferencing iterator
-                if (string_ends_with(first_selection.first, ".mp4")) {
-                    for (const auto &elem : selected_files) {
-                        std::size_t cam_string_mp4_position =
-                            elem.first.find("mp4");
-                        std::string cam_string =
-                            elem.first.substr(0, cam_string_mp4_position - 1);
-                        pm.camera_names.push_back(cam_string);
-                        std::cout << "camera names: " << cam_string
-                                  << std::endl;
-                        window_need_decoding[cam_string].store(true);
-                        window_was_decoding[cam_string] = true;
-                        std::map<std::string, std::string> m;
-                        FFmpegDemuxer *demuxer =
-                            new FFmpegDemuxer(elem.second.c_str(), m);
-                        demuxers.push_back(demuxer);
-                    }
-                    std::map<std::string, std::string> m;
-                    FFmpegDemuxer dummy_dmuxer(
-                        selected_files.begin()->second.c_str(), m);
-                    dc_context->seek_interval =
-                        (int)
-                            dummy_dmuxer.FindKeyFrameInterval(); // get the seek
-                                                                 // interval
-                    video_fps = dummy_dmuxer.GetFramerate();
-                    scene->num_cams = selected_files.size();
-                    scene->image_width =
-                        (u32 *)malloc(sizeof(u32) * scene->num_cams);
-                    scene->image_height =
-                        (u32 *)malloc(sizeof(u32) * scene->num_cams);
-                    for (u32 j = 0; j < scene->num_cams; j++) {
-                        scene->image_width[j] = demuxers[j]->GetWidth();
-                        scene->image_height[j] = demuxers[j]->GetHeight();
-                    }
-                    render_allocate_scene_memory(scene, label_buffer_size);
-                    // multiple threads for decoding for selected videos
-
-                    for (int i = 0; i < scene->num_cams; i++) {
-                        decoder_threads.push_back(std::thread(
-                            &decoder_process, dc_context, demuxers[i],
-                            pm.camera_names[i], scene->display_buffer[i],
-                            scene->size_of_buffer, &scene->seek_context[i],
-                            scene->use_cpu_buffer));
-                        is_view_focused.push_back(false);
-                    }
-                    video_loaded = true;
-                } else {
-                    input_is_imgs = true;
-                    for (const auto &elem : selected_files) {
-                        std::size_t cam_string_position = elem.first.find("_");
-                        std::string cam_name =
-                            elem.first.substr(0, cam_string_position);
-                        std::string file_name =
-                            elem.first.substr(cam_string_position + 1);
-
-                        if (std::find(pm.camera_names.begin(),
-                                      pm.camera_names.end(),
-                                      cam_name) == pm.camera_names.end()) {
-                            pm.camera_names.push_back(cam_name);
-                        }
-
-                        if (std::find(imgs_names.begin(), imgs_names.end(),
-                                      file_name) == imgs_names.end()) {
-                            imgs_names.push_back(file_name);
-                        }
-                    }
-
-                    dc_context->seek_interval = 1;
-                    scene->num_cams = pm.camera_names.size();
-                    scene->image_width =
-                        (u32 *)malloc(sizeof(u32) * scene->num_cams);
-                    scene->image_height =
-                        (u32 *)malloc(sizeof(u32) * scene->num_cams);
-                    for (u32 j = 0; j < scene->num_cams; j++) {
-                        std::string file_name = media_dir + "/" +
-                                                pm.camera_names[j] + "_" +
-                                                imgs_names[0];
-                        cv::Mat image = cv::imread(file_name, cv::IMREAD_COLOR);
-                        scene->image_width[j] = image.cols;
-                        scene->image_height[j] = image.rows;
-                    }
-                    if (imgs_names.size() < label_buffer_size) {
-                        label_buffer_size = imgs_names.size();
-                    }
-                    render_allocate_scene_memory(scene, label_buffer_size);
-                    for (int i = 0; i < scene->num_cams; i++) {
-                        decoder_threads.push_back(std::thread(
-                            &image_loader, dc_context, imgs_names,
-                            scene->display_buffer[i], scene->size_of_buffer,
-                            &scene->seek_context[i], scene->use_cpu_buffer,
-                            pm.camera_names[i], media_dir));
-                        is_view_focused.push_back(false);
-                    }
-                    video_loaded = true;
-                }
+                pm.project_name = dir_difference(media_dir, media_root_dir);
+                load_videos(selected_files, ps, pm, window_was_decoding,
+                            demuxers, dc_context, scene, label_buffer_size,
+                            decoder_threads, is_view_focused);
             }
             // close
             ImGuiFileDialog::Instance()->Close();
@@ -635,7 +540,7 @@ int main(int, char **) {
         }
 
         static int select_corr_head = 0;
-        if (video_loaded && (!ps.play_video)) {
+        if (ps.video_loaded && (!ps.play_video)) {
             int visible_idx = 0;
             if (!ps.pause_seeked) {
                 for (int i = 0; i < scene->num_cams; i++) {
@@ -827,7 +732,7 @@ int main(int, char **) {
         }
 
         // Render a video frame
-        if (video_loaded) {
+        if (ps.video_loaded) {
             for (int j = 0; j < scene->num_cams; j++) {
                 const std::string &win_name = pm.camera_names[j];
 
@@ -870,15 +775,15 @@ int main(int, char **) {
                 if (!window_was_decoding[win_name] && is_visible &&
                     ps.play_video) {
                     // seek if visibility has changed
-                    seek_all_cameras(scene, current_frame_num, video_fps, ps,
-                                     true);
+                    seek_all_cameras(scene, current_frame_num,
+                                     dc_context->video_fps, ps, true);
                 }
 
                 if (!window_was_decoding[win_name] && is_visible &&
                     !ps.play_video && !ps.pause_seeked) {
                     // seek if visibility has changed
-                    seek_all_cameras(scene, current_frame_num, video_fps, ps,
-                                     true);
+                    seek_all_cameras(scene, current_frame_num,
+                                     dc_context->video_fps, ps, true);
                     for (auto &[key, value] : window_need_decoding) {
                         value.store(true);
                     }
@@ -2208,15 +2113,15 @@ int main(int, char **) {
                         int clamped_frame =
                             std::max(0, current_frame_num -
                                             10 * dc_context->seek_interval);
-                        seek_all_cameras(scene, clamped_frame, video_fps, ps,
-                                         false);
+                        seek_all_cameras(scene, clamped_frame,
+                                         dc_context->video_fps, ps, false);
                     }
                     ImGui::SameLine(0.0f, spacing);
                     if (ImGui::Button(ICON_FK_STEP_BACKWARD)) {
                         int clamped_frame = std::max(
                             0, current_frame_num - dc_context->seek_interval);
-                        seek_all_cameras(scene, clamped_frame, video_fps, ps,
-                                         false);
+                        seek_all_cameras(scene, clamped_frame,
+                                         dc_context->video_fps, ps, false);
                     }
                     ImGui::SameLine(0.0f, spacing);
 
@@ -2233,7 +2138,8 @@ int main(int, char **) {
 
                         if (ImGui::Button(ICON_FK_REPEAT)) {
                             // seek to zero
-                            seek_all_cameras(scene, 0, video_fps, ps, false);
+                            seek_all_cameras(scene, 0, dc_context->video_fps,
+                                             ps, false);
                         }
                         ImGui::PopStyleColor(3);
                     } else {
@@ -2270,25 +2176,26 @@ int main(int, char **) {
                         int clamped_frame = std::min(
                             dc_context->total_num_frame,
                             current_frame_num + dc_context->seek_interval);
-                        seek_all_cameras(scene, clamped_frame, video_fps, ps,
-                                         false);
+                        seek_all_cameras(scene, clamped_frame,
+                                         dc_context->video_fps, ps, false);
                     }
                     ImGui::SameLine(0.0f, spacing);
                     if (ImGui::Button(ICON_FK_FAST_FORWARD)) {
                         int clamped_frame = std::min(
                             dc_context->total_num_frame,
                             current_frame_num + 10 * dc_context->seek_interval);
-                        seek_all_cameras(scene, clamped_frame, video_fps, ps,
-                                         false);
+                        seek_all_cameras(scene, clamped_frame,
+                                         dc_context->video_fps, ps, false);
                     }
                     ImGui::SameLine();
                     ps.slider_just_changed = ImGui::SliderInt(
                         "##frame count", &ps.slider_frame_number, 0,
                         dc_context->estimated_num_frames);
                     ImGui::SameLine();
-                    float current_time_sec = ps.slider_frame_number / video_fps;
-                    float total_time_sec =
-                        dc_context->estimated_num_frames / video_fps;
+                    float current_time_sec =
+                        ps.slider_frame_number / dc_context->video_fps;
+                    float total_time_sec = dc_context->estimated_num_frames /
+                                           dc_context->video_fps;
 
                     std::string current_str = format_time(current_time_sec);
                     std::string total_str = format_time(total_time_sec);
@@ -2300,7 +2207,7 @@ int main(int, char **) {
                         // ps.slider_frame_number
                         //           << std::endl;
                         seek_all_cameras(scene, ps.slider_frame_number,
-                                         video_fps, ps, false);
+                                         dc_context->video_fps, ps, false);
                     }
 
                     ImGui::EndGroup();
@@ -2362,13 +2269,13 @@ int main(int, char **) {
                 if (ImGui::GetIO().KeyShift) {
                     int clamped_frame = std::max(
                         0, current_frame_num - 10 * dc_context->seek_interval);
-                    seek_all_cameras(scene, clamped_frame, video_fps, ps,
-                                     false);
+                    seek_all_cameras(scene, clamped_frame,
+                                     dc_context->video_fps, ps, false);
                 } else {
                     int clamped_frame = std::max(
                         0, current_frame_num - dc_context->seek_interval);
-                    seek_all_cameras(scene, clamped_frame, video_fps, ps,
-                                     false);
+                    seek_all_cameras(scene, clamped_frame,
+                                     dc_context->video_fps, ps, false);
                 }
             }
 
@@ -2378,14 +2285,14 @@ int main(int, char **) {
                     int clamped_frame = std::min(
                         dc_context->total_num_frame,
                         current_frame_num + 10 * dc_context->seek_interval);
-                    seek_all_cameras(scene, clamped_frame, video_fps, ps,
-                                     false);
+                    seek_all_cameras(scene, clamped_frame,
+                                     dc_context->video_fps, ps, false);
                 } else {
                     int clamped_frame =
                         std::min(dc_context->total_num_frame,
                                  current_frame_num + dc_context->seek_interval);
-                    seek_all_cameras(scene, clamped_frame, video_fps, ps,
-                                     false);
+                    seek_all_cameras(scene, clamped_frame,
+                                     dc_context->video_fps, ps, false);
                 }
             }
 
@@ -3301,7 +3208,7 @@ int main(int, char **) {
                         (ImGui::IsKeyPressed(ImGuiKey_RightArrow, false) &&
                          !io.WantTextInput)) {
                         seek_all_cameras(scene, (*next_labeled_frame_it).first,
-                                         video_fps, ps, true);
+                                         dc_context->video_fps, ps, true);
                     }
                     ImGui::SameLine();
                     ImGui::Text("next labeled frame : %d",
@@ -4076,7 +3983,7 @@ int main(int, char **) {
             ImGui::End();
         }
 
-        DrawLiveTable(table, "Spreadsheet", scene, video_fps, ps, &video_loaded,
+        DrawLiveTable(table, "Spreadsheet", scene, dc_context->video_fps, ps,
                       pm.project_path);
 
         // YOLO Export Tool Window
@@ -4442,8 +4349,8 @@ int main(int, char **) {
         } else {
             if (dc_context->decoding_flag && ps.play_video) {
                 // always round up, mimimum 1
-                int frame_to_show =
-                    static_cast<int>(std::ceil(playback_time_now * video_fps));
+                int frame_to_show = static_cast<int>(
+                    std::ceil(playback_time_now * dc_context->video_fps));
 
                 int min_decoded_frame = INT_MAX;
                 for (const auto &[cam_name, visible] : window_need_decoding) {

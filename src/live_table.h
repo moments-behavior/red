@@ -58,9 +58,9 @@ inline void RemoveRow(LiveTable &t, int at) {
 
 inline void OnCellShiftClick(int row, int col, const std::string &value,
                              render_scene *scene, double video_fps,
-                             PlaybackState &ps, bool *video_loaded) {
+                             PlaybackState &ps) {
 
-    if (!(*video_loaded)) {
+    if (!ps.video_loaded) {
         return;
     }
 
@@ -85,8 +85,7 @@ inline void OnCellShiftClick(int row, int col, const std::string &value,
 
 inline void DrawLiveTable(LiveTable &t, const char *window_id,
                           render_scene *scene, double video_fps,
-                          PlaybackState &ps, bool *video_loaded,
-                          std::string &project_dir) {
+                          PlaybackState &ps, std::string &project_dir) {
     if (!t.is_open)
         return;
     if (!ImGui::Begin(window_id, &t.is_open, ImGuiWindowFlags_None)) {
@@ -456,7 +455,7 @@ inline void DrawLiveTable(LiveTable &t, const char *window_id,
                         (ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
                          ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))) {
                         OnCellShiftClick(r, c, t.rows[r][c], scene, video_fps,
-                                         ps, video_loaded);
+                                         ps);
                         suppress_activation = true;
                         ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
                     }
