@@ -97,6 +97,29 @@ enum SkeletonPrimitive {
     SP_LOAD
 };
 
+struct SkeletonCreatorNode {
+    ImPlotPoint position;
+    std::string name;
+    ImVec4 color;
+    int id;
+
+    SkeletonCreatorNode()
+        : position(0.5, 0.5), name(""), color(1.0f, 1.0f, 1.0f, 1.0f), id(-1) {}
+    SkeletonCreatorNode(double x, double y, int node_id)
+        : position(x, y), id(node_id) {
+        name = "Node" + std::to_string(node_id);
+        color = (ImVec4)ImColor::HSV(node_id / 10.0f, 1.0f, 1.0f);
+    }
+};
+
+struct SkeletonCreatorEdge {
+    int node1_id;
+    int node2_id;
+
+    SkeletonCreatorEdge() : node1_id(-1), node2_id(-1) {}
+    SkeletonCreatorEdge(int n1, int n2) : node1_id(n1), node2_id(n2) {}
+};
+
 std::map<std::string, SkeletonPrimitive> skeleton_get_all();
 bool has_labeled_frames(const std::map<u32, KeyPoints *> &keypoints_map,
                         SkeletonContext *skeleton);

@@ -38,9 +38,7 @@ int main(int, char **) {
     render_scene *scene = (render_scene *)malloc(sizeof(render_scene));
     std::string red_data_dir;
     std::string media_root_dir;
-    std::string media_dir;
     prepare_application_folders(red_data_dir, red_data_dir, media_root_dir);
-    media_dir = media_root_dir;
     std::string skeleton_dir = red_data_dir + "/skeleton";
     std::string yolo_model_dir = red_data_dir + "/yolo_model";
     std::vector<std::thread> decoder_threads;
@@ -78,30 +76,6 @@ int main(int, char **) {
 
     // Skeleton Creator variables
     bool show_skeleton_creator = false;
-    struct SkeletonCreatorNode {
-        ImPlotPoint position;
-        std::string name;
-        ImVec4 color;
-        int id;
-
-        SkeletonCreatorNode()
-            : position(0.5, 0.5), name(""), color(1.0f, 1.0f, 1.0f, 1.0f),
-              id(-1) {}
-        SkeletonCreatorNode(double x, double y, int node_id)
-            : position(x, y), id(node_id) {
-            name = "Node" + std::to_string(node_id);
-            color = (ImVec4)ImColor::HSV(node_id / 10.0f, 1.0f, 1.0f);
-        }
-    };
-
-    struct SkeletonCreatorEdge {
-        int node1_id;
-        int node2_id;
-
-        SkeletonCreatorEdge() : node1_id(-1), node2_id(-1) {}
-        SkeletonCreatorEdge(int n1, int n2) : node1_id(n1), node2_id(n2) {}
-    };
-
     std::vector<SkeletonCreatorNode> creator_nodes;
     std::vector<SkeletonCreatorEdge> creator_edges;
     int next_node_id = 0;
@@ -112,9 +86,9 @@ int main(int, char **) {
 
     // YOLO Export Tool variables
     bool show_yolo_export_tool = false;
-    std::string yolo_export_label_dir = media_dir + "/labeled_data";
-    std::string yolo_export_video_dir = media_dir;
-    std::string yolo_export_output_dir = media_dir + "/export";
+    std::string yolo_export_label_dir = media_root_dir + "/labeled_data";
+    std::string yolo_export_video_dir = media_root_dir;
+    std::string yolo_export_output_dir = media_root_dir + "/export";
     std::string yolo_export_skeleton_file;
     std::string yolo_export_class_names_file;
     std::vector<std::string> yolo_export_cam_names;
@@ -204,6 +178,7 @@ int main(int, char **) {
     // variables for project management
     ProjectManager pm = ProjectManager();
     pm.project_root_path = red_data_dir;
+    pm.media_dir = media_root_dir;
 
     while (!glfwWindowShouldClose(window->render_target)) {
         // Poll and handle events (inputs, window resize, etc.)
@@ -246,12 +221,19 @@ int main(int, char **) {
                     if (ImGui::MenuItem("Open")) {
                         IGFD::FileDialogConfig config;
                         config.countSelectionMax = 0;
-                        config.path = media_dir;
+                        config.path = pm.media_dir;
                         config.flags = ImGuiFileDialogFlags_Modal;
                         ImGuiFileDialog::Instance()->OpenDialog(
                             "ChooseMedia", "Choose Media", ".mp4", config);
                     };
                     if (ImGui::MenuItem("Load Project")) {
+                        IGFD::FileDialogConfig config;
+                        config.countSelectionMax = 1;
+                        config.path = pm.project_root_path;
+                        config.flags = ImGuiFileDialogFlags_Modal;
+                        ImGuiFileDialog::Instance()->OpenDialog(
+                            "ChooseProject", "Choose Project Json", ".json",
+                            config);
                     }
                     ImGui::EndMenu();
                 }
@@ -384,13 +366,58 @@ int main(int, char **) {
             if (ImGuiFileDialog::Instance()->IsOk()) {
                 auto selected_files =
                     ImGuiFileDialog::Instance()->GetSelection();
-                media_dir = ImGuiFileDialog::Instance()->GetCurrentPath();
-                pm.project_name = dir_difference(media_dir, media_root_dir);
+                pm.media_dir = ImGuiFileDialog::Instance()->GetCurrentPath();
+                pm.project_name = dir_difference(pm.media_dir, media_root_dir);
+                pm.media_dir = pm.media_dir;
                 load_videos(selected_files, ps, pm, window_was_decoding,
                             demuxers, dc_context, scene, label_buffer_size,
                             decoder_threads, is_view_focused);
             }
             // close
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        if (ImGuiFileDialog::Instance()->Display("ChooseProject")) {
+            if (ImGuiFileDialog::Instance()->IsOk()) {
+                const auto sel = ImGuiFileDialog::Instance()->GetSelection();
+                // Choose the picked file (single-select assumed)
+                std::filesystem::path cfg_path;
+                if (!sel.empty()) {
+                    cfg_path =
+                        std::filesystem::path(sel.begin()->second); // full path
+                } else {
+                    std::string full =
+                        ImGuiFileDialog::Instance()->GetFilePathName(
+                            IGFD_ResultMode_KeepInputFile);
+                    if (!full.empty())
+                        cfg_path = std::filesystem::path(full);
+                    else
+                        cfg_path = std::filesystem::path(
+                            ImGuiFileDialog::Instance()->GetCurrentPath());
+                }
+                ProjectManager loaded;
+                if (!load_project_manager_json(&loaded, cfg_path,
+                                               &error_message)) {
+                    show_error = true;
+                } else {
+                    pm = loaded;
+                    // need to fomart sel
+                    std::map<std::string, std::string> cam_sel;
+                    std::filesystem::path base =
+                        std::filesystem::path(pm.media_dir);
+
+                    for (const std::string &name : pm.camera_names) {
+                        std::string filename = name + ".mp4";
+                        std::filesystem::path full = base / filename;
+                        cam_sel.emplace(filename, full.string());
+                    }
+                    load_videos(cam_sel, ps, pm, window_was_decoding, demuxers,
+                                dc_context, scene, label_buffer_size,
+                                decoder_threads, is_view_focused);
+                    show_error = !setup_project(pm, scene, skeleton,
+                                                skeleton_map, &error_message);
+                }
+            }
             ImGuiFileDialog::Instance()->Close();
         }
 
@@ -3998,14 +4025,14 @@ int main(int, char **) {
                 int current_mode = static_cast<int>(yolo_export_mode);
 
                 auto apply_defaults = [&]() {
-                    if (media_dir.empty())
+                    if (pm.media_dir.empty())
                         return; // guard if config not loaded yet
                     yolo_export_mode =
                         static_cast<YoloExportMode>(current_mode);
                     if (yolo_export_mode == YOLO_DETECTION) {
                         if (pm.project_path.empty()) {
                             yolo_export_output_dir =
-                                media_dir + "/yolo_detection_dataset";
+                                pm.media_dir + "/yolo_detection_dataset";
                         } else {
                             yolo_export_output_dir =
                                 pm.project_path + "/yolo_detection_dataset";
@@ -4013,7 +4040,7 @@ int main(int, char **) {
                     } else if (yolo_export_mode == YOLO_POSE) {
                         if (pm.project_path.empty()) {
                             yolo_export_output_dir =
-                                media_dir + "/yolo_pose_dataset";
+                                pm.media_dir + "/yolo_pose_dataset";
                         } else {
                             yolo_export_output_dir =
                                 pm.project_path + "/yolo_pose_dataset";
@@ -4023,7 +4050,7 @@ int main(int, char **) {
                     } else {
                         if (pm.project_path.empty()) {
                             yolo_export_output_dir =
-                                media_dir + "/yolo_obb_dataset";
+                                pm.media_dir + "/yolo_obb_dataset";
                         } else {
                             yolo_export_output_dir =
                                 pm.project_path + "/yolo_obb_dataset";
@@ -4034,7 +4061,7 @@ int main(int, char **) {
                 static bool initialized = false;
 
                 // 1) First-time init (once, when media_dir is known)
-                if (!initialized && !media_dir.empty()) {
+                if (!initialized && !pm.media_dir.empty()) {
                     apply_defaults();
                     initialized = true;
                 }
@@ -4284,7 +4311,7 @@ int main(int, char **) {
                 // Quick setup buttons
                 ImGui::Text("Quick Setup:");
                 if (ImGui::Button("Use Current Data")) {
-                    yolo_export_video_dir = media_dir;
+                    yolo_export_video_dir = pm.media_dir;
                     yolo_export_output_dir = pm.project_path + "/export";
                     yolo_export_cam_names = pm.camera_names;
                     // Set label dir to current keypoints folder

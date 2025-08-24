@@ -5,7 +5,6 @@
 #include "skeleton.h"
 #include "utils.h"
 #include <ImGuiFileDialog.h>
-#include <algorithm>
 #include <fstream>
 #include <imgui.h>
 #include <misc/cpp/imgui_stdlib.h> // for InputText(std::string&)
@@ -24,26 +23,30 @@ struct ProjectManager {
     bool plot_keypoints_flag = false;
     std::vector<CameraParams> camera_params;
     std::vector<std::string> camera_names;
+    std::string skeleton_name;
+    std::string media_dir;
 };
 
 inline void to_json(nlohmann::json &j, const ProjectManager &p) {
     j = nlohmann::json{
         {"project_root_path", p.project_root_path},
         {"project_path", p.project_path},
-        {"suggest_project_name", p.project_name},
+        {"project_name", p.project_name},
         {"load_skeleton_from_json", p.load_skeleton_from_json},
         {"project_skeleton_file", p.project_skeleton_file},
         {"project_calibration_folder", p.project_calibration_folder},
         {"keypoints_root_folder", p.keypoints_root_folder},
         {"plot_keypoints_flag", p.plot_keypoints_flag},
-        {"camera_names", p.camera_names}};
+        {"camera_names", p.camera_names},
+        {"skeleton_name", p.skeleton_name},
+        {"media_dir", p.media_dir}};
 }
 
 inline void from_json(const nlohmann::json &j, ProjectManager &p) {
     // Leave show_project_window & camera_params at their defaults
     p.project_root_path = j.value("project_root_path", std::string{});
     p.project_path = j.value("project_path", std::string{});
-    p.project_name = j.value("suggest_project_name", std::string{});
+    p.project_name = j.value("project_name", std::string{});
     p.load_skeleton_from_json = j.value("load_skeleton_from_json", false);
     p.project_skeleton_file = j.value("project_skeleton_file", std::string{});
     p.project_calibration_folder =
@@ -51,6 +54,8 @@ inline void from_json(const nlohmann::json &j, ProjectManager &p) {
     p.keypoints_root_folder = j.value("keypoints_root_folder", std::string{});
     p.plot_keypoints_flag = j.value("plot_keypoints_flag", false);
     p.camera_names = j.value("camera_names", std::vector<std::string>{});
+    p.skeleton_name = j.value("skeleton_name", std::string{});
+    p.media_dir = j.value("media_dir", std::string{});
 }
 
 inline bool save_project_manager_json(const ProjectManager &p,
@@ -110,6 +115,83 @@ inline bool load_project_manager_json(ProjectManager *out,
     }
 }
 
+bool setup_project(ProjectManager &pm, render_scene *scene,
+                   SkeletonContext &skeleton,
+                   const std::map<std::string, SkeletonPrimitive> &skeleton_map,
+                   std::string *err) {
+    // 1) Ensure project directory
+    if (!ensure_dir_exists(pm.project_path, err))
+        return false;
+
+    // 2) Load camera params if needed
+    pm.camera_params.clear();
+    if (scene && scene->num_cams > 1) {
+        if (pm.camera_names.size() < scene->num_cams) {
+            if (err)
+                *err = "camera_names is smaller than scene->num_cams";
+            return false;
+        }
+        for (u32 i = 0; i < scene->num_cams; ++i) {
+            std::filesystem::path cam_path =
+                std::filesystem::path(pm.project_calibration_folder) /
+                (pm.camera_names[i] + ".yaml");
+
+            CameraParams cam;
+            std::string cam_err;
+            if (!camera_load_params_from_yaml(cam_path.string(), cam,
+                                              cam_err)) {
+                pm.camera_params.clear();
+                if (err)
+                    *err =
+                        "Failed to load camera params: " + cam_path.string() +
+                        (cam_err.empty() ? "" : (" (" + cam_err + ")"));
+                return false;
+            }
+            pm.camera_params.push_back(cam);
+        }
+    }
+
+    // 3) Reset & init skeleton
+    skeleton.num_nodes = 0;
+    skeleton.num_edges = 0;
+    skeleton.name.clear();
+    skeleton.has_bbox = false;
+    skeleton.has_skeleton = true;
+    skeleton.node_colors.clear();
+    skeleton.edges.clear();
+    skeleton.node_names.clear();
+
+    if (pm.load_skeleton_from_json) {
+        load_skeleton_json(pm.project_skeleton_file,
+                           &skeleton); // assume throws/handles its own errors
+    } else {
+        auto it = skeleton_map.find(pm.skeleton_name);
+        if (it == skeleton_map.end()) {
+            if (err)
+                *err = "Unknown skeleton: " + pm.skeleton_name;
+            return false;
+        }
+        skeleton_initialize(it->first.c_str(), &skeleton, it->second);
+    }
+
+    // 4) Ensure keypoints dir
+    pm.keypoints_root_folder =
+        (std::filesystem::path(pm.project_path) / "labeled_data").string();
+    if (!ensure_dir_exists(pm.keypoints_root_folder, err))
+        return false;
+
+    // 5) Save config
+    std::filesystem::path cfg =
+        std::filesystem::path(pm.project_path) / "project.json";
+    if (!save_project_manager_json(pm, cfg, err))
+        return false;
+
+    // 6) Final flags
+    pm.plot_keypoints_flag = true;
+    pm.show_project_window = false;
+    return true;
+}
+
 inline void DrawProjectWindow(
     ProjectManager &pm, std::map<std::string, SkeletonPrimitive> &skeleton_map,
     SkeletonContext &skeleton, std::string &skeleton_dir, bool &show_error,
@@ -163,10 +245,8 @@ inline void DrawProjectWindow(
         }
         static int skeleton_idx = 0;
         ImGui::BeginDisabled(pm.load_skeleton_from_json);
-        if (ImGui::Combo("Select Skeleton", &skeleton_idx, labels_s.data(),
-                         (int)labels_s.size())) {
-            // selection changed
-        }
+        ImGui::Combo("Select Skeleton", &skeleton_idx, labels_s.data(),
+                     (int)labels_s.size());
         ImGui::EndDisabled();
 
         ImGui::InputText("Calibration Folder", &pm.project_calibration_folder);
@@ -179,66 +259,15 @@ inline void DrawProjectWindow(
             ImGuiFileDialog::Instance()->OpenDialog(
                 "ChooseCalibration", "Choose Calibration Folder", nullptr, cfg);
         }
+        if (pm.load_skeleton_from_json) {
+            pm.skeleton_name = "";
+        } else {
+            pm.skeleton_name = labels_s[skeleton_idx];
+        }
+
         if (ImGui::Button("Create Project##action")) {
-            bool so_far_success = true;
-
-            if (so_far_success &&
-                ensure_dir_exists(pm.project_path, &error_message)) {
-                pm.show_project_window = false;
-            } else {
-                so_far_success = false;
-                show_error = true;
-            }
-
-            if (so_far_success && scene->num_cams > 1) {
-                for (u32 i = 0; i < scene->num_cams; i++) {
-                    std::string cam_file = pm.project_calibration_folder + "/" +
-                                           pm.camera_names[i] + ".yaml";
-                    CameraParams cam;
-                    if (camera_load_params_from_yaml(cam_file, cam,
-                                                     error_message)) {
-                        pm.camera_params.push_back(cam);
-                    } else {
-                        so_far_success = false;
-                        pm.camera_params.clear();
-                        show_error = true;
-                        break;
-                    }
-                }
-            }
-            if (so_far_success) {
-                skeleton.num_nodes = 0;
-                skeleton.num_edges = 0;
-                skeleton.name = "";
-                skeleton.has_bbox = false;
-                skeleton.has_skeleton = true;
-                skeleton.node_colors.clear();
-                skeleton.edges.clear();
-                skeleton.node_names.clear();
-
-                if (pm.load_skeleton_from_json) {
-                    load_skeleton_json(pm.project_skeleton_file, &skeleton);
-                } else {
-                    skeleton_initialize(labels_s[skeleton_idx], &skeleton,
-                                        *vals_s[skeleton_idx]);
-                }
-                pm.plot_keypoints_flag = true;
-                pm.keypoints_root_folder = pm.project_path + "/labeled_data";
-                if (so_far_success &&
-                    ensure_dir_exists(pm.keypoints_root_folder,
-                                      &error_message)) {
-                    pm.show_project_window = false;
-                } else {
-                    so_far_success = false;
-                    show_error = true;
-                }
-            }
-
-            if (so_far_success) {
-                std::filesystem::path config_file_path =
-                    std::filesystem::path(pm.project_path) / "config.json";
-                save_project_manager_json(pm, config_file_path);
-            }
+            show_error = !setup_project(pm, scene, skeleton, skeleton_map,
+                                        &error_message);
         }
     }
     ImGui::End();
