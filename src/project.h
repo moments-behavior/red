@@ -115,8 +115,7 @@ inline bool load_project_manager_json(ProjectManager *out,
     }
 }
 
-bool setup_project(ProjectManager &pm, render_scene *scene,
-                   SkeletonContext &skeleton,
+bool setup_project(ProjectManager &pm, SkeletonContext &skeleton,
                    const std::map<std::string, SkeletonPrimitive> &skeleton_map,
                    std::string *err) {
     // 1) Ensure project directory
@@ -125,26 +124,22 @@ bool setup_project(ProjectManager &pm, render_scene *scene,
 
     // 2) Load camera params if needed
     pm.camera_params.clear();
-    if (scene && scene->num_cams > 1) {
-        if (pm.camera_names.size() < scene->num_cams) {
-            if (err)
-                *err = "camera_names is smaller than scene->num_cams";
-            return false;
-        }
-        for (u32 i = 0; i < scene->num_cams; ++i) {
+    if (pm.camera_names.size() > 1) {
+        for (const std::string &cam_name : pm.camera_names) {
             std::filesystem::path cam_path =
                 std::filesystem::path(pm.project_calibration_folder) /
-                (pm.camera_names[i] + ".yaml");
+                (cam_name + ".yaml");
 
             CameraParams cam;
             std::string cam_err;
             if (!camera_load_params_from_yaml(cam_path.string(), cam,
                                               cam_err)) {
                 pm.camera_params.clear();
-                if (err)
+                if (err) {
                     *err =
                         "Failed to load camera params: " + cam_path.string() +
                         (cam_err.empty() ? "" : (" (" + cam_err + ")"));
+                }
                 return false;
             }
             pm.camera_params.push_back(cam);
@@ -192,10 +187,11 @@ bool setup_project(ProjectManager &pm, render_scene *scene,
     return true;
 }
 
-inline void DrawProjectWindow(
-    ProjectManager &pm, std::map<std::string, SkeletonPrimitive> &skeleton_map,
-    SkeletonContext &skeleton, std::string &skeleton_dir, bool &show_error,
-    std::string &error_message, render_scene *scene) {
+inline void
+DrawProjectWindow(ProjectManager &pm,
+                  std::map<std::string, SkeletonPrimitive> &skeleton_map,
+                  SkeletonContext &skeleton, std::string &skeleton_dir,
+                  bool &show_error, std::string &error_message) {
     if (!pm.show_project_window)
         return;
 
@@ -266,8 +262,8 @@ inline void DrawProjectWindow(
         }
 
         if (ImGui::Button("Create Project##action")) {
-            show_error = !setup_project(pm, scene, skeleton, skeleton_map,
-                                        &error_message);
+            show_error =
+                !setup_project(pm, skeleton, skeleton_map, &error_message);
         }
     }
     ImGui::End();

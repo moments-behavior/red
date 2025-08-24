@@ -323,7 +323,7 @@ int main(int, char **) {
         ImGui::End();
 
         DrawProjectWindow(pm, skeleton_map, skeleton, skeleton_dir, show_error,
-                          error_message, scene);
+                          error_message);
 
         if (ImGuiFileDialog::Instance()->Display("ChooseProjectDir")) {
             if (ImGuiFileDialog::Instance()->IsOk()) {
@@ -411,11 +411,16 @@ int main(int, char **) {
                         std::filesystem::path full = base / filename;
                         cam_sel.emplace(filename, full.string());
                     }
-                    load_videos(cam_sel, ps, pm, window_was_decoding, demuxers,
-                                dc_context, scene, label_buffer_size,
-                                decoder_threads, is_view_focused);
-                    show_error = !setup_project(pm, scene, skeleton,
-                                                skeleton_map, &error_message);
+                    bool ok = setup_project(pm, skeleton, skeleton_map,
+                                            &error_message);
+                    if (ok) {
+                        load_videos(cam_sel, ps, pm, window_was_decoding,
+                                    demuxers, dc_context, scene,
+                                    label_buffer_size, decoder_threads,
+                                    is_view_focused);
+                    } else {
+                        show_error = true;
+                    }
                 }
             }
             ImGuiFileDialog::Instance()->Close();
