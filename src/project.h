@@ -372,22 +372,24 @@ DrawProjectWindow(ProjectManager &pm,
                                         : std::string(labels_s[skeleton_idx]));
 
             // ---- Calibration Folder ----
-            ImGui::TableNextRow();
-            LabelCell("Calibration Folder");
-            ImGui::TableSetColumnIndex(1);
-            ImGui::SetNextItemWidth(-FLT_MIN);
-            ImGui::InputText("##calibfolder", &pm.project_calibration_folder);
-            ImGui::TableSetColumnIndex(2);
-            if (ImGui::Button("Browse##loadprojectcalibration")) {
-                IGFD::FileDialogConfig cfg;
-                cfg.countSelectionMax = 1;
-                cfg.path = pm.project_root_path;
-                cfg.flags = ImGuiFileDialogFlags_Modal;
-                ImGuiFileDialog::Instance()->OpenDialog(
-                    "ChooseCalibration", "Choose Calibration Folder", nullptr,
-                    cfg);
+            if (pm.camera_names.size() > 1) {
+                ImGui::TableNextRow();
+                LabelCell("Calibration Folder");
+                ImGui::TableSetColumnIndex(1);
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                ImGui::InputText("##calibfolder",
+                                 &pm.project_calibration_folder);
+                ImGui::TableSetColumnIndex(2);
+                if (ImGui::Button("Browse##loadprojectcalibration")) {
+                    IGFD::FileDialogConfig cfg;
+                    cfg.countSelectionMax = 1;
+                    cfg.path = pm.project_root_path;
+                    cfg.flags = ImGuiFileDialogFlags_Modal;
+                    ImGuiFileDialog::Instance()->OpenDialog(
+                        "ChooseCalibration", "Choose Calibration Folder",
+                        nullptr, cfg);
+                }
             }
-
             ImGui::EndTable();
         }
 
@@ -396,7 +398,8 @@ DrawProjectWindow(ProjectManager &pm,
         // Validation (also require overwrite if target exists)
         const bool needed_ok =
             !pm.project_name.empty() && !pm.project_root_path.empty() &&
-            !pm.project_calibration_folder.empty() &&
+            (pm.camera_names.size() <= 1 ||
+             !pm.project_calibration_folder.empty()) &&
             (!pm.load_skeleton_from_json || !pm.project_skeleton_file.empty());
 
         const bool allow_create =
