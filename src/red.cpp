@@ -218,6 +218,7 @@ int main(int, char **) {
         if (ImGui::Begin("File Browser", NULL, ImGuiWindowFlags_MenuBar)) {
             if (ImGui::BeginMenuBar()) {
                 if (ImGui::BeginMenu("File")) {
+                    ImGui::BeginDisabled(ps.video_loaded);
                     if (ImGui::MenuItem("Open Video(s)")) {
                         IGFD::FileDialogConfig config;
                         config.countSelectionMax = 0;
@@ -226,11 +227,14 @@ int main(int, char **) {
                         ImGuiFileDialog::Instance()->OpenDialog(
                             "ChooseMedia", "Choose Media", ".mp4", config);
                     }
-                    ImGui::BeginDisabled(!ps.video_loaded);
+                    ImGui::EndDisabled();
+                    ImGui::BeginDisabled(!ps.video_loaded ||
+                                         pm.plot_keypoints_flag);
                     if (ImGui::MenuItem("Create Project")) {
                         pm.show_project_window = true;
                     }
                     ImGui::EndDisabled();
+                    ImGui::BeginDisabled(ps.video_loaded);
                     if (ImGui::MenuItem("Load Project")) {
                         IGFD::FileDialogConfig config;
                         config.countSelectionMax = 1;
@@ -240,6 +244,7 @@ int main(int, char **) {
                             "ChooseProject", "Choose Project Json", ".json",
                             config);
                     }
+                    ImGui::EndDisabled();
                     ImGui::EndMenu();
                 }
 
