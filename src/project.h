@@ -25,7 +25,7 @@ struct ProjectManager {
     std::vector<CameraParams> camera_params;
     std::vector<std::string> camera_names;
     std::string skeleton_name;
-    std::string media_dir;
+    std::string media_folder;
 };
 
 inline void to_json(nlohmann::json &j, const ProjectManager &p) {
@@ -40,7 +40,7 @@ inline void to_json(nlohmann::json &j, const ProjectManager &p) {
         {"plot_keypoints_flag", p.plot_keypoints_flag},
         {"camera_names", p.camera_names},
         {"skeleton_name", p.skeleton_name},
-        {"media_dir", p.media_dir}};
+        {"media_folder", p.media_folder}};
 }
 
 inline void from_json(const nlohmann::json &j, ProjectManager &p) {
@@ -56,7 +56,7 @@ inline void from_json(const nlohmann::json &j, ProjectManager &p) {
     p.plot_keypoints_flag = j.value("plot_keypoints_flag", false);
     p.camera_names = j.value("camera_names", std::vector<std::string>{});
     p.skeleton_name = j.value("skeleton_name", std::string{});
-    p.media_dir = j.value("media_dir", std::string{});
+    p.media_folder = j.value("media_folder", std::string{});
 }
 
 inline bool save_project_manager_json(const ProjectManager &p,

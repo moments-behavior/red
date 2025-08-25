@@ -178,7 +178,7 @@ int main(int, char **) {
     // variables for project management
     ProjectManager pm = ProjectManager();
     pm.project_root_path = red_data_dir;
-    pm.media_dir = media_root_dir;
+    pm.media_folder = media_root_dir;
 
     while (!glfwWindowShouldClose(window->render_target)) {
         // Poll and handle events (inputs, window resize, etc.)
@@ -222,7 +222,7 @@ int main(int, char **) {
                     if (ImGui::MenuItem("Open Video(s)")) {
                         IGFD::FileDialogConfig config;
                         config.countSelectionMax = 0;
-                        config.path = pm.media_dir;
+                        config.path = pm.media_folder;
                         config.flags = ImGuiFileDialogFlags_Modal;
                         ImGuiFileDialog::Instance()->OpenDialog(
                             "ChooseMedia", "Choose Media", ".mp4", config);
@@ -367,9 +367,10 @@ int main(int, char **) {
             if (ImGuiFileDialog::Instance()->IsOk()) {
                 auto selected_files =
                     ImGuiFileDialog::Instance()->GetSelection();
-                pm.media_dir = ImGuiFileDialog::Instance()->GetCurrentPath();
-                pm.project_name = dir_difference(pm.media_dir, media_root_dir);
-                pm.media_dir = pm.media_dir;
+                pm.media_folder = ImGuiFileDialog::Instance()->GetCurrentPath();
+                pm.project_name =
+                    dir_difference(pm.media_folder, media_root_dir);
+                pm.media_folder = pm.media_folder;
                 load_videos(selected_files, ps, pm, window_was_decoding,
                             demuxers, dc_context, scene, label_buffer_size,
                             decoder_threads, is_view_focused);
@@ -405,7 +406,7 @@ int main(int, char **) {
                     // need to fomart sel
                     std::map<std::string, std::string> cam_sel;
                     std::filesystem::path base =
-                        std::filesystem::path(pm.media_dir);
+                        std::filesystem::path(pm.media_folder);
 
                     for (const std::string &name : pm.camera_names) {
                         std::string filename = name + ".mp4";
@@ -4031,14 +4032,14 @@ int main(int, char **) {
                 int current_mode = static_cast<int>(yolo_export_mode);
 
                 auto apply_defaults = [&]() {
-                    if (pm.media_dir.empty())
+                    if (pm.media_folder.empty())
                         return; // guard if config not loaded yet
                     yolo_export_mode =
                         static_cast<YoloExportMode>(current_mode);
                     if (yolo_export_mode == YOLO_DETECTION) {
                         if (pm.project_path.empty()) {
                             yolo_export_output_dir =
-                                pm.media_dir + "/yolo_detection_dataset";
+                                pm.media_folder + "/yolo_detection_dataset";
                         } else {
                             yolo_export_output_dir =
                                 pm.project_path + "/yolo_detection_dataset";
@@ -4046,7 +4047,7 @@ int main(int, char **) {
                     } else if (yolo_export_mode == YOLO_POSE) {
                         if (pm.project_path.empty()) {
                             yolo_export_output_dir =
-                                pm.media_dir + "/yolo_pose_dataset";
+                                pm.media_folder + "/yolo_pose_dataset";
                         } else {
                             yolo_export_output_dir =
                                 pm.project_path + "/yolo_pose_dataset";
@@ -4056,7 +4057,7 @@ int main(int, char **) {
                     } else {
                         if (pm.project_path.empty()) {
                             yolo_export_output_dir =
-                                pm.media_dir + "/yolo_obb_dataset";
+                                pm.media_folder + "/yolo_obb_dataset";
                         } else {
                             yolo_export_output_dir =
                                 pm.project_path + "/yolo_obb_dataset";
@@ -4067,7 +4068,7 @@ int main(int, char **) {
                 static bool initialized = false;
 
                 // 1) First-time init (once, when media_dir is known)
-                if (!initialized && !pm.media_dir.empty()) {
+                if (!initialized && !pm.media_folder.empty()) {
                     apply_defaults();
                     initialized = true;
                 }
@@ -4317,7 +4318,7 @@ int main(int, char **) {
                 // Quick setup buttons
                 ImGui::Text("Quick Setup:");
                 if (ImGui::Button("Use Current Data")) {
-                    yolo_export_video_dir = pm.media_dir;
+                    yolo_export_video_dir = pm.media_folder;
                     yolo_export_output_dir = pm.project_path + "/export";
                     yolo_export_cam_names = pm.camera_names;
                     // Set label dir to current keypoints folder
