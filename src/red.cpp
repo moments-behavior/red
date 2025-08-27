@@ -357,8 +357,9 @@ int main(int, char **) {
                 } else {
                     chosen = std::filesystem::path(
                         ImGuiFileDialog::Instance()->GetCurrentPath());
+                    chosen = chosen.parent_path();
                 }
-                pm.project_calibration_folder = chosen.string();
+                pm.project_calibration_folder = chosen.parent_path().string();
             }
             ImGuiFileDialog::Instance()->Close();
         }
