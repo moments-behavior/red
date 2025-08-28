@@ -358,7 +358,7 @@ int main(int, char **) {
                     chosen = std::filesystem::path(
                         ImGuiFileDialog::Instance()->GetCurrentPath());
                 }
-                pm.project_calibration_folder = chosen.string();
+                pm.calibration_folder = chosen.string();
             }
             ImGuiFileDialog::Instance()->Close();
         }
@@ -430,7 +430,7 @@ int main(int, char **) {
 
         if (ImGuiFileDialog::Instance()->Display("ChooseSkeleton")) {
             if (ImGuiFileDialog::Instance()->IsOk()) { // action if OK
-                pm.project_skeleton_file =
+                pm.skeleton_file =
                     ImGuiFileDialog::Instance()->GetFilePathName();
             }
             // close

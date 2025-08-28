@@ -18,8 +18,8 @@ struct ProjectManager {
     std::string project_path;
     std::string project_name;
     bool load_skeleton_from_json = false;
-    std::string project_skeleton_file;
-    std::string project_calibration_folder;
+    std::string skeleton_file;
+    std::string calibration_folder;
     std::string keypoints_root_folder;
     bool plot_keypoints_flag = false;
     std::vector<CameraParams> camera_params;
@@ -29,18 +29,17 @@ struct ProjectManager {
 };
 
 inline void to_json(nlohmann::json &j, const ProjectManager &p) {
-    j = nlohmann::json{
-        {"project_root_path", p.project_root_path},
-        {"project_path", p.project_path},
-        {"project_name", p.project_name},
-        {"load_skeleton_from_json", p.load_skeleton_from_json},
-        {"project_skeleton_file", p.project_skeleton_file},
-        {"project_calibration_folder", p.project_calibration_folder},
-        {"keypoints_root_folder", p.keypoints_root_folder},
-        {"plot_keypoints_flag", p.plot_keypoints_flag},
-        {"camera_names", p.camera_names},
-        {"skeleton_name", p.skeleton_name},
-        {"media_folder", p.media_folder}};
+    j = nlohmann::json{{"project_root_path", p.project_root_path},
+                       {"project_path", p.project_path},
+                       {"project_name", p.project_name},
+                       {"load_skeleton_from_json", p.load_skeleton_from_json},
+                       {"skeleton_file", p.skeleton_file},
+                       {"calibration_folder", p.calibration_folder},
+                       {"keypoints_root_folder", p.keypoints_root_folder},
+                       {"plot_keypoints_flag", p.plot_keypoints_flag},
+                       {"camera_names", p.camera_names},
+                       {"skeleton_name", p.skeleton_name},
+                       {"media_folder", p.media_folder}};
 }
 
 inline void from_json(const nlohmann::json &j, ProjectManager &p) {
@@ -49,9 +48,8 @@ inline void from_json(const nlohmann::json &j, ProjectManager &p) {
     p.project_path = j.value("project_path", std::string{});
     p.project_name = j.value("project_name", std::string{});
     p.load_skeleton_from_json = j.value("load_skeleton_from_json", false);
-    p.project_skeleton_file = j.value("project_skeleton_file", std::string{});
-    p.project_calibration_folder =
-        j.value("project_calibration_folder", std::string{});
+    p.skeleton_file = j.value("skeleton_file", std::string{});
+    p.calibration_folder = j.value("calibration_folder", std::string{});
     p.keypoints_root_folder = j.value("keypoints_root_folder", std::string{});
     p.plot_keypoints_flag = j.value("plot_keypoints_flag", false);
     p.camera_names = j.value("camera_names", std::vector<std::string>{});
@@ -128,7 +126,7 @@ bool setup_project(ProjectManager &pm, SkeletonContext &skeleton,
     if (pm.camera_names.size() > 1) {
         for (const std::string &cam_name : pm.camera_names) {
             std::filesystem::path cam_path =
-                std::filesystem::path(pm.project_calibration_folder) /
+                std::filesystem::path(pm.calibration_folder) /
                 (cam_name + ".yaml");
 
             CameraParams cam;
@@ -158,7 +156,7 @@ bool setup_project(ProjectManager &pm, SkeletonContext &skeleton,
     skeleton.node_names.clear();
 
     if (pm.load_skeleton_from_json) {
-        load_skeleton_json(pm.project_skeleton_file,
+        load_skeleton_json(pm.skeleton_file,
                            &skeleton); // assume throws/handles its own errors
     } else {
         auto it = skeleton_map.find(pm.skeleton_name);
@@ -330,7 +328,7 @@ DrawProjectWindow(ProjectManager &pm,
             ImGui::TableSetColumnIndex(1);
             ImGui::BeginDisabled(!pm.load_skeleton_from_json);
             ImGui::SetNextItemWidth(-FLT_MIN);
-            ImGui::InputText("##skelpath", &pm.project_skeleton_file);
+            ImGui::InputText("##skelpath", &pm.skeleton_file);
             ImGui::EndDisabled();
             ImGui::TableSetColumnIndex(2);
             ImGui::BeginDisabled(!pm.load_skeleton_from_json);
@@ -377,8 +375,7 @@ DrawProjectWindow(ProjectManager &pm,
                 LabelCell("Calibration Folder");
                 ImGui::TableSetColumnIndex(1);
                 ImGui::SetNextItemWidth(-FLT_MIN);
-                ImGui::InputText("##calibfolder",
-                                 &pm.project_calibration_folder);
+                ImGui::InputText("##calibfolder", &pm.calibration_folder);
                 ImGui::TableSetColumnIndex(2);
                 if (ImGui::Button("Browse##loadprojectcalibration")) {
                     IGFD::FileDialogConfig cfg;
@@ -398,9 +395,8 @@ DrawProjectWindow(ProjectManager &pm,
         // Validation (also require overwrite if target exists)
         const bool needed_ok =
             !pm.project_name.empty() && !pm.project_root_path.empty() &&
-            (pm.camera_names.size() <= 1 ||
-             !pm.project_calibration_folder.empty()) &&
-            (!pm.load_skeleton_from_json || !pm.project_skeleton_file.empty());
+            (pm.camera_names.size() <= 1 || !pm.calibration_folder.empty()) &&
+            (!pm.load_skeleton_from_json || !pm.skeleton_file.empty());
 
         const bool allow_create =
             needed_ok &&
