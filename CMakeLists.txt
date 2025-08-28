@@ -21,13 +21,13 @@ set(LIBTORCH_INCLUDE_API "${DIR_LIBTORCH}/include/torch/csrc/api/include")
 set(LIBTORCH_LIB "${DIR_LIBTORCH}/lib")
 
 # Source Files
-file(GLOB SRC_FILES src/*.cpp lib/ImGuiFileDialog/ImGuiFileDialog.cpp)
+file(GLOB SRC_FILES src/*.cpp)
 file(GLOB IMGUI_SRC
     ${DIR_IMGUI}/*.cpp
     ${DIR_IMGUI}/backends/imgui_impl_glfw.cpp
     ${DIR_IMGUI}/backends/imgui_impl_opengl3.cpp
     ${DIR_IMGUI}/misc/cpp/imgui_stdlib.cpp
-
+    ${DIR_FILEBROWSER}/ImGuiFileDialog.cpp
 )
 file(GLOB IMPLOT_SRC ${DIR_IMPLOT}/*.cpp)
 

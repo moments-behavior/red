@@ -383,7 +383,7 @@ DrawProjectWindow(ProjectManager &pm,
                     cfg.path = pm.project_root_path;
                     cfg.flags = ImGuiFileDialogFlags_Modal;
                     ImGuiFileDialog::Instance()->OpenDialog(
-                        "ChooseCalibration", "Choose Calibration Folder",
+                        "ChooseCalibration", "Select Calibration Folder",
                         nullptr, cfg);
                 }
             }

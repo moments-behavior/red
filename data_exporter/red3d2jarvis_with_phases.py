@@ -13,6 +13,7 @@ import os
 import sys
 
 parser = argparse.ArgumentParser()
+parser.add_argument("-c", "--config", type=str, required=True)
 parser.add_argument("-i", "--label_folder", type=str, required=True)
 parser.add_argument("-o", "--output_folder", type=str, required=True)
 parser.add_argument(
@@ -38,9 +39,12 @@ output_folder = args.output_folder
 select_indices = args.select_indices
 margin_pixel = args.margin
 phase = args.phase
+config = args.config
+
+with open(config, "r") as file:
+    config = json.load(file)
 
 datetime_pattern = re.compile(r"^\d{4}_\d{2}_\d{2}_\d{2}_\d{2}_\d{2}$")
-
 matching_folders = [
     name
     for name in os.listdir(label_folder)
@@ -69,41 +73,53 @@ elif phase == "arena":
         "Cam2002488",
         "Cam2002489",
     ]
+elif phase == "arena24":
+    cameras = [
+        "Cam710038",
+        "Cam2002490",
+        "Cam2002496",
+        "Cam2002488",
+        "Cam2002489",
+        "Cam2002479",
+        "Cam2002484",
+        "Cam2002495",
+        "Cam2002493",
+        "Cam2002481",
+        "Cam2002482",
+        "Cam2002494",
+        "Cam2002491",
+    ]
 else:
     print("Unrecognized phase. ")
     sys.exit(1)
 
 # get skeleton name
 selected_kp_3d = os.path.join(select_folder_path, "keypoints3d.csv")
-skeleton = get_skeleton_name(selected_kp_3d)
-print("Skeleton:", skeleton)
-
-if skeleton.endswith("json"):
+if config["load_skeleton_from_json"]:
+    skeleton = config["skeleton_file"]
     keypoints_names, skeleton_names, num_keypoints = (
         load_skeleton_json_format_for_jarvis(skeleton)
     )
 else:
+    skeleton = config["skeleton_name"]
     keypoints_names, skeleton_names, num_keypoints = skeleton_selector[
         skeleton
     ]()
 
-world_labels = csv_reader_red3d(
-    selected_kp_3d,
-    num_keypoints,
-    select_keypoints_idx=select_indices,
-)
+print("Skeleton:", skeleton)
+world_labels_all = csv_reader_red3d(selected_kp_3d)
 
 # filter out invalid lables
 if phase == "bridge":
     world_labels_filterd = {}
-    for name, value in world_labels.items():
+    for name, value in world_labels_all.items():
         if not np.any(np.isnan(value)):
             # check if on the bridge
             if np.all(value[:, 0] > 500) and np.all(np.abs(value[:, 1]) < 250):
                 world_labels_filterd[name] = value
 else:
     world_labels_filterd = {}
-    for name, value in world_labels.items():
+    for name, value in world_labels_all.items():
         if not np.any(np.isnan(value)):
             if not (
                 np.all(value[:, 0] > 500) and np.all(np.abs(value[:, 1]) < 250)
@@ -132,9 +148,7 @@ val_image_frames = labels_frames[val_ids]
 
 trial_name = select_folder
 
-calibration_folder = os.path.join(
-    "/".join(label_folder.split("/")[:-1]), "calibration"
-)
+calibration_folder = config["calibration_folder"]
 image_width = {}
 image_height = {}
 for cam in cameras:
@@ -240,7 +254,7 @@ for cam in cameras:
 
 
 # save jpeg images
-video_folder = "/".join(label_folder.split("/")[:-1])
+video_folder = config["media_folder"]
 
 map_frame_to_mode = {}
 all_image_frames = []
