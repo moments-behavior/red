@@ -479,6 +479,7 @@ void allocate_keypoints(KeyPoints *keypoints, render_scene *scene,
                         SkeletonContext *skeleton) {
     // allocate memory for storing keypoints
     keypoints->active_id = (u32 *)malloc(sizeof(u32) * scene->num_cams);
+    keypoints->cam_supress = (bool *)malloc(sizeof(u32) * scene->num_cams);
 
     new (&keypoints->bbox2d_list) std::vector<std::vector<BoundingBox>>();
     new (&keypoints->obb2d_list)
@@ -525,7 +526,7 @@ void allocate_keypoints(KeyPoints *keypoints, render_scene *scene,
 
     if (skeleton->has_skeleton) {
         keypoints->keypoints3d =
-            (triple_d *)malloc(sizeof(triple_d) * skeleton->num_nodes);
+            (KeyPoints3D *)malloc(sizeof(KeyPoints3D) * skeleton->num_nodes);
         keypoints->keypoints2d =
             (KeyPoints2D **)malloc(sizeof(KeyPoints2D *) * scene->num_cams);
         for (u32 j = 0; j < scene->num_cams; j++) {
@@ -538,16 +539,16 @@ void allocate_keypoints(KeyPoints *keypoints, render_scene *scene,
             keypoints->active_id[j] = 0;
             for (u32 k = 0; k < skeleton->num_nodes; k++) {
                 keypoints->keypoints2d[j][k].is_labeled = false;
-                keypoints->keypoints2d[j][k].is_triangulated = false;
                 keypoints->keypoints2d[j][k].position.x = 1E7;
                 keypoints->keypoints2d[j][k].position.y = 1E7;
             }
         }
 
         for (u32 k = 0; k < skeleton->num_nodes; k++) {
-            keypoints->keypoints3d[k].x = 1E7;
-            keypoints->keypoints3d[k].y = 1E7;
-            keypoints->keypoints3d[k].z = 1E7;
+            keypoints->keypoints3d[k].position.x = 1E7;
+            keypoints->keypoints3d[k].position.y = 1E7;
+            keypoints->keypoints3d[k].position.z = 1E7;
+            keypoints->keypoints3d[k].is_triangulated = false;
         }
     } else {
         keypoints->keypoints3d = nullptr;
@@ -608,6 +609,7 @@ void free_keypoints(KeyPoints *keypoints, render_scene *scene) {
 
     free(keypoints); // finally free the KeyPoints struct itself
 }
+
 void allocate_bbox_keypoints(BoundingBox *bbox, render_scene *scene,
                              SkeletonContext *skeleton) {
     if (!skeleton->has_skeleton) {
@@ -627,12 +629,12 @@ void allocate_bbox_keypoints(BoundingBox *bbox, render_scene *scene,
 
         for (u32 k = 0; k < skeleton->num_nodes; k++) {
             bbox->bbox_keypoints2d[j][k].is_labeled = false;
-            bbox->bbox_keypoints2d[j][k].is_triangulated = false;
             bbox->bbox_keypoints2d[j][k].position.x = 1E7;
             bbox->bbox_keypoints2d[j][k].position.y = 1E7;
         }
     }
 }
+
 void constrain_keypoint_to_bbox(KeyPoints2D *keypoint, ImPlotRect *bbox_rect) {
     if (!bbox_rect || !keypoint->is_labeled)
         return;

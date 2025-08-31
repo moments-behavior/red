@@ -180,6 +180,8 @@ int main(int, char **) {
     pm.project_root_path = red_data_dir;
     pm.media_folder = media_root_dir;
 
+    bool show_reprojection_error = false;
+
     while (!glfwWindowShouldClose(window->render_target)) {
         // Poll and handle events (inputs, window resize, etc.)
         glfwPollEvents();
@@ -257,6 +259,9 @@ int main(int, char **) {
                     }
                     if (ImGui::MenuItem("Spreadsheet")) {
                         table.is_open = true;
+                    }
+                    if (ImGui::MenuItem("Reprejection")) {
+                        show_reprojection_error = true;
                     }
                     ImGui::EndMenu();
                 }
@@ -975,9 +980,6 @@ int main(int, char **) {
                                         keypoints_map[current_frame_num]
                                             ->keypoints2d[j][*kp]
                                             .is_labeled = true;
-                                        keypoints_map[current_frame_num]
-                                            ->keypoints2d[j][*kp]
-                                            .is_triangulated = false;
                                         if (*kp < (skeleton.num_nodes - 1)) {
                                             (*kp)++;
                                         }
@@ -1572,11 +1574,6 @@ int main(int, char **) {
                                                             [j][active_kp]
                                                                 .is_labeled =
                                                             true;
-                                                        bbox
-                                                            .bbox_keypoints2d
-                                                                [j][active_kp]
-                                                            .is_triangulated =
-                                                            false;
                                                         constrain_keypoint_to_bbox(
                                                             &bbox.bbox_keypoints2d
                                                                  [j][active_kp],
@@ -2672,19 +2669,6 @@ int main(int, char **) {
                                                         }
                                                     }
 
-                                                    // Show triangulation
-                                                    // status
-                                                    if (bbox
-                                                            .bbox_keypoints2d
-                                                                [cam]
-                                                                [column - 1]
-                                                            .is_triangulated) {
-                                                        ImGui::TextColored(
-                                                            ImVec4(1.0f, 1.0f,
-                                                                   1.0f, 1.0f),
-                                                            "T");
-                                                    }
-
                                                     ImU32 cell_bg_color =
                                                         ImGui::GetColorU32(
                                                             node_color);
@@ -2786,8 +2770,7 @@ int main(int, char **) {
                                             }
 
                                             if (keypoints_map[current_frame_num]
-                                                    ->keypoints2d[row]
-                                                                 [column - 1]
+                                                    ->keypoints3d[column - 1]
                                                     .is_triangulated) {
                                                 ImGui::TextColored(
                                                     ImVec4(1.0f, 1.0f, 1.0f,
@@ -2850,19 +2833,40 @@ int main(int, char **) {
             ImGui::End();
         }
 
+        if (show_reprojection_error) {
+            if (scene->num_cams > 1) {
+                bool keypoint_triangulated_all = true;
+                if (keypoints_find) {
+                    for (int j = 0; j < skeleton.num_nodes; j++) {
+                        if (!keypoints_map.at(current_frame_num)
+                                 ->keypoints3d[j]
+                                 .is_triangulated) {
+                            keypoint_triangulated_all = false;
+                        }
+                    }
+                } else {
+                    keypoint_triangulated_all = false;
+                }
+
+                if (keypoint_triangulated_all) {
+                    if (ImGui::Begin("Reprojection Error")) {
+                    }
+                    ImGui::End();
+                }
+            }
+        }
+
         if (pm.plot_keypoints_flag) {
             if (ImGui::Begin("Labeling Tool")) {
 
                 if (scene->num_cams > 1) {
                     bool keypoint_triangulated_all = true;
                     if (keypoints_find) {
-                        for (int i = 0; i < scene->num_cams; i++) {
-                            for (int j = 0; j < skeleton.num_nodes; j++) {
-                                if (!keypoints_map.at(current_frame_num)
-                                         ->keypoints2d[i][j]
-                                         .is_triangulated) {
-                                    keypoint_triangulated_all = false;
-                                }
+                        for (int j = 0; j < skeleton.num_nodes; j++) {
+                            if (!keypoints_map.at(current_frame_num)
+                                     ->keypoints3d[j]
+                                     .is_triangulated) {
+                                keypoint_triangulated_all = false;
                             }
                         }
                     } else {
@@ -2889,17 +2893,6 @@ int main(int, char **) {
                                      &skeleton, pm.camera_params, scene);
                     }
                     ImGui::EndDisabled();
-
-                    // if (skeleton->has_bbox && keypoints_find) {
-                    //     if (ImGui::Button("Triangulate Bounding Boxes")
-                    //     ||
-                    //         ImGui::IsKeyPressed(ImGuiKey_B, false)) {
-                    //         triangulate_bounding_boxes(
-                    //             keypoints_map.at(current_frame_num),
-                    //             skeleton, camera_params, scene,
-                    //             current_frame_num);
-                    //     }
-                    // }
 
                     if (apply_color) {
                         ImGui::PopStyleColor(3);

@@ -12,8 +12,16 @@
 
 struct KeyPoints2D {
     tuple_d position;
+    tuple_d last_position;
     bool is_labeled;
+    double reproj_error;
+    float confidence;
+};
+
+struct KeyPoints3D {
+    triple_d position;
     bool is_triangulated;
+    float confidence;
 };
 
 enum RectState { RectNull, RectOnePoint, RectTwoPoints };
@@ -53,9 +61,11 @@ struct OrientedBoundingBox {
 };
 
 struct KeyPoints {
-    triple_d *keypoints3d;
+    KeyPoints3D *keypoints3d;
+    bool *is_triangulated;
     KeyPoints2D **keypoints2d;
     u32 *active_id;
+    bool *cam_supress;
     std::vector<std::vector<BoundingBox>> bbox2d_list;
     std::vector<std::vector<OrientedBoundingBox>> obb2d_list;
 };
