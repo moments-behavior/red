@@ -61,9 +61,9 @@ struct OrientedBoundingBox {
 };
 
 struct KeyPoints {
-    KeyPoints3D *keypoints3d;
+    KeyPoints3D *kp3d;
     bool *is_triangulated;
-    KeyPoints2D **keypoints2d;
+    KeyPoints2D **kp2d;
     u32 *active_id;
     bool *cam_supress;
     std::vector<std::vector<BoundingBox>> bbox2d_list;

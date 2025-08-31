@@ -975,10 +975,10 @@ int main(int, char **) {
                                         ImPlotPoint mouse =
                                             ImPlot::GetPlotMousePos();
                                         keypoints_map[current_frame_num]
-                                            ->keypoints2d[j][*kp]
+                                            ->kp2d[j][*kp]
                                             .position = {mouse.x, mouse.y};
                                         keypoints_map[current_frame_num]
-                                            ->keypoints2d[j][*kp]
+                                            ->kp2d[j][*kp]
                                             .is_labeled = true;
                                         if (*kp < (skeleton.num_nodes - 1)) {
                                             (*kp)++;
@@ -2758,9 +2758,8 @@ int main(int, char **) {
                                             } else {
                                                 if (keypoints_map
                                                         [current_frame_num]
-                                                            ->keypoints2d
-                                                                [row]
-                                                                [column - 1]
+                                                            ->kp2d[row]
+                                                                  [column - 1]
                                                             .is_labeled) {
                                                     node_color =
                                                         skeleton.node_colors
@@ -2770,7 +2769,7 @@ int main(int, char **) {
                                             }
 
                                             if (keypoints_map[current_frame_num]
-                                                    ->keypoints3d[column - 1]
+                                                    ->kp3d[column - 1]
                                                     .is_triangulated) {
                                                 ImGui::TextColored(
                                                     ImVec4(1.0f, 1.0f, 1.0f,
@@ -2839,7 +2838,7 @@ int main(int, char **) {
                 if (keypoints_find) {
                     for (int j = 0; j < skeleton.num_nodes; j++) {
                         if (!keypoints_map.at(current_frame_num)
-                                 ->keypoints3d[j]
+                                 ->kp3d[j]
                                  .is_triangulated) {
                             keypoint_triangulated_all = false;
                         }
@@ -2864,7 +2863,7 @@ int main(int, char **) {
                     if (keypoints_find) {
                         for (int j = 0; j < skeleton.num_nodes; j++) {
                             if (!keypoints_map.at(current_frame_num)
-                                     ->keypoints3d[j]
+                                     ->kp3d[j]
                                      .is_triangulated) {
                                 keypoint_triangulated_all = false;
                             }
@@ -3076,8 +3075,7 @@ int main(int, char **) {
                             for (int kp_id = 0;
                                  kp_id < skeleton.num_nodes && !has_labels;
                                  kp_id++) {
-                                if (keypoints->keypoints2d[cam_id][kp_id]
-                                        .is_labeled) {
+                                if (keypoints->kp2d[cam_id][kp_id].is_labeled) {
                                     has_labels = true;
                                 }
                             }
@@ -3160,7 +3158,7 @@ int main(int, char **) {
                                 for (int kp_id = 0;
                                      kp_id < skeleton.num_nodes && !has_labels;
                                      kp_id++) {
-                                    if (keypoints->keypoints2d[cam_id][kp_id]
+                                    if (keypoints->kp2d[cam_id][kp_id]
                                             .is_labeled) {
                                         has_labels = true;
                                     }
@@ -3263,8 +3261,7 @@ int main(int, char **) {
                             for (int kp_id = 0;
                                  kp_id < skeleton.num_nodes && !has_labels;
                                  kp_id++) {
-                                if (keypoints->keypoints2d[cam_id][kp_id]
-                                        .is_labeled) {
+                                if (keypoints->kp2d[cam_id][kp_id].is_labeled) {
                                     has_labels = true;
                                 }
                             }

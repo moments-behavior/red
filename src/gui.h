@@ -56,7 +56,7 @@ static void gui_plot_keypoints(KeyPoints *keypoints, SkeletonContext *skeleton,
                                int view_idx, int num_cams) {
     float pt_size = 6.0f;
     for (u32 node = 0; node < skeleton->num_nodes; node++) {
-        if (keypoints->keypoints2d[view_idx][node].is_labeled) {
+        if (keypoints->kp2d[view_idx][node].is_labeled) {
             ImVec4 node_color;
             if (keypoints->active_id[view_idx] == node) {
                 node_color = (ImVec4)ImColor::HSV(0.8, 1.0f, 1.0f);
@@ -72,22 +72,21 @@ static void gui_plot_keypoints(KeyPoints *keypoints, SkeletonContext *skeleton,
             static bool drag_point_hovered;
             static bool drag_point_modified;
             drag_point_modified = ImPlot::DragPoint(
-                id, &keypoints->keypoints2d[view_idx][node].position.x,
-                &keypoints->keypoints2d[view_idx][node].position.y, node_color,
+                id, &keypoints->kp2d[view_idx][node].position.x,
+                &keypoints->kp2d[view_idx][node].position.y, node_color,
                 pt_size, ImPlotDragToolFlags_None, &drag_point_clicked,
                 &drag_point_hovered);
             if (drag_point_modified) {
-                keypoints->keypoints3d[node].is_triangulated = false;
+                keypoints->kp3d[node].is_triangulated = false;
             }
             if (drag_point_hovered) {
-                if (keypoints->keypoints3d[node].is_triangulated) {
+                if (keypoints->kp3d[node].is_triangulated) {
 
                     std::ostringstream oss;
                     oss << std::fixed << std::setprecision(2);
-                    oss << "(" << keypoints->keypoints3d[node].position.x
-                        << ", " << keypoints->keypoints3d[node].position.y
-                        << ", " << keypoints->keypoints3d[node].position.z
-                        << ")";
+                    oss << "(" << keypoints->kp3d[node].position.x << ", "
+                        << keypoints->kp3d[node].position.y << ", "
+                        << keypoints->kp3d[node].position.z << ")";
                     std::string label = oss.str();
                     ImVec2 mouse_pos = ImGui::GetMousePos();
                     ImVec2 textPos = ImVec2(mouse_pos.x + 10, mouse_pos.y + 10);
@@ -98,9 +97,8 @@ static void gui_plot_keypoints(KeyPoints *keypoints, SkeletonContext *skeleton,
                 if (ImGui::IsKeyPressed(ImGuiKey_R,
                                         false)) // delete active keypoint
                 {
-                    keypoints->keypoints2d[view_idx][node].position = {1E7,
-                                                                       1E7};
-                    keypoints->keypoints2d[view_idx][node].is_labeled = false;
+                    keypoints->kp2d[view_idx][node].position = {1E7, 1E7};
+                    keypoints->kp2d[view_idx][node].is_labeled = false;
                     keypoints->active_id[view_idx] = node;
                 }
 
@@ -109,10 +107,8 @@ static void gui_plot_keypoints(KeyPoints *keypoints, SkeletonContext *skeleton,
                         false)) // Delete active keypoints from all the views
                 {
                     for (int cam_idx = 0; cam_idx < num_cams; cam_idx++) {
-                        keypoints->keypoints2d[cam_idx][node].position = {1E7,
-                                                                          1E7};
-                        keypoints->keypoints2d[cam_idx][node].is_labeled =
-                            false;
+                        keypoints->kp2d[cam_idx][node].position = {1E7, 1E7};
+                        keypoints->kp2d[cam_idx][node].is_labeled = false;
                         keypoints->active_id[cam_idx] = node;
                     }
                 }
@@ -127,12 +123,12 @@ static void gui_plot_keypoints(KeyPoints *keypoints, SkeletonContext *skeleton,
     for (u32 edge = 0; edge < skeleton->num_edges; edge++) {
         auto [a, b] = skeleton->edges[edge];
 
-        if (keypoints->keypoints2d[view_idx][a].is_labeled &&
-            keypoints->keypoints2d[view_idx][b].is_labeled) {
-            double xs[2]{keypoints->keypoints2d[view_idx][a].position.x,
-                         keypoints->keypoints2d[view_idx][b].position.x};
-            double ys[2]{keypoints->keypoints2d[view_idx][a].position.y,
-                         keypoints->keypoints2d[view_idx][b].position.y};
+        if (keypoints->kp2d[view_idx][a].is_labeled &&
+            keypoints->kp2d[view_idx][b].is_labeled) {
+            double xs[2]{keypoints->kp2d[view_idx][a].position.x,
+                         keypoints->kp2d[view_idx][b].position.x};
+            double ys[2]{keypoints->kp2d[view_idx][a].position.y,
+                         keypoints->kp2d[view_idx][b].position.y};
             ImPlot::PlotLine("##line", xs, ys, 2);
         }
     }
@@ -142,21 +138,19 @@ static void gui_plot_bbox_from_keypoints(KeyPoints *keypoints,
                                          SkeletonContext *skeleton,
                                          int view_idx, int top_left_idx,
                                          int bottom_right_idx) {
-    if (keypoints->keypoints2d[view_idx][top_left_idx].is_labeled &&
-        keypoints->keypoints2d[view_idx][bottom_right_idx].is_labeled) {
-        double xs[5]{
-            keypoints->keypoints2d[view_idx][top_left_idx].position.x,
-            keypoints->keypoints2d[view_idx][bottom_right_idx].position.x,
-            keypoints->keypoints2d[view_idx][bottom_right_idx].position.x,
-            keypoints->keypoints2d[view_idx][top_left_idx].position.x,
-            keypoints->keypoints2d[view_idx][top_left_idx].position.x};
+    if (keypoints->kp2d[view_idx][top_left_idx].is_labeled &&
+        keypoints->kp2d[view_idx][bottom_right_idx].is_labeled) {
+        double xs[5]{keypoints->kp2d[view_idx][top_left_idx].position.x,
+                     keypoints->kp2d[view_idx][bottom_right_idx].position.x,
+                     keypoints->kp2d[view_idx][bottom_right_idx].position.x,
+                     keypoints->kp2d[view_idx][top_left_idx].position.x,
+                     keypoints->kp2d[view_idx][top_left_idx].position.x};
 
-        double ys[5]{
-            keypoints->keypoints2d[view_idx][top_left_idx].position.y,
-            keypoints->keypoints2d[view_idx][top_left_idx].position.y,
-            keypoints->keypoints2d[view_idx][bottom_right_idx].position.y,
-            keypoints->keypoints2d[view_idx][bottom_right_idx].position.y,
-            keypoints->keypoints2d[view_idx][top_left_idx].position.y};
+        double ys[5]{keypoints->kp2d[view_idx][top_left_idx].position.y,
+                     keypoints->kp2d[view_idx][top_left_idx].position.y,
+                     keypoints->kp2d[view_idx][bottom_right_idx].position.y,
+                     keypoints->kp2d[view_idx][bottom_right_idx].position.y,
+                     keypoints->kp2d[view_idx][top_left_idx].position.y};
 
         ImPlot::SetNextLineStyle(ImVec4(0.5, 1.0, 1.0, 1.0), 3.0);
         ImPlot::PlotLine("##line", xs, ys, 5);
@@ -185,7 +179,7 @@ static void reprojection(KeyPoints *keypoints, SkeletonContext *skeleton,
 
         u32 num_views_labeled{0};
         for (u32 view_idx = 0; view_idx < scene->num_cams; view_idx++) {
-            if (keypoints->keypoints2d[view_idx][node].is_labeled) {
+            if (keypoints->kp2d[view_idx][node].is_labeled) {
                 num_views_labeled++;
             }
         }
@@ -197,14 +191,13 @@ static void reprojection(KeyPoints *keypoints, SkeletonContext *skeleton,
             cv::Mat output;
 
             for (u32 view_idx = 0; view_idx < scene->num_cams; view_idx++) {
-                if (keypoints->keypoints2d[view_idx][node].is_labeled) {
+                if (keypoints->kp2d[view_idx][node].is_labeled) {
 
                     cv::Mat point =
                         (cv::Mat_<double>(2, 1)
-                             << keypoints->keypoints2d[view_idx][node]
-                                    .position.x,
+                             << keypoints->kp2d[view_idx][node].position.x,
                          (double)scene->image_height[view_idx] -
-                             keypoints->keypoints2d[view_idx][node].position.y);
+                             keypoints->kp2d[view_idx][node].position.y);
                     cv::Mat pointUndistort;
                     cv::undistortPoints(
                         point, pointUndistort, camera_params[view_idx].k,
@@ -220,10 +213,10 @@ static void reprojection(KeyPoints *keypoints, SkeletonContext *skeleton,
             cv::sfm::triangulatePoints(sfmPoints2d, projection_matrices,
                                        output);
 
-            keypoints->keypoints3d[node].position.x = output.at<double>(0);
-            keypoints->keypoints3d[node].position.y = output.at<double>(1);
-            keypoints->keypoints3d[node].position.z = output.at<double>(2);
-            keypoints->keypoints3d[node].is_triangulated = true;
+            keypoints->kp3d[node].position.x = output.at<double>(0);
+            keypoints->kp3d[node].position.y = output.at<double>(1);
+            keypoints->kp3d[node].position.z = output.at<double>(2);
+            keypoints->kp3d[node].is_triangulated = true;
 
             for (u32 view_idx = 0; view_idx < scene->num_cams; view_idx++) {
 
@@ -243,21 +236,18 @@ static void reprojection(KeyPoints *keypoints, SkeletonContext *skeleton,
                     if (x > 0 && x < scene->image_width[view_idx] && y > 0 &&
                         y < scene->image_height[view_idx]) {
                         // calculate per keypoint error
-                        keypoints->keypoints2d[view_idx][node].last_position =
-                            keypoints->keypoints2d[view_idx][node].position;
-                        keypoints->keypoints2d[view_idx][node].position.x = x;
-                        keypoints->keypoints2d[view_idx][node].position.y = y;
-                        keypoints->keypoints2d[view_idx][node].is_labeled =
-                            true;
+                        keypoints->kp2d[view_idx][node].last_position =
+                            keypoints->kp2d[view_idx][node].position;
+                        keypoints->kp2d[view_idx][node].position.x = x;
+                        keypoints->kp2d[view_idx][node].position.y = y;
+                        keypoints->kp2d[view_idx][node].is_labeled = true;
                         double x_diff =
-                            keypoints->keypoints2d[view_idx][node].position.x -
-                            keypoints->keypoints2d[view_idx][node]
-                                .last_position.x;
+                            keypoints->kp2d[view_idx][node].position.x -
+                            keypoints->kp2d[view_idx][node].last_position.x;
                         double y_diff =
-                            keypoints->keypoints2d[view_idx][node].position.y -
-                            keypoints->keypoints2d[view_idx][node]
-                                .last_position.y;
-                        keypoints->keypoints2d[view_idx][node].reproj_error =
+                            keypoints->kp2d[view_idx][node].position.y -
+                            keypoints->kp2d[view_idx][node].last_position.y;
+                        keypoints->kp2d[view_idx][node].reproj_error =
                             std::sqrt(x_diff * x_diff + y_diff * y_diff);
                     }
                 }
@@ -336,10 +326,9 @@ void save_keypoints(std::map<u32, KeyPoints *> keypoints_map,
 
         // Write each labeled keypoint
         for (uint i = 0; i < skeleton->num_nodes; i++) {
-            output3d_file << "," << i << ","
-                          << keypoints->keypoints3d[i].position.x << ","
-                          << keypoints->keypoints3d[i].position.y << ","
-                          << keypoints->keypoints3d[i].position.z;
+            output3d_file << "," << i << "," << keypoints->kp3d[i].position.x
+                          << "," << keypoints->kp3d[i].position.y << ","
+                          << keypoints->kp3d[i].position.z;
         }
         output3d_file << "\n";
 
@@ -350,10 +339,10 @@ void save_keypoints(std::map<u32, KeyPoints *> keypoints_map,
                 output2d_files[cam] << frame;
             }
             for (int node = 0; node < skeleton->num_nodes; node++) {
-                output2d_files[cam]
-                    << "," << node << ","
-                    << keypoints->keypoints2d[cam][node].position.x << ","
-                    << keypoints->keypoints2d[cam][node].position.y;
+                output2d_files[cam] << "," << node << ","
+                                    << keypoints->kp2d[cam][node].position.x
+                                    << ","
+                                    << keypoints->kp2d[cam][node].position.y;
             }
             output2d_files[cam] << "\n";
         }
@@ -748,20 +737,18 @@ void load_2d_keypoints_depreciated(std::map<u32, KeyPoints *> &keypoints_map,
                     double y = stod(token);
                     line.erase(0, pos + delimeter.length());
 
-                    keypoints_map[frame_num]
-                        ->keypoints2d[cam_idx][node]
-                        .position.x = x;
-                    keypoints_map[frame_num]
-                        ->keypoints2d[cam_idx][node]
-                        .position.y = y;
+                    keypoints_map[frame_num]->kp2d[cam_idx][node].position.x =
+                        x;
+                    keypoints_map[frame_num]->kp2d[cam_idx][node].position.y =
+                        y;
 
                     if (x == 1E7 || y == 1E7) {
                         keypoints_map[frame_num]
-                            ->keypoints2d[cam_idx][node]
+                            ->kp2d[cam_idx][node]
                             .is_labeled = false;
                     } else {
                         keypoints_map[frame_num]
-                            ->keypoints2d[cam_idx][node]
+                            ->kp2d[cam_idx][node]
                             .is_labeled = true;
                     }
                     // std::cout << "frame: " << frame_num << "  node: " << node
@@ -860,20 +847,17 @@ int load_keypoints_depreciated(std::map<u32, KeyPoints *> &keypoints_map,
                         double z = stod(token);
                         line.erase(0, pos + delimeter.length());
 
-                        keypoints_map[frame_num]->keypoints3d[node].position.x =
-                            x;
-                        keypoints_map[frame_num]->keypoints3d[node].position.y =
-                            y;
-                        keypoints_map[frame_num]->keypoints3d[node].position.z =
-                            z;
+                        keypoints_map[frame_num]->kp3d[node].position.x = x;
+                        keypoints_map[frame_num]->kp3d[node].position.y = y;
+                        keypoints_map[frame_num]->kp3d[node].position.z = z;
 
                         if (x == 1E7 || y == 1E7 || z == 1E7) {
                             keypoints_map[frame_num]
-                                ->keypoints3d[node]
+                                ->kp3d[node]
                                 .is_triangulated = false;
                         } else {
                             keypoints_map[frame_num]
-                                ->keypoints3d[node]
+                                ->kp3d[node]
                                 .is_triangulated = true;
                         }
 
@@ -961,20 +945,18 @@ int load_2d_keypoints(std::map<u32, KeyPoints *> &keypoints_map,
                     double y = stod(token);
                     line.erase(0, pos + delimeter.length());
 
-                    keypoints_map[frame_num]
-                        ->keypoints2d[cam_idx][node]
-                        .position.x = x;
-                    keypoints_map[frame_num]
-                        ->keypoints2d[cam_idx][node]
-                        .position.y = y;
+                    keypoints_map[frame_num]->kp2d[cam_idx][node].position.x =
+                        x;
+                    keypoints_map[frame_num]->kp2d[cam_idx][node].position.y =
+                        y;
 
                     if (x == 1E7 || y == 1E7) {
                         keypoints_map[frame_num]
-                            ->keypoints2d[cam_idx][node]
+                            ->kp2d[cam_idx][node]
                             .is_labeled = false;
                     } else {
                         keypoints_map[frame_num]
-                            ->keypoints2d[cam_idx][node]
+                            ->kp2d[cam_idx][node]
                             .is_labeled = true;
                     }
                     // std::cout << "frame: " << frame_num << "  node: " << node
@@ -1089,20 +1071,17 @@ int load_keypoints(std::string keypoints_folder,
                         double z = stod(token);
                         line.erase(0, pos + delimeter.length());
 
-                        keypoints_map[frame_num]->keypoints3d[node].position.x =
-                            x;
-                        keypoints_map[frame_num]->keypoints3d[node].position.y =
-                            y;
-                        keypoints_map[frame_num]->keypoints3d[node].position.z =
-                            z;
+                        keypoints_map[frame_num]->kp3d[node].position.x = x;
+                        keypoints_map[frame_num]->kp3d[node].position.y = y;
+                        keypoints_map[frame_num]->kp3d[node].position.z = z;
 
                         if (x == 1E7 || y == 1E7 || z == 1E7) {
                             keypoints_map[frame_num]
-                                ->keypoints3d[node]
+                                ->kp3d[node]
                                 .is_triangulated = false;
                         } else {
                             keypoints_map[frame_num]
-                                ->keypoints3d[node]
+                                ->kp3d[node]
                                 .is_triangulated = true;
                         }
                     }

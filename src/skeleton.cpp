@@ -443,7 +443,7 @@ bool has_labeled_frames(const std::map<u32, KeyPoints *> &keypoints_map,
                  cam_id < keypoints->bbox2d_list.size() && cam_id < MAX_VIEWS;
                  cam_id++) {
                 for (int kp_id = 0; kp_id < skeleton->num_nodes; kp_id++) {
-                    if (keypoints->keypoints2d[cam_id][kp_id].is_labeled) {
+                    if (keypoints->kp2d[cam_id][kp_id].is_labeled) {
                         return true;
                     }
                 }
@@ -525,34 +525,34 @@ void allocate_keypoints(KeyPoints *keypoints, render_scene *scene,
     }
 
     if (skeleton->has_skeleton) {
-        keypoints->keypoints3d =
+        keypoints->kp3d =
             (KeyPoints3D *)malloc(sizeof(KeyPoints3D) * skeleton->num_nodes);
-        keypoints->keypoints2d =
+        keypoints->kp2d =
             (KeyPoints2D **)malloc(sizeof(KeyPoints2D *) * scene->num_cams);
         for (u32 j = 0; j < scene->num_cams; j++) {
-            keypoints->keypoints2d[j] = (KeyPoints2D *)malloc(
-                sizeof(KeyPoints2D) * skeleton->num_nodes);
+            keypoints->kp2d[j] = (KeyPoints2D *)malloc(sizeof(KeyPoints2D) *
+                                                       skeleton->num_nodes);
         }
 
         // initialize to big number
         for (u32 j = 0; j < scene->num_cams; j++) {
             keypoints->active_id[j] = 0;
             for (u32 k = 0; k < skeleton->num_nodes; k++) {
-                keypoints->keypoints2d[j][k].is_labeled = false;
-                keypoints->keypoints2d[j][k].position.x = 1E7;
-                keypoints->keypoints2d[j][k].position.y = 1E7;
+                keypoints->kp2d[j][k].is_labeled = false;
+                keypoints->kp2d[j][k].position.x = 1E7;
+                keypoints->kp2d[j][k].position.y = 1E7;
             }
         }
 
         for (u32 k = 0; k < skeleton->num_nodes; k++) {
-            keypoints->keypoints3d[k].position.x = 1E7;
-            keypoints->keypoints3d[k].position.y = 1E7;
-            keypoints->keypoints3d[k].position.z = 1E7;
-            keypoints->keypoints3d[k].is_triangulated = false;
+            keypoints->kp3d[k].position.x = 1E7;
+            keypoints->kp3d[k].position.y = 1E7;
+            keypoints->kp3d[k].position.z = 1E7;
+            keypoints->kp3d[k].is_triangulated = false;
         }
     } else {
-        keypoints->keypoints3d = nullptr;
-        keypoints->keypoints2d = nullptr;
+        keypoints->kp3d = nullptr;
+        keypoints->kp2d = nullptr;
         // Still need to initialize active_id array even without skeleton
         for (u32 j = 0; j < scene->num_cams; j++) {
             keypoints->active_id[j] = 0;
@@ -584,15 +584,15 @@ void free_keypoints(KeyPoints *keypoints, render_scene *scene) {
     if (!keypoints)
         return;
 
-    if (keypoints->keypoints2d) {
+    if (keypoints->kp2d) {
         for (u32 j = 0; j < scene->num_cams; ++j) {
-            free(keypoints->keypoints2d[j]);
+            free(keypoints->kp2d[j]);
         }
-        free(keypoints->keypoints2d);
+        free(keypoints->kp2d);
     }
 
     free(keypoints->active_id);
-    free(keypoints->keypoints3d);
+    free(keypoints->kp3d);
 
     // Free bounding boxes
     for (u32 j = 0; j < scene->num_cams; j++) {
