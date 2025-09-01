@@ -541,6 +541,9 @@ void allocate_keypoints(KeyPoints *keypoints, render_scene *scene,
                 keypoints->kp2d[j][k].is_labeled = false;
                 keypoints->kp2d[j][k].position.x = 1E7;
                 keypoints->kp2d[j][k].position.y = 1E7;
+                keypoints->kp2d[j][k].last_position =
+                    keypoints->kp2d[j][k].position;
+                keypoints->kp2d[j][k].last_is_labeled = false;
             }
         }
 

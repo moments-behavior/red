@@ -14,7 +14,7 @@ struct KeyPoints2D {
     tuple_d position;
     tuple_d last_position;
     bool is_labeled;
-    double reproj_error;
+    bool last_is_labeled;
     float confidence;
 };
 

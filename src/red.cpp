@@ -10,6 +10,7 @@
 #include "live_table.h"
 #include "project.h"
 #include "render.h"
+#include "reprojection_tool.h"
 #include "skeleton.h"
 #include "utils.h"
 #include "yolo_export.h"
@@ -24,6 +25,7 @@
 #include <thread>
 #define STB_IMAGE_IMPLEMENTATION
 #include "../lib/ImGuiFileDialog/stb/stb_image.h"
+#include "reprojection_tool.h"
 
 int main(int, char **) {
     gx_context *window = (gx_context *)malloc(sizeof(gx_context));
@@ -180,7 +182,7 @@ int main(int, char **) {
     pm.project_root_path = red_data_dir;
     pm.media_folder = media_root_dir;
 
-    bool show_reprojection_error = false;
+    ReprojectionTool rp_tool;
 
     while (!glfwWindowShouldClose(window->render_target)) {
         // Poll and handle events (inputs, window resize, etc.)
@@ -260,9 +262,10 @@ int main(int, char **) {
                     if (ImGui::MenuItem("Spreadsheet")) {
                         table.is_open = true;
                     }
-                    if (ImGui::MenuItem("Reprejection")) {
-                        show_reprojection_error = true;
+                    if (ImGui::MenuItem("Reprojection Error")) {
+                        rp_tool.show_reprojection_error = true;
                     }
+
                     ImGui::EndMenu();
                 }
 
@@ -421,6 +424,7 @@ int main(int, char **) {
                     bool ok = setup_project(pm, skeleton, skeleton_map,
                                             &error_message);
                     if (ok) {
+                        pm.camera_names.clear();
                         load_videos(cam_sel, ps, pm, window_was_decoding,
                                     demuxers, dc_context, scene,
                                     label_buffer_size, decoder_threads,
@@ -2832,48 +2836,32 @@ int main(int, char **) {
             ImGui::End();
         }
 
-        if (show_reprojection_error) {
-            if (scene->num_cams > 1) {
-                bool keypoint_triangulated_all = true;
-                if (keypoints_find) {
-                    for (int j = 0; j < skeleton.num_nodes; j++) {
-                        if (!keypoints_map.at(current_frame_num)
-                                 ->kp3d[j]
-                                 .is_triangulated) {
-                            keypoint_triangulated_all = false;
-                        }
-                    }
-                } else {
-                    keypoint_triangulated_all = false;
-                }
-
-                if (keypoint_triangulated_all) {
-                    if (ImGui::Begin("Reprojection Error")) {
-                    }
-                    ImGui::End();
-                }
-            }
+        if (keypoints_find) {
+            DrawReprojectionWindow(keypoints_map[current_frame_num],
+                                   pm.camera_names, scene, skeleton, rp_tool);
         }
 
         if (pm.plot_keypoints_flag) {
-            if (ImGui::Begin("Labeling Tool")) {
 
+            if (ImGui::Begin("Labeling Tool")) {
                 if (scene->num_cams > 1) {
                     bool keypoint_triangulated_all = true;
-                    if (keypoints_find) {
+                    if (keypoints_find && scene->num_cams > 1) {
                         for (int j = 0; j < skeleton.num_nodes; j++) {
                             if (!keypoints_map.at(current_frame_num)
                                      ->kp3d[j]
                                      .is_triangulated) {
                                 keypoint_triangulated_all = false;
+                                {
+                                }
+                                break; // small optimization, exit early
                             }
                         }
                     } else {
                         keypoint_triangulated_all = false;
                     }
-
-                    bool enabled = keypoints_find;
-                    bool apply_color = !keypoint_triangulated_all && enabled;
+                    bool apply_color =
+                        !keypoint_triangulated_all && keypoints_find;
                     if (apply_color) {
                         ImGui::PushStyleColor(
                             ImGuiCol_Button,
@@ -2886,7 +2874,7 @@ int main(int, char **) {
                             (ImVec4)ImColor::HSV(0.8, 0.9f, 0.5f));
                     }
 
-                    ImGui::BeginDisabled(!enabled);
+                    ImGui::BeginDisabled(!keypoints_find);
                     if (ImGui::Button("Triangulate")) {
                         reprojection(keypoints_map.at(current_frame_num),
                                      &skeleton, pm.camera_params, scene);

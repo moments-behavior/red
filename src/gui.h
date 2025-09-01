@@ -5,13 +5,16 @@
 #include "render.h"
 #include "skeleton.h"
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <future>
 #include <iostream>
+#include <limits>
 #include <opencv2/sfm.hpp>
 #include <regex>
 #include <sstream>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -219,7 +222,10 @@ static void reprojection(KeyPoints *keypoints, SkeletonContext *skeleton,
             keypoints->kp3d[node].is_triangulated = true;
 
             for (u32 view_idx = 0; view_idx < scene->num_cams; view_idx++) {
-
+                keypoints->kp2d[view_idx][node].last_position =
+                    keypoints->kp2d[view_idx][node].position;
+                keypoints->kp2d[view_idx][node].last_is_labeled =
+                    keypoints->kp2d[view_idx][node].is_labeled;
                 if (is_in_camera_fov(output, camera_params[view_idx].rvec,
                                      camera_params[view_idx].tvec,
                                      camera_params[view_idx].k,
@@ -236,19 +242,9 @@ static void reprojection(KeyPoints *keypoints, SkeletonContext *skeleton,
                     if (x > 0 && x < scene->image_width[view_idx] && y > 0 &&
                         y < scene->image_height[view_idx]) {
                         // calculate per keypoint error
-                        keypoints->kp2d[view_idx][node].last_position =
-                            keypoints->kp2d[view_idx][node].position;
                         keypoints->kp2d[view_idx][node].position.x = x;
                         keypoints->kp2d[view_idx][node].position.y = y;
                         keypoints->kp2d[view_idx][node].is_labeled = true;
-                        double x_diff =
-                            keypoints->kp2d[view_idx][node].position.x -
-                            keypoints->kp2d[view_idx][node].last_position.x;
-                        double y_diff =
-                            keypoints->kp2d[view_idx][node].position.y -
-                            keypoints->kp2d[view_idx][node].last_position.y;
-                        keypoints->kp2d[view_idx][node].reproj_error =
-                            std::sqrt(x_diff * x_diff + y_diff * y_diff);
                     }
                 }
             }
@@ -959,6 +955,7 @@ int load_2d_keypoints(std::map<u32, KeyPoints *> &keypoints_map,
                             ->kp2d[cam_idx][node]
                             .is_labeled = true;
                     }
+
                     // std::cout << "frame: " << frame_num << "  node: " << node
                     // << "  x: " <<
                     // keypoints_map[frame_num]->keypoints2d[cam_idx][node].position.x

@@ -433,6 +433,7 @@ load_videos(std::map<std::string, std::string> &selected_files,
             elem.first.substr(0, cam_string_mp4_position - 1);
         pm.camera_names.push_back(cam_string);
         std::cout << "camera names: " << cam_string << std::endl;
+
         window_need_decoding[cam_string].store(true);
         window_was_decoding[cam_string] = true;
         std::map<std::string, std::string> m;
