@@ -182,7 +182,7 @@ static void reprojection(KeyPoints *keypoints, SkeletonContext *skeleton,
 
         u32 num_views_labeled{0};
         for (u32 view_idx = 0; view_idx < scene->num_cams; view_idx++) {
-            if (keypoints->kp2d[view_idx][node].is_labeled && !keypoints->cam_supress[view_idx]) {
+            if (keypoints->kp2d[view_idx][node].is_labeled && !keypoints->view_is_suppressed[view_idx]) {
                 num_views_labeled++;
             }
         }
@@ -194,7 +194,7 @@ static void reprojection(KeyPoints *keypoints, SkeletonContext *skeleton,
             cv::Mat output;
 
             for (u32 view_idx = 0; view_idx < scene->num_cams; view_idx++) {
-                if (keypoints->kp2d[view_idx][node].is_labeled && !keypoints->cam_supress[view_idx]) {
+                if (keypoints->kp2d[view_idx][node].is_labeled && !keypoints->view_is_suppressed[view_idx]) {
 
                     cv::Mat point =
                         (cv::Mat_<double>(2, 1)
@@ -226,7 +226,7 @@ static void reprojection(KeyPoints *keypoints, SkeletonContext *skeleton,
                     keypoints->kp2d[view_idx][node].position;
                 keypoints->kp2d[view_idx][node].last_is_labeled =
                     keypoints->kp2d[view_idx][node].is_labeled;
-                if (!keypoints->cam_supress[view_idx] && is_in_camera_fov(output, camera_params[view_idx].rvec,
+                if (!keypoints->view_is_suppressed[view_idx] && is_in_camera_fov(output, camera_params[view_idx].rvec,
                                      camera_params[view_idx].tvec,
                                      camera_params[view_idx].k,
                                      scene->image_width[view_idx],
@@ -2558,22 +2558,22 @@ static void gui_view_suppression_controls(KeyPoints *keypoints, render_scene *sc
         
         u32 unsuppressed_count = 0;
         for (u32 cam_idx : cameras_with_labels) {
-            if (!keypoints->cam_supress[cam_idx]) {
+            if (!keypoints->view_is_suppressed[cam_idx]) {
                 unsuppressed_count++;
             }
         }
         
         for (u32 cam_idx : cameras_with_labels) {
-            bool can_suppress = unsuppressed_count > 2 || keypoints->cam_supress[cam_idx];
+            bool can_suppress = unsuppressed_count > 2 || keypoints->view_is_suppressed[cam_idx];
             
             if (!can_suppress) {
                 ImGui::BeginDisabled();
             }
             
-            bool old_value = keypoints->cam_supress[cam_idx];
-            if (ImGui::Checkbox(camera_names[cam_idx].c_str(), &keypoints->cam_supress[cam_idx])) {
-                if (keypoints->cam_supress[cam_idx] != old_value) {
-                    if (keypoints->cam_supress[cam_idx]) {
+            bool old_value = keypoints->view_is_suppressed[cam_idx];
+            if (ImGui::Checkbox(camera_names[cam_idx].c_str(), &keypoints->view_is_suppressed[cam_idx])) {
+                if (keypoints->view_is_suppressed[cam_idx] != old_value) {
+                    if (keypoints->view_is_suppressed[cam_idx]) {
                         unsuppressed_count--;
                     } else {
                         unsuppressed_count++;

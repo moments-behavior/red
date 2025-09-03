@@ -480,6 +480,11 @@ void allocate_keypoints(KeyPoints *keypoints, render_scene *scene,
     // allocate memory for storing keypoints
     keypoints->active_id = (u32 *)malloc(sizeof(u32) * scene->num_cams);
     keypoints->cam_supress = (bool *)malloc(sizeof(u32) * scene->num_cams);
+    keypoints->view_is_suppressed = (bool *)malloc(sizeof(bool) * scene->num_cams);
+    
+    for (u32 j = 0; j < scene->num_cams; j++) {
+        keypoints->view_is_suppressed[j] = false;
+    }
 
     new (&keypoints->bbox2d_list) std::vector<std::vector<BoundingBox>>();
     new (&keypoints->obb2d_list)
@@ -596,6 +601,8 @@ void free_keypoints(KeyPoints *keypoints, render_scene *scene) {
 
     free(keypoints->active_id);
     free(keypoints->kp3d);
+    free(keypoints->cam_supress);
+    free(keypoints->view_is_suppressed);
 
     // Free bounding boxes
     for (u32 j = 0; j < scene->num_cams; j++) {
