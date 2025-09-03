@@ -3549,6 +3549,10 @@ int main(int, char **) {
                         }
                     }
                 }
+                
+                if (keypoints_find && scene->num_cams > 1) {
+                    gui_view_suppression_controls(keypoints_map[current_frame_num], scene, pm.camera_names);
+                }
             }
             ImGui::End();
         }
