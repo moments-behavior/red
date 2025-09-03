@@ -66,6 +66,7 @@ struct KeyPoints {
     KeyPoints2D **kp2d;
     u32 *active_id;
     bool *cam_supress;
+    bool *view_is_suppressed;
     std::vector<std::vector<BoundingBox>> bbox2d_list;
     std::vector<std::vector<OrientedBoundingBox>> obb2d_list;
 };
