@@ -83,7 +83,7 @@ static void gui_plot_keypoints(KeyPoints *keypoints, SkeletonContext *skeleton,
                 keypoints->kp3d[node].is_triangulated = false;
             }
             if (drag_point_hovered) {
-                if (keypoints->kp3d[node].is_triangulated) {
+                if (keypoints->kp3d[node].is_triangulated && !keypoints->view_is_suppressed[view_idx]) {
 
                     std::ostringstream oss;
                     oss << std::fixed << std::setprecision(2);

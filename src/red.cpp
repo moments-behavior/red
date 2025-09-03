@@ -2774,7 +2774,9 @@ int main(int, char **) {
 
                                             if (keypoints_map[current_frame_num]
                                                     ->kp3d[column - 1]
-                                                    .is_triangulated) {
+                                                    .is_triangulated && 
+                                                !keypoints_map[current_frame_num]
+                                                    ->view_is_suppressed[row]) {
                                                 ImGui::TextColored(
                                                     ImVec4(1.0f, 1.0f, 1.0f,
                                                            1.0f),
