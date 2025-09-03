@@ -2564,19 +2564,20 @@ static void gui_view_suppression_controls(KeyPoints *keypoints, render_scene *sc
         }
         
         for (u32 cam_idx : cameras_with_labels) {
-            bool is_suppressed = keypoints->cam_supress[cam_idx];
-            bool can_suppress = unsuppressed_count > 2 || is_suppressed;
+            bool can_suppress = unsuppressed_count > 2 || keypoints->cam_supress[cam_idx];
             
             if (!can_suppress) {
                 ImGui::BeginDisabled();
             }
             
-            if (ImGui::Checkbox(camera_names[cam_idx].c_str(), &is_suppressed)) {
-                keypoints->cam_supress[cam_idx] = is_suppressed;
-                if (is_suppressed) {
-                    unsuppressed_count--;
-                } else {
-                    unsuppressed_count++;
+            bool old_value = keypoints->cam_supress[cam_idx];
+            if (ImGui::Checkbox(camera_names[cam_idx].c_str(), &keypoints->cam_supress[cam_idx])) {
+                if (keypoints->cam_supress[cam_idx] != old_value) {
+                    if (keypoints->cam_supress[cam_idx]) {
+                        unsuppressed_count--;
+                    } else {
+                        unsuppressed_count++;
+                    }
                 }
             }
             
