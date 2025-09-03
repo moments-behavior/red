@@ -2531,30 +2531,55 @@ void handle_obb_dragging(OrientedBoundingBox &obb, ImVec2 mouse_pos,
 }
 
 static void gui_view_suppression_controls(KeyPoints *keypoints, render_scene *scene,
-                                         std::vector<std::string> &camera_names) {
+                                         std::vector<std::string> &camera_names,
+                                         SkeletonContext *skeleton) {
     if (ImGui::CollapsingHeader("View Suppression")) {
         ImGui::Text("Suppress views from triangulation:");
         ImGui::Separator();
-
-        u32 unsuppressed_count = 0;
+        
+        std::vector<u32> cameras_with_labels;
         for (u32 cam_idx = 0; cam_idx < scene->num_cams; cam_idx++) {
+            bool has_labels = false;
+            for (u32 node = 0; node < skeleton->num_nodes && !has_labels; node++) {
+                if (keypoints->kp2d[cam_idx] && keypoints->kp2d[cam_idx][node].is_labeled) {
+                    has_labels = true;
+                }
+            }
+            if (has_labels) {
+                cameras_with_labels.push_back(cam_idx);
+            }
+        }
+        
+        if (cameras_with_labels.size() < 2) {
+            ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), 
+                              "Need at least 2 cameras with labeled keypoints");
+            return;
+        }
+        
+        u32 unsuppressed_count = 0;
+        for (u32 cam_idx : cameras_with_labels) {
             if (!keypoints->cam_supress[cam_idx]) {
                 unsuppressed_count++;
             }
         }
-
-        for (u32 cam_idx = 0; cam_idx < scene->num_cams; cam_idx++) {
+        
+        for (u32 cam_idx : cameras_with_labels) {
             bool is_suppressed = keypoints->cam_supress[cam_idx];
             bool can_suppress = unsuppressed_count > 2 || is_suppressed;
-
+            
             if (!can_suppress) {
                 ImGui::BeginDisabled();
             }
-
+            
             if (ImGui::Checkbox(camera_names[cam_idx].c_str(), &is_suppressed)) {
                 keypoints->cam_supress[cam_idx] = is_suppressed;
+                if (is_suppressed) {
+                    unsuppressed_count--;
+                } else {
+                    unsuppressed_count++;
+                }
             }
-
+            
             if (!can_suppress) {
                 ImGui::EndDisabled();
                 if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
@@ -2564,7 +2589,7 @@ static void gui_view_suppression_controls(KeyPoints *keypoints, render_scene *sc
         }
 
         if (unsuppressed_count < 2) {
-            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f),
+            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), 
                               "Warning: Need at least 2 unsuppressed views for triangulation");
         }
     }
