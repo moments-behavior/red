@@ -25,7 +25,7 @@ labels_raw = load_jarvis_3d_csv_rats(input_jarvis_folder + "/data3D.csv")
 print("Number of raw labels: {}".format(len(labels_raw)))
 
 first_value = next(iter(labels_raw.values()))
-num_keypoints = first_value.shape[1]
+num_keypoints = first_value.shape[0]
 
 labels = {}
 for key, value in labels_raw.items():
