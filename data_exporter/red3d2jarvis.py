@@ -14,7 +14,13 @@ import os
 parser = argparse.ArgumentParser()
 parser.add_argument("-i", "--label_folder", type=str, required=True)
 parser.add_argument("-o", "--output_folder", type=str, required=True)
-parser.add_argument("-c", "--calibration_folder", type=str, required=True)
+parser.add_argument(
+    "-p",
+    "--project_json",
+    type=str,
+    required=True,
+    help="Project json created by RED.",
+)
 parser.add_argument(
     "-s",
     "--select_indices",
@@ -42,9 +48,14 @@ args = parser.parse_args()
 label_folder = args.label_folder
 label_folder = os.path.normpath(label_folder)
 output_folder = args.output_folder
-calibration_folder = args.calibration_folder
 select_indices = args.select_indices
 margin_pixel = args.margin
+
+
+with open(args.project_json, "r") as f:
+    project_json = json.load(f)
+calibration_folder = project_json["calibration_folder"]
+video_folder = project_json["media_folder"]
 
 datetime_pattern = re.compile(r"^\d{4}_\d{2}_\d{2}_\d{2}_\d{2}_\d{2}$")
 
@@ -223,8 +234,6 @@ for cam in cameras:
 
 
 # save jpeg images
-video_folder = "/".join(label_folder.split("/")[:-1])
-
 map_frame_to_mode = {}
 all_image_frames = []
 
