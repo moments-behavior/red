@@ -14,6 +14,7 @@ import os
 parser = argparse.ArgumentParser()
 parser.add_argument("-i", "--label_folder", type=str, required=True)
 parser.add_argument("-o", "--output_folder", type=str, required=True)
+parser.add_argument("-c", "--calibration_folder", type=str, required=True)
 parser.add_argument(
     "-s",
     "--select_indices",
@@ -34,6 +35,7 @@ args = parser.parse_args()
 label_folder = args.label_folder
 label_folder = os.path.normpath(label_folder)
 output_folder = args.output_folder
+calibration_folder = args.calibration_folder
 select_indices = args.select_indices
 margin_pixel = args.margin
 
@@ -104,9 +106,6 @@ val_image_frames = labels_frames[val_ids]
 
 trial_name = select_folder
 
-calibration_folder = os.path.join(
-    "/".join(label_folder.split("/")[:-1]), "calibration"
-)
 image_width = {}
 image_height = {}
 for cam in cameras:
