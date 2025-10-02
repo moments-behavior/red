@@ -30,6 +30,13 @@ parser.add_argument(
     help="Margin in pixel to add when deciding bounding box.",
     required=True,
 )
+parser.add_argument(
+    "-e",
+    "--edges",
+    nargs="+",
+    type=int,
+    help="Pairs of numbers. Optional for sub selecting indices.",
+)
 
 args = parser.parse_args()
 label_folder = args.label_folder
@@ -131,6 +138,11 @@ set_of_frames = {trial_name: frame_set_one}
 if select_indices:
     keypoints_names_selected = [keypoints_names[i] for i in select_indices]
     annotation_num_kps = len(select_indices)
+    if args.edges:
+        skeleton_edge_pairs = list(zip(args.edges[::2], args.edges[1::2]))
+        skeleton_names = edges_to_jarvis_skeleton(
+            skeleton_edge_pairs, keypoints_names_selected
+        )
 else:
     keypoints_names_selected = keypoints_names
     annotation_num_kps = num_keypoints

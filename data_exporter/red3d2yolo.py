@@ -191,7 +191,7 @@ def save_yolo_data_opencv(output_folder, annotations, dset_mode, video_folder):
         while frame_num >= image_frames[0] and frame_num <= image_frames[-1]:
             ret, frame = cap.read()
             if not ret:
-                print("Missing fame: {}".format(frame_num))
+                print("Missing frame: {}".format(frame_num))
                 cap.release()
                 break
             else:

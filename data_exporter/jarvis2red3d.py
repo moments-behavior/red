@@ -8,7 +8,9 @@ import yaml
 
 parser = argparse.ArgumentParser()
 parser.add_argument("-i", "--input_jarvis_folder", type=str, required=True)
-parser.add_argument("-s", "--skeleton", type=str, required=True)
+parser.add_argument(
+    "-s", "--skeleton", type=str, required=True, help="Name of the skeleton."
+)
 parser.add_argument("-f", "--filter", type=int, default=1)
 parser.add_argument("-t", "--threshold", type=float, default=0.6)
 parser.add_argument("-o", "--output_dir", type=str, default="predictions")

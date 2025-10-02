@@ -456,6 +456,18 @@ def load_skeleton_json_format_for_jarvis(json_file):
     return keypoint_names, skeleton, len(keypoint_names)
 
 
+def edges_to_jarvis_skeleton(edges, keypoint_names):
+    skeleton = []
+    for i, (a, b) in enumerate(edges):
+        joint = {
+            "keypointA": keypoint_names[a],
+            "keypointB": keypoint_names[b],
+            "length": 0.0,
+            "name": f"Joint {i + 1}",
+        }
+        skeleton.append(joint)
+
+
 skeleton_selector = {
     "Rat4Target": rat4target,
     "Rat4": rat4,
