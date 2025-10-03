@@ -93,7 +93,7 @@ cd data_exporter
 ```
 
 ```
-python red3d2jarvis.py -i label_folder -o output_folder [-s subset of keypoints index] [-m margin for bounding box estimate]
+python red3d2jarvis.py -i label_folder -o output_folder -p project.json -m margin for bounding box estimate [-s subset of keypoints index] [-e new skeleton edges if use subset of keypoints]
 ```
 
 To check the dataset,
