@@ -154,6 +154,8 @@ if select_indices:
         skeleton_names = edges_to_jarvis_skeleton(
             skeleton_edge_pairs, keypoints_names_selected
         )
+    else:
+        print("You might need to update skeleton. Specify new edges with -e.")
 else:
     keypoints_names_selected = keypoints_names
     annotation_num_kps = num_keypoints

@@ -466,6 +466,7 @@ def edges_to_jarvis_skeleton(edges, keypoint_names):
             "name": f"Joint {i + 1}",
         }
         skeleton.append(joint)
+    return skeleton
 
 
 skeleton_selector = {
