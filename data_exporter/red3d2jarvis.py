@@ -12,15 +12,14 @@ from multiprocessing import get_context
 import os
 
 parser = argparse.ArgumentParser()
-parser.add_argument("-i", "--label_folder", type=str, required=True)
-parser.add_argument("-o", "--output_folder", type=str, required=True)
 parser.add_argument(
-    "-p",
-    "--project_json",
+    "-w",
+    "--working_dir",
     type=str,
     required=True,
-    help="Project json created by RED.",
+    help="labeled_data and project.json need to be under this directory.",
 )
+parser.add_argument("-o", "--output_folder", type=str, required=True)
 parser.add_argument(
     "-s",
     "--select_indices",
@@ -45,14 +44,14 @@ parser.add_argument(
 )
 
 args = parser.parse_args()
-label_folder = args.label_folder
-label_folder = os.path.normpath(label_folder)
+working_dir = args.working_dir
 output_folder = args.output_folder
 select_indices = args.select_indices
 margin_pixel = args.margin
 
-
-with open(args.project_json, "r") as f:
+label_folder = os.path.join(working_dir, "labeled_data")
+project_json = os.path.join(working_dir, "project.json")
+with open(project_json, "r") as f:
     project_json = json.load(f)
 calibration_folder = project_json["calibration_folder"]
 video_folder = project_json["media_folder"]

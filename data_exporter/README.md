@@ -93,13 +93,14 @@ cd data_exporter
 ```
 
 ```
-python red3d2jarvis.py -i label_folder -o output_folder -p project.json -m margin for bounding box estimate [-s subset of keypoints index] [-e new skeleton edges if use subset of keypoints]
+python red3d2jarvis.py -w working_dir -o output_folder -m margin for bounding box estimate [-s subset of keypoints index] [-e new skeleton edges if use subset of keypoints]
 ```
+Note, working dir should contain the labeled_data and project.json.
 
-To check the dataset,
+You should check your dataset to ensure it is properly exported,
 
 ```
-python check_jarvis_dataset.py -i /nfs/exports/ratlv/exp_2025_03/remy_emilie/2025_04_04_14_26_47/jarvis_test [-s train/valid]
+python check_jarvis_dataset.py -i jarvis_dataset [-s train/valid]
 ```
 
 If the skeleton is not in the `keypoints.py`, please add your skeleton manually. We will provide utils for generating from skeleton json file soon.  
