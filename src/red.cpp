@@ -1096,7 +1096,7 @@ int main(int, char **) {
 
                     ImGui::BeginDisabled(!enabled);
                     if (ImGui::Button("Triangulate")) {
-                        reprojection(keypoints_map.at(current_frame_num),
+                        reprojection_DLT(keypoints_map.at(current_frame_num),
                                      skeleton, camera_params, scene);
                     }
                     ImGui::EndDisabled();
@@ -1109,7 +1109,7 @@ int main(int, char **) {
                         if (ImGui::IsKeyPressed(ImGuiKey_S,
                                                 false)) // triangulate
                         {
-                            reprojection(keypoints_map.at(current_frame_num),
+                            reprojection_DLT(keypoints_map.at(current_frame_num),
                                          skeleton, camera_params, scene);
                         }
                     }
