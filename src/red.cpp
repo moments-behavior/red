@@ -94,6 +94,8 @@ int main(int, char **) {
     std::string start_folder_name = "/home/" + tokenized_path[2] + "/data";
     start_folder_name = "/nfs/exports/ratlv";
     start_folder_name = "/mnt/ssd1/orma";
+    start_folder_name = "/home/ro/src/telecal/videos/2025_10_01_18_16_49/";
+    
     ImVec4 clear_color = ImVec4(0.0f, 0.0f, 0.0f, 1.00f);
     ImGuiIO &io = ImGui::GetIO();
     bool trigger_image_save  = false;
@@ -167,10 +169,10 @@ int main(int, char **) {
                                              i++) {
                                             std::string cam_file =
                                                 root_dir + "/calibration/" +
-                                                camera_names[i] + ".yaml";
+                                                camera_names[i] + "_dlt.csv";
 
                                             CameraParams cam;
-                                            if (camera_load_params_from_yaml(
+                                            if (camera_load_dlt_parameters(
                                                     cam_file, cam,
                                                     error_message)) {
                                                 camera_params.push_back(cam);
@@ -439,10 +441,10 @@ int main(int, char **) {
                     if (scene->num_cams > 1) {
                         for (u32 i = 0; i < scene->num_cams; i++) {
                             std::string cam_file = root_dir + "/calibration/" +
-                                                   camera_names[i] + ".yaml";
+                                                   camera_names[i] + "_dlt.csv";
 
                             CameraParams cam;
-                            if (camera_load_params_from_yaml(cam_file, cam,
+                            if (camera_load_dlt_parameters(cam_file, cam,
                                                              error_message)) {
                                 camera_params.push_back(cam);
                             } else {
