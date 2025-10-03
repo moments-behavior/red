@@ -93,7 +93,7 @@ int main(int, char **) {
     std::vector<std::string> tokenized_path = string_split(cwd, delimiter);
     std::string start_folder_name = "/home/" + tokenized_path[2] + "/data";
     start_folder_name = "/nfs/exports/ratlv";
-    start_folder_name = "/media/ro/LaCie/orma";
+    start_folder_name = "/mnt/ssd1/orma";
     ImVec4 clear_color = ImVec4(0.0f, 0.0f, 0.0f, 1.00f);
     ImGuiIO &io = ImGui::GetIO();
     bool trigger_image_save  = false;

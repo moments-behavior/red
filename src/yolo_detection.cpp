@@ -169,7 +169,7 @@ void yolo_process_trt(std::string engine_file, int camera_id, int width, int hei
     std::vector<Object> objs;
     float    score_thres = 0.3f;
     float    iou_thres   = 0.5f;
-    int      topk        = 1;
+    int      topk        = 2;
 
     while (true) {
         std::unique_lock<std::mutex> ul(g_mutexes[camera_id]);
@@ -181,8 +181,25 @@ void yolo_process_trt(std::string engine_file, int camera_id, int width, int hei
         yolov8->preprocess_gpu(d_convert);
         yolov8->infer();
         yolov8->postprocess(objs);
-        yolov8->copy_keypoints_gpu(d_points, objs);
-        gpu_draw_rat_pose(yolo_input_frames_rgba[camera_id], width, height, d_points, d_skeleton, yolov8->stream);        
+        bool mouse_detected = false;
+        int mouse_class_id = 0; // Assuming mouse class id is 0
+        bool ball_detected = false;
+        std::vector<Object> objs_plot;
+    
+        for (size_t iter_id = 0; iter_id < objs.size(); ++iter_id) {
+            auto &obj = objs[iter_id];
+            if(obj.label == 0) { // mouse class id
+                mouse_detected = 1;
+                mouse_class_id = obj.label;
+                objs_plot.push_back(obj);
+            } else if (obj.label == 1) { // ball class id
+                ball_detected = 1;
+            }
+        }   
+        if(mouse_detected){
+            yolov8->copy_keypoints_gpu(d_points, objs_plot);
+            gpu_draw_rat_pose(yolo_input_frames_rgba[camera_id], width, height, d_points, d_skeleton, yolov8->stream);        
+        }
         g_ready[camera_id] = false;
     }
 }
