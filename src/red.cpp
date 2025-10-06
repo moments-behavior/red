@@ -620,9 +620,9 @@ int main(int, char **) {
             }
 
 
-            // ImGui::Checkbox("Trigger image save", &do_save_images_realtime);
+            ImGui::Checkbox("Trigger image save", &do_save_images_realtime);
 
-            if (ImGui::Button("Export current frame") || ImGui::IsKeyPressed(ImGuiKey_Z, true) || trigger_image_save) {
+            if ((ImGui::Button("Export current frame") || ImGui::IsKeyPressed(ImGuiKey_Z, true) || trigger_image_save) && do_save_images_realtime) {
                 std::string export_folder = root_dir + "/exported_frames";                
                 std::filesystem::create_directory(export_folder);
                 for (int j = 0; j < scene->num_cams; j++)
