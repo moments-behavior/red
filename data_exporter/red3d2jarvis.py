@@ -10,12 +10,15 @@ from multiprocessing import Pool
 import platform
 from multiprocessing import get_context
 import os
+from pathlib import Path
+
 
 parser = argparse.ArgumentParser()
 parser.add_argument("-i", "--label_folder", type=str, required=True)
 parser.add_argument("-o", "--output_folder", type=str, required=True)
+parser.add_argument("--scale_10x", type=bool, required=True)
 parser.add_argument(
-    "-s",
+    "-x",
     "--select_indices",
     nargs="+",
     type=int,
@@ -33,6 +36,7 @@ args = parser.parse_args()
 label_folder = args.label_folder
 label_folder = os.path.normpath(label_folder)
 output_folder = args.output_folder
+do_scale_10x = args.scale_10x
 select_indices = args.select_indices
 margin_pixel = args.margin
 
@@ -49,6 +53,8 @@ select_folder = matching_folders[-1]
 print("Select most recent label: {}".format(select_folder))
 
 select_folder_path = os.path.join(label_folder, select_folder)
+video_path = Path(label_folder).parent
+
 cameras = get_all_cams_in_labeled_folder(select_folder_path)
 
 # get skeleton name
@@ -109,11 +115,15 @@ calibration_folder = os.path.join(
 image_width = {}
 image_height = {}
 for cam in cameras:
-    input_file_name = calibration_folder + "/{}.yaml".format(cam)
-    fs = cv.FileStorage(input_file_name, cv.FILE_STORAGE_READ)
-    if fs.isOpened():
-        image_width[cam] = int(fs.getNode("image_width").real())
-        image_height[cam] = int(fs.getNode("image_height").real())
+    # vid_path = 
+    video_name = f"{video_path}/{cam}.mp4"
+    vreader = cv.VideoCapture(video_name)
+    
+    
+    if vreader.isOpened():
+        image_width[cam] = int(vreader.get(cv.CAP_PROP_FRAME_WIDTH))
+        image_height[cam] = int(vreader.get(cv.CAP_PROP_FRAME_HEIGHT))
+        
 
 
 annotations, images, frame_set_one = process_one_session(
@@ -188,26 +198,31 @@ os.makedirs(save_calib_folder, exist_ok=True)
 
 # Jarvis uses crazy transpose for some reason
 for cam in cameras:
-    input_file_name = calibration_folder + "/{}.yaml".format(cam)
-    fs = cv.FileStorage(input_file_name, cv.FILE_STORAGE_READ)
-    intrinsicMatrix = fs.getNode("camera_matrix").mat()
-    intrinsicMatrix = intrinsicMatrix.T
-    distortionCoefficients = fs.getNode("distortion_coefficients").mat()
-    distortionCoefficients = distortionCoefficients.T
-    R = fs.getNode("rc_ext").mat()
-    R = R.T
-    T = fs.getNode("tc_ext").mat()
+    input_file_name = calibration_folder + "/{}_dlt.csv".format(cam)
+
+    dlt_params = []
+    with open(input_file_name, 'r') as file:
+        for line in file:        
+            line = line.strip()            
+            values = line.split(',')            
+            dlt_params.append(values)
+
+    # Assuming dlt_params is the 11 coefficients list read from the file
+    dlt_array = np.array(dlt_params, dtype=float)
+    all_coefs = np.append(dlt_array, 1.0)
+    projection_matrix = all_coefs.reshape((3, 4))
+
+    if do_scale_10x:        
+        projection_matrix[0:2, 0:3] *= 0.1
 
     output_filename = save_calib_folder + "/{}.yaml".format(cam)
     s = cv.FileStorage(output_filename, cv.FileStorage_WRITE)
     s.write("image_width", image_width[cam])
     s.write("image_height", image_height[cam])
-    s.write("intrinsicMatrix", intrinsicMatrix)
-    s.write("distortionCoefficients", distortionCoefficients)
-    s.write("R", R)
-    s.write("T", T)
+    s.write("projectionMatrix", projection_matrix)
     s.release()
     print(output_filename)
+    
 
 
 # save jpeg images
