@@ -220,6 +220,10 @@ for cam in cameras:
     s.write("image_width", image_width[cam])
     s.write("image_height", image_height[cam])
     s.write("projectionMatrix", projection_matrix)
+    if(do_scale_10x):
+        s.write("scale", 10)    
+    else:
+        s.write("scale", 1)    
     s.release()
     print(output_filename)
     

@@ -1,3 +1,9 @@
+## mount the nas as a local drive (insted of smb folder)
+0. run the following shell script
+```
+cd /home/user/src2/red/data_exporter
+bash mount_nas_greatjig.sh
+```
 ## export annotations from red -> jarvis
 1. navigate to the `dlt` branch of `red`
 ```
