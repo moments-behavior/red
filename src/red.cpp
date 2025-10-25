@@ -27,7 +27,7 @@
 #include "../lib/ImGuiFileDialog/stb/stb_image.h"
 #include "reprojection_tool.h"
 
-int main(int, char **) {
+int main(int argc, char **argv) {
     gx_context *window = (gx_context *)malloc(sizeof(gx_context));
     *window =
         (gx_context){.swap_interval = 1, // use vsync
@@ -40,7 +40,7 @@ int main(int, char **) {
     render_scene *scene = (render_scene *)malloc(sizeof(render_scene));
     std::string red_data_dir;
     std::string media_root_dir;
-    prepare_application_folders(red_data_dir, red_data_dir, media_root_dir);
+    prepare_application_folders(red_data_dir, media_root_dir);
     std::string skeleton_dir = red_data_dir + "/skeleton";
     std::string yolo_model_dir = red_data_dir + "/yolo_model";
     std::vector<std::thread> decoder_threads;
@@ -184,6 +184,49 @@ int main(int, char **) {
 
     ReprojectionTool rp_tool;
 
+    if (argc > 1) {
+        for (int i = 1; i < argc; ++i) {
+            const char *path = argv[i];
+            ProjectManager loaded;
+            if (!load_project_manager_json(&loaded, path, &error_message)) {
+                show_error = true;
+            } else {
+                pm = loaded;
+                // need to fomart sel
+                std::map<std::string, std::string> cam_sel;
+                std::filesystem::path base =
+                    std::filesystem::path(pm.media_folder);
+
+                for (const std::string &name : pm.camera_names) {
+                    std::string filename = name + ".mp4";
+                    std::filesystem::path full = base / filename;
+                    cam_sel.emplace(filename, full.string());
+                }
+                bool ok =
+                    setup_project(pm, skeleton, skeleton_map, &error_message);
+                if (ok) {
+                    pm.camera_names.clear();
+                    load_videos(cam_sel, ps, pm, window_was_decoding, demuxers,
+                                dc_context, scene, label_buffer_size,
+                                decoder_threads, is_view_focused);
+                    std::string most_recent_folder;
+                    if (!find_most_recent_labels(pm.keypoints_root_folder,
+                                                 most_recent_folder,
+                                                 error_message)) {
+                        if (load_keypoints(most_recent_folder, keypoints_map,
+                                           &skeleton, scene, pm.camera_names,
+                                           error_message, bbox_class_names)) {
+                            free_all_keypoints(keypoints_map, scene);
+                            show_error = true;
+                        }
+                    }
+                } else {
+                    show_error = true;
+                }
+            }
+        }
+    }
+
     while (!glfwWindowShouldClose(window->render_target)) {
         // Poll and handle events (inputs, window resize, etc.)
         glfwPollEvents();
@@ -232,8 +275,7 @@ int main(int, char **) {
                             "ChooseMedia", "Choose Media", ".mp4", config);
                     }
                     ImGui::EndDisabled();
-                    ImGui::BeginDisabled(!ps.video_loaded ||
-                                         pm.plot_keypoints_flag);
+                    ImGui::BeginDisabled(!ps.video_loaded);
                     if (ImGui::MenuItem("Create Project")) {
                         pm.show_project_window = true;
                     }
@@ -245,7 +287,7 @@ int main(int, char **) {
                         config.path = pm.project_root_path;
                         config.flags = ImGuiFileDialogFlags_Modal;
                         ImGuiFileDialog::Instance()->OpenDialog(
-                            "ChooseProject", "Choose Project Json", ".json",
+                            "ChooseProject", "Choose Project File", ".redproj",
                             config);
                     }
                     ImGui::EndDisabled();
@@ -429,6 +471,20 @@ int main(int, char **) {
                                     demuxers, dc_context, scene,
                                     label_buffer_size, decoder_threads,
                                     is_view_focused);
+
+                        std::string most_recent_folder;
+                        if (!find_most_recent_labels(pm.keypoints_root_folder,
+                                                     most_recent_folder,
+                                                     error_message)) {
+                            if (load_keypoints(most_recent_folder,
+                                               keypoints_map, &skeleton, scene,
+                                               pm.camera_names, error_message,
+                                               bbox_class_names)) {
+                                free_all_keypoints(keypoints_map, scene);
+                                show_error = true;
+                            }
+                        }
+
                     } else {
                         show_error = true;
                     }
@@ -4313,11 +4369,13 @@ int main(int, char **) {
             ImGui::End();
         }
 
+        // Make sure this is called before any other popups in the same frame
         if (show_error) {
             ImGui::OpenPopup("Error");
             show_error = false; // Reset the flag so it only opens once
         }
 
+        // Ensures popup is drawn in front of others
         if (ImGui::BeginPopupModal("Error", NULL,
                                    ImGuiWindowFlags_AlwaysAutoResize)) {
             ImGui::Text("%s", error_message.c_str());
@@ -4325,7 +4383,6 @@ int main(int, char **) {
 
             if (ImGui::Button("OK")) {
                 ImGui::CloseCurrentPopup();
-                show_error = false;
             }
 
             ImGui::EndPopup();

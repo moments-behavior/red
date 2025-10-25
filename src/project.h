@@ -12,7 +12,6 @@
 #include <vector>
 
 struct ProjectManager {
-    bool confirm_overwrite = false;
     bool show_project_window = false;
     std::string project_root_path;
     std::string project_path;
@@ -174,12 +173,6 @@ bool setup_project(ProjectManager &pm, SkeletonContext &skeleton,
     if (!ensure_dir_exists(pm.keypoints_root_folder, err))
         return false;
 
-    // 5) Save config
-    std::filesystem::path cfg =
-        std::filesystem::path(pm.project_path) / "project.json";
-    if (!save_project_manager_json(pm, cfg, err))
-        return false;
-
     // 6) Final flags
     pm.plot_keypoints_flag = true;
     pm.show_project_window = false;
@@ -260,14 +253,6 @@ DrawProjectWindow(ProjectManager &pm,
                     pm.project_name;
                 pm.project_path = p.string();
             }
-            const bool path_exists = !pm.project_path.empty() &&
-                                     std::filesystem::exists(pm.project_path);
-            bool path_nonempty = false;
-            if (path_exists) {
-                std::error_code ec;
-                path_nonempty =
-                    !std::filesystem::is_empty(pm.project_path, ec) && !ec;
-            }
 
             ImGui::TableNextRow();
             LabelCell("Full Path");
@@ -278,41 +263,6 @@ DrawProjectWindow(ProjectManager &pm,
             ImGui::EndDisabled();
             ImGui::TableSetColumnIndex(2);
             ImGui::Dummy(ImVec2(1, 1));
-
-            // Existence warning + overwrite checkbox (full width row)
-            if (path_exists) {
-                ImGui::TableNextRow();
-                ImGui::TableSetColumnIndex(0);
-                ImGui::TableSetBgColor(
-                    ImGuiTableBgTarget_RowBg0,
-                    ImGui::GetColorU32(ImVec4(0.25f, 0.16f, 0.05f, 0.15f)));
-                ImGui::AlignTextToFramePadding();
-                ImGui::TextUnformatted("Warning");
-
-                ImGui::TableSetColumnIndex(1);
-                ImGui::PushStyleColor(ImGuiCol_Text,
-                                      ImVec4(1.0f, 0.78f, 0.20f, 1.0f));
-                if (path_nonempty)
-                    ImGui::TextWrapped("Folder exists and is NOT empty: %s",
-                                       pm.project_path.c_str());
-                else
-                    ImGui::TextWrapped("Folder exists: %s",
-                                       pm.project_path.c_str());
-                ImGui::PopStyleColor();
-
-                ImGui::TableSetColumnIndex(2);
-                ImGui::Dummy(ImVec2(1, 1));
-
-                ImGui::TableNextRow();
-                ImGui::TableSetColumnIndex(1);
-                ImGui::Checkbox("Overwrite existing folder##confirm_overwrite",
-                                &pm.confirm_overwrite);
-                ImGui::TableSetColumnIndex(2);
-                ImGui::Dummy(ImVec2(1, 1));
-            } else {
-                pm.confirm_overwrite =
-                    false; // reset if target no longer exists
-            }
 
             // ---- Skeleton source toggle ----
             ImGui::TableNextRow();
@@ -398,10 +348,6 @@ DrawProjectWindow(ProjectManager &pm,
             (pm.camera_names.size() <= 1 || !pm.calibration_folder.empty()) &&
             (!pm.load_skeleton_from_json || !pm.skeleton_file.empty());
 
-        const bool allow_create =
-            needed_ok &&
-            (!std::filesystem::exists(pm.project_path) || pm.confirm_overwrite);
-
         // Right-align Create button
         float avail = ImGui::GetContentRegionAvail().x;
         const char *create_label = "Create Project##action";
@@ -409,14 +355,45 @@ DrawProjectWindow(ProjectManager &pm,
                   ImGui::GetStyle().FramePadding.x * 2.0f;
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (avail - w));
 
-        ImGui::BeginDisabled(!allow_create);
+        ImGui::BeginDisabled(!needed_ok);
         if (ImGui::Button(create_label)) {
-            show_error =
-                !setup_project(pm, skeleton, skeleton_map, &error_message);
+            if (!ensure_dir_exists(pm.project_path, &error_message))
+                show_error = true;
+
+            // Configure the dialog
+            IGFD::FileDialogConfig config;
+            config.path = pm.project_path;
+            config.fileName = "project.redproj"; // prefill name
+            config.countSelectionMax = 1;
+            config.flags = ImGuiFileDialogFlags_ConfirmOverwrite; // warn on
+                                                                  // overwrite
+            ImGuiFileDialog::Instance()->OpenDialog(
+                "SaveProjectFileDlg", "Save Project File",
+                "Red Project{.redproj},All files{.*}", config);
         }
         ImGui::EndDisabled();
     }
     ImGui::End();
+
+    if (ImGuiFileDialog::Instance()->Display("SaveProjectFileDlg")) {
+        if (ImGuiFileDialog::Instance()->IsOk()) {
+            // Full path the user chose (may contain or omit extension)
+            std::string outPath =
+                ImGuiFileDialog::Instance()->GetFilePathName();
+
+            if (!ends_with_ci(outPath, ".redproj")) {
+                outPath += ".redproj";
+            }
+
+            show_error =
+                !setup_project(pm, skeleton, skeleton_map, &error_message);
+            if (!show_error) {
+                if (!save_project_manager_json(pm, outPath, &error_message))
+                    show_error = true;
+            }
+        }
+        ImGuiFileDialog::Instance()->Close();
+    }
 }
 
 inline void

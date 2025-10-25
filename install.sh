@@ -3,91 +3,96 @@ set -euo pipefail
 
 APP_NAME="red"
 
-# --- Locations (run this script from your project root) ---
+# --- Paths (run from project root) ---
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN_SRC="$SRC_DIR/release/$APP_NAME"
 FONTS_SRC="$SRC_DIR/fonts"
-ICON_SRC="$SRC_DIR/icon.png"
+APP_ICON="$SRC_DIR/icon.png"   # launcher icon (any size OK)
 
-# Optional prefix (default to ~/.local)
+# Optional install prefix (default: ~/.local)
 PREFIX="${1:-"$HOME/.local"}"
 
-# Install targets
-BINDIR="$PREFIX/bin"
-APPDIR="$PREFIX/opt/$APP_NAME"                 # app bundle dir (binary + fonts + icon)
-DESKTOP_DIR="$HOME/.local/share/applications"  # user desktop entries
+# XDG dirs
+XDG_DATA_HOME_DEFAULT="$HOME/.local/share"
+XDG_DATA_HOME="${XDG_DATA_HOME:-$XDG_DATA_HOME_DEFAULT}"
 
-echo "[*] Installing $APP_NAME into: $PREFIX"
-echo "    - Binary:  $BIN_SRC"
-echo "    - Fonts:   $FONTS_SRC (if exists)"
-echo "    - Icon:    $ICON_SRC  (if exists)"
+# Targets
+BINDIR="$PREFIX/bin"
+APPDIR="$PREFIX/opt/$APP_NAME"
+DESKTOP_DIR="$XDG_DATA_HOME/applications"
+MIME_PKGS_DIR="$XDG_DATA_HOME/mime/packages"
+
+# MIME
+MIME_TYPE="application/x-red-project"
+MIME_XML="$MIME_PKGS_DIR/red-project.xml"
+GLOB_PATTERN="*.redproj"
+
+echo "[*] Installing $APP_NAME ..."
 
 # --- Sanity checks ---
-if [[ ! -f "$BIN_SRC" ]]; then
-  echo "ERROR: $BIN_SRC not found. Build your app or check the path." >&2
-  exit 1
-fi
+[[ -f "$BIN_SRC" ]]  || { echo "ERROR: $BIN_SRC not found"; exit 1; }
+[[ -f "$APP_ICON" ]] || { echo "ERROR: $APP_ICON not found"; exit 1; }
 
-mkdir -p "$APPDIR" "$BINDIR" "$DESKTOP_DIR"
+# --- Create dirs ---
+mkdir -p "$APPDIR" "$BINDIR" "$DESKTOP_DIR" "$MIME_PKGS_DIR"
 
-# --- Copy binary into appdir (not directly into bin to keep fonts nearby) ---
+# --- Install binary (+fonts if present) ---
 install -m 755 "$BIN_SRC" "$APPDIR/$APP_NAME"
-
-# --- Copy fonts (if present) ---
 if [[ -d "$FONTS_SRC" ]]; then
   mkdir -p "$APPDIR/fonts"
-  if command -v rsync >/dev/null 2>&1; then
-    rsync -a --delete "$FONTS_SRC"/ "$APPDIR/fonts"/
-  else
-    # -a preserves perms; '/.' copies contents not the dir itself
-    cp -a "$FONTS_SRC"/. "$APPDIR/fonts"/
-  fi
-else
-  echo "WARN: fonts/ not found; continuing without it."
+  cp -a "$FONTS_SRC"/. "$APPDIR/fonts"/
 fi
 
-# --- Install icon into appdir and reference it by absolute path in .desktop ---
-if [[ -f "$ICON_SRC" ]]; then
-  cp -f "$ICON_SRC" "$APPDIR/$APP_NAME.png"
-else
-  echo "WARN: icon.png not found; launcher will have a generic icon."
-fi
+# --- App launcher icon ---
+install -m 644 "$APP_ICON" "$APPDIR/$APP_NAME.png"
 
-# --- Wrapper in ~/.local/bin so the app runs from its own dir (finds fonts/) ---
+# --- Wrapper ---
 WRAPPER="$BINDIR/$APP_NAME"
-cat > "$WRAPPER" <<EOF
+cat > "$WRAPPER" <<'EOF'
 #!/usr/bin/env bash
-APPDIR="$APPDIR"
-cd "\$APPDIR"
-exec "\$APPDIR/$APP_NAME" "\$@"
+set -euo pipefail
+APPDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../opt/red" && pwd)"
+cd "$APPDIR"
+exec "$APPDIR/red" "$@"
 EOF
 chmod +x "$WRAPPER"
 
-# --- Desktop entry (launcher) ---
+# --- .desktop entry ---
 DESKTOP_FILE="$DESKTOP_DIR/$APP_NAME.desktop"
-ICON_PATH="$APPDIR/$APP_NAME.png"   # absolute path avoids theme cache issues
-
 cat > "$DESKTOP_FILE" <<EOF
 [Desktop Entry]
 Type=Application
 Name=Red
-Comment=Red Application
-TryExec=$BINDIR/$APP_NAME
-Exec=$BINDIR/$APP_NAME %F
-Icon=$ICON_PATH
+GenericName=Project Editor
+Comment=Open Red project files
+TryExec=$WRAPPER
+Exec=$WRAPPER %f
+Icon=$APPDIR/$APP_NAME.png
 Terminal=false
 Categories=Graphics;Utility;
-# Uncomment if you set your window class to "red" (helps dock show the right icon)
+MimeType=$MIME_TYPE;
 # StartupWMClass=red
 EOF
 
-# --- Refresh desktop database (icon cache not needed for absolute icon path) ---
-if command -v update-desktop-database >/dev/null 2>&1; then
-  update-desktop-database "$DESKTOP_DIR" || true
-fi
+# --- MIME definition (no file icon) ---
+cat > "$MIME_XML" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="$MIME_TYPE">
+    <comment>Red project file</comment>
+    <glob pattern="$GLOB_PATTERN"/>
+  </mime-type>
+</mime-info>
+EOF
 
-echo
-echo "✔ Install complete."
-echo "➤ Run: $APP_NAME"
-echo "   (Make sure '$BINDIR' is in your PATH. If not, add this to your shell rc:)"
-echo "     export PATH=\"\$HOME/.local/bin:\$PATH\""
+# --- Refresh caches ---
+command -v update-mime-database >/dev/null && update-mime-database "$XDG_DATA_HOME/mime" || true
+command -v update-desktop-database >/dev/null && update-desktop-database "$DESKTOP_DIR" || true
+
+# --- Make Red the default handler for .redproj ---
+command -v xdg-mime >/dev/null && xdg-mime default "$(basename "$DESKTOP_FILE")" "$MIME_TYPE" || true
+
+echo "✔ Done."
+echo "Test:"
+echo "  echo '{}' > project.redproj"
+echo "  xdg-mime query filetype project.redproj   # expect: $MIME_TYPE"

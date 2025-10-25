@@ -21,6 +21,19 @@ simplelogger::Logger *logger =
 #include <unistd.h>
 #endif
 
+bool ends_with_ci(std::string_view s, std::string_view suffix) {
+    if (suffix.size() > s.size())
+        return false;
+    auto a = s.end() - suffix.size();
+    for (size_t i = 0; i < suffix.size(); ++i) {
+        unsigned char c1 = static_cast<unsigned char>(a[i]);
+        unsigned char c2 = static_cast<unsigned char>(suffix[i]);
+        if (std::tolower(c1) != std::tolower(c2))
+            return false;
+    }
+    return true;
+}
+
 std::string get_home_directory() {
 #if defined(_WIN32)
     PWSTR path = nullptr;
@@ -101,8 +114,7 @@ bool ensure_dir_exists(std::string path_string, std::string *err) {
     return true;
 }
 
-void prepare_application_folders(const std::string &data_dir,
-                                 std::string &red_data_dir,
+void prepare_application_folders(std::string &red_data_dir,
                                  std::string &media_dir) {
 
     std::string home_dir = get_home_directory();

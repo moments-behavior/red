@@ -37,10 +37,10 @@ void seek_all_cameras(render_scene *scene, int frame_number, double video_fps,
                       PlaybackState &state, bool seek_accurate);
 bool has_labeled_frames(const std::map<u32, KeyPoints *> &keypoints_map,
                         SkeletonContext *skeleton);
-void prepare_application_folders(const std::string &data_dir,
-                                 std::string &red_data_dir,
+void prepare_application_folders(std::string &red_data_dir,
                                  std::string &media_dir);
 std::string dir_difference(const std::filesystem::path &a,
                            const std::filesystem::path &b);
 bool ensure_dir_exists(std::string path_string, std::string *err);
+bool ends_with_ci(std::string_view s, std::string_view suffix);
 #endif
