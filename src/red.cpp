@@ -25,6 +25,7 @@
 #include <thread>
 #define STB_IMAGE_IMPLEMENTATION
 #include "../lib/ImGuiFileDialog/stb/stb_image.h"
+#include "kernel.cuh"
 #include "reprojection_tool.h"
 
 int main(int argc, char **argv) {
@@ -829,6 +830,23 @@ int main(int argc, char **argv) {
                 }
             }
         }
+        static int brightness = 0;
+
+        static float contrast = 1.0f;     // neutral contrastst
+        static bool pivot_midgray = true; // typical contrast feel
+
+        // UI
+        ImGui::Begin("Display Control");
+        ImGui::SliderFloat("Contrast (alpha)", &contrast, 0.0f, 3.0f,
+                           "%.2f"); // 1.0 neutral
+        ImGui::SliderInt("Brightness (beta)", &brightness, -100, 100);
+        ImGui::Checkbox("Contrast around mid-gray (128)", &pivot_midgray);
+        if (ImGui::Button("Reset##display")) {
+            contrast = 1.0f;
+            brightness = 0;
+            pivot_midgray = true;
+        }
+        ImGui::End();
 
         // Render a video frame
         if (ps.video_loaded) {
@@ -948,6 +966,31 @@ int main(int argc, char **argv) {
                                 scene->image_width[j] * scene->image_height[j] *
                                     4,
                                 cudaMemcpyHostToDevice));
+
+                            // // brighten in-place on GPU using npp
+                            // NppiSize roi = {
+                            //     static_cast<int>(scene->image_width[j]),
+                            //     static_cast<int>(scene->image_height[j])};
+                            // Npp8u *d_img =
+                            //     (Npp8u *)scene->pbo_cuda[j].cuda_buffer;
+                            // int step = scene->image_width[j] *
+                            //            4; // RGBA = 4 bytes per pixel
+
+                            // Npp8u addC[3] = {(Npp8u)brightness,
+                            //                  (Npp8u)brightness,
+                            //                  (Npp8u)brightness};
+
+                            // nppiAddC_8u_AC4IRSfs(addC, d_img, step, roi,
+                            //                      0); // in-place RGBA
+
+                            apply_contrast_brightness_rgba(
+                                scene->pbo_cuda[j].cuda_buffer,
+                                scene->image_width[j], scene->image_height[j],
+                                contrast,          // e.g. 1.0f default
+                                (float)brightness, // from ImGui slider
+                                pivot_midgray, // pivot around mid-gray (128)
+                                0);
+
                         } else {
                             ck(cudaMemcpy(
                                 scene->pbo_cuda[j].cuda_buffer,
