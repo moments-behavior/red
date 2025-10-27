@@ -178,6 +178,10 @@ int main(int argc, char **argv) {
     PlaybackState ps;
     LiveTable table;
 
+    int brightness = 0;
+    float contrast = 1.0f;     // neutral contrastst
+    bool pivot_midgray = true; // typical contrast feel
+
     // variables for project management
     ProjectManager pm = ProjectManager();
     pm.project_root_path = red_data_dir;
@@ -360,16 +364,108 @@ int main(int argc, char **argv) {
                     ps.last_wall_time_playspeed = now_wall;
                 }
 
-                // Always draw the latest value
-                if (ps.play_video) {
-                    ImGui::Text("Video FPS: %.1f", dc_context->video_fps);
-                    ImGui::SliderFloat("Set Playback Speed",
+                // === Playback section ===
+                ImGui::SeparatorText("Playback");
+
+                // Two-column table: label | control
+                if (ImGui::BeginTable("##playback_tbl", 2,
+                                      ImGuiTableFlags_SizingStretchProp |
+                                          ImGuiTableFlags_BordersInnerV)) {
+                    ImGui::TableSetupColumn(
+                        "Label", ImGuiTableColumnFlags_WidthFixed, 170.0f);
+                    ImGui::TableSetupColumn("Control",
+                                            ImGuiTableColumnFlags_WidthStretch);
+
+                    // Row: FPS (read-only)
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0);
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::TextUnformatted("Video FPS");
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::Text("%.1f", dc_context->video_fps);
+
+                    // Row: Playback speed slider
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0);
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::TextUnformatted("Set Playback Speed");
+                    ImGui::SameLine();
+                    HelpMarker("Range: 0.1x to 1.0x; affects render pacing.");
+
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::SliderFloat("##set_playback_speed",
                                        &set_playback_speed, 0.1f, 1.0f,
                                        "%.1fx");
-                    ImGui::Text("Current Playback Speed: %.2fx", inst_speed);
-                    ImGui::Text("Tip: If playback is slower than real-time, \n"
-                                "collapse camera views to improve speed.");
+
+                    // Row: Current speed readout
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0);
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::TextUnformatted("Current Speed");
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::Text("%.2fx", inst_speed);
+
+                    ImGui::EndTable();
                 }
+
+                // Tip (wrapped, subtle)
+                ImGui::PushTextWrapPos(ImGui::GetFontSize() * 24.0f);
+                ImGui::Spacing();
+                ImGui::TextDisabled(
+                    "Tip: If playback is slower than real-time, collapse "
+                    "camera views to improve speed.");
+                ImGui::PopTextWrapPos();
+
+                // === Display section ===
+                ImGui::SeparatorText("Display Controls");
+                ImGui::BeginDisabled(ps.play_video); // Disable if playing video
+
+                if (ImGui::BeginTable("##display_tbl", 2,
+                                      ImGuiTableFlags_SizingStretchProp |
+                                          ImGuiTableFlags_BordersInnerV)) {
+                    ImGui::TableSetupColumn(
+                        "Label", ImGuiTableColumnFlags_WidthFixed, 170.0f);
+                    ImGui::TableSetupColumn("Control",
+                                            ImGuiTableColumnFlags_WidthStretch);
+
+                    // Contrast
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0);
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::TextUnformatted("Contrast (alpha)");
+                    ImGui::SameLine();
+                    HelpMarker("1.00 = neutral. Increase to boost separation.");
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::SliderFloat("##contrast", &contrast, 0.0f, 3.0f,
+                                       "%.2f");
+
+                    // Brightness
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0);
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::TextUnformatted("Brightness (beta)");
+                    ImGui::SameLine();
+                    HelpMarker("Shift pixel values. 0 = neutral.");
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::SliderInt("##brightness", &brightness, -150, 150);
+
+                    // Reset row
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0);
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::TextUnformatted("Display Preset");
+                    ImGui::TableSetColumnIndex(1);
+                    if (ImGui::Button("Reset##display")) {
+                        contrast = 1.0f;
+                        brightness = 0;
+                        pivot_midgray = true;
+                    }
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("(restores neutral)");
+
+                    ImGui::EndTable();
+                }
+                ImGui::EndDisabled();
             }
         }
         ImGui::End();
@@ -830,23 +926,6 @@ int main(int argc, char **argv) {
                 }
             }
         }
-        static int brightness = 0;
-
-        static float contrast = 1.0f;     // neutral contrastst
-        static bool pivot_midgray = true; // typical contrast feel
-
-        // UI
-        ImGui::Begin("Display Control");
-        ImGui::SliderFloat("Contrast (alpha)", &contrast, 0.0f, 3.0f,
-                           "%.2f"); // 1.0 neutral
-        ImGui::SliderInt("Brightness (beta)", &brightness, -100, 100);
-        ImGui::Checkbox("Contrast around mid-gray (128)", &pivot_midgray);
-        if (ImGui::Button("Reset##display")) {
-            contrast = 1.0f;
-            brightness = 0;
-            pivot_midgray = true;
-        }
-        ImGui::End();
 
         // Render a video frame
         if (ps.video_loaded) {

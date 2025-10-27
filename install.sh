@@ -92,7 +92,8 @@ command -v update-desktop-database >/dev/null && update-desktop-database "$DESKT
 # --- Make Red the default handler for .redproj ---
 command -v xdg-mime >/dev/null && xdg-mime default "$(basename "$DESKTOP_FILE")" "$MIME_TYPE" || true
 
-echo "✔ Done."
-echo "Test:"
-echo "  echo '{}' > project.redproj"
-echo "  xdg-mime query filetype project.redproj   # expect: $MIME_TYPE"
+echo
+echo "✔ Install complete."
+echo "➤ Run: $APP_NAME"
+echo "   (Make sure '$BINDIR' is in your PATH. If not, add this to your shell rc:)"
+echo "     export PATH=\"\$HOME/.local/bin:\$PATH\""

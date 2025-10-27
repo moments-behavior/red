@@ -2530,4 +2530,11 @@ void handle_obb_dragging(OrientedBoundingBox &obb, ImVec2 mouse_pos,
     }
 }
 
+// Optional: tiny helper for inline help tooltips
+static void HelpMarker(const char *desc) {
+    ImGui::TextDisabled("(?)");
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("%s", desc);
+}
+
 #endif
