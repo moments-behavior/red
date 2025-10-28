@@ -257,7 +257,7 @@ void PlotBarsWithScatter(
 
 inline void DrawReprojectionWindow(KeyPoints *frame_keypoints,
                                    const std::vector<std::string> &camera_names,
-                                   render_scene *scene,
+                                   RenderScene *scene,
                                    SkeletonContext &skeleton,
                                    ReprojectionTool &rp_tool) {
     if (!rp_tool.show_reprojection_error)

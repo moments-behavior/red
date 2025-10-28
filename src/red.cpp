@@ -25,9 +25,10 @@
 #include <thread>
 #define STB_IMAGE_IMPLEMENTATION
 #include "../lib/ImGuiFileDialog/stb/stb_image.h"
+#include "kernel.cuh"
 #include "reprojection_tool.h"
 
-int main(int, char **) {
+int main(int argc, char **argv) {
     gx_context *window = (gx_context *)malloc(sizeof(gx_context));
     *window =
         (gx_context){.swap_interval = 1, // use vsync
@@ -37,10 +38,10 @@ int main(int, char **) {
                      .glsl_version = (char *)malloc(100)};
 
     render_initialize_target(window);
-    render_scene *scene = (render_scene *)malloc(sizeof(render_scene));
+    RenderScene *scene = (RenderScene *)malloc(sizeof(RenderScene));
     std::string red_data_dir;
     std::string media_root_dir;
-    prepare_application_folders(red_data_dir, red_data_dir, media_root_dir);
+    prepare_application_folders(red_data_dir, media_root_dir);
     std::string skeleton_dir = red_data_dir + "/skeleton";
     std::string yolo_model_dir = red_data_dir + "/yolo_model";
     std::vector<std::thread> decoder_threads;
@@ -177,12 +178,59 @@ int main(int, char **) {
     PlaybackState ps;
     LiveTable table;
 
+    int brightness = 0;
+    float contrast = 1.0f;     // neutral contrastst
+    bool pivot_midgray = true; // typical contrast feel
+
     // variables for project management
     ProjectManager pm = ProjectManager();
     pm.project_root_path = red_data_dir;
     pm.media_folder = media_root_dir;
 
     ReprojectionTool rp_tool;
+
+    if (argc > 1) {
+        for (int i = 1; i < argc; ++i) {
+            const char *path = argv[i];
+            ProjectManager loaded;
+            if (!load_project_manager_json(&loaded, path, &error_message)) {
+                show_error = true;
+            } else {
+                pm = loaded;
+                // need to fomart sel
+                std::map<std::string, std::string> cam_sel;
+                std::filesystem::path base =
+                    std::filesystem::path(pm.media_folder);
+
+                for (const std::string &name : pm.camera_names) {
+                    std::string filename = name + ".mp4";
+                    std::filesystem::path full = base / filename;
+                    cam_sel.emplace(filename, full.string());
+                }
+                bool ok =
+                    setup_project(pm, skeleton, skeleton_map, &error_message);
+                if (ok) {
+                    pm.camera_names.clear();
+                    load_videos(cam_sel, ps, pm, window_was_decoding, demuxers,
+                                dc_context, scene, label_buffer_size,
+                                decoder_threads, is_view_focused);
+                    std::string most_recent_folder;
+                    if (!find_most_recent_labels(pm.keypoints_root_folder,
+                                                 most_recent_folder,
+                                                 error_message)) {
+                        if (load_keypoints(most_recent_folder, keypoints_map,
+                                           &skeleton, scene, pm.camera_names,
+                                           error_message, bbox_class_names)) {
+                            free_all_keypoints(keypoints_map, scene);
+                            show_error = true;
+                        }
+                    }
+                } else {
+                    show_error = true;
+                }
+            }
+        }
+    }
 
     while (!glfwWindowShouldClose(window->render_target)) {
         // Poll and handle events (inputs, window resize, etc.)
@@ -232,8 +280,7 @@ int main(int, char **) {
                             "ChooseMedia", "Choose Media", ".mp4", config);
                     }
                     ImGui::EndDisabled();
-                    ImGui::BeginDisabled(!ps.video_loaded ||
-                                         pm.plot_keypoints_flag);
+                    ImGui::BeginDisabled(!ps.video_loaded);
                     if (ImGui::MenuItem("Create Project")) {
                         pm.show_project_window = true;
                     }
@@ -245,7 +292,7 @@ int main(int, char **) {
                         config.path = pm.project_root_path;
                         config.flags = ImGuiFileDialogFlags_Modal;
                         ImGuiFileDialog::Instance()->OpenDialog(
-                            "ChooseProject", "Choose Project Json", ".json",
+                            "ChooseProject", "Choose Project File", ".redproj",
                             config);
                     }
                     ImGui::EndDisabled();
@@ -317,16 +364,108 @@ int main(int, char **) {
                     ps.last_wall_time_playspeed = now_wall;
                 }
 
-                // Always draw the latest value
-                if (ps.play_video) {
-                    ImGui::Text("Video FPS: %.1f", dc_context->video_fps);
-                    ImGui::SliderFloat("Set Playback Speed",
+                // === Playback section ===
+                ImGui::SeparatorText("Playback");
+
+                // Two-column table: label | control
+                if (ImGui::BeginTable("##playback_tbl", 2,
+                                      ImGuiTableFlags_SizingStretchProp |
+                                          ImGuiTableFlags_BordersInnerV)) {
+                    ImGui::TableSetupColumn(
+                        "Label", ImGuiTableColumnFlags_WidthFixed, 170.0f);
+                    ImGui::TableSetupColumn("Control",
+                                            ImGuiTableColumnFlags_WidthStretch);
+
+                    // Row: FPS (read-only)
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0);
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::TextUnformatted("Video FPS");
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::Text("%.1f", dc_context->video_fps);
+
+                    // Row: Playback speed slider
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0);
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::TextUnformatted("Set Playback Speed");
+                    ImGui::SameLine();
+                    HelpMarker("Range: 0.1x to 1.0x; affects render pacing.");
+
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::SliderFloat("##set_playback_speed",
                                        &set_playback_speed, 0.1f, 1.0f,
                                        "%.1fx");
-                    ImGui::Text("Current Playback Speed: %.2fx", inst_speed);
-                    ImGui::Text("Tip: If playback is slower than real-time, \n"
-                                "collapse camera views to improve speed.");
+
+                    // Row: Current speed readout
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0);
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::TextUnformatted("Current Speed");
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::Text("%.2fx", inst_speed);
+
+                    ImGui::EndTable();
                 }
+
+                // Tip (wrapped, subtle)
+                ImGui::PushTextWrapPos(ImGui::GetFontSize() * 24.0f);
+                ImGui::Spacing();
+                ImGui::TextDisabled(
+                    "Tip: If playback is slower than real-time (< 1.0x), "
+                    "collapse camera views to improve speed.");
+                ImGui::PopTextWrapPos();
+
+                // === Display section ===
+                ImGui::SeparatorText("Display Controls");
+                ImGui::BeginDisabled(ps.play_video); // Disable if playing video
+
+                if (ImGui::BeginTable("##display_tbl", 2,
+                                      ImGuiTableFlags_SizingStretchProp |
+                                          ImGuiTableFlags_BordersInnerV)) {
+                    ImGui::TableSetupColumn(
+                        "Label", ImGuiTableColumnFlags_WidthFixed, 170.0f);
+                    ImGui::TableSetupColumn("Control",
+                                            ImGuiTableColumnFlags_WidthStretch);
+
+                    // Contrast
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0);
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::TextUnformatted("Contrast (alpha)");
+                    ImGui::SameLine();
+                    HelpMarker("1.00 = neutral. Increase to boost separation.");
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::SliderFloat("##contrast", &contrast, 0.0f, 3.0f,
+                                       "%.2f");
+
+                    // Brightness
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0);
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::TextUnformatted("Brightness (beta)");
+                    ImGui::SameLine();
+                    HelpMarker("Shift pixel values. 0 = neutral.");
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::SliderInt("##brightness", &brightness, -150, 150);
+
+                    // Reset row
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0);
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::TextUnformatted("Display Preset");
+                    ImGui::TableSetColumnIndex(1);
+                    if (ImGui::Button("Reset##display")) {
+                        contrast = 1.0f;
+                        brightness = 0;
+                        pivot_midgray = true;
+                    }
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("(restores neutral)");
+
+                    ImGui::EndTable();
+                }
+                ImGui::EndDisabled();
             }
         }
         ImGui::End();
@@ -429,6 +568,20 @@ int main(int, char **) {
                                     demuxers, dc_context, scene,
                                     label_buffer_size, decoder_threads,
                                     is_view_focused);
+
+                        std::string most_recent_folder;
+                        if (!find_most_recent_labels(pm.keypoints_root_folder,
+                                                     most_recent_folder,
+                                                     error_message)) {
+                            if (load_keypoints(most_recent_folder,
+                                               keypoints_map, &skeleton, scene,
+                                               pm.camera_names, error_message,
+                                               bbox_class_names)) {
+                                free_all_keypoints(keypoints_map, scene);
+                                show_error = true;
+                            }
+                        }
+
                     } else {
                         show_error = true;
                     }
@@ -892,6 +1045,31 @@ int main(int, char **) {
                                 scene->image_width[j] * scene->image_height[j] *
                                     4,
                                 cudaMemcpyHostToDevice));
+
+                            // // brighten in-place on GPU using npp
+                            // NppiSize roi = {
+                            //     static_cast<int>(scene->image_width[j]),
+                            //     static_cast<int>(scene->image_height[j])};
+                            // Npp8u *d_img =
+                            //     (Npp8u *)scene->pbo_cuda[j].cuda_buffer;
+                            // int step = scene->image_width[j] *
+                            //            4; // RGBA = 4 bytes per pixel
+
+                            // Npp8u addC[3] = {(Npp8u)brightness,
+                            //                  (Npp8u)brightness,
+                            //                  (Npp8u)brightness};
+
+                            // nppiAddC_8u_AC4IRSfs(addC, d_img, step, roi,
+                            //                      0); // in-place RGBA
+
+                            apply_contrast_brightness_rgba(
+                                scene->pbo_cuda[j].cuda_buffer,
+                                scene->image_width[j], scene->image_height[j],
+                                contrast,          // e.g. 1.0f default
+                                (float)brightness, // from ImGui slider
+                                pivot_midgray, // pivot around mid-gray (128)
+                                0);
+
                         } else {
                             ck(cudaMemcpy(
                                 scene->pbo_cuda[j].cuda_buffer,
@@ -3046,272 +3224,109 @@ int main(int, char **) {
                         config);
                 }
 
-                // Find next frame with actual labeled keypoints
+                ImGui::Separator();
+
                 auto next_labeled_frame_it = keypoints_map.end();
+
+                // Find next labeled frame (forward, wrap)
                 for (auto it = keypoints_map.upper_bound(current_frame_num);
                      it != keypoints_map.end(); ++it) {
-                    const auto &[frame_num, keypoints] = *it;
-                    if (!keypoints)
-                        continue;
-
-                    bool has_labels = false;
-
-                    if (skeleton.has_skeleton) {
-                        for (int cam_id = 0; cam_id < scene->num_cams &&
-                                             cam_id < MAX_VIEWS && !has_labels;
-                             cam_id++) {
-                            for (int kp_id = 0;
-                                 kp_id < skeleton.num_nodes && !has_labels;
-                                 kp_id++) {
-                                if (keypoints->kp2d[cam_id][kp_id].is_labeled) {
-                                    has_labels = true;
-                                }
-                            }
-                        }
-                    }
-
-                    if (!has_labels && skeleton.has_bbox) {
-                        for (int cam_id = 0; cam_id < scene->num_cams &&
-                                             cam_id < MAX_VIEWS && !has_labels;
-                             cam_id++) {
-                            for (const auto &bbox :
-                                 keypoints->bbox2d_list[cam_id]) {
-                                if (bbox.confidence >= 1.0f &&
-                                    bbox.state == RectTwoPoints) {
-                                    has_labels = true;
-                                    break;
-                                }
-                                if (bbox.confidence >= 0.0f &&
-                                    bbox.confidence < 1.0f &&
-                                    bbox.state == RectTwoPoints) {
-                                    has_labels = true;
-                                    break;
-                                }
-                                if (bbox.confidence >= 1.0f &&
-                                    bbox.has_bbox_keypoints) {
-                                    for (int kp_id = 0;
-                                         kp_id < skeleton.num_nodes &&
-                                         !has_labels;
-                                         kp_id++) {
-                                        if (bbox.bbox_keypoints2d &&
-                                            bbox.bbox_keypoints2d[cam_id] &&
-                                            bbox.bbox_keypoints2d[cam_id][kp_id]
-                                                .is_labeled) {
-                                            has_labels = true;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // Check for OBB labels
-                    if (!has_labels && skeleton.has_obb) {
-                        for (int cam_id = 0; cam_id < scene->num_cams &&
-                                             cam_id < MAX_VIEWS && !has_labels;
-                             cam_id++) {
-                            for (const auto &obb :
-                                 keypoints->obb2d_list[cam_id]) {
-                                if (obb.state == OBBComplete) {
-                                    has_labels = true;
-                                    break;
-                                }
-                            }
-                        }
-                    }
-
-                    if (has_labels) {
+                    if (has_any_labels(it->second, skeleton, scene)) {
                         next_labeled_frame_it = it;
                         break;
                     }
                 }
-
-                // If no labeled frame found after current, wrap around to
-                // beginning
                 if (next_labeled_frame_it == keypoints_map.end()) {
                     for (auto it = keypoints_map.begin();
                          it != keypoints_map.upper_bound(current_frame_num);
                          ++it) {
-                        const auto &[frame_num, keypoints] = *it;
-                        if (!keypoints)
-                            continue;
-
-                        bool has_labels = false;
-
-                        if (skeleton.has_skeleton) {
-                            for (int cam_id = 0;
-                                 cam_id < scene->num_cams &&
-                                 cam_id < MAX_VIEWS && !has_labels;
-                                 cam_id++) {
-                                for (int kp_id = 0;
-                                     kp_id < skeleton.num_nodes && !has_labels;
-                                     kp_id++) {
-                                    if (keypoints->kp2d[cam_id][kp_id]
-                                            .is_labeled) {
-                                        has_labels = true;
-                                    }
-                                }
-                            }
-                        }
-
-                        if (!has_labels && skeleton.has_bbox) {
-                            for (int cam_id = 0;
-                                 cam_id < scene->num_cams &&
-                                 cam_id < MAX_VIEWS && !has_labels;
-                                 cam_id++) {
-                                for (const auto &bbox :
-                                     keypoints->bbox2d_list[cam_id]) {
-                                    if (bbox.confidence >= 1.0f &&
-                                        bbox.state == RectTwoPoints) {
-                                        has_labels = true;
-                                        break;
-                                    }
-                                    if (bbox.confidence >= 0.0f &&
-                                        bbox.confidence < 1.0f &&
-                                        bbox.state == RectTwoPoints) {
-                                        has_labels = true;
-                                        break;
-                                    }
-                                    if (bbox.confidence >= 1.0f &&
-                                        bbox.has_bbox_keypoints) {
-                                        for (int kp_id = 0;
-                                             kp_id < skeleton.num_nodes &&
-                                             !has_labels;
-                                             kp_id++) {
-                                            if (bbox.bbox_keypoints2d &&
-                                                bbox.bbox_keypoints2d[cam_id] &&
-                                                bbox
-                                                    .bbox_keypoints2d[cam_id]
-                                                                     [kp_id]
-                                                    .is_labeled) {
-                                                has_labels = true;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        // Check for OBB labels
-                        if (!has_labels && skeleton.has_obb) {
-                            for (int cam_id = 0;
-                                 cam_id < scene->num_cams &&
-                                 cam_id < MAX_VIEWS && !has_labels;
-                                 cam_id++) {
-                                for (const auto &obb :
-                                     keypoints->obb2d_list[cam_id]) {
-                                    if (obb.state == OBBComplete) {
-                                        has_labels = true;
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-
-                        if (has_labels) {
+                        if (has_any_labels(it->second, skeleton, scene)) {
                             next_labeled_frame_it = it;
                             break;
                         }
                     }
                 }
 
-                ImGui::Separator();
-                if (next_labeled_frame_it != keypoints_map.end()) {
-                    if (ImGui::Button("Jump to") ||
-                        (ImGui::IsKeyPressed(ImGuiKey_RightArrow, false) &&
-                         !io.WantTextInput)) {
-                        seek_all_cameras(scene, (*next_labeled_frame_it).first,
+                // Find previous labeled frame (no wrap)
+                auto prev_labeled_frame_it = keypoints_map.end();
+                auto lb = keypoints_map.lower_bound(current_frame_num);
+                if (lb != keypoints_map.begin()) {
+                    for (auto it = std::prev(lb);;) {
+                        if (has_any_labels(it->second, skeleton, scene)) {
+                            prev_labeled_frame_it = it;
+                            break;
+                        }
+                        if (it == keypoints_map.begin())
+                            break;
+                        --it;
+                    }
+                }
+
+                bool has_next_frame =
+                    (next_labeled_frame_it != keypoints_map.end());
+                int next_frame_num =
+                    has_next_frame ? next_labeled_frame_it->first : -1;
+                bool has_prev_frame =
+                    (prev_labeled_frame_it != keypoints_map.end());
+                int previous_frame_num =
+                    has_prev_frame ? prev_labeled_frame_it->first : -1;
+
+                if (ImGui::BeginTable("frame_nav_table", 2,
+                                      ImGuiTableFlags_SizingFixedFit)) {
+                    ImGui::TableNextRow();
+
+                    // --- Next ---
+                    ImGui::TableSetColumnIndex(0);
+
+                    ImGui::BeginDisabled(!has_next_frame);
+                    bool button_pressed =
+                        ImGui::Button("Jump to next labeled frame");
+                    ImGui::EndDisabled();
+
+                    if (button_pressed && has_next_frame) {
+                        seek_all_cameras(scene, next_frame_num,
                                          dc_context->video_fps, ps, true);
                     }
-                    ImGui::SameLine();
-                    ImGui::Text("next labeled frame : %d",
-                                (*next_labeled_frame_it).first);
-                } else {
-                    ImGui::BeginDisabled(); // disable section
-                    ImGui::Button("Jump to");
+
+                    ImGui::TableSetColumnIndex(1);
+                    if (has_next_frame)
+                        ImGui::Text("%d", next_frame_num);
+                    else
+                        ImGui::Text("none");
+
+                    // --- Previous ---
+                    ImGui::TableNextRow();
+
+                    ImGui::TableSetColumnIndex(0);
+                    ImGui::BeginDisabled(!has_prev_frame);
+                    if (ImGui::Button("Copy from previous labeled frame")) {
+                        if (!keypoints_find) {
+                            KeyPoints *keypoints =
+                                (KeyPoints *)malloc(sizeof(KeyPoints));
+                            allocate_keypoints(keypoints, scene, &skeleton);
+                            keypoints_map[current_frame_num] = keypoints;
+                        }
+
+                        KeyPoints *prev = keypoints_map[previous_frame_num];
+                        KeyPoints *curr = keypoints_map[current_frame_num];
+                        copy_keypoints(curr, prev, scene, &skeleton);
+                    }
                     ImGui::EndDisabled();
-                    ImGui::SameLine();
-                    ImGui::Text("next labeled frame : none");
+
+                    ImGui::TableSetColumnIndex(1);
+                    if (has_prev_frame)
+                        ImGui::Text("%d", previous_frame_num);
+                    else
+                        ImGui::Text("none");
+
+                    ImGui::EndTable();
                 }
 
                 size_t labeled_count = 0;
                 for (const auto &[frame_num, keypoints] : keypoints_map) {
-                    if (!keypoints)
-                        continue;
-
-                    bool has_labels = false;
-
-                    // Check for skeleton keypoint labels
-                    if (skeleton.has_skeleton && !has_labels) {
-                        for (int cam_id = 0; cam_id < scene->num_cams &&
-                                             cam_id < MAX_VIEWS && !has_labels;
-                             cam_id++) {
-                            for (int kp_id = 0;
-                                 kp_id < skeleton.num_nodes && !has_labels;
-                                 kp_id++) {
-                                if (keypoints->kp2d[cam_id][kp_id].is_labeled) {
-                                    has_labels = true;
-                                }
-                            }
-                        }
-                    }
-
-                    // Check for bounding box labels (both manual and YOLO
-                    // detections)
-                    if (skeleton.has_bbox && !has_labels) {
-                        for (int cam_id = 0; cam_id < scene->num_cams &&
-                                             cam_id < MAX_VIEWS && !has_labels;
-                             cam_id++) {
-                            for (const auto &bbox :
-                                 keypoints->bbox2d_list[cam_id]) {
-                                if (bbox.confidence >= 1.0f &&
-                                    bbox.state == RectTwoPoints) {
-                                    has_labels = true;
-                                    break;
-                                }
-                                // Count YOLO detections (confidence < 1.0
-                                // but > threshold)
-                                if (bbox.confidence >= 0.5f &&
-                                    bbox.confidence < 1.0f &&
-                                    bbox.state == RectTwoPoints) {
-                                    has_labels = true;
-                                    break;
-                                }
-                                // Check for bbox keypoint labels
-                                if (bbox.has_bbox_keypoints) {
-                                    for (int kp_id = 0;
-                                         kp_id < skeleton.num_nodes &&
-                                         !has_labels;
-                                         kp_id++) {
-                                        if (bbox.bbox_keypoints2d &&
-                                            bbox.bbox_keypoints2d[cam_id] &&
-                                            bbox.bbox_keypoints2d[cam_id][kp_id]
-                                                .is_labeled) {
-                                            has_labels = true;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // Check for OBB labels
-                    if (skeleton.has_obb && !has_labels) {
-                        for (int cam_id = 0; cam_id < scene->num_cams &&
-                                             cam_id < MAX_VIEWS && !has_labels;
-                             cam_id++) {
-                            for (const auto &obb :
-                                 keypoints->obb2d_list[cam_id]) {
-                                if (obb.state == OBBComplete) {
-                                    has_labels = true;
-                                    break;
-                                }
-                            }
-                        }
-                    }
-
-                    if (has_labels) {
-                        labeled_count++;
+                    if (has_any_labels(keypoints, skeleton, scene,
+                                       /*yolo_thresh=*/0.5f)) {
+                        ++labeled_count;
                     }
                 }
                 ImGui::Text("Total labeled frames : %zu", labeled_count);
@@ -4313,11 +4328,13 @@ int main(int, char **) {
             ImGui::End();
         }
 
+        // Make sure this is called before any other popups in the same frame
         if (show_error) {
             ImGui::OpenPopup("Error");
             show_error = false; // Reset the flag so it only opens once
         }
 
+        // Ensures popup is drawn in front of others
         if (ImGui::BeginPopupModal("Error", NULL,
                                    ImGuiWindowFlags_AlwaysAutoResize)) {
             ImGui::Text("%s", error_message.c_str());
@@ -4325,7 +4342,6 @@ int main(int, char **) {
 
             if (ImGui::Button("OK")) {
                 ImGui::CloseCurrentPopup();
-                show_error = false;
             }
 
             ImGui::EndPopup();

@@ -20,16 +20,16 @@
 
 int load_bboxes(std::map<u32, KeyPoints *> &keypoints_map,
                 SkeletonContext *skeleton, std::string bbox_file, int cam_idx,
-                render_scene *scene, std::string &error_message);
+                RenderScene *scene, std::string &error_message);
 
 int load_bbox_keypoints(std::map<u32, KeyPoints *> &keypoints_map,
                         SkeletonContext *skeleton, std::string bbox_kp_file,
-                        int cam_idx, render_scene *scene,
+                        int cam_idx, RenderScene *scene,
                         std::string &error_message);
 
 int load_obb(std::map<u32, KeyPoints *> &keypoints_map,
              SkeletonContext *skeleton, std::string obb_file, int cam_idx,
-             render_scene *scene, std::string &error_message,
+             RenderScene *scene, std::string &error_message,
              std::vector<std::string> &class_names);
 
 static void draw_cv_contours(std::vector<cv::Rect> boxes,
@@ -176,7 +176,7 @@ bool is_in_camera_fov(cv::Mat point_world, const cv::Mat &rvec,
 
 static void reprojection(KeyPoints *keypoints, SkeletonContext *skeleton,
                          std::vector<CameraParams> camera_params,
-                         render_scene *scene) {
+                         RenderScene *scene) {
 
     for (u32 node = 0; node < skeleton->num_nodes; node++) {
 
@@ -667,7 +667,7 @@ void load_2d_keypoints_depreciated(std::map<u32, KeyPoints *> &keypoints_map,
                                    SkeletonContext *skeleton,
                                    std::string root_dir, int cam_idx,
                                    std::string camera_name,
-                                   render_scene *scene) {
+                                   RenderScene *scene) {
     std::string labeled_data_dir = root_dir + "/" + camera_name;
     std::vector<std::string> filenames;
 
@@ -763,7 +763,7 @@ void load_2d_keypoints_depreciated(std::map<u32, KeyPoints *> &keypoints_map,
 
 int load_keypoints_depreciated(std::map<u32, KeyPoints *> &keypoints_map,
                                SkeletonContext *skeleton, std::string root_dir,
-                               render_scene *scene,
+                               RenderScene *scene,
                                std::vector<std::string> &camera_names,
                                std::string &error_message) {
 
@@ -887,7 +887,7 @@ int load_keypoints_depreciated(std::map<u32, KeyPoints *> &keypoints_map,
 
 int load_2d_keypoints(std::map<u32, KeyPoints *> &keypoints_map,
                       SkeletonContext *skeleton, std::string kp2d_file,
-                      int cam_idx, render_scene *scene,
+                      int cam_idx, RenderScene *scene,
                       std::string &error_message) {
 
     std::ifstream fin(kp2d_file);
@@ -1002,7 +1002,7 @@ int find_most_recent_labels(std::string root_dir, std::string &most_recent_file,
 
 int load_keypoints(std::string keypoints_folder,
                    std::map<u32, KeyPoints *> &keypoints_map,
-                   SkeletonContext *skeleton, render_scene *scene,
+                   SkeletonContext *skeleton, RenderScene *scene,
                    std::vector<std::string> &camera_names,
                    std::string &error_message,
                    std::vector<std::string> &class_names) {
@@ -1201,7 +1201,7 @@ int load_keypoints(std::string keypoints_folder,
 
 int load_bboxes(std::map<u32, KeyPoints *> &keypoints_map,
                 SkeletonContext *skeleton, std::string bbox_file, int cam_idx,
-                render_scene *scene, std::string &error_message) {
+                RenderScene *scene, std::string &error_message) {
     std::ifstream fin;
     fin.open(bbox_file);
     if (fin.fail()) {
@@ -1307,7 +1307,7 @@ int load_bboxes(std::map<u32, KeyPoints *> &keypoints_map,
 // Load bounding boxes with keypoints from CSV files
 int load_bbox_keypoints(std::map<u32, KeyPoints *> &keypoints_map,
                         SkeletonContext *skeleton, std::string bbox_kp_file,
-                        int cam_idx, render_scene *scene,
+                        int cam_idx, RenderScene *scene,
                         std::string &error_message) {
     std::ifstream fin;
     fin.open(bbox_kp_file);
@@ -1452,7 +1452,7 @@ void set_obb_from_corners(OrientedBoundingBox *obb, const ImVec2 corners[4],
 // Load oriented bounding boxes from CSV files
 int load_obb(std::map<u32, KeyPoints *> &keypoints_map,
              SkeletonContext *skeleton, std::string obb_file, int cam_idx,
-             render_scene *scene, std::string &error_message,
+             RenderScene *scene, std::string &error_message,
              std::vector<std::string> &class_names) {
     std::ifstream fin;
     fin.open(obb_file);
@@ -1683,7 +1683,7 @@ static void gui_plot_perimeter(CameraParams *cvp, int image_height) {
 static void triangulate_bounding_boxes(KeyPoints *keypoints,
                                        SkeletonContext *skeleton,
                                        std::vector<CameraParams> camera_params,
-                                       render_scene *scene,
+                                       RenderScene *scene,
                                        int current_frame_num) {
     if (!skeleton->has_bbox || keypoints->bbox2d_list.empty()) {
         return;
@@ -2528,6 +2528,13 @@ void handle_obb_dragging(OrientedBoundingBox &obb, ImVec2 mouse_pos,
             reset_needed = false;
         }
     }
+}
+
+// Optional: tiny helper for inline help tooltips
+static void HelpMarker(const char *desc) {
+    ImGui::TextDisabled("(?)");
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("%s", desc);
 }
 
 #endif

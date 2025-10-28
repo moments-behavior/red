@@ -95,7 +95,7 @@ cd data_exporter
 ```
 python red3d2jarvis.py -w working_dir -o output_folder -m margin for bounding box estimate [-s subset of keypoints index] [-e new skeleton edges if use subset of keypoints]
 ```
-Note, working dir should contain the labeled_data and project.json.
+Note, working dir should contain the labeled_data and project.redproj.
 
 You should check your dataset to ensure it is properly exported,
 

@@ -10,7 +10,7 @@ struct PBO_CUDA {
     size_t cuda_pbo_storage_buffer_size;
 };
 
-struct render_scene {
+struct RenderScene {
     u32 num_cams;
     u32 *image_width;
     u32 *image_height;
@@ -23,6 +23,6 @@ struct render_scene {
 };
 
 void render_initialize_target(gx_context *context);
-void render_allocate_scene_memory(render_scene *scene, u32 size_of_buffer);
+void render_allocate_scene_memory(RenderScene *scene, u32 size_of_buffer);
 
 #endif

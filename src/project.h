@@ -12,7 +12,6 @@
 #include <vector>
 
 struct ProjectManager {
-    bool confirm_overwrite = false;
     bool show_project_window = false;
     std::string project_root_path;
     std::string project_path;
@@ -174,12 +173,6 @@ bool setup_project(ProjectManager &pm, SkeletonContext &skeleton,
     if (!ensure_dir_exists(pm.keypoints_root_folder, err))
         return false;
 
-    // 5) Save config
-    std::filesystem::path cfg =
-        std::filesystem::path(pm.project_path) / "project.json";
-    if (!save_project_manager_json(pm, cfg, err))
-        return false;
-
     // 6) Final flags
     pm.plot_keypoints_flag = true;
     pm.show_project_window = false;
@@ -260,14 +253,6 @@ DrawProjectWindow(ProjectManager &pm,
                     pm.project_name;
                 pm.project_path = p.string();
             }
-            const bool path_exists = !pm.project_path.empty() &&
-                                     std::filesystem::exists(pm.project_path);
-            bool path_nonempty = false;
-            if (path_exists) {
-                std::error_code ec;
-                path_nonempty =
-                    !std::filesystem::is_empty(pm.project_path, ec) && !ec;
-            }
 
             ImGui::TableNextRow();
             LabelCell("Full Path");
@@ -279,70 +264,8 @@ DrawProjectWindow(ProjectManager &pm,
             ImGui::TableSetColumnIndex(2);
             ImGui::Dummy(ImVec2(1, 1));
 
-            // Existence warning + overwrite checkbox (full width row)
-            if (path_exists) {
-                ImGui::TableNextRow();
-                ImGui::TableSetColumnIndex(0);
-                ImGui::TableSetBgColor(
-                    ImGuiTableBgTarget_RowBg0,
-                    ImGui::GetColorU32(ImVec4(0.25f, 0.16f, 0.05f, 0.15f)));
-                ImGui::AlignTextToFramePadding();
-                ImGui::TextUnformatted("Warning");
-
-                ImGui::TableSetColumnIndex(1);
-                ImGui::PushStyleColor(ImGuiCol_Text,
-                                      ImVec4(1.0f, 0.78f, 0.20f, 1.0f));
-                if (path_nonempty)
-                    ImGui::TextWrapped("Folder exists and is NOT empty: %s",
-                                       pm.project_path.c_str());
-                else
-                    ImGui::TextWrapped("Folder exists: %s",
-                                       pm.project_path.c_str());
-                ImGui::PopStyleColor();
-
-                ImGui::TableSetColumnIndex(2);
-                ImGui::Dummy(ImVec2(1, 1));
-
-                ImGui::TableNextRow();
-                ImGui::TableSetColumnIndex(1);
-                ImGui::Checkbox("Overwrite existing folder##confirm_overwrite",
-                                &pm.confirm_overwrite);
-                ImGui::TableSetColumnIndex(2);
-                ImGui::Dummy(ImVec2(1, 1));
-            } else {
-                pm.confirm_overwrite =
-                    false; // reset if target no longer exists
-            }
-
-            // ---- Skeleton source toggle ----
-            ImGui::TableNextRow();
-            LabelCell("Load skeleton from file");
-            ImGui::TableSetColumnIndex(1);
-            ImGui::Checkbox("##loadskel", &pm.load_skeleton_from_json);
-            ImGui::TableSetColumnIndex(2);
-            ImGui::Dummy(ImVec2(1, 1));
-
-            // ---- Skeleton File ----
-            ImGui::TableNextRow();
-            LabelCell("Skeleton File");
-            ImGui::TableSetColumnIndex(1);
-            ImGui::BeginDisabled(!pm.load_skeleton_from_json);
-            ImGui::SetNextItemWidth(-FLT_MIN);
-            ImGui::InputText("##skelpath", &pm.skeleton_file);
-            ImGui::EndDisabled();
-            ImGui::TableSetColumnIndex(2);
-            ImGui::BeginDisabled(!pm.load_skeleton_from_json);
-            if (ImGui::Button("Browse##loadprojectskeleton")) {
-                IGFD::FileDialogConfig config;
-                config.countSelectionMax = 1;
-                config.path = skeleton_dir;
-                config.flags = ImGuiFileDialogFlags_Modal;
-                ImGuiFileDialog::Instance()->OpenDialog(
-                    "ChooseSkeleton", "Choose Skeleton", ".json", config);
-            }
-            ImGui::EndDisabled();
-
-            // ---- Skeleton Preset ----
+            // ---- Skeleton (single row, compact toggle right, value centered)
+            // ---- Build preset labels
             std::vector<const char *> labels_s;
             labels_s.reserve(skeleton_map.size());
             for (auto &kv : skeleton_map)
@@ -351,18 +274,61 @@ DrawProjectWindow(ProjectManager &pm,
             if (skeleton_idx >= (int)labels_s.size())
                 skeleton_idx = 0;
 
-            ImGui::TableNextRow();
-            LabelCell("Select Skeleton");
-            ImGui::TableSetColumnIndex(1);
-            ImGui::BeginDisabled(pm.load_skeleton_from_json ||
-                                 labels_s.empty());
-            ImGui::SetNextItemWidth(-FLT_MIN);
-            ImGui::Combo("##skeleton_combo", &skeleton_idx, labels_s.data(),
-                         (int)labels_s.size());
-            ImGui::EndDisabled();
-            ImGui::TableSetColumnIndex(2);
-            ImGui::Dummy(ImVec2(1, 1));
+            // Mode: 0 = File, 1 = Preset (mirror your boolean)
+            int mode = pm.load_skeleton_from_json ? 0 : 1;
 
+            ImGui::TableNextRow();
+            LabelCell("Skeleton");
+
+            // -------- Field (center column): the value control --------
+            ImGui::TableSetColumnIndex(1);
+            {
+                if (pm.load_skeleton_from_json) {
+                    // Input path + inline Browse in the same (Field) column
+                    float avail = ImGui::GetContentRegionAvail().x;
+                    const char *btxt = "Browse##browse_skel";
+                    float browse_w = ImGui::CalcTextSize(btxt).x +
+                                     ImGui::GetStyle().FramePadding.x * 2.0f;
+                    float gap = ImGui::GetStyle().ItemInnerSpacing.x;
+
+                    ImGui::PushID("skelfile");
+                    ImGui::SetNextItemWidth(
+                        ImMax(50.0f, avail - browse_w - gap));
+                    ImGui::InputText("##path", &pm.skeleton_file);
+                    ImGui::SameLine(0.0f, gap);
+                    if (ImGui::Button(btxt)) {
+                        IGFD::FileDialogConfig config;
+                        config.countSelectionMax = 1;
+                        config.path = skeleton_dir;
+                        config.flags = ImGuiFileDialogFlags_Modal;
+                        ImGuiFileDialog::Instance()->OpenDialog(
+                            "ChooseSkeleton", "Choose Skeleton", ".json",
+                            config);
+                    }
+                    ImGui::PopID();
+                } else {
+                    // Preset list in the Field column
+                    ImGui::BeginDisabled(labels_s.empty());
+                    ImGui::SetNextItemWidth(-FLT_MIN);
+                    ImGui::Combo("##skeleton_preset", &skeleton_idx,
+                                 labels_s.data(), (int)labels_s.size());
+                    ImGui::EndDisabled();
+                }
+            }
+
+            // -------- Action (right column): compact File/Preset toggle
+            // --------
+            ImGui::TableSetColumnIndex(2);
+            // Keep this small
+            ImGui::SetNextItemWidth(90.0f);
+            if (ImGui::Combo("##skeleton_mode_small", &mode,
+                             "File\0Preset\0")) {
+                pm.load_skeleton_from_json = (mode == 0);
+                if (pm.load_skeleton_from_json)
+                    pm.skeleton_name.clear();
+            }
+
+            // Keep pm.skeleton_name in sync with preset selection
             pm.skeleton_name =
                 pm.load_skeleton_from_json
                     ? std::string()
@@ -387,6 +353,7 @@ DrawProjectWindow(ProjectManager &pm,
                         nullptr, cfg);
                 }
             }
+
             ImGui::EndTable();
         }
 
@@ -398,10 +365,6 @@ DrawProjectWindow(ProjectManager &pm,
             (pm.camera_names.size() <= 1 || !pm.calibration_folder.empty()) &&
             (!pm.load_skeleton_from_json || !pm.skeleton_file.empty());
 
-        const bool allow_create =
-            needed_ok &&
-            (!std::filesystem::exists(pm.project_path) || pm.confirm_overwrite);
-
         // Right-align Create button
         float avail = ImGui::GetContentRegionAvail().x;
         const char *create_label = "Create Project##action";
@@ -409,14 +372,45 @@ DrawProjectWindow(ProjectManager &pm,
                   ImGui::GetStyle().FramePadding.x * 2.0f;
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (avail - w));
 
-        ImGui::BeginDisabled(!allow_create);
+        ImGui::BeginDisabled(!needed_ok);
         if (ImGui::Button(create_label)) {
-            show_error =
-                !setup_project(pm, skeleton, skeleton_map, &error_message);
+            if (!ensure_dir_exists(pm.project_path, &error_message))
+                show_error = true;
+
+            // Configure the dialog
+            IGFD::FileDialogConfig config;
+            config.path = pm.project_path;
+            config.fileName = "project.redproj"; // prefill name
+            config.countSelectionMax = 1;
+            config.flags = ImGuiFileDialogFlags_ConfirmOverwrite; // warn on
+                                                                  // overwrite
+            ImGuiFileDialog::Instance()->OpenDialog(
+                "SaveProjectFileDlg", "Save Project File",
+                "Red Project{.redproj},All files{.*}", config);
         }
         ImGui::EndDisabled();
     }
     ImGui::End();
+
+    if (ImGuiFileDialog::Instance()->Display("SaveProjectFileDlg")) {
+        if (ImGuiFileDialog::Instance()->IsOk()) {
+            // Full path the user chose (may contain or omit extension)
+            std::string outPath =
+                ImGuiFileDialog::Instance()->GetFilePathName();
+
+            if (!ends_with_ci(outPath, ".redproj")) {
+                outPath += ".redproj";
+            }
+
+            show_error =
+                !setup_project(pm, skeleton, skeleton_map, &error_message);
+            if (!show_error) {
+                if (!save_project_manager_json(pm, outPath, &error_message))
+                    show_error = true;
+            }
+        }
+        ImGuiFileDialog::Instance()->Close();
+    }
 }
 
 inline void
@@ -424,7 +418,7 @@ load_videos(std::map<std::string, std::string> &selected_files,
             PlaybackState &ps, ProjectManager &pm,
             std::unordered_map<std::string, bool> &window_was_decoding,
             std::vector<FFmpegDemuxer *> &demuxers, DecoderContext *dc_context,
-            render_scene *scene, int label_buffer_size,
+            RenderScene *scene, int label_buffer_size,
             std::vector<std::thread> &decoder_threads,
             std::vector<bool> &is_view_focused) {
     for (const auto &elem : selected_files) {

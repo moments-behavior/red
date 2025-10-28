@@ -17,7 +17,7 @@ parser.add_argument(
     "--working_dir",
     type=str,
     required=True,
-    help="labeled_data and project.json need to be under this directory.",
+    help="labeled_data and project.redproj need to be under this directory.",
 )
 parser.add_argument("-o", "--output_folder", type=str, required=True)
 parser.add_argument(
@@ -50,11 +50,11 @@ select_indices = args.select_indices
 margin_pixel = args.margin
 
 label_folder = os.path.join(working_dir, "labeled_data")
-project_json = os.path.join(working_dir, "project.json")
-with open(project_json, "r") as f:
-    project_json = json.load(f)
-calibration_folder = project_json["calibration_folder"]
-video_folder = project_json["media_folder"]
+project.redproj = os.path.join(working_dir, "project.redproj")
+with open(project.redproj, "r") as f:
+    project.redproj = json.load(f)
+calibration_folder = project.redproj["calibration_folder"]
+video_folder = project.redproj["media_folder"]
 
 datetime_pattern = re.compile(r"^\d{4}_\d{2}_\d{2}_\d{2}_\d{2}_\d{2}$")
 
