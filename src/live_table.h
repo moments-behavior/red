@@ -57,7 +57,7 @@ inline void RemoveRow(LiveTable &t, int at) {
 }
 
 inline void OnCellShiftClick(int row, int col, const std::string &value,
-                             render_scene *scene, double video_fps,
+                             RenderScene *scene, double video_fps,
                              PlaybackState &ps) {
 
     if (!ps.video_loaded) {
@@ -84,7 +84,7 @@ inline void OnCellShiftClick(int row, int col, const std::string &value,
 }
 
 inline void DrawLiveTable(LiveTable &t, const char *window_id,
-                          render_scene *scene, double video_fps,
+                          RenderScene *scene, double video_fps,
                           PlaybackState &ps, std::string &project_dir) {
     if (!t.is_open)
         return;

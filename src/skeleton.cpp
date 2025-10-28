@@ -1,5 +1,6 @@
 #include "skeleton.h"
 #include "global.h"
+#include "render.h"
 
 std::map<std::string, SkeletonPrimitive> skeleton_get_all() {
     std::map<std::string, SkeletonPrimitive> skeleton_all = {
@@ -475,7 +476,7 @@ bool has_labeled_frames(const std::map<u32, KeyPoints *> &keypoints_map,
     return false;
 }
 
-void allocate_keypoints(KeyPoints *keypoints, render_scene *scene,
+void allocate_keypoints(KeyPoints *keypoints, RenderScene *scene,
                         SkeletonContext *skeleton) {
     // allocate memory for storing keypoints
     keypoints->active_id = (u32 *)malloc(sizeof(u32) * scene->num_cams);
@@ -563,7 +564,7 @@ void allocate_keypoints(KeyPoints *keypoints, render_scene *scene,
     }
 }
 
-void free_bbox_keypoints(BoundingBox *bbox, render_scene *scene) {
+void free_bbox_keypoints(BoundingBox *bbox, RenderScene *scene) {
     if (!bbox->has_bbox_keypoints)
         return;
 
@@ -583,7 +584,7 @@ void free_bbox_keypoints(BoundingBox *bbox, render_scene *scene) {
     bbox->has_bbox_keypoints = false;
 }
 
-void free_keypoints(KeyPoints *keypoints, render_scene *scene) {
+void free_keypoints(KeyPoints *keypoints, RenderScene *scene) {
     if (!keypoints)
         return;
 
@@ -613,7 +614,7 @@ void free_keypoints(KeyPoints *keypoints, render_scene *scene) {
     free(keypoints); // finally free the KeyPoints struct itself
 }
 
-void allocate_bbox_keypoints(BoundingBox *bbox, render_scene *scene,
+void allocate_bbox_keypoints(BoundingBox *bbox, RenderScene *scene,
                              SkeletonContext *skeleton) {
     if (!skeleton->has_skeleton) {
         bbox->has_bbox_keypoints = false;
@@ -660,7 +661,7 @@ bool is_point_in_bbox(double x, double y, ImPlotRect *bbox_rect) {
     return (x >= bbox_rect->X.Min && x <= bbox_rect->X.Max &&
             y >= bbox_rect->Y.Min && y <= bbox_rect->Y.Max);
 }
-void scale_bbox_keypoints(BoundingBox *bbox, render_scene *scene,
+void scale_bbox_keypoints(BoundingBox *bbox, RenderScene *scene,
                           SkeletonContext *skeleton, ImPlotRect *old_rect,
                           ImPlotRect *new_rect) {
     if (!bbox->has_bbox_keypoints || !old_rect || !new_rect)
@@ -721,7 +722,7 @@ void scale_bbox_keypoints(BoundingBox *bbox, render_scene *scene,
 }
 
 void free_all_keypoints(std::map<u32, KeyPoints *> &keypoints_map,
-                        render_scene *scene) {
+                        RenderScene *scene) {
     for (auto &[frame, kp] : keypoints_map)
         free_keypoints(kp, scene);
     keypoints_map.clear();
@@ -739,10 +740,189 @@ float calculate_angle(ImVec2 p1, ImVec2 p2) {
 }
 
 void cleanup_skeleton_data(std::map<u32, KeyPoints *> &keypoints_map,
-                           render_scene *scene) {
+                           RenderScene *scene) {
     // Free all existing keypoints
     if (!keypoints_map.empty()) {
         free_all_keypoints(keypoints_map, scene);
         keypoints_map.clear();
     }
+}
+
+bool has_any_labels(const KeyPoints *keypoints, const SkeletonContext &skeleton,
+                    const RenderScene *scene, float yolo_thresh) {
+
+    if (!keypoints)
+        return false;
+
+    // Skeleton keypoints
+    if (skeleton.has_skeleton) {
+        for (int cam_id = 0; cam_id < scene->num_cams && cam_id < MAX_VIEWS;
+             ++cam_id) {
+            for (int kp_id = 0; kp_id < skeleton.num_nodes; ++kp_id) {
+                if (keypoints->kp2d[cam_id][kp_id].is_labeled)
+                    return true;
+            }
+        }
+    }
+
+    // Bounding boxes
+    if (skeleton.has_bbox) {
+        for (int cam_id = 0; cam_id < scene->num_cams && cam_id < MAX_VIEWS;
+             ++cam_id) {
+            for (const auto &bbox : keypoints->bbox2d_list[cam_id]) {
+                // Manual or YOLO rectangles (RectTwoPoints) with confidence
+                // >= yolo_thresh
+                if (bbox.state == RectTwoPoints &&
+                    bbox.confidence >= yolo_thresh)
+                    return true;
+
+                // BBox keypoints
+                if (bbox.has_bbox_keypoints && bbox.bbox_keypoints2d &&
+                    bbox.bbox_keypoints2d[cam_id]) {
+                    for (int kp_id = 0; kp_id < skeleton.num_nodes; ++kp_id) {
+                        if (bbox.bbox_keypoints2d[cam_id][kp_id].is_labeled)
+                            return true;
+                    }
+                }
+            }
+        }
+    }
+
+    // OBBs
+    if (skeleton.has_obb) {
+        for (int cam_id = 0; cam_id < scene->num_cams && cam_id < MAX_VIEWS;
+             ++cam_id) {
+            for (const auto &obb : keypoints->obb2d_list[cam_id]) {
+                if (obb.state == OBBComplete)
+                    return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+bool has_any_labels(const KeyPoints *keypoints, const SkeletonContext &skeleton,
+                    const RenderScene *scene) {
+    if (!keypoints)
+        return false;
+
+    // --- Skeleton keypoints ---
+    if (skeleton.has_skeleton) {
+        for (int cam_id = 0; cam_id < scene->num_cams && cam_id < MAX_VIEWS;
+             ++cam_id) {
+            for (int kp_id = 0; kp_id < skeleton.num_nodes; ++kp_id) {
+                if (keypoints->kp2d[cam_id][kp_id].is_labeled)
+                    return true;
+            }
+        }
+    }
+
+    // --- Bounding boxes ---
+    if (skeleton.has_bbox) {
+        for (int cam_id = 0; cam_id < scene->num_cams && cam_id < MAX_VIEWS;
+             ++cam_id) {
+            for (const auto &bbox : keypoints->bbox2d_list[cam_id]) {
+                if ((bbox.state == RectTwoPoints && bbox.confidence >= 0.0f) ||
+                    (bbox.confidence >= 1.0f && bbox.has_bbox_keypoints)) {
+
+                    if (bbox.state == RectTwoPoints)
+                        return true;
+
+                    if (bbox.has_bbox_keypoints && bbox.bbox_keypoints2d &&
+                        bbox.bbox_keypoints2d[cam_id]) {
+                        for (int kp_id = 0; kp_id < skeleton.num_nodes;
+                             ++kp_id) {
+                            if (bbox.bbox_keypoints2d[cam_id][kp_id].is_labeled)
+                                return true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // --- OBBs ---
+    if (skeleton.has_obb) {
+        for (int cam_id = 0; cam_id < scene->num_cams && cam_id < MAX_VIEWS;
+             ++cam_id) {
+            for (const auto &obb : keypoints->obb2d_list[cam_id]) {
+                if (obb.state == OBBComplete)
+                    return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+void copy_keypoints(KeyPoints *dst, const KeyPoints *src,
+                    const RenderScene *scene, const SkeletonContext *skeleton) {
+    if (!dst || !src)
+        return;
+
+    // Copy simple pointers and allocate new memory where necessary
+
+    // --- Copy 3D keypoints ---
+    if (src->kp3d) {
+        dst->kp3d = (KeyPoints3D *)malloc(sizeof(KeyPoints3D));
+        *dst->kp3d =
+            *src->kp3d; // assuming it's a POD / trivially copyable type
+    } else {
+        dst->kp3d = nullptr;
+    }
+
+    // --- Copy triangulation flags ---
+    if (src->is_triangulated) {
+        size_t num_nodes = skeleton->num_nodes;
+        dst->is_triangulated = (bool *)malloc(sizeof(bool) * num_nodes);
+        std::memcpy(dst->is_triangulated, src->is_triangulated,
+                    sizeof(bool) * num_nodes);
+    } else {
+        dst->is_triangulated = nullptr;
+    }
+
+    // --- Copy active ID ---
+    if (src->active_id) {
+        dst->active_id = (u32 *)malloc(sizeof(u32));
+        *dst->active_id = *src->active_id;
+    } else {
+        dst->active_id = nullptr;
+    }
+
+    // --- Copy camera suppression flags ---
+    if (src->cam_supress) {
+        size_t num_cams = scene->num_cams;
+        dst->cam_supress = (bool *)malloc(sizeof(bool) * num_cams);
+        std::memcpy(dst->cam_supress, src->cam_supress,
+                    sizeof(bool) * num_cams);
+    } else {
+        dst->cam_supress = nullptr;
+    }
+
+    // --- Copy 2D keypoints ---
+    if (src->kp2d) {
+        int num_cams = scene->num_cams;
+        int num_nodes = skeleton->num_nodes;
+        dst->kp2d = (KeyPoints2D **)malloc(sizeof(KeyPoints2D *) * num_cams);
+        for (int cam = 0; cam < num_cams; ++cam) {
+            if (src->kp2d[cam]) {
+                dst->kp2d[cam] =
+                    (KeyPoints2D *)malloc(sizeof(KeyPoints2D) * num_nodes);
+                std::memcpy(dst->kp2d[cam], src->kp2d[cam],
+                            sizeof(KeyPoints2D) * num_nodes);
+            } else {
+                dst->kp2d[cam] = nullptr;
+            }
+        }
+    } else {
+        dst->kp2d = nullptr;
+    }
+
+    // --- Copy 2D bounding boxes ---
+    dst->bbox2d_list =
+        src->bbox2d_list; // std::vector performs deep copy of POD types
+
+    // --- Copy oriented bounding boxes ---
+    dst->obb2d_list = src->obb2d_list; // std::vector deep-copies too
 }

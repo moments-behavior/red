@@ -33,7 +33,7 @@ bool string_ends_with(const std::string &str, const std::string &suffix);
 std::vector<std::string> string_split(std::string s, std::string delimiter);
 bool numerical_compare_substr(const std::string &s1, const std::string &s2);
 std::string format_time(float t_seconds);
-void seek_all_cameras(render_scene *scene, int frame_number, double video_fps,
+void seek_all_cameras(RenderScene *scene, int frame_number, double video_fps,
                       PlaybackState &state, bool seek_accurate);
 bool has_labeled_frames(const std::map<u32, KeyPoints *> &keypoints_map,
                         SkeletonContext *skeleton);

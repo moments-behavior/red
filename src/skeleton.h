@@ -136,21 +136,27 @@ bool has_labeled_frames(const std::map<u32, KeyPoints *> &keypoints_map,
 void load_skeleton_json(std::string file_name, SkeletonContext *skeleton);
 void skeleton_initialize(std::string name, SkeletonContext *skeleton,
                          SkeletonPrimitive skeleton_type);
-void allocate_keypoints(KeyPoints *keypoints, render_scene *scene,
+void allocate_keypoints(KeyPoints *keypoints, RenderScene *scene,
                         SkeletonContext *skeleton);
-void free_bbox_keypoints(BoundingBox *bbox, render_scene *scene);
-void free_keypoints(KeyPoints *keypoints, render_scene *scene);
-void allocate_bbox_keypoints(BoundingBox *bbox, render_scene *scene,
+void free_bbox_keypoints(BoundingBox *bbox, RenderScene *scene);
+void free_keypoints(KeyPoints *keypoints, RenderScene *scene);
+void allocate_bbox_keypoints(BoundingBox *bbox, RenderScene *scene,
                              SkeletonContext *skeleton);
 void constrain_keypoint_to_bbox(KeyPoints2D *keypoint, ImPlotRect *bbox_rect);
 bool is_point_in_bbox(double x, double y, ImPlotRect *bbox_rect);
-void scale_bbox_keypoints(BoundingBox *bbox, render_scene *scene,
+void scale_bbox_keypoints(BoundingBox *bbox, RenderScene *scene,
                           SkeletonContext *skeleton, ImPlotRect *old_rect,
                           ImPlotRect *new_rect);
 void free_all_keypoints(std::map<u32, KeyPoints *> &keypoints_map,
-                        render_scene *scene);
+                        RenderScene *scene);
 float calculate_distance(ImVec2 p1, ImVec2 p2);
 float calculate_angle(ImVec2 p1, ImVec2 p2);
 void cleanup_skeleton_data(std::map<u32, KeyPoints *> &keypoints_map,
-                           render_scene *scene);
+                           RenderScene *scene);
+
+bool has_any_labels(const KeyPoints *keypoints, const SkeletonContext &skeleton,
+                    const RenderScene *scene, float yolo_thresh = 0.0f);
+
+void copy_keypoints(KeyPoints *dst, const KeyPoints *src,
+                    const RenderScene *scene, const SkeletonContext *skeleton);
 #endif

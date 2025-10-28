@@ -7,7 +7,7 @@ void render_initialize_target(gx_context *context) {
     gx_imgui_init(context);
 }
 
-void render_allocate_scene_memory(render_scene *scene, u32 size_of_buffer) {
+void render_allocate_scene_memory(RenderScene *scene, u32 size_of_buffer) {
     int num_cams = scene->num_cams;
     scene->image_texture = (GLuint *)malloc(sizeof(GLuint) * num_cams);
     scene->size_of_buffer = size_of_buffer;

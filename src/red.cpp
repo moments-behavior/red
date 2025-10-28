@@ -38,7 +38,7 @@ int main(int argc, char **argv) {
                      .glsl_version = (char *)malloc(100)};
 
     render_initialize_target(window);
-    render_scene *scene = (render_scene *)malloc(sizeof(render_scene));
+    RenderScene *scene = (RenderScene *)malloc(sizeof(RenderScene));
     std::string red_data_dir;
     std::string media_root_dir;
     prepare_application_folders(red_data_dir, media_root_dir);
@@ -412,8 +412,8 @@ int main(int argc, char **argv) {
                 ImGui::PushTextWrapPos(ImGui::GetFontSize() * 24.0f);
                 ImGui::Spacing();
                 ImGui::TextDisabled(
-                    "Tip: If playback is slower than real-time, collapse "
-                    "camera views to improve speed.");
+                    "Tip: If playback is slower than real-time (< 1.0x), "
+                    "collapse camera views to improve speed.");
                 ImGui::PopTextWrapPos();
 
                 // === Display section ===
@@ -3224,272 +3224,109 @@ int main(int argc, char **argv) {
                         config);
                 }
 
-                // Find next frame with actual labeled keypoints
+                ImGui::Separator();
+
                 auto next_labeled_frame_it = keypoints_map.end();
+
+                // Find next labeled frame (forward, wrap)
                 for (auto it = keypoints_map.upper_bound(current_frame_num);
                      it != keypoints_map.end(); ++it) {
-                    const auto &[frame_num, keypoints] = *it;
-                    if (!keypoints)
-                        continue;
-
-                    bool has_labels = false;
-
-                    if (skeleton.has_skeleton) {
-                        for (int cam_id = 0; cam_id < scene->num_cams &&
-                                             cam_id < MAX_VIEWS && !has_labels;
-                             cam_id++) {
-                            for (int kp_id = 0;
-                                 kp_id < skeleton.num_nodes && !has_labels;
-                                 kp_id++) {
-                                if (keypoints->kp2d[cam_id][kp_id].is_labeled) {
-                                    has_labels = true;
-                                }
-                            }
-                        }
-                    }
-
-                    if (!has_labels && skeleton.has_bbox) {
-                        for (int cam_id = 0; cam_id < scene->num_cams &&
-                                             cam_id < MAX_VIEWS && !has_labels;
-                             cam_id++) {
-                            for (const auto &bbox :
-                                 keypoints->bbox2d_list[cam_id]) {
-                                if (bbox.confidence >= 1.0f &&
-                                    bbox.state == RectTwoPoints) {
-                                    has_labels = true;
-                                    break;
-                                }
-                                if (bbox.confidence >= 0.0f &&
-                                    bbox.confidence < 1.0f &&
-                                    bbox.state == RectTwoPoints) {
-                                    has_labels = true;
-                                    break;
-                                }
-                                if (bbox.confidence >= 1.0f &&
-                                    bbox.has_bbox_keypoints) {
-                                    for (int kp_id = 0;
-                                         kp_id < skeleton.num_nodes &&
-                                         !has_labels;
-                                         kp_id++) {
-                                        if (bbox.bbox_keypoints2d &&
-                                            bbox.bbox_keypoints2d[cam_id] &&
-                                            bbox.bbox_keypoints2d[cam_id][kp_id]
-                                                .is_labeled) {
-                                            has_labels = true;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // Check for OBB labels
-                    if (!has_labels && skeleton.has_obb) {
-                        for (int cam_id = 0; cam_id < scene->num_cams &&
-                                             cam_id < MAX_VIEWS && !has_labels;
-                             cam_id++) {
-                            for (const auto &obb :
-                                 keypoints->obb2d_list[cam_id]) {
-                                if (obb.state == OBBComplete) {
-                                    has_labels = true;
-                                    break;
-                                }
-                            }
-                        }
-                    }
-
-                    if (has_labels) {
+                    if (has_any_labels(it->second, skeleton, scene)) {
                         next_labeled_frame_it = it;
                         break;
                     }
                 }
-
-                // If no labeled frame found after current, wrap around to
-                // beginning
                 if (next_labeled_frame_it == keypoints_map.end()) {
                     for (auto it = keypoints_map.begin();
                          it != keypoints_map.upper_bound(current_frame_num);
                          ++it) {
-                        const auto &[frame_num, keypoints] = *it;
-                        if (!keypoints)
-                            continue;
-
-                        bool has_labels = false;
-
-                        if (skeleton.has_skeleton) {
-                            for (int cam_id = 0;
-                                 cam_id < scene->num_cams &&
-                                 cam_id < MAX_VIEWS && !has_labels;
-                                 cam_id++) {
-                                for (int kp_id = 0;
-                                     kp_id < skeleton.num_nodes && !has_labels;
-                                     kp_id++) {
-                                    if (keypoints->kp2d[cam_id][kp_id]
-                                            .is_labeled) {
-                                        has_labels = true;
-                                    }
-                                }
-                            }
-                        }
-
-                        if (!has_labels && skeleton.has_bbox) {
-                            for (int cam_id = 0;
-                                 cam_id < scene->num_cams &&
-                                 cam_id < MAX_VIEWS && !has_labels;
-                                 cam_id++) {
-                                for (const auto &bbox :
-                                     keypoints->bbox2d_list[cam_id]) {
-                                    if (bbox.confidence >= 1.0f &&
-                                        bbox.state == RectTwoPoints) {
-                                        has_labels = true;
-                                        break;
-                                    }
-                                    if (bbox.confidence >= 0.0f &&
-                                        bbox.confidence < 1.0f &&
-                                        bbox.state == RectTwoPoints) {
-                                        has_labels = true;
-                                        break;
-                                    }
-                                    if (bbox.confidence >= 1.0f &&
-                                        bbox.has_bbox_keypoints) {
-                                        for (int kp_id = 0;
-                                             kp_id < skeleton.num_nodes &&
-                                             !has_labels;
-                                             kp_id++) {
-                                            if (bbox.bbox_keypoints2d &&
-                                                bbox.bbox_keypoints2d[cam_id] &&
-                                                bbox
-                                                    .bbox_keypoints2d[cam_id]
-                                                                     [kp_id]
-                                                    .is_labeled) {
-                                                has_labels = true;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        // Check for OBB labels
-                        if (!has_labels && skeleton.has_obb) {
-                            for (int cam_id = 0;
-                                 cam_id < scene->num_cams &&
-                                 cam_id < MAX_VIEWS && !has_labels;
-                                 cam_id++) {
-                                for (const auto &obb :
-                                     keypoints->obb2d_list[cam_id]) {
-                                    if (obb.state == OBBComplete) {
-                                        has_labels = true;
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-
-                        if (has_labels) {
+                        if (has_any_labels(it->second, skeleton, scene)) {
                             next_labeled_frame_it = it;
                             break;
                         }
                     }
                 }
 
-                ImGui::Separator();
-                if (next_labeled_frame_it != keypoints_map.end()) {
-                    if (ImGui::Button("Jump to") ||
-                        (ImGui::IsKeyPressed(ImGuiKey_RightArrow, false) &&
-                         !io.WantTextInput)) {
-                        seek_all_cameras(scene, (*next_labeled_frame_it).first,
+                // Find previous labeled frame (no wrap)
+                auto prev_labeled_frame_it = keypoints_map.end();
+                auto lb = keypoints_map.lower_bound(current_frame_num);
+                if (lb != keypoints_map.begin()) {
+                    for (auto it = std::prev(lb);;) {
+                        if (has_any_labels(it->second, skeleton, scene)) {
+                            prev_labeled_frame_it = it;
+                            break;
+                        }
+                        if (it == keypoints_map.begin())
+                            break;
+                        --it;
+                    }
+                }
+
+                bool has_next_frame =
+                    (next_labeled_frame_it != keypoints_map.end());
+                int next_frame_num =
+                    has_next_frame ? next_labeled_frame_it->first : -1;
+                bool has_prev_frame =
+                    (prev_labeled_frame_it != keypoints_map.end());
+                int previous_frame_num =
+                    has_prev_frame ? prev_labeled_frame_it->first : -1;
+
+                if (ImGui::BeginTable("frame_nav_table", 2,
+                                      ImGuiTableFlags_SizingFixedFit)) {
+                    ImGui::TableNextRow();
+
+                    // --- Next ---
+                    ImGui::TableSetColumnIndex(0);
+
+                    ImGui::BeginDisabled(!has_next_frame);
+                    bool button_pressed =
+                        ImGui::Button("Jump to next labeled frame");
+                    ImGui::EndDisabled();
+
+                    if (button_pressed && has_next_frame) {
+                        seek_all_cameras(scene, next_frame_num,
                                          dc_context->video_fps, ps, true);
                     }
-                    ImGui::SameLine();
-                    ImGui::Text("next labeled frame : %d",
-                                (*next_labeled_frame_it).first);
-                } else {
-                    ImGui::BeginDisabled(); // disable section
-                    ImGui::Button("Jump to");
+
+                    ImGui::TableSetColumnIndex(1);
+                    if (has_next_frame)
+                        ImGui::Text("%d", next_frame_num);
+                    else
+                        ImGui::Text("none");
+
+                    // --- Previous ---
+                    ImGui::TableNextRow();
+
+                    ImGui::TableSetColumnIndex(0);
+                    ImGui::BeginDisabled(!has_prev_frame);
+                    if (ImGui::Button("Copy from previous labeled frame")) {
+                        if (!keypoints_find) {
+                            KeyPoints *keypoints =
+                                (KeyPoints *)malloc(sizeof(KeyPoints));
+                            allocate_keypoints(keypoints, scene, &skeleton);
+                            keypoints_map[current_frame_num] = keypoints;
+                        }
+
+                        KeyPoints *prev = keypoints_map[previous_frame_num];
+                        KeyPoints *curr = keypoints_map[current_frame_num];
+                        copy_keypoints(curr, prev, scene, &skeleton);
+                    }
                     ImGui::EndDisabled();
-                    ImGui::SameLine();
-                    ImGui::Text("next labeled frame : none");
+
+                    ImGui::TableSetColumnIndex(1);
+                    if (has_prev_frame)
+                        ImGui::Text("%d", previous_frame_num);
+                    else
+                        ImGui::Text("none");
+
+                    ImGui::EndTable();
                 }
 
                 size_t labeled_count = 0;
                 for (const auto &[frame_num, keypoints] : keypoints_map) {
-                    if (!keypoints)
-                        continue;
-
-                    bool has_labels = false;
-
-                    // Check for skeleton keypoint labels
-                    if (skeleton.has_skeleton && !has_labels) {
-                        for (int cam_id = 0; cam_id < scene->num_cams &&
-                                             cam_id < MAX_VIEWS && !has_labels;
-                             cam_id++) {
-                            for (int kp_id = 0;
-                                 kp_id < skeleton.num_nodes && !has_labels;
-                                 kp_id++) {
-                                if (keypoints->kp2d[cam_id][kp_id].is_labeled) {
-                                    has_labels = true;
-                                }
-                            }
-                        }
-                    }
-
-                    // Check for bounding box labels (both manual and YOLO
-                    // detections)
-                    if (skeleton.has_bbox && !has_labels) {
-                        for (int cam_id = 0; cam_id < scene->num_cams &&
-                                             cam_id < MAX_VIEWS && !has_labels;
-                             cam_id++) {
-                            for (const auto &bbox :
-                                 keypoints->bbox2d_list[cam_id]) {
-                                if (bbox.confidence >= 1.0f &&
-                                    bbox.state == RectTwoPoints) {
-                                    has_labels = true;
-                                    break;
-                                }
-                                // Count YOLO detections (confidence < 1.0
-                                // but > threshold)
-                                if (bbox.confidence >= 0.5f &&
-                                    bbox.confidence < 1.0f &&
-                                    bbox.state == RectTwoPoints) {
-                                    has_labels = true;
-                                    break;
-                                }
-                                // Check for bbox keypoint labels
-                                if (bbox.has_bbox_keypoints) {
-                                    for (int kp_id = 0;
-                                         kp_id < skeleton.num_nodes &&
-                                         !has_labels;
-                                         kp_id++) {
-                                        if (bbox.bbox_keypoints2d &&
-                                            bbox.bbox_keypoints2d[cam_id] &&
-                                            bbox.bbox_keypoints2d[cam_id][kp_id]
-                                                .is_labeled) {
-                                            has_labels = true;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // Check for OBB labels
-                    if (skeleton.has_obb && !has_labels) {
-                        for (int cam_id = 0; cam_id < scene->num_cams &&
-                                             cam_id < MAX_VIEWS && !has_labels;
-                             cam_id++) {
-                            for (const auto &obb :
-                                 keypoints->obb2d_list[cam_id]) {
-                                if (obb.state == OBBComplete) {
-                                    has_labels = true;
-                                    break;
-                                }
-                            }
-                        }
-                    }
-
-                    if (has_labels) {
-                        labeled_count++;
+                    if (has_any_labels(keypoints, skeleton, scene,
+                                       /*yolo_thresh=*/0.5f)) {
+                        ++labeled_count;
                     }
                 }
                 ImGui::Text("Total labeled frames : %zu", labeled_count);

@@ -162,7 +162,7 @@ void prepare_application_folders(std::string &red_data_dir,
     }
 }
 
-void seek_all_cameras(render_scene *scene, int frame_number, double video_fps,
+void seek_all_cameras(RenderScene *scene, int frame_number, double video_fps,
                       PlaybackState &state, bool seek_accurate) {
     // Trigger seek request
     for (int i = 0; i < scene->num_cams; i++) {

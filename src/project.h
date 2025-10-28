@@ -264,35 +264,8 @@ DrawProjectWindow(ProjectManager &pm,
             ImGui::TableSetColumnIndex(2);
             ImGui::Dummy(ImVec2(1, 1));
 
-            // ---- Skeleton source toggle ----
-            ImGui::TableNextRow();
-            LabelCell("Load skeleton from file");
-            ImGui::TableSetColumnIndex(1);
-            ImGui::Checkbox("##loadskel", &pm.load_skeleton_from_json);
-            ImGui::TableSetColumnIndex(2);
-            ImGui::Dummy(ImVec2(1, 1));
-
-            // ---- Skeleton File ----
-            ImGui::TableNextRow();
-            LabelCell("Skeleton File");
-            ImGui::TableSetColumnIndex(1);
-            ImGui::BeginDisabled(!pm.load_skeleton_from_json);
-            ImGui::SetNextItemWidth(-FLT_MIN);
-            ImGui::InputText("##skelpath", &pm.skeleton_file);
-            ImGui::EndDisabled();
-            ImGui::TableSetColumnIndex(2);
-            ImGui::BeginDisabled(!pm.load_skeleton_from_json);
-            if (ImGui::Button("Browse##loadprojectskeleton")) {
-                IGFD::FileDialogConfig config;
-                config.countSelectionMax = 1;
-                config.path = skeleton_dir;
-                config.flags = ImGuiFileDialogFlags_Modal;
-                ImGuiFileDialog::Instance()->OpenDialog(
-                    "ChooseSkeleton", "Choose Skeleton", ".json", config);
-            }
-            ImGui::EndDisabled();
-
-            // ---- Skeleton Preset ----
+            // ---- Skeleton (single row, compact toggle right, value centered)
+            // ---- Build preset labels
             std::vector<const char *> labels_s;
             labels_s.reserve(skeleton_map.size());
             for (auto &kv : skeleton_map)
@@ -301,18 +274,61 @@ DrawProjectWindow(ProjectManager &pm,
             if (skeleton_idx >= (int)labels_s.size())
                 skeleton_idx = 0;
 
-            ImGui::TableNextRow();
-            LabelCell("Select Skeleton");
-            ImGui::TableSetColumnIndex(1);
-            ImGui::BeginDisabled(pm.load_skeleton_from_json ||
-                                 labels_s.empty());
-            ImGui::SetNextItemWidth(-FLT_MIN);
-            ImGui::Combo("##skeleton_combo", &skeleton_idx, labels_s.data(),
-                         (int)labels_s.size());
-            ImGui::EndDisabled();
-            ImGui::TableSetColumnIndex(2);
-            ImGui::Dummy(ImVec2(1, 1));
+            // Mode: 0 = File, 1 = Preset (mirror your boolean)
+            int mode = pm.load_skeleton_from_json ? 0 : 1;
 
+            ImGui::TableNextRow();
+            LabelCell("Skeleton");
+
+            // -------- Field (center column): the value control --------
+            ImGui::TableSetColumnIndex(1);
+            {
+                if (pm.load_skeleton_from_json) {
+                    // Input path + inline Browse in the same (Field) column
+                    float avail = ImGui::GetContentRegionAvail().x;
+                    const char *btxt = "Browse##browse_skel";
+                    float browse_w = ImGui::CalcTextSize(btxt).x +
+                                     ImGui::GetStyle().FramePadding.x * 2.0f;
+                    float gap = ImGui::GetStyle().ItemInnerSpacing.x;
+
+                    ImGui::PushID("skelfile");
+                    ImGui::SetNextItemWidth(
+                        ImMax(50.0f, avail - browse_w - gap));
+                    ImGui::InputText("##path", &pm.skeleton_file);
+                    ImGui::SameLine(0.0f, gap);
+                    if (ImGui::Button(btxt)) {
+                        IGFD::FileDialogConfig config;
+                        config.countSelectionMax = 1;
+                        config.path = skeleton_dir;
+                        config.flags = ImGuiFileDialogFlags_Modal;
+                        ImGuiFileDialog::Instance()->OpenDialog(
+                            "ChooseSkeleton", "Choose Skeleton", ".json",
+                            config);
+                    }
+                    ImGui::PopID();
+                } else {
+                    // Preset list in the Field column
+                    ImGui::BeginDisabled(labels_s.empty());
+                    ImGui::SetNextItemWidth(-FLT_MIN);
+                    ImGui::Combo("##skeleton_preset", &skeleton_idx,
+                                 labels_s.data(), (int)labels_s.size());
+                    ImGui::EndDisabled();
+                }
+            }
+
+            // -------- Action (right column): compact File/Preset toggle
+            // --------
+            ImGui::TableSetColumnIndex(2);
+            // Keep this small
+            ImGui::SetNextItemWidth(90.0f);
+            if (ImGui::Combo("##skeleton_mode_small", &mode,
+                             "File\0Preset\0")) {
+                pm.load_skeleton_from_json = (mode == 0);
+                if (pm.load_skeleton_from_json)
+                    pm.skeleton_name.clear();
+            }
+
+            // Keep pm.skeleton_name in sync with preset selection
             pm.skeleton_name =
                 pm.load_skeleton_from_json
                     ? std::string()
@@ -337,6 +353,7 @@ DrawProjectWindow(ProjectManager &pm,
                         nullptr, cfg);
                 }
             }
+
             ImGui::EndTable();
         }
 
@@ -401,7 +418,7 @@ load_videos(std::map<std::string, std::string> &selected_files,
             PlaybackState &ps, ProjectManager &pm,
             std::unordered_map<std::string, bool> &window_was_decoding,
             std::vector<FFmpegDemuxer *> &demuxers, DecoderContext *dc_context,
-            render_scene *scene, int label_buffer_size,
+            RenderScene *scene, int label_buffer_size,
             std::vector<std::thread> &decoder_threads,
             std::vector<bool> &is_view_focused) {
     for (const auto &elem : selected_files) {
