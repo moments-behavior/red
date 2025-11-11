@@ -1,5 +1,12 @@
 # projects
 
+### loading a project
+
+- make sure you have a project folder (`.redproj`) created or modified -- see instructions below
+- let's say we have a project file -- `/home/user/red_data/projects/fly_srini.redproj`
+- Run `red`
+- Load the project using `File` -> `Load Project` --> point to the `.redproj`
+
 ### creating project file (.redproj)
 - Project files (`.redproj`) usually lives in `/home/$USER/red_data/projects` -- create the directory if not present
 - You can modify the [example file](example/fly.redproj) and save it in the above directory
@@ -30,3 +37,4 @@ I'm not sure what all the different paths are, but some of them share the same v
     - for example, `Rat24`, `Rat4` are built-in to the source code
 
 - `media_folder` -- folder where the videos live (I think) -- same as the `project path`?
+
