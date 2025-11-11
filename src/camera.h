@@ -135,4 +135,52 @@ CameraParams camera_load_params_from_csv(std::string csv_filename,
     return cvp;
 }
 
+
+bool camera_load_dlt_parameters(const std::string &calibration_file,
+                                CameraParams &camera_params,
+                                std::string &error_message) {
+        error_message.clear();
+
+        if (!std::filesystem::exists(calibration_file)) {
+            error_message = "File does not exist: " + calibration_file;
+            return false;
+        }
+
+        std::ifstream fin(calibration_file);
+        if (!fin.is_open()) {
+            error_message = "Could not open file: " + calibration_file;
+            return false;
+        }
+
+        std::string line;
+        std::vector<double> values;
+        while (std::getline(fin, line)) {
+            std::stringstream ss(line);
+            std::string token;
+            while (std::getline(ss, token, ',')) {
+                try {
+                    values.push_back(std::stod(token));
+                } catch (...) {
+                    error_message = "Invalid value in CSV: " + token;
+                    return false;
+                }
+            }
+        }
+        fin.close();
+
+        if (values.size() < 11) {
+            error_message = "Not enough values for DLT projection matrix (need 12)";
+            return false;
+        }
+
+        camera_params.projection_mat = cv::Mat(3, 4, CV_64F);
+        for (int i = 0; i < 11; ++i) {
+            camera_params.projection_mat.at<double>(i / 4, i % 4) = values[i];
+        }
+    
+
+        camera_params.projection_mat.at<double>(2   , 3) = 1.0;
+        return true;
+}
+
 #endif

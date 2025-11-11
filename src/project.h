@@ -124,23 +124,54 @@ bool setup_project(ProjectManager &pm, SkeletonContext &skeleton,
     pm.camera_params.clear();
     if (pm.camera_names.size() > 1) {
         for (const std::string &cam_name : pm.camera_names) {
-            std::filesystem::path cam_path =
-                std::filesystem::path(pm.calibration_folder) /
-                (cam_name + ".yaml");
+            std::filesystem::path yaml_path = std::filesystem::path(pm.calibration_folder) / (cam_name + ".yaml");
 
+            std::filesystem::path csv_path = std::filesystem::path(pm.calibration_folder) / (cam_name + "_dlt.csv");
+            std::cout<<"csv_path: "<<csv_path<<std::endl;
             CameraParams cam;
             std::string cam_err;
-            if (!camera_load_params_from_yaml(cam_path.string(), cam,
-                                              cam_err)) {
-                pm.camera_params.clear();
+
+
+            if (std::filesystem::exists(yaml_path) ) {
+                std::filesystem::path cam_path = yaml_path;
+                if (!camera_load_params_from_yaml(cam_path.string(), cam, cam_err)) {
+                     pm.camera_params.clear();
+                    if (err) {
+                        *err =
+                            "Failed to load camera params: " + cam_path.string() +
+                            (cam_err.empty() ? "" : (" (" + cam_err + ")"));
+                    }
+                    return false;                
+                }
+                std::cout << "Loaded camera params from YAML: " << cam_path.string()<< std::endl;
+
+            } else if (std::filesystem::exists(csv_path)) {
+                std::filesystem::path cam_path = csv_path;
+                if (!camera_load_dlt_parameters(cam_path.string(), cam, cam_err)) {
+                     pm.camera_params.clear();
+                    if (err) {
+                        *err =
+                            "Failed to load camera params: " + cam_path.string() +
+                            (cam_err.empty() ? "" : (" (" + cam_err + ")"));
+                    }
+                    return false;
+                }
+                std::cout << "Loaded dlt params from CSV: " << cam_path.string()<< std::endl;
+
+            } else {
                 if (err) {
-                    *err =
-                        "Failed to load camera params: " + cam_path.string() +
-                        (cam_err.empty() ? "" : (" (" + cam_err + ")"));
+                    *err = "Camera calibration file not found for camera: " +
+                           cam_name + " (tried " + yaml_path.string() + " and " + csv_path.string() + ")";
                 }
                 return false;
             }
+
             pm.camera_params.push_back(cam);
+
+
+
+            
+
         }
     }
 
