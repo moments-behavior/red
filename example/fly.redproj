@@ -1,0 +1,13 @@
+{
+    "project_root_path": "/mnt/greatjig/HappyHouse/Session6/2025_10_12_15_06_46/",
+    "project_path": "/mnt/greatjig/HappyHouse/Session6/2025_10_12_15_06_46/",
+    "project_name": "courtship_test",
+    "load_skeleton_from_json": true,
+    "skeleton_file": "/mnt/greatjig/HappyHouse/Session6/2025_10_12_15_06_46/skeleton/fly_courtship.json",
+    "calibration_folder": "/mnt/greatjig/HappyHouse/Session6/2025_10_12_15_06_46/calibration",
+    "keypoints_root_folder": "/mnt/greatjig/HappyHouse/Session6/2025_10_12_15_06_46/",
+    "plot_keypoints_flag": true,
+    "camera_names": ["Cam2012630", "Cam2012631", "Cam2012853", "Cam2012855", "Cam2012857","Cam2012861","Cam2012862"],
+    "skeleton_name": "FlyTest",
+    "media_folder": "/mnt/greatjig/HappyHouse/Session6/2025_10_12_15_06_46/"
+}
