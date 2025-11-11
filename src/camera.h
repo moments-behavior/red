@@ -10,6 +10,7 @@
 #include <vector>
 
 struct CameraParams {
+    bool is_dlt;
     cv::Mat k;
     cv::Mat dist_coeffs;
     cv::Mat r;
@@ -73,6 +74,7 @@ bool camera_load_params_from_yaml(const std::string &calibration_file,
     cv::sfm::projectionFromKRt(camera_params.k, camera_params.r,
                                camera_params.tvec,
                                camera_params.projection_mat);
+    camera_params.is_dlt = false;
     return true;
 }
 
@@ -127,7 +129,7 @@ CameraParams camera_load_params_from_csv(std::string csv_filename,
     }
 
     cvp.k = cv::Mat_<float>(k, true).reshape(0, 3);
-    cvp.dist_coeffs = cv::Mat_<float>(d, true);
+cvp.dist_coeffs = cv::Mat_<float>(d, true);
     cvp.r = cv::Mat_<float>(r_m, true).reshape(0, 3);
     cvp.tvec = cv::Mat_<float>(t, true);
     cv::Rodrigues(cvp.r, cvp.rvec);
@@ -180,6 +182,8 @@ bool camera_load_dlt_parameters(const std::string &calibration_file,
     
 
         camera_params.projection_mat.at<double>(2   , 3) = 1.0;
+
+        camera_params.is_dlt = true;
         return true;
 }
 

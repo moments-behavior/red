@@ -160,6 +160,30 @@ static void gui_plot_bbox_from_keypoints(KeyPoints *keypoints,
     }
 }
 
+void projectPointsWithDLT(const std::vector<cv::Point3f>& world_points,
+                          const cv::Mat& projection_matrix,
+                          std::vector<cv::Point2f>& image_points) {
+    image_points.clear();
+    image_points.reserve(world_points.size());
+    
+    for (const auto& pt : world_points) {
+        // Create homogeneous coordinates [X, Y, Z, 1]
+        cv::Mat point_homogeneous = (cv::Mat_<double>(4, 1) 
+            << pt.x, pt.y, pt.z, 1.0);
+        
+        // Project: 3x4 * 4x1 = 3x1
+        cv::Mat projected = projection_matrix * point_homogeneous;
+        
+        // Normalize by dividing by w (homogeneous coordinate)
+        double w = projected.at<double>(2, 0);
+        double x = projected.at<double>(0, 0) / w;
+        double y = projected.at<double>(1, 0) / w;
+        
+        image_points.push_back(cv::Point2f(x, y));
+    }
+}
+
+
 bool is_in_camera_fov(cv::Mat point_world, const cv::Mat &rvec,
                       const cv::Mat &tvec, const cv::Mat &K, int image_width,
                       int image_height) {
@@ -174,10 +198,76 @@ bool is_in_camera_fov(cv::Mat point_world, const cv::Mat &rvec,
     return false;
 }
 
+bool is_in_camera_fov_DLT(cv::Mat point_world, const cv::Mat &projection_matrix,
+                           int image_width, int image_height) {
+    // Convert cv::Mat to cv::Point3f
+    std::vector<cv::Point3f> world_point;
+    world_point.push_back(cv::Point3f(point_world.at<double>(0), 
+                                      point_world.at<double>(1), 
+                                      point_world.at<double>(2)));
+    
+    // Use DLT projection
+    std::vector<cv::Point2f> image_pts;
+    projectPointsWithDLT(world_point, projection_matrix, image_pts);
+    
+    double x = image_pts[0].x;
+    double y = image_height - image_pts[0].y;
+    
+    if (x > 0 && x < image_width && y > 0 && y < image_height) {
+        return true;
+    }
+    return false;
+}
+
+cv::Mat triangulateDLT( const std::vector<cv::Mat>& points2d,
+                        const std::vector<cv::Mat>& projection_matrices) {
+    
+                            int num_views = points2d.size();
+
+    // Build matrix A for DLT
+    cv::Mat A(2 * num_views, 4, CV_64F);
+
+    for (int i = 0; i < num_views; i++) {
+    double x = points2d[i].at<double>(0, 0);
+    double y = points2d[i].at<double>(1, 0);
+
+    cv::Mat P = projection_matrices[i];
+
+    // First row: x * P_row3 - P_row1
+    A.at<double>(2*i, 0) = x * P.at<double>(2, 0) - P.at<double>(0, 0);
+    A.at<double>(2*i, 1) = x * P.at<double>(2, 1) - P.at<double>(0, 1);
+    A.at<double>(2*i, 2) = x * P.at<double>(2, 2) - P.at<double>(0, 2);
+    A.at<double>(2*i, 3) = x * P.at<double>(2, 3) - P.at<double>(0, 3);
+
+    // Second row: y * P_row3 - P_row2
+    A.at<double>(2*i+1, 0) = y * P.at<double>(2, 0) - P.at<double>(1, 0);
+    A.at<double>(2*i+1, 1) = y * P.at<double>(2, 1) - P.at<double>(1, 1);
+    A.at<double>(2*i+1, 2) = y * P.at<double>(2, 2) - P.at<double>(1, 2);
+    A.at<double>(2*i+1, 3) = y * P.at<double>(2, 3) - P.at<double>(1, 3);
+    }
+
+    // Solve using SVD
+    cv::Mat w, u, vt;
+    cv::SVD::compute(A, w, u, vt, cv::SVD::FULL_UV);
+
+    // Solution is last row of V (last column of Vt)
+    cv::Mat X_homogeneous = vt.row(3).t();
+
+    // Convert from homogeneous to 3D coordinates
+    cv::Mat X_3d(3, 1, CV_64F);
+    X_3d.at<double>(0) = X_homogeneous.at<double>(0) / X_homogeneous.at<double>(3);
+    X_3d.at<double>(1) = X_homogeneous.at<double>(1) / X_homogeneous.at<double>(3);
+    X_3d.at<double>(2) = X_homogeneous.at<double>(2) / X_homogeneous.at<double>(3);
+
+    return X_3d;
+}
+
+
 static void reprojection(KeyPoints *keypoints, SkeletonContext *skeleton,
                          std::vector<CameraParams> camera_params,
                          RenderScene *scene) {
-
+     
+                            
     for (u32 node = 0; node < skeleton->num_nodes; node++) {
 
         u32 num_views_labeled{0};
@@ -196,55 +286,94 @@ static void reprojection(KeyPoints *keypoints, SkeletonContext *skeleton,
             for (u32 view_idx = 0; view_idx < scene->num_cams; view_idx++) {
                 if (keypoints->kp2d[view_idx][node].is_labeled) {
 
-                    cv::Mat point =
-                        (cv::Mat_<double>(2, 1)
-                             << keypoints->kp2d[view_idx][node].position.x,
-                         (double)scene->image_height[view_idx] -
-                             keypoints->kp2d[view_idx][node].position.y);
-                    cv::Mat pointUndistort;
-                    cv::undistortPoints(
-                        point, pointUndistort, camera_params[view_idx].k,
-                        camera_params[view_idx].dist_coeffs, cv::noArray(),
-                        camera_params[view_idx].k);
+                    // note y axis being flipped here to match opencv coords
+                    cv::Mat point = (cv::Mat_<double>(2, 1)<< keypoints->kp2d[view_idx][node].position.x,
+                                    (double)scene->image_height[view_idx] - keypoints->kp2d[view_idx][node].position.y);
+                    
+                    if(!camera_params[view_idx].is_dlt){ //for intrinsic/extrinsic
+                        cv::Mat pointUndistort;
+                        cv::undistortPoints(
+                            point, pointUndistort, camera_params[view_idx].k,
+                            camera_params[view_idx].dist_coeffs, cv::noArray(),
+                            camera_params[view_idx].k);
 
-                    sfmPoints2d.push_back(pointUndistort.reshape(1, 2));
-                    projection_matrices.push_back(
-                        camera_params[view_idx].projection_mat);
+                        sfmPoints2d.push_back(pointUndistort.reshape(1, 2));
+                    } else{ //for DLT -- no undistortion
+                        
+                        sfmPoints2d.push_back(point.reshape(1, 2));
+                    }
+                    projection_matrices.push_back(camera_params[view_idx].projection_mat);
                 }
             }
 
-            cv::sfm::triangulatePoints(sfmPoints2d, projection_matrices,
-                                       output);
+            if(camera_params[0].is_dlt){
 
-            keypoints->kp3d[node].position.x = output.at<double>(0);
-            keypoints->kp3d[node].position.y = output.at<double>(1);
-            keypoints->kp3d[node].position.z = output.at<double>(2);
-            keypoints->kp3d[node].is_triangulated = true;
+                cv::Mat output = triangulateDLT(sfmPoints2d, projection_matrices);    
+                keypoints->kp3d[node].position.x = output.at<double>(0);
+                keypoints->kp3d[node].position.y = output.at<double>(1);
+                keypoints->kp3d[node].position.z = output.at<double>(2);
+                keypoints->kp3d[node].is_triangulated = true;
 
-            for (u32 view_idx = 0; view_idx < scene->num_cams; view_idx++) {
-                keypoints->kp2d[view_idx][node].last_position =
-                    keypoints->kp2d[view_idx][node].position;
-                keypoints->kp2d[view_idx][node].last_is_labeled =
-                    keypoints->kp2d[view_idx][node].is_labeled;
-                if (is_in_camera_fov(output, camera_params[view_idx].rvec,
-                                     camera_params[view_idx].tvec,
-                                     camera_params[view_idx].k,
-                                     scene->image_width[view_idx],
-                                     scene->image_height[view_idx])) {
-                    cv::Mat imagePts;
-                    cv::projectPoints(
-                        output, camera_params[view_idx].rvec,
-                        camera_params[view_idx].tvec, camera_params[view_idx].k,
-                        camera_params[view_idx].dist_coeffs, imagePts);
-                    double x = imagePts.at<double>(0, 0);
-                    double y = double(scene->image_height[view_idx]) -
-                               imagePts.at<double>(0, 1);
-                    if (x > 0 && x < scene->image_width[view_idx] && y > 0 &&
-                        y < scene->image_height[view_idx]) {
-                        // calculate per keypoint error
-                        keypoints->kp2d[view_idx][node].position.x = x;
-                        keypoints->kp2d[view_idx][node].position.y = y;
-                        keypoints->kp2d[view_idx][node].is_labeled = true;
+                for (u32 view_idx = 0; view_idx < scene->num_cams; view_idx++) {
+
+                    if (is_in_camera_fov_DLT(   output, 
+                                                camera_params[view_idx].projection_mat,
+                                                scene->image_width[view_idx],
+                                                scene->image_height[view_idx])) {
+                        
+                        // Use custom DLT projection
+                        std::vector<cv::Point3f> world_point;
+                        world_point.push_back(cv::Point3f(output.at<double>(0), 
+                                                        output.at<double>(1), 
+                                                        output.at<double>(2)));
+                        std::vector<cv::Point2f> imagePts;
+                        projectPointsWithDLT(world_point, camera_params[view_idx].projection_mat, imagePts);
+                        
+                        double x = imagePts[0].x;
+                        double y = double(scene->image_height[view_idx]) - imagePts[0].y;
+                        
+                        if (x > 0 && x < scene->image_width[view_idx] && y > 0 &&
+                            y < scene->image_height[view_idx]) {
+                            keypoints->kp2d[view_idx][node].position.x = x;
+                            keypoints->kp2d[view_idx][node].position.y = y;
+                            keypoints->kp2d[view_idx][node].is_labeled = true;
+                           
+                        }
+                    }
+                }            
+            }   else    {
+
+                cv::sfm::triangulatePoints(sfmPoints2d, projection_matrices, output);
+            
+
+                keypoints->kp3d[node].position.x = output.at<double>(0);
+                keypoints->kp3d[node].position.y = output.at<double>(1);
+                keypoints->kp3d[node].position.z = output.at<double>(2);
+                keypoints->kp3d[node].is_triangulated = true;
+
+                for (u32 view_idx = 0; view_idx < scene->num_cams; view_idx++) {
+                    keypoints->kp2d[view_idx][node].last_position =  keypoints->kp2d[view_idx][node].position;
+                    keypoints->kp2d[view_idx][node].last_is_labeled =  keypoints->kp2d[view_idx][node].is_labeled;
+                    if (is_in_camera_fov(output, camera_params[view_idx].rvec,
+                                        camera_params[view_idx].tvec,
+                                        camera_params[view_idx].k,
+                                        scene->image_width[view_idx],
+                                        scene->image_height[view_idx])) {
+                        cv::Mat imagePts;
+                        cv::projectPoints(
+                            output, camera_params[view_idx].rvec,
+                            camera_params[view_idx].tvec, camera_params[view_idx].k,
+                            camera_params[view_idx].dist_coeffs, imagePts);
+                        double x = imagePts.at<double>(0, 0);
+                        double y = double(scene->image_height[view_idx]) -
+                                imagePts.at<double>(0, 1);
+                        if (x > 0 && x < scene->image_width[view_idx] && y > 0 &&
+                            y < scene->image_height[view_idx]) {
+                            // calculate per keypoint error
+                            keypoints->kp2d[view_idx][node].position.x = x;
+                            keypoints->kp2d[view_idx][node].position.y = y;
+                            keypoints->kp2d[view_idx][node].is_labeled = true;
+                        }
                     }
                 }
             }
@@ -1553,6 +1682,11 @@ int load_obb(std::map<u32, KeyPoints *> &keypoints_map,
     return 0;
 }
 
+
+
+
+
+
 void world_coordinates_projection_points(CameraParams *cvp, int image_height,
                                          double *axis_x_values,
                                          double *axis_y_values, float scale) {
@@ -2536,5 +2670,8 @@ static void HelpMarker(const char *desc) {
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("%s", desc);
 }
+
+
+
 
 #endif
