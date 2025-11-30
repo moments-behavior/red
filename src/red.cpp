@@ -732,10 +732,37 @@ int main(int argc, char **argv) {
             ImGui::SetNextWindowSize(ImVec2(500, 440), ImGuiCond_FirstUseEver);
             if (ImGui::Begin("Frames in the buffer")) {
 
+                // Did selection change this frame?
+                bool selection_changed = false;
+
+                // Clamp just in case
+                if (ps.pause_selected < 0)
+                    ps.pause_selected = 0;
+                if (ps.pause_selected >= (int)scene->size_of_buffer)
+                    ps.pause_selected = scene->size_of_buffer - 1;
+
+                // Handle keyboard navigation first
+                if (ImGui::IsKeyPressed(ImGuiKey_Comma, true) &&
+                    !io.WantTextInput) {
+                    if (ps.pause_selected > 0) {
+                        ps.pause_selected--;
+                        selection_changed = true;
+                    }
+                }
+
+                if (ImGui::IsKeyPressed(ImGuiKey_Period, true) &&
+                    !io.WantTextInput) {
+                    if (ps.pause_selected < (int)scene->size_of_buffer - 1) {
+                        ps.pause_selected++;
+                        selection_changed = true;
+                    }
+                }
+
                 for (u32 i = 0; i < scene->size_of_buffer; i++) {
                     int seletable_frame_id =
                         (i + ps.read_head) % scene->size_of_buffer;
-                    char label[32];
+
+                    char label[64];
                     if (input_is_imgs) {
                         snprintf(label, sizeof(label), "%d: %s",
                                  scene
@@ -744,33 +771,31 @@ int main(int argc, char **argv) {
                                      .frame_number,
                                  imgs_names[i].c_str());
                     } else {
-                        sprintf(label, "Frame %d",
-                                scene
-                                    ->display_buffer[visible_idx]
-                                                    [seletable_frame_id]
-                                    .frame_number);
+                        snprintf(label, sizeof(label), "Frame %d",
+                                 scene
+                                     ->display_buffer[visible_idx]
+                                                     [seletable_frame_id]
+                                     .frame_number);
                     }
-                    if (ImGui::Selectable(label, ps.pause_selected == i)) {
-                        // start from the lowest frame
-                        ps.pause_selected = i;
+
+                    bool is_selected = (ps.pause_selected == (int)i);
+
+                    if (ImGui::Selectable(label, is_selected)) {
+                        if (!is_selected) { // clicked a new one
+                            ps.pause_selected = (int)i;
+                            selection_changed = true;
+                        }
+                    }
+
+                    // Only recenter when selection *changed* this frame
+                    if (selection_changed && ps.pause_selected == (int)i) {
+                        // 0.5f = roughly center; tweak if you like
+                        ImGui::SetScrollHereY(0.5f);
                     }
                 }
-
-                if (ImGui::IsKeyPressed(ImGuiKey_Comma, true) &&
-                    !io.WantTextInput) {
-                    if (ps.pause_selected > 0) {
-                        ps.pause_selected--;
-                    }
-                };
-
-                if (ImGui::IsKeyPressed(ImGuiKey_Period, true) &&
-                    !io.WantTextInput) {
-                    if (ps.pause_selected < (scene->size_of_buffer - 1)) {
-                        ps.pause_selected++;
-                    }
-                };
             }
             ImGui::End();
+
             select_corr_head =
                 (ps.pause_selected + ps.read_head) % scene->size_of_buffer;
             current_frame_num =
