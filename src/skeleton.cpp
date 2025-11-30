@@ -480,7 +480,6 @@ void allocate_keypoints(KeyPoints *keypoints, RenderScene *scene,
                         SkeletonContext *skeleton) {
     // allocate memory for storing keypoints
     keypoints->active_id = (u32 *)malloc(sizeof(u32) * scene->num_cams);
-    keypoints->cam_supress = (bool *)malloc(sizeof(u32) * scene->num_cams);
 
     new (&keypoints->bbox2d_list) std::vector<std::vector<BoundingBox>>();
     new (&keypoints->obb2d_list)
@@ -858,71 +857,42 @@ bool has_any_labels(const KeyPoints *keypoints, const SkeletonContext &skeleton,
 
 void copy_keypoints(KeyPoints *dst, const KeyPoints *src,
                     const RenderScene *scene, const SkeletonContext *skeleton) {
-    if (!dst || !src)
-        return;
 
-    // Copy simple pointers and allocate new memory where necessary
+    const u32 num_cams = scene->num_cams;
+    const u32 num_nodes = skeleton->num_nodes;
+    const bool has_skel = skeleton->has_skeleton;
 
-    // --- Copy 3D keypoints ---
-    if (src->kp3d) {
-        dst->kp3d = (KeyPoints3D *)malloc(sizeof(KeyPoints3D));
-        *dst->kp3d =
-            *src->kp3d; // assuming it's a POD / trivially copyable type
-    } else {
-        dst->kp3d = nullptr;
+    // --- Copy active_id ---
+    if (src->active_id && dst->active_id) {
+        memcpy(dst->active_id, src->active_id, sizeof(u32) * num_cams);
     }
 
-    // --- Copy triangulation flags ---
-    if (src->is_triangulated) {
-        size_t num_nodes = skeleton->num_nodes;
-        dst->is_triangulated = (bool *)malloc(sizeof(bool) * num_nodes);
-        std::memcpy(dst->is_triangulated, src->is_triangulated,
-                    sizeof(bool) * num_nodes);
-    } else {
-        dst->is_triangulated = nullptr;
-    }
+    // --- Copy bbox2d_list and obb2d_list (vector deep copy) ---
+    // std::vector already does element-wise copy for you
+    dst->bbox2d_list = src->bbox2d_list;
+    dst->obb2d_list = src->obb2d_list;
 
-    // --- Copy active ID ---
-    if (src->active_id) {
-        dst->active_id = (u32 *)malloc(sizeof(u32));
-        *dst->active_id = *src->active_id;
-    } else {
-        dst->active_id = nullptr;
-    }
+    // --- Copy 3D and 2D keypoints if skeleton is present ---
+    if (has_skel) {
+        // kp3d: array of KeyPoints3D
+        if (src->kp3d && dst->kp3d) {
+            // KeyPoints3D is POD -> memcpy is safe
+            memcpy(dst->kp3d, src->kp3d, sizeof(KeyPoints3D) * num_nodes);
+        }
 
-    // --- Copy camera suppression flags ---
-    if (src->cam_supress) {
-        size_t num_cams = scene->num_cams;
-        dst->cam_supress = (bool *)malloc(sizeof(bool) * num_cams);
-        std::memcpy(dst->cam_supress, src->cam_supress,
-                    sizeof(bool) * num_cams);
-    } else {
-        dst->cam_supress = nullptr;
-    }
-
-    // --- Copy 2D keypoints ---
-    if (src->kp2d) {
-        int num_cams = scene->num_cams;
-        int num_nodes = skeleton->num_nodes;
-        dst->kp2d = (KeyPoints2D **)malloc(sizeof(KeyPoints2D *) * num_cams);
-        for (int cam = 0; cam < num_cams; ++cam) {
-            if (src->kp2d[cam]) {
-                dst->kp2d[cam] =
-                    (KeyPoints2D *)malloc(sizeof(KeyPoints2D) * num_nodes);
-                std::memcpy(dst->kp2d[cam], src->kp2d[cam],
-                            sizeof(KeyPoints2D) * num_nodes);
-            } else {
-                dst->kp2d[cam] = nullptr;
+        // kp2d: per-camera array of per-node KeyPoints2D
+        if (src->kp2d && dst->kp2d) {
+            for (u32 cam = 0; cam < num_cams; ++cam) {
+                if (src->kp2d[cam] && dst->kp2d[cam]) {
+                    memcpy(dst->kp2d[cam], src->kp2d[cam],
+                           sizeof(KeyPoints2D) * num_nodes);
+                }
             }
         }
     } else {
+        // Mirror the "no skeleton" case: no kp3d / kp2d
+        dst->kp3d = nullptr;
         dst->kp2d = nullptr;
+        // active_id already copied above
     }
-
-    // --- Copy 2D bounding boxes ---
-    dst->bbox2d_list =
-        src->bbox2d_list; // std::vector performs deep copy of POD types
-
-    // --- Copy oriented bounding boxes ---
-    dst->obb2d_list = src->obb2d_list; // std::vector deep-copies too
 }

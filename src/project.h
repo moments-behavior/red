@@ -421,26 +421,49 @@ load_videos(std::map<std::string, std::string> &selected_files,
             RenderScene *scene, int label_buffer_size,
             std::vector<std::thread> &decoder_threads,
             std::vector<bool> &is_view_focused) {
-    for (const auto &elem : selected_files) {
-        std::size_t cam_string_mp4_position = elem.first.find("mp4");
-        std::string cam_string =
-            elem.first.substr(0, cam_string_mp4_position - 1);
-        pm.camera_names.push_back(cam_string);
-        std::cout << "camera names: " << cam_string << std::endl;
-
-        window_need_decoding[cam_string].store(true);
-        window_was_decoding[cam_string] = true;
+    if (selected_files.empty()) {
+        // order based on pm.camera_names
+        for (const auto &cam_string : pm.camera_names) {
+            window_need_decoding[cam_string].store(true);
+            window_was_decoding[cam_string] = true;
+            std::map<std::string, std::string> m;
+            std::string media_filename =
+                (std::filesystem::path(pm.media_folder) / (cam_string + ".mp4"))
+                    .string();
+            // std::cout << media_filename << std::endl;
+            FFmpegDemuxer *demuxer =
+                new FFmpegDemuxer(media_filename.c_str(), m);
+            demuxers.push_back(demuxer);
+        }
         std::map<std::string, std::string> m;
-        FFmpegDemuxer *demuxer = new FFmpegDemuxer(elem.second.c_str(), m);
-        demuxers.push_back(demuxer);
+        std::string media_filename = (std::filesystem::path(pm.media_folder) /
+                                      (pm.camera_names[0] + ".mp4"))
+                                         .string();
+        FFmpegDemuxer dummy_dmuxer(media_filename.c_str(), m);
+        dc_context->seek_interval = (int)dummy_dmuxer.FindKeyFrameInterval();
+        dc_context->video_fps = dummy_dmuxer.GetFramerate();
+    } else {
+        // ordered base on selected_files order
+        for (const auto &elem : selected_files) {
+            std::size_t cam_string_mp4_position = elem.first.find("mp4");
+            std::string cam_string =
+                elem.first.substr(0, cam_string_mp4_position - 1);
+            pm.camera_names.push_back(cam_string);
+            // std::cout << "camera names: " << cam_string << std::endl;
+
+            window_need_decoding[cam_string].store(true);
+            window_was_decoding[cam_string] = true;
+            std::map<std::string, std::string> m;
+            FFmpegDemuxer *demuxer = new FFmpegDemuxer(elem.second.c_str(), m);
+            demuxers.push_back(demuxer);
+        }
+        std::map<std::string, std::string> m;
+        FFmpegDemuxer dummy_dmuxer(selected_files.begin()->second.c_str(), m);
+        dc_context->seek_interval = (int)dummy_dmuxer.FindKeyFrameInterval();
+        dc_context->video_fps = dummy_dmuxer.GetFramerate();
     }
-    std::map<std::string, std::string> m;
-    FFmpegDemuxer dummy_dmuxer(selected_files.begin()->second.c_str(), m);
-    dc_context->seek_interval =
-        (int)dummy_dmuxer.FindKeyFrameInterval(); // get the seek
-                                                  // interval
-    dc_context->video_fps = dummy_dmuxer.GetFramerate();
-    scene->num_cams = selected_files.size();
+
+    scene->num_cams = demuxers.size();
     scene->image_width = (u32 *)malloc(sizeof(u32) * scene->num_cams);
     scene->image_height = (u32 *)malloc(sizeof(u32) * scene->num_cams);
     for (u32 j = 0; j < scene->num_cams; j++) {
