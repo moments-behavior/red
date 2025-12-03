@@ -27,6 +27,7 @@ struct PlaybackState {
     std::chrono::steady_clock::time_point last_wall_time_playspeed =
         std::chrono::steady_clock::now();
     bool video_loaded = false;
+    bool realtime_playback = true;
 };
 
 bool string_ends_with(const std::string &str, const std::string &suffix);

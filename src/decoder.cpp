@@ -280,7 +280,8 @@ void image_loader(DecoderContext *dc_context,
                   const std::vector<std::string> &img_list_vector,
                   PictureBuffer *display_buffer, int size_of_buffer,
                   SeekInfo *seek_info, bool use_cpu_buffer,
-                  std::string cam_name, std::string root_dir) {
+                  std::string cam_name, std::string root_dir,
+                  std::string file_ext) {
     int buffer_head = 0;
     int frame_number = 0;
     dc_context->total_num_frame = img_list_vector.size();
@@ -300,11 +301,13 @@ void image_loader(DecoderContext *dc_context,
             display_buffer[0].frame_number = -1;
             seek_info->use_seek = false;
             seek_info->seek_done = true;
+            latest_decoded_frame[cam_name].store(seek_info->seek_frame);
         } else {
             if (frame_number < img_list_vector.size()) {
                 if (frame_number == 0) {
                     std::string file_name = root_dir + "/" + cam_name + "_" +
-                                            img_list_vector[frame_number];
+                                            img_list_vector[frame_number] +
+                                            "." + file_ext;
                     cv::Mat image = cv::imread(file_name, cv::IMREAD_COLOR);
                     cv::Mat image_rgba;
                     cv::cvtColor(image, image_rgba, cv::COLOR_BGR2RGBA);
@@ -313,7 +316,6 @@ void image_loader(DecoderContext *dc_context,
                         image_rgba.elemSize(); // Rows * Cols * Channels
                     memcpy(display_buffer[buffer_head].frame, image_rgba.data,
                            buffer_size);
-
                     display_buffer[buffer_head].available_to_write = false;
                     dc_context->decoding_flag = true;
                     display_buffer[buffer_head].frame_number = frame_number;
@@ -324,7 +326,8 @@ void image_loader(DecoderContext *dc_context,
                             std::chrono::milliseconds(1));
                     }
                     std::string file_name = root_dir + "/" + cam_name + "_" +
-                                            img_list_vector[frame_number];
+                                            img_list_vector[frame_number] +
+                                            "." + file_ext;
                     cv::Mat image = cv::imread(file_name, cv::IMREAD_COLOR);
                     cv::Mat image_rgba;
                     cv::cvtColor(image, image_rgba, cv::COLOR_BGR2RGBA);
@@ -335,6 +338,7 @@ void image_loader(DecoderContext *dc_context,
                            buffer_size);
                     display_buffer[buffer_head].available_to_write = false;
                     display_buffer[buffer_head].frame_number = frame_number;
+                    latest_decoded_frame[cam_name].store(frame_number);
                 }
                 frame_number = frame_number + 1;
                 buffer_head = (buffer_head + 1) % size_of_buffer;

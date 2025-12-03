@@ -43,5 +43,6 @@ void image_loader(DecoderContext *dc_context,
                   const std::vector<std::string> &img_list_vector,
                   PictureBuffer *display_buffer, int size_of_buffer,
                   SeekInfo *seek_info, bool use_cpu_buffer,
-                  std::string cam_name, std::string root_dir);
+                  std::string cam_name, std::string root_dir,
+                  std::string file_ext);
 #endif

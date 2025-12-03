@@ -414,6 +414,75 @@ DrawProjectWindow(ProjectManager &pm,
 }
 
 inline void
+load_images(std::map<std::string, std::string> &selected_files,
+            PlaybackState &ps, ProjectManager &pm,
+            std::vector<std::string> &imgs_names, RenderScene *scene,
+            DecoderContext *dc_context, int label_buffer_size,
+            std::vector<std::thread> &decoder_threads,
+            std::vector<bool> &is_view_focused,
+            std::unordered_map<std::string, bool> &window_was_decoding) {
+
+    std::string file_ext;
+    for (const auto &elem : selected_files) {
+        std::size_t cam_string_position = elem.first.find("_");
+        std::string cam_name = elem.first.substr(0, cam_string_position);
+        std::string file_full = elem.first.substr(cam_string_position + 1);
+
+        window_need_decoding[cam_name].store(true);
+        window_was_decoding[cam_name] = true;
+
+        // split "123.jpg" → name = "123", ext = "jpg"
+        std::size_t dot_pos = file_full.rfind('.');
+        std::string file_name = file_full.substr(0, dot_pos);
+        file_ext = file_full.substr(dot_pos + 1); // "jpg"
+
+        if (std::find(pm.camera_names.begin(), pm.camera_names.end(),
+                      cam_name) == pm.camera_names.end()) {
+            pm.camera_names.push_back(cam_name);
+        }
+
+        if (std::find(imgs_names.begin(), imgs_names.end(), file_name) ==
+            imgs_names.end()) {
+            imgs_names.push_back(file_name);
+        }
+    }
+
+    auto to_number = [](const std::string &s) { return std::stoi(s); };
+
+    std::sort(imgs_names.begin(), imgs_names.end(),
+              [&](const std::string &a, const std::string &b) {
+                  return to_number(a) < to_number(b);
+              });
+
+    dc_context->seek_interval = 1;
+    dc_context->video_fps = 1;
+    ps.realtime_playback = false;
+    scene->num_cams = pm.camera_names.size();
+    scene->image_width = (u32 *)malloc(sizeof(u32) * scene->num_cams);
+    scene->image_height = (u32 *)malloc(sizeof(u32) * scene->num_cams);
+    for (u32 j = 0; j < scene->num_cams; j++) {
+        std::string file_name = pm.media_folder + "/" + pm.camera_names[j] +
+                                "_" + imgs_names[0] + "." + file_ext;
+        cv::Mat image = cv::imread(file_name, cv::IMREAD_COLOR);
+        scene->image_width[j] = image.cols;
+        scene->image_height[j] = image.rows;
+    }
+    if (imgs_names.size() < label_buffer_size) {
+        label_buffer_size = imgs_names.size();
+    }
+    render_allocate_scene_memory(scene, label_buffer_size);
+    for (int i = 0; i < scene->num_cams; i++) {
+        decoder_threads.push_back(
+            std::thread(&image_loader, dc_context, imgs_names,
+                        scene->display_buffer[i], scene->size_of_buffer,
+                        &scene->seek_context[i], scene->use_cpu_buffer,
+                        pm.camera_names[i], pm.media_folder, file_ext));
+        is_view_focused.push_back(false);
+    }
+    ps.video_loaded = true;
+}
+
+inline void
 load_videos(std::map<std::string, std::string> &selected_files,
             PlaybackState &ps, ProjectManager &pm,
             std::unordered_map<std::string, bool> &window_was_decoding,
@@ -450,7 +519,6 @@ load_videos(std::map<std::string, std::string> &selected_files,
                 elem.first.substr(0, cam_string_mp4_position - 1);
             pm.camera_names.push_back(cam_string);
             // std::cout << "camera names: " << cam_string << std::endl;
-
             window_need_decoding[cam_string].store(true);
             window_was_decoding[cam_string] = true;
             std::map<std::string, std::string> m;

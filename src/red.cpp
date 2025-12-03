@@ -271,6 +271,15 @@ int main(int argc, char **argv) {
                         ImGuiFileDialog::Instance()->OpenDialog(
                             "ChooseMedia", "Choose Media", ".mp4", config);
                     }
+                    if (ImGui::MenuItem("Open Images")) {
+                        IGFD::FileDialogConfig config;
+                        config.countSelectionMax = 0;
+                        config.path = pm.media_folder;
+                        config.flags = ImGuiFileDialogFlags_Modal;
+                        ImGuiFileDialog::Instance()->OpenDialog(
+                            "ChooseImages", "Choose Images",
+                            ".jpg,.tiff,.jpeg,.png", config);
+                    }
                     ImGui::EndDisabled();
                     ImGui::BeginDisabled(!ps.video_loaded);
                     if (ImGui::MenuItem("Create Project")) {
@@ -358,8 +367,9 @@ int main(int argc, char **argv) {
 
                 // === Playback section ===
                 ImGui::SeparatorText("Playback");
-
+                ImGui::Checkbox("Realtime", &ps.realtime_playback);
                 // Two-column table: label | control
+                ImGui::BeginDisabled(!ps.realtime_playback);
                 if (ImGui::BeginTable("##playback_tbl", 2,
                                       ImGuiTableFlags_SizingStretchProp |
                                           ImGuiTableFlags_BordersInnerV)) {
@@ -399,6 +409,7 @@ int main(int argc, char **argv) {
 
                     ImGui::EndTable();
                 }
+                ImGui::EndDisabled();
 
                 // Tip (wrapped, subtle)
                 ImGui::PushTextWrapPos(ImGui::GetFontSize() * 24.0f);
@@ -515,6 +526,22 @@ int main(int argc, char **argv) {
                             decoder_threads, is_view_focused);
             }
             // close
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        if (ImGuiFileDialog::Instance()->Display("ChooseImages")) {
+            if (ImGuiFileDialog::Instance()->IsOk()) {
+                auto selected_files =
+                    ImGuiFileDialog::Instance()->GetSelection();
+                pm.media_folder = ImGuiFileDialog::Instance()->GetCurrentPath();
+                pm.project_name =
+                    dir_difference(pm.media_folder, media_root_dir);
+                pm.media_folder = pm.media_folder;
+                load_images(selected_files, ps, pm, imgs_names, scene,
+                            dc_context, label_buffer_size, decoder_threads,
+                            is_view_focused, window_was_decoding);
+                input_is_imgs = true;
+            }
             ImGuiFileDialog::Instance()->Close();
         }
 
@@ -2344,9 +2371,12 @@ int main(int argc, char **argv) {
 
                     if (ps.to_display_frame_number ==
                         (dc_context->total_num_frame - 1)) {
-                        ImVec4 repeat_normal = ImVec4(1.0f, 1.0f, 0.2f, 1.0f);
-                        ImVec4 repeat_hover = ImVec4(1.0f, 1.0f, 0.4f, 1.0f);
-                        ImVec4 repeat_active = ImVec4(1.0f, 0.9f, 0.1f, 1.0f);
+
+                        ImVec4 repeat_normal =
+                            ImVec4(0.85f, 0.75f, 0.20f, 1.0f);
+                        ImVec4 repeat_hover = ImVec4(0.90f, 0.80f, 0.25f, 1.0f);
+                        ImVec4 repeat_active =
+                            ImVec4(0.80f, 0.70f, 0.18f, 1.0f);
                         ImGui::PushStyleColor(ImGuiCol_Button, repeat_normal);
                         ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
                                               repeat_hover);
@@ -3894,26 +3924,31 @@ int main(int argc, char **argv) {
             ps.just_seeked = false;
         } else {
             if (dc_context->decoding_flag && ps.play_video) {
-                // always round up, mimimum 1
-                int frame_to_show = static_cast<int>(
-                    std::ceil(playback_time_now * dc_context->video_fps));
-
-                int min_decoded_frame = INT_MAX;
-                for (const auto &[cam_name, visible] : window_need_decoding) {
-                    if (visible.load()) {
-                        int decoded = latest_decoded_frame[cam_name].load();
-                        min_decoded_frame =
-                            std::min(min_decoded_frame, decoded);
+                int frame_to_show = ps.to_display_frame_number;
+                // CHOOSE MODE
+                if (ps.realtime_playback) {
+                    // --- Real-time frame selection ---
+                    frame_to_show = static_cast<int>(
+                        std::ceil(playback_time_now * dc_context->video_fps));
+                    int min_decoded_frame = INT_MAX;
+                    for (const auto &[cam_name, visible] :
+                         window_need_decoding) {
+                        if (visible.load()) {
+                            int decoded = latest_decoded_frame[cam_name].load();
+                            min_decoded_frame =
+                                std::min(min_decoded_frame, decoded);
+                        }
                     }
+                    frame_to_show = std::min(frame_to_show, min_decoded_frame);
+                } else {
+                    // --- Tick-based mode (play every frame sequentially) ---
+                    frame_to_show = ps.to_display_frame_number + 1;
                 }
-                frame_to_show = std::min(frame_to_show, min_decoded_frame);
-
+                frame_to_show =
+                    std::min(frame_to_show, dc_context->total_num_frame - 1);
                 int frame_delta = frame_to_show - ps.to_display_frame_number;
                 if (frame_delta > 0) {
-                    // Update frame number
                     ps.to_display_frame_number = frame_to_show;
-
-                    // Mark all intermediate frames as available
                     for (int offset = 0; offset < frame_delta; ++offset) {
                         int index =
                             (ps.read_head + offset) % scene->size_of_buffer;
@@ -3922,12 +3957,8 @@ int main(int argc, char **argv) {
                                 true;
                         }
                     }
-
-                    // Advance the read head
                     ps.read_head =
                         (ps.read_head + frame_delta) % scene->size_of_buffer;
-
-                    // Optional: update slider/UI sync
                     ps.slider_frame_number = ps.to_display_frame_number;
                 }
             }
