@@ -50,11 +50,11 @@ select_indices = args.select_indices
 margin_pixel = args.margin
 
 label_folder = os.path.join(working_dir, "labeled_data")
-project.redproj = os.path.join(working_dir, "project.redproj")
-with open(project.redproj, "r") as f:
-    project.redproj = json.load(f)
-calibration_folder = project.redproj["calibration_folder"]
-video_folder = project.redproj["media_folder"]
+redproj = os.path.join(working_dir, "project.redproj")
+with open(redproj, "r") as f:
+    project = json.load(f)
+calibration_folder = project["calibration_folder"]
+video_folder = project["media_folder"]
 
 datetime_pattern = re.compile(r"^\d{4}_\d{2}_\d{2}_\d{2}_\d{2}_\d{2}$")
 
