@@ -5,6 +5,7 @@ from keypoints import *
 import argparse
 from datetime import datetime
 import yaml
+import json
 
 parser = argparse.ArgumentParser()
 parser.add_argument("-i", "--input_jarvis_folder", type=str, required=True)
@@ -13,7 +14,7 @@ parser.add_argument(
 )
 parser.add_argument("-f", "--filter", type=int, default=1)
 parser.add_argument("-t", "--threshold", type=float, default=0.6)
-parser.add_argument("-o", "--output_dir", type=str, default="predictions")
+parser.add_argument("-p", "--project_dir", type=str)
 
 
 args = parser.parse_args()
@@ -21,7 +22,7 @@ threshold = args.threshold
 input_jarvis_folder = args.input_jarvis_folder
 skeleton = args.skeleton
 use_filter = args.filter
-output_dir = args.output_dir
+project_dir = args.project_dir
 
 labels_raw = load_jarvis_3d_csv_rats(input_jarvis_folder + "/data3D.csv")
 print("Number of raw labels: {}".format(len(labels_raw)))
@@ -44,13 +45,15 @@ with open(input_jarvis_folder + "/info.yaml") as stream:
     except yaml.YAMLError as exc:
         print(exc)
 
-output_folder = os.path.join(
-    jarvis_info["recording_path"], "{}".format(output_dir)
-)
 
+redproj = os.path.join(project_dir, "project.redproj")
+with open(redproj, "r") as f:
+    project = json.load(f)
+calibration_folder = project["calibration_folder"]
+
+output_folder = os.path.join(project_dir + "predictions")
 if not os.path.exists(output_folder):
     os.makedirs(output_folder)
-calibration_folder = os.path.join(jarvis_info["recording_path"], "calibration")
 
 # project to 2d using calibrations, save 2d points
 cam_names = []
