@@ -267,6 +267,7 @@ inline void DrawLiveTable(LiveTable &t, const char *window_id,
         ImGui::PopStyleVar(2);
         ImGui::PopStyleColor(3);
     };
+
     auto HighlightCellFromLastItem = []() {
         const bool hovered = ImGui::IsItemHovered(
             ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
@@ -278,11 +279,11 @@ inline void DrawLiveTable(LiveTable &t, const char *window_id,
         hov.x *= 1.1f;
         hov.y *= 1.1f;
         hov.z *= 1.1f;
-        hov.w = 0.35f;
+        hov.w = 1.0f; // <- opaque
         act.x *= 1.15f;
         act.y *= 1.15f;
         act.z *= 1.15f;
-        act.w = 0.45f;
+        act.w = 1.0f; // <- opaque
         ImGui::TableSetBgColor(ImGuiTableBgTarget_CellBg,
                                ImGui::GetColorU32(active ? act : hov));
     };
@@ -470,6 +471,15 @@ inline void DrawLiveTable(LiveTable &t, const char *window_id,
                     ImGui::SetNextItemWidth(-FLT_MIN);
                     ImGui::InputText("##cell", &t.rows[r][c]); // stable height
                     PopFrameless();
+                    const ImU32 kRowHover = ImGui::GetColorU32(
+                        ImVec4(0.5f, 0.5f, 0.5f, 0.18f)); // faint gray
+                    if (ImGui::IsItemHovered(
+                            ImGuiHoveredFlags_AllowWhenBlockedByActiveItem)) {
+                        ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,
+                                               kRowHover);
+                        ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg1,
+                                               kRowHover);
+                    }
 
                     if (suppress_activation) {
                         ImGui::PopStyleVar();
