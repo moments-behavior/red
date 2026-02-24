@@ -126,6 +126,10 @@ this is based on [these instructions](https://docs.nvidia.com/deeplearning/tenso
     ./trtexec
     ```
 
+### Install LibTorch
+Download libtorch cpu version from [PyTorch](https://pytorch.org/get-started/locally/) selecting Linux, LibTorch, C++. Unzip it into `lib` folder.
+
+
 ### Install RED 
 
 - Clone the repo and submodules
@@ -133,21 +137,30 @@ this is based on [these instructions](https://docs.nvidia.com/deeplearning/tenso
 ```
 git clone --recursive https://github.com/JohnsonLabJanelia/red.git
 ```
-
-If you are building the project for the first time, uncomment [`line 16 ~ line 26`](https://github.com/JohnsonLabJanelia/red/blob/0829b09d20b0dbccb0ea6df7a20e5ee4e23f635f/build_linux.sh#L16) for building `ImGui` and `ImPlot` object files. Run
+To build the project, 
 ```
 ./build.sh
 ```
-Comment out Line 16 ~ line 26 to reduce compiling time afterwards. 
+We use CMake to build the project. Make sure you have CMake installed. 
 
 Once built, it will make a folder called `release`. The executable `redgui` is the application. Start the program using the run script. 
 
 ```
 ./run.sh
 ```
+To have RED show up as other installed programs with a desktop entry, install it with:
+```
+./install.sh
+```
 
-### Install LibTorch
-Download libtorch cpu version from [PyTorch](https://pytorch.org/get-started/locally/) selecting Linux, LibTorch, C++. Unzip it into `lib` folder.
+## Config RED (optional)
+If you want to open videos with a default media folder (instead of navigating to the folder everytime), and save red projects to a default folder, you can set up a config.json file in `$HOME/.config/red`.
+Example config file:
+{
+	"media_folder": "/nfs/exports/ratlv",
+	"project_folder": "/nfs/exports/ratlv/fetch_runs"
+}
+
 
 ## Format data for Deep Learning
 Currently we are saving labeled keypoints simply as a plain csv file. We provide python scripts for formating data as [COCO format](https://docs.aws.amazon.com/rekognition/latest/customlabels-dg/md-coco-overview.html), which is used by [JARVIS](https://github.com/JARVIS-MoCap/JARVIS-HybridNet). Please refer to [data_exporter](https://github.com/JohnsonLabJanelia/red/tree/main/data_exporter).
