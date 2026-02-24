@@ -154,7 +154,7 @@ To have RED show up as other installed programs with a desktop entry, install it
 ```
 
 ## Config RED (optional)
-If you want to open videos with a default media folder (instead of navigating to the folder everytime), and save red projects to a default folder (otherwise it is saved default to `HOME/red_data`), you can set up a config.json file in `$HOME/.config/red`.
+If you want to open videos with a default media folder (instead of navigating to the folder everytime), and save red projects to a default folder (otherwise it is saved default to `$HOME/red_data`), you can set up a config.json file in `$HOME/.config/red`.
 
 Example config file:
 ```
