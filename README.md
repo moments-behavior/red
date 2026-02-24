@@ -155,12 +155,14 @@ To have RED show up as other installed programs with a desktop entry, install it
 
 ## Config RED (optional)
 If you want to open videos with a default media folder (instead of navigating to the folder everytime), and save red projects to a default folder, you can set up a config.json file in `$HOME/.config/red`.
+
 Example config file:
+```
 {
 	"media_folder": "/nfs/exports/ratlv",
 	"project_folder": "/nfs/exports/ratlv/fetch_runs"
 }
-
+```
 
 ## Format data for Deep Learning
 Currently we are saving labeled keypoints simply as a plain csv file. We provide python scripts for formating data as [COCO format](https://docs.aws.amazon.com/rekognition/latest/customlabels-dg/md-coco-overview.html), which is used by [JARVIS](https://github.com/JARVIS-MoCap/JARVIS-HybridNet). Please refer to [data_exporter](https://github.com/JohnsonLabJanelia/red/tree/main/data_exporter).
