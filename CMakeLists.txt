@@ -10,7 +10,7 @@ add_compile_options(-msse4.1)
 set(DIR_IMGUI "${CMAKE_SOURCE_DIR}/lib/imgui")
 set(DIR_IMPLOT "${CMAKE_SOURCE_DIR}/lib/implot")
 set(DIR_FFMPEG "$ENV{HOME}/nvidia/ffmpeg/build")
-set(DIR_TENSORRT "$ENV{HOME}/nvidia/TensorRT-8.6.1.6")
+set(DIR_TENSORRT "$ENV{HOME}/nvidia/TensorRT")
 set(DIR_FILEBROWSER "${CMAKE_SOURCE_DIR}/lib/ImGuiFileDialog")
 set(DIR_ICONFONT "${CMAKE_SOURCE_DIR}/lib/IconFontCppHeaders")
 
