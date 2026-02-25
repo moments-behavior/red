@@ -322,7 +322,7 @@ void decoder_process(DecoderContext *dc_context, FFmpegDemuxer *demuxer,
     // --- Main loop ---
     while (!(dc_context->stop_flag)) {
         if (seek_info->use_seek) {
-            // Seek to nearest key frame
+            // Seek to nearest keyframe before the target
             uint64_t key_frame_num = demuxer->FindClosestKeyFrameFNI(
                 seek_info->seek_frame, dc_context->seek_interval);
             SeekContext s(key_frame_num);
@@ -333,14 +333,14 @@ void decoder_process(DecoderContext *dc_context, FFmpegDemuxer *demuxer,
             for (int i = 0; i < size_of_buffer; i++) {
                 display_buffer[i].available_to_write = true;
             }
-            buffer_head = 0;
-            nFrame = (int)seek_info->seek_frame;
-            latest_decoded_frame[cam_name].store((int)seek_info->seek_frame);
-            display_buffer[0].frame_number = -1;
-            seek_info->use_seek = false;
-            seek_info->seek_done = true;
 
-            // Feed the packet returned by Seek into the decoder
+            // Accurate forward seek: decode from keyframe to target frame,
+            // discarding intermediate frames, so display_buffer[0] contains
+            // exactly seek_frame and nFrame is set correctly.
+            uint64_t curr_frame = key_frame_num;
+            bool seek_complete = false;
+
+            // Send the keyframe packet first
             if (pVideo && nVideoBytes > 0) {
                 AVPacket *pkt = av_packet_alloc();
                 av_new_packet(pkt, (int)nVideoBytes);
@@ -350,12 +350,71 @@ void decoder_process(DecoderContext *dc_context, FFmpegDemuxer *demuxer,
                 avcodec_send_packet(codec_ctx, pkt);
                 av_packet_unref(pkt);
                 av_packet_free(&pkt);
-                // Drain any frames produced (discard them — seek positions
-                // the decoder at the keyframe; real display starts next loop)
-                while (avcodec_receive_frame(codec_ctx, hw_frame) == 0) {
-                    av_frame_unref(hw_frame);
-                }
             }
+
+            // Decode forward, discarding frames until we reach seek_frame
+            while (!seek_complete && !(dc_context->stop_flag)) {
+                int ret = avcodec_receive_frame(codec_ctx, hw_frame);
+                if (ret == AVERROR(EAGAIN)) {
+                    // Decoder needs more input — demux the next packet
+                    bool ok = demuxer->Demux(pVideo, nVideoBytes, pktinfo);
+                    if (!ok) break;
+                    AVPacket *pkt = av_packet_alloc();
+                    av_new_packet(pkt, (int)nVideoBytes);
+                    memcpy(pkt->data, pVideo, nVideoBytes);
+                    pkt->pts = pktinfo.pts;
+                    pkt->dts = pktinfo.dts;
+                    avcodec_send_packet(codec_ctx, pkt);
+                    av_packet_unref(pkt);
+                    av_packet_free(&pkt);
+                    continue;
+                }
+                if (ret < 0) break;
+
+                if (curr_frame < seek_info->seek_frame) {
+                    // Not at target yet — discard and advance
+                    av_frame_unref(hw_frame);
+                    curr_frame++;
+                    continue;
+                }
+
+                // curr_frame == seek_frame: decode this frame into display_buffer[0]
+                AVFrame *frame_to_scale = hw_frame;
+                if (hw_frame->format == AV_PIX_FMT_VIDEOTOOLBOX) {
+                    if (av_hwframe_transfer_data(sw_frame, hw_frame, 0) < 0) {
+                        av_frame_unref(hw_frame);
+                        break;
+                    }
+                    frame_to_scale = sw_frame;
+                }
+
+                AVPixelFormat src_fmt = (AVPixelFormat)frame_to_scale->format;
+                if (!sws_ctx || src_fmt != last_src_fmt) {
+                    if (sws_ctx) sws_freeContext(sws_ctx);
+                    last_src_fmt = src_fmt;
+                    sws_ctx = sws_getContext(w, h, src_fmt, w, h, AV_PIX_FMT_RGBA,
+                                             SWS_BILINEAR, nullptr, nullptr, nullptr);
+                }
+                if (sws_ctx) {
+                    uint8_t *dst[4] = {display_buffer[0].frame, nullptr, nullptr, nullptr};
+                    int dst_stride[4] = {w * 4, 0, 0, 0};
+                    sws_scale(sws_ctx,
+                              (const uint8_t *const *)frame_to_scale->data,
+                              frame_to_scale->linesize, 0, h, dst, dst_stride);
+                    display_buffer[0].frame_number = (int)seek_info->seek_frame;
+                    display_buffer[0].available_to_write = false;
+                    dc_context->decoding_flag = true;
+                }
+                av_frame_unref(hw_frame);
+                seek_complete = true;
+                curr_frame++;
+            }
+
+            buffer_head = seek_complete ? 1 : 0;
+            nFrame = (int)curr_frame;
+            latest_decoded_frame[cam_name].store((int)seek_info->seek_frame);
+            seek_info->use_seek = false;
+            seek_info->seek_done = true;
             continue;
         }
 
