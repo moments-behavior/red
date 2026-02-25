@@ -29,6 +29,7 @@ void render_allocate_scene_memory(RenderScene *scene, u32 size_of_buffer) {
 
     scene->pbo_cuda = (PBO_CUDA *)malloc(sizeof(PBO_CUDA) * num_cams);
     for (u32 j = 0; j < num_cams; j++) {
+#ifndef __APPLE__
         create_pbo(&scene->pbo_cuda[j].pbo, scene->image_width[j],
                    scene->image_height[j]);
         register_pbo_to_cuda(&scene->pbo_cuda[j].pbo,
@@ -38,13 +39,25 @@ void render_allocate_scene_memory(RenderScene *scene, u32 size_of_buffer) {
             &scene->pbo_cuda[j].cuda_buffer,
             &scene->pbo_cuda[j].cuda_pbo_storage_buffer_size,
             &scene->pbo_cuda[j].cuda_resource);
+#else
+        scene->pbo_cuda[j].pbo = 0;
+        scene->pbo_cuda[j].cuda_buffer = nullptr;
+#endif
     }
 
-    // allocate buffer on cpu
+    // allocate frame buffers
     for (u32 j = 0; j < num_cams; j++) {
         unsigned int size_pic = scene->image_width[j] * scene->image_height[j] *
                                 4 * sizeof(unsigned char);
         for (u32 i = 0; i < size_of_buffer; i++) {
+#ifdef __APPLE__
+            // macOS always uses CPU buffers
+            scene->display_buffer[j][i].frame =
+                (unsigned char *)malloc(size_pic);
+            decoder_clear_buffer_with_constant_image(
+                scene->display_buffer[j][i].frame, scene->image_width[j],
+                scene->image_height[j]);
+#else
             if (scene->use_cpu_buffer) {
                 scene->display_buffer[j][i].frame =
                     (unsigned char *)malloc(size_pic);
@@ -56,6 +69,7 @@ void render_allocate_scene_memory(RenderScene *scene, u32 size_of_buffer) {
                 cudaMalloc((void **)&scene->display_buffer[j][i].frame,
                            size_pic);
             }
+#endif
             scene->display_buffer[j][i].frame_number = -1;
             scene->display_buffer[j][i].available_to_write = true;
         }

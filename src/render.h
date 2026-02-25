@@ -6,8 +6,10 @@
 struct PBO_CUDA {
     GLuint pbo;
     unsigned char *cuda_buffer;
+#ifndef __APPLE__
     cudaGraphicsResource_t cuda_resource;
     size_t cuda_pbo_storage_buffer_size;
+#endif
 };
 
 struct RenderScene {

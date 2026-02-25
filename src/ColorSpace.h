@@ -1,6 +1,12 @@
 #pragma once
 #include <stdint.h>
+#ifndef __APPLE__
 #include <cuda_runtime.h>
+#else
+// Minimal CUDA vector type replacements for macOS compilation
+struct uchar4 { uint8_t x, y, z, w; };
+struct ushort4 { uint16_t x, y, z, w; };
+#endif
 
 typedef enum ColorSpaceStandard {
     ColorSpaceStandard_BT709 = 1,

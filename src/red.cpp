@@ -25,7 +25,9 @@
 #include <thread>
 #define STB_IMAGE_IMPLEMENTATION
 #include "../lib/ImGuiFileDialog/stb/stb_image.h"
+#ifndef __APPLE__
 #include "kernel.cuh"
+#endif
 #include "keypoints_table.h"
 #include "reprojection_tool.h"
 
@@ -829,6 +831,7 @@ int main(int argc, char **argv) {
                 scene->display_buffer[visible_idx][select_corr_head]
                     .frame_number;
 
+#ifndef __APPLE__
             // Automatic YOLO detection for current frame
             if (auto_yolo_labeling && !yolo_model_path.empty() &&
                 skeleton.has_bbox) {
@@ -918,7 +921,7 @@ int main(int argc, char **argv) {
                                      yolo_bboxes[cam_id]) {
                                     if (yolo_bbox.is_valid) {
                                         while (yolo_bbox.class_id >=
-                                               bbox_class_colors.size()) {
+                                               (int)bbox_class_colors.size()) {
                                             create_new_bbox_class();
                                         }
 
@@ -959,6 +962,7 @@ int main(int argc, char **argv) {
                     }
                 }
             }
+#endif // !__APPLE__
         }
 
         // Render a video frame
@@ -1024,6 +1028,22 @@ int main(int argc, char **argv) {
                 };
 
                 if (is_visible) {
+#ifdef __APPLE__
+                    // macOS: upload CPU frame buffer directly to texture
+                    if (ps.play_video) {
+                        current_frame_num = ps.to_display_frame_number;
+                    }
+                    {
+                        int mac_head =
+                            ps.play_video ? ps.read_head : select_corr_head;
+                        glBindTexture(GL_TEXTURE_2D, scene->image_texture[j]);
+                        glTexSubImage2D(
+                            GL_TEXTURE_2D, 0, 0, 0, scene->image_width[j],
+                            scene->image_height[j], GL_RGBA, GL_UNSIGNED_BYTE,
+                            scene->display_buffer[j][mac_head].frame);
+                        glBindTexture(GL_TEXTURE_2D, 0);
+                    }
+#else
                     if (ps.play_video) {
                         // if the current frame is ready, upload for
                         // display, otherwise wait for the frame to get
@@ -1120,6 +1140,7 @@ int main(int argc, char **argv) {
                                                 scene->image_height[j]);
                     unbind_pbo();
                     unbind_texture();
+#endif // __APPLE__
 
                     ImGui::BeginGroup();
                     std::string scene_name = "scene view" + std::to_string(j);
@@ -2938,6 +2959,7 @@ int main(int argc, char **argv) {
                             "Non-Maximum Suppression IoU threshold");
                     }
 
+#ifndef __APPLE__
                     if (ImGui::Button("Run YOLO Prediction")) {
                         std::cout << "Running YOLO prediction on frame "
                                   << ps.to_display_frame_number << std::endl;
@@ -3058,7 +3080,7 @@ int main(int argc, char **argv) {
                                          yolo_bboxes[cam_id]) {
                                         if (yolo_bbox.is_valid) {
                                             while (yolo_bbox.class_id >=
-                                                   bbox_class_colors.size()) {
+                                                   (int)bbox_class_colors.size()) {
                                                 create_new_bbox_class();
                                             }
 
@@ -3111,6 +3133,7 @@ int main(int argc, char **argv) {
                             }
                         }
                     }
+#endif // !__APPLE__
                 }
             }
             ImGui::End();

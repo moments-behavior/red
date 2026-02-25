@@ -1,6 +1,7 @@
 #ifndef KERNEL_H
 #define KERNEL_H
 #include "types.h"
+#ifndef __APPLE__
 #include <chrono>
 #include <cuda.h>
 #include <cuda_runtime_api.h>
@@ -19,4 +20,5 @@ void gpu_draw_rat_pose(unsigned char *src, int width, int height,
 void apply_contrast_brightness_rgba(unsigned char *d_img, int width, int height,
                                     float alpha, float beta, bool pivot_midgray,
                                     cudaStream_t stream);
+#endif // !__APPLE__
 #endif // KERNEL_H

@@ -2,8 +2,10 @@
 #include "ColorSpace.h"
 #include "FFmpegDemuxer.h"
 #include "NvCodecUtils.h"
+#ifndef __APPLE__
 #include "NvDecoder.h"
 #include <cuda.h>
+#endif
 
 #include "json.hpp"
 #include <filesystem>
@@ -107,12 +109,28 @@ void create_data_yaml(const std::string &output_dir,
                       const nlohmann::json &skeleton_config = nlohmann::json());
 
 // Main export functions
+#ifndef __APPLE__
 bool export_yolo_detection_dataset(const ExportConfig &config,
                                    std::string *status = nullptr);
 bool export_yolo_pose_dataset(const ExportConfig &config,
                               std::string *status = nullptr);
 bool export_yolo_obb_dataset(const ExportConfig &config,
                              std::string *status = nullptr);
+#else
+// Stub implementations for macOS
+inline bool export_yolo_detection_dataset(const ExportConfig &,
+                                          std::string * = nullptr) {
+    return false;
+}
+inline bool export_yolo_pose_dataset(const ExportConfig &,
+                                     std::string * = nullptr) {
+    return false;
+}
+inline bool export_yolo_obb_dataset(const ExportConfig &,
+                                    std::string * = nullptr) {
+    return false;
+}
+#endif
 
 // Utility functions
 void print_progress(int current, int total,

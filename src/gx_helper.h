@@ -1,5 +1,8 @@
 #ifndef GX_HELPER
 #define GX_HELPER
+#ifdef __APPLE__
+#define GL_SILENCE_DEPRECATION
+#endif
 #include "IconsForkAwesome.h"
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
@@ -9,7 +12,9 @@
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
 #include <cstdio>
+#ifndef __APPLE__
 #include <cuda_gl_interop.h>
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -35,6 +40,9 @@ static void gx_glew_error_callback(GLenum glew_error) {
 inline void gx_init(gx_context *context, GLFWwindow *render_target) {
     context->render_target = render_target;
     glfwMakeContextCurrent(render_target);
+#ifdef __APPLE__
+    glewExperimental = GL_TRUE;
+#endif
     gx_glew_error_callback(glewInit());
     glfwSwapInterval(context->swap_interval); // Enable vsync
 }
@@ -51,8 +59,14 @@ inline GLFWwindow *gx_glfw_init_render_target(u32 marjor_version,
     }
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
+#ifdef __APPLE__
+    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+    glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
+    strcpy(glsl_version, "#version 150");
+#else
     // local_glsl_version = "#version 330";
     strcpy(glsl_version, "#version 130");
+#endif
 
     // Create window with graphics context
     GLFWwindow *window = glfwCreateWindow(1920, 1080, title, NULL, NULL);
@@ -138,6 +152,7 @@ static void bind_pbo(GLuint *pbo) {
 
 static void unbind_pbo() { glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0); }
 
+#ifndef __APPLE__
 static void register_pbo_to_cuda(GLuint *pbo,
                                  cudaGraphicsResource_t *cuda_resource) {
     cudaGraphicsGLRegisterBuffer(cuda_resource, *pbo,
@@ -158,6 +173,7 @@ static void cuda_pointer_from_resource(unsigned char **cuda_buffer_p,
 static void unmap_cuda_resource(cudaGraphicsResource_t *cuda_resource) {
     cudaGraphicsUnmapResources(1, cuda_resource);
 }
+#endif // !__APPLE__
 
 static void upload_image_pbo_to_texture(int image_width, int img_height) {
     // Assume PBO is bound before this, therefore the last

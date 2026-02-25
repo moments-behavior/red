@@ -15,6 +15,7 @@
 //---------------------------------------------------------------------------
 
 #pragma once
+#ifndef __APPLE__
 #include <sstream>
 #include <iostream>
 
@@ -201,3 +202,4 @@ static void ShowDecoderCapability()
         ck(cuCtxDestroy(cuContext));
     }
 }
+#endif // !__APPLE__

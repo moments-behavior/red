@@ -1,8 +1,10 @@
 #pragma once
 #include "skeleton.h"
 #include "types.h"
+#ifndef __APPLE__
 #include <torch/script.h>
 #include <torch/torch.h>
+#endif
 
 struct YoloPrediction {
     float x, y, w, h;
@@ -31,6 +33,7 @@ struct YoloBBox {
     }
 };
 
+#ifndef __APPLE__
 float calculateIoU(const YoloPrediction &a, const YoloPrediction &b);
 std::vector<YoloPrediction> applyNMS(std::vector<YoloPrediction> &predictions,
                                      float iou_threshold,
@@ -41,3 +44,22 @@ std::vector<YoloPrediction> runYoloInference(const std::string &model_path,
 bool frameHasYoloDetections(int frame_num,
                             const std::map<u32, KeyPoints *> &keypoints_map,
                             const SkeletonContext *skeleton);
+#else
+// Stub implementations for macOS (YOLO inference not available)
+inline float calculateIoU(const YoloPrediction &, const YoloPrediction &) {
+    return 0.0f;
+}
+inline std::vector<YoloPrediction>
+applyNMS(std::vector<YoloPrediction> &predictions, float, float) {
+    return {};
+}
+inline std::vector<YoloPrediction>
+runYoloInference(const std::string &, unsigned char *, int, int) {
+    return {};
+}
+inline bool frameHasYoloDetections(int,
+                                   const std::map<u32, KeyPoints *> &,
+                                   const SkeletonContext *) {
+    return false;
+}
+#endif

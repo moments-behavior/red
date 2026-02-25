@@ -20,8 +20,10 @@ extern "C" {
 #include "libavformat/avio.h"
 }
 
+#ifndef __APPLE__
 #include "cuviddec.h"
 #include "nvcuvid.h"
+#endif
 #include <map>
 #include <string>
 #include <vector>
@@ -223,6 +225,7 @@ class FFmpegDemuxer {
     static int ReadPacket(void *opaque, uint8_t *pBuf, int nBuf);
 };
 
+#ifndef __APPLE__
 inline cudaVideoCodec FFmpeg2NvCodecId(AVCodecID id) {
     switch (id) {
     case AV_CODEC_ID_MPEG1VIDEO:
@@ -247,3 +250,4 @@ inline cudaVideoCodec FFmpeg2NvCodecId(AVCodecID id) {
         return cudaVideoCodec_NumCodecs;
     }
 }
+#endif // !__APPLE__

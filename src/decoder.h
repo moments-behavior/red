@@ -3,9 +3,18 @@
 #include "ColorSpace.h"
 #include "FFmpegDemuxer.h"
 #include "NvCodecUtils.h"
+#ifndef __APPLE__
 #include "NvDecoder.h"
 #include <cuda.h>
+#endif
+#ifdef __APPLE__
+extern "C" {
+#include <libavcodec/avcodec.h>
+#include <libswscale/swscale.h>
+}
+#endif
 #include <opencv2/opencv.hpp>
+
 struct SeekInfo {
     bool use_seek;
     bool seek_done;
@@ -29,8 +38,10 @@ struct DecoderContext {
     double video_fps;
 };
 
+#ifndef __APPLE__
 void decoder_get_image_from_gpu(CUdeviceptr dpSrc, uint8_t *pDst, int nWidth,
                                 int nHeight);
+#endif
 void decoder_clear_buffer_with_constant_image(unsigned char *image_pt,
                                               int width, int height);
 void decoder_print_one_display_buffer(unsigned char *image_pt, int width,
