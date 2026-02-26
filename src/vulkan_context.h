@@ -486,6 +486,7 @@ inline void vk_allocate_textures(int num_cams, uint32_t *widths, uint32_t *heigh
         vk_create_texture(g_vk->textures[j], widths[j], heights[j]);
 }
 
+
 inline bool vk_begin_frame() {
     int cf = g_vk->current_frame;
     VK_CHECK(vkWaitForFences(g_vk->device, 1, &g_vk->in_flight_fences[cf],

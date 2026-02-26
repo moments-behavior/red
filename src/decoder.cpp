@@ -249,6 +249,7 @@ void decoder_process(DecoderContext *dc_context, FFmpegDemuxer *demuxer,
 
 #include <Accelerate/Accelerate.h>
 #include <CoreVideo/CoreVideo.h>
+#include <pthread.h>
 
 // Convert a VideoToolbox CVPixelBuffer (NV12) directly to RGBA using vImage,
 // writing into dst_rgba (w*h*4 bytes). info/info_init are cached per thread.
@@ -315,6 +316,9 @@ void decoder_process(DecoderContext *dc_context, FFmpegDemuxer *demuxer,
                      std::string cam_name, PictureBuffer *display_buffer,
                      int size_of_buffer, SeekInfo *seek_info,
                      bool /*use_cpu_buffer*/) {
+    // Run on performance cores to maximise decode/convert throughput
+    pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+
     // --- Setup ---
     AVCodecID codec_id = demuxer->GetVideoCodec();
     const AVCodec *codec = avcodec_find_decoder(codec_id);
