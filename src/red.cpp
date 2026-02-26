@@ -6,7 +6,8 @@
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #ifdef __APPLE__
-#include "imgui_impl_vulkan.h"
+#include "metal_context.h"
+#include <CoreFoundation/CoreFoundation.h>  // CFRelease for CVPixelBuffer
 #else
 #include "imgui_impl_opengl3.h"
 #endif
@@ -203,7 +204,7 @@ int main(int argc, char **argv) {
     ReprojectionTool rp_tool;
 
 #ifdef __APPLE__
-    // Per-camera last-uploaded frame number for Vulkan (skip redundant uploads)
+    // Per-camera last-uploaded frame number for Metal (skip redundant uploads)
     std::vector<int> mac_last_uploaded_frame(MAX_VIEWS, -1);
 #endif
 
@@ -249,16 +250,17 @@ int main(int argc, char **argv) {
         glfwPollEvents();
 
 #ifdef __APPLE__
-        // Acquire swapchain image and open command buffer before ImGui/uploads
-        if (!vk_begin_frame()) {
-            // window minimized or swapchain out-of-date — skip this frame
+        // Acquire drawable and open command buffer; calls ImGui_ImplMetal_NewFrame
+        if (!metal_begin_frame()) {
+            // No drawable available (window minimized) — skip this frame
             continue;
         }
 #endif
 
         // Start the Dear ImGui frame
 #ifdef __APPLE__
-        ImGui_ImplVulkan_NewFrame();
+        // ImGui_ImplMetal_NewFrame was called inside metal_begin_frame()
+        (void)0;
 #else
         ImGui_ImplOpenGL3_NewFrame();
 #endif
@@ -689,7 +691,7 @@ int main(int argc, char **argv) {
                         stbi_image_free(image_data);
                     }
 #else
-                    // Background texture not supported on macOS/Vulkan yet
+                    // Background texture not supported on macOS/Metal yet
                     (void)background_width; (void)background_height;
 #endif
                 }
@@ -1071,7 +1073,10 @@ int main(int argc, char **argv) {
 
                 if (is_visible) {
 #ifdef __APPLE__
-                    // macOS: upload CPU frame buffer to Vulkan texture
+                    // macOS: upload frame to Metal texture for display.
+                    // Phase 2/3: if a CVPixelBuffer is available, use GPU
+                    //            NV12→RGBA compute (metal_upload_pixelbuf).
+                    // Phase 1 fallback: CPU RGBA frame via metal_upload_texture.
                     if (ps.play_video) {
                         current_frame_num = ps.to_display_frame_number;
                     }
@@ -1080,10 +1085,18 @@ int main(int argc, char **argv) {
                             ps.play_video ? ps.read_head : select_corr_head;
                         int fn = scene->display_buffer[j][mac_head].frame_number;
                         if (fn != mac_last_uploaded_frame[j]) {
-                            vk_upload_texture(j,
-                                scene->display_buffer[j][mac_head].frame,
-                                scene->image_width[j],
-                                scene->image_height[j]);
+                            CVPixelBufferRef pb =
+                                scene->display_buffer[j][mac_head].pixel_buffer;
+                            if (pb) {
+                                metal_upload_pixelbuf(j, pb,
+                                    scene->image_width[j],
+                                    scene->image_height[j]);
+                            } else {
+                                metal_upload_texture(j,
+                                    scene->display_buffer[j][mac_head].frame,
+                                    scene->image_width[j],
+                                    scene->image_height[j]);
+                            }
                             mac_last_uploaded_frame[j] = fn;
                         }
                     }
@@ -2896,6 +2909,7 @@ int main(int argc, char **argv) {
                     ImGui::EndDisabled();
 
                     if (button_pressed && has_next_frame) {
+                        ps.play_video = false;
                         seek_all_cameras(scene, next_frame_num,
                                          dc_context->video_fps, ps, true);
                     }
@@ -3971,10 +3985,7 @@ int main(int argc, char **argv) {
         // Rendering
         ImGui::Render();
 #ifdef __APPLE__
-        vk_begin_rendering();
-        ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(),
-            g_vk->command_buffers[g_vk->current_frame]);
-        vk_end_frame();
+        metal_end_frame();  // creates render encoder, renders ImGui, presents
 #else
         int display_w, display_h;
         glfwGetFramebufferSize(window->render_target, &display_w, &display_h);
@@ -4030,6 +4041,13 @@ int main(int argc, char **argv) {
                         int index =
                             (ps.read_head + offset) % scene->size_of_buffer;
                         for (int j = 0; j < scene->num_cams; j++) {
+#ifdef __APPLE__
+                            // Release CVPixelBuffer before relinquishing slot
+                            if (scene->display_buffer[j][index].pixel_buffer) {
+                                CFRelease(scene->display_buffer[j][index].pixel_buffer);
+                                scene->display_buffer[j][index].pixel_buffer = nullptr;
+                            }
+#endif
                             scene->display_buffer[j][index].available_to_write =
                                 true;
                         }
@@ -4044,7 +4062,7 @@ int main(int argc, char **argv) {
     // Cleanup
     cleanup_yolo_drag_boxes(); // Clean up YOLO drag boxes memory
 #ifdef __APPLE__
-    vk_cleanup();  // includes vkDeviceWaitIdle + ImGui_ImplVulkan_Shutdown
+    metal_cleanup();  // waits for GPU, shuts down ImGui Metal backend
 #else
     ImGui_ImplOpenGL3_Shutdown();
 #endif

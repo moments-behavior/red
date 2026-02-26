@@ -210,6 +210,15 @@ void FFmpegDemuxer::Flush() {
     avformat_flush(fmtc);
 }
 
+#ifdef __APPLE__
+uint8_t *FFmpegDemuxer::GetExtradata() const {
+    return fmtc->streams[videoStream]->codecpar->extradata;
+}
+int FFmpegDemuxer::GetExtradataSize() const {
+    return fmtc->streams[videoStream]->codecpar->extradata_size;
+}
+#endif
+
 int64_t FFmpegDemuxer::TsFromTime(double ts_sec) {
     /* Internal timestamp representation is integer, so multiply to AV_TIME_BASE
      * and switch to fixed point precision arithmetics; */

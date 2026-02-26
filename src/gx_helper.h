@@ -12,8 +12,8 @@
 #include <stdlib.h>
 
 #ifdef __APPLE__
-#include "vulkan_context.h"
-#include "imgui_impl_vulkan.h"
+#include "metal_context.h"
+// imgui_impl_metal.h is ObjC-only; all Metal ImGui calls go through metal_context.mm
 #else
 #include "imgui_impl_opengl3.h"
 #include <GL/glew.h>
@@ -26,7 +26,7 @@ typedef struct gx_context {
     u32 height;
     GLFWwindow *render_target;
     char *render_target_title;
-    char *glsl_version;  // unused on macOS/Vulkan, kept for Linux compat
+    char *glsl_version;  // unused on macOS/Metal, kept for Linux compat
     std::string exe_dir; // absolute path to directory containing the binary
 } gx_context;
 
@@ -45,7 +45,7 @@ static void gx_glew_error_callback(GLenum glew_error) {
 inline void gx_init(gx_context *context, GLFWwindow *render_target) {
     context->render_target = render_target;
 #ifdef __APPLE__
-    vk_init(render_target);
+    metal_init(render_target);
 #else
     glfwMakeContextCurrent(render_target);
     gx_glew_error_callback(glewInit());
@@ -64,7 +64,7 @@ inline GLFWwindow *gx_glfw_init_render_target(u32 major_version,
     }
 
 #ifdef __APPLE__
-    // Vulkan: no OpenGL context
+    // Metal: no OpenGL context needed; CAMetalLayer handles presentation
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 #else
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
@@ -100,8 +100,8 @@ inline void gx_imgui_init(gx_context *context) {
     }
 
 #ifdef __APPLE__
-    ImGui_ImplGlfw_InitForVulkan(context->render_target, true);
-    vk_init_imgui();
+    ImGui_ImplGlfw_InitForOther(context->render_target, true);
+    metal_init_imgui();
 #else
     ImGui_ImplGlfw_InitForOpenGL(context->render_target, true);
     ImGui_ImplOpenGL3_Init(context->glsl_version);

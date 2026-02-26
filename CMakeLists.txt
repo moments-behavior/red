@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.10)
 
 if(APPLE)
-    project(red LANGUAGES CXX)
+    project(red LANGUAGES CXX OBJCXX)
 
     # Homebrew prefix for Apple Silicon
     list(APPEND CMAKE_PREFIX_PATH "/opt/homebrew")
@@ -11,7 +11,7 @@ if(APPLE)
 
     find_package(OpenCV REQUIRED COMPONENTS core calib3d imgproc imgcodecs videoio)
     find_package(glfw3 REQUIRED)
-    find_package(Vulkan REQUIRED)
+    # No Vulkan needed — replaced by native Metal
 
     set(DIR_IMGUI "${CMAKE_SOURCE_DIR}/lib/imgui")
     set(DIR_IMPLOT "${CMAKE_SOURCE_DIR}/lib/implot")
@@ -22,12 +22,17 @@ if(APPLE)
         "${CMAKE_SOURCE_DIR}/src/NvDecoder.cpp"
         "${CMAKE_SOURCE_DIR}/src/yolo_torch.cpp"
         "${CMAKE_SOURCE_DIR}/src/yolo_export.cpp"
+        # Vulkan context replaced by metal_context
+        "${CMAKE_SOURCE_DIR}/src/vulkan_context.cpp"
     )
+
+    # Objective-C++ source files (.mm)
+    file(GLOB MM_SRC_FILES src/*.mm)
 
     file(GLOB IMGUI_SRC
         ${DIR_IMGUI}/*.cpp
         ${DIR_IMGUI}/backends/imgui_impl_glfw.cpp
-        ${DIR_IMGUI}/backends/imgui_impl_vulkan.cpp
+        ${DIR_IMGUI}/backends/imgui_impl_metal.mm
         ${DIR_IMGUI}/misc/cpp/imgui_stdlib.cpp
         ${DIR_FILEBROWSER}/ImGuiFileDialog.cpp
     )
@@ -35,6 +40,7 @@ if(APPLE)
 
     add_executable(red
         ${SRC_FILES}
+        ${MM_SRC_FILES}
         ${IMGUI_SRC}
         ${IMPLOT_SRC}
     )
@@ -48,7 +54,6 @@ if(APPLE)
         lib/IconFontCppHeaders
         ${OpenCV_INCLUDE_DIRS}
         ${FFMPEG_INCLUDE_DIRS}
-        ${Vulkan_INCLUDE_DIRS}
         /opt/homebrew/include
     )
 
@@ -58,19 +63,24 @@ if(APPLE)
         ${OpenCV_LIBS}
         opencv_sfm
         glfw
-        Vulkan::Vulkan
         "-framework Metal"
         "-framework QuartzCore"
         "-framework VideoToolbox"
         "-framework CoreMedia"
         "-framework CoreFoundation"
-        "-framework Accelerate"
         "-framework CoreVideo"
+        "-framework Cocoa"
         ${FFMPEG_LIBRARIES}
         pthread
     )
+    # Removed: Vulkan::Vulkan, -framework Accelerate (vImage no longer used)
 
-    target_compile_definitions(red PRIVATE GLFW_INCLUDE_VULKAN)
+    # Enable ARC for all Objective-C++ translation units
+    set_source_files_properties(
+        ${MM_SRC_FILES}
+        ${DIR_IMGUI}/backends/imgui_impl_metal.mm
+        PROPERTIES COMPILE_FLAGS "-fobjc-arc"
+    )
 
     set_target_properties(red PROPERTIES
         CXX_STANDARD 17
@@ -83,6 +93,7 @@ if(APPLE)
 
     add_executable(test_gui
         ${TEST_GUI_SRC_FILES}
+        ${MM_SRC_FILES}
         ${IMGUI_SRC}
         ${IMPLOT_SRC}
         tests/test_gui.cpp
@@ -98,7 +109,6 @@ if(APPLE)
         lib/IconFontCppHeaders
         ${OpenCV_INCLUDE_DIRS}
         ${FFMPEG_INCLUDE_DIRS}
-        ${Vulkan_INCLUDE_DIRS}
         /opt/homebrew/include
     )
 
@@ -108,19 +118,22 @@ if(APPLE)
         ${OpenCV_LIBS}
         opencv_sfm
         glfw
-        Vulkan::Vulkan
         "-framework Metal"
         "-framework QuartzCore"
         "-framework VideoToolbox"
         "-framework CoreMedia"
         "-framework CoreFoundation"
-        "-framework Accelerate"
         "-framework CoreVideo"
+        "-framework Cocoa"
         ${FFMPEG_LIBRARIES}
         pthread
     )
 
-    target_compile_definitions(test_gui PRIVATE GLFW_INCLUDE_VULKAN)
+    set_source_files_properties(
+        ${MM_SRC_FILES}
+        ${DIR_IMGUI}/backends/imgui_impl_metal.mm
+        PROPERTIES COMPILE_FLAGS "-fobjc-arc"
+    )
 
     set_target_properties(test_gui PROPERTIES
         CXX_STANDARD 17

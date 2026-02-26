@@ -1,4 +1,7 @@
 #include "render.h"
+#ifdef __APPLE__
+#include "metal_context.h"
+#endif
 
 void render_initialize_target(gx_context *context) {
     GLFWwindow *render_target = gx_glfw_init_render_target(
@@ -47,12 +50,14 @@ void render_allocate_scene_memory(RenderScene *scene, u32 size_of_buffer) {
                                 4 * sizeof(unsigned char);
         for (u32 i = 0; i < size_of_buffer; i++) {
 #ifdef __APPLE__
-            // macOS always uses CPU buffers
+            // macOS: CPU frame buffer still needed for image_loader path.
+            // Video decode path (Phase 2/3) uses pixel_buffer instead.
             scene->display_buffer[j][i].frame =
                 (unsigned char *)malloc(size_pic);
             decoder_clear_buffer_with_constant_image(
                 scene->display_buffer[j][i].frame, scene->image_width[j],
                 scene->image_height[j]);
+            scene->display_buffer[j][i].pixel_buffer = nullptr;
 #else
             if (scene->use_cpu_buffer) {
                 scene->display_buffer[j][i].frame =
@@ -72,12 +77,12 @@ void render_allocate_scene_memory(RenderScene *scene, u32 size_of_buffer) {
     }
 
 #ifdef __APPLE__
-    // Vulkan: create GPU textures and grab their descriptor sets
-    vk_allocate_textures(num_cams, scene->image_width, scene->image_height);
+    // Metal: create per-camera RGBA output textures used as ImTextureID
+    metal_allocate_textures(num_cams, scene->image_width, scene->image_height);
     scene->image_descriptor =
-        (VkDescriptorSet *)malloc(sizeof(VkDescriptorSet) * num_cams);
+        (ImTextureID *)malloc(sizeof(ImTextureID) * num_cams);
     for (int j = 0; j < num_cams; j++)
-        scene->image_descriptor[j] = g_vk->textures[j].descriptor_set;
+        scene->image_descriptor[j] = metal_get_texture_id(j);
 #else
     scene->image_texture = (GLuint *)malloc(sizeof(GLuint) * num_cams);
     for (u32 j = 0; j < num_cams; j++) {

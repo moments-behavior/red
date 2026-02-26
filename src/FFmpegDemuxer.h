@@ -224,6 +224,13 @@ class FFmpegDemuxer {
     void Flush();
 
     static int ReadPacket(void *opaque, uint8_t *pBuf, int nBuf);
+
+#ifdef __APPLE__
+    // Extradata (SPS/PPS in AVCC/HVCC format) needed for direct VT decode.
+    // The pointer is valid for the lifetime of this FFmpegDemuxer.
+    uint8_t *GetExtradata() const;
+    int      GetExtradataSize() const;
+#endif
 };
 
 #ifndef __APPLE__

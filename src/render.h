@@ -18,7 +18,7 @@ struct RenderScene {
     u32 *image_height;
     u32 size_of_buffer;
 #ifdef __APPLE__
-    VkDescriptorSet *image_descriptor;  // ImTextureID per camera (Vulkan)
+    ImTextureID *image_descriptor;  // ImTextureID per camera (Metal MTLTexture)
 #else
     GLuint *image_texture;
 #endif

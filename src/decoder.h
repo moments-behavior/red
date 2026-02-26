@@ -12,6 +12,7 @@ extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libswscale/swscale.h>
 }
+#include <CoreVideo/CoreVideo.h>
 #endif
 #include <atomic>
 #include <opencv2/opencv.hpp>
@@ -27,6 +28,10 @@ struct PictureBuffer {
     unsigned char *frame;
     int frame_number;
     bool available_to_write;
+#ifdef __APPLE__
+    // Phase 2/3: decoded CVPixelBuffer (retained by decoder, released by main thread)
+    CVPixelBufferRef pixel_buffer;
+#endif
 };
 
 struct DecoderContext {

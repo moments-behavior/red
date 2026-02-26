@@ -244,344 +244,202 @@ void decoder_process(DecoderContext *dc_context, FFmpegDemuxer *demuxer,
 
 #else // __APPLE__
 
-// macOS decoder using FFmpeg + VideoToolbox hardware acceleration
-// Falls back to software decode if VideoToolbox is unavailable.
+// macOS decoder: Phase 3 — async VideoToolbox via VTAsyncDecoder.
+// Phases 2+3: decoded frames are stored as CVPixelBufferRef (IOSurface-backed)
+// in display_buffer[*].pixel_buffer; the main thread imports them into Metal
+// textures via CVMetalTextureCache + compute shader (no CPU color conversion).
 
-#include <Accelerate/Accelerate.h>
-#include <CoreVideo/CoreVideo.h>
 #include <pthread.h>
+#include "vt_async_decoder.h"
 
-// Convert a VideoToolbox CVPixelBuffer (NV12) directly to RGBA using vImage,
-// writing into dst_rgba (w*h*4 bytes). info/info_init are cached per thread.
-// Returns true on success; false if the pixel format is not NV12 (caller should
-// fall back to sws_scale).
-static bool mac_vimage_nv12_to_rgba(AVFrame *hw_frame, uint8_t *dst_rgba,
-                                     int w, int h,
-                                     vImage_YpCbCrToARGB &info,
-                                     bool &info_init) {
-    if (hw_frame->format != AV_PIX_FMT_VIDEOTOOLBOX)
-        return false;
-
-    CVPixelBufferRef pixbuf = (CVPixelBufferRef)hw_frame->data[3];
-    OSType pix_fmt = CVPixelBufferGetPixelFormatType(pixbuf);
-
-    bool full_range = (pix_fmt == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange);
-    if (!full_range && pix_fmt != kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange)
-        return false;  // unsupported pixel format — caller falls back to sws
-
-    if (!info_init) {
-        vImage_YpCbCrPixelRange range = full_range
-            ? (vImage_YpCbCrPixelRange){ 0, 128, 255, 255, 255, 0, 255, 0 }
-            : (vImage_YpCbCrPixelRange){ 16, 128, 235, 240, 255, 1, 255, 0 };
-        vImageConvert_YpCbCrToARGB_GenerateConversion(
-            kvImage_YpCbCrToARGBMatrix_ITU_R_601_4,
-            &range, &info,
-            kvImage420Yp8_CbCr8, kvImageARGB8888,
-            kvImageNoFlags);
-        info_init = true;
+// Helper: release any CVPixelBuffer retained in a buffer slot and reset it.
+static inline void mac_release_pixbuf_slot(PictureBuffer &slot) {
+    if (slot.pixel_buffer) {
+        CFRelease(slot.pixel_buffer);
+        slot.pixel_buffer = nullptr;
     }
-
-    CVPixelBufferLockBaseAddress(pixbuf, kCVPixelBufferLock_ReadOnly);
-
-    uint8_t *y_ptr    = (uint8_t *)CVPixelBufferGetBaseAddressOfPlane(pixbuf, 0);
-    size_t   y_stride = CVPixelBufferGetBytesPerRowOfPlane(pixbuf, 0);
-    uint8_t *uv_ptr   = (uint8_t *)CVPixelBufferGetBaseAddressOfPlane(pixbuf, 1);
-    size_t   uv_stride = CVPixelBufferGetBytesPerRowOfPlane(pixbuf, 1);
-
-    vImage_Buffer y_buf  = { y_ptr,  (vImagePixelCount)h,   (vImagePixelCount)w,   y_stride  };
-    vImage_Buffer uv_buf = { uv_ptr, (vImagePixelCount)h/2, (vImagePixelCount)w/2, uv_stride };
-    vImage_Buffer dst    = { dst_rgba, (vImagePixelCount)h, (vImagePixelCount)w, (size_t)w * 4 };
-
-    // permuteMap: reorder vImage's ARGB output to RGBA
-    // ARGB[0]=A, [1]=R, [2]=G, [3]=B  →  RGBA: dest[0]=R, [1]=G, [2]=B, [3]=A
-    const uint8_t permuteMap[4] = { 1, 2, 3, 0 };
-    vImageConvert_420Yp8_CbCr8ToARGB8888(
-        &y_buf, &uv_buf, &dst, &info, permuteMap, 255, kvImageNoFlags);
-
-    CVPixelBufferUnlockBaseAddress(pixbuf, kCVPixelBufferLock_ReadOnly);
-    return true;
-}
-
-static enum AVPixelFormat mac_get_hw_format(AVCodecContext *,
-                                            const enum AVPixelFormat *pix_fmts) {
-    for (const enum AVPixelFormat *p = pix_fmts; *p != AV_PIX_FMT_NONE; p++) {
-        if (*p == AV_PIX_FMT_VIDEOTOOLBOX)
-            return *p;
-    }
-    // Return first available software format as fallback
-    return pix_fmts[0];
 }
 
 void decoder_process(DecoderContext *dc_context, FFmpegDemuxer *demuxer,
                      std::string cam_name, PictureBuffer *display_buffer,
                      int size_of_buffer, SeekInfo *seek_info,
                      bool /*use_cpu_buffer*/) {
-    // Run on performance cores to maximise decode/convert throughput
+    // Run on performance cores
     pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
-
-    // --- Setup ---
-    AVCodecID codec_id = demuxer->GetVideoCodec();
-    const AVCodec *codec = avcodec_find_decoder(codec_id);
-    if (!codec) {
-        std::cerr << "[decoder_process mac] Cannot find decoder for codec "
-                  << codec_id << std::endl;
-        return;
-    }
-
-    AVCodecContext *codec_ctx = avcodec_alloc_context3(codec);
-    if (!codec_ctx) {
-        std::cerr << "[decoder_process mac] Cannot allocate codec context\n";
-        return;
-    }
-
-    // Try VideoToolbox hardware acceleration
-    AVBufferRef *hw_device_ctx = nullptr;
-    bool use_hw = (av_hwdevice_ctx_create(&hw_device_ctx,
-                                          AV_HWDEVICE_TYPE_VIDEOTOOLBOX,
-                                          nullptr, nullptr, 0) == 0);
-    if (use_hw) {
-        codec_ctx->hw_device_ctx = av_buffer_ref(hw_device_ctx);
-        codec_ctx->get_format = mac_get_hw_format;
-        av_buffer_unref(&hw_device_ctx);
-    }
-
-    if (avcodec_open2(codec_ctx, codec, nullptr) < 0) {
-        std::cerr << "[decoder_process mac] Cannot open codec\n";
-        avcodec_free_context(&codec_ctx);
-        return;
-    }
-
-    AVFrame *hw_frame = av_frame_alloc();
-    AVFrame *sw_frame = av_frame_alloc();
-    SwsContext *sws_ctx = nullptr;
-    AVPixelFormat last_src_fmt = AV_PIX_FMT_NONE;
-    vImage_YpCbCrToARGB vimg_info = {};
-    bool vimg_initialized = false;
 
     int w = (int)demuxer->GetWidth();
     int h = (int)demuxer->GetHeight();
     double video_length = demuxer->GetDuration();
-    double frame_rate = demuxer->GetFramerate();
+    double frame_rate   = demuxer->GetFramerate();
+    double timebase     = demuxer->GetTimebase();
     std::cout << "[mac] Video framerate: " << frame_rate
               << "  length: " << video_length << std::endl;
 
-    if (demuxer->GetNumFrames() == 0) {
+    if (demuxer->GetNumFrames() == 0)
         dc_context->estimated_num_frames = (int)(video_length * frame_rate);
-    } else {
+    else
         dc_context->estimated_num_frames = (int)demuxer->GetNumFrames() - 1;
-    }
     std::cout << "[mac] estimated_num_frames: "
               << dc_context->estimated_num_frames << std::endl;
 
-    size_t nVideoBytes = 0;
-    uint8_t *pVideo = nullptr;
+    (void)w; (void)h;  // used by caller via scene->image_width/height
+
+    AVCodecID codec_id = demuxer->GetVideoCodec();
+    uint8_t *extradata      = demuxer->GetExtradata();
+    int      extradata_size = demuxer->GetExtradataSize();
+
+    VTAsyncDecoder vt_dec;
+    bool use_vt = vt_dec.init(extradata, extradata_size, codec_id);
+    if (!use_vt)
+        std::cerr << "[mac] VTAsyncDecoder init failed; no video decode available\n";
+
+    size_t   nVideoBytes = 0;
+    uint8_t *pVideo      = nullptr;
     PacketData pktinfo;
-    int nFrame = 0;
+    int nFrame      = 0;
     int buffer_head = 0;
 
-    // --- Main loop ---
-    while (!(dc_context->stop_flag)) {
+    // -----------------------------------------------------------------------
+    // Lambda: store a decoded CVPixelBuffer into the next free display slot
+    // -----------------------------------------------------------------------
+    auto store_frame = [&](CVPixelBufferRef pb, int frame_num) {
+        // Slot 0 is stored without waiting (dc_context->decoding_flag not yet set)
+        if (frame_num > 0) {
+            while (!display_buffer[buffer_head].available_to_write &&
+                   !dc_context->stop_flag && !seek_info->use_seek) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+        }
+        if (dc_context->stop_flag || seek_info->use_seek) {
+            CFRelease(pb);
+            return false;
+        }
+        // Release any old pixel buffer still in this slot
+        mac_release_pixbuf_slot(display_buffer[buffer_head]);
+
+        display_buffer[buffer_head].pixel_buffer        = pb;  // transfer ownership
+        display_buffer[buffer_head].frame_number        = frame_num;
+        display_buffer[buffer_head].available_to_write  = false;
+
+        if (frame_num == 0)
+            dc_context->decoding_flag = true;
+        else
+            latest_decoded_frame[cam_name].store(frame_num);
+
+        nFrame++;
+        buffer_head = (buffer_head + 1) % size_of_buffer;
+        return true;
+    };
+
+    // -----------------------------------------------------------------------
+    // Main loop
+    // -----------------------------------------------------------------------
+    while (!dc_context->stop_flag) {
+        // ---- SEEK ----
         if (seek_info->use_seek) {
-            // Seek to nearest keyframe before the target
+            // 1. Drain any in-flight async decodes and clear buffered frames
+            vt_dec.flush();
+
+            // 2. Seek demuxer to nearest keyframe at or before the target
             uint64_t key_frame_num = demuxer->FindClosestKeyFrameFNI(
                 seek_info->seek_frame, dc_context->seek_interval);
-            SeekContext s(key_frame_num);
-            demuxer->Seek(s, pVideo, nVideoBytes, pktinfo);
-            avcodec_flush_buffers(codec_ctx);
+            SeekContext sc(key_frame_num);
+            demuxer->Seek(sc, pVideo, nVideoBytes, pktinfo);
 
-            // Reset display buffer
+            // 3. Release all pixel buffers in display slots
             for (int i = 0; i < size_of_buffer; i++) {
+                mac_release_pixbuf_slot(display_buffer[i]);
                 display_buffer[i].available_to_write = true;
             }
 
-            // Send the keyframe packet first
+            // 4. Recreate VT session (seek invalidates existing decode state)
+            vt_dec.destroy();
+            use_vt = vt_dec.init(extradata, extradata_size, codec_id);
+
+            // 5. Forward-decode from keyframe to the target frame using
+            //    blocking submissions (synchronous for seek accuracy).
+            uint64_t curr_frame = key_frame_num;
+            bool     seek_done  = false;
+
+            // Prime the session with the keyframe packet
             if (pVideo && nVideoBytes > 0) {
-                AVPacket *pkt = av_packet_alloc();
-                av_new_packet(pkt, (int)nVideoBytes);
-                memcpy(pkt->data, pVideo, nVideoBytes);
-                pkt->pts = pktinfo.pts;
-                pkt->dts = pktinfo.dts;
-                avcodec_send_packet(codec_ctx, pkt);
-                av_packet_unref(pkt);
-                av_packet_free(&pkt);
+                vt_dec.submit_blocking(pVideo, nVideoBytes, pktinfo.pts, pktinfo.dts,
+                                       timebase, (pktinfo.flags & AV_PKT_FLAG_KEY) != 0);
+                // After submit_blocking, callback has fired; drain_one() retrieves it
+                CVPixelBufferRef pb = vt_dec.drain_one();
+                if (pb) {
+                    if (curr_frame < seek_info->seek_frame) {
+                        CFRelease(pb);
+                        curr_frame++;
+                    } else {
+                        display_buffer[0].pixel_buffer       = pb;
+                        display_buffer[0].frame_number       = (int)seek_info->seek_frame;
+                        display_buffer[0].available_to_write = false;
+                        dc_context->decoding_flag            = true;
+                        seek_done = true;
+                    }
+                }
             }
 
-            // Accurate forward seek: decode from keyframe to target frame,
-            // discarding intermediate frames, so display_buffer[0] contains
-            // exactly seek_frame and nFrame is set correctly.
-            uint64_t curr_frame = key_frame_num;
-            bool seek_complete = false;
+            while (!seek_done && !dc_context->stop_flag) {
+                bool ok = demuxer->Demux(pVideo, nVideoBytes, pktinfo);
+                if (!ok) break;
+                if (!pVideo || nVideoBytes == 0) continue;
 
-            // Decode forward, discarding frames until we reach seek_frame
-            while (!seek_complete && !(dc_context->stop_flag)) {
-                int ret = avcodec_receive_frame(codec_ctx, hw_frame);
-                if (ret == AVERROR(EAGAIN)) {
-                    // Decoder needs more input — demux the next packet
-                    bool ok = demuxer->Demux(pVideo, nVideoBytes, pktinfo);
-                    if (!ok) break;
-                    AVPacket *pkt = av_packet_alloc();
-                    av_new_packet(pkt, (int)nVideoBytes);
-                    memcpy(pkt->data, pVideo, nVideoBytes);
-                    pkt->pts = pktinfo.pts;
-                    pkt->dts = pktinfo.dts;
-                    avcodec_send_packet(codec_ctx, pkt);
-                    av_packet_unref(pkt);
-                    av_packet_free(&pkt);
-                    continue;
-                }
-                if (ret < 0) break;
+                vt_dec.submit_blocking(pVideo, nVideoBytes, pktinfo.pts, pktinfo.dts,
+                                       timebase, (pktinfo.flags & AV_PKT_FLAG_KEY) != 0);
+                CVPixelBufferRef pb = vt_dec.drain_one();
+                if (!pb) continue;
 
                 if (curr_frame < seek_info->seek_frame) {
-                    // Not at target yet — discard and advance
-                    av_frame_unref(hw_frame);
+                    CFRelease(pb);
                     curr_frame++;
-                    continue;
-                }
-
-                // curr_frame == seek_frame: decode this frame into display_buffer[0]
-                bool converted = mac_vimage_nv12_to_rgba(
-                    hw_frame, display_buffer[0].frame, w, h,
-                    vimg_info, vimg_initialized);
-                if (!converted) {
-                    // Fallback: transfer to CPU then sws_scale
-                    AVFrame *frame_to_scale = hw_frame;
-                    if (hw_frame->format == AV_PIX_FMT_VIDEOTOOLBOX) {
-                        if (av_hwframe_transfer_data(sw_frame, hw_frame, 0) < 0) {
-                            av_frame_unref(hw_frame);
-                            break;
-                        }
-                        frame_to_scale = sw_frame;
-                    }
-                    AVPixelFormat src_fmt = (AVPixelFormat)frame_to_scale->format;
-                    if (!sws_ctx || src_fmt != last_src_fmt) {
-                        if (sws_ctx) sws_freeContext(sws_ctx);
-                        last_src_fmt = src_fmt;
-                        sws_ctx = sws_getContext(w, h, src_fmt, w, h, AV_PIX_FMT_RGBA,
-                                                 SWS_BILINEAR, nullptr, nullptr, nullptr);
-                    }
-                    if (!sws_ctx) { av_frame_unref(hw_frame); break; }
-                    uint8_t *dst[4] = {display_buffer[0].frame, nullptr, nullptr, nullptr};
-                    int dst_stride[4] = {w * 4, 0, 0, 0};
-                    sws_scale(sws_ctx, (const uint8_t *const *)frame_to_scale->data,
-                              frame_to_scale->linesize, 0, h, dst, dst_stride);
-                    converted = true;
-                }
-                if (converted) {
-                    display_buffer[0].frame_number = (int)seek_info->seek_frame;
+                } else {
+                    display_buffer[0].pixel_buffer       = pb;
+                    display_buffer[0].frame_number       = (int)seek_info->seek_frame;
                     display_buffer[0].available_to_write = false;
-                    dc_context->decoding_flag = true;
+                    dc_context->decoding_flag            = true;
+                    curr_frame++;
+                    seek_done = true;
                 }
-                av_frame_unref(hw_frame);
-                seek_complete = true;
-                curr_frame++;
             }
 
-            buffer_head = seek_complete ? 1 : 0;
-            nFrame = (int)curr_frame;
+            buffer_head = 1;
+            nFrame      = (int)curr_frame;
             latest_decoded_frame[cam_name].store((int)seek_info->seek_frame);
-            seek_info->use_seek = false;
+            seek_info->use_seek  = false;
             seek_info->seek_done = true;
             continue;
         }
 
+        // ---- NORMAL PLAYBACK ----
         if (!window_need_decoding[cam_name].load()) {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
             continue;
         }
 
-        // Demux one packet
         bool demux_ok = demuxer->Demux(pVideo, nVideoBytes, pktinfo);
-
-        AVPacket *pkt = av_packet_alloc();
         if (demux_ok && pVideo && nVideoBytes > 0) {
-            av_new_packet(pkt, (int)nVideoBytes);
-            memcpy(pkt->data, pVideo, nVideoBytes);
-            pkt->pts = pktinfo.pts;
-            pkt->dts = pktinfo.dts;
-            avcodec_send_packet(codec_ctx, pkt);
+            vt_dec.submit(pVideo, nVideoBytes, pktinfo.pts, pktinfo.dts,
+                          timebase, (pktinfo.flags & AV_PKT_FLAG_KEY) != 0);
         } else {
-            // End of stream — flush decoder
-            avcodec_send_packet(codec_ctx, nullptr);
-        }
-        av_packet_unref(pkt);
-        av_packet_free(&pkt);
-
-        // Receive all decoded frames from this packet
-        while (true) {
-            int ret = avcodec_receive_frame(codec_ctx, hw_frame);
-            if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
-                break;
-            if (ret < 0)
-                break;
-
-            // Wait for a free buffer slot (except for the very first frame)
-            if (nFrame > 0) {
-                while (!display_buffer[buffer_head].available_to_write &&
-                       !(dc_context->stop_flag) && !(seek_info->use_seek)) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                }
-            }
-
-            if (dc_context->stop_flag || seek_info->use_seek) {
-                av_frame_unref(hw_frame);
-                break;
-            }
-
-            // Convert to RGBA: try fast vImage path first, fall back to sws_scale
-            bool converted = mac_vimage_nv12_to_rgba(
-                hw_frame, display_buffer[buffer_head].frame, w, h,
-                vimg_info, vimg_initialized);
-            if (!converted) {
-                // Fallback: transfer to CPU then sws_scale
-                AVFrame *frame_to_scale = hw_frame;
-                if (hw_frame->format == AV_PIX_FMT_VIDEOTOOLBOX) {
-                    if (av_hwframe_transfer_data(sw_frame, hw_frame, 0) < 0) {
-                        av_frame_unref(hw_frame);
-                        continue;
-                    }
-                    frame_to_scale = sw_frame;
-                }
-                AVPixelFormat src_fmt = (AVPixelFormat)frame_to_scale->format;
-                if (!sws_ctx || src_fmt != last_src_fmt) {
-                    if (sws_ctx) sws_freeContext(sws_ctx);
-                    last_src_fmt = src_fmt;
-                    sws_ctx = sws_getContext(w, h, src_fmt, w, h, AV_PIX_FMT_RGBA,
-                                             SWS_BILINEAR, nullptr, nullptr, nullptr);
-                    if (!sws_ctx) { av_frame_unref(hw_frame); continue; }
-                }
-                uint8_t *dst[4] = {display_buffer[buffer_head].frame, nullptr,
-                                   nullptr, nullptr};
-                int dst_stride[4] = {w * 4, 0, 0, 0};
-                sws_scale(sws_ctx, (const uint8_t *const *)frame_to_scale->data,
-                          frame_to_scale->linesize, 0, h, dst, dst_stride);
-            }
-
-            display_buffer[buffer_head].frame_number = nFrame;
-            display_buffer[buffer_head].available_to_write = false;
-
-            if (nFrame == 0) {
-                dc_context->decoding_flag = true;
-            } else {
-                latest_decoded_frame[cam_name].store(nFrame);
-            }
-
-            nFrame++;
-            buffer_head = (buffer_head + 1) % size_of_buffer;
-
-            av_frame_unref(hw_frame);
-        }
-
-        if (!demux_ok) {
+            // End of stream
             dc_context->total_num_frame = nFrame;
+        }
+
+        // Drain decoded frames from the reorder queue
+        while (true) {
+            CVPixelBufferRef pb = vt_dec.pop_next();
+            if (!pb) break;
+            if (!store_frame(pb, nFrame))
+                break;
         }
     }
 
-    // Cleanup
-    if (sws_ctx)
-        sws_freeContext(sws_ctx);
-    av_frame_free(&hw_frame);
-    av_frame_free(&sw_frame);
-    avcodec_free_context(&codec_ctx);
+    // Cleanup: release any retained pixel buffers
+    vt_dec.flush();
+    for (int i = 0; i < size_of_buffer; i++)
+        mac_release_pixbuf_slot(display_buffer[i]);
 }
 
 #endif // __APPLE__
