@@ -34,6 +34,7 @@ struct PacketData {
     uint64_t pos;
     uint64_t bsl;
     uint64_t duration;
+    int flags; // AVPacket flags, e.g. AV_PKT_FLAG_KEY for keyframes
 };
 
 enum SeekMode {

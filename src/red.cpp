@@ -424,12 +424,19 @@ int main(int argc, char **argv) {
                     ImGui::AlignTextToFramePadding();
                     ImGui::TextUnformatted("Set Playback Speed");
                     ImGui::SameLine();
-                    HelpMarker("Range: 0.1x to 1.0x; affects render pacing.");
+                    HelpMarker("Log2 scale: 1/16x to 1x.");
 
                     ImGui::TableSetColumnIndex(1);
-                    ImGui::SliderFloat("##set_playback_speed",
-                                       &set_playback_speed, 0.1f, 1.0f,
-                                       "%.1fx");
+                    // Format label: show as fraction, e.g. "1/8x"
+                    char speed_label[16];
+                    int denom = (int)roundf(1.0f / set_playback_speed);
+                    if (denom <= 1)
+                        snprintf(speed_label, sizeof(speed_label), "1x");
+                    else
+                        snprintf(speed_label, sizeof(speed_label), "1/%dx", denom);
+                    ImGui::SliderFloat("##set_playback_speed", &set_playback_speed,
+                                       1.0f / 16.0f, 1.0f, speed_label,
+                                       ImGuiSliderFlags_Logarithmic);
 
                     // Row: Current speed readout
                     ImGui::TableNextRow();

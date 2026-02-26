@@ -13,6 +13,7 @@ extern "C" {
 #include <libswscale/swscale.h>
 }
 #endif
+#include <atomic>
 #include <opencv2/opencv.hpp>
 
 struct SeekInfo {

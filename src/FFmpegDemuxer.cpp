@@ -193,6 +193,7 @@ bool FFmpegDemuxer::Demux(uint8_t *&pVideo, size_t &rVideoBytes,
     last_packet_data.dts = pktDst.dts;
     last_packet_data.pos = pktDst.pos;
     last_packet_data.duration = pktDst.duration;
+    last_packet_data.flags = pktSrc.flags;
 
     pktData = last_packet_data;
 

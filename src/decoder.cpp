@@ -394,12 +394,6 @@ void decoder_process(DecoderContext *dc_context, FFmpegDemuxer *demuxer,
                 display_buffer[i].available_to_write = true;
             }
 
-            // Accurate forward seek: decode from keyframe to target frame,
-            // discarding intermediate frames, so display_buffer[0] contains
-            // exactly seek_frame and nFrame is set correctly.
-            uint64_t curr_frame = key_frame_num;
-            bool seek_complete = false;
-
             // Send the keyframe packet first
             if (pVideo && nVideoBytes > 0) {
                 AVPacket *pkt = av_packet_alloc();
@@ -411,6 +405,12 @@ void decoder_process(DecoderContext *dc_context, FFmpegDemuxer *demuxer,
                 av_packet_unref(pkt);
                 av_packet_free(&pkt);
             }
+
+            // Accurate forward seek: decode from keyframe to target frame,
+            // discarding intermediate frames, so display_buffer[0] contains
+            // exactly seek_frame and nFrame is set correctly.
+            uint64_t curr_frame = key_frame_num;
+            bool seek_complete = false;
 
             // Decode forward, discarding frames until we reach seek_frame
             while (!seek_complete && !(dc_context->stop_flag)) {
