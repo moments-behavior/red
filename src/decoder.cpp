@@ -295,7 +295,7 @@ static bool mac_vimage_nv12_to_rgba(AVFrame *hw_frame, uint8_t *dst_rgba,
     // ARGB[0]=A, [1]=R, [2]=G, [3]=B  →  RGBA: dest[0]=R, [1]=G, [2]=B, [3]=A
     const uint8_t permuteMap[4] = { 1, 2, 3, 0 };
     vImageConvert_420Yp8_CbCr8ToARGB8888(
-        &y_buf, &uv_buf, &dst, &info, permuteMap, 255, kvImageDoNotTile);
+        &y_buf, &uv_buf, &dst, &info, permuteMap, 255, kvImageNoFlags);
 
     CVPixelBufferUnlockBaseAddress(pixbuf, kCVPixelBufferLock_ReadOnly);
     return true;
