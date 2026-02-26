@@ -5,7 +5,11 @@
 #include "gui.h"
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
+#ifdef __APPLE__
+#include "imgui_impl_vulkan.h"
+#else
 #include "imgui_impl_opengl3.h"
+#endif
 #include "implot.h"
 #include "live_table.h"
 #include "project.h"
@@ -147,7 +151,11 @@ int main(int argc, char **argv) {
 
     std::string background_image_path = "";
     bool background_image_selected = false;
+#ifndef __APPLE__
     GLuint background_texture = 0;
+#else
+    uintptr_t background_texture = 0;
+#endif
     int background_width = 0, background_height = 0;
     colors[ImPlotCol_Crosshairs] = ImVec4(0.3f, 0.10f, 0.64f, 1.00f);
 
@@ -192,6 +200,11 @@ int main(int argc, char **argv) {
 
     ReprojectionTool rp_tool;
 
+#ifdef __APPLE__
+    // Per-camera last-uploaded frame number for Vulkan (skip redundant uploads)
+    std::vector<int> mac_last_uploaded_frame(MAX_VIEWS, -1);
+#endif
+
     if (argc > 1) {
         for (int i = 1; i < argc; ++i) {
             const char *path = argv[i];
@@ -230,8 +243,20 @@ int main(int argc, char **argv) {
         // Poll and handle events (inputs, window resize, etc.)
         glfwPollEvents();
 
+#ifdef __APPLE__
+        // Acquire swapchain image and open command buffer before ImGui/uploads
+        if (!vk_begin_frame()) {
+            // window minimized or swapchain out-of-date — skip this frame
+            continue;
+        }
+#endif
+
         // Start the Dear ImGui frame
+#ifdef __APPLE__
+        ImGui_ImplVulkan_NewFrame();
+#else
         ImGui_ImplOpenGL3_NewFrame();
+#endif
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
 
@@ -620,6 +645,7 @@ int main(int argc, char **argv) {
                     background_image_selected = true;
 
                     // Load the background image texture
+#ifndef __APPLE__
                     if (background_texture != 0) {
                         glDeleteTextures(1, &background_texture);
                         background_texture = 0;
@@ -650,6 +676,10 @@ int main(int argc, char **argv) {
 
                         stbi_image_free(image_data);
                     }
+#else
+                    // Background texture not supported on macOS/Vulkan yet
+                    (void)background_width; (void)background_height;
+#endif
                 }
             }
             ImGuiFileDialog::Instance()->Close();
@@ -1029,19 +1059,21 @@ int main(int argc, char **argv) {
 
                 if (is_visible) {
 #ifdef __APPLE__
-                    // macOS: upload CPU frame buffer directly to texture
+                    // macOS: upload CPU frame buffer to Vulkan texture
                     if (ps.play_video) {
                         current_frame_num = ps.to_display_frame_number;
                     }
                     {
                         int mac_head =
                             ps.play_video ? ps.read_head : select_corr_head;
-                        glBindTexture(GL_TEXTURE_2D, scene->image_texture[j]);
-                        glTexSubImage2D(
-                            GL_TEXTURE_2D, 0, 0, 0, scene->image_width[j],
-                            scene->image_height[j], GL_RGBA, GL_UNSIGNED_BYTE,
-                            scene->display_buffer[j][mac_head].frame);
-                        glBindTexture(GL_TEXTURE_2D, 0);
+                        int fn = scene->display_buffer[j][mac_head].frame_number;
+                        if (fn != mac_last_uploaded_frame[j]) {
+                            vk_upload_texture(j,
+                                scene->display_buffer[j][mac_head].frame,
+                                scene->image_width[j],
+                                scene->image_height[j]);
+                            mac_last_uploaded_frame[j] = fn;
+                        }
                     }
 #else
                     if (ps.play_video) {
@@ -1167,7 +1199,11 @@ int main(int argc, char **argv) {
                                               ImPlotFlags_Crosshairs)) {
                         ImPlot::PlotImage(
                             "##no_image_name",
+#ifdef __APPLE__
+                            (ImTextureID)scene->image_descriptor[j],
+#else
                             (ImTextureID)(intptr_t)scene->image_texture[j],
+#endif
                             ImVec2(0, 0),
                             ImVec2(scene->image_width[j],
                                    scene->image_height[j]));
@@ -3285,10 +3321,12 @@ int main(int argc, char **argv) {
                                        background_width, background_height);
                     ImGui::SameLine();
                     if (ImGui::Button("Clear Background")) {
+#ifndef __APPLE__
                         if (background_texture != 0) {
                             glDeleteTextures(1, &background_texture);
                             background_texture = 0;
                         }
+#endif
                         background_image_path = "";
                         background_image_selected = false;
                         background_width = 0;
@@ -3920,6 +3958,12 @@ int main(int argc, char **argv) {
 
         // Rendering
         ImGui::Render();
+#ifdef __APPLE__
+        vk_begin_rendering();
+        ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(),
+            g_vk->command_buffers[g_vk->current_frame]);
+        vk_end_frame();
+#else
         int display_w, display_h;
         glfwGetFramebufferSize(window->render_target, &display_w, &display_h);
         glViewport(0, 0, display_w, display_h);
@@ -3929,11 +3973,6 @@ int main(int argc, char **argv) {
         glClear(GL_COLOR_BUFFER_BIT);
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
-        // Update and Render additional Platform Windows
-        // (Platform functions may change the current OpenGL context, so we
-        // save/restore it to make it easier to paste this code elsewhere.
-        //  For this specific demo app we could also call
-        //  glfwMakeContextCurrent(window) directly)
         if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
             GLFWwindow *backup_current_context = glfwGetCurrentContext();
             ImGui::UpdatePlatformWindows();
@@ -3942,6 +3981,7 @@ int main(int argc, char **argv) {
         }
 
         glfwSwapBuffers(window->render_target);
+#endif
 
         if (ps.just_seeked) {
             ps.just_seeked = false;
@@ -3989,7 +4029,11 @@ int main(int argc, char **argv) {
     }
     // Cleanup
     cleanup_yolo_drag_boxes(); // Clean up YOLO drag boxes memory
+#ifdef __APPLE__
+    vk_cleanup();  // includes vkDeviceWaitIdle + ImGui_ImplVulkan_Shutdown
+#else
     ImGui_ImplOpenGL3_Shutdown();
+#endif
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();
 

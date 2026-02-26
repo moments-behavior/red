@@ -11,7 +11,7 @@ if(APPLE)
 
     find_package(OpenCV REQUIRED COMPONENTS core calib3d imgproc imgcodecs videoio)
     find_package(glfw3 REQUIRED)
-    find_package(GLEW REQUIRED)
+    find_package(Vulkan REQUIRED)
 
     set(DIR_IMGUI "${CMAKE_SOURCE_DIR}/lib/imgui")
     set(DIR_IMPLOT "${CMAKE_SOURCE_DIR}/lib/implot")
@@ -27,7 +27,7 @@ if(APPLE)
     file(GLOB IMGUI_SRC
         ${DIR_IMGUI}/*.cpp
         ${DIR_IMGUI}/backends/imgui_impl_glfw.cpp
-        ${DIR_IMGUI}/backends/imgui_impl_opengl3.cpp
+        ${DIR_IMGUI}/backends/imgui_impl_vulkan.cpp
         ${DIR_IMGUI}/misc/cpp/imgui_stdlib.cpp
         ${DIR_FILEBROWSER}/ImGuiFileDialog.cpp
     )
@@ -48,6 +48,7 @@ if(APPLE)
         lib/IconFontCppHeaders
         ${OpenCV_INCLUDE_DIRS}
         ${FFMPEG_INCLUDE_DIRS}
+        ${Vulkan_INCLUDE_DIRS}
         /opt/homebrew/include
     )
 
@@ -57,8 +58,9 @@ if(APPLE)
         ${OpenCV_LIBS}
         opencv_sfm
         glfw
-        GLEW::GLEW
-        "-framework OpenGL"
+        Vulkan::Vulkan
+        "-framework Metal"
+        "-framework QuartzCore"
         "-framework VideoToolbox"
         "-framework CoreMedia"
         "-framework CoreFoundation"
@@ -66,9 +68,57 @@ if(APPLE)
         pthread
     )
 
-    target_compile_definitions(red PRIVATE GL_SILENCE_DEPRECATION)
+    target_compile_definitions(red PRIVATE GLFW_INCLUDE_VULKAN)
 
     set_target_properties(red PROPERTIES
+        CXX_STANDARD 17
+        CXX_STANDARD_REQUIRED ON
+    )
+
+    # Test target: same source/deps as red, replacing red.cpp with tests/test_gui.cpp
+    set(TEST_GUI_SRC_FILES ${SRC_FILES})
+    list(REMOVE_ITEM TEST_GUI_SRC_FILES "${CMAKE_SOURCE_DIR}/src/red.cpp")
+
+    add_executable(test_gui
+        ${TEST_GUI_SRC_FILES}
+        ${IMGUI_SRC}
+        ${IMPLOT_SRC}
+        tests/test_gui.cpp
+    )
+
+    target_include_directories(test_gui PRIVATE
+        src
+        ${DIR_IMGUI}
+        ${DIR_IMGUI}/backends
+        ${DIR_IMPLOT}
+        ${DIR_FILEBROWSER}
+        lib/nvcodec
+        lib/IconFontCppHeaders
+        ${OpenCV_INCLUDE_DIRS}
+        ${FFMPEG_INCLUDE_DIRS}
+        ${Vulkan_INCLUDE_DIRS}
+        /opt/homebrew/include
+    )
+
+    target_link_directories(test_gui PRIVATE ${FFMPEG_LIBRARY_DIRS})
+
+    target_link_libraries(test_gui PRIVATE
+        ${OpenCV_LIBS}
+        opencv_sfm
+        glfw
+        Vulkan::Vulkan
+        "-framework Metal"
+        "-framework QuartzCore"
+        "-framework VideoToolbox"
+        "-framework CoreMedia"
+        "-framework CoreFoundation"
+        ${FFMPEG_LIBRARIES}
+        pthread
+    )
+
+    target_compile_definitions(test_gui PRIVATE GLFW_INCLUDE_VULKAN)
+
+    set_target_properties(test_gui PROPERTIES
         CXX_STANDARD 17
         CXX_STANDARD_REQUIRED ON
     )

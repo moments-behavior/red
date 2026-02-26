@@ -9,7 +9,6 @@ void render_initialize_target(gx_context *context) {
 
 void render_allocate_scene_memory(RenderScene *scene, u32 size_of_buffer) {
     int num_cams = scene->num_cams;
-    scene->image_texture = (GLuint *)malloc(sizeof(GLuint) * num_cams);
     scene->size_of_buffer = size_of_buffer;
 
     scene->seek_context = (SeekInfo *)malloc(sizeof(SeekInfo) * num_cams);
@@ -28,8 +27,8 @@ void render_allocate_scene_memory(RenderScene *scene, u32 size_of_buffer) {
     }
 
     scene->pbo_cuda = (PBO_CUDA *)malloc(sizeof(PBO_CUDA) * num_cams);
-    for (u32 j = 0; j < num_cams; j++) {
 #ifndef __APPLE__
+    for (u32 j = 0; j < num_cams; j++) {
         create_pbo(&scene->pbo_cuda[j].pbo, scene->image_width[j],
                    scene->image_height[j]);
         register_pbo_to_cuda(&scene->pbo_cuda[j].pbo,
@@ -39,11 +38,8 @@ void render_allocate_scene_memory(RenderScene *scene, u32 size_of_buffer) {
             &scene->pbo_cuda[j].cuda_buffer,
             &scene->pbo_cuda[j].cuda_pbo_storage_buffer_size,
             &scene->pbo_cuda[j].cuda_resource);
-#else
-        scene->pbo_cuda[j].pbo = 0;
-        scene->pbo_cuda[j].cuda_buffer = nullptr;
-#endif
     }
+#endif
 
     // allocate frame buffers
     for (u32 j = 0; j < num_cams; j++) {
@@ -75,19 +71,25 @@ void render_allocate_scene_memory(RenderScene *scene, u32 size_of_buffer) {
         }
     }
 
+#ifdef __APPLE__
+    // Vulkan: create GPU textures and grab their descriptor sets
+    vk_allocate_textures(num_cams, scene->image_width, scene->image_height);
+    scene->image_descriptor =
+        (VkDescriptorSet *)malloc(sizeof(VkDescriptorSet) * num_cams);
+    for (int j = 0; j < num_cams; j++)
+        scene->image_descriptor[j] = g_vk->textures[j].descriptor_set;
+#else
+    scene->image_texture = (GLuint *)malloc(sizeof(GLuint) * num_cams);
     for (u32 j = 0; j < num_cams; j++) {
         glGenTextures(1, &scene->image_texture[j]);
         glBindTexture(GL_TEXTURE_2D, scene->image_texture[j]);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, scene->image_width[j],
                      scene->image_height[j], 0, GL_RGBA, GL_UNSIGNED_BYTE,
                      NULL);
-        // Setup filtering parameters for display
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S,
-                        GL_CLAMP_TO_EDGE); // This is required on WebGL for non
-                                           // power-of-two textures
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T,
-                        GL_CLAMP_TO_EDGE); // Same
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     }
+#endif
 }

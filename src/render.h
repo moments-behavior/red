@@ -4,9 +4,9 @@
 #include "gx_helper.h"
 
 struct PBO_CUDA {
+#ifndef __APPLE__
     GLuint pbo;
     unsigned char *cuda_buffer;
-#ifndef __APPLE__
     cudaGraphicsResource_t cuda_resource;
     size_t cuda_pbo_storage_buffer_size;
 #endif
@@ -17,7 +17,11 @@ struct RenderScene {
     u32 *image_width;
     u32 *image_height;
     u32 size_of_buffer;
+#ifdef __APPLE__
+    VkDescriptorSet *image_descriptor;  // ImTextureID per camera (Vulkan)
+#else
     GLuint *image_texture;
+#endif
     PBO_CUDA *pbo_cuda;
     PictureBuffer **display_buffer;
     SeekInfo *seek_context;
