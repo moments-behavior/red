@@ -247,6 +247,60 @@ void decoder_process(DecoderContext *dc_context, FFmpegDemuxer *demuxer,
 // macOS decoder using FFmpeg + VideoToolbox hardware acceleration
 // Falls back to software decode if VideoToolbox is unavailable.
 
+#include <Accelerate/Accelerate.h>
+#include <CoreVideo/CoreVideo.h>
+
+// Convert a VideoToolbox CVPixelBuffer (NV12) directly to RGBA using vImage,
+// writing into dst_rgba (w*h*4 bytes). info/info_init are cached per thread.
+// Returns true on success; false if the pixel format is not NV12 (caller should
+// fall back to sws_scale).
+static bool mac_vimage_nv12_to_rgba(AVFrame *hw_frame, uint8_t *dst_rgba,
+                                     int w, int h,
+                                     vImage_YpCbCrToARGB &info,
+                                     bool &info_init) {
+    if (hw_frame->format != AV_PIX_FMT_VIDEOTOOLBOX)
+        return false;
+
+    CVPixelBufferRef pixbuf = (CVPixelBufferRef)hw_frame->data[3];
+    OSType pix_fmt = CVPixelBufferGetPixelFormatType(pixbuf);
+
+    bool full_range = (pix_fmt == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange);
+    if (!full_range && pix_fmt != kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange)
+        return false;  // unsupported pixel format — caller falls back to sws
+
+    if (!info_init) {
+        vImage_YpCbCrPixelRange range = full_range
+            ? (vImage_YpCbCrPixelRange){ 0, 128, 255, 255, 255, 0, 255, 0 }
+            : (vImage_YpCbCrPixelRange){ 16, 128, 235, 240, 255, 1, 255, 0 };
+        vImageConvert_YpCbCrToARGB_GenerateConversion(
+            kvImage_YpCbCrToARGBMatrix_ITU_R_601_4,
+            &range, &info,
+            kvImage420Yp8_CbCr8, kvImageARGB8888,
+            kvImageNoFlags);
+        info_init = true;
+    }
+
+    CVPixelBufferLockBaseAddress(pixbuf, kCVPixelBufferLock_ReadOnly);
+
+    uint8_t *y_ptr    = (uint8_t *)CVPixelBufferGetBaseAddressOfPlane(pixbuf, 0);
+    size_t   y_stride = CVPixelBufferGetBytesPerRowOfPlane(pixbuf, 0);
+    uint8_t *uv_ptr   = (uint8_t *)CVPixelBufferGetBaseAddressOfPlane(pixbuf, 1);
+    size_t   uv_stride = CVPixelBufferGetBytesPerRowOfPlane(pixbuf, 1);
+
+    vImage_Buffer y_buf  = { y_ptr,  (vImagePixelCount)h,   (vImagePixelCount)w,   y_stride  };
+    vImage_Buffer uv_buf = { uv_ptr, (vImagePixelCount)h/2, (vImagePixelCount)w/2, uv_stride };
+    vImage_Buffer dst    = { dst_rgba, (vImagePixelCount)h, (vImagePixelCount)w, (size_t)w * 4 };
+
+    // permuteMap: reorder vImage's ARGB output to RGBA
+    // ARGB[0]=A, [1]=R, [2]=G, [3]=B  →  RGBA: dest[0]=R, [1]=G, [2]=B, [3]=A
+    const uint8_t permuteMap[4] = { 1, 2, 3, 0 };
+    vImageConvert_420Yp8_CbCr8ToARGB8888(
+        &y_buf, &uv_buf, &dst, &info, permuteMap, 255, kvImageDoNotTile);
+
+    CVPixelBufferUnlockBaseAddress(pixbuf, kCVPixelBufferLock_ReadOnly);
+    return true;
+}
+
 static enum AVPixelFormat mac_get_hw_format(AVCodecContext *,
                                             const enum AVPixelFormat *pix_fmts) {
     for (const enum AVPixelFormat *p = pix_fmts; *p != AV_PIX_FMT_NONE; p++) {
@@ -297,6 +351,8 @@ void decoder_process(DecoderContext *dc_context, FFmpegDemuxer *demuxer,
     AVFrame *sw_frame = av_frame_alloc();
     SwsContext *sws_ctx = nullptr;
     AVPixelFormat last_src_fmt = AV_PIX_FMT_NONE;
+    vImage_YpCbCrToARGB vimg_info = {};
+    bool vimg_initialized = false;
 
     int w = (int)demuxer->GetWidth();
     int h = (int)demuxer->GetHeight();
@@ -379,28 +435,34 @@ void decoder_process(DecoderContext *dc_context, FFmpegDemuxer *demuxer,
                 }
 
                 // curr_frame == seek_frame: decode this frame into display_buffer[0]
-                AVFrame *frame_to_scale = hw_frame;
-                if (hw_frame->format == AV_PIX_FMT_VIDEOTOOLBOX) {
-                    if (av_hwframe_transfer_data(sw_frame, hw_frame, 0) < 0) {
-                        av_frame_unref(hw_frame);
-                        break;
+                bool converted = mac_vimage_nv12_to_rgba(
+                    hw_frame, display_buffer[0].frame, w, h,
+                    vimg_info, vimg_initialized);
+                if (!converted) {
+                    // Fallback: transfer to CPU then sws_scale
+                    AVFrame *frame_to_scale = hw_frame;
+                    if (hw_frame->format == AV_PIX_FMT_VIDEOTOOLBOX) {
+                        if (av_hwframe_transfer_data(sw_frame, hw_frame, 0) < 0) {
+                            av_frame_unref(hw_frame);
+                            break;
+                        }
+                        frame_to_scale = sw_frame;
                     }
-                    frame_to_scale = sw_frame;
-                }
-
-                AVPixelFormat src_fmt = (AVPixelFormat)frame_to_scale->format;
-                if (!sws_ctx || src_fmt != last_src_fmt) {
-                    if (sws_ctx) sws_freeContext(sws_ctx);
-                    last_src_fmt = src_fmt;
-                    sws_ctx = sws_getContext(w, h, src_fmt, w, h, AV_PIX_FMT_RGBA,
-                                             SWS_BILINEAR, nullptr, nullptr, nullptr);
-                }
-                if (sws_ctx) {
+                    AVPixelFormat src_fmt = (AVPixelFormat)frame_to_scale->format;
+                    if (!sws_ctx || src_fmt != last_src_fmt) {
+                        if (sws_ctx) sws_freeContext(sws_ctx);
+                        last_src_fmt = src_fmt;
+                        sws_ctx = sws_getContext(w, h, src_fmt, w, h, AV_PIX_FMT_RGBA,
+                                                 SWS_BILINEAR, nullptr, nullptr, nullptr);
+                    }
+                    if (!sws_ctx) { av_frame_unref(hw_frame); break; }
                     uint8_t *dst[4] = {display_buffer[0].frame, nullptr, nullptr, nullptr};
                     int dst_stride[4] = {w * 4, 0, 0, 0};
-                    sws_scale(sws_ctx,
-                              (const uint8_t *const *)frame_to_scale->data,
+                    sws_scale(sws_ctx, (const uint8_t *const *)frame_to_scale->data,
                               frame_to_scale->linesize, 0, h, dst, dst_stride);
+                    converted = true;
+                }
+                if (converted) {
                     display_buffer[0].frame_number = (int)seek_info->seek_frame;
                     display_buffer[0].available_to_write = false;
                     dc_context->decoding_flag = true;
@@ -448,33 +510,6 @@ void decoder_process(DecoderContext *dc_context, FFmpegDemuxer *demuxer,
             if (ret < 0)
                 break;
 
-            // Transfer hardware frame to CPU if needed
-            AVFrame *frame_to_scale;
-            if (hw_frame->format == AV_PIX_FMT_VIDEOTOOLBOX) {
-                if (av_hwframe_transfer_data(sw_frame, hw_frame, 0) < 0) {
-                    av_frame_unref(hw_frame);
-                    continue;
-                }
-                frame_to_scale = sw_frame;
-            } else {
-                frame_to_scale = hw_frame;
-            }
-
-            // Lazy-init swscale context
-            AVPixelFormat src_fmt = (AVPixelFormat)frame_to_scale->format;
-            if (!sws_ctx || src_fmt != last_src_fmt) {
-                if (sws_ctx)
-                    sws_freeContext(sws_ctx);
-                last_src_fmt = src_fmt;
-                sws_ctx = sws_getContext(w, h, src_fmt, w, h, AV_PIX_FMT_RGBA,
-                                         SWS_BILINEAR, nullptr, nullptr,
-                                         nullptr);
-                if (!sws_ctx) {
-                    av_frame_unref(hw_frame);
-                    continue;
-                }
-            }
-
             // Wait for a free buffer slot (except for the very first frame)
             if (nFrame > 0) {
                 while (!display_buffer[buffer_head].available_to_write &&
@@ -488,13 +523,34 @@ void decoder_process(DecoderContext *dc_context, FFmpegDemuxer *demuxer,
                 break;
             }
 
-            // Scale to RGBA into the CPU display buffer
-            uint8_t *dst[4] = {display_buffer[buffer_head].frame, nullptr,
-                               nullptr, nullptr};
-            int dst_stride[4] = {w * 4, 0, 0, 0};
-            sws_scale(sws_ctx,
-                      (const uint8_t *const *)frame_to_scale->data,
-                      frame_to_scale->linesize, 0, h, dst, dst_stride);
+            // Convert to RGBA: try fast vImage path first, fall back to sws_scale
+            bool converted = mac_vimage_nv12_to_rgba(
+                hw_frame, display_buffer[buffer_head].frame, w, h,
+                vimg_info, vimg_initialized);
+            if (!converted) {
+                // Fallback: transfer to CPU then sws_scale
+                AVFrame *frame_to_scale = hw_frame;
+                if (hw_frame->format == AV_PIX_FMT_VIDEOTOOLBOX) {
+                    if (av_hwframe_transfer_data(sw_frame, hw_frame, 0) < 0) {
+                        av_frame_unref(hw_frame);
+                        continue;
+                    }
+                    frame_to_scale = sw_frame;
+                }
+                AVPixelFormat src_fmt = (AVPixelFormat)frame_to_scale->format;
+                if (!sws_ctx || src_fmt != last_src_fmt) {
+                    if (sws_ctx) sws_freeContext(sws_ctx);
+                    last_src_fmt = src_fmt;
+                    sws_ctx = sws_getContext(w, h, src_fmt, w, h, AV_PIX_FMT_RGBA,
+                                             SWS_BILINEAR, nullptr, nullptr, nullptr);
+                    if (!sws_ctx) { av_frame_unref(hw_frame); continue; }
+                }
+                uint8_t *dst[4] = {display_buffer[buffer_head].frame, nullptr,
+                                   nullptr, nullptr};
+                int dst_stride[4] = {w * 4, 0, 0, 0};
+                sws_scale(sws_ctx, (const uint8_t *const *)frame_to_scale->data,
+                          frame_to_scale->linesize, 0, h, dst, dst_stride);
+            }
 
             display_buffer[buffer_head].frame_number = nFrame;
             display_buffer[buffer_head].available_to_write = false;

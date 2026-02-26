@@ -64,6 +64,8 @@ if(APPLE)
         "-framework VideoToolbox"
         "-framework CoreMedia"
         "-framework CoreFoundation"
+        "-framework Accelerate"
+        "-framework CoreVideo"
         ${FFMPEG_LIBRARIES}
         pthread
     )
@@ -112,6 +114,8 @@ if(APPLE)
         "-framework VideoToolbox"
         "-framework CoreMedia"
         "-framework CoreFoundation"
+        "-framework Accelerate"
+        "-framework CoreVideo"
         ${FFMPEG_LIBRARIES}
         pthread
     )

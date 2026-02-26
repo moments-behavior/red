@@ -207,7 +207,10 @@ int main(int argc, char **argv) {
 
     if (argc > 1) {
         for (int i = 1; i < argc; ++i) {
-            const char *path = argv[i];
+            std::filesystem::path path = argv[i];
+            // If a directory is passed, look for a sibling .redproj file
+            if (std::filesystem::is_directory(path))
+                path = path.parent_path() / (path.filename().string() + ".redproj");
             ProjectManager loaded;
             if (!load_project_manager_json(&loaded, path, &error_message)) {
                 show_error = true;
@@ -3988,25 +3991,27 @@ int main(int argc, char **argv) {
         } else {
             if (dc_context->decoding_flag && ps.play_video) {
                 int frame_to_show = ps.to_display_frame_number;
+                // Cap to slowest decoded camera (applied in both modes)
+                int min_decoded_frame = INT_MAX;
+                for (const auto &[cam_name, visible] : window_need_decoding) {
+                    if (visible.load()) {
+                        int decoded = latest_decoded_frame[cam_name].load();
+                        min_decoded_frame =
+                            std::min(min_decoded_frame, decoded);
+                    }
+                }
+
                 // CHOOSE MODE
                 if (ps.realtime_playback) {
-                    // --- Real-time frame selection ---
+                    // --- Real-time frame selection: advance by wall clock ---
                     frame_to_show = static_cast<int>(
                         std::ceil(playback_time_now * dc_context->video_fps));
-                    int min_decoded_frame = INT_MAX;
-                    for (const auto &[cam_name, visible] :
-                         window_need_decoding) {
-                        if (visible.load()) {
-                            int decoded = latest_decoded_frame[cam_name].load();
-                            min_decoded_frame =
-                                std::min(min_decoded_frame, decoded);
-                        }
-                    }
-                    frame_to_show = std::min(frame_to_show, min_decoded_frame);
                 } else {
-                    // --- Tick-based mode (play every frame sequentially) ---
+                    // --- Tick-based mode: advance one frame per render tick,
+                    //     but never past what the decoder has filled ---
                     frame_to_show = ps.to_display_frame_number + 1;
                 }
+                frame_to_show = std::min(frame_to_show, min_decoded_frame);
                 frame_to_show =
                     std::min(frame_to_show, dc_context->total_num_frame - 1);
                 int frame_delta = frame_to_show - ps.to_display_frame_number;
