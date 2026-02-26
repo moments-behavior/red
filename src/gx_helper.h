@@ -27,6 +27,7 @@ typedef struct gx_context {
     GLFWwindow *render_target;
     char *render_target_title;
     char *glsl_version;  // unused on macOS/Vulkan, kept for Linux compat
+    std::string exe_dir; // absolute path to directory containing the binary
 } gx_context;
 
 static void gx_glfw_error_callback(int error, const char *description) {
@@ -106,12 +107,18 @@ inline void gx_imgui_init(gx_context *context) {
     ImGui_ImplOpenGL3_Init(context->glsl_version);
 #endif
 
-    io.Fonts->AddFontFromFileTTF("fonts/Roboto-Regular.ttf", 15.0f);
+    // Use absolute paths so fonts and ini work regardless of cwd
+    static std::string ini_path;
+    ini_path = context->exe_dir + "/imgui.ini";
+    io.IniFilename = ini_path.c_str();
+
+    std::string font_dir = context->exe_dir + "/../fonts";
+    io.Fonts->AddFontFromFileTTF((font_dir + "/Roboto-Regular.ttf").c_str(), 15.0f);
     static const ImWchar icons_ranges[] = {ICON_MIN_FK, ICON_MAX_16_FK, 0};
     ImFontConfig icons_config;
     icons_config.MergeMode = true;
     icons_config.PixelSnapH = true;
-    io.Fonts->AddFontFromFileTTF("fonts/forkawesome-webfont.ttf", 15.0f,
+    io.Fonts->AddFontFromFileTTF((font_dir + "/forkawesome-webfont.ttf").c_str(), 15.0f,
                                  &icons_config, icons_ranges);
 }
 

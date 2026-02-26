@@ -43,6 +43,8 @@ int main(int argc, char **argv) {
                      .height = 1080,
                      .render_target_title = (char *)malloc(100), // window title
                      .glsl_version = (char *)malloc(100)};
+    window->exe_dir =
+        std::filesystem::canonical(argv[0]).parent_path().string();
 
     render_initialize_target(window);
     RenderScene *scene = (RenderScene *)malloc(sizeof(RenderScene));
