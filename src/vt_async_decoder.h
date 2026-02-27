@@ -102,8 +102,9 @@ private:
     std::mutex                      mutex_;
     bool                            flushing_ = false;
 
-    // How many frames to buffer before emitting (handles B-frame reordering)
-    static constexpr int REORDER_DEPTH = 4;
+    // How many frames to buffer before emitting (handles B-frame reordering).
+    // 8 covers encoders that use long B-frame sequences (up to 8 consecutive).
+    static constexpr int REORDER_DEPTH = 8;
 };
 
 // Convenience: build a CMSampleBufferRef from AVCC data + timing.

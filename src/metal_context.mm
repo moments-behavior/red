@@ -55,6 +55,7 @@
 @end
 
 static MetalCtx *g_ctx = nil;
+static uint64_t  g_frame_count = 0;
 
 // ---------------------------------------------------------------------------
 // NV12→RGBA compute shader (BT.601 full-range)
@@ -69,7 +70,8 @@ static NSString * const kNV12Shader = @""
     "    texture2d<float, access::write> out_rgba [[texture(2)]],\n"
     "    uint2 gid [[thread_position_in_grid]])\n"
     "{\n"
-    "    if (gid.x >= out_rgba.get_width() || gid.y >= out_rgba.get_height()) return;\n"
+    // No bounds check needed: dispatchThreads sizes the grid exactly to
+    // (w, h) so Metal guarantees gid is always within texture bounds.
     "    float  y  = y_plane.read(gid).r;\n"
     "    float2 uv = uv_plane.read(gid / 2).rg - 0.5f;\n"
     "    float r = clamp(y + 1.402f   * uv.y,                   0.0f, 1.0f);\n"
@@ -161,6 +163,11 @@ void metal_allocate_textures(int num_cams, uint32_t *widths, uint32_t *heights) 
 }
 
 bool metal_begin_frame() {
+    // Flush stale CVMetalTextureCache entries every 60 frames to prevent
+    // recycled CVPixelBuffers from accumulating unreleased cache wrappers.
+    if (++g_frame_count % 60 == 0)
+        CVMetalTextureCacheFlush([g_ctx texCache], 0);
+
     g_ctx.drawable = [g_ctx.layer nextDrawable];
     if (!g_ctx.drawable)
         return false;
@@ -229,9 +236,11 @@ void metal_upload_pixelbuf(int cam_idx, CVPixelBufferRef pb, uint32_t w, uint32_
         [enc setTexture:y_tex  atIndex:0];
         [enc setTexture:uv_tex atIndex:1];
         [enc setTexture:out    atIndex:2];
-        MTLSize tg  = MTLSizeMake(16, 16, 1);
-        MTLSize grid = MTLSizeMake((w + 15) / 16, (h + 15) / 16, 1);
-        [enc dispatchThreadgroups:grid threadsPerThreadgroup:tg];
+        // dispatchThreads sizes the grid exactly to the texture dimensions;
+        // Metal handles non-multiple-of-threadgroup remainders automatically.
+        MTLSize tg     = MTLSizeMake(16, 16, 1);
+        MTLSize pixels = MTLSizeMake(w, h, 1);
+        [enc dispatchThreads:pixels threadsPerThreadgroup:tg];
         [enc endEncoding];
 
         CFRelease(y_ref);

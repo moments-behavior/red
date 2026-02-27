@@ -51,7 +51,7 @@ float b = clamp(y + 1.8556f  * uv.x,                   0.0f, 1.0f);
 
 ## Medium Impact
 
-### 3. Periodic `CVMetalTextureCacheFlush`
+### 3. Periodic `CVMetalTextureCacheFlush` ✓ implemented
 
 `CVMetalTextureCache` holds internal references to textures imported from
 `CVPixelBuffer`. Currently `CVMetalTextureCacheFlush` is only called in
@@ -80,7 +80,7 @@ This will reveal whether there is remaining headroom on the GPU side.
 
 ## Low Impact / Code Hygiene
 
-### 5. `dispatchThreads` instead of `dispatchThreadgroups`
+### 5. `dispatchThreads` instead of `dispatchThreadgroups` ✓ implemented
 
 The current compute dispatch in `metal_context.mm`:
 
@@ -106,7 +106,7 @@ MTLSize pixels = MTLSizeMake(w, h, 1);
 [enc dispatchThreads:pixels threadsPerThreadgroup:tg];
 ```
 
-### 6. Increase `REORDER_DEPTH` for high-B-frame content
+### 6. Increase `REORDER_DEPTH` for high-B-frame content ✓ implemented (4 → 8)
 
 `REORDER_DEPTH = 4` in `vt_async_decoder.h` is sufficient for most H.264
 with 1–2 consecutive B-frames. Some encoders use longer B-frame sequences
