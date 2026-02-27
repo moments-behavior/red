@@ -23,7 +23,7 @@ ffmpeg -i input.mp4 -c:v hevc_videotoolbox -q:v 60 output.mp4
 
 This would benefit every future labeling session without any code changes.
 
-### 2. Color space accuracy (BT.601 → BT.709)
+### 2. Color space accuracy (BT.601 → BT.709) ✓ implemented
 
 The NV12→RGBA compute shader in `metal_context.mm` currently uses BT.601
 full-range coefficients:
@@ -62,7 +62,7 @@ Fix: call `CVMetalTextureCacheFlush(_texCache, 0)` once per second or on
 every seek in `metal_context.mm`. This is a one-liner addition to
 `metal_begin_frame` or the seek path.
 
-### 4. GPU profiling with Xcode Metal System Trace
+### 4. GPU profiling with Xcode Metal System Trace ✓ pending (requires macOS 15.6+ / full Xcode)
 
 Now that the pipeline is GPU-side, the next bottleneck (if any) will only be
 visible in GPU timelines. The CPU profiling done with `sample` during the
@@ -121,8 +121,8 @@ increasing this constant to 8 is the fix.
   before waiting; seeks already run in parallel across decoder threads.
 - **Display buffer depth** — 64 frames (~355 ms at 180 fps) gives the decoder
   ample lookahead.
-- **Texture format** — RGBA8Unorm output into a BGRA8Unorm `CAMetalLayer` is
-  handled transparently by the GPU with no swizzle overhead.
+- **Texture format** — output textures are BGRA8Unorm, matching both the VT
+  output and the CAMetalLayer pixel format; no swizzle at any stage.
 - **Command buffer structure** — compute and render passes share one
   `MTLCommandBuffer` per frame; fewer command buffers means less driver
   overhead.
