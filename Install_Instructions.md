@@ -7,12 +7,12 @@ installing RED on your Mac via Homebrew and verifying it works.
 
 ## System requirements
 
-- **Mac with Apple Silicon** (M1, M2, or M3 chip)
+- **Mac with Apple Silicon** (M1, M2, M3, M4, or M5 chip)
 - **macOS 12 Monterey or later**
 - **GitHub access** to the JohnsonLabJanelia organization
 - **SSH key configured for GitHub** (see below if unsure)
 
-> Intel Macs are not currently supported.
+> Intel Macs are not currently supported. Any Apple Silicon Mac (M1 and later) works.
 
 ---
 
