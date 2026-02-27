@@ -30,7 +30,6 @@
 @property (nonatomic, strong) id<CAMetalDrawable>       drawable;
 @property (nonatomic, strong) MTLRenderPassDescriptor  *rpd;
 @property (nonatomic, strong) id<MTLCommandBuffer>      cmd;
-@property (nonatomic, strong) id<MTLComputePipelineState> nv12PSO;
 @end
 
 @implementation MetalCtx {
@@ -57,28 +56,6 @@
 static MetalCtx *g_ctx = nil;
 static uint64_t  g_frame_count = 0;
 
-// ---------------------------------------------------------------------------
-// NV12→RGBA compute shader (BT.601 full-range)
-// ---------------------------------------------------------------------------
-
-static NSString * const kNV12Shader = @""
-    "#include <metal_stdlib>\n"
-    "using namespace metal;\n"
-    "kernel void nv12_to_rgba(\n"
-    "    texture2d<float, access::read>  y_plane  [[texture(0)]],\n"
-    "    texture2d<float, access::read>  uv_plane [[texture(1)]],\n"
-    "    texture2d<float, access::write> out_rgba [[texture(2)]],\n"
-    "    uint2 gid [[thread_position_in_grid]])\n"
-    "{\n"
-    // No bounds check needed: dispatchThreads sizes the grid exactly to
-    // (w, h) so Metal guarantees gid is always within texture bounds.
-    "    float  y  = y_plane.read(gid).r;\n"
-    "    float2 uv = uv_plane.read(gid / 2).rg - 0.5f;\n"
-    "    float r = clamp(y + 1.402f   * uv.y,                   0.0f, 1.0f);\n"
-    "    float g = clamp(y - 0.34414f * uv.x - 0.71414f * uv.y, 0.0f, 1.0f);\n"
-    "    float b = clamp(y + 1.772f   * uv.x,                   0.0f, 1.0f);\n"
-    "    out_rgba.write(float4(r, g, b, 1.0f), gid);\n"
-    "}\n";
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -115,23 +92,6 @@ void metal_init(GLFWwindow *window) {
         CGSize drawableSize = [nswin.contentView convertSizeToBacking:nswin.contentView.bounds.size];
         g_ctx.layer.drawableSize = drawableSize;
 
-        // Build NV12→RGBA compute pipeline
-        NSError *err = nil;
-        id<MTLLibrary> lib = [g_ctx.device newLibraryWithSource:kNV12Shader
-                                                        options:nil
-                                                          error:&err];
-        if (!lib) {
-            fprintf(stderr, "[Metal] NV12 shader compile error: %s\n",
-                    err.localizedDescription.UTF8String);
-        } else {
-            id<MTLFunction> fn = [lib newFunctionWithName:@"nv12_to_rgba"];
-            g_ctx.nv12PSO = [g_ctx.device newComputePipelineStateWithFunction:fn
-                                                                        error:&err];
-            if (!g_ctx.nv12PSO)
-                fprintf(stderr, "[Metal] NV12 pipeline error: %s\n",
-                        err.localizedDescription.UTF8String);
-        }
-
         // CVMetalTextureCache for zero-copy CVPixelBuffer import
         [g_ctx createTexCacheWithDevice:g_ctx.device];
     }
@@ -147,14 +107,14 @@ void metal_allocate_textures(int num_cams, uint32_t *widths, uint32_t *heights) 
         for (int j = 0; j < num_cams; j++) {
             MTLTextureDescriptor *desc =
                 [MTLTextureDescriptor
-                    texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
+                    texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
                                                 width:widths[j]
                                                height:heights[j]
                                             mipmapped:NO];
-            // ShaderWrite needed for NV12 compute output
-            desc.usage       = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
+            // ShaderWrite needed as blit destination; ShaderRead for ImGui sampling.
             // MTLStorageModeShared: CPU+GPU share unified memory on Apple Silicon
-            // (replaceRegion: works without staging buffer)
+            // (replaceRegion: works without staging buffer for the CPU upload path)
+            desc.usage       = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
             desc.storageMode = MTLStorageModeShared;
             id<MTLTexture> tex = [g_ctx.device newTextureWithDescriptor:desc];
             [g_ctx.textures addObject:tex];
@@ -195,56 +155,40 @@ void metal_upload_texture(int cam_idx, const uint8_t *rgba, uint32_t w, uint32_t
            bytesPerRow:w * 4];
 }
 
-// Phase 2: Import a CVPixelBuffer (NV12) as MTLTextures via CVMetalTextureCache
-// and run a compute shader to convert NV12→RGBA in the output texture.
-// The CVPixelBuffer is IOSurface-backed, so this is zero-copy on the CPU side.
+// Import a CVPixelBuffer (BGRA, IOSurface-backed) as a Metal texture via
+// CVMetalTextureCache and blit it into the per-camera output texture.
+// VideoToolbox applies the correct color matrix (BT.601/BT.709, full/video
+// range) internally based on the stream's metadata, so no shader is needed.
 void metal_upload_pixelbuf(int cam_idx, CVPixelBufferRef pb, uint32_t w, uint32_t h) {
-    if (!g_ctx.nv12PSO || ![g_ctx texCache] || !g_ctx.cmd)
+    if (![g_ctx texCache] || !g_ctx.cmd)
         return;
 
     @autoreleasepool {
-        CVMetalTextureCacheRef cache = [g_ctx texCache];
-
-        CVMetalTextureRef y_ref  = NULL;
-        CVMetalTextureRef uv_ref = NULL;
-
-        CVReturn r;
-        r = CVMetalTextureCacheCreateTextureFromImage(
-            kCFAllocatorDefault, cache, pb, NULL,
-            MTLPixelFormatR8Unorm, w, h, 0, &y_ref);
-        if (r != kCVReturnSuccess || !y_ref) {
-            fprintf(stderr, "[Metal] CVMetalTextureCache Y failed: %d\n", r);
+        CVMetalTextureRef bgra_ref = NULL;
+        CVReturn r = CVMetalTextureCacheCreateTextureFromImage(
+            kCFAllocatorDefault, [g_ctx texCache], pb, NULL,
+            MTLPixelFormatBGRA8Unorm, w, h, 0, &bgra_ref);
+        if (r != kCVReturnSuccess || !bgra_ref) {
+            fprintf(stderr, "[Metal] CVMetalTextureCache BGRA failed: %d\n", r);
             return;
         }
 
-        r = CVMetalTextureCacheCreateTextureFromImage(
-            kCFAllocatorDefault, cache, pb, NULL,
-            MTLPixelFormatRG8Unorm, w / 2, h / 2, 1, &uv_ref);
-        if (r != kCVReturnSuccess || !uv_ref) {
-            fprintf(stderr, "[Metal] CVMetalTextureCache UV failed: %d\n", r);
-            CFRelease(y_ref);
-            return;
-        }
+        id<MTLTexture> src = CVMetalTextureGetTexture(bgra_ref);
+        id<MTLTexture> dst = g_ctx.textures[cam_idx];
 
-        id<MTLTexture> y_tex  = CVMetalTextureGetTexture(y_ref);
-        id<MTLTexture> uv_tex = CVMetalTextureGetTexture(uv_ref);
-        id<MTLTexture> out    = g_ctx.textures[cam_idx];
+        // Blit from the IOSurface-backed VT texture into the stable output
+        // texture that ImGui holds a reference to. Zero CPU involvement.
+        id<MTLBlitCommandEncoder> blit = [g_ctx.cmd blitCommandEncoder];
+        [blit copyFromTexture:src
+                  sourceSlice:0 sourceLevel:0
+                 sourceOrigin:MTLOriginMake(0, 0, 0)
+                   sourceSize:MTLSizeMake(w, h, 1)
+                    toTexture:dst
+             destinationSlice:0 destinationLevel:0
+            destinationOrigin:MTLOriginMake(0, 0, 0)];
+        [blit endEncoding];
 
-        // Dispatch compute on the frame's command buffer
-        id<MTLComputeCommandEncoder> enc = [g_ctx.cmd computeCommandEncoder];
-        [enc setComputePipelineState:g_ctx.nv12PSO];
-        [enc setTexture:y_tex  atIndex:0];
-        [enc setTexture:uv_tex atIndex:1];
-        [enc setTexture:out    atIndex:2];
-        // dispatchThreads sizes the grid exactly to the texture dimensions;
-        // Metal handles non-multiple-of-threadgroup remainders automatically.
-        MTLSize tg     = MTLSizeMake(16, 16, 1);
-        MTLSize pixels = MTLSizeMake(w, h, 1);
-        [enc dispatchThreads:pixels threadsPerThreadgroup:tg];
-        [enc endEncoding];
-
-        CFRelease(y_ref);
-        CFRelease(uv_ref);
+        CFRelease(bgra_ref);
     }
 }
 

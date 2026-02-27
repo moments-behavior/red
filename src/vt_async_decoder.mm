@@ -229,10 +229,14 @@ bool VTAsyncDecoder::init(const uint8_t *extradata, int extradata_size,
         return false;
     }
 
-    // Request IOSurface-backed NV12 for zero-copy Metal import (Phase 2)
+    // Request IOSurface-backed BGRA output. VideoToolbox reads the color space
+    // metadata from the stream (BT.601/BT.709, full/video range) and applies
+    // the correct matrix internally, producing display-ready pixels for any
+    // video source. IOSurface backing allows zero-copy import as a Metal
+    // texture via CVMetalTextureCacheCreateTextureFromImage.
     NSDictionary *out_props = @{
         (id)kCVPixelBufferPixelFormatTypeKey:
-            @(kCVPixelFormatType_420YpCbCr8BiPlanarFullRange),
+            @(kCVPixelFormatType_32BGRA),
         (id)kCVPixelBufferIOSurfacePropertiesKey: @{},
     };
 
