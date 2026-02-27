@@ -1,157 +1,250 @@
-# Red Labeling App
-3D labeling tool for multiple cameras in C++
+# RED — Real-time multi-camera keypoint labeling
 
-Contact [Jinyao Yan](yanj11@janelia.hhmi.org) if you have questions about the software 
+RED is a GPU-accelerated, multi-camera 3D keypoint labeling tool written in C++.
+It is designed for behavioral neuroscience datasets where multiple synchronized
+cameras capture an animal at high frame rate.
+
+Contact [Jinyao Yan](yanj11@janelia.hhmi.org) with questions about the software.
 
 ![gui](images/gui.png)
 
 ## Video demo
-Please see this [link](https://www.youtube.com/watch?v=9eOJaadE1Nc) for a video demo of the app. 
+
+See this [link](https://www.youtube.com/watch?v=9eOJaadE1Nc) for a video demo of the application.
+
+---
 
 ## Features
-1. Real-time GPU accelerated decoding (h264, h265)
-2. Synchronized decoding
-3. Multi-view keypoints labeling and triangulation  
 
-## Dependencies
-1. NVIDIA Video Codec SDK
-1. CUDA Toolkit and cuDNN
-2. FFmpeg 
-3. OpenCV
-4. LibTorch
-5. OpenGL
+- **Real-time GPU-accelerated decoding** — H.264 and H.265 (HEVC) at up to 180+ fps
+- **Synchronized multi-camera playback** — all cameras seek and advance together
+- **2D keypoint labeling** — click to place keypoints on each camera view
+- **3D triangulation** — multi-view linear triangulation using OpenCV (DLT)
+- **Reprojection error visualization** — bar charts and scatter plots per camera / keypoint
+- **Bounding box annotation** — axis-aligned and oriented bounding boxes
+- **YOLO auto-labeling** — load a LibTorch model to seed keypoint positions
+- **Custom skeleton support** — define any anatomy via JSON or built-in presets
+- **Data export** — CSV output; Python scripts for COCO / JARVIS / YOLO formats
+- **Cross-platform** — Linux with NVIDIA CUDA, macOS with Apple Silicon Metal
 
-## Build instructions 
+---
 
-### Install cuDNN (depends on CUDA installation)
-- download the cudnn install files (we use `cudnn 8.9.3` with `driver 525.105.17` and `cuda 12.0` )
-- you may run the commands below for the exact version or download a TAR file for `cudnn-linux-x86_64-8.9.3.28_cuda12-archive.tar.xz` from the [cudnn version archives](https://developer.nvidia.com/rdp/cudnn-archive)
-- extract the file
-- copy cudnn files to where your `cuda` is installed -- we assume it is installed at `/usr/local/cuda` 
-  ```
-  sudo cp cudnn-*-archive/include/cudnn*.h /usr/local/cuda/include 
-  sudo cp -P cudnn-*-archive/lib/libcudnn* /usr/local/cuda/lib64 
-  sudo chmod a+r /usr/local/cuda/include/cudnn*.h /usr/local/cuda/lib64/libcudnn*
-  ```
-- verify installation and cudnn version
-  ```
-  source ~/.bashrc
-  cat /usr/local/cuda/include/cudnn_version.h | grep CUDNN_MAJOR -A 2
-  ```
-  you can expect an output like:
-  ```
-  #define CUDNN_MAJOR 8
-  #define CUDNN_MINOR 9
-  #define CUDNN_PATCHLEVEL 3
-  --
-  #define CUDNN_VERSION (CUDNN_MAJOR * 1000 + CUDNN_MINOR * 100 + CUDNN_PATCHLEVEL)
-  ```
+## Platform support
 
-### Install OpenCV
-- download and upzip `opencv-4.8.0.zip` and `opencv_contrib-4.8.0.zip`. Unzip the folders to `~/build/`, for instance. Note, if you are using cuda 12.2, please download opencv-4.10 instead.
+| Platform | GPU backend | Decoder |
+|---|---|---|
+| Linux (NVIDIA GPU) | OpenGL + CUDA | NVIDIA NVDEC (`NvDecoder`) |
+| macOS (Apple Silicon) | Metal + VideoToolbox | `VTDecompressionSession` (async) |
 
-- to build OpenCV with opencv sfm, please follow instructions from: https://docs.opencv.org/4.x/db/db8/tutorial_sfm_installation.html first to install sfm dependency. Ceres solver is optional. If you wish to install ceres solver, a more detailed installation instruction can be found at: http://ceres-solver.org/installation.html#linux. At the time of test, one need to set CMake flag USE_CUDA=OFF for ceres.  
+The Linux and macOS code paths are entirely separate under `#ifdef __APPLE__`
+guards. No cross-platform compromises were needed.
 
-- build OpenCV using
+---
 
-```
-cd opencv-4.8.0/ 
-mkdir build
-cd build 
+## macOS — Quick Start (Apple Silicon)
+
+### Dependencies
+
+```bash
+brew install ffmpeg opencv glfw pkg-config
 ```
 
+No CUDA, no Vulkan, and no MoltenVK are required on macOS.
+
+### Build
+
+```bash
+git clone --recursive https://github.com/JohnsonLabJanelia/red.git
+cd red
+cmake -S . -B release -DCMAKE_PREFIX_PATH=/opt/homebrew
+cmake --build release --config Release -j$(sysctl -n hw.logicalcpu)
 ```
+
+### Run
+
+```bash
+./release/red
+```
+
+### macOS performance notes
+
+On Apple Silicon (M1/M2/M3) with a 3-camera, 180 fps, 3208×2200 dataset,
+the application plays back at **1.0× real-time**. The pipeline is fully
+GPU-side:
+
+```
+FFmpeg demux → VTDecompressionSession (async) → CVPixelBuffer (IOSurface)
+  → CVMetalTextureCache (zero-copy) → MTLBlitCommandEncoder
+  → MTLTexture (BGRA) → imgui_impl_metal → CAMetalLayer → display
+```
+
+VideoToolbox reads the color space metadata from the stream (BT.601 / BT.709,
+full / video range) and applies the correct YUV→RGB matrix internally, so the
+pipeline is correct for any camera source.
+
+---
+
+## Linux / NVIDIA — Dependencies and Build
+
+### 1. Install CUDA and cuDNN
+
+We use `cuDNN 8.9.3` with `driver 525.105.17` and `CUDA 12.0`. Download the
+appropriate TAR from the
+[cuDNN version archive](https://developer.nvidia.com/rdp/cudnn-archive) and
+install:
+
+```bash
+sudo cp cudnn-*-archive/include/cudnn*.h /usr/local/cuda/include
+sudo cp -P cudnn-*-archive/lib/libcudnn* /usr/local/cuda/lib64
+sudo chmod a+r /usr/local/cuda/include/cudnn*.h /usr/local/cuda/lib64/libcudnn*
+```
+
+Verify:
+```bash
+cat /usr/local/cuda/include/cudnn_version.h | grep CUDNN_MAJOR -A 2
+```
+
+### 2. Install OpenCV with SfM
+
+Download `opencv-4.8.0.zip` and `opencv_contrib-4.8.0.zip` (use 4.10 for
+CUDA 12.2+). Follow the
+[SfM installation guide](https://docs.opencv.org/4.x/db/db8/tutorial_sfm_installation.html)
+for the optional Ceres solver dependency, then build:
+
+```bash
+cd opencv-4.8.0
+mkdir build && cd build
 cmake -D CMAKE_BUILD_TYPE=RELEASE \
--D CMAKE_INSTALL_PREFIX=/usr/local \
--D WITH_TBB=ON \
--D ENABLE_FAST_MATH=1 \
--D CUDA_FAST_MATH=1 \
--D WITH_CUBLAS=1 \
--D WITH_CUDA=ON \
--D BUILD_opencv_cudacodec=OFF \
--D WITH_CUDNN=ON \
--D OPENCV_DNN_CUDA=ON \
--D CUDA_ARCH_BIN=7.5 \
--D WITH_V4L=ON \
--D WITH_QT=ON \
--D WITH_OPENGL=ON \
--D WITH_GSTREAMER=ON \
--D OPENCV_GENERATE_PKGCONFIG=ON \
--D OPENCV_PC_FILE_NAME=opencv.pc \
--D OPENCV_ENABLE_NONFREE=ON \
--D OPENCV_EXTRA_MODULES_PATH=~/build/opencv_contrib-4.8.0/modules \
--D INSTALL_PYTHON_EXAMPLES=OFF \
--D INSTALL_C_EXAMPLES=ON \
--D BUILD_EXAMPLES=ON ..
-```
-
-```
-make -j $(nproc) 
+      -D CMAKE_INSTALL_PREFIX=/usr/local \
+      -D WITH_CUDA=ON \
+      -D CUDA_ARCH_BIN=7.5 \
+      -D WITH_CUDNN=ON \
+      -D OPENCV_DNN_CUDA=ON \
+      -D OPENCV_ENABLE_NONFREE=ON \
+      -D OPENCV_EXTRA_MODULES_PATH=~/build/opencv_contrib-4.8.0/modules \
+      -D OPENCV_GENERATE_PKGCONFIG=ON ..
+make -j$(nproc)
 sudo make install
 ```
-### Install TensorRT
-- [tensor-rt (depends on nvidia-driver and CUDA)](#install-tensor-rt)
 
-### install tensor-rt
-this is based on [these instructions](https://docs.nvidia.com/deeplearning/tensorrt/install-guide/index.html#installing-tar) (has more details if needed)
+### 3. Install TensorRT
 
-**0. download and extract tensor-rt installation file**
-  - we use `TensorRT-8.6.1.6` with `cuda 12.0`  -- you can directly download this (or from this page). But if you are using `cuda 12.2` and above, please use TensorRT 10, for instance `TensorRT-10.6.0.26.Linux.x86_64-gnu.cuda-12.6`. The installation steps are similar.
-    ```
-    cd /home/$USER/nvidia
-    wget https://developer.nvidia.com/downloads/compute/machine-learning/tensorrt/secure/8.6.1/tars/TensorRT-8.6.1.6.Linux.x86_64-gnu.cuda-12.0.tar.gz
-    tar -xzvf TensorRT-8.6.1.6.Linux.x86_64-gnu.cuda-12.0.tar.gz
-    ```
-  - this should extract a folder `TensorRT-8.6.1.6` with following subdirectories
-    ```
-    bin  data  doc  include  lib  python  samples  targets
-    ```
-  - rename the folder `TensorRT`.
+We use `TensorRT-8.6.1.6` with `CUDA 12.0` (use TensorRT 10 for CUDA 12.2+).
 
-**1. add tensor-rt path in bashrc**
-  - Add the absolute path to the TensorRT lib directory to the environment variable `LD_LIBRARY_PATH`:
-    ```
-    export LD_LIBRARY_PATH=/home/$USER/nvidia/TensorRT/lib:$LD_LIBRARY_PATH 
-    source ~/.bashrc
-    ```
-**2. verify installation**
-  - try to build one of the sample programs (say, `trtexec`) to verify installation
-    ```
-    cd /home/$USER/nvidia/TensorRT/samples/trtexec
-    make
-    ```
-  - run the program built above
-    ```
-    cd home/$USER/nvidia/TensorRT/bin/
-    ./trtexec
-    ```
-
-### Install RED 
-
-- Clone the repo and submodules
-
+```bash
+cd ~/nvidia
+wget https://developer.nvidia.com/downloads/compute/machine-learning/tensorrt/secure/8.6.1/tars/TensorRT-8.6.1.6.Linux.x86_64-gnu.cuda-12.0.tar.gz
+tar -xzvf TensorRT-8.6.1.6.Linux.x86_64-gnu.cuda-12.0.tar.gz
+mv TensorRT-8.6.1.6 TensorRT
+echo 'export LD_LIBRARY_PATH=~/nvidia/TensorRT/lib:$LD_LIBRARY_PATH' >> ~/.bashrc
+source ~/.bashrc
 ```
+
+Verify:
+```bash
+cd ~/nvidia/TensorRT/samples/trtexec && make
+~/nvidia/TensorRT/bin/trtexec
+```
+
+### 4. Install LibTorch (optional — required for YOLO inference only)
+
+Download the CPU or CUDA version from [PyTorch](https://pytorch.org/get-started/locally/)
+(Linux → LibTorch → C++) and unzip into `lib/`:
+
+```bash
+unzip libtorch-*.zip -d lib/
+```
+
+### 5. Build RED (Linux)
+
+```bash
 git clone --recursive https://github.com/JohnsonLabJanelia/red.git
-```
-
-If you are building the project for the first time, uncomment [`line 16 ~ line 26`](https://github.com/JohnsonLabJanelia/red/blob/0829b09d20b0dbccb0ea6df7a20e5ee4e23f635f/build_linux.sh#L16) for building `ImGui` and `ImPlot` object files. Run
-```
+cd red
 ./build.sh
 ```
-Comment out Line 16 ~ line 26 to reduce compiling time afterwards. 
 
-Once built, it will make a folder called `release`. The executable `redgui` is the application. Start the program using the run script. 
+On first build, ensure lines 16–26 of `build.sh` are uncommented to compile
+ImGui and ImPlot object files. Comment them out afterwards to reduce build time.
 
-```
+### 6. Run (Linux)
+
+```bash
 ./run.sh
 ```
 
-### Install LibTorch
-Download libtorch cpu version from [PyTorch](https://pytorch.org/get-started/locally/) selecting Linux, LibTorch, C++. Unzip it into `lib` folder.
+---
 
-## Format data for Deep Learning
-Currently we are saving labeled keypoints simply as a plain csv file. We provide python scripts for formating data as [COCO format](https://docs.aws.amazon.com/rekognition/latest/customlabels-dg/md-coco-overview.html), which is used by [JARVIS](https://github.com/JARVIS-MoCap/JARVIS-HybridNet). Please refer to [data_exporter](https://github.com/JohnsonLabJanelia/red/tree/main/data_exporter).
+## Project file format
+
+RED projects are stored as `.redproj` JSON files. Key fields:
+
+| Field | Description |
+|---|---|
+| `project_name` | Human-readable identifier |
+| `project_path` | Absolute path to the project directory |
+| `skeleton_name` | Built-in preset (e.g., `"rat"`) or empty |
+| `load_skeleton_from_json` | Set to `true` to use a custom skeleton file |
+| `skeleton_file` | Path to custom skeleton JSON |
+| `calibration_folder` | Directory containing per-camera OpenCV YAML files |
+| `media_folder` | Directory containing video files (`.mp4`) |
+| `camera_names` | Ordered list of camera identifiers |
+
+---
+
+## Custom skeleton format
+
+```json
+{
+    "name": "zebrafish",
+    "num_nodes": 7,
+    "num_edges": 6,
+    "node_names": ["Head", "Neck", "Spine1", "Spine2", "Spine3", "TailBase", "TailTip"],
+    "edges": [[0,1],[1,2],[2,3],[3,4],[4,5],[5,6]],
+    "has_skeleton": true,
+    "has_bbox": false,
+    "has_obb": false
+}
+```
+
+See `example/skeleton.json` for a complete example.
+
+---
+
+## Output data format
+
+Labels are saved in `<project>/labeled_data/<timestamp>/`.
+
+### `keypoints3d.csv`
+```
+frame_id, kp0_x, kp0_y, kp0_z, kp1_x, kp1_y, kp1_z, ...
+42, 12.3, -5.1, 200.4, NaN, NaN, NaN, ...
+```
+Un-triangulated keypoints are written as `NaN`.
+
+### `<camera_name>.csv`
+```
+frame_id, kp0_x, kp0_y, kp0_conf, kp1_x, kp1_y, kp1_conf, ...
+42, 310.5, 220.1, 1.0, NaN, NaN, 0.0, ...
+```
+
+---
+
+## Deep learning export
+
+Python export scripts are provided in `data_exporter/`:
+
+| Script | Purpose |
+|---|---|
+| `red3d2jarvis.py` | Export to [JARVIS](https://github.com/JARVIS-MoCap/JARVIS-HybridNet) / COCO format |
+| `red3d2yolo.py` | Export to YOLO detection format |
+| `red2yolopose.py` | Export to YOLO pose format |
+| `jarvis2red3d.py` | Import JARVIS predictions back to RED CSVs |
+
+See [data_exporter/README.md](data_exporter/README.md) for usage details.
+
+---
 
 ## Contribute
 
-Please open an issue for bug fix or feature request. If you wish to make changes to the source code, you can fork the repo. To contribute to the project, please create a [pull request](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/creating-a-pull-request).
+Please open an issue for bug reports or feature requests. To contribute code,
+fork the repository and open a pull request.
