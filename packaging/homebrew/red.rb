@@ -34,7 +34,7 @@ class Red < Formula
   # Use while a stable release is not yet tagged, or for development:
   #   brew install --HEAD JohnsonLabJanelia/red/red
   # ---------------------------------------------------------------------------
-  head "https://github.com/JohnsonLabJanelia/red.git", branch: "main"
+  head "https://github.com/JohnsonLabJanelia/red.git", branch: "rob_dev_metal"
 
   bottle :unneeded  # Bottles (pre-compiled binaries) are provided as separate
                     # GitHub Release assets — see the releases page.
