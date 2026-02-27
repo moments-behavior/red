@@ -8,6 +8,7 @@
 #ifdef __APPLE__
 #include "metal_context.h"
 #include <CoreFoundation/CoreFoundation.h>  // CFRelease for CVPixelBuffer
+#include <mach-o/dyld.h>                   // _NSGetExecutablePath
 #else
 #include "imgui_impl_opengl3.h"
 #endif
@@ -44,8 +45,23 @@ int main(int argc, char **argv) {
                      .height = 1080,
                      .render_target_title = (char *)malloc(100), // window title
                      .glsl_version = (char *)malloc(100)};
+    // Resolve the real path of the executable.
+    // std::filesystem::canonical(argv[0]) fails when the binary is invoked
+    // via PATH (argv[0] is just "red" with no directory component).
+    // On macOS use _NSGetExecutablePath which always returns the full path.
+#ifdef __APPLE__
+    {
+        char exe_buf[PATH_MAX];
+        uint32_t exe_buf_size = sizeof(exe_buf);
+        if (_NSGetExecutablePath(exe_buf, &exe_buf_size) == 0)
+            window->exe_dir = std::filesystem::canonical(exe_buf).parent_path().string();
+        else
+            window->exe_dir = std::filesystem::canonical(argv[0]).parent_path().string();
+    }
+#else
     window->exe_dir =
         std::filesystem::canonical(argv[0]).parent_path().string();
+#endif
 
     render_initialize_target(window);
     RenderScene *scene = (RenderScene *)malloc(sizeof(RenderScene));

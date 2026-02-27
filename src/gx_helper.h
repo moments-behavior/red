@@ -112,7 +112,24 @@ inline void gx_imgui_init(gx_context *context) {
     ini_path = context->exe_dir + "/imgui.ini";
     io.IniFilename = ini_path.c_str();
 
-    std::string font_dir = context->exe_dir + "/../fonts";
+    // Search for the fonts directory in candidate locations so the binary
+    // works both from a development build (./release/red → ./fonts) and
+    // from a Homebrew install (/opt/homebrew/bin/red → /opt/homebrew/share/red/fonts).
+    std::string font_dir;
+    for (const auto &candidate : {
+            context->exe_dir + "/../fonts",            // dev build
+            context->exe_dir + "/../share/red/fonts",  // Homebrew install
+        }) {
+        if (std::filesystem::exists(candidate + "/Roboto-Regular.ttf")) {
+            font_dir = candidate;
+            break;
+        }
+    }
+    if (font_dir.empty()) {
+        fprintf(stderr, "[RED] Could not find fonts directory (searched relative to %s)\n",
+                context->exe_dir.c_str());
+        font_dir = context->exe_dir + "/../fonts"; // best-effort fallback
+    }
     io.Fonts->AddFontFromFileTTF((font_dir + "/Roboto-Regular.ttf").c_str(), 15.0f);
     static const ImWchar icons_ranges[] = {ICON_MIN_FK, ICON_MAX_16_FK, 0};
     ImFontConfig icons_config;
