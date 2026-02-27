@@ -3,8 +3,21 @@ cmake_minimum_required(VERSION 3.10)
 if(APPLE)
     project(red LANGUAGES CXX OBJCXX)
 
-    # Homebrew prefix for Apple Silicon
-    list(APPEND CMAKE_PREFIX_PATH "/opt/homebrew")
+    # Homebrew prefix — defaults to /opt/homebrew (Apple Silicon).
+    # Override with -DHOMEBREW_PREFIX=/usr/local for Intel Macs, or let
+    # the Homebrew formula pass the correct value via CMAKE_PREFIX_PATH.
+    if(NOT DEFINED HOMEBREW_PREFIX)
+        execute_process(
+            COMMAND brew --prefix
+            OUTPUT_VARIABLE HOMEBREW_PREFIX
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_QUIET
+        )
+        if(NOT HOMEBREW_PREFIX)
+            set(HOMEBREW_PREFIX "/opt/homebrew")
+        endif()
+    endif()
+    list(APPEND CMAKE_PREFIX_PATH "${HOMEBREW_PREFIX}")
 
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(FFMPEG REQUIRED libavcodec libavformat libavutil libswscale)
@@ -54,7 +67,7 @@ if(APPLE)
         lib/IconFontCppHeaders
         ${OpenCV_INCLUDE_DIRS}
         ${FFMPEG_INCLUDE_DIRS}
-        /opt/homebrew/include
+        ${HOMEBREW_PREFIX}/include
     )
 
     target_link_directories(red PRIVATE ${FFMPEG_LIBRARY_DIRS})
@@ -109,7 +122,7 @@ if(APPLE)
         lib/IconFontCppHeaders
         ${OpenCV_INCLUDE_DIRS}
         ${FFMPEG_INCLUDE_DIRS}
-        /opt/homebrew/include
+        ${HOMEBREW_PREFIX}/include
     )
 
     target_link_directories(test_gui PRIVATE ${FFMPEG_LIBRARY_DIRS})

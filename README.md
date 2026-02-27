@@ -29,6 +29,19 @@ See this [link](https://www.youtube.com/watch?v=9eOJaadE1Nc) for a video demo of
 
 ---
 
+## Install (macOS — one command)
+
+```bash
+brew tap JohnsonLabJanelia/red
+brew install red
+```
+
+Homebrew installs all dependencies automatically. See the
+[full macOS setup](#macos--quick-start-apple-silicon) section below for
+requirements and troubleshooting.
+
+---
+
 ## Platform support
 
 | Platform | GPU backend | Decoder |

@@ -1,0 +1,91 @@
+name: Release
+
+# Triggers when a version tag is pushed, e.g.:
+#   git tag v1.0.0
+#   git push origin v1.0.0
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-macos:
+    name: Build macOS (Apple Silicon)
+    runs-on: macos-14   # GitHub-hosted Apple Silicon runner
+
+    steps:
+      - name: Checkout with submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Install dependencies
+        run: |
+          brew install ffmpeg opencv glfw pkg-config cmake
+
+      - name: Configure
+        run: |
+          cmake -S . -B release \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$(brew --prefix)"
+
+      - name: Build
+        run: |
+          cmake --build release --config Release -j$(sysctl -n hw.logicalcpu)
+
+      # ---------------------------------------------------------------
+      # Binary archive — pre-built executable users can run directly
+      # ---------------------------------------------------------------
+      - name: Package binary
+        run: |
+          VERSION="${{ github.ref_name }}"
+          mkdir -p dist
+          cp release/red dist/red
+          # Include fonts directory (required at runtime)
+          cp -r fonts dist/fonts
+          tar -czf "red-${VERSION}-macos-arm64.tar.gz" -C dist .
+
+      # ---------------------------------------------------------------
+      # Source archive — fat tarball with all submodule contents bundled
+      # Used by the Homebrew formula so it doesn't need network access
+      # during install to fetch submodules.
+      # ---------------------------------------------------------------
+      - name: Create source archive (with submodules)
+        run: |
+          VERSION="${{ github.ref_name }}"
+          ARCHIVE="red-${VERSION}-src.tar.gz"
+
+          # rsync the full working tree (submodules already checked out)
+          # into a versioned subdirectory, then tar it up.
+          STAGING="/tmp/red-src/red-${VERSION}"
+          mkdir -p "${STAGING}"
+          rsync -a \
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude='release' \
+            --exclude='dist' \
+            . "${STAGING}/"
+          tar -czf "${ARCHIVE}" -C "/tmp/red-src" "red-${VERSION}"
+
+      # ---------------------------------------------------------------
+      # Compute SHA256 for the formula (printed to the build log)
+      # ---------------------------------------------------------------
+      - name: Compute SHA256
+        run: |
+          VERSION="${{ github.ref_name }}"
+          echo "=== SHA256 for Homebrew formula ==="
+          shasum -a 256 "red-${VERSION}-src.tar.gz"
+          shasum -a 256 "red-${VERSION}-macos-arm64.tar.gz"
+
+      # ---------------------------------------------------------------
+      # Publish to GitHub Releases
+      # ---------------------------------------------------------------
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            red-${{ github.ref_name }}-macos-arm64.tar.gz
+            red-${{ github.ref_name }}-src.tar.gz
+          generate_release_notes: true
+          fail_on_unmatched_files: true
