@@ -36,9 +36,6 @@ class Red < Formula
   # ---------------------------------------------------------------------------
   head "https://github.com/JohnsonLabJanelia/red.git", branch: "rob_dev_metal"
 
-  bottle :unneeded  # Bottles (pre-compiled binaries) are provided as separate
-                    # GitHub Release assets — see the releases page.
-
   # Build dependencies (not needed at runtime)
   depends_on "cmake"      => :build
   depends_on "pkg-config" => :build
@@ -46,12 +43,10 @@ class Red < Formula
   # Runtime dependencies (Homebrew handles installation automatically)
   depends_on "ffmpeg"
   depends_on "glfw"
-  depends_on "opencv"       # must include opencv_sfm (contrib); standard brew opencv does
+  depends_on "opencv"  # includes opencv_sfm via contrib modules
 
-  # Needs Xcode command-line tools for:
-  #   - Metal headers (Metal.h, QuartzCore, VideoToolbox, etc.)
-  #   - Objective-C++ compiler (-fobjc-arc)
-  depends_on :xcode => ["14.0", :build]
+  # Needs Xcode command-line tools for Metal headers and ObjC++ compiler
+  uses_from_macos "xcode" => :build
 
   # macOS 12+ required (Metal compute shaders + VideoToolbox async decode)
   depends_on macos: :monterey
