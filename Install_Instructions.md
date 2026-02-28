@@ -86,8 +86,12 @@ Tapped 1 formula (15 files, ...).
 ## Step 5 — Install RED
 
 ```bash
-brew install --HEAD JohnsonLabJanelia/red/red
+brew install --HEAD --verbose JohnsonLabJanelia/red/red
 ```
+
+The `--verbose` flag shows detailed progress so you can see what is happening
+at each stage (dependency downloads, git clone, cmake build, etc.). Without it,
+Homebrew only shows a spinner which can appear stuck during long steps.
 
 This will:
 1. Install build dependencies (`cmake`, `pkg-config`) and runtime dependencies
