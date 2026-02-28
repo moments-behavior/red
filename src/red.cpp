@@ -19,6 +19,7 @@
 #include "reprojection_tool.h"
 #include "skeleton.h"
 #include "utils.h"
+#include "jarvis_export.h"
 #include "yolo_export.h"
 #include "yolo_torch.h"
 #include <ImGuiFileDialog.h>
@@ -129,6 +130,15 @@ int main(int argc, char **argv) {
     YoloExportMode yolo_export_mode = YOLO_DETECTION;
     bool yolo_export_in_progress = false;
     std::string yolo_export_status = "";
+
+    // JARVIS Export Tool variables
+    bool show_jarvis_export_tool = false;
+    std::string jarvis_export_output_dir;
+    float jarvis_export_margin = 50.0f;
+    float jarvis_export_train_ratio = 0.9f;
+    int jarvis_export_seed = 42;
+    bool jarvis_export_in_progress = false;
+    std::string jarvis_export_status = "";
 
     // Bounding box class management
     std::vector<std::string> bbox_class_names = {"Class_1"};
@@ -356,6 +366,9 @@ int main(int argc, char **argv) {
                     }
                     if (ImGui::MenuItem("YOLO Export Tool")) {
                         show_yolo_export_tool = true;
+                    }
+                    if (ImGui::MenuItem("JARVIS Export Tool")) {
+                        show_jarvis_export_tool = true;
                     }
                     if (ImGui::MenuItem("Spreadsheet")) {
                         table.is_open = true;
@@ -3289,6 +3302,16 @@ int main(int argc, char **argv) {
             ImGuiFileDialog::Instance()->Close();
         }
 
+        // JARVIS Export Tool Dialog Handler
+        if (ImGuiFileDialog::Instance()->Display(
+                "ChooseJarvisExportOutputDir")) {
+            if (ImGuiFileDialog::Instance()->IsOk()) {
+                jarvis_export_output_dir =
+                    ImGuiFileDialog::Instance()->GetCurrentPath();
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
         if (ImGui::IsKeyPressed(ImGuiKey_H, false) && !io.WantTextInput) {
             show_help_window = !show_help_window;
         }
@@ -3973,6 +3996,144 @@ int main(int argc, char **argv) {
                     // Set skeleton file to current one
                     if (!skeleton_file_path.empty()) {
                         yolo_export_skeleton_file = skeleton_file_path;
+                    }
+                }
+            }
+            ImGui::End();
+        }
+
+        // JARVIS Export Tool Window
+        if (show_jarvis_export_tool) {
+            ImGui::SetNextWindowSize(ImVec2(550, 400), ImGuiCond_FirstUseEver);
+            if (ImGui::Begin("JARVIS Export Tool", &show_jarvis_export_tool)) {
+                ImGui::SeparatorText("Export Configuration");
+
+                // Auto-detect label folder
+                std::string jarvis_label_folder;
+                std::string jarvis_label_display = "(none)";
+                if (!pm.keypoints_root_folder.empty()) {
+                    std::string most_recent;
+                    std::string tmp_err;
+                    if (find_most_recent_labels(pm.keypoints_root_folder,
+                                                most_recent, tmp_err) == 0) {
+                        jarvis_label_folder = most_recent;
+                        jarvis_label_display =
+                            std::filesystem::path(most_recent)
+                                .filename()
+                                .string();
+                    }
+                }
+
+                ImGui::Text("Label Folder: %s", jarvis_label_display.c_str());
+                ImGui::Text("Calibration:  %s",
+                            pm.calibration_folder.empty()
+                                ? "(none)"
+                                : pm.calibration_folder.c_str());
+                ImGui::Text("Video Folder: %s",
+                            pm.media_folder.empty()
+                                ? "(none)"
+                                : pm.media_folder.c_str());
+                ImGui::Text("Cameras:      %d",
+                            (int)pm.camera_names.size());
+
+                ImGui::Separator();
+
+                ImGui::InputText("Output Directory", &jarvis_export_output_dir);
+                ImGui::SameLine();
+                if (ImGui::Button("Browse##jarvis_output")) {
+                    IGFD::FileDialogConfig cfg;
+                    cfg.countSelectionMax = 1;
+                    cfg.path = jarvis_export_output_dir;
+                    cfg.flags = ImGuiFileDialogFlags_Modal;
+                    ImGuiFileDialog::Instance()->OpenDialog(
+                        "ChooseJarvisExportOutputDir",
+                        "Choose Output Directory", nullptr, cfg);
+                }
+
+                ImGui::SliderFloat("Bbox Margin (px)", &jarvis_export_margin,
+                                   0.0f, 200.0f);
+                ImGui::SliderFloat("Train Ratio", &jarvis_export_train_ratio,
+                                   0.5f, 0.99f);
+                ImGui::InputInt("Random Seed", &jarvis_export_seed);
+
+                ImGui::Separator();
+
+                if (!jarvis_export_in_progress) {
+                    std::string validation_error;
+                    if (ImGui::Button("Start Export")) {
+                        if (jarvis_label_folder.empty()) {
+                            validation_error = "No labeled data found";
+                        } else if (pm.calibration_folder.empty()) {
+                            validation_error = "No calibration folder set";
+                        } else if (pm.media_folder.empty()) {
+                            validation_error = "No media folder set";
+                        } else if (jarvis_export_output_dir.empty()) {
+                            validation_error = "Output directory not set";
+                        } else if (pm.camera_names.empty()) {
+                            validation_error = "No cameras loaded";
+                        } else {
+                            jarvis_export_in_progress = true;
+                            jarvis_export_status = "Starting export...";
+
+                            JarvisExport::ExportConfig jcfg;
+                            jcfg.label_folder = jarvis_label_folder;
+                            jcfg.calibration_folder = pm.calibration_folder;
+                            jcfg.media_folder = pm.media_folder;
+                            jcfg.output_folder = jarvis_export_output_dir;
+                            jcfg.camera_names = pm.camera_names;
+                            jcfg.skeleton_name = skeleton.name;
+                            jcfg.num_keypoints = skeleton.num_nodes;
+                            jcfg.margin_pixel = jarvis_export_margin;
+                            jcfg.train_ratio = jarvis_export_train_ratio;
+                            jcfg.seed = jarvis_export_seed;
+
+                            // Copy node names and edges from skeleton
+                            jcfg.node_names = skeleton.node_names;
+                            for (const auto &e : skeleton.edges) {
+                                jcfg.edges.push_back({e.x, e.y});
+                            }
+
+                            std::thread(
+                                [jcfg, &jarvis_export_status,
+                                 &jarvis_export_in_progress]() {
+                                    JarvisExport::export_jarvis_dataset(
+                                        jcfg, &jarvis_export_status);
+                                    jarvis_export_in_progress = false;
+                                })
+                                .detach();
+                        }
+                        if (!validation_error.empty()) {
+                            jarvis_export_status =
+                                "Error: " + validation_error;
+                        }
+                    }
+                } else {
+                    ImGui::BeginDisabled();
+                    ImGui::Button("Exporting...");
+                    ImGui::EndDisabled();
+                }
+
+                if (!jarvis_export_status.empty()) {
+                    if (jarvis_export_status.find("Error") !=
+                        std::string::npos) {
+                        ImGui::TextColored(
+                            ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s",
+                            jarvis_export_status.c_str());
+                    } else if (jarvis_export_status.find("completed") !=
+                               std::string::npos) {
+                        ImGui::TextColored(
+                            ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "%s",
+                            jarvis_export_status.c_str());
+                    } else {
+                        ImGui::Text("%s", jarvis_export_status.c_str());
+                    }
+                }
+
+                ImGui::Separator();
+                if (ImGui::Button("Use Current Project")) {
+                    if (!pm.project_path.empty()) {
+                        jarvis_export_output_dir =
+                            pm.project_path + "/jarvis_dataset";
                     }
                 }
             }
