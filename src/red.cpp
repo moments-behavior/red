@@ -762,6 +762,11 @@ int main(int argc, char **argv) {
                 // Did selection change this frame?
                 bool selection_changed = false;
 
+                // After a seek, also trigger recenter once
+                if (ps.just_seeked) {
+                    selection_changed = true;
+                }
+
                 // Clamp just in case
                 if (ps.pause_selected < 0)
                     ps.pause_selected = 0;
