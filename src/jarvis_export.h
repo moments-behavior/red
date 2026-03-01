@@ -372,6 +372,33 @@ inline bool write_calibration_yamls(const ExportConfig &config,
 }
 
 // ---------------------------------------------------------------------------
+// Negative PTS offset detection
+// ---------------------------------------------------------------------------
+// Some MP4 videos have pre-roll frames with negative PTS before PTS=0.
+// RED counts these frames during sequential playback (frame 0 = first packet),
+// but OpenCV respects the MP4 edit list (frame 0 = PTS 0). This function
+// detects the offset so we can correctly map RED frame numbers to OpenCV frames.
+inline int detect_negative_pts_offset(const std::string &video_path, double fps) {
+    std::string cmd = "ffprobe -v quiet -select_streams v:0 -show_packets "
+                      "-show_entries packet=pts_time -of csv=p=0 \"" +
+                      video_path + "\" 2>/dev/null | head -1";
+    FILE *fp = popen(cmd.c_str(), "r");
+    if (!fp) return 0;
+    char buf[256];
+    int offset = 0;
+    if (fgets(buf, sizeof(buf), fp)) {
+        try {
+            double first_pts = std::stod(buf);
+            if (first_pts < -0.001) {
+                offset = static_cast<int>(std::round(std::abs(first_pts) * fps));
+            }
+        } catch (...) {}
+    }
+    pclose(fp);
+    return offset;
+}
+
+// ---------------------------------------------------------------------------
 // JPEG frame extraction — one thread per camera
 // ---------------------------------------------------------------------------
 inline void extract_jpegs_for_camera(
@@ -399,7 +426,7 @@ inline void extract_jpegs_for_camera(
     if (all_frames.empty())
         return;
 
-    cv::VideoCapture cap(video_path);
+    cv::VideoCapture cap(video_path, cv::CAP_FFMPEG);
     if (!cap.isOpened()) {
         if (status && status_mutex) {
             std::lock_guard<std::mutex> lock(*status_mutex);
@@ -408,39 +435,30 @@ inline void extract_jpegs_for_camera(
         return;
     }
 
-    // Seek-and-read: for each needed frame, either read sequentially if close
-    // to current position, or seek directly if there's a large gap.
-    // This avoids decoding thousands of intermediate frames.
-    constexpr int SEEK_THRESHOLD = 30; // roughly one keyframe interval
+    double fps = cap.get(cv::CAP_PROP_FPS);
 
-    int current_pos = -1;
-    for (size_t i = 0; i < all_frames.size(); i++) {
-        int target = all_frames[i];
+    // Detect negative PTS offset: RED counts pre-roll frames with negative PTS
+    // during sequential playback, but OpenCV skips them (edit list).
+    int pts_offset = detect_negative_pts_offset(video_path, fps);
 
-        if (current_pos < 0 || target - current_pos > SEEK_THRESHOLD) {
-            // Seek directly to target frame
-            cap.set(cv::CAP_PROP_POS_FRAMES, target);
-            current_pos = target;
-        } else {
-            // Read sequentially, skipping unneeded frames
-            while (current_pos < target) {
-                cap.grab(); // decode but don't retrieve — faster than read()
-                current_pos++;
-            }
-        }
+    int saved_count = 0;
+    for (int frame_num : all_frames) {
+        // Map RED frame number to OpenCV frame number
+        int opencv_frame = frame_num - pts_offset;
+        if (opencv_frame < 0) continue;
 
+        cap.set(cv::CAP_PROP_POS_FRAMES, opencv_frame);
         cv::Mat frame;
-        if (!cap.read(frame))
-            break;
-        current_pos++;
+        if (!cap.read(frame)) continue;
 
-        auto it = frame_to_mode.find(target);
+        auto it = frame_to_mode.find(frame_num);
         if (it != frame_to_mode.end()) {
             std::string dir = output_folder + "/" + it->second + "/" +
                               trial_name + "/" + cam + "/";
             std::string filename =
-                dir + "Frame_" + std::to_string(target) + ".jpg";
+                dir + "Frame_" + std::to_string(frame_num) + ".jpg";
             cv::imwrite(filename, frame);
+            saved_count++;
         }
     }
     cap.release();
