@@ -38,6 +38,98 @@
 #include "keypoints_table.h"
 #include "reprojection_tool.h"
 
+static void print_project_summary(const ProjectManager &pm,
+                                  const std::string &skeleton_name,
+                                  const std::string &label_folder) {
+    namespace fs = std::filesystem;
+    std::cout << "\n=== Project Loaded ===" << std::endl;
+    std::cout << "Name:        " << pm.project_name << std::endl;
+    std::cout << "Skeleton:    " << skeleton_name << std::endl;
+    std::cout << "Cameras:     " << pm.camera_names.size() << " (";
+    for (size_t i = 0; i < pm.camera_names.size(); i++) {
+        if (i > 0) std::cout << ", ";
+        std::cout << pm.camera_names[i];
+    }
+    std::cout << ")" << std::endl;
+    std::cout << "Media:       " << pm.media_folder << std::endl;
+    std::cout << "Calibration: " << pm.calibration_folder << std::endl;
+
+    if (!label_folder.empty()) {
+        std::string folder_name = fs::path(label_folder).filename().string();
+        // Count labeled frames from keypoints3d.csv
+        int labeled_frames = 0;
+        std::vector<int> labeled_frame_ids;
+        std::string kp3d_path = label_folder + "/keypoints3d.csv";
+        {
+            std::ifstream f(kp3d_path);
+            if (f.is_open()) {
+                std::string line;
+                bool header = true;
+                while (std::getline(f, line)) {
+                    if (line.empty()) continue;
+                    if (header) { header = false; continue; }
+                    labeled_frames++;
+                    // Parse frame_id (first field before comma)
+                    auto comma = line.find(',');
+                    if (comma != std::string::npos) {
+                        try { labeled_frame_ids.push_back(std::stoi(line.substr(0, comma))); }
+                        catch (...) {}
+                    }
+                }
+            }
+        }
+        std::cout << "Labels:      " << folder_name;
+        if (labeled_frames > 0)
+            std::cout << " (" << labeled_frames << " labeled frames)";
+        std::cout << std::endl;
+
+        // Count complete/incomplete 2D annotations per camera x frame
+        if (!labeled_frame_ids.empty() && !pm.camera_names.empty()) {
+            int n_complete = 0, n_incomplete = 0;
+            for (const auto &cam : pm.camera_names) {
+                std::string csv_path = label_folder + "/" + cam + ".csv";
+                // Parse 2D CSV: check each labeled frame for 1e7 sentinels
+                std::map<int, bool> frame_complete; // frame_id -> all valid?
+                std::ifstream cf(csv_path);
+                if (cf.is_open()) {
+                    std::string line;
+                    bool header = true;
+                    while (std::getline(cf, line)) {
+                        if (line.empty()) continue;
+                        if (header) { header = false; continue; }
+                        std::stringstream ss(line);
+                        std::string token;
+                        if (!std::getline(ss, token, ',')) continue;
+                        int fid = 0;
+                        try { fid = std::stoi(token); } catch (...) { continue; }
+                        bool valid = true;
+                        while (std::getline(ss, token, ',')) {
+                            try {
+                                if (std::stod(token) == 1e7) { valid = false; break; }
+                            } catch (...) { valid = false; break; }
+                        }
+                        frame_complete[fid] = valid;
+                    }
+                }
+                for (int fid : labeled_frame_ids) {
+                    auto it = frame_complete.find(fid);
+                    if (it != frame_complete.end() && it->second)
+                        n_complete++;
+                    else
+                        n_incomplete++;
+                }
+            }
+            std::cout << "Annotations: " << n_complete << " complete, "
+                      << n_incomplete << " incomplete ("
+                      << pm.camera_names.size() << " cameras x "
+                      << labeled_frame_ids.size() << " frames)" << std::endl;
+        }
+    } else {
+        std::cout << "Labels:      (none)" << std::endl;
+    }
+    std::cout << std::endl;
+}
+
 int main(int argc, char **argv) {
     gx_context *window = (gx_context *)malloc(sizeof(gx_context));
     *window =
@@ -264,6 +356,7 @@ int main(int argc, char **argv) {
                             show_error = true;
                         }
                     }
+                    print_project_summary(pm, pm.skeleton_name, most_recent_folder);
                 } else {
                     show_error = true;
                 }
@@ -660,6 +753,7 @@ int main(int argc, char **argv) {
                                 show_error = true;
                             }
                         }
+                        print_project_summary(pm, pm.skeleton_name, most_recent_folder);
 
                     } else {
                         show_error = true;

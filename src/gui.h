@@ -996,7 +996,6 @@ int find_most_recent_labels(std::string root_dir, std::string &most_recent_file,
     }
     sort(filenames.begin(), filenames.end());
     most_recent_file = filenames.back();
-    std::cout << most_recent_file << std::endl;
     return 0;
 }
 

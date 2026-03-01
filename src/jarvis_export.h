@@ -1,9 +1,13 @@
 #pragma once
 #include "json.hpp"
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
+#include <iostream>
 #include <map>
 #include <mutex>
 #include <numeric>
@@ -15,6 +19,17 @@
 #include <vector>
 
 namespace JarvisExport {
+
+struct ExportStats {
+    int train_frames = 0;
+    int val_frames = 0;
+    int complete_annotations = 0;
+    int incomplete_annotations = 0;
+    int num_cameras = 0;
+    std::atomic<int> total_images_saved{0};
+    double elapsed_seconds = 0.0;
+    std::string output_folder;
+};
 
 struct ExportConfig {
     std::string label_folder;       // path to specific labeling session folder
@@ -169,7 +184,9 @@ inline nlohmann::json generate_annotation_json(
     const std::string &label_folder,
     const ExportConfig &config,
     const std::map<std::string, int> &image_width,
-    const std::map<std::string, int> &image_height) {
+    const std::map<std::string, int> &image_height,
+    int *out_complete = nullptr,
+    int *out_incomplete = nullptr) {
 
     nlohmann::json annotations_arr = nlohmann::json::array();
     nlohmann::json images_arr = nlohmann::json::array();
@@ -177,6 +194,7 @@ inline nlohmann::json generate_annotation_json(
 
     int annotation_id = 0;
     int image_id = 0;
+    int n_complete = 0, n_incomplete = 0;
 
     // Outer loop = cameras, inner loop = frames (matches Python iteration order)
     for (const auto &cam : config.camera_names) {
@@ -261,12 +279,18 @@ inline nlohmann::json generate_annotation_json(
             if (has_valid_2d) {
                 annotations_arr.push_back(annotation_entry);
                 annotation_id++;
+                n_complete++;
+            } else {
+                n_incomplete++;
             }
 
             images_arr.push_back(image_entry);
             image_id++;
         }
     }
+
+    if (out_complete) *out_complete = n_complete;
+    if (out_incomplete) *out_incomplete = n_incomplete;
 
     // Build skeleton array for JSON
     nlohmann::json skeleton_arr = nlohmann::json::array();
@@ -409,7 +433,8 @@ inline void extract_jpegs_for_camera(
     const std::vector<int> &train_frames,
     const std::vector<int> &val_frames,
     const std::map<int, std::string> &frame_to_mode,
-    std::string *status, std::mutex *status_mutex) {
+    std::string *status, std::mutex *status_mutex,
+    std::atomic<int> *images_saved_counter = nullptr) {
 
     namespace fs = std::filesystem;
 
@@ -459,6 +484,8 @@ inline void extract_jpegs_for_camera(
                 dir + "Frame_" + std::to_string(frame_num) + ".jpg";
             cv::imwrite(filename, frame);
             saved_count++;
+            if (images_saved_counter)
+                images_saved_counter->fetch_add(1, std::memory_order_relaxed);
         }
     }
     cap.release();
@@ -470,6 +497,11 @@ inline void extract_jpegs_for_camera(
 inline bool export_jarvis_dataset(const ExportConfig &config,
                                   std::string *status) {
     namespace fs = std::filesystem;
+    auto t_start = std::chrono::steady_clock::now();
+
+    ExportStats stats;
+    stats.output_folder = config.output_folder;
+    stats.num_cameras = static_cast<int>(config.camera_names.size());
 
     if (status)
         *status = "Reading 3D keypoints...";
@@ -498,6 +530,9 @@ inline bool export_jarvis_dataset(const ExportConfig &config,
     split_frames(valid_frames, config.train_ratio, config.seed, train_frames,
                  val_frames);
 
+    stats.train_frames = static_cast<int>(train_frames.size());
+    stats.val_frames = static_cast<int>(val_frames.size());
+
     // 3. Read image dimensions from calibration files
     std::map<std::string, int> image_width, image_height;
     for (const auto &cam : config.camera_names) {
@@ -519,16 +554,21 @@ inline bool export_jarvis_dataset(const ExportConfig &config,
     // 4. Generate train annotation JSON
     if (status)
         *status = "Generating train annotations...";
+    int train_complete = 0, train_incomplete = 0;
     auto train_json = generate_annotation_json(
         trial_name, train_frames, config.label_folder, config, image_width,
-        image_height);
+        image_height, &train_complete, &train_incomplete);
 
     // 5. Generate val annotation JSON
     if (status)
         *status = "Generating val annotations...";
+    int val_complete = 0, val_incomplete = 0;
     auto val_json = generate_annotation_json(
         trial_name, val_frames, config.label_folder, config, image_width,
-        image_height);
+        image_height, &val_complete, &val_incomplete);
+
+    stats.complete_annotations = train_complete + val_complete;
+    stats.incomplete_annotations = train_incomplete + val_incomplete;
 
     // 6. Write annotation JSONs
     if (status)
@@ -580,7 +620,8 @@ inline bool export_jarvis_dataset(const ExportConfig &config,
             config.media_folder + "/" + cam + ".mp4";
         threads.emplace_back(extract_jpegs_for_camera, cam, trial_name,
                              video_path, config.output_folder, train_frames,
-                             val_frames, frame_to_mode, status, &status_mutex);
+                             val_frames, frame_to_mode, status, &status_mutex,
+                             &stats.total_images_saved);
     }
     for (auto &t : threads)
         t.join();
@@ -588,6 +629,23 @@ inline bool export_jarvis_dataset(const ExportConfig &config,
     // Check if status was set to an error during extraction
     if (status && status->find("Error") != std::string::npos)
         return false;
+
+    auto t_end = std::chrono::steady_clock::now();
+    stats.elapsed_seconds = std::chrono::duration<double>(t_end - t_start).count();
+
+    // Print export summary
+    int total_frames = stats.train_frames + stats.val_frames;
+    std::cout << "\n=== JARVIS Export Complete ===" << std::endl;
+    std::cout << "Output:      " << stats.output_folder << std::endl;
+    std::cout << "Frames:      " << stats.train_frames << " train, "
+              << stats.val_frames << " val (" << total_frames << " total)" << std::endl;
+    std::cout << "Images:      " << stats.total_images_saved.load() << " saved ("
+              << stats.num_cameras << " cameras x " << total_frames << " frames)" << std::endl;
+    std::cout << "Annotations: " << stats.complete_annotations << " complete, "
+              << stats.incomplete_annotations << " incomplete" << std::endl;
+    std::cout << "Duration:    " << std::fixed << std::setprecision(1)
+              << stats.elapsed_seconds << "s" << std::endl;
+    std::cout << std::endl;
 
     if (status)
         *status = "Export completed successfully! Train: " +
