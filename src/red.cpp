@@ -4008,19 +4008,25 @@ int main(int argc, char **argv) {
             if (ImGui::Begin("JARVIS Export Tool", &show_jarvis_export_tool)) {
                 ImGui::SeparatorText("Export Configuration");
 
-                // Auto-detect label folder
-                std::string jarvis_label_folder;
-                std::string jarvis_label_display = "(none)";
-                if (!pm.keypoints_root_folder.empty()) {
-                    std::string most_recent;
-                    std::string tmp_err;
-                    if (find_most_recent_labels(pm.keypoints_root_folder,
-                                                most_recent, tmp_err) == 0) {
-                        jarvis_label_folder = most_recent;
-                        jarvis_label_display =
-                            std::filesystem::path(most_recent)
-                                .filename()
-                                .string();
+                // Auto-detect label folder (cached to avoid per-frame work)
+                static std::string jarvis_label_folder;
+                static std::string jarvis_label_display = "(none)";
+                static std::string jarvis_label_cache_key;
+                if (jarvis_label_cache_key != pm.keypoints_root_folder) {
+                    jarvis_label_cache_key = pm.keypoints_root_folder;
+                    jarvis_label_folder.clear();
+                    jarvis_label_display = "(none)";
+                    if (!pm.keypoints_root_folder.empty()) {
+                        std::string most_recent;
+                        std::string tmp_err;
+                        if (find_most_recent_labels(pm.keypoints_root_folder,
+                                                    most_recent, tmp_err) == 0) {
+                            jarvis_label_folder = most_recent;
+                            jarvis_label_display =
+                                std::filesystem::path(most_recent)
+                                    .filename()
+                                    .string();
+                        }
                     }
                 }
 
