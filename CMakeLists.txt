@@ -36,8 +36,6 @@ if(APPLE)
         "${CMAKE_SOURCE_DIR}/src/NvDecoder.cpp"
         "${CMAKE_SOURCE_DIR}/src/yolo_torch.cpp"
         "${CMAKE_SOURCE_DIR}/src/yolo_export.cpp"
-        # Vulkan context replaced by metal_context
-        "${CMAKE_SOURCE_DIR}/src/vulkan_context.cpp"
     )
 
     # Objective-C++ source files (.mm)
