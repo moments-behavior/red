@@ -46,9 +46,6 @@ class Red < Formula
   depends_on "glfw"
   depends_on "jpeg-turbo"
 
-  # Needs Xcode command-line tools for Metal headers and ObjC++ compiler
-  uses_from_macos "xcode" => :build
-
   # macOS 12+ required (Metal compute shaders + VideoToolbox async decode)
   depends_on macos: :monterey
 
@@ -57,9 +54,7 @@ class Red < Formula
     # Fetch all submodules (imgui, implot, ImGuiFileDialog, etc.) now.
     # For versioned installs from the fat tarball this is a no-op because
     # the submodule directories are already present.
-    if build.head?
-      system "git", "submodule", "update", "--init", "--recursive"
-    end
+    system "git", "submodule", "update", "--init", "--recursive" if build.head?
 
     # Pass the Homebrew prefix explicitly so CMakeLists.txt does not fall
     # back to /opt/homebrew (which would break on Intel Macs at /usr/local).
@@ -94,7 +89,7 @@ class Red < Formula
 
   test do
     # Verify the binary is present and executable
-    assert_predicate bin/"red", :exist?
+    assert_path_exists bin/"red"
     assert_predicate bin/"red", :executable?
     # The application needs a display to start; check it at least exits
     # with a recognisable error rather than crashing silently.
