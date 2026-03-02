@@ -1,5 +1,12 @@
 #pragma once
+#include "ffmpeg_frame_reader.h"
 #include "json.hpp"
+#include "opencv_yaml_io.h"
+#ifdef __APPLE__
+#include <turbojpeg.h>
+#else
+#include "stb_image_write.h"
+#endif
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -11,7 +18,6 @@
 #include <map>
 #include <mutex>
 #include <numeric>
-#include <opencv2/opencv.hpp>
 #include <random>
 #include <sstream>
 #include <string>
@@ -19,6 +25,36 @@
 #include <vector>
 
 namespace JarvisExport {
+
+// ---------------------------------------------------------------------------
+// JPEG writing — turbojpeg (SIMD-accelerated) on macOS, stb fallback elsewhere
+// ---------------------------------------------------------------------------
+#ifdef __APPLE__
+inline bool write_jpeg(const char *path, int w, int h, int channels,
+                       const uint8_t *data, int quality) {
+    tjhandle tj = tjInitCompress();
+    if (!tj) return false;
+    unsigned char *buf = nullptr;
+    unsigned long buf_size = 0;
+    int pf = (channels == 3) ? TJPF_RGB : TJPF_RGBA;
+    int rc = tjCompress2(tj, data, w, 0, h, pf, &buf, &buf_size,
+                         TJSAMP_420, quality, TJFLAG_FASTDCT);
+    bool ok = (rc == 0);
+    if (ok) {
+        FILE *f = fopen(path, "wb");
+        if (f) { fwrite(buf, 1, buf_size, f); fclose(f); }
+        else ok = false;
+    }
+    tjFree(buf);
+    tjDestroy(tj);
+    return ok;
+}
+#else
+inline bool write_jpeg(const char *path, int w, int h, int channels,
+                       const uint8_t *data, int quality) {
+    return stbi_write_jpg(path, w, h, channels, data, quality) != 0;
+}
+#endif
 
 struct ExportStats {
     int train_frames = 0;
@@ -359,39 +395,41 @@ inline bool write_calibration_yamls(const ExportConfig &config,
 
     for (const auto &cam : config.camera_names) {
         std::string input_path = config.calibration_folder + "/" + cam + ".yaml";
-        cv::FileStorage fs_in(input_path, cv::FileStorage::READ);
-        if (!fs_in.isOpened()) {
+
+        try {
+            opencv_yaml::YamlFile yaml_in = opencv_yaml::read(input_path);
+
+            Eigen::MatrixXd K = yaml_in.getMatrix("camera_matrix");
+            Eigen::MatrixXd dist = yaml_in.getMatrix("distortion_coefficients");
+            Eigen::MatrixXd R = yaml_in.getMatrix("rc_ext");
+            Eigen::MatrixXd T = yaml_in.getMatrix("tc_ext");
+
+            // Transpose K, dist, R (not T) — matches Python script
+            Eigen::MatrixXd Kt = K.transpose();
+            Eigen::MatrixXd dist_t = dist.transpose();
+            Eigen::MatrixXd Rt = R.transpose();
+
+            std::string output_path = save_dir + "/" + cam + ".yaml";
+            opencv_yaml::YamlWriter writer(output_path);
+            if (!writer.isOpen()) {
+                if (status)
+                    *status = "Error: Cannot write calibration file: " + output_path;
+                return false;
+            }
+
+            writer.writeScalar("image_width", image_width.at(cam));
+            writer.writeScalar("image_height", image_height.at(cam));
+            writer.writeMatrix("intrinsicMatrix", Kt);
+            writer.writeMatrix("distortionCoefficients", dist_t);
+            writer.writeMatrix("R", Rt);
+            writer.writeMatrix("T", T);
+            writer.close();
+        } catch (const std::exception &e) {
             if (status)
-                *status = "Error: Cannot open calibration file: " + input_path;
+                *status = "Error: Cannot open calibration file: " + input_path +
+                          " (" + e.what() + ")";
             return false;
         }
-
-        cv::Mat K, dist, R, T;
-        fs_in["camera_matrix"] >> K;
-        fs_in["distortion_coefficients"] >> dist;
-        fs_in["rc_ext"] >> R;
-        fs_in["tc_ext"] >> T;
-
-        // Transpose K, dist, R (not T) — matches Python script
-        K = K.t();
-        dist = dist.t();
-        R = R.t();
-
-        std::string output_path = save_dir + "/" + cam + ".yaml";
-        cv::FileStorage fs_out(output_path, cv::FileStorage::WRITE);
-        if (!fs_out.isOpened()) {
-            if (status)
-                *status = "Error: Cannot write calibration file: " + output_path;
-            return false;
-        }
-
-        fs_out.write("image_width", image_width.at(cam));
-        fs_out.write("image_height", image_height.at(cam));
-        fs_out.write("intrinsicMatrix", K);
-        fs_out.write("distortionCoefficients", dist);
-        fs_out.write("R", R);
-        fs_out.write("T", T);
-        fs_out.release();
     }
     return true;
 }
@@ -401,8 +439,8 @@ inline bool write_calibration_yamls(const ExportConfig &config,
 // ---------------------------------------------------------------------------
 // Some MP4 videos have pre-roll frames with negative PTS before PTS=0.
 // RED counts these frames during sequential playback (frame 0 = first packet),
-// but OpenCV respects the MP4 edit list (frame 0 = PTS 0). This function
-// detects the offset so we can correctly map RED frame numbers to OpenCV frames.
+// but frame-based seeking respects the MP4 edit list (frame 0 = PTS 0).
+// This function detects the offset so we can correctly map RED frame numbers.
 inline int detect_negative_pts_offset(const std::string &video_path, double fps) {
     std::string cmd = "ffprobe -v quiet -select_streams v:0 -show_packets "
                       "-show_entries packet=pts_time -of csv=p=0 \"" +
@@ -425,6 +463,7 @@ inline int detect_negative_pts_offset(const std::string &video_path, double fps)
 
 // ---------------------------------------------------------------------------
 // JPEG frame extraction — one thread per camera
+// Uses FFmpeg C API + stb_image_write instead of cv::VideoCapture + cv::imwrite
 // ---------------------------------------------------------------------------
 inline void extract_jpegs_for_camera(
     const std::string &cam,
@@ -453,8 +492,8 @@ inline void extract_jpegs_for_camera(
     if (all_frames.empty())
         return;
 
-    cv::VideoCapture cap(video_path, cv::CAP_FFMPEG);
-    if (!cap.isOpened()) {
+    ffmpeg_reader::FrameReader reader;
+    if (!reader.open(video_path)) {
         if (status && status_mutex) {
             std::lock_guard<std::mutex> lock(*status_mutex);
             *status = "Error: Cannot open video: " + video_path;
@@ -462,21 +501,21 @@ inline void extract_jpegs_for_camera(
         return;
     }
 
-    double fps = cap.get(cv::CAP_PROP_FPS);
+    double fps = reader.fps();
+    int w = reader.width();
+    int h = reader.height();
 
     // Detect negative PTS offset: RED counts pre-roll frames with negative PTS
-    // during sequential playback, but OpenCV skips them (edit list).
+    // during sequential playback, but seeking respects the edit list.
     int pts_offset = detect_negative_pts_offset(video_path, fps);
 
-    int saved_count = 0;
     for (int frame_num : all_frames) {
-        // Map RED frame number to OpenCV frame number
-        int opencv_frame = frame_num - pts_offset;
-        if (opencv_frame < 0) continue;
+        // Map RED frame number to seek frame number
+        int seek_frame = frame_num - pts_offset;
+        if (seek_frame < 0) continue;
 
-        cap.set(cv::CAP_PROP_POS_FRAMES, opencv_frame);
-        cv::Mat frame;
-        if (!cap.read(frame)) continue;
+        const uint8_t *rgb = reader.readFrame(seek_frame);
+        if (!rgb) continue;
 
         auto it = frame_to_mode.find(frame_num);
         if (it != frame_to_mode.end()) {
@@ -484,14 +523,11 @@ inline void extract_jpegs_for_camera(
                               trial_name + "/" + cam + "/";
             std::string filename =
                 dir + "Frame_" + std::to_string(frame_num) + ".jpg";
-            cv::imwrite(filename, frame,
-                        {cv::IMWRITE_JPEG_QUALITY, jpeg_quality});
-            saved_count++;
+            write_jpeg(filename.c_str(), w, h, 3, rgb, jpeg_quality);
             if (images_saved_counter)
                 images_saved_counter->fetch_add(1, std::memory_order_relaxed);
         }
     }
-    cap.release();
 }
 
 // ---------------------------------------------------------------------------
@@ -551,14 +587,15 @@ inline bool export_jarvis_dataset(const ExportConfig &config_in,
     for (const auto &cam : config.camera_names) {
         std::string calib_path =
             config.calibration_folder + "/" + cam + ".yaml";
-        cv::FileStorage fs(calib_path, cv::FileStorage::READ);
-        if (!fs.isOpened()) {
+        try {
+            opencv_yaml::YamlFile yaml = opencv_yaml::read(calib_path);
+            image_width[cam] = yaml.getInt("image_width");
+            image_height[cam] = yaml.getInt("image_height");
+        } catch (const std::exception &e) {
             if (status)
                 *status = "Error: Cannot open calibration: " + calib_path;
             return false;
         }
-        image_width[cam] = static_cast<int>(fs["image_width"].real());
-        image_height[cam] = static_cast<int>(fs["image_height"].real());
     }
 
     // Extract trial_name from label_folder (last directory component)

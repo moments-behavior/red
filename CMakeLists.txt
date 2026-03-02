@@ -20,10 +20,11 @@ if(APPLE)
     list(APPEND CMAKE_PREFIX_PATH "${HOMEBREW_PREFIX}")
 
     find_package(PkgConfig REQUIRED)
-    pkg_check_modules(FFMPEG REQUIRED libavcodec libavformat libavutil)
+    pkg_check_modules(FFMPEG REQUIRED libavcodec libavformat libavutil libswscale)
 
-    find_package(OpenCV REQUIRED COMPONENTS core calib3d imgproc imgcodecs videoio)
+    find_package(Eigen3 REQUIRED)
     find_package(glfw3 REQUIRED)
+    pkg_check_modules(TURBOJPEG REQUIRED libturbojpeg)
     # No Vulkan needed — replaced by native Metal
 
     set(DIR_IMGUI "${CMAKE_SOURCE_DIR}/lib/imgui")
@@ -65,16 +66,16 @@ if(APPLE)
         ${DIR_FILEBROWSER}
         lib/nvcodec
         lib/IconFontCppHeaders
-        ${OpenCV_INCLUDE_DIRS}
         ${FFMPEG_INCLUDE_DIRS}
+        ${TURBOJPEG_INCLUDE_DIRS}
         ${HOMEBREW_PREFIX}/include
+        ${HOMEBREW_PREFIX}/include/eigen3
     )
 
-    target_link_directories(red PRIVATE ${FFMPEG_LIBRARY_DIRS})
+    target_link_directories(red PRIVATE ${FFMPEG_LIBRARY_DIRS} ${TURBOJPEG_LIBRARY_DIRS})
 
     target_link_libraries(red PRIVATE
-        ${OpenCV_LIBS}
-        opencv_sfm
+        Eigen3::Eigen
         glfw
         "-framework Metal"
         "-framework QuartzCore"
@@ -84,6 +85,7 @@ if(APPLE)
         "-framework CoreVideo"
         "-framework Cocoa"
         ${FFMPEG_LIBRARIES}
+        ${TURBOJPEG_LIBRARIES}
         pthread
     )
     # Removed: Vulkan::Vulkan, -framework Accelerate (vImage no longer used)
@@ -120,16 +122,15 @@ if(APPLE)
         ${DIR_FILEBROWSER}
         lib/nvcodec
         lib/IconFontCppHeaders
-        ${OpenCV_INCLUDE_DIRS}
         ${FFMPEG_INCLUDE_DIRS}
         ${HOMEBREW_PREFIX}/include
+        ${HOMEBREW_PREFIX}/include/eigen3
     )
 
     target_link_directories(test_gui PRIVATE ${FFMPEG_LIBRARY_DIRS})
 
     target_link_libraries(test_gui PRIVATE
-        ${OpenCV_LIBS}
-        opencv_sfm
+        Eigen3::Eigen
         glfw
         "-framework Metal"
         "-framework QuartzCore"

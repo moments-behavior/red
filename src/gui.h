@@ -11,7 +11,7 @@
 #include <future>
 #include <iostream>
 #include <limits>
-#include <opencv2/sfm.hpp>
+#include "red_math.h"
 #include <regex>
 #include <sstream>
 #include <string>
@@ -31,29 +31,6 @@ int load_obb(std::map<u32, KeyPoints *> &keypoints_map,
              SkeletonContext *skeleton, std::string obb_file, int cam_idx,
              RenderScene *scene, std::string &error_message,
              std::vector<std::string> &class_names);
-
-static void draw_cv_contours(std::vector<cv::Rect> boxes,
-                             std::vector<std::string> labels,
-                             std::vector<int> class_ids, int image_height) {
-    for (int i = 0; i < boxes.size(); i++) {
-        double x[5] = {(double)boxes[i].x, (double)boxes[i].x,
-                       (double)boxes[i].x + boxes[i].width,
-                       (double)boxes[i].x + boxes[i].width, (double)boxes[i].x};
-        double y[5] = {(double)image_height - boxes[i].y,
-                       (double)image_height - boxes[i].y - boxes[i].height,
-                       (double)image_height - boxes[i].y - boxes[i].height,
-                       (double)image_height - boxes[i].y,
-                       (double)image_height - boxes[i].y};
-
-        if (class_ids[i] == 0) {
-            ImPlot::SetNextLineStyle(ImVec4(1.0, 0.0, 1.0, 1.0), 3.0);
-        } else {
-            ImPlot::SetNextLineStyle(ImVec4(0.5, 1.0, 1.0, 1.0), 3.0);
-        }
-
-        ImPlot::PlotLine(labels[i].c_str(), &x[0], &y[0], 5);
-    }
-}
 
 static void gui_plot_keypoints(KeyPoints *keypoints, SkeletonContext *skeleton,
                                int view_idx, int num_cams) {
@@ -160,14 +137,14 @@ static void gui_plot_bbox_from_keypoints(KeyPoints *keypoints,
     }
 }
 
-bool is_in_camera_fov(cv::Mat point_world, const cv::Mat &rvec,
-                      const cv::Mat &tvec, const cv::Mat &K, int image_width,
+bool is_in_camera_fov(const Eigen::Vector3d &point_world,
+                      const Eigen::Vector3d &rvec,
+                      const Eigen::Vector3d &tvec,
+                      const Eigen::Matrix3d &K, int image_width,
                       int image_height) {
-    cv::Mat image_pts;
-    cv::Mat dist_coeffs = cv::Mat::zeros(5, 1, CV_64F);
-    cv::projectPoints(point_world, rvec, tvec, K, dist_coeffs, image_pts);
-    double x = image_pts.at<double>(0, 0);
-    double y = image_height - image_pts.at<double>(0, 1);
+    auto pt2d = red_math::projectPointNoDist(point_world, rvec, tvec, K);
+    double x = pt2d(0);
+    double y = image_height - pt2d(1);
     if (x > 0 && x < image_width && y > 0 && y < image_height) {
         return true;
     }
@@ -189,36 +166,31 @@ static void reprojection(KeyPoints *keypoints, SkeletonContext *skeleton,
 
         if (num_views_labeled >= 2) {
 
-            std::vector<cv::Mat> sfmPoints2d;
-            std::vector<cv::Mat> projection_matrices;
-            cv::Mat output;
+            std::vector<Eigen::Vector2d> undist_pts;
+            std::vector<Eigen::Matrix<double, 3, 4>> proj_mats;
 
             for (u32 view_idx = 0; view_idx < scene->num_cams; view_idx++) {
                 if (keypoints->kp2d[view_idx][node].is_labeled) {
+                    Eigen::Vector2d pt(
+                        keypoints->kp2d[view_idx][node].position.x,
+                        (double)scene->image_height[view_idx] -
+                            keypoints->kp2d[view_idx][node].position.y);
+                    Eigen::Vector2d pt_undist = red_math::undistortPoint(
+                        pt, camera_params[view_idx].k,
+                        camera_params[view_idx].dist_coeffs);
 
-                    cv::Mat point =
-                        (cv::Mat_<double>(2, 1)
-                             << keypoints->kp2d[view_idx][node].position.x,
-                         (double)scene->image_height[view_idx] -
-                             keypoints->kp2d[view_idx][node].position.y);
-                    cv::Mat pointUndistort;
-                    cv::undistortPoints(
-                        point, pointUndistort, camera_params[view_idx].k,
-                        camera_params[view_idx].dist_coeffs, cv::noArray(),
-                        camera_params[view_idx].k);
-
-                    sfmPoints2d.push_back(pointUndistort.reshape(1, 2));
-                    projection_matrices.push_back(
+                    undist_pts.push_back(pt_undist);
+                    proj_mats.push_back(
                         camera_params[view_idx].projection_mat);
                 }
             }
 
-            cv::sfm::triangulatePoints(sfmPoints2d, projection_matrices,
-                                       output);
+            Eigen::Vector3d pt3d =
+                red_math::triangulatePoints(undist_pts, proj_mats);
 
-            keypoints->kp3d[node].position.x = output.at<double>(0);
-            keypoints->kp3d[node].position.y = output.at<double>(1);
-            keypoints->kp3d[node].position.z = output.at<double>(2);
+            keypoints->kp3d[node].position.x = pt3d(0);
+            keypoints->kp3d[node].position.y = pt3d(1);
+            keypoints->kp3d[node].position.z = pt3d(2);
             keypoints->kp3d[node].is_triangulated = true;
 
             for (u32 view_idx = 0; view_idx < scene->num_cams; view_idx++) {
@@ -226,19 +198,19 @@ static void reprojection(KeyPoints *keypoints, SkeletonContext *skeleton,
                     keypoints->kp2d[view_idx][node].position;
                 keypoints->kp2d[view_idx][node].last_is_labeled =
                     keypoints->kp2d[view_idx][node].is_labeled;
-                if (is_in_camera_fov(output, camera_params[view_idx].rvec,
+                if (is_in_camera_fov(pt3d, camera_params[view_idx].rvec,
                                      camera_params[view_idx].tvec,
                                      camera_params[view_idx].k,
                                      scene->image_width[view_idx],
                                      scene->image_height[view_idx])) {
-                    cv::Mat imagePts;
-                    cv::projectPoints(
-                        output, camera_params[view_idx].rvec,
-                        camera_params[view_idx].tvec, camera_params[view_idx].k,
-                        camera_params[view_idx].dist_coeffs, imagePts);
-                    double x = imagePts.at<double>(0, 0);
+                    auto reproj = red_math::projectPoint(
+                        pt3d, camera_params[view_idx].rvec,
+                        camera_params[view_idx].tvec,
+                        camera_params[view_idx].k,
+                        camera_params[view_idx].dist_coeffs);
+                    double x = reproj(0);
                     double y = double(scene->image_height[view_idx]) -
-                               imagePts.at<double>(0, 1);
+                               reproj(1);
                     if (x > 0 && x < scene->image_width[view_idx] && y > 0 &&
                         y < scene->image_height[view_idx]) {
                         // calculate per keypoint error
@@ -1555,19 +1527,19 @@ int load_obb(std::map<u32, KeyPoints *> &keypoints_map,
 void world_coordinates_projection_points(CameraParams *cvp, int image_height,
                                          double *axis_x_values,
                                          double *axis_y_values, float scale) {
-    std::vector<cv::Point3f> world_coordinates;
-    world_coordinates.push_back(cv::Point3f(0.0f, 0.0f, 0.0f));
-    world_coordinates.push_back(cv::Point3f(scale * 1.0f, 0.0f, 0.0f));
-    world_coordinates.push_back(cv::Point3f(0.0f, scale * 1.0f, 0.0f));
-    world_coordinates.push_back(cv::Point3f(0.0f, 0.0f, scale * 1.0f));
+    std::vector<Eigen::Vector3d> world_coordinates = {
+        {0.0, 0.0, 0.0},
+        {scale * 1.0, 0.0, 0.0},
+        {0.0, scale * 1.0, 0.0},
+        {0.0, 0.0, scale * 1.0}};
 
-    std::vector<cv::Point2f> img_pts;
-    cv::projectPoints(world_coordinates, cvp->rvec, cvp->tvec, cvp->k,
-                      cvp->dist_coeffs, img_pts);
+    auto img_pts = red_math::projectPoints(world_coordinates, cvp->rvec,
+                                           cvp->tvec, cvp->k,
+                                           cvp->dist_coeffs);
 
     for (int i = 0; i < 4; i++) {
-        axis_x_values[i] = img_pts.at(i).x;
-        axis_y_values[i] = image_height - img_pts.at(i).y;
+        axis_x_values[i] = img_pts[i](0);
+        axis_y_values[i] = image_height - img_pts[i](1);
     }
 }
 
@@ -1636,35 +1608,23 @@ static void gui_plot_world_coordinates(CameraParams *cvp, int cam_id,
 
 void gui_arena_projection_points(CameraParams *cvp, int image_height,
                                  float *arena_x, float *arena_y, int n) {
-    std::vector<float> x;
-    std::vector<float> y;
-    std::vector<float> z;
-
     float radius = 1473.0f;
-    std::vector<cv::Point3f> inPts;
+    std::vector<Eigen::Vector3d> inPts;
 
     for (int i = 0; i <= n; i++) {
         float angle = (3.14159265358979323846 * 2) * (float(i) / float(n - 1));
-        x.push_back(sin(angle) * radius);
-        y.push_back(cos(angle) * radius);
-        z.push_back(0.0f);
+        inPts.push_back(Eigen::Vector3d(sin(angle) * radius,
+                                        cos(angle) * radius, 0.0));
     }
+    // Only project n points (not n+1)
+    inPts.resize(n);
+
+    auto img_pts = red_math::projectPoints(inPts, cvp->rvec, cvp->tvec,
+                                           cvp->k, cvp->dist_coeffs);
 
     for (int i = 0; i < n; i++) {
-        cv::Point3f p;
-        p.x = x[i];
-        p.y = y[i];
-        p.z = z[i];
-        inPts.push_back(p);
-    }
-
-    std::vector<cv::Point2f> img_pts;
-    cv::projectPoints(inPts, cvp->rvec, cvp->tvec, cvp->k, cvp->dist_coeffs,
-                      img_pts);
-
-    for (int i = 0; i < n; i++) {
-        arena_x[i] = img_pts.at(i).x;
-        arena_y[i] = image_height - img_pts.at(i).y;
+        arena_x[i] = (float)img_pts[i](0);
+        arena_y[i] = (float)(image_height - img_pts[i](1));
     }
 }
 
@@ -1746,35 +1706,28 @@ static void triangulate_bounding_boxes(KeyPoints *keypoints,
         std::cout << "Center 2: (" << center2_x << ", " << center2_y << ")"
                   << std::endl;
 
-        std::vector<cv::Mat> sfmPoints2d;
-        std::vector<cv::Mat> projection_matrices;
+        Eigen::Vector2d pt1(center1_x,
+                             (double)scene->image_height[cam1_id] - center1_y);
+        Eigen::Vector2d pt2(center2_x,
+                             (double)scene->image_height[cam2_id] - center2_y);
 
-        cv::Mat point1 = (cv::Mat_<double>(2, 1) << center1_x,
-                          (double)scene->image_height[cam1_id] - center1_y);
-        cv::Mat point2 = (cv::Mat_<double>(2, 1) << center2_x,
-                          (double)scene->image_height[cam2_id] - center2_y);
+        Eigen::Vector2d pt1_undist = red_math::undistortPoint(
+            pt1, camera_params[cam1_id].k, camera_params[cam1_id].dist_coeffs);
+        Eigen::Vector2d pt2_undist = red_math::undistortPoint(
+            pt2, camera_params[cam2_id].k, camera_params[cam2_id].dist_coeffs);
 
-        cv::Mat point1_undistort, point2_undistort;
-        cv::undistortPoints(point1, point1_undistort, camera_params[cam1_id].k,
-                            camera_params[cam1_id].dist_coeffs, cv::noArray(),
-                            camera_params[cam1_id].k);
-        cv::undistortPoints(point2, point2_undistort, camera_params[cam2_id].k,
-                            camera_params[cam2_id].dist_coeffs, cv::noArray(),
-                            camera_params[cam2_id].k);
+        std::vector<Eigen::Vector2d> undist_pts = {pt1_undist, pt2_undist};
+        std::vector<Eigen::Matrix<double, 3, 4>> proj_mats = {
+            camera_params[cam1_id].projection_mat,
+            camera_params[cam2_id].projection_mat};
 
-        sfmPoints2d.push_back(point1_undistort.reshape(1, 2));
-        sfmPoints2d.push_back(point2_undistort.reshape(1, 2));
-        projection_matrices.push_back(camera_params[cam1_id].projection_mat);
-        projection_matrices.push_back(camera_params[cam2_id].projection_mat);
-
-        cv::Mat triangulated_center;
-        cv::sfm::triangulatePoints(sfmPoints2d, projection_matrices,
-                                   triangulated_center);
+        Eigen::Vector3d triangulated_center =
+            red_math::triangulatePoints(undist_pts, proj_mats);
 
         std::cout << "Triangulated 3D center: ("
-                  << triangulated_center.at<double>(0) << ", "
-                  << triangulated_center.at<double>(1) << ", "
-                  << triangulated_center.at<double>(2) << ")" << std::endl;
+                  << triangulated_center(0) << ", "
+                  << triangulated_center(1) << ", "
+                  << triangulated_center(2) << ")" << std::endl;
 
         double width1 = bbox1->rect->X.Max - bbox1->rect->X.Min;
         double height1 = bbox1->rect->Y.Max - bbox1->rect->Y.Min;
@@ -1807,15 +1760,14 @@ static void triangulate_bounding_boxes(KeyPoints *keypoints,
                 continue;
             }
 
-            cv::Mat reprojected_points;
-            cv::projectPoints(
+            auto reproj = red_math::projectPoint(
                 triangulated_center, camera_params[target_cam].rvec,
                 camera_params[target_cam].tvec, camera_params[target_cam].k,
-                camera_params[target_cam].dist_coeffs, reprojected_points);
+                camera_params[target_cam].dist_coeffs);
 
-            double proj_x = reprojected_points.at<double>(0, 0);
+            double proj_x = reproj(0);
             double proj_y = (double)scene->image_height[target_cam] -
-                            reprojected_points.at<double>(0, 1);
+                            reproj(1);
 
             std::cout << "Reprojected center in camera " << target_cam << ": ("
                       << proj_x << ", " << proj_y << ")" << std::endl;
@@ -1846,9 +1798,6 @@ static void triangulate_bounding_boxes(KeyPoints *keypoints,
                      "successfully."
                   << std::endl;
 
-    } catch (const cv::Exception &e) {
-        std::cerr << "OpenCV error in bounding box triangulation: " << e.what()
-                  << std::endl;
     } catch (const std::exception &e) {
         std::cerr << "Error in bounding box triangulation: " << e.what()
                   << std::endl;

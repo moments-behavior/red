@@ -14,7 +14,9 @@ extern "C" {
 #include <CoreVideo/CoreVideo.h>
 #endif
 #include <atomic>
+#ifndef __APPLE__
 #include <opencv2/opencv.hpp>
+#endif
 
 struct SeekInfo {
     bool use_seek;

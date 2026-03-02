@@ -32,6 +32,8 @@
 #include <thread>
 #define STB_IMAGE_IMPLEMENTATION
 #include "../lib/ImGuiFileDialog/stb/stb_image.h"
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "stb_image_write.h"
 #ifndef __APPLE__
 #include "kernel.cuh"
 #endif

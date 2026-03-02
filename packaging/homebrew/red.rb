@@ -41,9 +41,10 @@ class Red < Formula
   depends_on "pkg-config" => :build
 
   # Runtime dependencies (Homebrew handles installation automatically)
+  depends_on "eigen"
   depends_on "ffmpeg"
   depends_on "glfw"
-  depends_on "opencv"  # includes opencv_sfm via contrib modules
+  depends_on "jpeg-turbo"
 
   # Needs Xcode command-line tools for Metal headers and ObjC++ compiler
   uses_from_macos "xcode" => :build

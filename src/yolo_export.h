@@ -10,7 +10,9 @@
 #include "json.hpp"
 #include <filesystem>
 #include <map>
+#ifndef __APPLE__
 #include <opencv2/opencv.hpp>
+#endif
 #include <string>
 #include <vector>
 
@@ -54,7 +56,9 @@ struct ExportConfig {
 };
 
 // Image processing functions
+#ifndef __APPLE__
 cv::Mat resize_image_for_yolo(const cv::Mat &image, int target_size = 640);
+#endif
 std::vector<float> adjust_bbox_for_resize(const std::vector<float> &bbox,
                                           int original_width,
                                           int original_height, int target_size);
@@ -71,7 +75,9 @@ std::vector<float> convert_keypoints_to_yolo_format(
     int img_height, int expected_num_keypoints = -1);
 
 // Frame extraction
+#ifndef __APPLE__
 cv::Mat extract_frame_opencv(const std::string &video_path, int frame_number);
+#endif
 
 // Data loading functions
 std::vector<FrameAnnotation>

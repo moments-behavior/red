@@ -2,6 +2,8 @@
 #include "global.h"
 #ifndef __APPLE__
 #include "AppDecUtils.h"
+#else
+#include "../lib/ImGuiFileDialog/stb/stb_image.h"
 #endif
 
 void decoder_clear_buffer_with_constant_image(unsigned char *image_pt,
@@ -444,6 +446,31 @@ void decoder_process(DecoderContext *dc_context, FFmpegDemuxer *demuxer,
 
 #endif // __APPLE__
 
+// Helper: load image as RGBA into display buffer slot
+static inline bool load_image_rgba(const std::string &file_name,
+                                   unsigned char *dst_buf,
+                                   size_t *out_size) {
+#ifdef __APPLE__
+    int w, h, ch;
+    unsigned char *data = stbi_load(file_name.c_str(), &w, &h, &ch, 4);
+    if (!data) return false;
+    size_t buf_size = (size_t)w * h * 4;
+    memcpy(dst_buf, data, buf_size);
+    stbi_image_free(data);
+    if (out_size) *out_size = buf_size;
+    return true;
+#else
+    cv::Mat image = cv::imread(file_name, cv::IMREAD_COLOR);
+    if (image.empty()) return false;
+    cv::Mat image_rgba;
+    cv::cvtColor(image, image_rgba, cv::COLOR_BGR2RGBA);
+    size_t buf_size = image_rgba.total() * image_rgba.elemSize();
+    memcpy(dst_buf, image_rgba.data, buf_size);
+    if (out_size) *out_size = buf_size;
+    return true;
+#endif
+}
+
 void image_loader(DecoderContext *dc_context,
                   const std::vector<std::string> &img_list_vector,
                   PictureBuffer *display_buffer, int size_of_buffer,
@@ -472,14 +499,8 @@ void image_loader(DecoderContext *dc_context,
                     std::string file_name = root_dir + "/" + cam_name + "_" +
                                             img_list_vector[frame_number] +
                                             "." + file_ext;
-                    cv::Mat image = cv::imread(file_name, cv::IMREAD_COLOR);
-                    cv::Mat image_rgba;
-                    cv::cvtColor(image, image_rgba, cv::COLOR_BGR2RGBA);
-                    size_t buffer_size =
-                        image_rgba.total() *
-                        image_rgba.elemSize(); // Rows * Cols * Channels
-                    memcpy(display_buffer[buffer_head].frame, image_rgba.data,
-                           buffer_size);
+                    load_image_rgba(file_name,
+                                    display_buffer[buffer_head].frame, nullptr);
                     display_buffer[buffer_head].available_to_write = false;
                     dc_context->decoding_flag = true;
                     display_buffer[buffer_head].frame_number = frame_number;
@@ -492,14 +513,8 @@ void image_loader(DecoderContext *dc_context,
                     std::string file_name = root_dir + "/" + cam_name + "_" +
                                             img_list_vector[frame_number] +
                                             "." + file_ext;
-                    cv::Mat image = cv::imread(file_name, cv::IMREAD_COLOR);
-                    cv::Mat image_rgba;
-                    cv::cvtColor(image, image_rgba, cv::COLOR_BGR2RGBA);
-                    size_t buffer_size =
-                        image_rgba.total() *
-                        image_rgba.elemSize(); // Rows * Cols * Channels
-                    memcpy(display_buffer[buffer_head].frame, image_rgba.data,
-                           buffer_size);
+                    load_image_rgba(file_name,
+                                    display_buffer[buffer_head].frame, nullptr);
                     display_buffer[buffer_head].available_to_write = false;
                     display_buffer[buffer_head].frame_number = frame_number;
                     latest_decoded_frame[cam_name].store(frame_number);

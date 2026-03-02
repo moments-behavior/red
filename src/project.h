@@ -10,6 +10,9 @@
 #include <misc/cpp/imgui_stdlib.h> // for InputText(std::string&)
 #include <string>
 #include <vector>
+#ifdef __APPLE__
+#include "../lib/ImGuiFileDialog/stb/stb_image.h"
+#endif
 
 struct ProjectManager {
     bool show_project_window = false;
@@ -463,9 +466,16 @@ load_images(std::map<std::string, std::string> &selected_files,
     for (u32 j = 0; j < scene->num_cams; j++) {
         std::string file_name = pm.media_folder + "/" + pm.camera_names[j] +
                                 "_" + imgs_names[0] + "." + file_ext;
+#ifdef __APPLE__
+        int w = 0, h = 0, ch = 0;
+        stbi_info(file_name.c_str(), &w, &h, &ch);
+        scene->image_width[j] = w;
+        scene->image_height[j] = h;
+#else
         cv::Mat image = cv::imread(file_name, cv::IMREAD_COLOR);
         scene->image_width[j] = image.cols;
         scene->image_height[j] = image.rows;
+#endif
     }
     if (imgs_names.size() < label_buffer_size) {
         label_buffer_size = imgs_names.size();
