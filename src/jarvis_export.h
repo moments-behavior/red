@@ -44,6 +44,7 @@ struct ExportConfig {
     float margin_pixel = 50.0f;
     float train_ratio = 0.9f;
     int seed = 42;
+    int jpeg_quality = 95;
 };
 
 // ---------------------------------------------------------------------------
@@ -434,7 +435,8 @@ inline void extract_jpegs_for_camera(
     const std::vector<int> &val_frames,
     const std::map<int, std::string> &frame_to_mode,
     std::string *status, std::mutex *status_mutex,
-    std::atomic<int> *images_saved_counter = nullptr) {
+    std::atomic<int> *images_saved_counter = nullptr,
+    int jpeg_quality = 95) {
 
     namespace fs = std::filesystem;
 
@@ -482,7 +484,8 @@ inline void extract_jpegs_for_camera(
                               trial_name + "/" + cam + "/";
             std::string filename =
                 dir + "Frame_" + std::to_string(frame_num) + ".jpg";
-            cv::imwrite(filename, frame);
+            cv::imwrite(filename, frame,
+                        {cv::IMWRITE_JPEG_QUALITY, jpeg_quality});
             saved_count++;
             if (images_saved_counter)
                 images_saved_counter->fetch_add(1, std::memory_order_relaxed);
@@ -494,10 +497,20 @@ inline void extract_jpegs_for_camera(
 // ---------------------------------------------------------------------------
 // Main export function
 // ---------------------------------------------------------------------------
-inline bool export_jarvis_dataset(const ExportConfig &config,
+inline bool export_jarvis_dataset(const ExportConfig &config_in,
                                   std::string *status) {
     namespace fs = std::filesystem;
     auto t_start = std::chrono::steady_clock::now();
+
+    // Create timestamped subfolder inside output directory
+    ExportConfig config = config_in;
+    {
+        time_t now = time(0);
+        struct tm tstruct = *localtime(&now);
+        char buf[64];
+        strftime(buf, sizeof(buf), "%Y_%m_%d_%H_%M_%S", &tstruct);
+        config.output_folder = config_in.output_folder + "/" + buf;
+    }
 
     ExportStats stats;
     stats.output_folder = config.output_folder;
@@ -621,7 +634,7 @@ inline bool export_jarvis_dataset(const ExportConfig &config,
         threads.emplace_back(extract_jpegs_for_camera, cam, trial_name,
                              video_path, config.output_folder, train_frames,
                              val_frames, frame_to_mode, status, &status_mutex,
-                             &stats.total_images_saved);
+                             &stats.total_images_saved, config.jpeg_quality);
     }
     for (auto &t : threads)
         t.join();

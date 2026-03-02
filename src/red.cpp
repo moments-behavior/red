@@ -229,6 +229,7 @@ int main(int argc, char **argv) {
     float jarvis_export_margin = 50.0f;
     float jarvis_export_train_ratio = 0.9f;
     int jarvis_export_seed = 42;
+    int jarvis_export_jpeg_quality = 95;
     bool jarvis_export_in_progress = false;
     std::string jarvis_export_status = "";
 
@@ -4120,6 +4121,15 @@ int main(int argc, char **argv) {
                                 std::filesystem::path(most_recent)
                                     .filename()
                                     .string();
+                            // Default output dir next to label folder
+                            if (jarvis_export_output_dir.empty()) {
+                                jarvis_export_output_dir =
+                                    std::filesystem::path(most_recent)
+                                        .parent_path()
+                                        .parent_path()
+                                        .string() +
+                                    "/jarvis_export";
+                            }
                         }
                     }
                 }
@@ -4155,6 +4165,8 @@ int main(int argc, char **argv) {
                 ImGui::SliderFloat("Train Ratio", &jarvis_export_train_ratio,
                                    0.5f, 0.99f);
                 ImGui::InputInt("Random Seed", &jarvis_export_seed);
+                ImGui::SliderInt("JPEG Quality", &jarvis_export_jpeg_quality,
+                                 10, 100);
 
                 ImGui::Separator();
 
@@ -4186,6 +4198,7 @@ int main(int argc, char **argv) {
                             jcfg.margin_pixel = jarvis_export_margin;
                             jcfg.train_ratio = jarvis_export_train_ratio;
                             jcfg.seed = jarvis_export_seed;
+                            jcfg.jpeg_quality = jarvis_export_jpeg_quality;
 
                             // Copy node names and edges from skeleton
                             jcfg.node_names = skeleton.node_names;
@@ -4229,13 +4242,6 @@ int main(int argc, char **argv) {
                     }
                 }
 
-                ImGui::Separator();
-                if (ImGui::Button("Use Current Project")) {
-                    if (!pm.project_path.empty()) {
-                        jarvis_export_output_dir =
-                            pm.project_path + "/jarvis_dataset";
-                    }
-                }
             }
             ImGui::End();
         }

@@ -80,6 +80,7 @@ void metal_init(GLFWwindow *window) {
         g_ctx.layer.device          = g_ctx.device;
         g_ctx.layer.pixelFormat     = MTLPixelFormatBGRA8Unorm;
         g_ctx.layer.framebufferOnly = YES;
+        g_ctx.layer.allowsNextDrawableTimeout = NO;
         nswin.contentView.layer      = g_ctx.layer;
         nswin.contentView.wantsLayer = YES;
 
