@@ -13,7 +13,7 @@ brew install red
 ```
 
 That's it. Homebrew installs all dependencies automatically
-(`ffmpeg`, `opencv`, `glfw`).
+(`eigen`, `ffmpeg`, `glfw`, `jpeg-turbo`).
 
 ### First-launch note
 
@@ -65,11 +65,6 @@ brew untap JohnsonLabJanelia/red
 ---
 
 ## Troubleshooting
-
-**`opencv_sfm` not found at build time**
-Homebrew's `opencv` formula includes the `sfm` contrib module. If you have
-a custom opencv installation, ensure it was built with
-`-DOPENCV_EXTRA_MODULES_PATH` pointing to `opencv_contrib`.
 
 **Formula fails to build**
 Run with verbose output:

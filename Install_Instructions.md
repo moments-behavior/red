@@ -95,8 +95,8 @@ Homebrew only shows a spinner which can appear stuck during long steps.
 
 This will:
 1. Install build dependencies (`cmake`, `pkg-config`) and runtime dependencies
-   (`ffmpeg`, `opencv`, `glfw`) automatically — this may take a few minutes if
-   any are not already installed
+   (`eigen`, `ffmpeg`, `glfw`, `jpeg-turbo`) automatically — this typically
+   takes just a minute or two
 2. Clone the RED source repository and check out the current development branch
 3. Fetch all submodules (ImGui, ImPlot, etc.)
 4. Build RED with CMake — expect **2–5 minutes** on an M-series Mac

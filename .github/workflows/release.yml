@@ -22,7 +22,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          brew install ffmpeg opencv glfw pkg-config cmake
+          brew install eigen ffmpeg glfw jpeg-turbo pkg-config cmake
 
       - name: Configure
         run: |

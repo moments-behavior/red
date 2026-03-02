@@ -34,7 +34,7 @@ class Red < Formula
   # Use while a stable release is not yet tagged, or for development:
   #   brew install --HEAD JohnsonLabJanelia/red/red
   # ---------------------------------------------------------------------------
-  head "https://github.com/JohnsonLabJanelia/red.git", branch: "rob_dev_metal"
+  head "https://github.com/JohnsonLabJanelia/red.git", branch: "rob_dev_no_opencv"
 
   # Build dependencies (not needed at runtime)
   depends_on "cmake"      => :build
