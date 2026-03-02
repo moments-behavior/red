@@ -32,13 +32,13 @@ warning, either:
 
 - **macOS 12 (Monterey) or later** — required for async VideoToolbox decode
   and Metal compute
-- **Apple Silicon (M1 / M2 / M3)** — Intel Macs are not currently supported
+- **Apple Silicon (M1 / M2 / M3 / M4 / M5)** — Intel Macs are not currently supported
 
 ---
 
 ## Development / HEAD install
 
-To build from the latest `main` branch instead of a stable release:
+To build from the latest development branch instead of a stable release:
 
 ```bash
 brew install --HEAD JohnsonLabJanelia/red/red
