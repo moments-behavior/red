@@ -928,34 +928,34 @@ int main(int argc, char **argv) {
                 }
             }
 
+            // Frame buffer keyboard navigation — global so it works
+            // even when the "Frames in the buffer" tab is hidden.
+            bool selection_changed = false;
+
+            // Clamp just in case
+            if (ps.pause_selected < 0)
+                ps.pause_selected = 0;
+            if (ps.pause_selected >= (int)scene->size_of_buffer)
+                ps.pause_selected = scene->size_of_buffer - 1;
+
+            if (ImGui::IsKeyPressed(ImGuiKey_Comma, true) &&
+                !io.WantTextInput) {
+                if (ps.pause_selected > 0) {
+                    ps.pause_selected--;
+                    selection_changed = true;
+                }
+            }
+
+            if (ImGui::IsKeyPressed(ImGuiKey_Period, true) &&
+                !io.WantTextInput) {
+                if (ps.pause_selected < (int)scene->size_of_buffer - 1) {
+                    ps.pause_selected++;
+                    selection_changed = true;
+                }
+            }
+
             ImGui::SetNextWindowSize(ImVec2(500, 440), ImGuiCond_FirstUseEver);
             if (ImGui::Begin("Frames in the buffer")) {
-
-                // Did selection change this frame?
-                bool selection_changed = false;
-
-                // Clamp just in case
-                if (ps.pause_selected < 0)
-                    ps.pause_selected = 0;
-                if (ps.pause_selected >= (int)scene->size_of_buffer)
-                    ps.pause_selected = scene->size_of_buffer - 1;
-
-                // Handle keyboard navigation first
-                if (ImGui::IsKeyPressed(ImGuiKey_Comma, true) &&
-                    !io.WantTextInput) {
-                    if (ps.pause_selected > 0) {
-                        ps.pause_selected--;
-                        selection_changed = true;
-                    }
-                }
-
-                if (ImGui::IsKeyPressed(ImGuiKey_Period, true) &&
-                    !io.WantTextInput) {
-                    if (ps.pause_selected < (int)scene->size_of_buffer - 1) {
-                        ps.pause_selected++;
-                        selection_changed = true;
-                    }
-                }
 
                 for (u32 i = 0; i < scene->size_of_buffer; i++) {
                     int seletable_frame_id =
@@ -1145,32 +1145,12 @@ int main(int argc, char **argv) {
                                          ImGuiCond_FirstUseEver);
                 ImVec2 window_pos;
 
-                if (scene->num_cams < 8) {
-                    if (j % 2 == 0) {
-                        window_pos.y = 200.0;
-                        window_pos.x = (j / 2.0) * 500;
-                    } else {
-                        window_pos.y = 600.0;
-                        window_pos.x = (j - 1) / 2.0 * 500;
-                    }
-                } else {
-                    int row = j % 4;
-                    float base_x = (row == 0) ? j : (j - 1);
-                    float x_group = (base_x / 4.0f) * 500;
-                    switch (row) {
-                    case 0:
-                        window_pos = {x_group, 200.0f};
-                        break;
-                    case 1:
-                        window_pos = {x_group, 600.0f};
-                        break;
-                    case 2:
-                        window_pos = {x_group, 1000.0f};
-                        break;
-                    case 3:
-                        window_pos = {x_group, 1400.0f};
-                        break;
-                    }
+                {
+                    int rows = (scene->num_cams < 8) ? 2 : 4;
+                    int col = j / rows;
+                    int row = j % rows;
+                    window_pos.x = col * 500.0f;
+                    window_pos.y = 200.0f + row * 400.0f;
                 }
 
                 ImGui::SetNextWindowPos(window_pos, ImGuiCond_FirstUseEver);
@@ -1188,6 +1168,7 @@ int main(int argc, char **argv) {
                     // seek if visibility has changed
                     seek_all_cameras(scene, current_frame_num,
                                      dc_context->video_fps, ps, true);
+                    ps.pause_selected = 0; // stay on the seeked frame
                     for (auto &[key, value] : window_need_decoding) {
                         value.store(true);
                     }
@@ -2772,6 +2753,17 @@ int main(int argc, char **argv) {
                                    pm.camera_names, scene, skeleton, rp_tool);
         }
 
+        // Ctrl+S save: global so it works even when Labeling Tool tab
+        // is hidden.  The flag is consumed by the save block inside
+        // the Labeling Tool window (or after it).
+        bool save_requested = false;
+        if (pm.plot_keypoints_flag &&
+            ImGui::GetIO().KeyCtrl &&
+            ImGui::IsKeyPressed(ImGuiKey_S, false) &&
+            !io.WantTextInput) {
+            save_requested = true;
+        }
+
         if (pm.plot_keypoints_flag) {
 
             if (ImGui::Begin("Labeling Tool")) {
@@ -2814,15 +2806,8 @@ int main(int argc, char **argv) {
                         ImGui::PopStyleColor(3);
                     }
 
-                    if (keypoints_find) {
-                        if (ImGui::IsKeyPressed(ImGuiKey_T,
-                                                false) &&
-                            !io.WantTextInput) // triangulate
-                        {
-                            reprojection(keypoints_map.at(current_frame_num),
-                                         &skeleton, pm.camera_params, scene);
-                        }
-                    }
+                    // T-key triangulation moved outside this window
+                    // so it works even when the Labeling Tool tab is hidden.
                 } else {
                     // Display message when skeleton is not properly loaded
                     ImGui::Text("Please load a skeleton to view keypoints.");
@@ -2840,93 +2825,8 @@ int main(int argc, char **argv) {
                 ImGui::SameLine();
                 ImGui::Text("%s", pm.keypoints_root_folder.c_str());
 
-                if (ImGui::Button("Save Labeled Data") ||
-                    (ImGui::GetIO().KeyCtrl &&
-                     ImGui::IsKeyPressed(ImGuiKey_S, false) &&
-                     !io.WantTextInput)) {
-
-                    // Detect what type of data we have and save accordingly
-                    if (skeleton.has_skeleton && !skeleton.has_bbox) {
-                        save_keypoints(keypoints_map, &skeleton,
-                                       pm.keypoints_root_folder,
-                                       scene->num_cams, pm.camera_names,
-                                       &input_is_imgs, imgs_names);
-                        std::cout << "Saved skeleton keypoints data"
-                                  << std::endl;
-                    } else if (!skeleton.has_skeleton && skeleton.has_bbox) {
-                        save_bboxes(keypoints_map, &skeleton,
-                                    pm.keypoints_root_folder, scene->num_cams,
-                                    pm.camera_names, &input_is_imgs,
-                                    imgs_names);
-                        std::cout << "Saved bounding boxes data" << std::endl;
-                    } else if (skeleton.has_obb) {
-                        save_obb(keypoints_map, &skeleton,
-                                 pm.keypoints_root_folder, pm.camera_names,
-                                 scene->num_cams, &imgs_names, &input_is_imgs,
-                                 bbox_class_names);
-                        std::cout << "Saved oriented bounding boxes data"
-                                  << std::endl;
-                    } else if (skeleton.has_skeleton && skeleton.has_bbox) {
-                        bool has_bbox_keypoints = false;
-                        for (const auto &[frame_num, keypoints] :
-                             keypoints_map) {
-                            if (!keypoints)
-                                continue;
-                            for (int cam_id = 0;
-                                 cam_id < scene->num_cams &&
-                                 cam_id < MAX_VIEWS && !has_bbox_keypoints;
-                                 cam_id++) {
-                                for (const auto &bbox :
-                                     keypoints->bbox2d_list[cam_id]) {
-                                    if (bbox.state == RectTwoPoints &&
-                                        bbox.has_bbox_keypoints) {
-                                        has_bbox_keypoints = true;
-                                        break;
-                                    }
-                                }
-                            }
-                            if (has_bbox_keypoints)
-                                break;
-                        }
-
-                        if (has_bbox_keypoints) {
-                            // Save both skeleton keypoints and bbox
-                            // keypoints
-                            save_keypoints(keypoints_map, &skeleton,
-                                           pm.keypoints_root_folder,
-                                           scene->num_cams, pm.camera_names,
-                                           &input_is_imgs, imgs_names);
-                            save_bbox_keypoints(
-                                keypoints_map, &skeleton,
-                                pm.keypoints_root_folder, scene->num_cams,
-                                pm.camera_names, &input_is_imgs, imgs_names);
-                            std::cout << "Saved skeleton keypoints and "
-                                         "bounding box "
-                                         "keypoints data"
-                                      << std::endl;
-                        } else {
-                            save_keypoints(keypoints_map, &skeleton,
-                                           pm.keypoints_root_folder,
-                                           scene->num_cams, pm.camera_names,
-                                           &input_is_imgs, imgs_names);
-                            save_bboxes(keypoints_map, &skeleton,
-                                        pm.keypoints_root_folder,
-                                        scene->num_cams, pm.camera_names,
-                                        &input_is_imgs, imgs_names);
-                            std::cout << "Saved skeleton keypoints and "
-                                         "bounding boxes data"
-                                      << std::endl;
-                        }
-                    } else {
-                        save_keypoints(keypoints_map, &skeleton,
-                                       pm.keypoints_root_folder,
-                                       scene->num_cams, pm.camera_names,
-                                       &input_is_imgs, imgs_names);
-                        std::cout << "Saved skeleton keypoints data (fallback)"
-                                  << std::endl;
-                    }
-
-                    last_saved = time(NULL);
+                if (ImGui::Button("Save Labeled Data")) {
+                    save_requested = true;
                 }
                 if (last_saved != static_cast<std::time_t>(-1)) {
                     ImGui::SameLine();
@@ -3325,6 +3225,97 @@ int main(int argc, char **argv) {
                 }
             }
             ImGui::End();
+
+            // T-key triangulation: runs even when Labeling Tool tab is hidden
+            if (keypoints_find &&
+                ImGui::IsKeyPressed(ImGuiKey_T, false) &&
+                !io.WantTextInput) {
+                reprojection(keypoints_map.at(current_frame_num),
+                             &skeleton, pm.camera_params, scene);
+            }
+
+            // Ctrl+S save: runs even when Labeling Tool tab is hidden
+            if (save_requested) {
+                if (skeleton.has_skeleton && !skeleton.has_bbox) {
+                    save_keypoints(keypoints_map, &skeleton,
+                                   pm.keypoints_root_folder,
+                                   scene->num_cams, pm.camera_names,
+                                   &input_is_imgs, imgs_names);
+                    std::cout << "Saved skeleton keypoints data"
+                              << std::endl;
+                } else if (!skeleton.has_skeleton && skeleton.has_bbox) {
+                    save_bboxes(keypoints_map, &skeleton,
+                                pm.keypoints_root_folder, scene->num_cams,
+                                pm.camera_names, &input_is_imgs,
+                                imgs_names);
+                    std::cout << "Saved bounding boxes data" << std::endl;
+                } else if (skeleton.has_obb) {
+                    save_obb(keypoints_map, &skeleton,
+                             pm.keypoints_root_folder, pm.camera_names,
+                             scene->num_cams, &imgs_names, &input_is_imgs,
+                             bbox_class_names);
+                    std::cout << "Saved oriented bounding boxes data"
+                              << std::endl;
+                } else if (skeleton.has_skeleton && skeleton.has_bbox) {
+                    bool has_bbox_keypoints = false;
+                    for (const auto &[frame_num, keypoints] :
+                         keypoints_map) {
+                        if (!keypoints)
+                            continue;
+                        for (int cam_id = 0;
+                             cam_id < scene->num_cams &&
+                             cam_id < MAX_VIEWS && !has_bbox_keypoints;
+                             cam_id++) {
+                            for (const auto &bbox :
+                                 keypoints->bbox2d_list[cam_id]) {
+                                if (bbox.state == RectTwoPoints &&
+                                    bbox.has_bbox_keypoints) {
+                                    has_bbox_keypoints = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if (has_bbox_keypoints)
+                            break;
+                    }
+
+                    if (has_bbox_keypoints) {
+                        save_keypoints(keypoints_map, &skeleton,
+                                       pm.keypoints_root_folder,
+                                       scene->num_cams, pm.camera_names,
+                                       &input_is_imgs, imgs_names);
+                        save_bbox_keypoints(
+                            keypoints_map, &skeleton,
+                            pm.keypoints_root_folder, scene->num_cams,
+                            pm.camera_names, &input_is_imgs, imgs_names);
+                        std::cout << "Saved skeleton keypoints and "
+                                     "bounding box "
+                                     "keypoints data"
+                                  << std::endl;
+                    } else {
+                        save_keypoints(keypoints_map, &skeleton,
+                                       pm.keypoints_root_folder,
+                                       scene->num_cams, pm.camera_names,
+                                       &input_is_imgs, imgs_names);
+                        save_bboxes(keypoints_map, &skeleton,
+                                    pm.keypoints_root_folder,
+                                    scene->num_cams, pm.camera_names,
+                                    &input_is_imgs, imgs_names);
+                        std::cout << "Saved skeleton keypoints and "
+                                     "bounding boxes data"
+                                  << std::endl;
+                    }
+                } else {
+                    save_keypoints(keypoints_map, &skeleton,
+                                   pm.keypoints_root_folder,
+                                   scene->num_cams, pm.camera_names,
+                                   &input_is_imgs, imgs_names);
+                    std::cout << "Saved skeleton keypoints data (fallback)"
+                              << std::endl;
+                }
+
+                last_saved = time(NULL);
+            }
         }
 
         if (ImGuiFileDialog::Instance()->Display("ChooseKeypointsFolder")) {
@@ -3415,11 +3406,15 @@ int main(int argc, char **argv) {
 
         if (show_help_window) {
             if (ImGui::Begin("Help Menu")) {
+                ImGui::SeparatorText("General");
+                ImGui::Text("<h>: toggle this help menu");
                 ImGui::Text("<Space>: toggle play and pause");
                 ImGui::Text("<Left Arrow>    : Seek backward");
-                ImGui::Text("<Shift+Left>    : Seek backward (×10)");
+                ImGui::Text("<Shift+Left>    : Seek backward (x10)");
                 ImGui::Text("<Right Arrow>   : Seek forward");
-                ImGui::Text("<Shift+Right>   : Seek forward (×10)");
+                ImGui::Text("<Shift+Right>   : Seek forward (x10)");
+                ImGui::Text("<t>: triangulate");
+                ImGui::Text("<Ctrl+s>: Save labels");
 
                 ImGui::SeparatorText("When paused");
                 ImGui::Text("<,>: previous image in buffer");
@@ -3432,14 +3427,15 @@ int main(int argc, char **argv) {
                 ImGui::Text("<d>: active keypoint++");
                 ImGui::Text("<q>: active keypoint set to first node");
                 ImGui::Text("<e>: active keypoint set to last node");
-                ImGui::Text("<t>: triangulate");
                 ImGui::Text("<Backspace>: delete all keypoints");
-                ImGui::Text("<Ctrl+s>: Save labels");
+
+                ImGui::SeparatorText("While hovering keypoints");
+                ImGui::Text("<r>: delete active keypoint");
+                ImGui::Text("<f>: delete active keypoint on all cameras");
+                ImGui::Text("Click keypoint to activate it");
 
                 ImGui::SeparatorText("Bounding box");
-                ImGui::Text("<Shift + drag mouse>: draw bbox, drag then "
-                            "release to "
-                            "finish drawing the bbox");
+                ImGui::Text("<Shift + drag mouse>: draw bbox");
                 ImGui::Text("<f>: delete bounding box from current camera");
                 ImGui::Text("<o>: delete all instances of current class");
                 ImGui::Text("<z>: switch to previous bbox class");
@@ -3448,11 +3444,6 @@ int main(int argc, char **argv) {
                 ImGui::Text("<n>: create new bbox class");
                 ImGui::Text("<c>: bbox id--");
                 ImGui::Text("<v>: bbox id++");
-
-                ImGui::SeparatorText("While hovering keypoints");
-                ImGui::Text("<r>: delete active keypoint");
-                ImGui::Text("<f>: delete active keypoint on all cameras");
-                ImGui::Text("Click keypoint to active it");
             }
             ImGui::End();
         }

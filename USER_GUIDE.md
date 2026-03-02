@@ -123,11 +123,12 @@ Once loaded, all camera views appear in the main window and playback begins.
 | Action | How |
 |---|---|
 | Toggle play / pause | Click the **Play/Pause** button, or press **Space** |
-| Seek forward 1 frame | **Right Arrow** (while paused) |
-| Seek back 1 frame | **Left Arrow** (while paused) |
+| Seek forward | **Right Arrow** |
+| Seek backward | **Left Arrow** |
 | Seek forward (large step) | **Shift + Right Arrow** |
-| Seek back (large step) | **Shift + Left Arrow** |
-| Jump to next labeled frame | Click **"Jump to next labeled frame"** button (pauses playback) |
+| Seek backward (large step) | **Shift + Left Arrow** |
+| Jump to next labeled frame | Click **"Jump to next labeled frame"** button in the Labeling Tool |
+| Jump to previous labeled frame | Click **"Copy from previous labeled frame"** button in the Labeling Tool |
 
 ### Playback speed
 
@@ -180,6 +181,8 @@ keypoint so you can label sequentially without changing the selection manually.
 
 | Action | How |
 |---|---|
+| Delete hovered keypoint (current camera) | **R** (while hovering a keypoint) |
+| Delete hovered keypoint (all cameras) | **F** (while hovering a keypoint) |
 | Delete all keypoints on current frame | **Backspace** (while hovering a camera view) |
 
 Individual keypoints can be moved by clicking to place them at a new position
@@ -209,7 +212,7 @@ the current frame.
 
 | Action | How |
 |---|---|
-| Triangulate all labeled keypoints | Press **T** while hovering any camera view, or click **"Triangulate"** in the Labeling Tool panel |
+| Triangulate all labeled keypoints | Press **T** (works globally), or click **"Triangulate"** in the Labeling Tool panel |
 
 After triangulation:
 - The keypoint appears in the **Keypoints Table** with a green color (fully
@@ -236,20 +239,24 @@ Bounding boxes are available when `has_bbox: true` in the skeleton definition.
 Hold Shift and drag from one corner to the opposite corner of the region you
 want to annotate. Release to finish.
 
-### Bounding box class selection
+### Bounding box class and ID selection
 
 | Action | How |
 |---|---|
 | Switch to previous class | **Z** |
-| Cycle through classes | Configure class names in the project or YOLO export settings |
+| Switch to next class (creates new if at end) | **X** |
+| Create new class | **N** |
+| Previous bbox ID within class | **C** |
+| Next bbox ID within class | **V** |
 
-The current class is shown above the camera views.
+The current class and ID are shown in the Labeling Tool panel.
 
 ### Deleting a bounding box
 
 | Action | How |
 |---|---|
-| Delete the hovered bounding box | Hover over the box, then press **F** |
+| Delete hovered bounding box (current camera) | Hover over the box, then press **F** |
+| Delete all instances of hovered class | Hover over the box, then press **O** |
 
 ### Keypoints inside bounding boxes
 
@@ -403,66 +410,71 @@ See `data_exporter/README.md` for full argument documentation.
 
 ## Keyboard shortcut reference
 
-### Playback
-
-| Key | Action |
-|---|---|
-| `Space` | Play / pause |
-| `←` | Previous frame (paused only) |
-| `→` | Next frame (paused only) |
-| `Shift+←` | Jump back (larger step) |
-| `Shift+→` | Jump forward (larger step) |
-| `,` | Previous entry in decode buffer (paused) |
-| `.` | Next entry in decode buffer (paused) |
-
-### Keypoint labeling (hover a camera view to activate)
-
-| Key | Action |
-|---|---|
-| Left click | Place active keypoint at mouse position |
-| `W` | Place active keypoint at mouse position |
-| `A` | Select previous keypoint |
-| `D` | Select next keypoint |
-| `Q` | Select first keypoint |
-| `E` | Select last keypoint |
-| `T` | Triangulate all labeled keypoints on current frame |
-| `Backspace` | Delete all keypoints on current frame |
-
-### Bounding boxes (hover a camera view)
-
-| Key | Action |
-|---|---|
-| `Shift + drag` | Draw a new bounding box |
-| `Z` | Switch to previous bounding box class |
-| `F` (hover bbox) | Delete the hovered bounding box |
-| `W` (hover bbox) | Place keypoint inside bounding box |
-| `A` (hover bbox) | Select previous keypoint inside bbox |
-| `D` (hover bbox) | Select next keypoint inside bbox |
-
-### Oriented bounding boxes (hover a camera view)
-
-| Key | Action |
-|---|---|
-| `W` | Place next OBB corner point (3 clicks to complete) |
-| `Escape` | Cancel incomplete OBB |
-| `T` (hover OBB) | Delete hovered OBB from current camera |
-| `F` (hover OBB) | Delete hovered OBB from all cameras |
-
 ### General
 
-| Key | Action |
-|---|---|
-| `Ctrl+S` | Save labeled data |
-| `H` | Toggle help window |
-| `Escape` | Cancel edge creation in skeleton editor |
+| Key | Action | Scope |
+|---|---|---|
+| `H` | Toggle help window | Global |
+| `Space` | Play / pause | Global |
+| `Ctrl+S` | Save labeled data | Global |
+| `T` | Triangulate all labeled keypoints on current frame | Global |
+| `←` | Seek backward | Global |
+| `→` | Seek forward | Global |
+| `Shift+←` | Seek backward (x10) | Global |
+| `Shift+→` | Seek forward (x10) | Global |
+| `,` | Previous entry in decode buffer | Global (paused) |
+| `.` | Next entry in decode buffer | Global (paused) |
+
+### Keypoint labeling
+
+| Key | Action | Scope |
+|---|---|---|
+| `B` | Create keypoints on frame | Hover: camera view |
+| Left click | Place active keypoint at mouse position | Hover: camera view |
+| `W` | Place active keypoint at mouse position | Hover: camera view |
+| `A` | Select previous keypoint | Hover: camera view |
+| `D` | Select next keypoint | Hover: camera view |
+| `Q` | Select first keypoint | Hover: camera view |
+| `E` | Select last keypoint | Hover: camera view |
+| `Backspace` | Delete all keypoints on current frame | Hover: camera view |
+| `R` | Delete hovered keypoint (current camera) | Hover: keypoint |
+| `F` | Delete hovered keypoint (all cameras) | Hover: keypoint |
+| Click | Activate a keypoint | Hover: keypoint |
+
+### Bounding boxes
+
+| Key | Action | Scope |
+|---|---|---|
+| `Shift + drag` | Draw a new bounding box | Hover: camera view |
+| `Z` | Switch to previous bbox class | Global |
+| `X` | Switch to next bbox class (creates new if at end) | Global |
+| `N` | Create new bbox class | Global |
+| `C` | Previous bbox ID within class | Global |
+| `V` | Next bbox ID within class | Global |
+| `F` | Delete hovered bounding box (current camera) | Hover: bbox |
+| `O` | Delete all instances of hovered class | Hover: bbox |
+| `W` | Place keypoint inside bounding box | Hover: bbox |
+| `A` | Select previous keypoint inside bbox | Hover: bbox |
+| `D` | Select next keypoint inside bbox | Hover: bbox |
+
+### Oriented bounding boxes
+
+| Key | Action | Scope |
+|---|---|---|
+| `W` | Place next OBB corner point (3 clicks to complete) | Hover: camera view |
+| `Escape` | Cancel incomplete OBB | Hover: camera view |
+| `T` | Delete hovered OBB (current camera) | Hover: OBB |
+| `F` | Delete hovered OBB (all cameras) | Hover: OBB |
+| `A` | Switch OBB class backward | Hover: OBB |
+| `D` | Switch OBB class forward | Hover: OBB |
 
 ### Skeleton editor
 
-| Key | Action |
-|---|---|
-| Left click (in plot) | Add a new skeleton node |
-| Drag (in plot) | Move an existing node |
-| `Ctrl+Click` (node) | Select a node for edge creation |
-| `Ctrl+Click` (another node) | Create or remove an edge between two selected nodes |
-| `R` (hover node) | Delete a node |
-| `Escape` | Cancel edge selection |
+| Key | Action | Scope |
+|---|---|---|
+| Left click (in plot) | Add a new skeleton node | Skeleton editor |
+| Drag (in plot) | Move an existing node | Skeleton editor |
+| `Ctrl+Click` (node) | Select a node for edge creation | Skeleton editor |
+| `Ctrl+Click` (another node) | Create or remove an edge between two nodes | Skeleton editor |
+| `R` | Delete hovered node | Hover: node |
+| `Escape` | Cancel edge selection | Skeleton editor |
