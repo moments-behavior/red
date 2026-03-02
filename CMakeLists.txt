@@ -20,7 +20,7 @@ if(APPLE)
     list(APPEND CMAKE_PREFIX_PATH "${HOMEBREW_PREFIX}")
 
     find_package(PkgConfig REQUIRED)
-    pkg_check_modules(FFMPEG REQUIRED libavcodec libavformat libavutil libswscale)
+    pkg_check_modules(FFMPEG REQUIRED libavcodec libavformat libavutil)
 
     find_package(OpenCV REQUIRED COMPONENTS core calib3d imgproc imgcodecs videoio)
     find_package(glfw3 REQUIRED)
@@ -229,7 +229,7 @@ else()
         GLEW GLU GL
         pthread
         -L/usr/local/cuda/lib64/ -lcudart -lcuda -lnvcuvid -lnppicc -lnppidei -lnvidia-encode -lnppc -lnppig -lnppial
-        -L${DIR_FFMPEG}/lib/ -lavformat -lswscale -lswresample -lavutil -lavcodec
+        -L${DIR_FFMPEG}/lib/ -lavformat -lavutil -lavcodec
         -lopencv_sfm -lopencv_core -lopencv_bgsegm -lopencv_imgcodecs -lopencv_imgproc -lopencv_video -lopencv_highgui -lopencv_videoio -lopencv_calib3d -lopencv_dnn
         -L${DIR_TENSORRT}/lib/ -lnvinfer -lnvinfer_plugin
         -L${LIBTORCH_LIB} -ltorch -lc10 -ltorch_cpu

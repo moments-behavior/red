@@ -10,7 +10,6 @@
 #ifdef __APPLE__
 extern "C" {
 #include <libavcodec/avcodec.h>
-#include <libswscale/swscale.h>
 }
 #include <CoreVideo/CoreVideo.h>
 #endif
