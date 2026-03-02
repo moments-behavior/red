@@ -27,6 +27,10 @@ understand, extend, or contribute to the codebase.
    - [Reprojection Tool — reprojection_tool.h](#reprojection-tool--reprojection_toolh)
    - [YOLO Inference — yolo_torch.h / yolo_torch.cpp](#yolo-inference--yolo_torchh--yolo_torchcpp)
    - [YOLO Export — yolo_export.h / yolo_export.cpp](#yolo-export--yolo_exporth--yolo_exportcpp)
+   - [JARVIS Export — jarvis_export.h](#jarvis-export--jarvis_exporth)
+   - [Camera Math — red_math.h](#camera-math--red_mathh)
+   - [OpenCV YAML I/O — opencv_yaml_io.h](#opencv-yaml-io--opencv_yaml_ioh)
+   - [FFmpeg Frame Reader — ffmpeg_frame_reader.h](#ffmpeg-frame-reader--ffmpeg_frame_readerh)
    - [Global State — global.h / global.cpp](#global-state--globalh--globalcpp)
 6. [Key Data Structures](#key-data-structures)
 7. [Data Flow: Annotation Session](#data-flow-annotation-session)
@@ -70,6 +74,10 @@ red/
 │   ├── — macOS / Apple Silicon only —
 │   ├── metal_context.h / .mm       # Metal init, CAMetalLayer, CVMetalTextureCache
 │   ├── vt_async_decoder.h / .mm    # Async VideoToolbox decoder + PTS reorder queue
+│   ├── red_math.h                  # Eigen-based camera math (replaces OpenCV sfm/calib3d)
+│   ├── opencv_yaml_io.h            # OpenCV YAML format reader/writer (no OpenCV dep)
+│   ├── ffmpeg_frame_reader.h       # FFmpeg C API frame reader (JARVIS export)
+│   ├── jarvis_export.h             # Built-in JARVIS/COCO export tool
 │   │
 │   └── json.hpp                    # nlohmann/json (single-header)
 │
@@ -84,12 +92,19 @@ red/
 │   ├── export_yolo_pose.py         # Standalone YOLO pose export
 │   └── utils.py                   # Shared Python helpers
 │
+├── packaging/
+│   └── homebrew/
+│       ├── red.rb                 # Homebrew formula
+│       └── README.md              # Tap documentation
 ├── example/
 │   └── skeleton.json              # Example custom skeleton (zebrafish)
 ├── fonts/                         # Icon and UI fonts
 ├── lib/                           # Third-party C++ libraries (libtorch, etc.)
+├── .github/workflows/
+│   └── release.yml                # GitHub Actions release workflow
 ├── CMakeLists.txt
-└── build.sh / run.sh
+├── build.sh / run.sh              # Linux build and run scripts
+└── development_notes.md           # Full macOS port history
 ```
 
 ---
@@ -302,8 +317,8 @@ entire render loop:
   that has a new `CVPixelBufferRef` in its `display_buffer` slot, then releases
   the retained buffer. On Linux: maps PBO and calls `glTexSubImage2D`.
 - **Save logic** — writes per-frame CSV files on `Ctrl+S`.
-- **Triangulation** — calls `cv::triangulatePoints()` when the user presses `T`;
-  stores results in `KeyPoints3D`.
+- **Triangulation** — triangulates when the user presses `T` (Eigen DLT on
+  macOS via `red_math.h`, OpenCV on Linux); stores results in `KeyPoints3D`.
 - **Keyboard / mouse dispatch** — maps raw GLFW events to application actions.
 
 ---
@@ -335,21 +350,26 @@ creates the `labeled_data/` directory.
 
 ### Camera Calibration — `camera.h`
 
-`CameraParams` holds the OpenCV intrinsic and extrinsic matrices for one camera:
+`CameraParams` holds the intrinsic and extrinsic matrices for one camera.
+On Linux, these are `cv::Mat`; on macOS, they are Eigen types (no OpenCV
+dependency):
 
 ```cpp
 struct CameraParams {
-    cv::Mat K;        // 3×3 intrinsic matrix
-    cv::Mat dist;     // Distortion coefficients (5 or 8 element)
-    cv::Mat R;        // 3×3 rotation matrix  (world → camera)
-    cv::Mat T;        // 3×1 translation vector
-    cv::Mat P;        // 3×4 projection matrix  P = K[R|T]
+    // Linux: cv::Mat; macOS: Eigen types
+    Matrix3d K;                  // 3×3 intrinsic matrix
+    Matrix<double,5,1> dist;     // Distortion coefficients
+    Matrix3d R;                  // 3×3 rotation matrix  (world → camera)
+    Vector3d rvec;               // Rodrigues rotation vector
+    Vector3d tvec;               // 3×1 translation vector
+    Matrix<double,3,4> P;        // 3×4 projection matrix  P = K[R|T]
 };
 ```
 
-`camera_load_params_from_yaml()` reads a standard OpenCV YAML calibration file.
-The projection matrix `P` is computed once at load time and reused for all
-subsequent triangulation calls.
+`camera_load_params_from_yaml()` reads a standard OpenCV-format YAML calibration
+file. On macOS, parsing uses `opencv_yaml_io.h` (a standalone YAML parser with
+no OpenCV dependency). The projection matrix `P` is computed once at load time
+and reused for all subsequent triangulation calls.
 
 ---
 
@@ -421,7 +441,7 @@ platform-specific:
    `PictureBuffer.pixel_buffer`.
 
 For image-sequence inputs, `image_loader()` replaces the video path with
-OpenCV `imread` + colorspace conversion on CPU.
+image loading on CPU (`stbi_load` on macOS, `cv::imread` on Linux).
 
 ---
 
@@ -620,9 +640,73 @@ objects and optionally used to seed keypoint positions (auto-labeling mode).
 
 ### YOLO Export — `yolo_export.h` / `yolo_export.cpp`
 
-Implements the in-app YOLO dataset export dialog. Wraps the logic from the
-Python scripts for cases where the user wants to export directly from within
-the GUI without running Python.
+Implements the in-app YOLO dataset export dialog (Linux only). Wraps the logic
+from the Python scripts for cases where the user wants to export directly from
+within the GUI without running Python.
+
+---
+
+### JARVIS Export — `jarvis_export.h`
+
+Header-only module (namespace `JarvisExport`) accessible via **Tools -> JARVIS
+Export Tool** in the GUI. Exports labeled data to
+[JARVIS-HybridNet](https://github.com/JARVIS-MoCap/JARVIS-HybridNet) COCO
+training format directly from within RED, without requiring Python.
+
+Features:
+- Reads calibration YAML files and writes JARVIS-format YAML output
+- Extracts JPEG frames from source videos using `ffmpeg_frame_reader.h`
+- Writes COCO JSON annotation files with automatic 90/10 train/val split
+- Detects and corrects **negative PTS frame offset** (some MP4s have pre-roll
+  frames with negative PTS; RED's frame counter includes these but OpenCV/JARVIS
+  start from PTS 0). Auto-detected via ffprobe.
+- JPEG quality slider, auto output directory, timestamped export folders
+
+On macOS, JPEG encoding uses turbojpeg (`tjCompress2`, SIMD-accelerated).
+On Linux, falls back to stb_image_write.
+
+---
+
+### Camera Math — `red_math.h`
+
+macOS-only header (~130 lines) providing Eigen-based replacements for OpenCV
+camera math functions. Used by `gui.h` for triangulation and reprojection:
+
+| Function | Replaces |
+|---|---|
+| `triangulatePoints()` | `cv::sfm::triangulatePoints` — DLT via `Eigen::JacobiSVD` |
+| `projectionFromKRt()` | `cv::sfm::projectionFromKRt` — builds 3x4 P matrix |
+| `rotationMatrixToVector()` / `rotationVectorToMatrix()` | `cv::Rodrigues` — via `Eigen::AngleAxisd` |
+| `undistortPoint()` | `cv::undistortPoints` — iterative Brown-Conrady (10 iterations, k1-k3 + p1-p2) |
+| `projectPoints()` / `projectPoint()` | `cv::projectPoints` — forward projection with full distortion model |
+
+---
+
+### OpenCV YAML I/O — `opencv_yaml_io.h`
+
+macOS-only standalone parser and writer (~245 lines) for OpenCV's YAML format
+(`%YAML:1.0` header, `!!opencv-matrix` tags). Allows RED to read and write
+OpenCV-format calibration files without linking OpenCV.
+
+- `read(path)` — parses a YAML file into a `YamlFile` struct with `scalars`
+  and `matrices` maps
+- `getInt()` / `getDouble()` / `getMatrix()` — typed accessors
+- `YamlWriter` class — writes OpenCV-compatible YAML output (used by JARVIS
+  export for calibration files)
+
+---
+
+### FFmpeg Frame Reader — `ffmpeg_frame_reader.h`
+
+macOS-only FFmpeg C API frame reader (~220 lines) used by the JARVIS export
+tool to extract JPEG frames from source videos. Three performance optimizations:
+
+1. **VideoToolbox hardware decode** — automatically enabled via
+   `AV_HWDEVICE_TYPE_VIDEOTOOLBOX`
+2. **Sequential decode optimization** — when frames are requested in order,
+   decodes forward instead of seeking for each frame
+3. **Lazy swscale context** — created on first decoded frame so the pixel format
+   matches what the decoder actually produces
 
 ---
 
@@ -747,8 +831,8 @@ Render loop (display refresh rate, typically 60 Hz)
   │
   ├── User presses T
   │     collect all is_labeled 2D points for current frame (≥2 cameras required)
-  │     cv::undistortPoints() with K and dist for each labeled camera
-  │     cv::triangulatePoints() with projection matrices P
+  │     undistort with K and dist for each labeled camera
+  │     triangulate with projection matrices P (Eigen DLT on macOS, OpenCV on Linux)
   │     convert homogeneous → 3D; store in KeyPoints3D[node]
   │     set is_triangulated = true
   │
@@ -761,13 +845,19 @@ Render loop (display refresh rate, typically 60 Hz)
 
 ## Triangulation
 
-Triangulation uses OpenCV's linear triangulation (DLT). For each keypoint
-labeled in ≥ 2 cameras:
+Triangulation uses the Direct Linear Transform (DLT) algorithm. For each
+keypoint labeled in >= 2 cameras:
 
 1. Collect 2D pixel coordinates from all labeled cameras.
-2. Apply `cv::undistortPoints()` with each camera's `K` and `dist`.
-3. Call `cv::triangulatePoints()` with projection matrices `P`.
+2. Undistort points using each camera's `K` and distortion coefficients.
+3. Triangulate using projection matrices `P` (SVD on the constructed
+   measurement matrix).
 4. Convert from homogeneous coordinates to 3D Euclidean.
+
+On Linux, steps 2-3 use OpenCV (`cv::undistortPoints`, `cv::triangulatePoints`).
+On macOS, the same math is implemented in Eigen via `red_math.h`
+(`red_math::undistortPoint`, `red_math::triangulatePoints`) with no OpenCV
+dependency.
 
 The result is stored in `KeyPoints3D.position` and displayed as a white "T"
 badge in the keypoints table.
@@ -859,8 +949,9 @@ rather than modifying `skeleton.cpp`.
 4. Follow the argument convention of existing scripts (`--input`, `--output`,
    `--calibration`, `--skeleton`).
 
-To add an in-app export UI, implement it in `yolo_export.h/cpp` and wire a
-menu item in `gui.h`.
+To add an in-app export UI, see `jarvis_export.h` as a reference
+implementation — it is a header-only module wired into the **Tools** menu in
+`red.cpp`.
 
 ---
 
@@ -873,10 +964,11 @@ cmake -S . -B release -DCMAKE_PREFIX_PATH=/opt/homebrew
 cmake --build release --config Release -j$(sysctl -n hw.logicalcpu)
 ```
 
-The CMake configuration detects `APPLE` automatically. On macOS, Vulkan
-and CUDA are excluded. Metal and VideoToolbox are linked as system frameworks:
+The CMake configuration detects `APPLE` automatically. On macOS, CUDA and
+OpenCV are excluded. Metal and VideoToolbox are linked as system frameworks:
 `-framework Metal -framework QuartzCore -framework CoreVideo
--framework CoreMedia -framework VideoToolbox`.
+-framework CoreMedia -framework VideoToolbox`. Eigen and libjpeg-turbo are
+the only non-system dependencies beyond FFmpeg and GLFW.
 
 Objective-C++ source files (`.mm`) are compiled with the Xcode C++ compiler.
 
@@ -909,9 +1001,11 @@ lines 16–26 to compile ImGui and ImPlot object files.
 | [imgui-filebrowser](https://github.com/AirGuanZ/imgui-filebrowser) | `lib/imgui-filebrowser/` | Alternative file browser |
 | [nlohmann/json](https://github.com/nlohmann/json) | `src/json.hpp` | JSON serialization |
 | [NVDEC / nvcodec](https://developer.nvidia.com/nvidia-video-codec-sdk) | `src/nvcodec/` | NVIDIA hardware decode (Linux) |
-| [stb_image_write](https://github.com/nothings/stb) | `src/stb_image_write.h` | PNG/JPEG writing |
-| LibTorch | `lib/libtorch/` | PyTorch C++ frontend for YOLO inference |
-| OpenCV | system | Triangulation, image I/O, calibration |
+| [stb_image / stb_image_write](https://github.com/nothings/stb) | `src/stb_image.h`, `src/stb_image_write.h` | Image loading and PNG/JPEG writing |
+| LibTorch | `lib/libtorch/` | PyTorch C++ frontend for YOLO inference (Linux) |
+| OpenCV | system (Linux only) | Triangulation, image I/O, calibration |
+| Eigen | system (macOS) | Linear algebra, triangulation, camera math |
+| libjpeg-turbo | system (macOS) | SIMD-accelerated JPEG encoding (JARVIS export) |
 | FFmpeg | system | Video demuxing (both platforms) |
 | GLFW | system | Window and input management |
 | Metal / QuartzCore | system (macOS) | GPU rendering on Apple Silicon |
