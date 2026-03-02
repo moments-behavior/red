@@ -29,12 +29,13 @@ RED is an open-source, GPU-accelerated application for annotating 3D keypoints a
 
 ```bash
 brew tap JohnsonLabJanelia/red
-brew install red
+brew install --HEAD JohnsonLabJanelia/red/red
 ```
 
-Homebrew installs all dependencies automatically. See
-[macOS — Quick Start](#macos--quick-start-apple-silicon) below for
-build-from-source instructions and troubleshooting.
+Homebrew installs all dependencies automatically (`eigen`, `ffmpeg`, `glfw`,
+`jpeg-turbo`). The `--HEAD` flag is required while a stable release has not yet
+been tagged. See [macOS — Quick Start](#macos--quick-start-apple-silicon) below
+for build-from-source instructions and troubleshooting.
 
 ---
 

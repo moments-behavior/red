@@ -9,11 +9,12 @@ a GPU-accelerated multi-camera 3D keypoint labeling tool.
 
 ```bash
 brew tap JohnsonLabJanelia/red
-brew install red
+brew install --HEAD JohnsonLabJanelia/red/red
 ```
 
 That's it. Homebrew installs all dependencies automatically
-(`eigen`, `ffmpeg`, `glfw`, `jpeg-turbo`).
+(`eigen`, `ffmpeg`, `glfw`, `jpeg-turbo`). The `--HEAD` flag is required while
+a stable release has not yet been tagged.
 
 ### First-launch note
 
@@ -33,16 +34,6 @@ warning, either:
 - **macOS 12 (Monterey) or later** — required for async VideoToolbox decode
   and Metal compute
 - **Apple Silicon (M1 / M2 / M3 / M4 / M5)** — Intel Macs are not currently supported
-
----
-
-## Development / HEAD install
-
-To build from the latest development branch instead of a stable release:
-
-```bash
-brew install --HEAD JohnsonLabJanelia/red/red
-```
 
 ---
 
@@ -69,7 +60,7 @@ brew untap JohnsonLabJanelia/red
 **Formula fails to build**
 Run with verbose output:
 ```bash
-brew install --verbose red
+brew install --HEAD --verbose JohnsonLabJanelia/red/red
 ```
 and open an issue at https://github.com/JohnsonLabJanelia/red/issues with
 the output.
