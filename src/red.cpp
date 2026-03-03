@@ -4,6 +4,7 @@
 #include "global.h"
 #include "gui.h"
 #include "imgui.h"
+#include "imgui_internal.h"
 #include "imgui_impl_glfw.h"
 #ifdef __APPLE__
 #include "metal_context.h"
@@ -194,6 +195,7 @@ int main(int argc, char **argv) {
     // others
     ImVec4 clear_color = ImVec4(0.0f, 0.0f, 0.0f, 1.00f);
     ImGuiIO &io = ImGui::GetIO();
+    static std::string project_ini_path;
 
     ImPlotStyle &style = ImPlot::GetStyle();
     ImVec4 *colors = style.Colors;
@@ -322,6 +324,36 @@ int main(int argc, char **argv) {
     pm.project_root_path = red_data_dir;
     pm.media_folder = media_root_dir;
 
+    // Switch ImGui layout ini to the project folder so each project keeps its own layout.
+    // Before the main loop (CLI path): just redirect io.IniFilename and let NewFrame()
+    // auto-load it. Mid-session (File menu): also explicitly load the project ini.
+    bool main_loop_running = false;
+    auto switch_ini_to_project = [&]() {
+        project_ini_path = pm.project_path + "/imgui_layout.ini";
+        io.IniFilename = project_ini_path.c_str();
+        if (main_loop_running && std::filesystem::exists(project_ini_path)) {
+            ImGui::LoadIniSettingsFromDisk(project_ini_path.c_str());
+            // LoadIniSettingsFromDisk clears DockId on live windows during its
+            // internal rebuild. Restore DockId/DockOrder from the loaded settings
+            // so windows can re-dock into the newly created dock nodes.
+            ImGuiContext* ctx = ImGui::GetCurrentContext();
+            for (int i = 0; i < ctx->Windows.Size; i++) {
+                ImGuiWindow* w = ctx->Windows[i];
+                if (ImGuiWindowSettings* s = ImGui::FindWindowSettingsByWindow(w)) {
+                    w->DockId = s->DockId;
+                    w->DockOrder = s->DockOrder;
+                }
+            }
+            // Mark all dock nodes alive so BeginDocked() doesn't undock windows
+            // thinking the nodes have expired.
+            for (int i = 0; i < ctx->DockContext.Nodes.Data.Size; i++) {
+                ImGuiDockNode* node = (ImGuiDockNode*)ctx->DockContext.Nodes.Data[i].val_p;
+                if (node)
+                    node->LastFrameAlive = ctx->FrameCount;
+            }
+        }
+    };
+
     ReprojectionTool rp_tool;
 
 #ifdef __APPLE__
@@ -343,6 +375,7 @@ int main(int argc, char **argv) {
                 bool ok =
                     setup_project(pm, skeleton, skeleton_map, &error_message);
                 if (ok) {
+                    switch_ini_to_project();
                     std::map<std::string, std::string> empty_selected_files;
                     load_videos(empty_selected_files, ps, pm,
                                 window_was_decoding, demuxers, dc_context,
@@ -367,6 +400,7 @@ int main(int argc, char **argv) {
         }
     }
 
+    main_loop_running = true;
     while (!glfwWindowShouldClose(window->render_target)) {
         // Poll and handle events (inputs, window resize, etc.)
         glfwPollEvents();
@@ -738,6 +772,7 @@ int main(int argc, char **argv) {
                     bool ok = setup_project(pm, skeleton, skeleton_map,
                                             &error_message);
                     if (ok) {
+                        switch_ini_to_project();
                         std::map<std::string, std::string> empty_selected_files;
                         load_videos(empty_selected_files, ps, pm,
                                     window_was_decoding, demuxers, dc_context,
