@@ -85,17 +85,11 @@ void decoder_process(DecoderContext *dc_context, FFmpegDemuxer *demuxer,
 
     double video_length = demuxer->GetDuration();
     double frame_rate = demuxer->GetFramerate();
-    std::cout << "Video framerate: " << frame_rate << std::endl;
-    std::cout << "Video length: " << video_length << std::endl;
-
     if (demuxer->GetNumFrames() == 0) {
         dc_context->estimated_num_frames = int(video_length * frame_rate);
     } else {
         dc_context->estimated_num_frames = demuxer->GetNumFrames() - 1;
     }
-
-    std::cout << "estimated_num_frames:" << dc_context->estimated_num_frames
-              << std::endl;
     int size_in_bytes;
     bool skip_first_decode_after_seek = false;
     do {
@@ -274,15 +268,10 @@ void decoder_process(DecoderContext *dc_context, FFmpegDemuxer *demuxer,
     double video_length = demuxer->GetDuration();
     double frame_rate   = demuxer->GetFramerate();
     double timebase     = demuxer->GetTimebase();
-    std::cout << "[mac] Video framerate: " << frame_rate
-              << "  length: " << video_length << std::endl;
-
     if (demuxer->GetNumFrames() == 0)
         dc_context->estimated_num_frames = (int)(video_length * frame_rate);
     else
         dc_context->estimated_num_frames = (int)demuxer->GetNumFrames() - 1;
-    std::cout << "[mac] estimated_num_frames: "
-              << dc_context->estimated_num_frames << std::endl;
 
     (void)w; (void)h;  // used by caller via scene->image_width/height
 

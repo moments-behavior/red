@@ -299,7 +299,6 @@ int64_t FFmpegDemuxer::FindKeyFrameInterval() {
             break;
         }
     }
-    std::cout << "identified seek interval: " << cnt - 1 << std::endl;
     return cnt - 1;
 }
 

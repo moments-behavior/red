@@ -26,6 +26,7 @@
 #include <ImGuiFileDialog.h>
 #include <algorithm>
 #include <cstddef>
+#include <iomanip>
 #include <iostream>
 #include <misc/cpp/imgui_stdlib.h> // for InputText(std::string&)
 #include <stdio.h>
@@ -40,6 +41,35 @@
 #endif
 #include "keypoints_table.h"
 #include "reprojection_tool.h"
+
+static void print_video_metadata(const std::vector<FFmpegDemuxer *> &demuxers,
+                                 const std::vector<std::string> &camera_names,
+                                 int seek_interval) {
+    if (demuxers.empty()) return;
+    int n = (int)demuxers.size();
+    // Find max camera name length for column width
+    size_t max_name = 6; // minimum "Camera"
+    for (int i = 0; i < n; i++) {
+        size_t len = (i < (int)camera_names.size()) ? camera_names[i].size() : 0;
+        if (len > max_name) max_name = len;
+    }
+    int name_w = (int)max_name + 2;
+
+    std::cout << "\nVideo metadata (" << n << " camera" << (n != 1 ? "s" : "") << "):\n";
+    std::cout << std::left << std::setw(name_w) << "Camera"
+              << std::right << std::setw(12) << "Frame Rate"
+              << std::setw(12) << "Length"
+              << std::setw(16) << "Seek Interval" << "\n";
+    for (int i = 0; i < n; i++) {
+        std::string name = (i < (int)camera_names.size()) ? camera_names[i] : "?";
+        std::cout << std::left << std::setw(name_w) << name
+                  << std::right << std::fixed << std::setprecision(2)
+                  << std::setw(12) << demuxers[i]->GetFramerate()
+                  << std::setw(12) << demuxers[i]->GetDuration()
+                  << std::setw(16) << seek_interval << "\n";
+    }
+    std::cout << std::endl;
+}
 
 static void print_project_summary(const ProjectManager &pm,
                                   const std::string &skeleton_name,
@@ -381,6 +411,7 @@ int main(int argc, char **argv) {
                                 window_was_decoding, demuxers, dc_context,
                                 scene, label_buffer_size, decoder_threads,
                                 is_view_focused);
+                    print_video_metadata(demuxers, pm.camera_names, dc_context->seek_interval);
                     std::string most_recent_folder;
                     if (!find_most_recent_labels(pm.keypoints_root_folder,
                                                  most_recent_folder,
@@ -724,6 +755,7 @@ int main(int argc, char **argv) {
                 load_videos(selected_files, ps, pm, window_was_decoding,
                             demuxers, dc_context, scene, label_buffer_size,
                             decoder_threads, is_view_focused);
+                print_video_metadata(demuxers, pm.camera_names, dc_context->seek_interval);
             }
             // close
             ImGuiFileDialog::Instance()->Close();
@@ -778,6 +810,7 @@ int main(int argc, char **argv) {
                                     window_was_decoding, demuxers, dc_context,
                                     scene, label_buffer_size, decoder_threads,
                                     is_view_focused);
+                        print_video_metadata(demuxers, pm.camera_names, dc_context->seek_interval);
 
                         std::string most_recent_folder;
                         if (!find_most_recent_labels(pm.keypoints_root_folder,
