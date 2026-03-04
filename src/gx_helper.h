@@ -110,6 +110,21 @@ inline void gx_imgui_init(gx_context *context) {
     // Use absolute paths so fonts and ini work regardless of cwd
     static std::string ini_path;
     ini_path = context->exe_dir + "/imgui.ini";
+
+    // Always reset to the shipped default layout on launch so that new projects
+    // start with a clean arrangement rather than inheriting stale window positions.
+    // Per-project layouts are handled separately by switch_ini_to_project().
+    for (const auto &candidate : {
+            context->exe_dir + "/../default_imgui_layout.ini",           // dev build
+            context->exe_dir + "/../share/red/default_imgui_layout.ini", // Homebrew
+        }) {
+        if (std::filesystem::exists(candidate)) {
+            std::filesystem::copy_file(candidate, ini_path,
+                std::filesystem::copy_options::overwrite_existing);
+            break;
+        }
+    }
+
     io.IniFilename = ini_path.c_str();
 
     // Search for the fonts directory in candidate locations so the binary

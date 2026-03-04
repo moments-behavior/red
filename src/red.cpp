@@ -728,18 +728,8 @@ int main(int argc, char **argv) {
 
         if (ImGuiFileDialog::Instance()->Display("ChooseCalibration")) {
             if (ImGuiFileDialog::Instance()->IsOk()) {
-                std::filesystem::path chosen;
-                auto sel = ImGuiFileDialog::Instance()->GetSelection();
-                if (!sel.empty()) {
-                    chosen = std::filesystem::path(sel.begin()->second);
-                    if (std::filesystem::is_regular_file(chosen)) {
-                        chosen = chosen.parent_path();
-                    }
-                } else {
-                    chosen = std::filesystem::path(
-                        ImGuiFileDialog::Instance()->GetCurrentPath());
-                }
-                pm.calibration_folder = chosen.string();
+                pm.calibration_folder =
+                    ImGuiFileDialog::Instance()->GetCurrentPath();
             }
             ImGuiFileDialog::Instance()->Close();
         }

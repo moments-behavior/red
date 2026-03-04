@@ -72,6 +72,7 @@ class Red < Formula
     # Install fonts required at runtime (the app looks for them relative to
     # the executable or in standard system locations).
     (share/"red/fonts").install Dir["fonts/*"]
+    (share/"red").install "default_imgui_layout.ini"
   end
 
   def caveats
