@@ -41,10 +41,12 @@ class Red < Formula
   depends_on "pkg-config" => :build
 
   # Runtime dependencies (Homebrew handles installation automatically)
+  depends_on "ceres-solver"
   depends_on "eigen"
   depends_on "ffmpeg"
   depends_on "glfw"
   depends_on "jpeg-turbo"
+  depends_on "opencv"
 
   # macOS 12+ required (Metal compute shaders + VideoToolbox async decode)
   depends_on macos: :monterey

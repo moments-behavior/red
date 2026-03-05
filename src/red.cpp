@@ -20,6 +20,8 @@
 #include "reprojection_tool.h"
 #include "skeleton.h"
 #include "utils.h"
+#include "calibration_tool.h"
+#include "calibration_pipeline.h"
 #include "jarvis_export.h"
 #include "yolo_export.h"
 #include "yolo_torch.h"
@@ -266,6 +268,20 @@ int main(int argc, char **argv) {
     int jarvis_export_jpeg_quality = 95;
     bool jarvis_export_in_progress = false;
     std::string jarvis_export_status = "";
+
+    // Calibration Tool variables
+    bool show_calibration_tool = false;
+    std::string calib_config_path;
+    CalibrationTool::CalibConfig calib_config;
+    bool calib_config_loaded = false;
+    bool calib_images_loaded = false;
+    std::string calib_status = "";
+    // Phase 2: calibration pipeline
+    bool calib_running = false;
+    bool calib_done = false;
+    std::string calib_project_folder;
+    CalibrationPipeline::CalibrationResult calib_result;
+    std::future<CalibrationPipeline::CalibrationResult> calib_future;
 
     // Bounding box class management
     std::vector<std::string> bbox_class_names = {"Class_1"};
@@ -536,6 +552,9 @@ int main(int argc, char **argv) {
                     }
                     if (ImGui::MenuItem("Reprojection Error")) {
                         rp_tool.show_reprojection_error = true;
+                    }
+                    if (ImGui::MenuItem("Calibrate")) {
+                        show_calibration_tool = true;
                     }
 
                     ImGui::EndMenu();
@@ -3458,6 +3477,46 @@ int main(int argc, char **argv) {
             ImGuiFileDialog::Instance()->Close();
         }
 
+        // Calibration Tool Dialog Handler
+        if (ImGuiFileDialog::Instance()->Display("ChooseCalibConfig")) {
+            if (ImGuiFileDialog::Instance()->IsOk()) {
+                std::string selected =
+                    ImGuiFileDialog::Instance()->GetFilePathName();
+                if (!selected.empty()) {
+                    calib_config_path = selected;
+                    std::string err;
+                    if (CalibrationTool::parse_config(calib_config_path,
+                                                       calib_config, err)) {
+                        calib_config_loaded = true;
+                        calib_images_loaded = false;
+                        calib_done = false;
+                        calib_project_folder =
+                            std::filesystem::path(calib_config_path)
+                                .parent_path()
+                                .string();
+                        calib_status = "Config loaded: " +
+                            std::to_string(calib_config.cam_ordered.size()) +
+                            " cameras";
+                    } else {
+                        calib_config_loaded = false;
+                        calib_status = "Error: " + err;
+                    }
+                }
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        // Calibration Project Folder Dialog Handler
+        if (ImGuiFileDialog::Instance()->Display("ChooseCalibProject")) {
+            if (ImGuiFileDialog::Instance()->IsOk()) {
+                std::string selected =
+                    ImGuiFileDialog::Instance()->GetCurrentPath();
+                if (!selected.empty())
+                    calib_project_folder = selected;
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
         if (ImGui::IsKeyPressed(ImGuiKey_H, false) && !io.WantTextInput) {
             show_help_window = !show_help_window;
         }
@@ -4293,6 +4352,213 @@ int main(int argc, char **argv) {
                     }
                 }
 
+            }
+            ImGui::End();
+        }
+
+        // Calibration Tool Window
+        if (show_calibration_tool) {
+            ImGui::SetNextWindowSize(ImVec2(550, 350), ImGuiCond_FirstUseEver);
+            if (ImGui::Begin("Calibration Tool", &show_calibration_tool)) {
+                ImGui::SeparatorText("Configuration");
+
+                // Config file path + Browse button
+                ImGui::InputText("Config File", &calib_config_path);
+                ImGui::SameLine();
+                if (ImGui::Button("Browse##calib_config")) {
+                    IGFD::FileDialogConfig cfg;
+                    cfg.countSelectionMax = 1;
+                    cfg.flags = ImGuiFileDialogFlags_Modal;
+                    if (!calib_config_path.empty()) {
+                        cfg.path = std::filesystem::path(calib_config_path)
+                                       .parent_path()
+                                       .string();
+                    }
+                    ImGuiFileDialog::Instance()->OpenDialog(
+                        "ChooseCalibConfig", "Choose config.json",
+                        ".json", cfg);
+                }
+
+                // Display config info when loaded
+                if (calib_config_loaded) {
+                    ImGui::Separator();
+                    ImGui::Text("Cameras:      %d",
+                                (int)calib_config.cam_ordered.size());
+                    ImGui::Text("Board:        %d x %d  (%.1f mm squares)",
+                                calib_config.charuco_setup.w,
+                                calib_config.charuco_setup.h,
+                                calib_config.charuco_setup.square_side_length);
+                    ImGui::Text("Image Path:   %s",
+                                calib_config.img_path.c_str());
+
+                    // Count images (cached)
+                    static std::string cached_img_path;
+                    static int cached_img_count = 0;
+                    static int cached_per_cam = 0;
+                    if (cached_img_path != calib_config.img_path) {
+                        cached_img_path = calib_config.img_path;
+                        auto files =
+                            CalibrationTool::discover_images(calib_config);
+                        cached_img_count = (int)files.size();
+                        if (!calib_config.cam_ordered.empty()) {
+                            cached_per_cam =
+                                CalibrationTool::count_images_per_camera(
+                                    files, calib_config.cam_ordered[0]);
+                        }
+                    }
+                    ImGui::Text("Images:       %d total (%d per camera)",
+                                cached_img_count, cached_per_cam);
+
+                    ImGui::Separator();
+
+                    // Load Images button
+                    if (!calib_images_loaded) {
+                        if (ImGui::Button("Load Images")) {
+                            auto files =
+                                CalibrationTool::discover_images(calib_config);
+                            if (files.empty()) {
+                                calib_status =
+                                    "Error: No matching images found in " +
+                                    calib_config.img_path;
+                            } else {
+                                pm.media_folder = calib_config.img_path;
+                                pm.camera_names.clear();
+                                imgs_names.clear();
+                                load_images(files, ps, pm, imgs_names, scene,
+                                            dc_context, label_buffer_size,
+                                            decoder_threads, is_view_focused,
+                                            window_was_decoding);
+                                input_is_imgs = true;
+                                calib_images_loaded = true;
+                                calib_status =
+                                    "Loaded " + std::to_string(files.size()) +
+                                    " images across " +
+                                    std::to_string(
+                                        calib_config.cam_ordered.size()) +
+                                    " cameras";
+                            }
+                        }
+                    } else {
+                        ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f),
+                                           "Images loaded");
+                    }
+
+                    // ── Calibration Pipeline (Phase 2) ──
+                    ImGui::SeparatorText("Calibration Pipeline");
+
+                    // Project folder (where .redproj + calibration/ go)
+                    if (calib_project_folder.empty() &&
+                        !calib_config_path.empty()) {
+                        calib_project_folder =
+                            std::filesystem::path(calib_config_path)
+                                .parent_path()
+                                .string();
+                    }
+                    ImGui::InputText("Project Folder", &calib_project_folder);
+                    ImGui::SameLine();
+                    if (ImGui::Button("Browse##calib_project")) {
+                        IGFD::FileDialogConfig cfg;
+                        cfg.countSelectionMax = 1;
+                        cfg.flags = ImGuiFileDialogFlags_Modal;
+                        cfg.path = calib_project_folder;
+                        ImGuiFileDialog::Instance()->OpenDialog(
+                            "ChooseCalibProject",
+                            "Choose Calibration Project Folder", nullptr, cfg);
+                    }
+
+                    // Check if pipeline is running — poll future
+                    if (calib_running && calib_future.valid()) {
+                        auto fut_status = calib_future.wait_for(
+                            std::chrono::milliseconds(0));
+                        if (fut_status == std::future_status::ready) {
+                            calib_result = calib_future.get();
+                            calib_running = false;
+                            calib_done = true;
+
+                            if (calib_result.success) {
+                                // Auto-save project.redproj
+                                std::string calib_folder =
+                                    calib_project_folder + "/calibration";
+                                pm.media_folder = calib_config.img_path;
+                                pm.camera_names = calib_config.cam_ordered;
+                                pm.calibration_folder = calib_folder;
+                                pm.project_path = calib_project_folder;
+                                pm.project_name =
+                                    std::filesystem::path(calib_project_folder)
+                                        .filename()
+                                        .string();
+                                pm.project_root_path =
+                                    std::filesystem::path(calib_project_folder)
+                                        .parent_path()
+                                        .string();
+
+                                std::string proj_file =
+                                    calib_project_folder + "/project.redproj";
+                                std::string save_err;
+                                save_project_manager_json(pm, proj_file,
+                                                         &save_err);
+
+                                calib_status =
+                                    "Calibration complete! Mean reproj: " +
+                                    std::to_string(
+                                        calib_result.mean_reproj_error)
+                                        .substr(0, 5) +
+                                    " px. Saved to " + calib_folder;
+                            } else {
+                                calib_status =
+                                    "Error: " + calib_result.error;
+                            }
+                        }
+                    }
+
+                    // Run Calibration button
+                    bool can_run = calib_config_loaded &&
+                                   !calib_project_folder.empty() &&
+                                   !calib_running;
+                    ImGui::BeginDisabled(!can_run);
+                    if (ImGui::Button("Run Calibration")) {
+                        calib_running = true;
+                        calib_done = false;
+                        calib_status = "Starting calibration pipeline...";
+                        std::string out_folder =
+                            calib_project_folder + "/calibration";
+                        calib_future = std::async(
+                            std::launch::async,
+                            [config = calib_config, out_folder,
+                             status_ptr = &calib_status]() {
+                                return CalibrationPipeline::run_full_pipeline(
+                                    config, out_folder, status_ptr);
+                            });
+                    }
+                    ImGui::EndDisabled();
+
+                    if (calib_running) {
+                        ImGui::SameLine();
+                        ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f),
+                                           "Running...");
+                    }
+
+                    // Show results
+                    if (calib_done && calib_result.success) {
+                        ImGui::TextColored(
+                            ImVec4(0.0f, 1.0f, 0.0f, 1.0f),
+                            "Mean reproj error: %.3f px",
+                            calib_result.mean_reproj_error);
+                        ImGui::Text("Output: %s/calibration",
+                                    calib_project_folder.c_str());
+                    }
+                }
+
+                // Status text
+                if (!calib_status.empty()) {
+                    ImGui::Separator();
+                    if (calib_status.find("Error") != std::string::npos) {
+                        ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f),
+                                           "%s", calib_status.c_str());
+                    } else {
+                        ImGui::Text("%s", calib_status.c_str());
+                    }
+                }
             }
             ImGui::End();
         }

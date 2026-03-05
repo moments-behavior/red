@@ -25,7 +25,8 @@ if(APPLE)
     find_package(Eigen3 REQUIRED)
     find_package(glfw3 REQUIRED)
     pkg_check_modules(TURBOJPEG REQUIRED libturbojpeg)
-    # No Vulkan needed — replaced by native Metal
+    find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs aruco calib3d objdetect)
+    find_package(Ceres REQUIRED)
 
     set(DIR_IMGUI "${CMAKE_SOURCE_DIR}/lib/imgui")
     set(DIR_IMPLOT "${CMAKE_SOURCE_DIR}/lib/implot")
@@ -68,6 +69,7 @@ if(APPLE)
         ${TURBOJPEG_INCLUDE_DIRS}
         ${HOMEBREW_PREFIX}/include
         ${HOMEBREW_PREFIX}/include/eigen3
+        ${OpenCV_INCLUDE_DIRS}
     )
 
     target_link_directories(red PRIVATE ${FFMPEG_LIBRARY_DIRS} ${TURBOJPEG_LIBRARY_DIRS})
@@ -84,6 +86,8 @@ if(APPLE)
         "-framework Cocoa"
         ${FFMPEG_LIBRARIES}
         ${TURBOJPEG_LIBRARIES}
+        ${OpenCV_LIBS}
+        Ceres::ceres
         pthread
     )
     # Removed: Vulkan::Vulkan, -framework Accelerate (vImage no longer used)
@@ -123,6 +127,7 @@ if(APPLE)
         ${FFMPEG_INCLUDE_DIRS}
         ${HOMEBREW_PREFIX}/include
         ${HOMEBREW_PREFIX}/include/eigen3
+        ${OpenCV_INCLUDE_DIRS}
     )
 
     target_link_directories(test_gui PRIVATE ${FFMPEG_LIBRARY_DIRS})
@@ -138,6 +143,8 @@ if(APPLE)
         "-framework CoreVideo"
         "-framework Cocoa"
         ${FFMPEG_LIBRARIES}
+        ${OpenCV_LIBS}
+        Ceres::ceres
         pthread
     )
 
@@ -148,6 +155,25 @@ if(APPLE)
     )
 
     set_target_properties(test_gui PROPERTIES
+        CXX_STANDARD 17
+        CXX_STANDARD_REQUIRED ON
+    )
+
+    # Calibration debug test: no ImGui/Metal, just OpenCV + Eigen + Ceres
+    add_executable(test_calib_debug tests/test_calib_debug.cpp)
+    target_include_directories(test_calib_debug PRIVATE
+        src
+        ${HOMEBREW_PREFIX}/include
+        ${HOMEBREW_PREFIX}/include/eigen3
+        ${OpenCV_INCLUDE_DIRS}
+    )
+    target_link_libraries(test_calib_debug PRIVATE
+        Eigen3::Eigen
+        ${OpenCV_LIBS}
+        Ceres::ceres
+        pthread
+    )
+    set_target_properties(test_calib_debug PROPERTIES
         CXX_STANDARD 17
         CXX_STANDARD_REQUIRED ON
     )
