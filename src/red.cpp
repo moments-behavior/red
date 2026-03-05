@@ -1385,8 +1385,15 @@ int main(int argc, char **argv) {
 
                     if (ImPlot::BeginPlot("##no_plot_name", avail_size,
                                           ImPlotFlags_Equal |
-                                              ImPlotAxisFlags_AutoFit |
                                               ImPlotFlags_Crosshairs)) {
+                        // Fit axes to image on first display so videos
+                        // fill their windows without a manual double-click.
+                        if (scene->image_width[j] > 0 && scene->image_height[j] > 0) {
+                            ImPlot::SetupAxisLimits(ImAxis_X1, 0,
+                                scene->image_width[j], ImGuiCond_Once);
+                            ImPlot::SetupAxisLimits(ImAxis_Y1, 0,
+                                scene->image_height[j], ImGuiCond_Once);
+                        }
                         ImPlot::PlotImage(
                             "##no_image_name",
 #ifdef __APPLE__
