@@ -395,7 +395,7 @@ DrawProjectWindow(ProjectManager &pm,
     }
     ImGui::End();
 
-    if (ImGuiFileDialog::Instance()->Display("SaveProjectFileDlg")) {
+    if (ImGuiFileDialog::Instance()->Display("SaveProjectFileDlg", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
         if (ImGuiFileDialog::Instance()->IsOk()) {
             // Full path the user chose (may contain or omit extension)
             std::string outPath =

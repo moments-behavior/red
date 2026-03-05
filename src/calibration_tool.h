@@ -160,4 +160,89 @@ default_output_folder(const std::string &config_path) {
     return (parent / "calibration").string();
 }
 
+// ── Calibration Project (.redproj) ──────────────────────────────────────────
+
+struct CalibProject {
+    std::string project_name;      // e.g. "MyCalibration"
+    std::string project_path;      // folder containing .redproj
+    std::string project_root_path; // parent of project_path
+    std::string config_file;       // path to config.json
+    std::string img_path;          // image directory (from config)
+    std::string output_folder;     // defaults to project_path/calibration
+};
+
+inline void to_json(nlohmann::json &j, const CalibProject &p) {
+    j = nlohmann::json{{"project_name", p.project_name},
+                       {"project_path", p.project_path},
+                       {"project_root_path", p.project_root_path},
+                       {"config_file", p.config_file},
+                       {"img_path", p.img_path},
+                       {"output_folder", p.output_folder}};
+}
+
+inline void from_json(const nlohmann::json &j, CalibProject &p) {
+    p.project_name = j.value("project_name", std::string{});
+    p.project_path = j.value("project_path", std::string{});
+    p.project_root_path = j.value("project_root_path", std::string{});
+    p.config_file = j.value("config_file", std::string{});
+    p.img_path = j.value("img_path", std::string{});
+    p.output_folder = j.value("output_folder", std::string{});
+}
+
+inline bool save_calib_project_json(const CalibProject &p,
+                                    const std::filesystem::path &file,
+                                    std::string *err = nullptr,
+                                    int indent = 2) {
+    try {
+        nlohmann::json j = p;
+
+        std::error_code ec;
+        std::filesystem::create_directories(file.parent_path(), ec);
+        if (ec) {
+            if (err)
+                *err = ec.message();
+            return false;
+        }
+
+        std::ofstream ofs(file, std::ios::binary);
+        if (!ofs) {
+            if (err)
+                *err = "Failed to open file for writing: " + file.string();
+            return false;
+        }
+        ofs << j.dump(indent);
+        return true;
+    } catch (const std::exception &e) {
+        if (err)
+            *err = e.what();
+        return false;
+    }
+}
+
+inline bool load_calib_project_json(CalibProject *out,
+                                    const std::filesystem::path &file,
+                                    std::string *err = nullptr) {
+    if (!out) {
+        if (err)
+            *err = "Output pointer is null";
+        return false;
+    }
+    try {
+        std::ifstream ifs(file, std::ios::binary);
+        if (!ifs) {
+            if (err)
+                *err = "Failed to open file for reading: " + file.string();
+            return false;
+        }
+        nlohmann::json j;
+        ifs >> j;
+        *out = j.get<CalibProject>();
+        return true;
+    } catch (const std::exception &e) {
+        if (err)
+            *err = e.what();
+        return false;
+    }
+}
+
 } // namespace CalibrationTool

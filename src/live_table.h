@@ -137,7 +137,7 @@ inline void DrawLiveTable(LiveTable &t, const char *window_id,
     std::vector<std::string> csv_cols;
     std::vector<std::vector<std::string>> csv_rows;
 
-    if (ImGuiFileDialog::Instance()->Display("LoadCSVDlg")) {
+    if (ImGuiFileDialog::Instance()->Display("LoadCSVDlg", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
         if (ImGuiFileDialog::Instance()->IsOk()) {
             std::string path = ImGuiFileDialog::Instance()->GetFilePathName();
             auto detect_delim = [](const std::string &s) -> char {
@@ -202,7 +202,7 @@ inline void DrawLiveTable(LiveTable &t, const char *window_id,
     }
 
     // -------- CSV SAVE dialog + write --------
-    if (ImGuiFileDialog::Instance()->Display("SaveCSVDlg")) {
+    if (ImGuiFileDialog::Instance()->Display("SaveCSVDlg", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
         if (ImGuiFileDialog::Instance()->IsOk()) {
             std::string path = ImGuiFileDialog::Instance()->GetFilePathName();
             auto ends_with = [](const std::string &s, const char *suf) {

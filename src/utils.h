@@ -44,4 +44,5 @@ std::string dir_difference(const std::filesystem::path &a,
                            const std::filesystem::path &b);
 bool ensure_dir_exists(std::string path_string, std::string *err);
 bool ends_with_ci(std::string_view s, std::string_view suffix);
+std::string get_home_directory();
 #endif

@@ -22,6 +22,7 @@
 #include "utils.h"
 #include "calibration_tool.h"
 #include "calibration_pipeline.h"
+#include "user_settings.h"
 #include "jarvis_export.h"
 #include "yolo_export.h"
 #include "yolo_torch.h"
@@ -165,6 +166,27 @@ static void print_project_summary(const ProjectManager &pm,
     std::cout << std::endl;
 }
 
+// Scan a directory for .mp4 files and return sorted vector of stems (camera names).
+static std::vector<std::string> discover_mp4_cameras(const std::string &folder) {
+    namespace fs = std::filesystem;
+    std::vector<std::string> cameras;
+    if (folder.empty() || !fs::is_directory(folder))
+        return cameras;
+    for (const auto &entry : fs::directory_iterator(folder)) {
+        if (!entry.is_regular_file()) continue;
+        auto ext = entry.path().extension().string();
+        // case-insensitive .mp4 check
+        if (ext.size() == 4 &&
+            (ext[1] == 'm' || ext[1] == 'M') &&
+            (ext[2] == 'p' || ext[2] == 'P') &&
+            (ext[3] == '4')) {
+            cameras.push_back(entry.path().stem().string());
+        }
+    }
+    std::sort(cameras.begin(), cameras.end());
+    return cameras;
+}
+
 int main(int argc, char **argv) {
     gx_context *window = (gx_context *)malloc(sizeof(gx_context));
     *window =
@@ -196,6 +218,7 @@ int main(int argc, char **argv) {
     std::string red_data_dir;
     std::string media_root_dir;
     prepare_application_folders(red_data_dir, media_root_dir);
+    UserSettings user_settings = load_user_settings();
     std::string skeleton_dir = red_data_dir + "/skeleton";
     std::string yolo_model_dir = red_data_dir + "/yolo_model";
     std::vector<std::thread> decoder_threads;
@@ -271,6 +294,15 @@ int main(int argc, char **argv) {
 
     // Calibration Tool variables
     bool show_calibration_tool = false;
+    CalibrationTool::CalibProject calib_project;
+    calib_project.project_root_path =
+        user_settings.default_project_root_path.empty()
+            ? red_data_dir
+            : user_settings.default_project_root_path;
+    if (!user_settings.default_media_root_path.empty())
+        calib_project.config_file = user_settings.default_media_root_path;
+    bool calib_project_loaded = false;
+    bool show_calib_create_dialog = true; // show creation dialog first
     std::string calib_config_path;
     CalibrationTool::CalibConfig calib_config;
     bool calib_config_loaded = false;
@@ -279,9 +311,17 @@ int main(int argc, char **argv) {
     // Phase 2: calibration pipeline
     bool calib_running = false;
     bool calib_done = false;
-    std::string calib_project_folder;
     CalibrationPipeline::CalibrationResult calib_result;
     std::future<CalibrationPipeline::CalibrationResult> calib_future;
+
+    // Annotation dialog variables
+    bool show_annotation_dialog = false;
+    std::string annot_video_folder = user_settings.default_media_root_path.empty()
+                                         ? media_root_dir
+                                         : user_settings.default_media_root_path;
+    std::vector<std::string> annot_discovered_cameras;
+    std::vector<bool> annot_camera_selected;
+    std::string annot_status;
 
     // Bounding box class management
     std::vector<std::string> bbox_class_names = {"Class_1"};
@@ -367,8 +407,32 @@ int main(int argc, char **argv) {
 
     // variables for project management
     ProjectManager pm = ProjectManager();
-    pm.project_root_path = red_data_dir;
-    pm.media_folder = media_root_dir;
+    pm.project_root_path = user_settings.default_project_root_path.empty()
+                               ? red_data_dir
+                               : user_settings.default_project_root_path;
+    pm.media_folder = user_settings.default_media_root_path.empty()
+                          ? media_root_dir
+                          : user_settings.default_media_root_path;
+
+    // Copy the shipped default_imgui_layout.ini into a project folder so new
+    // projects (annotation or calibration) start with the standard dock layout.
+    // If the project already has an imgui_layout.ini, this is a no-op.
+    auto copy_default_layout_to_project = [&](const std::string &proj_path) {
+        namespace fs = std::filesystem;
+        fs::path dest = fs::path(proj_path) / "imgui_layout.ini";
+        if (fs::exists(dest))
+            return; // preserve existing layout
+        for (const auto &candidate : {
+                 window->exe_dir + "/../default_imgui_layout.ini",           // dev
+                 window->exe_dir + "/../share/red/default_imgui_layout.ini", // brew
+             }) {
+            if (fs::exists(candidate)) {
+                std::error_code ec;
+                fs::copy_file(candidate, dest, ec);
+                break;
+            }
+        }
+    };
 
     // Switch ImGui layout ini to the project folder so each project keeps its own layout.
     // Before the main loop (CLI path): just redirect io.IniFilename and let NewFrame()
@@ -376,6 +440,8 @@ int main(int argc, char **argv) {
     bool main_loop_running = false;
     auto switch_ini_to_project = [&]() {
         project_ini_path = pm.project_path + "/imgui_layout.ini";
+        // Seed new projects with the default dock layout
+        copy_default_layout_to_project(pm.project_path);
         io.IniFilename = project_ini_path.c_str();
         if (main_loop_running && std::filesystem::exists(project_ini_path)) {
             ImGui::LoadIniSettingsFromDisk(project_ini_path.c_str());
@@ -537,6 +603,47 @@ int main(int argc, char **argv) {
                     ImGui::EndMenu();
                 }
 
+                if (ImGui::BeginMenu("Annotate")) {
+                    ImGui::BeginDisabled(ps.video_loaded);
+                    if (ImGui::MenuItem("Create Annotation Project")) {
+                        show_annotation_dialog = true;
+                        annot_discovered_cameras.clear();
+                        annot_camera_selected.clear();
+                        annot_status.clear();
+                    }
+                    if (ImGui::MenuItem("Load Annotation Project")) {
+                        IGFD::FileDialogConfig cfg;
+                        cfg.countSelectionMax = 1;
+                        cfg.path = pm.project_root_path;
+                        cfg.flags = ImGuiFileDialogFlags_Modal;
+                        ImGuiFileDialog::Instance()->OpenDialog(
+                            "LoadAnnotProject", "Load Annotation Project",
+                            "Red Project{.redproj}", cfg);
+                    }
+                    ImGui::EndDisabled();
+                    ImGui::EndMenu();
+                }
+
+                if (ImGui::BeginMenu("Calibrate")) {
+                    if (ImGui::MenuItem("Create Calibration Project")) {
+                        show_calibration_tool = true;
+                        show_calib_create_dialog = true;
+                    }
+                    if (ImGui::MenuItem("Load Calibration Project")) {
+                        IGFD::FileDialogConfig cfg;
+                        cfg.countSelectionMax = 1;
+                        cfg.path =
+                            user_settings.default_project_root_path.empty()
+                                ? red_data_dir
+                                : user_settings.default_project_root_path;
+                        cfg.flags = ImGuiFileDialogFlags_Modal;
+                        ImGuiFileDialog::Instance()->OpenDialog(
+                            "LoadCalibProject", "Load Calibration Project",
+                            "Red Project{.redproj}", cfg);
+                    }
+                    ImGui::EndMenu();
+                }
+
                 if (ImGui::BeginMenu("Tools")) {
                     if (ImGui::MenuItem("Skeleton Creator")) {
                         show_skeleton_creator = true;
@@ -553,10 +660,34 @@ int main(int argc, char **argv) {
                     if (ImGui::MenuItem("Reprojection Error")) {
                         rp_tool.show_reprojection_error = true;
                     }
-                    if (ImGui::MenuItem("Calibrate")) {
-                        show_calibration_tool = true;
-                    }
+                    ImGui::EndMenu();
+                }
 
+                if (ImGui::BeginMenu("Settings")) {
+                    if (ImGui::MenuItem("Default Project Root")) {
+                        IGFD::FileDialogConfig cfg;
+                        cfg.countSelectionMax = 1;
+                        cfg.path =
+                            user_settings.default_project_root_path.empty()
+                                ? red_data_dir
+                                : user_settings.default_project_root_path;
+                        cfg.flags = ImGuiFileDialogFlags_Modal;
+                        ImGuiFileDialog::Instance()->OpenDialog(
+                            "ChooseDefaultProjectRoot",
+                            "Set Default Project Root", nullptr, cfg);
+                    }
+                    if (ImGui::MenuItem("Default Media Root")) {
+                        IGFD::FileDialogConfig cfg;
+                        cfg.countSelectionMax = 1;
+                        cfg.path =
+                            user_settings.default_media_root_path.empty()
+                                ? media_root_dir
+                                : user_settings.default_media_root_path;
+                        cfg.flags = ImGuiFileDialogFlags_Modal;
+                        ImGuiFileDialog::Instance()->OpenDialog(
+                            "ChooseDefaultMediaRoot",
+                            "Set Default Media Root", nullptr, cfg);
+                    }
                     ImGui::EndMenu();
                 }
 
@@ -726,7 +857,288 @@ int main(int argc, char **argv) {
         DrawProjectWindow(pm, skeleton_map, skeleton, skeleton_dir, show_error,
                           error_message);
 
-        if (ImGuiFileDialog::Instance()->Display("ChooseProjectDir")) {
+        // ===== Create Annotation Project dialog =====
+        if (show_annotation_dialog) {
+            ImGuiWindowFlags annot_flags = ImGuiWindowFlags_NoCollapse;
+            ImGui::SetNextWindowSize(ImVec2(720, 460), ImGuiCond_FirstUseEver);
+
+            if (ImGui::Begin("Create Annotation Project", &show_annotation_dialog, annot_flags)) {
+                // error banner
+                if (!annot_status.empty()) {
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.45f, 0.45f, 1.0f));
+                    ImGui::TextUnformatted(annot_status.c_str());
+                    ImGui::PopStyleColor();
+                    ImGui::Separator();
+                }
+
+                // Build skeleton preset labels (reuse same logic as DrawProjectWindow)
+                std::vector<const char *> annot_skel_labels;
+                annot_skel_labels.reserve(skeleton_map.size());
+                for (auto &kv : skeleton_map)
+                    annot_skel_labels.push_back(kv.first.c_str());
+                static int annot_skeleton_idx = 0;
+                if (annot_skeleton_idx >= (int)annot_skel_labels.size())
+                    annot_skeleton_idx = 0;
+
+                if (ImGui::BeginTable(
+                        "annotForm", 3,
+                        ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_PadOuterX |
+                            ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV)) {
+                    ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 160.0f);
+                    ImGui::TableSetupColumn("Field", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+                    ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthFixed, 110.0f);
+
+                    auto LabelCell = [](const char *t) {
+                        ImGui::TableSetColumnIndex(0);
+                        ImGui::AlignTextToFramePadding();
+                        ImGui::TextUnformatted(t);
+                    };
+
+                    // ---- Video Folder ----
+                    ImGui::TableNextRow();
+                    LabelCell("Video Folder");
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::SetNextItemWidth(-FLT_MIN);
+                    if (ImGui::InputText("##annot_video_folder", &annot_video_folder)) {
+                        annot_discovered_cameras = discover_mp4_cameras(annot_video_folder);
+                        annot_camera_selected.assign(annot_discovered_cameras.size(), true);
+                    }
+                    ImGui::TableSetColumnIndex(2);
+                    if (ImGui::Button("Browse##annot_video")) {
+                        IGFD::FileDialogConfig cfg;
+                        cfg.countSelectionMax = 1;
+                        cfg.path = annot_video_folder;
+                        cfg.flags = ImGuiFileDialogFlags_Modal;
+                        ImGuiFileDialog::Instance()->OpenDialog(
+                            "ChooseAnnotVideoDir", "Choose Video Folder", nullptr, cfg);
+                    }
+
+                    // ---- Cameras Found (checkboxes) ----
+                    ImGui::TableNextRow();
+                    {
+                        int n_selected = 0;
+                        for (size_t i = 0; i < annot_camera_selected.size(); i++)
+                            if (annot_camera_selected[i]) n_selected++;
+                        std::string cam_label = "Cameras (" + std::to_string(n_selected) +
+                                                "/" + std::to_string(annot_discovered_cameras.size()) + ")";
+                        LabelCell(cam_label.c_str());
+                    }
+                    ImGui::TableSetColumnIndex(1);
+                    if (annot_discovered_cameras.empty()) {
+                        ImGui::TextDisabled("(none — select a folder with .mp4 files)");
+                    } else {
+                        // Vertical 2-column layout for camera checkboxes
+                        int n_cams = (int)annot_discovered_cameras.size();
+                        int n_rows = (n_cams + 1) / 2;
+                        if (ImGui::BeginTable("##annot_cam_grid", 2)) {
+                            for (int row = 0; row < n_rows; row++) {
+                                ImGui::TableNextRow();
+                                for (int col = 0; col < 2; col++) {
+                                    int idx = row + col * n_rows;
+                                    ImGui::TableSetColumnIndex(col);
+                                    if (idx < n_cams) {
+                                        bool selected = annot_camera_selected[idx];
+                                        if (ImGui::Checkbox(
+                                                ("##cam_" + std::to_string(idx)).c_str(),
+                                                &selected))
+                                            annot_camera_selected[idx] = selected;
+                                        ImGui::SameLine(0.0f, 2.0f);
+                                        ImGui::TextUnformatted(
+                                            annot_discovered_cameras[idx].c_str());
+                                    }
+                                }
+                            }
+                            ImGui::EndTable();
+                        }
+                    }
+                    ImGui::TableSetColumnIndex(2);
+                    if (!annot_discovered_cameras.empty()) {
+                        int n_sel = 0;
+                        for (auto b : annot_camera_selected) if (b) n_sel++;
+                        bool all = (n_sel == (int)annot_discovered_cameras.size());
+                        if (ImGui::Button(all ? "Select None" : "Select All", ImVec2(-FLT_MIN, 0))) {
+                            annot_camera_selected.assign(annot_discovered_cameras.size(), !all);
+                        }
+                    } else {
+                        ImGui::Dummy(ImVec2(1, 1));
+                    }
+
+                    // ---- Project Name ----
+                    ImGui::TableNextRow();
+                    LabelCell("Project Name");
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::SetNextItemWidth(-FLT_MIN);
+                    ImGui::InputText("##annot_projname", &pm.project_name);
+                    ImGui::TableSetColumnIndex(2);
+                    ImGui::Dummy(ImVec2(1, 1));
+
+                    // ---- Project Root Path ----
+                    ImGui::TableNextRow();
+                    LabelCell("Project Root Path");
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::SetNextItemWidth(-FLT_MIN);
+                    ImGui::InputText("##annot_rootpath", &pm.project_root_path);
+                    ImGui::TableSetColumnIndex(2);
+                    if (ImGui::Button("Browse##annot_root")) {
+                        IGFD::FileDialogConfig cfg;
+                        cfg.countSelectionMax = 1;
+                        cfg.path = pm.project_root_path;
+                        cfg.flags = ImGuiFileDialogFlags_Modal;
+                        ImGuiFileDialog::Instance()->OpenDialog(
+                            "ChooseAnnotRootDir", "Choose Project Root", nullptr, cfg);
+                    }
+
+                    // ---- Full Path (computed) ----
+                    {
+                        std::filesystem::path p =
+                            std::filesystem::path(pm.project_root_path) / pm.project_name;
+                        pm.project_path = p.string();
+                    }
+                    ImGui::TableNextRow();
+                    LabelCell("Full Path");
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::BeginDisabled();
+                    ImGui::SetNextItemWidth(-FLT_MIN);
+                    ImGui::InputText("##annot_fullpath", &pm.project_path);
+                    ImGui::EndDisabled();
+                    ImGui::TableSetColumnIndex(2);
+                    ImGui::Dummy(ImVec2(1, 1));
+
+                    // ---- Skeleton ----
+                    int skel_mode = pm.load_skeleton_from_json ? 0 : 1;
+
+                    ImGui::TableNextRow();
+                    LabelCell("Skeleton");
+                    ImGui::TableSetColumnIndex(1);
+                    {
+                        if (pm.load_skeleton_from_json) {
+                            float avail = ImGui::GetContentRegionAvail().x;
+                            const char *btxt = "Browse##annot_skel";
+                            float browse_w = ImGui::CalcTextSize(btxt).x +
+                                             ImGui::GetStyle().FramePadding.x * 2.0f;
+                            float gap = ImGui::GetStyle().ItemInnerSpacing.x;
+                            ImGui::PushID("annot_skelfile");
+                            ImGui::SetNextItemWidth(ImMax(50.0f, avail - browse_w - gap));
+                            ImGui::InputText("##path", &pm.skeleton_file);
+                            ImGui::SameLine(0.0f, gap);
+                            if (ImGui::Button(btxt)) {
+                                IGFD::FileDialogConfig config;
+                                config.countSelectionMax = 1;
+                                config.path = skeleton_dir;
+                                config.flags = ImGuiFileDialogFlags_Modal;
+                                ImGuiFileDialog::Instance()->OpenDialog(
+                                    "ChooseAnnotSkeleton", "Choose Skeleton", ".json", config);
+                            }
+                            ImGui::PopID();
+                        } else {
+                            ImGui::BeginDisabled(annot_skel_labels.empty());
+                            ImGui::SetNextItemWidth(-FLT_MIN);
+                            ImGui::Combo("##annot_skeleton_preset", &annot_skeleton_idx,
+                                         annot_skel_labels.data(), (int)annot_skel_labels.size());
+                            ImGui::EndDisabled();
+                        }
+                    }
+                    ImGui::TableSetColumnIndex(2);
+                    ImGui::SetNextItemWidth(90.0f);
+                    if (ImGui::Combo("##annot_skel_mode", &skel_mode, "File\0Preset\0")) {
+                        pm.load_skeleton_from_json = (skel_mode == 0);
+                        if (pm.load_skeleton_from_json)
+                            pm.skeleton_name.clear();
+                    }
+                    pm.skeleton_name =
+                        pm.load_skeleton_from_json
+                            ? std::string()
+                            : (annot_skel_labels.empty() ? std::string()
+                                                         : std::string(annot_skel_labels[annot_skeleton_idx]));
+
+                    // ---- Calibration Folder (only if multiple cameras selected) ----
+                    {
+                        int n_sel = 0;
+                        for (auto b : annot_camera_selected) if (b) n_sel++;
+                        if (n_sel > 1) {
+                        ImGui::TableNextRow();
+                        LabelCell("Calibration Folder");
+                        ImGui::TableSetColumnIndex(1);
+                        ImGui::SetNextItemWidth(-FLT_MIN);
+                        ImGui::InputText("##annot_calibfolder", &pm.calibration_folder);
+                        ImGui::TableSetColumnIndex(2);
+                        if (ImGui::Button("Browse##annot_calib")) {
+                            IGFD::FileDialogConfig cfg;
+                            cfg.countSelectionMax = 1;
+                            cfg.path = annot_video_folder.empty()
+                                           ? (user_settings.default_media_root_path.empty()
+                                                  ? media_root_dir
+                                                  : user_settings.default_media_root_path)
+                                           : annot_video_folder;
+                            cfg.flags = ImGuiFileDialogFlags_Modal;
+                            ImGuiFileDialog::Instance()->OpenDialog(
+                                "ChooseAnnotCalib", "Select Calibration Folder", nullptr, cfg);
+                        }
+                        }
+                    }
+
+                    ImGui::EndTable();
+                }
+
+                ImGui::Separator();
+
+                // Count selected cameras for validation
+                int annot_n_selected = 0;
+                for (size_t i = 0; i < annot_camera_selected.size(); i++)
+                    if (annot_camera_selected[i]) annot_n_selected++;
+
+                // Validation
+                const bool annot_ok =
+                    !pm.project_name.empty() && !pm.project_root_path.empty() &&
+                    annot_n_selected > 0 &&
+                    (annot_n_selected <= 1 || !pm.calibration_folder.empty()) &&
+                    (!pm.load_skeleton_from_json || !pm.skeleton_file.empty());
+
+                // Right-align Create button
+                float avail = ImGui::GetContentRegionAvail().x;
+                const char *create_label = "Create Project##annot_action";
+                float w = ImGui::CalcTextSize(create_label).x +
+                          ImGui::GetStyle().FramePadding.x * 2.0f;
+                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (avail - w));
+
+                ImGui::BeginDisabled(!annot_ok);
+                if (ImGui::Button(create_label)) {
+                    annot_status.clear();
+                    pm.media_folder = annot_video_folder;
+                    // Only include selected cameras
+                    pm.camera_names.clear();
+                    for (size_t i = 0; i < annot_discovered_cameras.size(); i++)
+                        if (annot_camera_selected[i])
+                            pm.camera_names.push_back(annot_discovered_cameras[i]);
+
+                    if (!ensure_dir_exists(pm.project_path, &error_message)) {
+                        annot_status = error_message;
+                    } else if (!setup_project(pm, skeleton, skeleton_map, &error_message)) {
+                        annot_status = error_message;
+                    } else {
+                        switch_ini_to_project();
+                        std::filesystem::path redproj_path =
+                            std::filesystem::path(pm.project_path) / (pm.project_name + ".redproj");
+                        if (!save_project_manager_json(pm, redproj_path, &error_message)) {
+                            annot_status = error_message;
+                        } else {
+                            std::map<std::string, std::string> empty_selected_files;
+                            load_videos(empty_selected_files, ps, pm,
+                                        window_was_decoding, demuxers, dc_context,
+                                        scene, label_buffer_size, decoder_threads,
+                                        is_view_focused);
+                            print_video_metadata(demuxers, pm.camera_names, dc_context->seek_interval);
+                            print_project_summary(pm, pm.skeleton_name, "");
+                            show_annotation_dialog = false;
+                        }
+                    }
+                }
+                ImGui::EndDisabled();
+            }
+            ImGui::End();
+        }
+
+        if (ImGuiFileDialog::Instance()->Display("ChooseProjectDir", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
             if (ImGuiFileDialog::Instance()->IsOk()) {
                 std::filesystem::path chosen;
 
@@ -745,7 +1157,7 @@ int main(int argc, char **argv) {
             ImGuiFileDialog::Instance()->Close();
         }
 
-        if (ImGuiFileDialog::Instance()->Display("ChooseCalibration")) {
+        if (ImGuiFileDialog::Instance()->Display("ChooseCalibration", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
             if (ImGuiFileDialog::Instance()->IsOk()) {
                 pm.calibration_folder =
                     ImGuiFileDialog::Instance()->GetCurrentPath();
@@ -753,7 +1165,53 @@ int main(int argc, char **argv) {
             ImGuiFileDialog::Instance()->Close();
         }
 
-        if (ImGuiFileDialog::Instance()->Display("ChooseMedia")) {
+        if (ImGuiFileDialog::Instance()->Display(
+                "ChooseDefaultProjectRoot", ImGuiWindowFlags_NoCollapse,
+                ImVec2(680, 440))) {
+            if (ImGuiFileDialog::Instance()->IsOk()) {
+                std::filesystem::path chosen;
+                auto sel = ImGuiFileDialog::Instance()->GetSelection();
+                if (!sel.empty()) {
+                    chosen = std::filesystem::path(sel.begin()->second);
+                    if (std::filesystem::is_regular_file(chosen))
+                        chosen = chosen.parent_path();
+                } else {
+                    chosen = std::filesystem::path(
+                        ImGuiFileDialog::Instance()->GetCurrentPath());
+                }
+                user_settings.default_project_root_path = chosen.string();
+                save_user_settings(user_settings);
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        if (ImGuiFileDialog::Instance()->Display(
+                "ChooseDefaultMediaRoot", ImGuiWindowFlags_NoCollapse,
+                ImVec2(680, 440))) {
+            if (ImGuiFileDialog::Instance()->IsOk()) {
+                std::filesystem::path chosen;
+                auto sel = ImGuiFileDialog::Instance()->GetSelection();
+                if (!sel.empty()) {
+                    chosen = std::filesystem::path(sel.begin()->second);
+                    if (std::filesystem::is_regular_file(chosen))
+                        chosen = chosen.parent_path();
+                } else {
+                    chosen = std::filesystem::path(
+                        ImGuiFileDialog::Instance()->GetCurrentPath());
+                }
+                std::string old_media_root =
+                    user_settings.default_media_root_path;
+                user_settings.default_media_root_path = chosen.string();
+                pm.media_folder = chosen.string();
+                if (calib_project.config_file.empty() ||
+                    calib_project.config_file == old_media_root)
+                    calib_project.config_file = chosen.string();
+                save_user_settings(user_settings);
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        if (ImGuiFileDialog::Instance()->Display("ChooseMedia", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
             if (ImGuiFileDialog::Instance()->IsOk()) {
                 auto selected_files =
                     ImGuiFileDialog::Instance()->GetSelection();
@@ -770,7 +1228,7 @@ int main(int argc, char **argv) {
             ImGuiFileDialog::Instance()->Close();
         }
 
-        if (ImGuiFileDialog::Instance()->Display("ChooseImages")) {
+        if (ImGuiFileDialog::Instance()->Display("ChooseImages", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
             if (ImGuiFileDialog::Instance()->IsOk()) {
                 auto selected_files =
                     ImGuiFileDialog::Instance()->GetSelection();
@@ -786,7 +1244,7 @@ int main(int argc, char **argv) {
             ImGuiFileDialog::Instance()->Close();
         }
 
-        if (ImGuiFileDialog::Instance()->Display("ChooseProject")) {
+        if (ImGuiFileDialog::Instance()->Display("ChooseProject", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
             if (ImGuiFileDialog::Instance()->IsOk()) {
                 const auto sel = ImGuiFileDialog::Instance()->GetSelection();
                 // Choose the picked file (single-select assumed)
@@ -843,7 +1301,7 @@ int main(int argc, char **argv) {
             ImGuiFileDialog::Instance()->Close();
         }
 
-        if (ImGuiFileDialog::Instance()->Display("ChooseSkeleton")) {
+        if (ImGuiFileDialog::Instance()->Display("ChooseSkeleton", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
             if (ImGuiFileDialog::Instance()->IsOk()) { // action if OK
                 pm.skeleton_file =
                     ImGuiFileDialog::Instance()->GetFilePathName();
@@ -852,8 +1310,113 @@ int main(int argc, char **argv) {
             ImGuiFileDialog::Instance()->Close();
         }
 
+        // ===== Annotation file dialog handlers =====
+        if (ImGuiFileDialog::Instance()->Display("ChooseAnnotVideoDir", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
+            if (ImGuiFileDialog::Instance()->IsOk()) {
+                std::filesystem::path chosen;
+                auto sel = ImGuiFileDialog::Instance()->GetSelection();
+                if (!sel.empty()) {
+                    chosen = std::filesystem::path(sel.begin()->second);
+                    if (std::filesystem::is_regular_file(chosen))
+                        chosen = chosen.parent_path();
+                } else {
+                    chosen = std::filesystem::path(
+                        ImGuiFileDialog::Instance()->GetCurrentPath());
+                }
+                annot_video_folder = chosen.string();
+                annot_discovered_cameras = discover_mp4_cameras(annot_video_folder);
+                annot_camera_selected.assign(annot_discovered_cameras.size(), true);
+                // Auto-fill project name from folder name
+                if (pm.project_name.empty())
+                    pm.project_name = chosen.filename().string();
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        if (ImGuiFileDialog::Instance()->Display("ChooseAnnotRootDir", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
+            if (ImGuiFileDialog::Instance()->IsOk()) {
+                std::filesystem::path chosen;
+                auto sel = ImGuiFileDialog::Instance()->GetSelection();
+                if (!sel.empty()) {
+                    chosen = std::filesystem::path(sel.begin()->second);
+                    if (std::filesystem::is_regular_file(chosen))
+                        chosen = chosen.parent_path();
+                } else {
+                    chosen = std::filesystem::path(
+                        ImGuiFileDialog::Instance()->GetCurrentPath());
+                }
+                pm.project_root_path = chosen.string();
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        if (ImGuiFileDialog::Instance()->Display("ChooseAnnotSkeleton", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
+            if (ImGuiFileDialog::Instance()->IsOk()) {
+                pm.skeleton_file = ImGuiFileDialog::Instance()->GetFilePathName();
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        if (ImGuiFileDialog::Instance()->Display("ChooseAnnotCalib", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
+            if (ImGuiFileDialog::Instance()->IsOk()) {
+                pm.calibration_folder = ImGuiFileDialog::Instance()->GetCurrentPath();
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        if (ImGuiFileDialog::Instance()->Display("LoadAnnotProject", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
+            if (ImGuiFileDialog::Instance()->IsOk()) {
+                const auto sel = ImGuiFileDialog::Instance()->GetSelection();
+                std::filesystem::path cfg_path;
+                if (!sel.empty()) {
+                    cfg_path = std::filesystem::path(sel.begin()->second);
+                } else {
+                    std::string full =
+                        ImGuiFileDialog::Instance()->GetFilePathName(
+                            IGFD_ResultMode_KeepInputFile);
+                    if (!full.empty())
+                        cfg_path = std::filesystem::path(full);
+                    else
+                        cfg_path = std::filesystem::path(
+                            ImGuiFileDialog::Instance()->GetCurrentPath());
+                }
+                ProjectManager loaded;
+                if (!load_project_manager_json(&loaded, cfg_path, &error_message)) {
+                    show_error = true;
+                } else {
+                    pm = loaded;
+                    bool ok = setup_project(pm, skeleton, skeleton_map, &error_message);
+                    if (ok) {
+                        switch_ini_to_project();
+                        std::map<std::string, std::string> empty_selected_files;
+                        load_videos(empty_selected_files, ps, pm,
+                                    window_was_decoding, demuxers, dc_context,
+                                    scene, label_buffer_size, decoder_threads,
+                                    is_view_focused);
+                        print_video_metadata(demuxers, pm.camera_names, dc_context->seek_interval);
+
+                        std::string most_recent_folder;
+                        if (!find_most_recent_labels(pm.keypoints_root_folder,
+                                                     most_recent_folder,
+                                                     error_message)) {
+                            if (load_keypoints(most_recent_folder, keypoints_map,
+                                               &skeleton, scene, pm.camera_names,
+                                               error_message, bbox_class_names)) {
+                                free_all_keypoints(keypoints_map, scene);
+                                show_error = true;
+                            }
+                        }
+                        print_project_summary(pm, pm.skeleton_name, most_recent_folder);
+                    } else {
+                        show_error = true;
+                    }
+                }
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
         // Handle background image selection for skeleton creator
-        if (ImGuiFileDialog::Instance()->Display("ChooseBackgroundImage")) {
+        if (ImGuiFileDialog::Instance()->Display("ChooseBackgroundImage", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
             if (ImGuiFileDialog::Instance()->IsOk()) {
                 auto file_selection =
                     ImGuiFileDialog::Instance()->GetSelection();
@@ -903,7 +1466,7 @@ int main(int argc, char **argv) {
         }
 
         // Handle skeleton load dialog for editing
-        if (ImGuiFileDialog::Instance()->Display("LoadSkeletonForEdit")) {
+        if (ImGuiFileDialog::Instance()->Display("LoadSkeletonForEdit", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
             if (ImGuiFileDialog::Instance()->IsOk()) {
                 std::string file_path =
                     ImGuiFileDialog::Instance()->GetFilePathName();
@@ -1217,20 +1780,16 @@ int main(int argc, char **argv) {
             for (int j = 0; j < scene->num_cams; j++) {
                 const std::string &win_name = pm.camera_names[j];
 
-                // layout
+                // Dock cameras into the 2x2 grid from default layout.
+                // Dock IDs 0x05..0x08 map to TL, BL, TR, BR quadrants.
+                {
+                    static const ImGuiID quad_ids[4] = {
+                        0x00000005, 0x00000006, 0x00000007, 0x00000008};
+                    ImGui::SetNextWindowDockID(quad_ids[j % 4],
+                                               ImGuiCond_FirstUseEver);
+                }
                 ImGui::SetNextWindowSize(ImVec2(500, 400),
                                          ImGuiCond_FirstUseEver);
-                ImVec2 window_pos;
-
-                {
-                    int rows = (scene->num_cams < 8) ? 2 : 4;
-                    int col = j / rows;
-                    int row = j % rows;
-                    window_pos.x = col * 500.0f;
-                    window_pos.y = 200.0f + row * 400.0f;
-                }
-
-                ImGui::SetNextWindowPos(window_pos, ImGuiCond_FirstUseEver);
                 bool is_visible = ImGui::Begin(win_name.c_str());
 
                 if (!window_was_decoding[win_name] && is_visible &&
@@ -1404,8 +1963,13 @@ int main(int argc, char **argv) {
 
                     if (ImPlot::BeginPlot("##no_plot_name", avail_size,
                                           ImPlotFlags_Equal |
-                                              ImPlotAxisFlags_AutoFit |
                                               ImPlotFlags_Crosshairs)) {
+                        ImPlot::SetupAxisLimits(
+                            ImAxis_X1, 0, scene->image_width[j],
+                            ImPlotCond_Once);
+                        ImPlot::SetupAxisLimits(
+                            ImAxis_Y1, 0, scene->image_height[j],
+                            ImPlotCond_Once);
                         ImPlot::PlotImage(
                             "##no_image_name",
 #ifdef __APPLE__
@@ -3079,7 +3643,7 @@ int main(int argc, char **argv) {
                     }
                 }
 
-                if (ImGuiFileDialog::Instance()->Display("ChooseYoloModel")) {
+                if (ImGuiFileDialog::Instance()->Display("ChooseYoloModel", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
                     if (ImGuiFileDialog::Instance()->IsOk()) {
                         std::string model_path =
                             ImGuiFileDialog::Instance()->GetFilePathName();
@@ -3395,7 +3959,7 @@ int main(int argc, char **argv) {
             }
         }
 
-        if (ImGuiFileDialog::Instance()->Display("ChooseKeypointsFolder")) {
+        if (ImGuiFileDialog::Instance()->Display("ChooseKeypointsFolder", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
             if (ImGuiFileDialog::Instance()->IsOk()) {
                 pm.keypoints_root_folder =
                     ImGuiFileDialog::Instance()->GetCurrentPath();
@@ -3404,7 +3968,7 @@ int main(int argc, char **argv) {
             ImGuiFileDialog::Instance()->Close();
         }
 
-        if (ImGuiFileDialog::Instance()->Display("LoadFromSelected")) {
+        if (ImGuiFileDialog::Instance()->Display("LoadFromSelected", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
             if (ImGuiFileDialog::Instance()->IsOk()) {
                 auto selected_folder =
                     ImGuiFileDialog::Instance()->GetCurrentPath();
@@ -3421,7 +3985,7 @@ int main(int argc, char **argv) {
         }
 
         // YOLO Export Tool Dialog Handlers
-        if (ImGuiFileDialog::Instance()->Display("ChooseYoloExportLabelDir")) {
+        if (ImGuiFileDialog::Instance()->Display("ChooseYoloExportLabelDir", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
             if (ImGuiFileDialog::Instance()->IsOk()) {
                 std::string selected_path =
                     ImGuiFileDialog::Instance()->GetCurrentPath();
@@ -3430,7 +3994,7 @@ int main(int argc, char **argv) {
             ImGuiFileDialog::Instance()->Close();
         }
 
-        if (ImGuiFileDialog::Instance()->Display("ChooseYoloExportVideoDir")) {
+        if (ImGuiFileDialog::Instance()->Display("ChooseYoloExportVideoDir", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
             if (ImGuiFileDialog::Instance()->IsOk()) {
                 std::string selected_path =
                     ImGuiFileDialog::Instance()->GetCurrentPath();
@@ -3439,7 +4003,7 @@ int main(int argc, char **argv) {
             ImGuiFileDialog::Instance()->Close();
         }
 
-        if (ImGuiFileDialog::Instance()->Display("ChooseYoloExportOutputDir")) {
+        if (ImGuiFileDialog::Instance()->Display("ChooseYoloExportOutputDir", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
             if (ImGuiFileDialog::Instance()->IsOk()) {
                 std::string selected_path =
                     ImGuiFileDialog::Instance()->GetCurrentPath();
@@ -3449,7 +4013,8 @@ int main(int argc, char **argv) {
         }
 
         if (ImGuiFileDialog::Instance()->Display(
-                "ChooseYoloExportSkeletonFile")) {
+                "ChooseYoloExportSkeletonFile", ImGuiWindowFlags_NoCollapse,
+                ImVec2(680, 440))) {
             if (ImGuiFileDialog::Instance()->IsOk()) {
                 std::string selected_file =
                     ImGuiFileDialog::Instance()->GetFilePathName();
@@ -3458,7 +4023,7 @@ int main(int argc, char **argv) {
             ImGuiFileDialog::Instance()->Close();
         }
 
-        if (ImGuiFileDialog::Instance()->Display("ChooseYoloExportClassFile")) {
+        if (ImGuiFileDialog::Instance()->Display("ChooseYoloExportClassFile", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
             if (ImGuiFileDialog::Instance()->IsOk()) {
                 std::string selected_file =
                     ImGuiFileDialog::Instance()->GetFilePathName();
@@ -3469,7 +4034,8 @@ int main(int argc, char **argv) {
 
         // JARVIS Export Tool Dialog Handler
         if (ImGuiFileDialog::Instance()->Display(
-                "ChooseJarvisExportOutputDir")) {
+                "ChooseJarvisExportOutputDir", ImGuiWindowFlags_NoCollapse,
+                ImVec2(680, 440))) {
             if (ImGuiFileDialog::Instance()->IsOk()) {
                 jarvis_export_output_dir =
                     ImGuiFileDialog::Instance()->GetCurrentPath();
@@ -3477,42 +4043,82 @@ int main(int argc, char **argv) {
             ImGuiFileDialog::Instance()->Close();
         }
 
-        // Calibration Tool Dialog Handler
-        if (ImGuiFileDialog::Instance()->Display("ChooseCalibConfig")) {
+        // Calibration: Browse for root directory (creation dialog)
+        if (ImGuiFileDialog::Instance()->Display("ChooseCalibRootDir", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
             if (ImGuiFileDialog::Instance()->IsOk()) {
-                std::string selected =
-                    ImGuiFileDialog::Instance()->GetFilePathName();
-                if (!selected.empty()) {
-                    calib_config_path = selected;
-                    std::string err;
-                    if (CalibrationTool::parse_config(calib_config_path,
-                                                       calib_config, err)) {
-                        calib_config_loaded = true;
-                        calib_images_loaded = false;
-                        calib_done = false;
-                        calib_project_folder =
-                            std::filesystem::path(calib_config_path)
-                                .parent_path()
-                                .string();
-                        calib_status = "Config loaded: " +
-                            std::to_string(calib_config.cam_ordered.size()) +
-                            " cameras";
-                    } else {
-                        calib_config_loaded = false;
-                        calib_status = "Error: " + err;
-                    }
+                std::filesystem::path chosen(
+                    ImGuiFileDialog::Instance()->GetFilePathName(
+                        IGFD_ResultMode_KeepInputFile));
+                if (chosen.empty() || !std::filesystem::is_directory(chosen)) {
+                    chosen = std::filesystem::path(
+                        ImGuiFileDialog::Instance()->GetCurrentPath());
                 }
+                calib_project.project_root_path = chosen.string();
             }
             ImGuiFileDialog::Instance()->Close();
         }
 
-        // Calibration Project Folder Dialog Handler
-        if (ImGuiFileDialog::Instance()->Display("ChooseCalibProject")) {
+        // Calibration: Browse for config.json (creation dialog)
+        if (ImGuiFileDialog::Instance()->Display("ChooseCalibConfigCreate", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
             if (ImGuiFileDialog::Instance()->IsOk()) {
                 std::string selected =
-                    ImGuiFileDialog::Instance()->GetCurrentPath();
+                    ImGuiFileDialog::Instance()->GetFilePathName();
                 if (!selected.empty())
-                    calib_project_folder = selected;
+                    calib_project.config_file = selected;
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        // Calibration: Load existing .redproj
+        if (ImGuiFileDialog::Instance()->Display(
+                "LoadCalibProject", ImGuiWindowFlags_NoCollapse,
+                ImVec2(680, 440))) {
+            if (ImGuiFileDialog::Instance()->IsOk()) {
+                std::string selected =
+                    ImGuiFileDialog::Instance()->GetFilePathName();
+                if (!selected.empty()) {
+                    CalibrationTool::CalibProject loaded;
+                    std::string err;
+                    if (CalibrationTool::load_calib_project_json(
+                            &loaded, selected, &err)) {
+                        calib_project = loaded;
+                        calib_config_path = calib_project.config_file;
+                        if (calib_config_path.empty()) {
+                            calib_status =
+                                "Error: Not a calibration project "
+                                "(no config_file). Select a "
+                                "calibration .redproj file.";
+                        } else if (CalibrationTool::parse_config(
+                                       calib_config_path, calib_config,
+                                       err)) {
+                            calib_config_loaded = true;
+                            calib_images_loaded = false;
+                            calib_done = false;
+                            calib_status =
+                                "Project loaded: " +
+                                std::to_string(
+                                    calib_config.cam_ordered.size()) +
+                                " cameras";
+                            // Switch layout ini to project folder
+                            project_ini_path =
+                                calib_project.project_path +
+                                "/imgui_layout.ini";
+                            io.IniFilename = project_ini_path.c_str();
+                            if (std::filesystem::exists(project_ini_path)) {
+                                ImGui::LoadIniSettingsFromDisk(
+                                    project_ini_path.c_str());
+                            }
+                            calib_project_loaded = true;
+                            show_calib_create_dialog = false;
+                            show_calibration_tool = true;
+                        } else {
+                            calib_config_loaded = false;
+                            calib_status = "Error parsing config: " + err;
+                        }
+                    } else {
+                        calib_status = "Error loading project: " + err;
+                    }
+                }
             }
             ImGuiFileDialog::Instance()->Close();
         }
@@ -4356,32 +4962,214 @@ int main(int argc, char **argv) {
             ImGui::End();
         }
 
-        // Calibration Tool Window
+        // ── Calibration Tool: Creation Dialog + Tool Window ──
         if (show_calibration_tool) {
-            ImGui::SetNextWindowSize(ImVec2(550, 350), ImGuiCond_FirstUseEver);
-            if (ImGui::Begin("Calibration Tool", &show_calibration_tool)) {
-                ImGui::SeparatorText("Configuration");
 
-                // Config file path + Browse button
-                ImGui::InputText("Config File", &calib_config_path);
-                ImGui::SameLine();
-                if (ImGui::Button("Browse##calib_config")) {
-                    IGFD::FileDialogConfig cfg;
-                    cfg.countSelectionMax = 1;
-                    cfg.flags = ImGuiFileDialogFlags_Modal;
-                    if (!calib_config_path.empty()) {
-                        cfg.path = std::filesystem::path(calib_config_path)
-                                       .parent_path()
-                                       .string();
+            // Phase 1: Show creation dialog when no project is loaded
+            if (show_calib_create_dialog && !calib_project_loaded) {
+                ImGui::SetNextWindowSize(ImVec2(720, 340), ImGuiCond_FirstUseEver);
+                ImGuiWindowFlags cw_flags = ImGuiWindowFlags_NoCollapse;
+                if (ImGui::Begin("Create Calibration Project", &show_calibration_tool, cw_flags)) {
+
+                    // Error banner
+                    if (!calib_status.empty() &&
+                        calib_status.find("Error") != std::string::npos) {
+                        ImGui::PushStyleColor(ImGuiCol_Text,
+                                              ImVec4(1.0f, 0.45f, 0.45f, 1.0f));
+                        ImGui::TextUnformatted(calib_status.c_str());
+                        ImGui::PopStyleColor();
+                        ImGui::Separator();
                     }
-                    ImGuiFileDialog::Instance()->OpenDialog(
-                        "ChooseCalibConfig", "Choose config.json",
-                        ".json", cfg);
-                }
 
-                // Display config info when loaded
-                if (calib_config_loaded) {
+                    if (ImGui::BeginTable(
+                            "calibCreateForm", 3,
+                            ImGuiTableFlags_SizingStretchProp |
+                                ImGuiTableFlags_PadOuterX |
+                                ImGuiTableFlags_RowBg |
+                                ImGuiTableFlags_BordersInnerV)) {
+                        ImGui::TableSetupColumn("Label",
+                                                ImGuiTableColumnFlags_WidthFixed,
+                                                160.0f);
+                        ImGui::TableSetupColumn("Field",
+                                                ImGuiTableColumnFlags_WidthStretch,
+                                                1.0f);
+                        ImGui::TableSetupColumn("Action",
+                                                ImGuiTableColumnFlags_WidthFixed,
+                                                110.0f);
+
+                        auto LabelCell = [](const char *t) {
+                            ImGui::TableSetColumnIndex(0);
+                            ImGui::AlignTextToFramePadding();
+                            ImGui::TextUnformatted(t);
+                        };
+
+                        // ── Project Name ──
+                        ImGui::TableNextRow();
+                        LabelCell("Project Name");
+                        ImGui::TableSetColumnIndex(1);
+                        ImGui::SetNextItemWidth(-FLT_MIN);
+                        ImGui::InputText("##calib_projname",
+                                         &calib_project.project_name);
+                        ImGui::TableSetColumnIndex(2);
+                        ImGui::Dummy(ImVec2(1, 1));
+
+                        // ── Project Root Path ──
+                        ImGui::TableNextRow();
+                        LabelCell("Project Root Path");
+                        ImGui::TableSetColumnIndex(1);
+                        ImGui::SetNextItemWidth(-FLT_MIN);
+                        ImGui::InputText("##calib_rootpath",
+                                         &calib_project.project_root_path);
+                        ImGui::TableSetColumnIndex(2);
+                        if (ImGui::Button("Browse##calib_root")) {
+                            IGFD::FileDialogConfig cfg;
+                            cfg.countSelectionMax = 1;
+                            cfg.path = calib_project.project_root_path;
+                            cfg.fileName = calib_project.project_name;
+                            cfg.flags = ImGuiFileDialogFlags_Modal;
+                            ImGuiFileDialog::Instance()->OpenDialog(
+                                "ChooseCalibRootDir",
+                                "Choose Project Root Directory", nullptr, cfg);
+                        }
+
+                        // ── Full Path (computed, read-only) ──
+                        {
+                            std::filesystem::path p =
+                                std::filesystem::path(
+                                    calib_project.project_root_path) /
+                                calib_project.project_name;
+                            calib_project.project_path = p.string();
+                        }
+                        ImGui::TableNextRow();
+                        LabelCell("Full Path");
+                        ImGui::TableSetColumnIndex(1);
+                        ImGui::BeginDisabled();
+                        ImGui::SetNextItemWidth(-FLT_MIN);
+                        ImGui::InputText("##calib_fullpath",
+                                         &calib_project.project_path);
+                        ImGui::EndDisabled();
+                        ImGui::TableSetColumnIndex(2);
+                        ImGui::Dummy(ImVec2(1, 1));
+
+                        // ── Config File ──
+                        ImGui::TableNextRow();
+                        LabelCell("Config File");
+                        ImGui::TableSetColumnIndex(1);
+                        ImGui::SetNextItemWidth(-FLT_MIN);
+                        ImGui::InputText("##calib_configfile",
+                                         &calib_project.config_file);
+                        ImGui::TableSetColumnIndex(2);
+                        if (ImGui::Button("Browse##calib_cfg")) {
+                            IGFD::FileDialogConfig cfg;
+                            cfg.countSelectionMax = 1;
+                            cfg.flags = ImGuiFileDialogFlags_Modal;
+                            if (!calib_project.config_file.empty()) {
+                                cfg.path =
+                                    std::filesystem::path(
+                                        calib_project.config_file)
+                                        .parent_path()
+                                        .string();
+                            } else if (!user_settings.default_media_root_path
+                                            .empty()) {
+                                cfg.path =
+                                    user_settings.default_media_root_path;
+                            }
+                            ImGuiFileDialog::Instance()->OpenDialog(
+                                "ChooseCalibConfigCreate",
+                                "Choose config.json", ".json", cfg);
+                        }
+
+                        ImGui::EndTable();
+                    }
+
                     ImGui::Separator();
+
+                    // Validation
+                    const bool create_ok = !calib_project.project_name.empty() &&
+                                           !calib_project.project_root_path.empty() &&
+                                           !calib_project.config_file.empty();
+
+                    // Right-align "Create Project" button
+                    float avail = ImGui::GetContentRegionAvail().x;
+                    const char *create_label = "Create Project##calib_create";
+                    float cw = ImGui::CalcTextSize(create_label).x +
+                               ImGui::GetStyle().FramePadding.x * 2.0f;
+                    ImGui::SetCursorPosX(ImGui::GetCursorPosX() +
+                                         (avail - cw));
+
+                    ImGui::BeginDisabled(!create_ok);
+                    if (ImGui::Button(create_label)) {
+                        // Parse config.json
+                        std::string err;
+                        calib_config_path = calib_project.config_file;
+                        if (CalibrationTool::parse_config(
+                                calib_config_path, calib_config, err)) {
+                            calib_config_loaded = true;
+                            calib_images_loaded = false;
+                            calib_done = false;
+                            calib_project.img_path = calib_config.img_path;
+                            calib_project.output_folder =
+                                calib_project.project_path + "/calibration";
+
+                            // Create project folder
+                            if (!ensure_dir_exists(calib_project.project_path,
+                                                   &err)) {
+                                calib_status = "Error: " + err;
+                            } else {
+                                // Copy default layout before switching ini
+                                copy_default_layout_to_project(
+                                    calib_project.project_path);
+
+                                // Save .redproj
+                                std::string proj_file =
+                                    calib_project.project_path + "/" +
+                                    calib_project.project_name + ".redproj";
+                                if (!CalibrationTool::save_calib_project_json(
+                                        calib_project, proj_file, &err)) {
+                                    calib_status =
+                                        "Error saving project: " + err;
+                                } else {
+                                    // Switch layout ini
+                                    project_ini_path =
+                                        calib_project.project_path +
+                                        "/imgui_layout.ini";
+                                    io.IniFilename =
+                                        project_ini_path.c_str();
+                                    if (std::filesystem::exists(
+                                            project_ini_path)) {
+                                        ImGui::LoadIniSettingsFromDisk(
+                                            project_ini_path.c_str());
+                                    }
+
+                                    calib_project_loaded = true;
+                                    show_calib_create_dialog = false;
+                                    calib_status =
+                                        "Project created. Config: " +
+                                        std::to_string(
+                                            calib_config.cam_ordered.size()) +
+                                        " cameras";
+                                }
+                            }
+                        } else {
+                            calib_config_loaded = false;
+                            calib_status = "Error parsing config: " + err;
+                        }
+                    }
+                    ImGui::EndDisabled();
+                }
+                ImGui::End();
+
+            } else if (calib_project_loaded) {
+                // Phase 2: Calibration Tool window (project loaded)
+                ImGui::SetNextWindowSize(ImVec2(550, 400), ImGuiCond_FirstUseEver);
+                if (ImGui::Begin("Calibration Tool", &show_calibration_tool)) {
+                    ImGui::SeparatorText("Project");
+                    ImGui::Text("Project: %s",
+                                calib_project.project_name.c_str());
+                    ImGui::Text("Path:    %s",
+                                calib_project.project_path.c_str());
+
+                    ImGui::SeparatorText("Configuration");
                     ImGui::Text("Cameras:      %d",
                                 (int)calib_config.cam_ordered.size());
                     ImGui::Text("Board:        %d x %d  (%.1f mm squares)",
@@ -4443,28 +5231,8 @@ int main(int argc, char **argv) {
                                            "Images loaded");
                     }
 
-                    // ── Calibration Pipeline (Phase 2) ──
+                    // ── Calibration Pipeline ──
                     ImGui::SeparatorText("Calibration Pipeline");
-
-                    // Project folder (where .redproj + calibration/ go)
-                    if (calib_project_folder.empty() &&
-                        !calib_config_path.empty()) {
-                        calib_project_folder =
-                            std::filesystem::path(calib_config_path)
-                                .parent_path()
-                                .string();
-                    }
-                    ImGui::InputText("Project Folder", &calib_project_folder);
-                    ImGui::SameLine();
-                    if (ImGui::Button("Browse##calib_project")) {
-                        IGFD::FileDialogConfig cfg;
-                        cfg.countSelectionMax = 1;
-                        cfg.flags = ImGuiFileDialogFlags_Modal;
-                        cfg.path = calib_project_folder;
-                        ImGuiFileDialog::Instance()->OpenDialog(
-                            "ChooseCalibProject",
-                            "Choose Calibration Project Folder", nullptr, cfg);
-                    }
 
                     // Check if pipeline is running — poll future
                     if (calib_running && calib_future.valid()) {
@@ -4476,34 +5244,23 @@ int main(int argc, char **argv) {
                             calib_done = true;
 
                             if (calib_result.success) {
-                                // Auto-save project.redproj
-                                std::string calib_folder =
-                                    calib_project_folder + "/calibration";
-                                pm.media_folder = calib_config.img_path;
-                                pm.camera_names = calib_config.cam_ordered;
-                                pm.calibration_folder = calib_folder;
-                                pm.project_path = calib_project_folder;
-                                pm.project_name =
-                                    std::filesystem::path(calib_project_folder)
-                                        .filename()
-                                        .string();
-                                pm.project_root_path =
-                                    std::filesystem::path(calib_project_folder)
-                                        .parent_path()
-                                        .string();
-
+                                // Update and save calib project
+                                calib_project.output_folder =
+                                    calib_project.project_path + "/calibration";
                                 std::string proj_file =
-                                    calib_project_folder + "/project.redproj";
+                                    calib_project.project_path + "/" +
+                                    calib_project.project_name + ".redproj";
                                 std::string save_err;
-                                save_project_manager_json(pm, proj_file,
-                                                         &save_err);
+                                CalibrationTool::save_calib_project_json(
+                                    calib_project, proj_file, &save_err);
 
                                 calib_status =
                                     "Calibration complete! Mean reproj: " +
                                     std::to_string(
                                         calib_result.mean_reproj_error)
                                         .substr(0, 5) +
-                                    " px. Saved to " + calib_folder;
+                                    " px. Saved to " +
+                                    calib_project.output_folder;
                             } else {
                                 calib_status =
                                     "Error: " + calib_result.error;
@@ -4512,16 +5269,15 @@ int main(int argc, char **argv) {
                     }
 
                     // Run Calibration button
-                    bool can_run = calib_config_loaded &&
-                                   !calib_project_folder.empty() &&
-                                   !calib_running;
+                    bool can_run =
+                        calib_config_loaded && !calib_running;
                     ImGui::BeginDisabled(!can_run);
                     if (ImGui::Button("Run Calibration")) {
                         calib_running = true;
                         calib_done = false;
                         calib_status = "Starting calibration pipeline...";
                         std::string out_folder =
-                            calib_project_folder + "/calibration";
+                            calib_project.project_path + "/calibration";
                         calib_future = std::async(
                             std::launch::async,
                             [config = calib_config, out_folder,
@@ -4544,23 +5300,34 @@ int main(int argc, char **argv) {
                             ImVec4(0.0f, 1.0f, 0.0f, 1.0f),
                             "Mean reproj error: %.3f px",
                             calib_result.mean_reproj_error);
-                        ImGui::Text("Output: %s/calibration",
-                                    calib_project_folder.c_str());
+                        ImGui::Text("Output: %s",
+                                    calib_project.output_folder.c_str());
                     }
-                }
 
-                // Status text
-                if (!calib_status.empty()) {
-                    ImGui::Separator();
-                    if (calib_status.find("Error") != std::string::npos) {
-                        ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f),
-                                           "%s", calib_status.c_str());
-                    } else {
-                        ImGui::Text("%s", calib_status.c_str());
+                    // Status text
+                    if (!calib_status.empty()) {
+                        ImGui::Separator();
+                        if (calib_status.find("Error") != std::string::npos) {
+                            ImGui::TextColored(
+                                ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s",
+                                calib_status.c_str());
+                        } else {
+                            ImGui::Text("%s", calib_status.c_str());
+                        }
                     }
                 }
+                ImGui::End();
             }
-            ImGui::End();
+
+            // Reset state when calibration tool window is closed
+            if (!show_calibration_tool) {
+                calib_project_loaded = false;
+                show_calib_create_dialog = true;
+                calib_config_loaded = false;
+                calib_images_loaded = false;
+                calib_done = false;
+                calib_status.clear();
+            }
         }
 
         // Make sure this is called before any other popups in the same frame
