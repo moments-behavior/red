@@ -1,9 +1,10 @@
 # RED — macOS Apple Silicon Port: Development Notes
 
 This document records the full history of porting RED from a Linux/NVIDIA-only
-application to a native macOS Apple Silicon build. The work was done by Rob
-Johnson (Johnson Lab, HHMI Janelia) with Claude Code assistance across five
-development phases spanning February 24 – March 1, 2026.
+application to a native macOS Apple Silicon build, and subsequent development
+of the calibration pipeline. The work was done by Rob Johnson (Johnson Lab,
+HHMI Janelia) with Claude Code assistance across eleven development phases
+spanning February 24 – March 6, 2026.
 
 All macOS changes use `#ifdef __APPLE__` guards. The Linux/NVIDIA build is
 completely untouched throughout.
@@ -18,6 +19,7 @@ completely untouched throughout.
 | `rob_dev_vulkan` | Feb 25–26 | Vulkan/MoltenVK rendering backend |
 | `rob_dev_metal` | Feb 26 – Mar 1 | Native Metal rendering, async VT decode, Homebrew tap, JARVIS export |
 | `rob_dev_no_opencv` | Mar 1 | Remove OpenCV dependency, replace with Eigen + turbojpeg |
+| `rob_dev_calib` | Mar 1–6 | Calibration pipeline, laser refinement, unified projects |
 
 Each branch builds on the previous one (linear history, no merges to main).
 Main branch merging is handled by Jinyao Yan.
@@ -358,6 +360,307 @@ After: `eigen` (0 deps, header-only) + `ffmpeg` (~10, already required) +
 
 ---
 
+## Phase 7 — Cleanup and Documentation (branch: `rob_dev_calib`)
+
+**Commits:** `5bd964b` through `b8c000d` (Mar 1–2)
+
+### Vulkan removal
+
+Deleted `src/vulkan_context.h/cpp` and `build_mac.sh`. Vulkan/MoltenVK was
+fully superseded by native Metal in Phase 3; keeping the files added confusion.
+
+### Documentation overhaul
+
+- **`ARCHITECTURE.md`**: Updated for JARVIS export, Eigen math, no-OpenCV build.
+- **`development_notes.md`**: Consolidated from five scattered documents
+  (`port_to_mac_summary.md`, `Vulkan_upgrade_info.md`, `metal_upgrade_info.md`,
+  `suggested_improvements.md`, `remove_opencv_strategy.md`).
+- **`Install_Instructions.md`**: Fixed to use `--HEAD` (no stable release yet).
+
+### Homebrew formula fixes
+
+Several rounds of Homebrew `test-bot` CI failures:
+- CRLF line endings — Claude's Write tool outputs CRLF; fixed with `sed`.
+  Added `.gitattributes` to enforce LF repo-wide.
+- `uses_from_macos "xcode"` is invalid (not a recognized package).
+- `assert_path_exists` instead of `assert_predicate :exist?`.
+
+---
+
+## Phase 8 — ImGui Layout Management (branch: `rob_dev_calib`)
+
+**Commits:** `9ea57e0` through `79fe8df` (Mar 2–4)
+
+### Per-project layout persistence
+
+Each project folder now saves/restores its own `imgui_layout.ini`. On project
+load, the ImGui ini handler reads the project-local file; on save or close, the
+current layout is written back. This means camera view arrangements persist
+across sessions and differ between projects.
+
+### Default layout for first-time users
+
+Ship a default `imgui_layout.ini` as an embedded string constant. When a
+project is created and no layout exists yet, the default is written to the
+project folder. This avoids the ImGui "everything docked in one tab" initial
+state.
+
+### Other improvements
+
+- **Formatted video metadata table**: Replaced scattered per-camera `printf`
+  calls with a single formatted table showing resolution, codec, FPS, and
+  duration for all cameras on project load.
+- **Layout grid fix**: Camera views now tile correctly in a grid instead of
+  stacking.
+- **Global keybindings**: Moved keybinding registration to global scope so
+  shortcuts work regardless of which ImGui window has focus.
+
+---
+
+## Phase 9 — Calibration Pipeline (branch: `rob_dev_calib`)
+
+**Commits:** `e6d3666`, `83795f8`, `4fd0092` (Mar 4–5)
+
+### Goal
+
+Port the `multiview_calib` Python calibration pipeline to C++ so users can
+calibrate cameras entirely within RED's GUI. The Python pipeline required a
+separate conda environment with OpenCV, JARVIS, and other dependencies.
+
+### New files
+
+- **`src/calibration_pipeline.h`** (~1640 lines): Complete 7-step pipeline.
+- **`src/calibration_tool.h`** (~290 lines): Config parsing, image discovery,
+  project save/load for calibration `.redproj` files.
+
+### Pipeline stages
+
+| Stage | Description |
+|---|---|
+| 1. ChArUco detection | Detect ChArUco board corners in all images per camera |
+| 2. Intrinsics | `cv::calibrateCamera` per camera (serial, not parallel — see gotchas) |
+| 3. Relative poses | Stereo calibration for each camera pair |
+| 4. Chain | Build extrinsic chain from first camera through second-view order |
+| 5. Bundle adjustment | Ceres Solver global BA over all cameras + 3D points |
+| 6. World registration | Align to ground-truth 3D points via Procrustes |
+| 7. YAML export | Write OpenCV-format `CamXXXX.yaml` per camera |
+
+### Dependencies
+
+OpenCV 4.x (aruco module for ChArUco detection, `calibrateCamera`) and Ceres
+Solver 2.2 for bundle adjustment. These are the only remaining OpenCV usages in
+the macOS build.
+
+### Calibration project workflow
+
+The GUI provides a "Calibrate" menu with "Create Calibration Project" and
+"Load Calibration Project". A `.redproj` file stores project metadata (paths,
+camera serials, board parameters). The user browses for a `config.json` and
+image directory, then runs the pipeline with status updates.
+
+### Key findings
+
+- **OpenCV 4.13 API change**: `calibrateCameraCharuco` was deprecated. Must use
+  `matchImagePoints` + `calibrateCamera` instead.
+- **Thread safety**: `cv::calibrateCamera` is not thread-safe on macOS
+  (Accelerate LAPACK data race). Detection runs in parallel, but calibration
+  runs serially.
+- **BA config**: `ba_config.bounds_cp` value of zero means "fix this parameter"
+  — implemented with `ceres::SubsetManifold`.
+- **`CALIB_FIX_ASPECT_RATIO`**: Used to match `multiview_calib` behavior.
+
+### BA residual agreement
+
+RED C++ pipeline: ~0.58 px mean reprojection error vs. Python `multiview_calib`:
+~0.51 px — close agreement, difference attributed to detection order sensitivity.
+
+### Drop OpenCV `imgcodecs`
+
+Replaced `cv::imread` usage in calibration with `stbi_load` (already a
+submodule). Removed `opencv_imgcodecs` from the link list, reducing the OpenCV
+surface area further.
+
+### BA crash fix
+
+Fixed crash on datasets with many outliers: Ceres residual block removal during
+outlier filtering could invalidate iterators. Switched to mark-and-sweep
+(collect indices, remove in reverse order).
+
+### Annotation project
+
+Added "Create/Load Annotation Project" to a new "Annotate" menu, separating the
+annotation workflow from calibration.
+
+---
+
+## Phase 10 — Laser Calibration Refinement (branch: `rob_dev_calib`)
+
+**Commits:** `72b63cf` through `db19659` (Mar 5–6)
+
+### Goal
+
+Add laser-based calibration refinement to RED. A laser pointer is swept through
+the scene while all cameras record video. The laser spots are detected in each
+frame, triangulated to 3D points, and used to refine the camera parameters via
+bundle adjustment. This corrects residual errors from the ChArUco calibration.
+
+### New files
+
+- **`src/laser_calibration.h`** (~1440 lines): Laser detection (CPU + Metal
+  GPU), filtering, triangulation, Ceres BA, YAML output.
+- **`src/laser_metal.h`** (~30 lines): C++ interface for Metal GPU kernels.
+- **`src/laser_metal.mm`** (~600 lines): Metal compute shader for GPU-accelerated
+  laser spot detection.
+
+### Laser spot detection
+
+Two paths for detecting laser spots in video frames:
+
+| Path | Method | Speed |
+|---|---|---|
+| CPU | Green-channel threshold → contour → centroid | ~5 fps per camera |
+| Metal GPU | Compute shader: threshold + atomic min/max + centroid | ~120 fps per camera |
+
+The Metal GPU path processes all cameras in parallel on a single command buffer.
+Each camera's frame is uploaded as an `MTLTexture`, and the compute shader
+performs threshold detection, bounding box computation via atomics, and
+weighted centroid calculation — all in one dispatch.
+
+### Detection Processing
+
+A "Detection Processing" mode runs detection across all cameras and all frames
+in the specified frame range, building up observation data for BA. Statistics
+per camera (frame count, detection count, detection rate) are displayed in the
+UI. Detection runs on a background thread with progress reporting.
+
+The GPU path detects across all cameras simultaneously per frame, achieving
+~120 fps aggregate throughput vs. ~5 fps per camera on CPU.
+
+### Filtering and triangulation
+
+After detection, observations are filtered:
+1. **Minimum cameras**: Each frame must have detections in ≥ N cameras
+2. **Reprojection error**: Triangulated 3D points with reprojection error above
+   threshold are removed
+3. **Inter-camera distance**: Points where any pair of camera rays are too far
+   apart are removed
+
+Triangulation uses Eigen DLT (`red_math.h`), consistent with the annotation
+tool's triangulation.
+
+### Bundle adjustment
+
+Ceres Solver BA optimizes camera intrinsics (fx, fy, cx, cy) and extrinsics
+(rotation, translation) using the triangulated laser points. Options:
+
+- **Lock intrinsics**: Fix fx, fy, cx, cy and only optimize extrinsics.
+- **Bounds**: Per-parameter optimization bounds from config.
+- **Outlier removal**: Iterative BA with outlier rejection.
+
+### Cross-validation tool
+
+A "Cross-Validate" button runs leave-one-out cross-validation: for each camera,
+hold it out, triangulate using the remaining cameras, reproject into the
+held-out camera, and report the mean reprojection error. This validates
+calibration quality independently of the BA objective.
+
+### Output structure
+
+```
+project/
+└── laser_calibration/
+    └── YYYY_MM_DD_HH_MM_SS/
+        ├── CamXXXX.yaml          (refined camera parameters)
+        └── summary_data/
+            ├── settings.json     (detection + BA parameters)
+            ├── summary.json      (stats, per-camera parameter changes)
+            ├── ba_points.json    (triangulated 3D points)
+            └── observations.json (per-point camera observations)
+```
+
+---
+
+## Phase 11 — Unified Calibration Projects (branch: `rob_dev_calib`)
+
+**Commit:** `b94897f` (Mar 6)
+
+### Goal
+
+Merge the separate aruco and laser calibration project types into a single
+unified `.redproj` format that supports a progressive pipeline:
+
+- **Path A**: config.json + images → aruco calibration → laser refinement
+- **Path B**: existing YAML folder → laser refinement only (no aruco needed)
+
+### CalibProject struct
+
+Extended `CalibrationTool::CalibProject` with fields for both aruco and laser
+workflows:
+
+```cpp
+struct CalibProject {
+    // Core
+    std::string project_name, project_path, project_root_path;
+    // Aruco (optional — empty for Path B)
+    std::string config_file, img_path;
+    // Laser (optional — empty until laser phase)
+    std::string media_folder, calibration_folder;
+    std::vector<std::string> camera_names;
+    // Output
+    std::string output_folder, laser_output_folder;
+
+    bool has_aruco() const { return !config_file.empty(); }
+    bool has_laser_input() const { return !calibration_folder.empty() && !media_folder.empty(); }
+};
+```
+
+Backward compatible — old `.redproj` files load correctly (missing fields
+default to empty strings).
+
+### Timestamped aruco output
+
+Aruco calibration now writes to timestamped subfolders:
+
+```
+project/
+└── aruco_calibration/
+    └── YYYY_MM_DD_HH_MM_SS/
+        ├── CamXXXX.yaml
+        └── summary_data/
+            ├── intrinsics/
+            ├── bundle_adjustment/
+            └── (intermediate JSON files)
+```
+
+### Media switching
+
+First-ever support for switching between loaded media (images → videos) within
+a single RED session. Previously, media was loaded once at project open and
+persisted until program exit.
+
+**`unload_media()`** (new function in `project.h`):
+1. Signals decoder threads to stop, joins them
+2. Frees demuxers
+3. Releases display buffers (CPU frames + CVPixelBuffers on macOS)
+4. Frees scene arrays (image_width, image_height, image_descriptor, etc.)
+5. Clears global state (latest_decoded_frame, window_need_decoding)
+6. Resets playback state (realtime_playback, accumulated_play_time, etc.)
+
+**Deferred transition**: The load button sets a `laser_load_pending` flag.
+The actual unload+load executes at the start of the next frame (after
+`ImGui::NewFrame()`, before any rendering). This avoids use-after-free crashes
+from ImGui draw commands referencing freed Metal textures — ImGui records draw
+commands during the frame and executes them at the end, so freeing textures
+mid-frame is unsafe.
+
+### Camera name derivation
+
+For Path B (no config.json), camera serials are derived from YAML filenames in
+the calibration folder: scan for `CamXXXX.yaml`, extract the serial portion.
+`derive_camera_names_from_yaml()` in `calibration_tool.h`.
+
+---
+
 ## Lessons Learned and Gotchas
 
 ### VideoToolbox
@@ -405,11 +708,31 @@ After: `eigen` (0 deps, header-only) + `ffmpeg` (~10, already required) +
   includes these (frame 0 = first packet), but OpenCV skips them (frame 0 =
   PTS 0). The offset must be auto-detected and corrected during data export.
 
+### OpenCV calibration
+- `calibrateCameraCharuco` was deprecated in OpenCV 4.13. Use
+  `matchImagePoints` + `calibrateCamera` instead.
+- `cv::calibrateCamera` is not thread-safe on macOS (data race in Accelerate
+  LAPACK). Run ChArUco detection in parallel, calibration serially.
+- `ba_config.bounds_cp` value of zero means "fix this parameter" — use
+  `ceres::SubsetManifold` in Ceres Solver to fix individual parameters.
+
+### Media switching (ImGui + Metal)
+- Freeing Metal textures mid-frame causes use-after-free crashes. ImGui records
+  draw commands during the frame and executes them at frame end — any
+  `ImTextureID` referenced in earlier draw calls must remain valid until after
+  `ImGui::Render()`.
+- Solution: defer media unload+load to the start of the next frame using a
+  pending flag checked after `ImGui::NewFrame()`.
+- When switching from images to videos, must reset: `latest_decoded_frame`
+  global map (stale frame numbers block advancement), `dc_context->total_num_frame`
+  (stale value clamps playback), `ps.realtime_playback` (images set it false,
+  videos need true for wall-clock sync).
+
 ---
 
 ## File Summary
 
-New files added during the port (macOS only):
+New files added during the port and calibration work:
 
 | File | Purpose |
 |---|---|
@@ -419,5 +742,10 @@ New files added during the port (macOS only):
 | `src/opencv_yaml_io.h` | OpenCV YAML format reader/writer (no OpenCV dep) |
 | `src/ffmpeg_frame_reader.h` | FFmpeg C API frame reader |
 | `src/jarvis_export.h` | Built-in JARVIS/COCO export tool |
+| `src/calibration_pipeline.h` | 7-step multiview_calib port (ChArUco → BA → YAML) |
+| `src/calibration_tool.h` | Calibration project config, discovery, save/load |
+| `src/laser_calibration.h` | Laser spot detection, filtering, triangulation, BA |
+| `src/laser_metal.h/mm` | Metal GPU compute shader for laser spot detection |
+| `src/user_settings.h` | Persistent user settings (default paths, preferences) |
 | `packaging/homebrew/red.rb` | Homebrew formula |
 | `.github/workflows/release.yml` | GitHub Actions release workflow |
