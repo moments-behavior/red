@@ -11,6 +11,7 @@
 #ifdef __APPLE__
 #include "FFmpegDemuxer.h"        // Annex-B demuxing for VT decode
 #include "vt_async_decoder.h"     // HW decode → BGRA CVPixelBuffer (zero swscale)
+#include "laser_metal.h"          // GPU-accelerated laser spot detection
 #include <CoreVideo/CoreVideo.h>
 #else
 #include "ffmpeg_frame_reader.h"  // FFmpeg + swscale fallback (Linux)
@@ -153,6 +154,7 @@ struct LaserConfig {
     double ba_outlier_th1 = 20.0;
     double ba_outlier_th2 = 5.0;
     int ba_max_iter = 50;
+    bool lock_intrinsics = true;
 };
 
 inline nlohmann::json config_to_json(const LaserConfig &c) {
@@ -171,7 +173,8 @@ inline nlohmann::json config_to_json(const LaserConfig &c) {
         {"reproj_threshold", c.reproj_threshold},
         {"ba_outlier_th1", c.ba_outlier_th1},
         {"ba_outlier_th2", c.ba_outlier_th2},
-        {"ba_max_iter", c.ba_max_iter}};
+        {"ba_max_iter", c.ba_max_iter},
+        {"lock_intrinsics", c.lock_intrinsics}};
 }
 
 struct SpotDetection {
@@ -717,6 +720,11 @@ inline std::vector<DetectionMap> detect_all_cameras(
     std::vector<DetectionMap> all_detections(num_cameras);
     std::mutex det_mutex;
 
+    // GPU-accelerated detection — shared across all camera threads
+    LaserMetalHandle metal_ctx = laser_metal_create();
+    if (!metal_ctx)
+        printf("Laser: Metal compute init failed, falling back to CPU\n");
+
     std::vector<std::thread> threads;
 
     for (int c = 0; c < num_cameras; c++) {
@@ -725,7 +733,7 @@ inline std::vector<DetectionMap> detect_all_cameras(
             continue;
 
         threads.emplace_back([&config, &all_detections, &det_mutex, c,
-                              video_path = it->second, progress]() {
+                              video_path = it->second, progress, metal_ctx]() {
             CameraProgress *cam_prog = progress ? progress->cameras[c].get() : nullptr;
             // Open demuxer (handles Annex-B conversion for VT)
             std::unique_ptr<FFmpegDemuxer> demuxer;
@@ -786,22 +794,38 @@ inline std::vector<DetectionMap> detect_all_cameras(
                                      frame < stop_fr &&
                                      ((frame - start_fr) % step == 0);
                 if (should_detect) {
-                    CVPixelBufferLockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
-                    const uint8_t *bgra =
-                        (const uint8_t *)CVPixelBufferGetBaseAddress(pb);
-                    int stride = (int)CVPixelBufferGetBytesPerRow(pb);
-
                     SpotDetection det;
-                    if (detect_laser_spot(bgra, width, height, stride,
-                                          LASER_FMT_BGRA,
-                                          config.green_threshold,
-                                          config.green_dominance,
-                                          config.min_blob_pixels,
-                                          config.max_blob_pixels, det)) {
+                    bool found = false;
+                    if (metal_ctx) {
+                        // GPU path — process CVPixelBuffer directly (zero-copy)
+                        LaserMetalSpot mdet = laser_metal_detect(
+                            metal_ctx, pb,
+                            config.green_threshold, config.green_dominance,
+                            config.min_blob_pixels, config.max_blob_pixels);
+                        if (mdet.found) {
+                            det.cx = mdet.cx;
+                            det.cy = mdet.cy;
+                            det.pixel_count = mdet.pixel_count;
+                            found = true;
+                        }
+                    } else {
+                        // CPU fallback
+                        CVPixelBufferLockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
+                        const uint8_t *bgra =
+                            (const uint8_t *)CVPixelBufferGetBaseAddress(pb);
+                        int stride = (int)CVPixelBufferGetBytesPerRow(pb);
+                        found = detect_laser_spot(bgra, width, height, stride,
+                                                  LASER_FMT_BGRA,
+                                                  config.green_threshold,
+                                                  config.green_dominance,
+                                                  config.min_blob_pixels,
+                                                  config.max_blob_pixels, det);
+                        CVPixelBufferUnlockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
+                    }
+                    if (found) {
                         local_detections[frame] = det;
                         detected++;
                     }
-                    CVPixelBufferUnlockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
                     processed++;
                 }
                 CFRelease(pb);
@@ -874,6 +898,9 @@ inline std::vector<DetectionMap> detect_all_cameras(
 
     for (auto &t : threads)
         t.join();
+
+    if (metal_ctx)
+        laser_metal_destroy(metal_ctx);
 
     return all_detections;
 }
@@ -1123,7 +1150,8 @@ inline bool bundle_adjust_laser(
     const std::vector<std::vector<Observation>> &obs_per_point,
     double outlier_th1, double outlier_th2, int max_iter,
     double &mean_reproj_error, std::string *status,
-    int *outliers_removed_out = nullptr) {
+    int *outliers_removed_out = nullptr,
+    bool lock_intrinsics = false) {
 
     int num_cameras = (int)poses.size();
 
@@ -1195,9 +1223,25 @@ inline bool bundle_adjust_laser(
         }
 
         // Fix camera 0 extrinsics (rvec + tvec, indices 0-5) — gauge freedom
-        problem.SetManifold(
-            camera_params[0].data(),
-            new ceres::SubsetManifold(15, {0, 1, 2, 3, 4, 5}));
+        // When lock_intrinsics: also fix indices 6-14 (fx,fy,cx,cy,k1-k3,p1,p2)
+        {
+            std::vector<int> fixed_cam0 = {0, 1, 2, 3, 4, 5};
+            if (lock_intrinsics)
+                for (int k = 6; k < 15; k++)
+                    fixed_cam0.push_back(k);
+            problem.SetManifold(
+                camera_params[0].data(),
+                new ceres::SubsetManifold(15, fixed_cam0));
+        }
+
+        // Lock intrinsics for all other cameras
+        if (lock_intrinsics) {
+            std::vector<int> intrinsic_indices = {6, 7, 8, 9, 10, 11, 12, 13, 14};
+            for (int i = 1; i < num_cameras; i++)
+                problem.SetManifold(
+                    camera_params[i].data(),
+                    new ceres::SubsetManifold(15, intrinsic_indices));
+        }
 
         ceres::Solver::Options options;
         options.linear_solver_type = ceres::SPARSE_SCHUR;
@@ -1502,7 +1546,8 @@ inline LaserResult run_laser_refinement(const LaserConfig &config,
     if (!bundle_adjust_laser(config.camera_names, poses, points_3d,
                              obs_per_point, config.ba_outlier_th1,
                              config.ba_outlier_th2, config.ba_max_iter,
-                             mean_reproj_after, status, &ba_outliers)) {
+                             mean_reproj_after, status, &ba_outliers,
+                             config.lock_intrinsics)) {
         result.error = "Bundle adjustment failed";
         return result;
     }
