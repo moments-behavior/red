@@ -41,89 +41,7 @@
 
 namespace LaserCalibration {
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Project persistence (mirrors CalibrationTool::CalibProject pattern)
-// ─────────────────────────────────────────────────────────────────────────────
-
-struct LaserCalibProject {
-    std::string project_name;
-    std::string project_path;      // project_root_path / project_name
-    std::string project_root_path;
-    std::string media_folder;      // folder with laser videos
-    std::string calibration_folder; // folder with CamXXXX.yaml
-    std::vector<std::string> camera_names; // validated intersection
-    std::string output_folder;     // refined YAML output
-};
-
-inline void to_json(nlohmann::json &j, const LaserCalibProject &p) {
-    j = nlohmann::json{{"type", "laser_calibration"},
-                       {"project_name", p.project_name},
-                       {"project_path", p.project_path},
-                       {"project_root_path", p.project_root_path},
-                       {"media_folder", p.media_folder},
-                       {"calibration_folder", p.calibration_folder},
-                       {"camera_names", p.camera_names},
-                       {"output_folder", p.output_folder}};
-}
-
-inline void from_json(const nlohmann::json &j, LaserCalibProject &p) {
-    p.project_name = j.value("project_name", std::string{});
-    p.project_path = j.value("project_path", std::string{});
-    p.project_root_path = j.value("project_root_path", std::string{});
-    p.media_folder = j.value("media_folder", std::string{});
-    p.calibration_folder = j.value("calibration_folder", std::string{});
-    p.camera_names = j.value("camera_names", std::vector<std::string>{});
-    p.output_folder = j.value("output_folder", std::string{});
-}
-
-inline bool save_laser_project(const LaserCalibProject &p,
-                                const std::string &file,
-                                std::string *err = nullptr) {
-    try {
-        namespace fs = std::filesystem;
-        std::error_code ec;
-        fs::create_directories(fs::path(file).parent_path(), ec);
-        if (ec) {
-            if (err) *err = ec.message();
-            return false;
-        }
-        std::ofstream ofs(file, std::ios::binary);
-        if (!ofs) {
-            if (err) *err = "Cannot open: " + file;
-            return false;
-        }
-        nlohmann::json j = p;
-        ofs << j.dump(2);
-        return true;
-    } catch (const std::exception &e) {
-        if (err) *err = e.what();
-        return false;
-    }
-}
-
-inline bool load_laser_project(LaserCalibProject *out,
-                                const std::string &file,
-                                std::string *err = nullptr) {
-    try {
-        std::ifstream ifs(file, std::ios::binary);
-        if (!ifs) {
-            if (err) *err = "Cannot open: " + file;
-            return false;
-        }
-        nlohmann::json j;
-        ifs >> j;
-        // Verify it's a laser calibration project
-        if (j.value("type", std::string{}) != "laser_calibration") {
-            if (err) *err = "Not a laser calibration project";
-            return false;
-        }
-        *out = j.get<LaserCalibProject>();
-        return true;
-    } catch (const std::exception &e) {
-        if (err) *err = e.what();
-        return false;
-    }
-}
+// Project persistence moved to CalibrationTool::CalibProject (calibration_tool.h)
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Data structures
@@ -1400,7 +1318,9 @@ inline LaserResult run_laser_refinement(const LaserConfig &config,
     char tbuf[64];
     strftime(tbuf, sizeof(tbuf), "%Y_%m_%d_%H_%M_%S", &tstruct);
     std::string out_folder = base_folder + "/" + tbuf;
+    std::string summary_dir = out_folder + "/summary_data";
     fs::create_directories(out_folder);
+    fs::create_directories(summary_dir);
 
     if (status)
         *status = "Writing refined calibration to " + out_folder;
@@ -1412,13 +1332,79 @@ inline LaserResult run_laser_refinement(const LaserConfig &config,
         return result;
     }
 
-    // Write settings.json
+    // Write summary_data/settings.json
     {
         nlohmann::json settings = config_to_json(config);
-        std::string settings_path = out_folder + "/settings.json";
+        std::string settings_path = summary_dir + "/settings.json";
         std::ofstream ofs(settings_path, std::ios::binary);
         if (ofs)
             ofs << settings.dump(2);
+    }
+
+    // Write summary_data/summary.json — overall stats and per-camera changes
+    {
+        nlohmann::json j;
+        j["mean_reproj_before"] = mean_reproj_before;
+        j["mean_reproj_after"] = mean_reproj_after;
+        j["valid_3d_points"] = result.valid_3d_points;
+        j["total_observations"] = result.total_observations;
+        j["ba_outliers_removed"] = ba_outliers;
+        j["num_cameras"] = num_cameras;
+        j["image_width"] = image_width;
+        j["image_height"] = image_height;
+
+        nlohmann::json cams_j = nlohmann::json::array();
+        for (int c = 0; c < num_cameras; c++) {
+            const auto &cc = result.camera_changes[c];
+            nlohmann::json cam_j;
+            cam_j["name"] = cc.name;
+            cam_j["detections"] = cc.detections;
+            cam_j["observations"] = cc.observations;
+            cam_j["dfx"] = cc.dfx;
+            cam_j["dfy"] = cc.dfy;
+            cam_j["dcx"] = cc.dcx;
+            cam_j["dcy"] = cc.dcy;
+            cam_j["dt_x"] = cc.dt_x;
+            cam_j["dt_y"] = cc.dt_y;
+            cam_j["dt_z"] = cc.dt_z;
+            cam_j["dt_norm"] = cc.dt_norm;
+            cam_j["drot_deg"] = cc.drot_deg;
+            cams_j.push_back(cam_j);
+        }
+        j["camera_changes"] = cams_j;
+
+        std::ofstream ofs(summary_dir + "/summary.json", std::ios::binary);
+        if (ofs)
+            ofs << j.dump(2);
+    }
+
+    // Write summary_data/ba_points.json — triangulated 3D points
+    {
+        nlohmann::json j = nlohmann::json::array();
+        for (int i = 0; i < (int)points_3d.size(); i++) {
+            j.push_back({points_3d[i].x(), points_3d[i].y(),
+                          points_3d[i].z()});
+        }
+        std::ofstream ofs(summary_dir + "/ba_points.json", std::ios::binary);
+        if (ofs)
+            ofs << j.dump(2);
+    }
+
+    // Write summary_data/observations.json — per-point camera observations
+    {
+        nlohmann::json j = nlohmann::json::array();
+        for (int i = 0; i < (int)obs_per_point.size(); i++) {
+            nlohmann::json pt_j = nlohmann::json::array();
+            for (const auto &obs : obs_per_point[i]) {
+                pt_j.push_back({{"cam", obs.cam_idx},
+                                {"px", {obs.px, obs.py}}});
+            }
+            j.push_back(pt_j);
+        }
+        std::ofstream ofs(summary_dir + "/observations.json",
+                          std::ios::binary);
+        if (ofs)
+            ofs << j.dump(2);
     }
 
     result.output_folder = out_folder;

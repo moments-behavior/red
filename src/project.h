@@ -416,6 +416,101 @@ DrawProjectWindow(ProjectManager &pm,
     }
 }
 
+// Tear down existing media (decoder threads, demuxers, scene memory)
+// so that load_images or load_videos can be called cleanly.
+inline void
+unload_media(PlaybackState &ps, ProjectManager &pm,
+             std::vector<FFmpegDemuxer *> &demuxers,
+             DecoderContext *dc_context,
+             RenderScene *scene,
+             std::vector<std::thread> &decoder_threads,
+             std::vector<bool> &is_view_focused,
+             std::unordered_map<std::string, bool> &window_was_decoding) {
+    if (!ps.video_loaded)
+        return;
+
+    // Signal all decoder/image_loader threads to stop
+    dc_context->stop_flag = true;
+    for (auto &t : decoder_threads) {
+        if (t.joinable())
+            t.join();
+    }
+    decoder_threads.clear();
+    dc_context->stop_flag = false;
+
+    // Free demuxers
+    for (auto *d : demuxers)
+        delete d;
+    demuxers.clear();
+
+    // Free scene display buffers
+    if (scene->display_buffer) {
+        for (u32 j = 0; j < scene->num_cams; j++) {
+            if (scene->display_buffer[j]) {
+                for (u32 i = 0; i < scene->size_of_buffer; i++) {
+#ifdef __APPLE__
+                    free(scene->display_buffer[j][i].frame);
+                    if (scene->display_buffer[j][i].pixel_buffer) {
+                        CVPixelBufferRelease(scene->display_buffer[j][i].pixel_buffer);
+                        scene->display_buffer[j][i].pixel_buffer = nullptr;
+                    }
+#else
+                    if (scene->use_cpu_buffer)
+                        free(scene->display_buffer[j][i].frame);
+                    else
+                        cudaFree(scene->display_buffer[j][i].frame);
+#endif
+                }
+                free(scene->display_buffer[j]);
+            }
+        }
+        free(scene->display_buffer);
+        scene->display_buffer = nullptr;
+    }
+
+    // Free other scene arrays
+    free(scene->image_width);
+    scene->image_width = nullptr;
+    free(scene->image_height);
+    scene->image_height = nullptr;
+    free(scene->seek_context);
+    scene->seek_context = nullptr;
+    free(scene->pbo_cuda);
+    scene->pbo_cuda = nullptr;
+#ifdef __APPLE__
+    free(scene->image_descriptor);
+    scene->image_descriptor = nullptr;
+#endif
+
+    scene->num_cams = 0;
+    scene->size_of_buffer = 0;
+
+    // Clear playback and project media state
+    is_view_focused.clear();
+    pm.camera_names.clear();
+    window_need_decoding.clear();
+    window_was_decoding.clear();
+    ps.video_loaded = false;
+    ps.play_video = false;
+    ps.to_display_frame_number = 0;
+    ps.read_head = 0;
+    ps.slider_frame_number = 0;
+    ps.just_seeked = false;
+    ps.pause_seeked = false;
+    dc_context->decoding_flag = false;
+    dc_context->total_num_frame = INT_MAX;
+    dc_context->estimated_num_frames = 0;
+
+    // Clear stale per-camera decoded frame counters
+    latest_decoded_frame.clear();
+
+    // Reset realtime playback (load_images sets false; load_videos expects true)
+    ps.realtime_playback = true;
+    ps.accumulated_play_time = 0.0;
+    ps.last_play_time_start = std::chrono::steady_clock::now();
+    ps.pause_selected = 0;
+}
+
 inline void
 load_images(std::map<std::string, std::string> &selected_files,
             PlaybackState &ps, ProjectManager &pm,

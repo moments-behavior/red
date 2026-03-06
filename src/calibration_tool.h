@@ -166,18 +166,37 @@ struct CalibProject {
     std::string project_name;      // e.g. "MyCalibration"
     std::string project_path;      // folder containing .redproj
     std::string project_root_path; // parent of project_path
+
+    // Aruco calibration (optional — empty for laser-only projects)
     std::string config_file;       // path to config.json
     std::string img_path;          // image directory (from config)
-    std::string output_folder;     // defaults to project_path/calibration
+
+    // Laser refinement (optional — empty until laser phase)
+    std::string media_folder;      // folder with laser .mp4 videos
+    std::string calibration_folder; // folder with CamXXXX.yaml (input)
+    std::vector<std::string> camera_names; // validated camera serials
+
+    // Output
+    std::string output_folder;     // aruco YAML output (project_path/calibration)
+    std::string laser_output_folder; // laser YAML output (project_path/laser_calibration)
+
+    // Mode helpers
+    bool has_aruco() const { return !config_file.empty(); }
+    bool has_laser_input() const { return !calibration_folder.empty() && !media_folder.empty(); }
 };
 
 inline void to_json(nlohmann::json &j, const CalibProject &p) {
-    j = nlohmann::json{{"project_name", p.project_name},
+    j = nlohmann::json{{"type", "calibration"},
+                       {"project_name", p.project_name},
                        {"project_path", p.project_path},
                        {"project_root_path", p.project_root_path},
                        {"config_file", p.config_file},
                        {"img_path", p.img_path},
-                       {"output_folder", p.output_folder}};
+                       {"media_folder", p.media_folder},
+                       {"calibration_folder", p.calibration_folder},
+                       {"camera_names", p.camera_names},
+                       {"output_folder", p.output_folder},
+                       {"laser_output_folder", p.laser_output_folder}};
 }
 
 inline void from_json(const nlohmann::json &j, CalibProject &p) {
@@ -186,63 +205,85 @@ inline void from_json(const nlohmann::json &j, CalibProject &p) {
     p.project_root_path = j.value("project_root_path", std::string{});
     p.config_file = j.value("config_file", std::string{});
     p.img_path = j.value("img_path", std::string{});
+    p.media_folder = j.value("media_folder", std::string{});
+    p.calibration_folder = j.value("calibration_folder", std::string{});
+    p.camera_names = j.value("camera_names", std::vector<std::string>{});
     p.output_folder = j.value("output_folder", std::string{});
+    p.laser_output_folder = j.value("laser_output_folder", std::string{});
 }
 
-inline bool save_calib_project_json(const CalibProject &p,
-                                    const std::filesystem::path &file,
-                                    std::string *err = nullptr,
-                                    int indent = 2) {
+inline bool save_project(const CalibProject &p,
+                          const std::string &file,
+                          std::string *err = nullptr) {
     try {
-        nlohmann::json j = p;
-
+        namespace fs = std::filesystem;
         std::error_code ec;
-        std::filesystem::create_directories(file.parent_path(), ec);
+        fs::create_directories(fs::path(file).parent_path(), ec);
         if (ec) {
-            if (err)
-                *err = ec.message();
+            if (err) *err = ec.message();
             return false;
         }
-
         std::ofstream ofs(file, std::ios::binary);
         if (!ofs) {
-            if (err)
-                *err = "Failed to open file for writing: " + file.string();
+            if (err) *err = "Cannot open: " + file;
             return false;
         }
-        ofs << j.dump(indent);
+        nlohmann::json j = p;
+        ofs << j.dump(2);
         return true;
     } catch (const std::exception &e) {
-        if (err)
-            *err = e.what();
+        if (err) *err = e.what();
         return false;
     }
 }
 
-inline bool load_calib_project_json(CalibProject *out,
-                                    const std::filesystem::path &file,
-                                    std::string *err = nullptr) {
+inline bool load_project(CalibProject *out,
+                          const std::string &file,
+                          std::string *err = nullptr) {
     if (!out) {
-        if (err)
-            *err = "Output pointer is null";
+        if (err) *err = "Output pointer is null";
         return false;
     }
     try {
         std::ifstream ifs(file, std::ios::binary);
         if (!ifs) {
-            if (err)
-                *err = "Failed to open file for reading: " + file.string();
+            if (err) *err = "Cannot open: " + file;
             return false;
         }
         nlohmann::json j;
         ifs >> j;
+        // Accept both old aruco-only projects and new unified projects
+        std::string type = j.value("type", std::string{});
+        if (!type.empty() && type != "calibration" && type != "laser_calibration") {
+            if (err) *err = "Unknown project type: " + type;
+            return false;
+        }
         *out = j.get<CalibProject>();
         return true;
     } catch (const std::exception &e) {
-        if (err)
-            *err = e.what();
+        if (err) *err = e.what();
         return false;
     }
+}
+
+// Derive camera serial numbers from YAML filenames in a folder.
+// Looks for CamXXXX.yaml files and returns the "XXXX" part sorted.
+inline std::vector<std::string>
+derive_camera_names_from_yaml(const std::string &yaml_folder) {
+    namespace fs = std::filesystem;
+    std::vector<std::string> names;
+    if (yaml_folder.empty() || !fs::is_directory(yaml_folder))
+        return names;
+    for (const auto &entry : fs::directory_iterator(yaml_folder)) {
+        if (!entry.is_regular_file()) continue;
+        std::string stem = entry.path().stem().string();
+        std::string ext = entry.path().extension().string();
+        if (ext == ".yaml" && stem.size() > 3 && stem.substr(0, 3) == "Cam") {
+            names.push_back(stem.substr(3));
+        }
+    }
+    std::sort(names.begin(), names.end());
+    return names;
 }
 
 } // namespace CalibrationTool

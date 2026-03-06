@@ -26,7 +26,9 @@
 #include <Eigen/SVD>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <future>
@@ -78,6 +80,7 @@ struct CalibrationResult {
     int image_height = 0;
     bool success = false;
     std::string error;
+    std::string output_folder; // timestamped folder where YAMLs were written
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1286,10 +1289,10 @@ inline bool write_intermediate_output(
     const std::map<std::string, std::map<int, Eigen::Vector2d>> &landmarks,
     const std::vector<CameraPose> &poses,
     const std::map<int, Eigen::Vector3d> &points_3d,
-    const std::string &project_folder) {
+    const std::string &output_folder) {
 
     namespace fs = std::filesystem;
-    std::string output_dir = project_folder + "/output";
+    std::string output_dir = output_folder + "/summary_data";
     std::string ba_dir = output_dir + "/bundle_adjustment";
     std::string intr_dir = output_dir + "/intrinsics";
 
@@ -1466,10 +1469,29 @@ inline bool write_intermediate_output(
 
 inline CalibrationResult
 run_full_pipeline(const CalibrationTool::CalibConfig &config,
-                  const std::string &output_folder,
+                  const std::string &base_folder,
                   std::string *status) {
     CalibrationResult result;
     result.cam_names = config.cam_ordered;
+
+    // Create timestamped output folder inside base_folder
+    auto now = std::chrono::system_clock::now();
+    std::time_t t = std::chrono::system_clock::to_time_t(now);
+    std::tm tstruct;
+    localtime_r(&t, &tstruct);
+    char tbuf[64];
+    std::strftime(tbuf, sizeof(tbuf), "%Y_%m_%d_%H_%M_%S", &tstruct);
+    std::string output_folder = base_folder + "/" + tbuf;
+
+    {
+        namespace fs = std::filesystem;
+        std::error_code ec;
+        fs::create_directories(output_folder, ec);
+        if (ec) {
+            result.error = "Cannot create output folder: " + ec.message();
+            return result;
+        }
+    }
 
     // Step 1: Detect ChArUco corners + calibrate intrinsics
     if (status)
@@ -1573,13 +1595,9 @@ run_full_pipeline(const CalibrationTool::CalibConfig &config,
         return result;
     }
 
-    // Write intermediate output for validation/comparison
-    {
-        std::string project_folder =
-            std::filesystem::path(output_folder).parent_path().string();
-        write_intermediate_output(config, intrinsics, landmarks, poses,
-                                  points_3d, project_folder);
-    }
+    // Write summary data for validation/comparison
+    write_intermediate_output(config, intrinsics, landmarks, poses,
+                              points_3d, output_folder);
 
     // Compute final mean reprojection error
     double total_err = 0.0;
@@ -1604,6 +1622,7 @@ run_full_pipeline(const CalibrationTool::CalibConfig &config,
     result.mean_reproj_error =
         (total_obs > 0) ? (total_err / total_obs) : 0.0;
 
+    result.output_folder = output_folder;
     result.cameras = std::move(poses);
     result.points_3d = std::move(points_3d);
     result.success = true;
