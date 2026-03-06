@@ -8,11 +8,12 @@
 #include "opencv_yaml_io.h"
 #include "red_math.h"
 
+#include "../lib/ImGuiFileDialog/stb/stb_image.h"
+
 #include <opencv2/aruco/aruco_calib.hpp>
 #include <opencv2/calib3d.hpp>
 #include <opencv2/core.hpp>
 #include <opencv2/core/eigen.hpp>
-#include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/objdetect/aruco_board.hpp>
 #include <opencv2/objdetect/charuco_detector.hpp>
@@ -197,28 +198,35 @@ detect_and_calibrate_intrinsics(
                 for (int img_num : image_numbers) {
                     std::string img_file = config.img_path + "/" + serial +
                                            "_" + std::to_string(img_num) + ext;
-                    cv::Mat img = cv::imread(img_file, cv::IMREAD_GRAYSCALE);
-                    if (img.empty())
+                    int w = 0, h = 0, channels = 0;
+                    unsigned char *pixels =
+                        stbi_load(img_file.c_str(), &w, &h, &channels, 1);
+                    if (!pixels)
                         continue;
+                    cv::Mat img(h, w, CV_8UC1, pixels);
 
                     if (det.image_size.width == 0) {
-                        det.image_size = img.size();
-                        det.cam_data.image_width = img.cols;
-                        det.cam_data.image_height = img.rows;
+                        det.image_size = cv::Size(w, h);
+                        det.cam_data.image_width = w;
+                        det.cam_data.image_height = h;
                     }
 
                     std::vector<cv::Point2f> corners;
                     std::vector<int> ids;
                     detector.detectBoard(img, corners, ids);
 
-                    if ((int)ids.size() < 6)
+                    if ((int)ids.size() < 6) {
+                        stbi_image_free(pixels);
                         continue;
+                    }
 
                     cv::cornerSubPix(
                         img, corners, cv::Size(3, 3), cv::Size(-1, -1),
                         cv::TermCriteria(cv::TermCriteria::EPS +
                                              cv::TermCriteria::COUNT,
                                          30, 0.01));
+
+                    stbi_image_free(pixels);
 
                     int sorted_idx = img_num_to_idx[img_num];
                     det.cam_data.corners_per_image[sorted_idx] = corners;
@@ -826,6 +834,8 @@ inline bool bundle_adjust(
 
         ceres::Problem problem;
 
+        // Track which point indices have observations in this pass
+        std::set<int> active_point_indices;
         for (const auto &obs : observations) {
             ceres::CostFunction *cost =
                 ReprojectionCost::Create(obs.px, obs.py);
@@ -837,6 +847,7 @@ inline bool bundle_adjust(
             problem.AddResidualBlock(cost, loss,
                                      camera_params[obs.cam_idx].data(),
                                      point_params[obs.point_param_idx].data());
+            active_point_indices.insert(obs.point_param_idx);
         }
 
         // Set bounds if configured.
@@ -868,7 +879,7 @@ inline bool bundle_adjust(
         }
 
         if (use_bounds && bounds_pt.size() >= 3 && optimize_points) {
-            for (int i = 0; i < (int)point_params.size(); i++) {
+            for (int i : active_point_indices) {
                 for (int p = 0; p < 3; p++) {
                     double b = bounds_pt[p];
                     if (b > 0) {

@@ -25,7 +25,7 @@ if(APPLE)
     find_package(Eigen3 REQUIRED)
     find_package(glfw3 REQUIRED)
     pkg_check_modules(TURBOJPEG REQUIRED libturbojpeg)
-    find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs aruco calib3d objdetect)
+    find_package(OpenCV REQUIRED COMPONENTS core imgproc aruco calib3d objdetect)
     find_package(Ceres REQUIRED)
 
     set(DIR_IMGUI "${CMAKE_SOURCE_DIR}/lib/imgui")

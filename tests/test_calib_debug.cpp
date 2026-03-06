@@ -6,6 +6,7 @@
 // Build: cmake target "test_calib_debug" (no ImGui/Metal needed).
 // Run:   ./test_calib_debug
 
+#define STB_IMAGE_IMPLEMENTATION
 #include "calibration_pipeline.h"
 
 #include <iomanip>
@@ -92,14 +93,16 @@ int main() {
         for (int n : img_nums) {
             std::string f = config.img_path + "/" + std::string(SERIAL_A) +
                             "_" + std::to_string(n) + ext;
-            cv::Mat im = cv::imread(f, cv::IMREAD_GRAYSCALE);
-            if (im.empty()) continue;
-            if (imsz.width == 0) imsz = im.size();
+            int w = 0, h = 0, ch = 0;
+            unsigned char *px = stbi_load(f.c_str(), &w, &h, &ch, 1);
+            if (!px) continue;
+            cv::Mat im(h, w, CV_8UC1, px);
+            if (imsz.width == 0) imsz = cv::Size(w, h);
 
             std::vector<cv::Point2f> corners;
             std::vector<int> ids;
             detector.detectBoard(im, corners, ids);
-            if ((int)ids.size() < 6) continue;
+            if ((int)ids.size() < 6) { stbi_image_free(px); continue; }
 
             std::vector<cv::Point3f> op;
             std::vector<cv::Point2f> ip;
@@ -112,6 +115,7 @@ int main() {
                 all_obj.push_back(op);
                 all_img.push_back(ip);
             }
+            stbi_image_free(px);
             if (all_obj.size() >= 5) break; // just test a few
         }
 
