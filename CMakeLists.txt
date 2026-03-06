@@ -178,6 +178,21 @@ if(APPLE)
         CXX_STANDARD_REQUIRED ON
     )
 
+    # Cross-validation: laser-refined vs ChArUco landmarks (Eigen-only, no OpenCV)
+    add_executable(test_calib_crossval tests/test_calib_crossval.cpp)
+    target_include_directories(test_calib_crossval PRIVATE
+        src
+        ${HOMEBREW_PREFIX}/include
+        ${HOMEBREW_PREFIX}/include/eigen3
+    )
+    target_link_libraries(test_calib_crossval PRIVATE
+        Eigen3::Eigen
+    )
+    set_target_properties(test_calib_crossval PROPERTIES
+        CXX_STANDARD 17
+        CXX_STANDARD_REQUIRED ON
+    )
+
 else()
     # Linux build with NVIDIA CUDA support
     project(red LANGUAGES CXX CUDA)

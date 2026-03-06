@@ -5952,6 +5952,12 @@ int main(int argc, char **argv) {
                         laser_config.ba_outlier_th2 = ba_th2;
                     ImGui::SliderInt("BA Max Iterations",
                                      &laser_config.ba_max_iter, 10, 200);
+                    ImGui::Checkbox("Lock Intrinsics",
+                                    &laser_config.lock_intrinsics);
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip(
+                            "Fix focal length and distortion coefficients.\n"
+                            "Recommended when laser points lack depth diversity.");
 
                     ImGui::Separator();
 
