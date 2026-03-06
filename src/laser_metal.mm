@@ -6,6 +6,8 @@
 
 #include "laser_metal.h"
 #include <stdio.h>
+#include <vector>
+#include <cstring>
 
 // ---------------------------------------------------------------------------
 // Metal shader source (4 compute kernels embedded as string)
@@ -123,6 +125,41 @@ kernel void reduce_centroid(
     atomic_fetch_max_explicit(&result[6], gid.x, memory_order_relaxed);
     atomic_fetch_max_explicit(&result[7], gid.y, memory_order_relaxed);
 }
+// Kernel 5: Colorize visualization — writes RGBA to shared buffer
+// Also counts total mask pixels via atomic counter.
+kernel void colorize_viz(
+    texture2d<uint, access::read>  mask    [[texture(0)]],
+    texture2d<uint, access::read>  dilated [[texture(1)]],
+    device uint8_t *rgba_out              [[buffer(0)]],
+    device atomic_uint *mask_count        [[buffer(1)]],
+    uint2 gid [[thread_position_in_grid]])
+{
+    uint w = mask.get_width();
+    uint h = mask.get_height();
+    if (gid.x >= w || gid.y >= h) return;
+
+    uint idx = gid.y * w + gid.x;
+    uint base = idx * 4;
+
+    bool m = mask.read(gid).r != 0u;
+    bool d = dilated.read(gid).r != 0u;
+
+    if (m) atomic_fetch_add_explicit(mask_count, 1u, memory_order_relaxed);
+
+    if (d) {
+        // Green placeholder — CPU will recolor per-blob classification
+        rgba_out[base]   = 0;   rgba_out[base+1] = 255;
+        rgba_out[base+2] = 0;   rgba_out[base+3] = 255;
+    } else if (m) {
+        // Gray — threshold passed but filtered by erode/dilate
+        rgba_out[base]   = 60;  rgba_out[base+1] = 60;
+        rgba_out[base+2] = 60;  rgba_out[base+3] = 255;
+    } else {
+        // Black background
+        rgba_out[base]   = 0;   rgba_out[base+1] = 0;
+        rgba_out[base+2] = 0;   rgba_out[base+3] = 255;
+    }
+}
 )METAL";
 
 
@@ -137,7 +174,18 @@ struct LaserMetalContext {
     id<MTLComputePipelineState> pso_erode;
     id<MTLComputePipelineState> pso_dilate;
     id<MTLComputePipelineState> pso_reduce;
+    id<MTLComputePipelineState> pso_colorize;
     CVMetalTextureCacheRef      texCache;
+
+    // Pre-allocated resources reused across calls (avoid per-frame allocation)
+    int alloc_width = 0, alloc_height = 0;
+    id<MTLTexture> maskTex;
+    id<MTLTexture> erodedTex;
+    id<MTLTexture> dilatedTex;
+    id<MTLBuffer>  rgbaBuf;       // viz path: w*h*4 RGBA
+    id<MTLBuffer>  maskCountBuf;  // viz path: atomic mask counter
+    id<MTLBuffer>  threshBuf;     // viz path: green_threshold param
+    id<MTLBuffer>  domBuf;        // viz path: green_dominance param
 };
 
 
@@ -189,9 +237,10 @@ LaserMetalHandle laser_metal_create() {
         ctx->pso_erode     = make_pso("erode_3x3");
         ctx->pso_dilate    = make_pso("dilate_3x3");
         ctx->pso_reduce    = make_pso("reduce_centroid");
+        ctx->pso_colorize  = make_pso("colorize_viz");
 
         if (!ctx->pso_threshold || !ctx->pso_erode ||
-            !ctx->pso_dilate || !ctx->pso_reduce) {
+            !ctx->pso_dilate || !ctx->pso_reduce || !ctx->pso_colorize) {
             delete ctx;
             return nullptr;
         }
@@ -235,7 +284,9 @@ LaserMetalSpot laser_metal_detect(LaserMetalHandle ctx,
         }
         id<MTLTexture> srcTex = CVMetalTextureGetTexture(cvTex);
 
-        // Create intermediate textures (R8Uint for masks)
+        // Thread-safe: allocate local textures/buffers per call.
+        // This function is called concurrently from multiple threads in
+        // detect_all_cameras, so it must NOT use shared pre-allocated state.
         MTLTextureDescriptor *maskDesc =
             [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatR8Uint
                                                               width:width
@@ -248,8 +299,7 @@ LaserMetalSpot laser_metal_detect(LaserMetalHandle ctx,
         id<MTLTexture> erodedTex  = [ctx->device newTextureWithDescriptor:maskDesc];
         id<MTLTexture> dilatedTex = [ctx->device newTextureWithDescriptor:maskDesc];
 
-        // Result buffer: 8 × uint32 (count, sum_gx, sum_gy, sum_g,
-        //                              min_x, min_y, max_x, max_y)
+        // Result buffer: 8 × uint32
         id<MTLBuffer> resultBuf =
             [ctx->device newBufferWithLength:8 * sizeof(uint32_t)
                                      options:MTLResourceStorageModeShared];
@@ -337,6 +387,9 @@ LaserMetalSpot laser_metal_detect(LaserMetalHandle ctx,
         uint32_t max_x  = vals[6];
         uint32_t max_y  = vals[7];
 
+        // Always report dilated pixel count (even when not a valid single blob)
+        result.pixel_count = (int)count;
+
         // Release CVMetalTexture
         CFRelease(cvTex);
 
@@ -356,6 +409,182 @@ LaserMetalSpot laser_metal_detect(LaserMetalHandle ctx,
                 result.found = true;
             }
         }
+    }
+
+    return result;
+}
+
+
+LaserMetalVizResult laser_metal_detect_viz(
+    LaserMetalHandle ctx,
+    CVPixelBufferRef pixel_buffer,
+    int green_threshold, int green_dominance,
+    int min_blob_pixels, int max_blob_pixels,
+    uint8_t *rgba_out) {
+
+    LaserMetalVizResult result = {};
+    if (!ctx || !pixel_buffer || !rgba_out) return result;
+
+    @autoreleasepool {
+        int width  = (int)CVPixelBufferGetWidth(pixel_buffer);
+        int height = (int)CVPixelBufferGetHeight(pixel_buffer);
+        int npixels = width * height;
+
+        // Zero-copy: wrap CVPixelBuffer as MTLTexture via IOSurface
+        CVMetalTextureRef cvTex = NULL;
+        CVReturn rv = CVMetalTextureCacheCreateTextureFromImage(
+            kCFAllocatorDefault, ctx->texCache, pixel_buffer, NULL,
+            MTLPixelFormatBGRA8Unorm, width, height, 0, &cvTex);
+        if (rv != kCVReturnSuccess || !cvTex) return result;
+        id<MTLTexture> srcTex = CVMetalTextureGetTexture(cvTex);
+
+        // Pre-allocate / reuse intermediate textures and buffers
+        if (ctx->alloc_width != width || ctx->alloc_height != height) {
+            MTLTextureDescriptor *maskDesc =
+                [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatR8Uint
+                                                                  width:width
+                                                                 height:height
+                                                              mipmapped:NO];
+            maskDesc.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
+            maskDesc.storageMode = MTLStorageModePrivate;
+
+            ctx->maskTex    = [ctx->device newTextureWithDescriptor:maskDesc];
+            ctx->erodedTex  = [ctx->device newTextureWithDescriptor:maskDesc];
+            ctx->dilatedTex = [ctx->device newTextureWithDescriptor:maskDesc];
+            ctx->rgbaBuf    = [ctx->device newBufferWithLength:npixels * 4
+                                                       options:MTLResourceStorageModeShared];
+            ctx->alloc_width = width;
+            ctx->alloc_height = height;
+        }
+        if (!ctx->maskCountBuf) {
+            ctx->maskCountBuf = [ctx->device newBufferWithLength:sizeof(uint32_t)
+                                                         options:MTLResourceStorageModeShared];
+            ctx->threshBuf    = [ctx->device newBufferWithLength:sizeof(int)
+                                                         options:MTLResourceStorageModeShared];
+            ctx->domBuf       = [ctx->device newBufferWithLength:sizeof(int)
+                                                         options:MTLResourceStorageModeShared];
+        }
+        *(uint32_t *)ctx->maskCountBuf.contents = 0;
+        *(int *)ctx->threshBuf.contents = green_threshold;
+        *(int *)ctx->domBuf.contents = green_dominance;
+
+        MTLSize tgSize = MTLSizeMake(16, 16, 1);
+        MTLSize gridSize = MTLSizeMake(width, height, 1);
+
+        id<MTLCommandBuffer> cmdBuf = [ctx->queue commandBuffer];
+
+        // Pass 1: threshold_green
+        {
+            id<MTLComputeCommandEncoder> enc = [cmdBuf computeCommandEncoder];
+            [enc setComputePipelineState:ctx->pso_threshold];
+            [enc setTexture:srcTex        atIndex:0];
+            [enc setTexture:ctx->maskTex  atIndex:1];
+            [enc setBuffer:ctx->threshBuf offset:0 atIndex:0];
+            [enc setBuffer:ctx->domBuf    offset:0 atIndex:1];
+            [enc dispatchThreads:gridSize threadsPerThreadgroup:tgSize];
+            [enc endEncoding];
+        }
+
+        // Pass 2: erode_3x3
+        {
+            id<MTLComputeCommandEncoder> enc = [cmdBuf computeCommandEncoder];
+            [enc setComputePipelineState:ctx->pso_erode];
+            [enc setTexture:ctx->maskTex   atIndex:0];
+            [enc setTexture:ctx->erodedTex atIndex:1];
+            [enc dispatchThreads:gridSize threadsPerThreadgroup:tgSize];
+            [enc endEncoding];
+        }
+
+        // Pass 3: dilate_3x3
+        {
+            id<MTLComputeCommandEncoder> enc = [cmdBuf computeCommandEncoder];
+            [enc setComputePipelineState:ctx->pso_dilate];
+            [enc setTexture:ctx->erodedTex  atIndex:0];
+            [enc setTexture:ctx->dilatedTex atIndex:1];
+            [enc dispatchThreads:gridSize threadsPerThreadgroup:tgSize];
+            [enc endEncoding];
+        }
+
+        // Pass 4: colorize_viz (writes RGBA + counts mask pixels)
+        {
+            id<MTLComputeCommandEncoder> enc = [cmdBuf computeCommandEncoder];
+            [enc setComputePipelineState:ctx->pso_colorize];
+            [enc setTexture:ctx->maskTex    atIndex:0];
+            [enc setTexture:ctx->dilatedTex atIndex:1];
+            [enc setBuffer:ctx->rgbaBuf      offset:0 atIndex:0];
+            [enc setBuffer:ctx->maskCountBuf offset:0 atIndex:1];
+            [enc dispatchThreads:gridSize threadsPerThreadgroup:tgSize];
+            [enc endEncoding];
+        }
+
+        [cmdBuf commit];
+        [cmdBuf waitUntilCompleted];
+
+        result.total_mask_pixels = *(uint32_t *)ctx->maskCountBuf.contents;
+
+        // --- CPU: BFS connected components on dilated (green) pixels ---
+        // The colorize_viz kernel wrote green (0,255,0,255) for dilated pixels.
+        // We scan the shared RGBA buffer, BFS each green blob, classify by size,
+        // and recolor in-place. Dilated pixels are typically ~100-500, so this
+        // is negligible. We avoid a full-frame labels array by using the RGBA
+        // color itself as a visited marker — recolored pixels are no longer
+        // (R=0,G=255,B=0), so subsequent scan skips them.
+        uint8_t *rgba = (uint8_t *)ctx->rgbaBuf.contents;
+        int num_blobs = 0;
+        std::vector<int> queue;
+        queue.reserve(1024);
+
+        for (int y = 1; y < height - 1; y++) {
+            for (int x = 1; x < width - 1; x++) {
+                int idx = y * width + x;
+                int base = idx * 4;
+                // Check for unvisited green (dilated) pixel
+                if (rgba[base] != 0 || rgba[base+1] != 255 || rgba[base+2] != 0)
+                    continue;
+
+                // BFS flood-fill this connected component
+                queue.clear();
+                queue.push_back(idx);
+                rgba[base] = 1; // mark visited (R=1 distinguishes from unvisited green)
+
+                for (size_t qi = 0; qi < queue.size(); qi++) {
+                    int ci = queue[qi];
+                    // 4-connected neighbors
+                    const int neighbors[4] = {ci - 1, ci + 1, ci - width, ci + width};
+                    for (int ni : neighbors) {
+                        if (ni < 0 || ni >= npixels) continue;
+                        int nb = ni * 4;
+                        if (rgba[nb] == 0 && rgba[nb+1] == 255 && rgba[nb+2] == 0) {
+                            rgba[nb] = 1; // mark visited
+                            queue.push_back(ni);
+                        }
+                    }
+                }
+
+                int blob_size = (int)queue.size();
+
+                // Classify blob and assign final color
+                uint8_t cr, cg, cb;
+                if (blob_size >= min_blob_pixels && blob_size <= max_blob_pixels) {
+                    cr = 0; cg = 255; cb = 0;   // green — valid
+                    num_blobs++;
+                } else if (blob_size < min_blob_pixels) {
+                    cr = 200; cg = 200; cb = 0;  // yellow — too small
+                } else {
+                    cr = 255; cg = 50; cb = 50;  // red — too large
+                }
+
+                for (int pi : queue) {
+                    int pb = pi * 4;
+                    rgba[pb] = cr; rgba[pb+1] = cg; rgba[pb+2] = cb; rgba[pb+3] = 255;
+                }
+            }
+        }
+
+        result.num_blobs = num_blobs;
+        memcpy(rgba_out, rgba, npixels * 4);
+
+        CFRelease(cvTex);
     }
 
     return result;

@@ -25,6 +25,7 @@
 #include "user_settings.h"
 #include "jarvis_export.h"
 #include "laser_calibration.h"
+#include "laser_metal.h"
 #include "yolo_export.h"
 #include "yolo_torch.h"
 #include <ImGuiFileDialog.h>
@@ -343,7 +344,8 @@ int main(int argc, char **argv) {
     struct LaserVizState {
         // Double-buffered: "ready" results for display, "pending" being computed
         struct CamResult {
-            LaserCalibration::DetectionVizResult info;
+            int num_blobs = 0;
+            int total_mask_pixels = 0;
             std::vector<uint8_t> rgba;       // w*h*4 RGBA mask
             int frame_num = -1;              // frame this result corresponds to
             bool uploaded = false;           // has this been uploaded to GPU?
@@ -353,14 +355,21 @@ int main(int argc, char **argv) {
         std::atomic<bool> computing{false};  // background work in flight
         std::thread worker;
 
-        // Pre-allocated per-camera work buffers (persist across frames)
-        std::vector<LaserCalibration::DetectionVizBuffers> cam_bufs;
+#ifdef __APPLE__
+        // Metal context for GPU-accelerated viz (macOS only)
+        LaserMetalHandle metal_ctx = nullptr;
+#endif
 
         // Params that triggered the current computation
         int last_green_th = -1, last_green_dom = -1;
         int last_min_blob = -1, last_max_blob = -1;
 
-        ~LaserVizState() { if (worker.joinable()) worker.join(); }
+        ~LaserVizState() {
+            if (worker.joinable()) worker.join();
+#ifdef __APPLE__
+            if (metal_ctx) laser_metal_destroy(metal_ctx);
+#endif
+        }
     } laser_viz;
 
     // Annotation dialog variables
@@ -445,6 +454,7 @@ int main(int argc, char **argv) {
     std::set<int>
         yolo_processed_frames; // Track which frames have been processed
     std::unordered_map<std::string, bool> window_was_decoding;
+    std::unordered_map<std::string, bool> window_is_visible;  // actual ImGui visibility (prev frame)
     double inst_speed = 1.0;
     float set_playback_speed = 1.0f;
     PlaybackState ps;
@@ -1845,6 +1855,135 @@ int main(int argc, char **argv) {
 
         // Render a video frame
         if (ps.video_loaded) {
+#ifdef __APPLE__
+            // --- Laser detection viz: dispatch once before camera loop ---
+            // This must run before per-camera iteration so that hidden cameras
+            // (not in a visible ImGui window) still get processed.
+            if (laser_show_detection && laser_project_loaded) {
+                int mac_head_dispatch = ps.play_video ? ps.read_head : select_corr_head;
+                int fn0 = scene->display_buffer[0][mac_head_dispatch].frame_number;
+
+                // Collect results from background thread
+                if (!laser_viz.computing.load(std::memory_order_acquire) &&
+                    !laser_viz.pending.empty()) {
+                    if (laser_viz.worker.joinable())
+                        laser_viz.worker.join();
+                    laser_viz.ready = std::move(laser_viz.pending);
+                    laser_viz.pending.clear();
+                    // Mark all as needing GPU upload
+                    for (auto &cr : laser_viz.ready)
+                        cr.uploaded = false;
+                }
+
+                // Check if we need new work
+                bool params_changed =
+                    laser_config.green_threshold != laser_viz.last_green_th ||
+                    laser_config.green_dominance != laser_viz.last_green_dom ||
+                    laser_config.min_blob_pixels != laser_viz.last_min_blob ||
+                    laser_config.max_blob_pixels != laser_viz.last_max_blob;
+                bool frame_changed = laser_viz.ready.empty() ||
+                    fn0 != laser_viz.ready[0].frame_num;
+                bool need_dispatch = (frame_changed || params_changed) &&
+                    !laser_viz.computing.load(std::memory_order_relaxed);
+
+                if (need_dispatch) {
+                    if (laser_viz.worker.joinable())
+                        laser_viz.worker.join();
+
+                    // Lazy-init Metal context for GPU viz
+                    if (!laser_viz.metal_ctx)
+                        laser_viz.metal_ctx = laser_metal_create();
+
+                    // Retain CVPixelBuffers for background thread
+                    struct CamInput {
+                        CVPixelBufferRef pixel_buffer;
+                        int width, height, frame_num;
+                        bool needs_rgba;  // visible cameras need RGBA for texture upload
+                    };
+                    auto inputs = std::make_shared<std::vector<CamInput>>(scene->num_cams);
+                    for (int ci = 0; ci < scene->num_cams; ci++) {
+                        auto &inp = (*inputs)[ci];
+                        inp.width = scene->image_width[ci];
+                        inp.height = scene->image_height[ci];
+                        inp.frame_num = scene->display_buffer[ci][mac_head_dispatch].frame_number;
+                        const std::string &cam_name = pm.camera_names[ci];
+                        inp.needs_rgba = window_is_visible.count(cam_name) &&
+                                         window_is_visible.at(cam_name);
+                        CVPixelBufferRef cpb = scene->display_buffer[ci][mac_head_dispatch].pixel_buffer;
+                        if (cpb) {
+                            CVPixelBufferRetain(cpb);
+                            inp.pixel_buffer = cpb;
+                        } else {
+                            inp.pixel_buffer = nullptr;
+                        }
+                    }
+
+                    int green_th = laser_config.green_threshold;
+                    int green_dom = laser_config.green_dominance;
+                    int min_blob = laser_config.min_blob_pixels;
+                    int max_blob = laser_config.max_blob_pixels;
+                    int ncams = scene->num_cams;
+
+                    laser_viz.computing.store(true, std::memory_order_release);
+                    laser_viz.last_green_th = green_th;
+                    laser_viz.last_green_dom = green_dom;
+                    laser_viz.last_min_blob = min_blob;
+                    laser_viz.last_max_blob = max_blob;
+
+                    auto metal_ctx = laser_viz.metal_ctx;
+                    laser_viz.worker = std::thread(
+                        [inputs, ncams, green_th, green_dom,
+                         min_blob, max_blob, metal_ctx, &laser_viz]() {
+                            std::vector<LaserVizState::CamResult> results(ncams);
+
+                            // Phase 1: ALL cameras in parallel via fast detect (for stats)
+                            {
+                                std::vector<std::thread> threads;
+                                for (int ci = 0; ci < ncams; ci++) {
+                                    auto &inp = (*inputs)[ci];
+                                    if (!inp.pixel_buffer) continue;
+                                    threads.emplace_back([&inp, &results, ci,
+                                        metal_ctx, green_th, green_dom, min_blob, max_blob]() {
+                                        auto &res = results[ci];
+                                        res.frame_num = inp.frame_num;
+                                        auto spot = laser_metal_detect(
+                                            metal_ctx, inp.pixel_buffer,
+                                            green_th, green_dom, min_blob, max_blob);
+                                        if (spot.found) {
+                                            res.num_blobs = 1;
+                                        } else if (spot.pixel_count > 0) {
+                                            res.num_blobs = -1; // ambiguous
+                                        }
+                                        res.total_mask_pixels = spot.pixel_count;
+                                    });
+                                }
+                                for (auto &t : threads) t.join();
+                            }
+
+                            // Phase 2: visible cameras get RGBA overlay (sequential, shared ctx)
+                            for (int ci = 0; ci < ncams; ci++) {
+                                auto &inp = (*inputs)[ci];
+                                if (!inp.pixel_buffer || !inp.needs_rgba) {
+                                    if (inp.pixel_buffer) CVPixelBufferRelease(inp.pixel_buffer);
+                                    continue;
+                                }
+                                auto &res = results[ci];
+                                res.rgba.resize(inp.width * inp.height * 4);
+                                laser_metal_detect_viz(
+                                    metal_ctx, inp.pixel_buffer,
+                                    green_th, green_dom, min_blob, max_blob,
+                                    res.rgba.data());
+                                // Stats already populated by Phase 1 — don't overwrite
+                                CVPixelBufferRelease(inp.pixel_buffer);
+                            }
+
+                            laser_viz.pending = std::move(results);
+                            laser_viz.computing.store(false, std::memory_order_release);
+                        });
+                }
+            }
+#endif // __APPLE__
+
             for (int j = 0; j < scene->num_cams; j++) {
                 const std::string &win_name = pm.camera_names[j];
 
@@ -1859,6 +1998,7 @@ int main(int argc, char **argv) {
                 ImGui::SetNextWindowSize(ImVec2(500, 400),
                                          ImGuiCond_FirstUseEver);
                 bool is_visible = ImGui::Begin(win_name.c_str());
+                window_is_visible[win_name] = is_visible;
 
                 if (!window_was_decoding[win_name] && is_visible &&
                     ps.play_video) {
@@ -1879,7 +2019,8 @@ int main(int argc, char **argv) {
                 }
 
                 if (ps.play_video) {
-                    window_need_decoding[win_name].store(is_visible);
+                    window_need_decoding[win_name].store(
+                        is_visible || (laser_show_detection && laser_project_loaded));
                 };
 
                 if (is_visible) {
@@ -1899,110 +2040,6 @@ int main(int argc, char **argv) {
                         uint32_t h = scene->image_height[j];
 
                         if (laser_show_detection && laser_project_loaded) {
-                            // --- Async detection viz ---
-                            // On first camera each frame: check if work done, dispatch new work
-                            if (j == 0) {
-                                // Collect results from background thread
-                                if (!laser_viz.computing.load(std::memory_order_acquire) &&
-                                    !laser_viz.pending.empty()) {
-                                    if (laser_viz.worker.joinable())
-                                        laser_viz.worker.join();
-                                    laser_viz.ready = std::move(laser_viz.pending);
-                                    laser_viz.pending.clear();
-                                    // Mark all as needing GPU upload
-                                    for (auto &cr : laser_viz.ready)
-                                        cr.uploaded = false;
-                                }
-
-                                // Check if we need new work
-                                bool params_changed =
-                                    laser_config.green_threshold != laser_viz.last_green_th ||
-                                    laser_config.green_dominance != laser_viz.last_green_dom ||
-                                    laser_config.min_blob_pixels != laser_viz.last_min_blob ||
-                                    laser_config.max_blob_pixels != laser_viz.last_max_blob;
-                                bool frame_changed = laser_viz.ready.empty() ||
-                                    fn != laser_viz.ready[0].frame_num;
-                                bool need_dispatch = (frame_changed || params_changed) &&
-                                    !laser_viz.computing.load(std::memory_order_relaxed);
-
-                                if (need_dispatch) {
-                                    if (laser_viz.worker.joinable())
-                                        laser_viz.worker.join();
-
-                                    // Snapshot frame data: copy pixels for each visible camera
-                                    struct CamInput {
-                                        std::vector<uint8_t> pixels;
-                                        int width, height, stride;
-                                        int frame_num;
-                                    };
-                                    auto inputs = std::make_shared<std::vector<CamInput>>(scene->num_cams);
-                                    for (int ci = 0; ci < scene->num_cams; ci++) {
-                                        int mh = ps.play_video ? ps.read_head : select_corr_head;
-                                        uint32_t cw = scene->image_width[ci];
-                                        uint32_t ch = scene->image_height[ci];
-                                        int cfn = scene->display_buffer[ci][mh].frame_number;
-                                        CVPixelBufferRef cpb = scene->display_buffer[ci][mh].pixel_buffer;
-                                        auto &inp = (*inputs)[ci];
-                                        inp.width = cw;
-                                        inp.height = ch;
-                                        inp.frame_num = cfn;
-                                        if (cpb) {
-                                            CVPixelBufferLockBaseAddress(cpb, kCVPixelBufferLock_ReadOnly);
-                                            inp.stride = (int)CVPixelBufferGetBytesPerRow(cpb);
-                                            const uint8_t *src = (const uint8_t *)CVPixelBufferGetBaseAddress(cpb);
-                                            inp.pixels.assign(src, src + inp.stride * ch);
-                                            CVPixelBufferUnlockBaseAddress(cpb, kCVPixelBufferLock_ReadOnly);
-                                        } else if (scene->display_buffer[ci][mh].frame) {
-                                            inp.stride = cw * 4;
-                                            const uint8_t *src = scene->display_buffer[ci][mh].frame;
-                                            inp.pixels.assign(src, src + inp.stride * ch);
-                                        }
-                                    }
-
-                                    int green_th = laser_config.green_threshold;
-                                    int green_dom = laser_config.green_dominance;
-                                    int min_blob = laser_config.min_blob_pixels;
-                                    int max_blob = laser_config.max_blob_pixels;
-                                    int ncams = scene->num_cams;
-
-                                    laser_viz.computing.store(true, std::memory_order_release);
-                                    laser_viz.last_green_th = green_th;
-                                    laser_viz.last_green_dom = green_dom;
-                                    laser_viz.last_min_blob = min_blob;
-                                    laser_viz.last_max_blob = max_blob;
-
-                                    // Ensure pre-allocated per-camera buffers exist
-                                    if ((int)laser_viz.cam_bufs.size() < ncams)
-                                        laser_viz.cam_bufs.resize(ncams);
-
-                                    laser_viz.worker = std::thread(
-                                        [inputs, ncams, green_th, green_dom,
-                                         min_blob, max_blob, &laser_viz]() {
-                                            std::vector<LaserVizState::CamResult> results(ncams);
-                                            // Process all cameras in parallel
-                                            std::vector<std::thread> cam_threads;
-                                            for (int ci = 0; ci < ncams; ci++) {
-                                                cam_threads.emplace_back([&, ci]() {
-                                                    auto &inp = (*inputs)[ci];
-                                                    auto &res = results[ci];
-                                                    res.frame_num = inp.frame_num;
-                                                    if (inp.pixels.empty()) return;
-                                                    res.rgba.resize(inp.width * inp.height * 4);
-                                                    res.info = LaserCalibration::detect_laser_spot_viz(
-                                                        inp.pixels.data(), inp.width, inp.height,
-                                                        inp.stride, LaserCalibration::LASER_FMT_BGRA,
-                                                        green_th, green_dom, min_blob, max_blob,
-                                                        res.rgba.data(),
-                                                        &laser_viz.cam_bufs[ci]);
-                                                });
-                                            }
-                                            for (auto &t : cam_threads) t.join();
-                                            laser_viz.pending = std::move(results);
-                                            laser_viz.computing.store(false, std::memory_order_release);
-                                        });
-                                }
-                            }
-
                             // Upload ready result for this camera if available
                             if (j < (int)laser_viz.ready.size() &&
                                 !laser_viz.ready[j].rgba.empty() &&
@@ -6140,24 +6177,46 @@ int main(int argc, char **argv) {
 #endif
                         laser_viz.ready.clear();
                     }
+                    if (!prev_detection && laser_show_detection && ps.video_loaded) {
+                        // Toggled on — force-decode all cameras so hidden ones have frames
+                        if (!ps.play_video) {
+                            seek_all_cameras(scene, current_frame_num,
+                                             dc_context->video_fps, ps, true);
+                            ps.pause_selected = 0;
+                        }
+                        for (auto &[key, value] : window_need_decoding)
+                            value.store(true);
+                    }
                     if (laser_show_detection && ps.video_loaded) {
                         if (laser_viz.computing.load(std::memory_order_relaxed))
                             ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f),
                                                "  Processing...");
                         // Show per-camera blob info from ready results
-                        for (int ci = 0; ci < (int)laser_viz.ready.size() && ci < scene->num_cams; ci++) {
-                            auto &vr = laser_viz.ready[ci].info;
+                        int detecting_count = 0;
+                        int total_cams = std::min((int)laser_viz.ready.size(), (int)scene->num_cams);
+                        for (int ci = 0; ci < total_cams; ci++) {
+                            auto &cr = laser_viz.ready[ci];
                             const char *blob_str =
-                                vr.num_blobs == 0 ? "0 blobs" :
-                                vr.num_blobs == 1 ? "1 blob (OK)" :
+                                cr.num_blobs == 0  ? "0 blobs" :
+                                cr.num_blobs == 1  ? "1 blob (OK)" :
+                                cr.num_blobs == -1 ? "invalid" :
                                 "multiple blobs";
-                            ImVec4 col = vr.num_blobs == 1
+                            ImVec4 col = cr.num_blobs == 1
                                 ? ImVec4(0.0f, 1.0f, 0.0f, 1.0f)
                                 : ImVec4(1.0f, 0.4f, 0.4f, 1.0f);
-                            ImGui::TextColored(col, "  %s: %s, %d green px",
+                            ImGui::TextColored(col, "  %s: %s, %d px",
                                 ci < (int)pm.camera_names.size()
                                     ? pm.camera_names[ci].c_str() : "?",
-                                blob_str, vr.total_mask_pixels);
+                                blob_str, cr.total_mask_pixels);
+                            if (cr.num_blobs == 1) detecting_count++;
+                        }
+                        // Summary line
+                        if (total_cams > 0) {
+                            ImVec4 summary_col = (detecting_count == total_cams)
+                                ? ImVec4(0.0f, 1.0f, 0.0f, 1.0f)
+                                : ImVec4(1.0f, 1.0f, 0.0f, 1.0f);
+                            ImGui::TextColored(summary_col,
+                                "  %d/%d cameras detecting", detecting_count, total_cams);
                         }
                         ImGui::TextWrapped(
                             "Green=valid blob, Yellow=too small, "
