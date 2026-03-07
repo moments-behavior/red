@@ -32,6 +32,7 @@
 #include <ImGuiFileDialog.h>
 #include <algorithm>
 #include <cstddef>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <misc/cpp/imgui_stdlib.h> // for InputText(std::string&)
@@ -305,6 +306,7 @@ int main(int argc, char **argv) {
     if (!user_settings.default_media_root_path.empty())
         calib_project.config_file = user_settings.default_media_root_path;
     bool calib_project_loaded = false;
+    bool calib_dock_pending = false; // one-shot: dock Calibration Tool next to Navigator
     bool show_calib_create_dialog = true; // show creation dialog first
     std::string calib_config_path;
     CalibrationTool::CalibConfig calib_config;
@@ -488,10 +490,46 @@ int main(int argc, char **argv) {
     // Before the main loop (CLI path): just redirect io.IniFilename and let NewFrame()
     // auto-load it. Mid-session (File menu): also explicitly load the project ini.
     bool main_loop_running = false;
+    // Migrate renamed windows in project ini files so saved dock settings
+    // carry over. Replaces old window name with new name. If the new name
+    // already exists, removes the old section entirely to avoid duplicates.
+    auto migrate_ini_window_names = [](const std::string &ini_path) {
+        if (!std::filesystem::exists(ini_path)) return;
+        std::ifstream in(ini_path);
+        std::string content((std::istreambuf_iterator<char>(in)),
+                            std::istreambuf_iterator<char>());
+        in.close();
+
+        // "File Browser" → "Navigator" (renamed 2026-03-07)
+        const std::string old_header = "[Window][File Browser]";
+        const std::string new_header = "[Window][Navigator]";
+        size_t old_pos = content.find(old_header);
+        if (old_pos == std::string::npos) return; // nothing to migrate
+
+        // Find the end of the old section (next "[" or end of file)
+        size_t section_end = content.find("\n[", old_pos + 1);
+        if (section_end == std::string::npos)
+            section_end = content.size();
+        else
+            section_end += 1; // include the newline before next section
+
+        if (content.find(new_header) != std::string::npos) {
+            // New name already exists — remove old section entirely
+            content.erase(old_pos, section_end - old_pos);
+        } else {
+            // No new name yet — rename the old section
+            content.replace(old_pos, old_header.size(), new_header);
+        }
+        std::ofstream out(ini_path);
+        out << content;
+    };
+
     auto switch_ini_to_project = [&]() {
         project_ini_path = pm.project_path + "/imgui_layout.ini";
         // Seed new projects with the default dock layout
         copy_default_layout_to_project(pm.project_path);
+        // Migrate old window names before loading
+        migrate_ini_window_names(project_ini_path);
         io.IniFilename = project_ini_path.c_str();
         if (main_loop_running && std::filesystem::exists(project_ini_path)) {
             ImGui::LoadIniSettingsFromDisk(project_ini_path.c_str());
@@ -649,7 +687,7 @@ int main(int argc, char **argv) {
         }
         double playback_time_now = ps.accumulated_play_time;
 
-        if (ImGui::Begin("File Browser", NULL, ImGuiWindowFlags_MenuBar)) {
+        if (ImGui::Begin("Navigator", NULL, ImGuiWindowFlags_MenuBar)) {
             if (ImGui::BeginMenuBar()) {
                 if (ImGui::BeginMenu("File")) {
                     ImGui::BeginDisabled(ps.video_loaded);
@@ -4376,6 +4414,7 @@ int main(int argc, char **argv) {
                         }
 
                         calib_project_loaded = true;
+                        calib_dock_pending = true;
                         show_calib_create_dialog = false;
                         show_calibration_tool = true;
 
@@ -5544,6 +5583,7 @@ int main(int argc, char **argv) {
                                     }
 
                                     calib_project_loaded = true;
+                                    calib_dock_pending = true;
                                     show_calib_create_dialog = false;
 
                                     // For pure laser projects (no aruco), auto-load videos.
@@ -5600,6 +5640,16 @@ int main(int argc, char **argv) {
 
             } else if (calib_project_loaded) {
                 // Phase 2: Unified Calibration Tool window (project loaded)
+                // One-shot: dock as a tab next to Navigator on project load.
+                // Uses ImGuiCond_Always to override any saved undocked state,
+                // but only fires once (flag reset after docking).
+                if (calib_dock_pending) {
+                    ImGuiWindow *nav = ImGui::FindWindowByName("Navigator");
+                    if (nav && nav->DockId) {
+                        ImGui::SetNextWindowDockID(nav->DockId, ImGuiCond_Always);
+                        calib_dock_pending = false;
+                    }
+                }
                 ImGui::SetNextWindowSize(ImVec2(580, 600), ImGuiCond_FirstUseEver);
                 if (laser_focus_window) {
                     ImGui::SetNextWindowFocus();
