@@ -5,6 +5,10 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include "calibration_pipeline.h"
 
+#ifdef __APPLE__
+#include "aruco_metal.h"
+#endif
+
 #include <iostream>
 
 static const char *CONFIG_PATH =
@@ -19,9 +23,29 @@ int main() {
     }
     std::cout << "Config loaded: " << config.cam_ordered.size() << " cameras\n";
 
+    // Create Metal GPU context for accelerated threshold (macOS only)
+    aruco_detect::GpuThresholdFunc gpu_fn = nullptr;
+    void *gpu_ctx = nullptr;
+#ifdef __APPLE__
+    auto aruco_metal = aruco_metal_create();
+    if (aruco_metal) {
+        gpu_fn = aruco_metal_threshold_batch;
+        gpu_ctx = aruco_metal;
+        std::cout << "Metal GPU acceleration: ENABLED\n";
+    } else {
+        std::cout << "Metal GPU acceleration: FAILED (using CPU)\n";
+    }
+#else
+    std::cout << "Metal GPU acceleration: N/A (Linux)\n";
+#endif
+
     std::string status;
     auto result = CalibrationPipeline::run_full_pipeline(
-        config, "/tmp/calib_test_output", &status);
+        config, "/tmp/calib_test_output", &status, gpu_fn, gpu_ctx);
+
+#ifdef __APPLE__
+    aruco_metal_destroy(aruco_metal);
+#endif
 
     std::cout << "Status: " << status << "\n";
     if (!result.success) {
@@ -35,11 +59,6 @@ int main() {
     std::cout << "Output: " << result.output_folder << "\n";
 
     // Validation
-    // Target: 0.60 px (multiview_calib Python baseline).
-    // Current C++ pipeline achieves ~11 px due to custom intrinsic calibration
-    // and relative pose estimation not yet matching OpenCV quality.
-    // Using 15.0 px as a regression threshold until intrinsic_calibration.h
-    // and red_math.h (findEssentialMat, decomposeEssentialMat) are improved.
     double threshold = 15.0;
     if (result.mean_reproj_error > threshold) {
         std::cerr << "\nFAILED: mean reproj error " << result.mean_reproj_error

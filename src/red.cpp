@@ -25,6 +25,7 @@
 #include "user_settings.h"
 #include "jarvis_export.h"
 #include "laser_calibration.h"
+#include "aruco_metal.h"
 #include "laser_metal.h"
 #include "yolo_export.h"
 #include "yolo_torch.h"
@@ -5732,8 +5733,19 @@ int main(int argc, char **argv) {
                             std::launch::async,
                             [config = calib_config, base_folder,
                              status_ptr = &calib_status]() {
+#ifdef __APPLE__
+                                auto aruco_metal = aruco_metal_create();
+                                aruco_detect::GpuThresholdFunc gpu_fn =
+                                    aruco_metal ? aruco_metal_threshold_batch : nullptr;
+                                auto result = CalibrationPipeline::run_full_pipeline(
+                                    config, base_folder, status_ptr,
+                                    gpu_fn, aruco_metal);
+                                aruco_metal_destroy(aruco_metal);
+                                return result;
+#else
                                 return CalibrationPipeline::run_full_pipeline(
                                     config, base_folder, status_ptr);
+#endif
                             });
                     }
                     ImGui::EndDisabled();

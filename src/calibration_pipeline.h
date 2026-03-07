@@ -134,7 +134,9 @@ inline bool
 detect_and_calibrate_intrinsics(
     const CalibrationTool::CalibConfig &config,
     std::map<std::string, CameraIntrinsics> &intrinsics,
-    std::string *status) {
+    std::string *status,
+    aruco_detect::GpuThresholdFunc gpu_thresh = nullptr,
+    void *gpu_ctx = nullptr) {
 
     const auto &cs = config.charuco_setup;
     int max_corners = (cs.w - 1) * (cs.h - 1);
@@ -171,7 +173,14 @@ detect_and_calibrate_intrinsics(
     std::vector<DetectionResult> detections(num_cameras);
 
     // ── Phase 1: detect ChArUco corners in parallel (thread-safe) ──
-    if (status) *status = "Detecting ChArUco corners...";
+    int total_images = num_cameras * (int)image_numbers.size();
+    std::atomic<int> images_done{0};
+    auto phase1_start = std::chrono::steady_clock::now();
+
+    if (status) *status = "Detecting ChArUco corners (0/" +
+                          std::to_string(total_images) + " images)...";
+    fprintf(stderr, "[Calibration] Phase 1: detecting corners in %d images "
+            "across %d cameras...\n", total_images, num_cameras);
     {
         std::vector<std::future<void>> futures;
         for (int cam_i = 0; cam_i < num_cameras; cam_i++) {
@@ -194,8 +203,10 @@ detect_and_calibrate_intrinsics(
                     int w = 0, h = 0, channels = 0;
                     unsigned char *pixels =
                         stbi_load(img_file.c_str(), &w, &h, &channels, 1);
-                    if (!pixels)
+                    if (!pixels) {
+                        ++images_done;
                         continue;
+                    }
 
                     if (det.det_image_width == 0) {
                         det.det_image_width = w;
@@ -205,10 +216,28 @@ detect_and_calibrate_intrinsics(
                     }
 
                     auto charuco = aruco_detect::detectCharucoBoard(
-                        pixels, w, h, board, aruco_dict);
+                        pixels, w, h, board, aruco_dict,
+                        gpu_thresh, gpu_ctx);
 
                     if ((int)charuco.ids.size() < 6) {
                         stbi_image_free(pixels);
+                        int done_img = ++images_done;
+                        // Update progress periodically
+                        if (done_img % 20 == 0) {
+                            auto now = std::chrono::steady_clock::now();
+                            double elapsed = std::chrono::duration<double>(now - phase1_start).count();
+                            double rate = done_img / elapsed;
+                            int remaining = total_images - done_img;
+                            double eta = remaining / rate;
+                            std::lock_guard<std::mutex> lock(status_mutex);
+                            if (status) {
+                                char buf[128];
+                                snprintf(buf, sizeof(buf),
+                                    "Detecting corners (%d/%d images, %.0f img/s, ~%.0fs left)...",
+                                    done_img, total_images, rate, eta);
+                                *status = buf;
+                            }
+                        }
                         continue;
                     }
 
@@ -230,6 +259,27 @@ detect_and_calibrate_intrinsics(
                         det.all_obj_points.push_back(std::move(obj_pts));
                         det.all_img_points.push_back(std::move(img_pts));
                     }
+
+                    int done_img = ++images_done;
+                    if (done_img % 20 == 0) {
+                        auto now = std::chrono::steady_clock::now();
+                        double elapsed = std::chrono::duration<double>(now - phase1_start).count();
+                        double rate = done_img / elapsed;
+                        int remaining = total_images - done_img;
+                        double eta = remaining / rate;
+                        {
+                            std::lock_guard<std::mutex> lock(status_mutex);
+                            if (status) {
+                                char buf[128];
+                                snprintf(buf, sizeof(buf),
+                                    "Detecting corners (%d/%d images, %.0f img/s, ~%.0fs left)...",
+                                    done_img, total_images, rate, eta);
+                                *status = buf;
+                            }
+                        }
+                        fprintf(stderr, "[Calibration]   %d/%d images (%.0f img/s, ~%.0fs left)\n",
+                                done_img, total_images, rate, eta);
+                    }
                 }
 
                 if (det.all_obj_points.size() < 4) {
@@ -244,13 +294,21 @@ detect_and_calibrate_intrinsics(
                 {
                     std::lock_guard<std::mutex> lock(status_mutex);
                     if (status)
-                        *status = "Detecting corners (" + std::to_string(done) +
-                                  "/" + std::to_string(num_cameras) + ")...";
+                        *status = "Detecting corners — camera " +
+                                  std::to_string(done) + "/" +
+                                  std::to_string(num_cameras) + " done";
                 }
             }));
         }
         for (auto &f : futures)
             f.get();
+    }
+
+    {
+        auto phase1_end = std::chrono::steady_clock::now();
+        double phase1_s = std::chrono::duration<double>(phase1_end - phase1_start).count();
+        fprintf(stderr, "[Calibration] Phase 1 done: %d images in %.1fs (%.0f img/s)\n",
+                total_images, phase1_s, total_images / phase1_s);
     }
 
     // Check detection results
@@ -261,28 +319,43 @@ detect_and_calibrate_intrinsics(
         }
     }
 
-    // ── Phase 2: calibrate intrinsics serially (LAPACK not thread-safe) ──
+    // ── Phase 2: calibrate intrinsics in parallel (Ceres is thread-safe) ──
     std::vector<CameraIntrinsics> results(num_cameras);
     std::vector<bool> result_ok(num_cameras, false);
+    std::atomic<int> calib_done{0};
 
-    for (int cam_i = 0; cam_i < num_cameras; cam_i++) {
-        auto &det = detections[cam_i];
-        const std::string &serial = config.cam_ordered[cam_i];
+    if (status)
+        *status = "Calibrating intrinsics (0/" + std::to_string(num_cameras) + ")...";
 
-        if (status)
-            *status = "Calibrating intrinsics (" + std::to_string(cam_i + 1) +
-                      "/" + std::to_string(num_cameras) + "): " + serial;
+    {
+        std::vector<std::future<void>> calib_futures;
+        for (int cam_i = 0; cam_i < num_cameras; cam_i++) {
+            calib_futures.push_back(std::async(std::launch::async, [&, cam_i]() {
+                auto &det = detections[cam_i];
 
-        auto calib_result = intrinsic_calib::calibrateCamera(
-            det.all_obj_points, det.all_img_points,
-            det.det_image_width, det.det_image_height,
-            /*fix_aspect_ratio=*/true);
+                auto calib_result = intrinsic_calib::calibrateCamera(
+                    det.all_obj_points, det.all_img_points,
+                    det.det_image_width, det.det_image_height,
+                    /*fix_aspect_ratio=*/true);
 
-        det.cam_data.K = calib_result.K;
-        det.cam_data.dist = calib_result.dist;
-        det.cam_data.reproj_error = calib_result.reproj_error;
-        results[cam_i] = std::move(det.cam_data);
-        result_ok[cam_i] = true;
+                det.cam_data.K = calib_result.K;
+                det.cam_data.dist = calib_result.dist;
+                det.cam_data.reproj_error = calib_result.reproj_error;
+                results[cam_i] = std::move(det.cam_data);
+                result_ok[cam_i] = true;
+
+                int done = ++calib_done;
+                {
+                    std::lock_guard<std::mutex> lock(status_mutex);
+                    if (status)
+                        *status = "Calibrating intrinsics (" +
+                                  std::to_string(done) + "/" +
+                                  std::to_string(num_cameras) + ")...";
+                }
+            }));
+        }
+        for (auto &f : calib_futures)
+            f.get();
     }
 
     // Collect results
@@ -1442,7 +1515,9 @@ inline bool write_intermediate_output(
 inline CalibrationResult
 run_full_pipeline(const CalibrationTool::CalibConfig &config,
                   const std::string &base_folder,
-                  std::string *status) {
+                  std::string *status,
+                  aruco_detect::GpuThresholdFunc gpu_thresh = nullptr,
+                  void *gpu_ctx = nullptr) {
     CalibrationResult result;
     result.cam_names = config.cam_ordered;
 
@@ -1469,7 +1544,8 @@ run_full_pipeline(const CalibrationTool::CalibConfig &config,
     if (status)
         *status = "Step 1/7: Detecting ChArUco corners...";
     std::map<std::string, CameraIntrinsics> intrinsics;
-    if (!detect_and_calibrate_intrinsics(config, intrinsics, status)) {
+    if (!detect_and_calibrate_intrinsics(config, intrinsics, status,
+                                         gpu_thresh, gpu_ctx)) {
         result.error = status ? *status : "Intrinsic calibration failed";
         return result;
     }

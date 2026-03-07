@@ -172,7 +172,10 @@ if(APPLE)
     )
 
     # Full pipeline test: runs all 7 steps, validates reproj error
-    add_executable(test_pipeline_run tests/test_pipeline_run.cpp)
+    add_executable(test_pipeline_run
+        tests/test_pipeline_run.cpp
+        src/aruco_metal.mm
+    )
     target_include_directories(test_pipeline_run PRIVATE
         src
         ${HOMEBREW_PREFIX}/include
@@ -181,9 +184,45 @@ if(APPLE)
     target_link_libraries(test_pipeline_run PRIVATE
         Eigen3::Eigen
         Ceres::ceres
+        "-framework Metal"
+        "-framework Foundation"
+        "-framework CoreGraphics"
+        "-framework IOKit"
         pthread
     )
+    set_source_files_properties(
+        src/aruco_metal.mm
+        PROPERTIES COMPILE_FLAGS "-fobjc-arc"
+    )
     set_target_properties(test_pipeline_run PROPERTIES
+        CXX_STANDARD 17
+        CXX_STANDARD_REQUIRED ON
+    )
+
+    # Detection timing benchmark
+    add_executable(test_detect_timing
+        tests/test_detect_timing.cpp
+        src/aruco_metal.mm
+    )
+    target_include_directories(test_detect_timing PRIVATE
+        src
+        ${HOMEBREW_PREFIX}/include
+        ${HOMEBREW_PREFIX}/include/eigen3
+    )
+    target_link_libraries(test_detect_timing PRIVATE
+        Eigen3::Eigen
+        Ceres::ceres
+        "-framework Metal"
+        "-framework Foundation"
+        "-framework CoreGraphics"
+        "-framework IOKit"
+        pthread
+    )
+    set_source_files_properties(
+        src/aruco_metal.mm
+        PROPERTIES COMPILE_FLAGS "-fobjc-arc"
+    )
+    set_target_properties(test_detect_timing PROPERTIES
         CXX_STANDARD 17
         CXX_STANDARD_REQUIRED ON
     )

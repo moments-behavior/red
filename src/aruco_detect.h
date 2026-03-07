@@ -20,6 +20,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <future>
 #include <map>
 #include <numeric>
 #include <utility>
@@ -73,6 +74,24 @@ struct CharucoResult {
     std::vector<Eigen::Vector2f> corners;
     std::vector<int> ids;  // corner IDs (0 to (squares_x-1)*(squares_y-1)-1)
 };
+
+// Optional GPU-accelerated batch threshold function pointer.
+// When non-null, replaces CPU adaptive threshold in detectMarkers.
+// The GPU computes box sums internally (separable filter) — no integral
+// image needed, only the 7MB grayscale image is transferred.
+// Parameters:
+//   ctx:             opaque GPU context (e.g. ArucoMetalHandle cast to void*)
+//   gray:            grayscale image (w*h bytes)
+//   w, h:            image dimensions
+//   window_sizes:    array of window sizes (num_passes elements)
+//   C:               threshold constant
+//   num_passes:      number of threshold passes
+//   binary_outputs:  array of num_passes pointers, each pre-allocated to w*h bytes
+using GpuThresholdFunc = void (*)(
+    void *ctx,
+    const uint8_t *gray, int w, int h,
+    const int *window_sizes, int C, int num_passes,
+    uint8_t **binary_outputs);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // getDictionary
@@ -170,12 +189,21 @@ static constexpr int dx8[8] = {1, 1, 0, -1, -1, -1, 0, 1};
 static constexpr int dy8[8] = {0, 1, 1, 1, 0, -1, -1, -1};
 
 inline std::vector<std::vector<Eigen::Vector2i>>
-findContours(const std::vector<uint8_t> &binary, int w, int h) {
+findContours(const std::vector<uint8_t> &binary, int w, int h,
+             std::vector<uint8_t> *reuse_visited = nullptr,
+             int max_contour_length = 0) {
     std::vector<std::vector<Eigen::Vector2i>> contours;
 
     // Visited mask to avoid re-tracing the same contour.
-    // We mark border pixels as visited once traced.
-    std::vector<uint8_t> visited(binary.size(), 0);
+    // Reuse caller-provided buffer to avoid 7MB allocation per call.
+    std::vector<uint8_t> local_visited;
+    std::vector<uint8_t> &visited = reuse_visited ? *reuse_visited : local_visited;
+    visited.assign(binary.size(), 0);
+
+    // Default max contour length: no ArUco marker should have a perimeter
+    // longer than ~4000 pixels on a 3208x2200 image. Skip huge foreground
+    // regions (e.g. white paper) that waste tracing time.
+    int max_steps = (max_contour_length > 0) ? max_contour_length : w * h;
 
     for (int y = 1; y < h - 1; y++) {
         for (int x = 1; x < w - 1; x++) {
@@ -201,8 +229,6 @@ findContours(const std::vector<uint8_t> &binary, int w, int h) {
             // (direction 0), which means we came from direction 4 (left).
             dir = 7; // Start by checking up-right from the entry direction
 
-            bool first = true;
-            int max_steps = w * h; // Safety limit
             int steps = 0;
 
             do {
@@ -240,7 +266,7 @@ findContours(const std::vector<uint8_t> &binary, int w, int h) {
                 }
             } while (true);
 
-            if (contour.size() >= 20) { // Minimum contour length
+            if (contour.size() >= 20 && steps <= max_steps) {
                 contours.push_back(std::move(contour));
             }
         }
@@ -607,47 +633,139 @@ inline bool readMarkerBits(const uint8_t *gray, int w, int h,
     return true;
 }
 
+// --- Downsample binary image Nx (OR: preserve all foreground edges) ---
+// For N=3: 3208×2200 → 1069×733 (784KB) — fits in L2 cache.
+inline void downsampleBinaryNx(const uint8_t *src, int sw, int sh,
+                               std::vector<uint8_t> &dst, int &dw, int &dh,
+                               int N) {
+    dw = sw / N;
+    dh = sh / N;
+    dst.resize((size_t)dw * dh);
+    for (int y = 0; y < dh; y++) {
+        int sy = y * N;
+        for (int x = 0; x < dw; x++) {
+            int sx = x * N;
+            uint8_t val = 0;
+            for (int dy = 0; dy < N && sy + dy < sh; dy++)
+                for (int dx = 0; dx < N && sx + dx < sw; dx++)
+                    val |= src[(sy + dy) * sw + (sx + dx)];
+            dst[y * dw + x] = val ? 255 : 0;
+        }
+    }
+}
+
 } // namespace detail
+
+// Forward declaration (defined after detectMarkers)
+inline void cornerSubPix(const uint8_t *gray, int w, int h,
+                         std::vector<Eigen::Vector2f> &corners,
+                         int half_win, int max_iter,
+                         float epsilon);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // detectMarkers — detect ArUco markers in a grayscale image
 // ─────────────────────────────────────────────────────────────────────────────
 
 inline std::vector<DetectedMarker>
-detectMarkers(const uint8_t *gray, int w, int h, const ArUcoDictionary &dict) {
+detectMarkers(const uint8_t *gray, int w, int h, const ArUcoDictionary &dict,
+              GpuThresholdFunc gpu_thresh = nullptr, void *gpu_ctx = nullptr) {
     if (!dict.valid() || !gray || w < 10 || h < 10)
         return {};
 
     // ── Steps (a)+(b): Multi-scale adaptive threshold + contour finding ──
-    // Try multiple window sizes to detect markers at different scales,
-    // similar to OpenCV's multi-pass approach.
-    detail::IntegralImage integral;
-    integral.compute(gray, w, h);
 
-    // Generate window sizes: geometric series from small to large
+    // Two window sizes: small (marker-sized) and large (board-sized).
+    // With 4x downsampled contour finding, the second pass adds only ~15ms.
     std::vector<int> window_sizes;
     {
-        int min_win = std::max(3, std::min(w, h) / 80); // ~40px for 3208-wide
-        if (min_win % 2 == 0) min_win++;
-        int max_win = std::max(w, h) / 8;
-        if (max_win % 2 == 0) max_win++;
-        max_win = std::min(max_win, 255);
-        for (int ws = min_win; ws <= max_win; ws = std::max(ws + 2, (int)(ws * 1.6))) {
-            if (ws % 2 == 0) ws++;
-            window_sizes.push_back(ws);
-        }
+        int small_win = std::max(3, std::min(w, h) / 40);
+        if (small_win % 2 == 0) small_win++;
+        int large_win = std::max(w, h) / 10;
+        if (large_win % 2 == 0) large_win++;
+        large_win = std::min(large_win, 255);
+        window_sizes.push_back(small_win);
+        if (large_win > small_win + 10)
+            window_sizes.push_back(large_win);
     }
     int C = 7;
+    int num_passes = (int)window_sizes.size();
 
-    // Collect contours from all threshold scales
+    // Max contour length: ArUco markers have perimeter ~200-800px.
+    // Abort tracing for noise contours (large foreground blobs) early.
+    int max_contour_len = 800;
+
     std::vector<std::vector<Eigen::Vector2i>> all_contours;
-    std::vector<uint8_t> binary;
-    for (int win : window_sizes) {
-        detail::adaptiveThreshold(gray, w, h, binary, integral, win, C);
-        auto contours = detail::findContours(binary, w, h);
-        all_contours.insert(all_contours.end(),
-                           std::make_move_iterator(contours.begin()),
-                           std::make_move_iterator(contours.end()));
+
+    // Lambda: downsample binary 2x, find contours, scale back to full res.
+    // The 2x downsample makes contour arrays fit in L2 cache (~1.76MB vs 7MB),
+    // giving ~50x speedup over full-resolution contour tracing.
+    // Downsample binary 3x, find contours on small image (784KB fits in L2),
+    // then scale contour points back to full resolution.
+    constexpr int ds_factor = 3;
+    auto find_contours_downsampled = [&](const std::vector<uint8_t> &binary) {
+        int dw = 0, dh = 0;
+        std::vector<uint8_t> small;
+        detail::downsampleBinaryNx(binary.data(), w, h, small, dw, dh, ds_factor);
+
+        auto contours = detail::findContours(small, dw, dh,
+                                             nullptr, max_contour_len / ds_factor);
+
+        // Scale contour points back to full resolution
+        for (auto &contour : contours) {
+            for (auto &pt : contour) {
+                pt.x() *= ds_factor;
+                pt.y() *= ds_factor;
+            }
+        }
+        return contours;
+    };
+
+    if (gpu_thresh && gpu_ctx) {
+        // GPU path: separable box filter on GPU computes adaptive threshold
+        // directly — no integral image needed, only 7MB gray image transferred.
+        std::vector<std::vector<uint8_t>> binary_images(num_passes);
+        std::vector<uint8_t *> binary_ptrs(num_passes);
+        for (int p = 0; p < num_passes; p++) {
+            binary_images[p].resize((size_t)w * h);
+            binary_ptrs[p] = binary_images[p].data();
+        }
+
+        gpu_thresh(gpu_ctx, gray, w, h,
+                   window_sizes.data(), C, num_passes,
+                   binary_ptrs.data());
+
+        // Run contour finding on 2x downsampled images
+        std::vector<std::future<std::vector<std::vector<Eigen::Vector2i>>>> futures;
+        for (int p = 0; p < num_passes; p++) {
+            futures.push_back(std::async(std::launch::async, [&, p]() {
+                return find_contours_downsampled(binary_images[p]);
+            }));
+        }
+        for (auto &f : futures) {
+            auto contours = f.get();
+            all_contours.insert(all_contours.end(),
+                               std::make_move_iterator(contours.begin()),
+                               std::make_move_iterator(contours.end()));
+        }
+    } else {
+        // CPU path: compute integral image, threshold + contour on downsampled
+        detail::IntegralImage integral;
+        integral.compute(gray, w, h);
+
+        std::vector<std::future<std::vector<std::vector<Eigen::Vector2i>>>> futures;
+        for (int win : window_sizes) {
+            futures.push_back(std::async(std::launch::async, [&, win]() {
+                std::vector<uint8_t> bin;
+                detail::adaptiveThreshold(gray, w, h, bin, integral, win, C);
+                return find_contours_downsampled(bin);
+            }));
+        }
+        for (auto &f : futures) {
+            auto contours = f.get();
+            all_contours.insert(all_contours.end(),
+                               std::make_move_iterator(contours.begin()),
+                               std::make_move_iterator(contours.end()));
+        }
     }
     auto &contours = all_contours;
 
@@ -703,6 +821,15 @@ detectMarkers(const uint8_t *gray, int w, int h, const ArUcoDictionary &dict) {
         std::array<Eigen::Vector2f, 4> quad = {poly[0], poly[1], poly[2],
                                                  poly[3]};
         detail::orderQuadCorners(quad);
+
+        // Refine quad corners to subpixel accuracy on full-resolution
+        // gray image. This recovers precision lost by the 3x downsampled
+        // contour finding (~1.5px grid → subpixel accuracy).
+        {
+            std::vector<Eigen::Vector2f> qv(quad.begin(), quad.end());
+            cornerSubPix(gray, w, h, qv, 5, 30, 0.01f);
+            for (int i = 0; i < 4; i++) quad[i] = qv[i];
+        }
 
         // Ensure clockwise winding (positive area in screen coords with y-down)
         float signed_area =
@@ -945,11 +1072,13 @@ surroundingSquares(int corner_row, int corner_col) {
 
 inline CharucoResult
 detectCharucoBoard(const uint8_t *gray, int w, int h,
-                   const CharucoBoard &board, const ArUcoDictionary &dict) {
+                   const CharucoBoard &board, const ArUcoDictionary &dict,
+                   GpuThresholdFunc gpu_thresh = nullptr,
+                   void *gpu_ctx = nullptr) {
     CharucoResult result;
 
     // Step 1: Detect ArUco markers
-    auto markers = detectMarkers(gray, w, h, dict);
+    auto markers = detectMarkers(gray, w, h, dict, gpu_thresh, gpu_ctx);
     if (markers.empty())
         return result;
 
