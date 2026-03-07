@@ -8,9 +8,11 @@ typedef struct ArucoMetalContext *ArucoMetalHandle;
 // Create shared Metal state (device, queue, pipelines). Thread-safe, called once.
 ArucoMetalHandle aruco_metal_create();
 
-// Run adaptive threshold on GPU for multiple window sizes using separable
-// box filter. Only the 7MB grayscale image is transferred — box sums are
-// computed entirely on GPU (horizontal running sum + vertical sum + threshold).
+// Run adaptive threshold + 3x downsample on GPU for multiple window sizes.
+// Uses separable box filter (horizontal running sum + vertical sum + threshold),
+// then downsamples the binary result 3x on GPU. Only the 7MB grayscale image
+// is transferred in; only (w/3)*(h/3) ~784KB per pass is transferred out.
+// The full-res binary never leaves the GPU.
 //
 // Thread-safe: uses internal mutex to serialize GPU access. Multiple camera
 // threads can call concurrently; they queue behind the mutex while the GPU
@@ -23,7 +25,7 @@ ArucoMetalHandle aruco_metal_create();
 //   window_sizes:    array of adaptive threshold window sizes (num_passes elements)
 //   C:               threshold constant (pixel > local_mean - C → foreground)
 //   num_passes:      number of threshold passes (length of window_sizes array)
-//   binary_outputs:  array of num_passes pointers, each pre-allocated to w*h bytes
+//   binary_outputs:  array of num_passes pointers, each pre-allocated to (w/3)*(h/3) bytes
 void aruco_metal_threshold_batch(
     void *ctx,
     const uint8_t *gray, int w, int h,

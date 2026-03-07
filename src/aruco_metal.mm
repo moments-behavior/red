@@ -10,10 +10,12 @@
 // ---------------------------------------------------------------------------
 // Metal shader source — separable box filter adaptive threshold
 // ---------------------------------------------------------------------------
-// Two-kernel approach that avoids transferring the 56MB integral image:
+// Three-kernel approach that avoids transferring the 56MB integral image:
 //   Kernel 1 (horizontal_box_sum): one thread per row, sliding window
 //   Kernel 2 (vertical_sum_threshold): one thread per column, sliding window
-// Total GPU data transfer: 7MB gray in + 7MB binary out per pass.
+//   Kernel 3 (downsample_binary_3x): 2D, one thread per output pixel, OR 3×3 block
+// Total GPU data transfer: 7MB gray in + 784KB downsampled binary out per pass.
+// Full-res binary stays on GPU (private storage, never copied to CPU).
 
 static const char *kArucoShaderSource = R"METAL(
 #include <metal_stdlib>
@@ -103,6 +105,35 @@ kernel void vertical_sum_threshold(
         if (rem_y >= 0) vsum -= h_sum[rem_y * w + int(x)];
     }
 }
+
+// Kernel 3: 3x downsample binary image.
+// One thread per output pixel. Reads a 3x3 block from the full-res binary,
+// ORs them: if any pixel in the block is 255, output is 255.
+// This avoids copying the full 7MB binary to CPU — only 784KB transferred.
+kernel void downsample_binary_3x(
+    device const uint8_t *binary  [[buffer(0)]],
+    device uint8_t       *ds_out  [[buffer(1)]],
+    constant uint        &src_w   [[buffer(2)]],
+    constant uint        &src_h   [[buffer(3)]],
+    constant uint        &dst_w   [[buffer(4)]],
+    constant uint        &dst_h   [[buffer(5)]],
+    uint2 tid [[thread_position_in_grid]])
+{
+    if (tid.x >= dst_w || tid.y >= dst_h) return;
+
+    uint sx = tid.x * 3;
+    uint sy = tid.y * 3;
+    uint sw = src_w;
+
+    uint8_t val = 0;
+    for (uint dy = 0; dy < 3 && (sy + dy) < src_h; dy++) {
+        uint row = (sy + dy) * sw + sx;
+        for (uint dx = 0; dx < 3 && (sx + dx) < src_w; dx++) {
+            val |= binary[row + dx];
+        }
+    }
+    ds_out[tid.y * dst_w + tid.x] = val;
+}
 )METAL";
 
 // Maximum number of simultaneous threshold passes per call
@@ -117,13 +148,16 @@ struct ArucoMetalContext {
     id<MTLCommandQueue>         queue;
     id<MTLComputePipelineState> pso_horizontal;
     id<MTLComputePipelineState> pso_vertical;
+    id<MTLComputePipelineState> pso_downsample;
 
     // Pre-allocated buffers (reused across calls, protected by mutex)
     std::mutex mtx;
     int alloc_w = 0, alloc_h = 0;
-    id<MTLBuffer> grayBuf;           // w*h uint8
+    int ds_w = 0, ds_h = 0;         // downsampled dimensions (w/3, h/3)
+    id<MTLBuffer> grayBuf;           // w*h uint8 (shared — CPU writes)
     id<MTLBuffer> hSumBuf;           // w*h int32 (intermediate horizontal sums)
-    id<MTLBuffer> outBufs[kMaxPasses]; // w*h uint8 per pass
+    id<MTLBuffer> fullResBuf;        // w*h uint8 (private — GPU only, never copied to CPU)
+    id<MTLBuffer> dsBufs[kMaxPasses]; // (w/3)*(h/3) uint8 per pass (shared — CPU reads)
 
     // Timing stats
     int call_count = 0;
@@ -176,8 +210,9 @@ ArucoMetalHandle aruco_metal_create() {
 
         ctx->pso_horizontal = make_pso("horizontal_box_sum");
         ctx->pso_vertical   = make_pso("vertical_sum_threshold");
+        ctx->pso_downsample = make_pso("downsample_binary_3x");
 
-        if (!ctx->pso_horizontal || !ctx->pso_vertical) {
+        if (!ctx->pso_horizontal || !ctx->pso_vertical || !ctx->pso_downsample) {
             delete ctx;
             return nullptr;
         }
@@ -208,6 +243,8 @@ void aruco_metal_threshold_batch(
 
         size_t gray_size = (size_t)w * h;
         size_t hsum_size = (size_t)w * h * sizeof(int32_t);
+        int dw = w / 3, dh = h / 3;
+        size_t ds_size = (size_t)dw * dh;
 
         // Re-allocate buffers only when image dimensions change
         if (ctx->alloc_w != w || ctx->alloc_h != h) {
@@ -215,15 +252,21 @@ void aruco_metal_threshold_batch(
                                                     options:MTLResourceStorageModeShared];
             ctx->hSumBuf = [ctx->device newBufferWithLength:hsum_size
                                                     options:MTLResourceStorageModeShared];
+            // Full-res binary stays on GPU only (private storage — never copied to CPU)
+            ctx->fullResBuf = [ctx->device newBufferWithLength:gray_size
+                                                        options:MTLResourceStorageModePrivate];
+            // Downsampled outputs are small (784KB each) — shared for CPU readback
             for (int p = 0; p < kMaxPasses; p++) {
-                ctx->outBufs[p] = [ctx->device newBufferWithLength:gray_size
+                ctx->dsBufs[p] = [ctx->device newBufferWithLength:ds_size
                                                             options:MTLResourceStorageModeShared];
             }
             ctx->alloc_w = w;
             ctx->alloc_h = h;
-            fprintf(stderr, "[ArucoMetal] Allocated buffers for %dx%d "
-                    "(gray=%.1fMB, hsum=%.1fMB)\n",
-                    w, h, gray_size / 1e6, hsum_size / 1e6);
+            ctx->ds_w = dw;
+            ctx->ds_h = dh;
+            fprintf(stderr, "[ArucoMetal] Allocated buffers for %dx%d → %dx%d "
+                    "(gray=%.1fMB, fullres=%.1fMB private, ds=%.1fKB×%d shared)\n",
+                    w, h, dw, dh, gray_size / 1e6, gray_size / 1e6, ds_size / 1e3, kMaxPasses);
         }
 
         // Copy only the 7MB gray image (vs 56MB integral image before!)
@@ -233,6 +276,8 @@ void aruco_metal_threshold_batch(
         uint32_t width_val = (uint32_t)w;
         uint32_t height_val = (uint32_t)h;
         int32_t C_val = (int32_t)C;
+        uint32_t ds_w_val = (uint32_t)dw;
+        uint32_t ds_h_val = (uint32_t)dh;
 
         id<MTLBuffer> widthBuf  = [ctx->device newBufferWithBytes:&width_val
                                                             length:sizeof(uint32_t)
@@ -242,6 +287,12 @@ void aruco_metal_threshold_batch(
                                                            options:MTLResourceStorageModeShared];
         id<MTLBuffer> cBuf      = [ctx->device newBufferWithBytes:&C_val
                                                             length:sizeof(int32_t)
+                                                           options:MTLResourceStorageModeShared];
+        id<MTLBuffer> dsWBuf    = [ctx->device newBufferWithBytes:&ds_w_val
+                                                            length:sizeof(uint32_t)
+                                                           options:MTLResourceStorageModeShared];
+        id<MTLBuffer> dsHBuf    = [ctx->device newBufferWithBytes:&ds_h_val
+                                                            length:sizeof(uint32_t)
                                                            options:MTLResourceStorageModeShared];
 
         // Encode all passes into one command buffer
@@ -268,13 +319,13 @@ void aruco_metal_threshold_batch(
                 [enc endEncoding];
             }
 
-            // Pass 2: Vertical running sum + threshold (one thread per column)
+            // Pass 2: Vertical running sum + threshold → fullResBuf (GPU-private)
             {
                 id<MTLComputeCommandEncoder> enc = [cmdBuf computeCommandEncoder];
                 [enc setComputePipelineState:ctx->pso_vertical];
                 [enc setBuffer:ctx->grayBuf    offset:0 atIndex:0];
                 [enc setBuffer:ctx->hSumBuf    offset:0 atIndex:1];
-                [enc setBuffer:ctx->outBufs[p] offset:0 atIndex:2];
+                [enc setBuffer:ctx->fullResBuf offset:0 atIndex:2];
                 [enc setBuffer:widthBuf        offset:0 atIndex:3];
                 [enc setBuffer:heightBuf       offset:0 atIndex:4];
                 [enc setBuffer:hwBuf           offset:0 atIndex:5];
@@ -284,14 +335,33 @@ void aruco_metal_threshold_batch(
                         MIN((NSUInteger)w, ctx->pso_vertical.maxTotalThreadsPerThreadgroup), 1, 1)];
                 [enc endEncoding];
             }
+
+            // Pass 3: 3x downsample → dsBufs[p] (shared, CPU reads this)
+            {
+                id<MTLComputeCommandEncoder> enc = [cmdBuf computeCommandEncoder];
+                [enc setComputePipelineState:ctx->pso_downsample];
+                [enc setBuffer:ctx->fullResBuf offset:0 atIndex:0];
+                [enc setBuffer:ctx->dsBufs[p]  offset:0 atIndex:1];
+                [enc setBuffer:widthBuf        offset:0 atIndex:2];
+                [enc setBuffer:heightBuf       offset:0 atIndex:3];
+                [enc setBuffer:dsWBuf          offset:0 atIndex:4];
+                [enc setBuffer:dsHBuf          offset:0 atIndex:5];
+                NSUInteger ds_threads_w = (NSUInteger)dw;
+                NSUInteger ds_threads_h = (NSUInteger)dh;
+                NSUInteger tg_w = MIN(ds_threads_w, 16u);
+                NSUInteger tg_h = MIN(ds_threads_h, 16u);
+                [enc dispatchThreads:MTLSizeMake(ds_threads_w, ds_threads_h, 1)
+                    threadsPerThreadgroup:MTLSizeMake(tg_w, tg_h, 1)];
+                [enc endEncoding];
+            }
         }
 
         [cmdBuf commit];
         [cmdBuf waitUntilCompleted];
 
-        // Copy results to caller's output buffers
+        // Copy downsampled results to caller's output buffers (784KB each vs 7MB before)
         for (int p = 0; p < num_passes; p++) {
-            memcpy(binary_outputs[p], ctx->outBufs[p].contents, gray_size);
+            memcpy(binary_outputs[p], ctx->dsBufs[p].contents, ds_size);
         }
 
         auto t_end = std::chrono::steady_clock::now();

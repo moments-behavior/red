@@ -769,24 +769,33 @@ detectMarkers(const uint8_t *gray, int w, int h, const ArUcoDictionary &dict,
     };
 
     if (gpu_thresh && gpu_ctx) {
-        // GPU path: separable box filter on GPU computes adaptive threshold
-        // directly — no integral image needed, only 7MB gray image transferred.
-        std::vector<std::vector<uint8_t>> binary_images(num_passes);
-        std::vector<uint8_t *> binary_ptrs(num_passes);
+        // GPU path: threshold + 3x downsample fused on GPU.
+        // Only (w/3)*(h/3) bytes transferred back per pass (~784KB vs 7MB).
+        int dw = w / 3, dh = h / 3;
+        std::vector<std::vector<uint8_t>> ds_images(num_passes);
+        std::vector<uint8_t *> ds_ptrs(num_passes);
         for (int p = 0; p < num_passes; p++) {
-            binary_images[p].resize((size_t)w * h);
-            binary_ptrs[p] = binary_images[p].data();
+            ds_images[p].resize((size_t)dw * dh);
+            ds_ptrs[p] = ds_images[p].data();
         }
 
         gpu_thresh(gpu_ctx, gray, w, h,
                    window_sizes.data(), C, num_passes,
-                   binary_ptrs.data());
+                   ds_ptrs.data());
+
+        // Contours directly on GPU-downsampled output (no CPU downsample needed)
+        auto find_ds_contours = [&](const std::vector<uint8_t> &ds) {
+            auto contours = detail::findContours(ds, dw, dh,
+                                                 nullptr, max_contour_len / ds_factor);
+            for (auto &contour : contours)
+                for (auto &pt : contour) { pt.x() *= ds_factor; pt.y() *= ds_factor; }
+            return contours;
+        };
 
         // Run first pass contour finding; early-exit if no markers visible.
-        all_contours = find_contours_downsampled(binary_images[0]);
+        all_contours = find_ds_contours(ds_images[0]);
         if (num_passes > 1 && all_contours.size() >= 4) {
-            // First pass found enough quad candidates — run second pass too
-            auto pass2 = find_contours_downsampled(binary_images[1]);
+            auto pass2 = find_ds_contours(ds_images[1]);
             all_contours.insert(all_contours.end(),
                                std::make_move_iterator(pass2.begin()),
                                std::make_move_iterator(pass2.end()));
