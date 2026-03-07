@@ -4,6 +4,7 @@
 #include "AppDecUtils.h"
 #else
 #include "../lib/ImGuiFileDialog/stb/stb_image.h"
+#include <turbojpeg.h>
 #endif
 
 void decoder_clear_buffer_with_constant_image(unsigned char *image_pt,
@@ -440,6 +441,43 @@ static inline bool load_image_rgba(const std::string &file_name,
                                    unsigned char *dst_buf,
                                    size_t *out_size) {
 #ifdef __APPLE__
+    // Try turbojpeg first for JPEG files (NEON SIMD, ~2-3x faster than stbi)
+    {
+        FILE *fp = fopen(file_name.c_str(), "rb");
+        if (fp) {
+            fseek(fp, 0, SEEK_END);
+            long fsize = ftell(fp);
+            fseek(fp, 0, SEEK_SET);
+            // Check JPEG magic bytes (FFD8)
+            unsigned char magic[2] = {};
+            fread(magic, 1, 2, fp);
+            if (fsize > 2 && magic[0] == 0xFF && magic[1] == 0xD8) {
+                fseek(fp, 0, SEEK_SET);
+                std::vector<unsigned char> jpeg_buf(fsize);
+                fread(jpeg_buf.data(), 1, fsize, fp);
+                fclose(fp);
+
+                tjhandle tj = tjInitDecompress();
+                if (tj) {
+                    int w, h, tj_subsamp, tj_cs;
+                    if (tjDecompressHeader3(tj, jpeg_buf.data(), fsize,
+                                            &w, &h, &tj_subsamp, &tj_cs) == 0) {
+                        if (tjDecompress2(tj, jpeg_buf.data(), fsize,
+                                          dst_buf, w, 0, h, TJPF_RGBA,
+                                          TJFLAG_FASTDCT) == 0) {
+                            if (out_size) *out_size = (size_t)w * h * 4;
+                            tjDestroy(tj);
+                            return true;
+                        }
+                    }
+                    tjDestroy(tj);
+                }
+            } else {
+                fclose(fp);
+            }
+        }
+    }
+    // Fallback to stbi for non-JPEG formats (PNG, TIFF, etc.)
     int w, h, ch;
     unsigned char *data = stbi_load(file_name.c_str(), &w, &h, &ch, 4);
     if (!data) return false;

@@ -126,7 +126,7 @@ if(APPLE)
         ${HOMEBREW_PREFIX}/include/eigen3
     )
 
-    target_link_directories(test_gui PRIVATE ${FFMPEG_LIBRARY_DIRS})
+    target_link_directories(test_gui PRIVATE ${FFMPEG_LIBRARY_DIRS} ${TURBOJPEG_LIBRARY_DIRS})
 
     target_link_libraries(test_gui PRIVATE
         Eigen3::Eigen
@@ -139,6 +139,7 @@ if(APPLE)
         "-framework CoreVideo"
         "-framework Cocoa"
         ${FFMPEG_LIBRARIES}
+        ${TURBOJPEG_LIBRARIES}
         Ceres::ceres
         pthread
     )
