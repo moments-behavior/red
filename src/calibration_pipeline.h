@@ -11,6 +11,9 @@
 #include "red_math.h"
 
 #include "../lib/ImGuiFileDialog/stb/stb_image.h"
+#ifdef __APPLE__
+#include <turbojpeg.h>
+#endif
 
 #include <ceres/ceres.h>
 #include <ceres/rotation.h>
@@ -197,16 +200,45 @@ detect_and_calibrate_intrinsics(
                 board.marker_length = cs.marker_side_length;
                 board.dictionary_id = cs.dictionary;
 
+#ifdef __APPLE__
+                // Per-thread turbojpeg decompressor (SIMD-accelerated)
+                tjhandle tj = tjInitDecompress();
+#endif
                 for (int img_num : image_numbers) {
                     std::string img_file = config.img_path + "/" + serial +
                                            "_" + std::to_string(img_num) + ext;
-                    int w = 0, h = 0, channels = 0;
-                    unsigned char *pixels =
-                        stbi_load(img_file.c_str(), &w, &h, &channels, 1);
-                    if (!pixels) {
-                        ++images_done;
-                        continue;
+                    int w = 0, h = 0;
+                    unsigned char *pixels = nullptr;
+
+#ifdef __APPLE__
+                    // turbojpeg: NEON SIMD, ~2-3x faster than stbi_load
+                    FILE *fp = fopen(img_file.c_str(), "rb");
+                    if (!fp) { ++images_done; continue; }
+                    fseek(fp, 0, SEEK_END);
+                    long fsize = ftell(fp);
+                    fseek(fp, 0, SEEK_SET);
+                    std::vector<unsigned char> jpeg_buf(fsize);
+                    fread(jpeg_buf.data(), 1, fsize, fp);
+                    fclose(fp);
+
+                    int tj_subsamp, tj_colorspace;
+                    if (tjDecompressHeader3(tj, jpeg_buf.data(), fsize,
+                                            &w, &h, &tj_subsamp,
+                                            &tj_colorspace) != 0) {
+                        ++images_done; continue;
                     }
+                    pixels = (unsigned char *)malloc(w * h);
+                    if (tjDecompress2(tj, jpeg_buf.data(), fsize,
+                                      pixels, w, 0, h, TJPF_GRAY,
+                                      TJFLAG_FASTDCT) != 0) {
+                        free(pixels);
+                        ++images_done; continue;
+                    }
+#else
+                    int channels = 0;
+                    pixels = stbi_load(img_file.c_str(), &w, &h, &channels, 1);
+                    if (!pixels) { ++images_done; continue; }
+#endif
 
                     if (det.det_image_width == 0) {
                         det.det_image_width = w;
@@ -220,7 +252,11 @@ detect_and_calibrate_intrinsics(
                         gpu_thresh, gpu_ctx);
 
                     if ((int)charuco.ids.size() < 6) {
+#ifdef __APPLE__
+                        free(pixels);
+#else
                         stbi_image_free(pixels);
+#endif
                         int done_img = ++images_done;
                         // Update progress periodically
                         if (done_img % 20 == 0) {
@@ -244,7 +280,11 @@ detect_and_calibrate_intrinsics(
                     aruco_detect::cornerSubPix(
                         pixels, w, h, charuco.corners, 5, 30, 0.01f);
 
+#ifdef __APPLE__
+                    free(pixels);
+#else
                     stbi_image_free(pixels);
+#endif
 
                     int sorted_idx = img_num_to_idx[img_num];
                     det.cam_data.corners_per_image[sorted_idx] = charuco.corners;
@@ -281,6 +321,9 @@ detect_and_calibrate_intrinsics(
                                 done_img, total_images, rate, eta);
                     }
                 }
+#ifdef __APPLE__
+                tjDestroy(tj);
+#endif
 
                 if (det.all_obj_points.size() < 4) {
                     det.error = "Too few valid images for camera " + serial +

@@ -230,6 +230,7 @@ findContours(const std::vector<uint8_t> &binary, int w, int h,
             dir = 7; // Start by checking up-right from the entry direction
 
             int steps = 0;
+            bool exceeded_max = false;
 
             do {
                 contour.push_back(Eigen::Vector2i(cx, cy));
@@ -256,8 +257,33 @@ findContours(const std::vector<uint8_t> &binary, int w, int h,
                     break;
 
                 steps++;
-                if (steps > max_steps)
+                if (steps > max_steps) {
+                    exceeded_max = true;
+                    // Continue tracing to mark all boundary pixels as visited
+                    // (prevents re-entering the same contour from unvisited
+                    // boundary pixels), but stop recording points.
+                    do {
+                        visited[cy * w + cx] = 1;
+                        int sd = (dir + 5) % 8;
+                        bool f2 = false;
+                        for (int i = 0; i < 8; i++) {
+                            int d = (sd + i) % 8;
+                            int nx = cx + dx8[d];
+                            int ny = cy + dy8[d];
+                            if (nx >= 0 && nx < w && ny >= 0 && ny < h &&
+                                binary[ny * w + nx] != 0) {
+                                cx = nx;
+                                cy = ny;
+                                dir = d;
+                                f2 = true;
+                                break;
+                            }
+                        }
+                        if (!f2) break;
+                    } while (cx != sx || cy != sy);
+                    visited[cy * w + cx] = 1; // mark start pixel too
                     break;
+                }
 
                 // Check termination: back at start with same direction
                 if (cx == sx && cy == sy) {
@@ -266,7 +292,7 @@ findContours(const std::vector<uint8_t> &binary, int w, int h,
                 }
             } while (true);
 
-            if (contour.size() >= 20 && steps <= max_steps) {
+            if (contour.size() >= 20 && !exceeded_max) {
                 contours.push_back(std::move(contour));
             }
         }
@@ -633,11 +659,33 @@ inline bool readMarkerBits(const uint8_t *gray, int w, int h,
     return true;
 }
 
-// --- Downsample binary image Nx (OR: preserve all foreground edges) ---
-// For N=3: 3208×2200 → 1069×733 (784KB) — fits in L2 cache.
+// --- Downsample binary image 3x (OR: preserve all foreground edges) ---
+// Specialized for N=3: unrolled 3×3 OR with no bounds checks for interior.
+// 3208×2200 → 1069×733 (784KB) — fits in L2 cache.
+inline void downsampleBinary3x(const uint8_t *src, int sw, int sh,
+                               std::vector<uint8_t> &dst, int &dw, int &dh) {
+    dw = sw / 3;
+    dh = sh / 3;
+    dst.resize((size_t)dw * dh);
+    for (int y = 0; y < dh; y++) {
+        int sy = y * 3;
+        const uint8_t *r0 = src + sy * sw;
+        const uint8_t *r1 = r0 + sw;
+        const uint8_t *r2 = r1 + sw;
+        for (int x = 0; x < dw; x++) {
+            int sx = x * 3;
+            dst[y * dw + x] = (r0[sx] | r0[sx+1] | r0[sx+2] |
+                                r1[sx] | r1[sx+1] | r1[sx+2] |
+                                r2[sx] | r2[sx+1] | r2[sx+2]) ? 255 : 0;
+        }
+    }
+}
+
+// Generic fallback for other downsample factors.
 inline void downsampleBinaryNx(const uint8_t *src, int sw, int sh,
                                std::vector<uint8_t> &dst, int &dw, int &dh,
                                int N) {
+    if (N == 3) { downsampleBinary3x(src, sw, sh, dst, dw, dh); return; }
     dw = sw / N;
     dh = sh / N;
     dst.resize((size_t)dw * dh);
@@ -734,37 +782,36 @@ detectMarkers(const uint8_t *gray, int w, int h, const ArUcoDictionary &dict,
                    window_sizes.data(), C, num_passes,
                    binary_ptrs.data());
 
-        // Run contour finding on 2x downsampled images
-        std::vector<std::future<std::vector<std::vector<Eigen::Vector2i>>>> futures;
-        for (int p = 0; p < num_passes; p++) {
-            futures.push_back(std::async(std::launch::async, [&, p]() {
-                return find_contours_downsampled(binary_images[p]);
-            }));
-        }
-        for (auto &f : futures) {
-            auto contours = f.get();
+        // Run first pass contour finding; early-exit if no markers visible.
+        all_contours = find_contours_downsampled(binary_images[0]);
+        if (num_passes > 1 && all_contours.size() >= 4) {
+            // First pass found enough quad candidates — run second pass too
+            auto pass2 = find_contours_downsampled(binary_images[1]);
             all_contours.insert(all_contours.end(),
-                               std::make_move_iterator(contours.begin()),
-                               std::make_move_iterator(contours.end()));
+                               std::make_move_iterator(pass2.begin()),
+                               std::make_move_iterator(pass2.end()));
         }
     } else {
         // CPU path: compute integral image, threshold + contour on downsampled
         detail::IntegralImage integral;
         integral.compute(gray, w, h);
 
-        std::vector<std::future<std::vector<std::vector<Eigen::Vector2i>>>> futures;
-        for (int win : window_sizes) {
-            futures.push_back(std::async(std::launch::async, [&, win]() {
-                std::vector<uint8_t> bin;
-                detail::adaptiveThreshold(gray, w, h, bin, integral, win, C);
-                return find_contours_downsampled(bin);
-            }));
+        // First pass
+        {
+            std::vector<uint8_t> bin;
+            detail::adaptiveThreshold(gray, w, h, bin, integral,
+                                      window_sizes[0], C);
+            all_contours = find_contours_downsampled(bin);
         }
-        for (auto &f : futures) {
-            auto contours = f.get();
+        // Second pass only if first found enough candidates
+        if (num_passes > 1 && all_contours.size() >= 4) {
+            std::vector<uint8_t> bin;
+            detail::adaptiveThreshold(gray, w, h, bin, integral,
+                                      window_sizes[1], C);
+            auto pass2 = find_contours_downsampled(bin);
             all_contours.insert(all_contours.end(),
-                               std::make_move_iterator(contours.begin()),
-                               std::make_move_iterator(contours.end()));
+                               std::make_move_iterator(pass2.begin()),
+                               std::make_move_iterator(pass2.end()));
         }
     }
     auto &contours = all_contours;

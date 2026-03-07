@@ -160,10 +160,13 @@ if(APPLE)
         src
         ${HOMEBREW_PREFIX}/include
         ${HOMEBREW_PREFIX}/include/eigen3
+        ${TURBOJPEG_INCLUDE_DIRS}
     )
+    target_link_directories(test_calib_debug PRIVATE ${TURBOJPEG_LIBRARY_DIRS})
     target_link_libraries(test_calib_debug PRIVATE
         Eigen3::Eigen
         Ceres::ceres
+        ${TURBOJPEG_LIBRARIES}
         pthread
     )
     set_target_properties(test_calib_debug PROPERTIES
@@ -180,10 +183,13 @@ if(APPLE)
         src
         ${HOMEBREW_PREFIX}/include
         ${HOMEBREW_PREFIX}/include/eigen3
+        ${TURBOJPEG_INCLUDE_DIRS}
     )
+    target_link_directories(test_pipeline_run PRIVATE ${TURBOJPEG_LIBRARY_DIRS})
     target_link_libraries(test_pipeline_run PRIVATE
         Eigen3::Eigen
         Ceres::ceres
+        ${TURBOJPEG_LIBRARIES}
         "-framework Metal"
         "-framework Foundation"
         "-framework CoreGraphics"
@@ -208,10 +214,13 @@ if(APPLE)
         src
         ${HOMEBREW_PREFIX}/include
         ${HOMEBREW_PREFIX}/include/eigen3
+        ${TURBOJPEG_INCLUDE_DIRS}
     )
+    target_link_directories(test_detect_timing PRIVATE ${TURBOJPEG_LIBRARY_DIRS})
     target_link_libraries(test_detect_timing PRIVATE
         Eigen3::Eigen
         Ceres::ceres
+        ${TURBOJPEG_LIBRARIES}
         "-framework Metal"
         "-framework Foundation"
         "-framework CoreGraphics"
@@ -227,6 +236,68 @@ if(APPLE)
         CXX_STANDARD_REQUIRED ON
     )
 
+
+    # Granular detection timing benchmark
+    add_executable(test_detect_granular
+        tests/test_detect_granular.cpp
+        src/aruco_metal.mm
+    )
+    target_include_directories(test_detect_granular PRIVATE
+        src
+        ${HOMEBREW_PREFIX}/include
+        ${HOMEBREW_PREFIX}/include/eigen3
+        ${TURBOJPEG_INCLUDE_DIRS}
+    )
+    target_link_directories(test_detect_granular PRIVATE ${TURBOJPEG_LIBRARY_DIRS})
+    target_link_libraries(test_detect_granular PRIVATE
+        Eigen3::Eigen
+        Ceres::ceres
+        ${TURBOJPEG_LIBRARIES}
+        "-framework Metal"
+        "-framework Foundation"
+        "-framework CoreGraphics"
+        "-framework IOKit"
+        pthread
+    )
+    set_source_files_properties(
+        src/aruco_metal.mm
+        PROPERTIES COMPILE_FLAGS "-fobjc-arc"
+    )
+    set_target_properties(test_detect_granular PROPERTIES
+        CXX_STANDARD 17
+        CXX_STANDARD_REQUIRED ON
+    )
+
+    # Contour finding drill-down benchmark
+    add_executable(test_contour_drill
+        tests/test_contour_drill.cpp
+        src/aruco_metal.mm
+    )
+    target_include_directories(test_contour_drill PRIVATE
+        src
+        ${HOMEBREW_PREFIX}/include
+        ${HOMEBREW_PREFIX}/include/eigen3
+        ${TURBOJPEG_INCLUDE_DIRS}
+    )
+    target_link_directories(test_contour_drill PRIVATE ${TURBOJPEG_LIBRARY_DIRS})
+    target_link_libraries(test_contour_drill PRIVATE
+        Eigen3::Eigen
+        Ceres::ceres
+        ${TURBOJPEG_LIBRARIES}
+        "-framework Metal"
+        "-framework Foundation"
+        "-framework CoreGraphics"
+        "-framework IOKit"
+        pthread
+    )
+    set_source_files_properties(
+        src/aruco_metal.mm
+        PROPERTIES COMPILE_FLAGS "-fobjc-arc"
+    )
+    set_target_properties(test_contour_drill PROPERTIES
+        CXX_STANDARD 17
+        CXX_STANDARD_REQUIRED ON
+    )
     # Cross-validation: laser-refined vs ChArUco landmarks (Eigen-only, no OpenCV)
     add_executable(test_calib_crossval tests/test_calib_crossval.cpp)
     target_include_directories(test_calib_crossval PRIVATE
