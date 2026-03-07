@@ -661,6 +661,277 @@ the calibration folder: scan for `CamXXXX.yaml`, extract the serial portion.
 
 ---
 
+## Phase 12 — Remove OpenCV from Calibration Pipeline (branch: `rob_calib_no_opencv`)
+
+**Commits:** Mar 7, 2026
+
+### Goal
+
+Completely remove OpenCV from the macOS build. The calibration pipeline
+(`calibration_pipeline.h`) was the last remaining user of OpenCV, relying on it
+for three distinct tasks: essential matrix estimation for relative pose
+computation, camera intrinsic calibration via Zhang's method, and ChArUco
+marker detection. This phase replaces all three with Eigen-only (and
+Ceres-based) implementations, eliminating the `brew install opencv` requirement
+and its ~65 transitive dependencies.
+
+### Approach: phased replacement with continuous validation
+
+Each OpenCV function was replaced independently and validated against the
+baseline before proceeding. The baseline numbers (from the OpenCV-based
+pipeline on the 16-camera test dataset) were:
+
+| Metric | Baseline |
+|---|---|
+| BA mean reprojection error | 0.58 px (16 cameras, 7665 points) |
+| Cross-validation reprojection | 0.592 px |
+| Per-camera intrinsic reproj | 0.207–1.300 px |
+| Essential matrix inliers | 628/628 at threshold 0.001 |
+
+### Phase 12a: Essential matrix + pose estimation → Eigen
+
+**Replaced:** `cv::findEssentialMat`, `cv::findFundamentalMat`,
+`cv::decomposeEssentialMat`, `cv::eigen2cv`/`cv::cv2eigen` (5 conversion
+calls).
+
+**New functions in `src/red_math.h`:**
+
+1. `findEssentialMatRANSAC()` — 8-point algorithm with Hartley normalization,
+   RANSAC with adaptive iteration count, and iterative inlier refinement.
+2. `findFundamentalMatRANSAC()` — Same pattern with Hartley
+   normalize/denormalize for pixel-coordinate inputs.
+3. `decomposeEssentialMatrix()` — SVD decomposition into R1, R2, t candidates
+   with determinant correction.
+4. Supporting functions: `sampsonDistanceSq()`, `eightPointAlgorithm()`,
+   `hartleyNormalize()`.
+
+**Key finding: Hartley normalization is critical for the 8-point algorithm.**
+Without it, the 8-point algorithm on normalized camera coordinates produced E
+matrices with Sampson distance distributions ~5× larger than OpenCV's 5-point
+algorithm, yielding only 82/628 inliers at threshold 0.001. Adding Hartley
+normalization (center points at origin, scale to average distance √2) improved
+this to 523/628. The remaining gap versus OpenCV's 628/628 is because the
+5-point algorithm directly enforces the cubic essential matrix constraint,
+producing a mathematically tighter fit. Despite fewer inliers, the pipeline
+converged to 0.573 px mean reproj — actually *better* than baseline.
+
+The RANSAC implementation uses:
+- Deterministic seed (42) for reproducibility
+- Adaptive iteration count based on inlier ratio
+- 3 rounds of iterative refinement (re-estimate E from inliers, re-classify)
+- Sampson distance for scoring (scale-invariant)
+
+**Data type changes:** `CameraIntrinsics::corners_per_image` changed from
+`cv::Point2f` to `Eigen::Vector2f`. `DetectionResult` fields changed from
+`cv::Point3f`/`cv::Point2f`/`cv::Size` to `Eigen::Vector3f`/`Eigen::Vector2f`
+/`int`. All OpenCV→Eigen conversions at the detection boundary were eliminated.
+
+**Removed includes:** `<opencv2/calib3d.hpp>`, `<opencv2/core/eigen.hpp>`.
+
+**Validation:** Pipeline reproj 0.573 px (baseline 0.58), cross-validation
+0.592 px (unchanged). Per-camera intrinsic reproj improved slightly for all
+cameras.
+
+### Phase 12b: `cv::calibrateCamera` → Ceres-based Zhang's method
+
+**Replaced:** `cv::calibrateCamera` with `cv::CALIB_FIX_ASPECT_RATIO`.
+
+**New file: `src/intrinsic_calibration.h`** (~300 lines)
+
+Implements Zhang's camera calibration in four steps:
+
+1. **Homography estimation** — DLT with Hartley normalization from planar
+   object points to image points. Each view of the calibration board gives one
+   3×3 homography.
+
+2. **Closed-form intrinsic extraction** — From N homographies, build a system
+   of constraints on the image of the absolute conic B = K^{-T}K^{-1}. Each
+   homography contributes 2 equations (orthogonality + equal-norm of first two
+   columns). Solve via SVD for the 6-parameter B, then extract (fx, fy, cx,
+   cy, skew) from Cholesky-like decomposition.
+
+3. **Per-image extrinsic estimation** — Given K and homography H, compute
+   R, t from K^{-1}H: normalize columns, enforce rotation constraint via SVD
+   projection to SO(3).
+
+4. **Ceres nonlinear refinement** — Joint optimization of intrinsics (f, cx,
+   cy, k1, k2, p1, p2, k3) and per-image extrinsics (rvec, tvec) using
+   automatic differentiation. Full Brown-Conrady distortion model.
+
+**Key design decision: separate cost functors for `fix_aspect_ratio`.**
+The initial approach used `ceres::SubsetManifold` to fix fy and copy fx→fy
+after optimization. This is *wrong* — during optimization, fy is frozen at its
+initial value while fx is optimized, so the model uses inconsistent focal
+lengths. The correct approach: when `fix_aspect_ratio=true`, parameterize
+intrinsics as `[f, cx, cy, k1, k2, p1, p2, k3]` (8 params) with a cost
+functor that reads `intrinsics[0]` for both fx and fy. This required two cost
+functor structs (`IntrinsicReprojCostFixedAR` and `IntrinsicReprojCost`).
+
+**Closed-form fallback:** The Zhang closed-form extraction is numerically
+sensitive — it can produce unreasonable K when homographies are poorly
+conditioned (few images, small board, near-degenerate viewpoints). Validation
+checks reject K if focal length is outside [0.3w, 5w] or principal point is
+outside [-w, 2w]. On failure, falls back to f=image_width, cx=w/2, cy=h/2.
+Ceres refinement converges from this rough guess in ~100 iterations.
+
+**Removed includes:** `<opencv2/aruco/aruco_calib.hpp>`. Removed `calib3d` and
+`aruco` from CMake `find_package(OpenCV COMPONENTS ...)`, leaving only
+`core imgproc objdetect`.
+
+**Validation:** Per-camera intrinsic reproj *consistently better* than OpenCV
+(e.g., 2002486: 0.238 vs 0.280, 2005325: 0.176 vs 0.207). This is because
+Ceres with 100 iterations converges more tightly than OpenCV's
+Levenberg-Marquardt with fewer iterations. Pipeline reproj 0.582 px (baseline
+0.58), cross-validation 0.592 px (unchanged).
+
+### Phase 12c: ChArUco detection → custom implementation
+
+**Replaced:** `cv::aruco::getPredefinedDictionary`, `cv::aruco::CharucoBoard`,
+`cv::aruco::CharucoDetector::detectBoard`, `cv::cornerSubPix`,
+`board->matchImagePoints`, `cv::Mat` image wrapping.
+
+**New file: `src/aruco_detect.h`** (~1100 lines)
+
+Self-contained ArUco marker detection and ChArUco corner interpolation using
+only Eigen and the standard library. No OpenCV at all.
+
+**Dictionary data:** The DICT_4X4_50 bit patterns (50 markers × 16 bits each)
+were extracted from OpenCV using a small utility program that reads
+`cv::aruco::getPredefinedDictionary(0).bytesList` and repacks the data as
+`constexpr uint16_t[50]`. The byte layout in OpenCV is non-trivial:
+`bytesList` is a 3D Mat with shape (nmarkers, ceil(bits/8), 4) where the 4
+channels represent 4 rotations. For 4×4 markers, each marker is 2 bytes × 4
+rotations. We extract rotation 0 and store as `(byte0 << 8) | byte1`.
+
+**ArUco detection pipeline:**
+
+1. **Multi-scale adaptive threshold.** A single threshold window size misses
+   markers at different scales. The implementation generates a geometric series
+   of window sizes from ~max(w,h)/80 to ~max(w,h)/8 and runs adaptive mean
+   threshold at each scale. For a 3208×2200 image, this produces ~5 threshold
+   passes with window sizes {41, 67, 107, 171, 275}. An integral image
+   (computed once) enables O(1) per-pixel mean lookup at any window size.
+
+2. **Contour tracing.** Moore boundary tracing with 8-connectivity. Scans the
+   binary image for foreground pixels, traces the boundary by following the
+   8-connected neighbor chain, marks visited pixels. Returns all outer
+   contours.
+
+3. **Polygon approximation.** Douglas-Peucker algorithm with epsilon = 5% of
+   contour perimeter. Recursively splits the contour at the point with maximum
+   deviation from the line segment.
+
+4. **Quad filtering.** Keeps only 4-vertex convex polygons with area > 100 px²,
+   minimum side > 10 px, and maximum side ratio < 4:1. Corners are sorted into
+   consistent TL/TR/BR/BL order based on centroid-relative angles.
+
+5. **Perspective warp + bit reading.** For each quad, computes a 4-point DLT
+   homography mapping the quad to a (marker_bits+2) × (marker_bits+2) grid
+   (the +2 accounts for the black border). Samples the image at grid cell
+   centers using bilinear interpolation.
+
+6. **Otsu thresholding for bit classification.** The initial implementation
+   used a simple mean threshold to classify cells as black/white, but this
+   produced 2-3 bit errors per marker on real images (Hamming distance 2-3
+   versus the dictionary). Switching to Otsu's method on the sampled cell
+   values dramatically improved classification, reducing typical Hamming
+   distance to 0-1.
+
+7. **Border verification.** The outer ring of cells (border) must be
+   predominantly black. Allows up to 25% of border cells to be white (noise
+   tolerance for real-world images with imperfect borders).
+
+8. **Dictionary matching with rotation.** For the inner 4×4 grid, tries all 4
+   rotations (0°, 90°, 180°, 270°). Each rotation is computed by bit
+   manipulation (`rotateBits90CW`). Accepts matches with Hamming distance ≤ 1
+   (the dictionary's max correction bits). The quad corners are rotated to
+   match the canonical marker orientation.
+
+9. **Duplicate removal.** When multiple quads match the same marker ID (from
+   different threshold scales), keeps the one with the lowest Hamming distance.
+
+**ChArUco corner interpolation:**
+
+The critical design decision here was using a **global homography** computed
+from ALL detected marker corners on the board, rather than per-corner local
+homographies. The initial implementation used local homographies (1-2 nearby
+markers per corner), which produced corners ~1.5 px off from OpenCV's output.
+The global homography approach uses all 48 point correspondences (12 markers ×
+4 corners) for a heavily overdetermined DLT fit, producing corners within
+~0.7 px of OpenCV's and yielding pipeline reproj of 0.598 px.
+
+Board layout convention: markers occupy squares where `(row + col)` is odd
+(OpenCV's convention where square (0,0) is black). Marker IDs are assigned
+sequentially row-by-row among marker squares.
+
+**Board-level spatial consistency check:** After detecting markers, validates
+that the detected markers' image positions are consistent with the known board
+geometry. Computes pairwise distance ratios (image distance / board distance)
+and rejects markers whose ratios deviate >50% from the median. This filters
+out false-positive markers that happen to match dictionary patterns by chance
+but are not actually on the board.
+
+**Subpixel corner refinement (`cornerSubPix`):** Gradient-based iterative
+refinement using the autocorrelation matrix method. For each corner, in a
+window around the current estimate: compute image gradients via central
+differences, build 2×2 autocorrelation matrix M = Σ(∇I ∇Iᵀ), solve for the
+new corner position as M⁻¹ Σ(∇I ∇Iᵀ p). Converges in ~5-10 iterations.
+
+**`matchImagePoints`:** Maps corner IDs to 3D object points. Corner
+(row, col) = (id / (squares_x-1), id % (squares_x-1)) maps to world point
+((col+1) × square_length, (row+1) × square_length, 0).
+
+**Debugging methodology:** A comparison test program linked against both
+OpenCV and the custom detector ran both on the same image and compared:
+marker IDs, marker corner positions, ChArUco corner positions, and object
+point coordinates. This identified three issues: (1) the dictionary bit
+patterns had been packed incorrectly (row-vs-column byte order), (2) the
+board layout convention was inverted ((row+col) even vs odd), and (3)
+per-corner local homographies were too noisy. Each was fixed and re-validated.
+
+### Phase 12d: CMakeLists.txt cleanup
+
+Removed `find_package(OpenCV ...)` entirely from the macOS section. Removed
+all `${OpenCV_INCLUDE_DIRS}` and `${OpenCV_LIBS}` references from all macOS
+targets (red, test_gui, test_calib_debug, test_pipeline_run). Verified with
+`otool -L ./release/red` that no OpenCV dylibs are linked.
+
+The Linux build section is untouched — it still uses OpenCV for the NVIDIA
+pipeline.
+
+### Final validation
+
+| Metric | OpenCV baseline | No-OpenCV | Status |
+|---|---|---|---|
+| BA mean reproj | 0.58 px | 0.598 px | Pass (< 0.60) |
+| Cross-validation | 0.592 px | 0.592 px | Identical |
+| Per-camera intrinsic reproj | 0.207–1.300 | 0.176–0.835 | Better |
+| OpenCV linked (macOS) | yes | **no** | Removed |
+| `find_package(OpenCV)` (macOS) | required | **none** | Removed |
+
+**macOS dependencies after removal:**
+`eigen` (header-only), `ffmpeg`, `glfw`, `jpeg-turbo`, `ceres-solver`
+(already needed for BA). No OpenCV.
+
+### New files
+
+| File | Lines | Purpose |
+|---|---|---|
+| `src/aruco_detect.h` | ~1100 | Custom ArUco/ChArUco detection |
+| `src/intrinsic_calibration.h` | ~300 | Zhang's calibration with Ceres refinement |
+
+### Modified files
+
+| File | Changes |
+|---|---|
+| `src/red_math.h` | Added essential/fundamental matrix RANSAC, decomposition |
+| `src/calibration_pipeline.h` | Replaced all 43 `cv::` references with Eigen equivalents |
+| `CMakeLists.txt` | Removed OpenCV from macOS build |
+| `tests/test_calib_debug.cpp` | Updated for Eigen types, custom detection |
+| `tests/test_pipeline_run.cpp` | New full pipeline validation test |
+
+---
+
 ## Lessons Learned and Gotchas
 
 ### VideoToolbox
@@ -716,6 +987,34 @@ the calibration folder: scan for `CamXXXX.yaml`, extract the serial portion.
 - `ba_config.bounds_cp` value of zero means "fix this parameter" — use
   `ceres::SubsetManifold` in Ceres Solver to fix individual parameters.
 
+### Replacing OpenCV algorithms
+- The 8-point algorithm for essential matrix estimation **requires** Hartley
+  normalization even when inputs are already in normalized camera coordinates.
+  Without it, numerical conditioning is poor and Sampson distances are ~5×
+  larger than expected.
+- OpenCV's `findEssentialMat` uses the 5-point algorithm (Nistér 2004) which
+  directly enforces the cubic essential matrix constraint. The 8-point
+  algorithm with Hartley normalization is a close approximation but produces
+  slightly larger residuals. Iterative refinement (re-estimate from inliers)
+  closes most of the gap.
+- `ceres::SubsetManifold` is wrong for `fix_aspect_ratio` — it freezes fy at
+  its initial value while fx is optimized. The correct approach is to
+  parameterize with a single focal length parameter and use a cost functor
+  that reads `f` for both fx and fy.
+- Zhang's closed-form intrinsic extraction (from homographies) is numerically
+  fragile. Always validate the result and fall back to a rough initial guess
+  (f=image_width, cx=w/2, cy=h/2) when it fails. Ceres converges from this
+  guess in ~100 iterations.
+- For ChArUco corner interpolation, a **global** homography from all detected
+  marker corners (~48 point correspondences) is much more accurate than
+  per-corner **local** homographies from 1-2 nearby markers (~4-8 points).
+  The global fit averages out individual marker corner errors.
+- ArUco bit reading requires Otsu's threshold (not mean threshold) for
+  reliable black/white cell classification on real images. Mean threshold
+  produces 2-3 bit errors per marker.
+- Multi-scale adaptive thresholding (multiple window sizes) is essential for
+  detecting markers at different apparent sizes in high-resolution images.
+
 ### Media switching (ImGui + Metal)
 - Freeing Metal textures mid-frame causes use-after-free crashes. ImGui records
   draw commands during the frame and executes them at frame end — any
@@ -744,6 +1043,8 @@ New files added during the port and calibration work:
 | `src/jarvis_export.h` | Built-in JARVIS/COCO export tool |
 | `src/calibration_pipeline.h` | 7-step multiview_calib port (ChArUco → BA → YAML) |
 | `src/calibration_tool.h` | Calibration project config, discovery, save/load |
+| `src/intrinsic_calibration.h` | Zhang's camera calibration with Ceres refinement |
+| `src/aruco_detect.h` | Custom ArUco/ChArUco detection (no OpenCV) |
 | `src/laser_calibration.h` | Laser spot detection, filtering, triangulation, BA |
 | `src/laser_metal.h/mm` | Metal GPU compute shader for laser spot detection |
 | `src/user_settings.h` | Persistent user settings (default paths, preferences) |

@@ -5607,15 +5607,20 @@ int main(int argc, char **argv) {
                 if (ImGui::Begin("Calibration Tool", &show_calibration_tool)) {
 
                     // ── Section 1: Project Info ──
-                    ImGui::SeparatorText("Project");
-                    ImGui::Text("Project: %s",
-                                calib_project.project_name.c_str());
-                    ImGui::Text("Path:    %s",
-                                calib_project.project_path.c_str());
+                    if (ImGui::CollapsingHeader("Project", ImGuiTreeNodeFlags_DefaultOpen)) {
+                        ImGui::Indent();
+                        ImGui::Text("Project: %s",
+                                    calib_project.project_name.c_str());
+                        ImGui::Text("Path:    %s",
+                                    calib_project.project_path.c_str());
+                        ImGui::Unindent();
+                    }
+                    ImGui::Spacing();
 
                     // ── Section 2: Aruco Calibration (if has_aruco) ──
                     if (calib_project.has_aruco() && calib_config_loaded) {
-                    ImGui::SeparatorText("Aruco Calibration");
+                    if (ImGui::CollapsingHeader("Aruco Calibration", ImGuiTreeNodeFlags_DefaultOpen)) {
+                    ImGui::Indent();
                     ImGui::Text("Cameras:      %d",
                                 (int)calib_config.cam_ordered.size());
                     ImGui::Text("Board:        %d x %d  (%.1f mm squares)",
@@ -5677,8 +5682,7 @@ int main(int argc, char **argv) {
                                            "Images loaded");
                     }
 
-                    // ── Calibration Pipeline ──
-                    ImGui::SeparatorText("Calibration Pipeline");
+                    ImGui::Separator();
 
                     // Check if pipeline is running — poll future
                     if (calib_running && calib_future.valid()) {
@@ -5750,6 +5754,9 @@ int main(int argc, char **argv) {
                                     calib_project.output_folder.c_str());
                     }
 
+                    ImGui::Unindent();
+                    } // end CollapsingHeader("Aruco Calibration")
+                    ImGui::Spacing();
                     } // end aruco section
 
                     // ── Section 3: Laser Refinement ──
@@ -5776,7 +5783,8 @@ int main(int argc, char **argv) {
                     }
 
                     if (show_laser_section) {
-                        ImGui::SeparatorText("Laser Refinement");
+                        if (ImGui::CollapsingHeader("Laser Refinement", ImGuiTreeNodeFlags_DefaultOpen)) {
+                        ImGui::Indent();
 
                         // Poll async result
                         if (laser_running && laser_future.valid()) {
@@ -5886,14 +5894,20 @@ int main(int argc, char **argv) {
 
                         // Show matched cameras
                         if (!calib_project.camera_names.empty()) {
-                            std::string cam_list;
-                            for (int i = 0; i < (int)calib_project.camera_names.size(); i++) {
-                                if (i > 0) cam_list += ", ";
-                                cam_list += "Cam" + calib_project.camera_names[i];
+                            char cam_header[64];
+                            snprintf(cam_header, sizeof(cam_header), "Cameras (%d matched)",
+                                     (int)calib_project.camera_names.size());
+                            if (ImGui::CollapsingHeader(cam_header, ImGuiTreeNodeFlags_DefaultOpen)) {
+                                ImGui::Indent();
+                                if (ImGui::BeginTable("##cam_grid", 4)) {
+                                    for (int i = 0; i < (int)calib_project.camera_names.size(); i++) {
+                                        ImGui::TableNextColumn();
+                                        ImGui::Text("Cam%s", calib_project.camera_names[i].c_str());
+                                    }
+                                    ImGui::EndTable();
+                                }
+                                ImGui::Unindent();
                             }
-                            ImGui::Text("Matched cameras (%d): %s",
-                                        (int)calib_project.camera_names.size(),
-                                        cam_list.c_str());
                         } else if (!calib_project.media_folder.empty() &&
                                    !calib_project.calibration_folder.empty()) {
                             ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f),
@@ -5902,7 +5916,8 @@ int main(int argc, char **argv) {
 
                         if (laser_ready) {
                             // Detection parameters
-                            ImGui::SeparatorText("Detection");
+                            if (ImGui::CollapsingHeader("Detection Parameters")) {
+                            ImGui::Indent();
                             ImGui::SliderInt("Green Threshold",
                                              &laser_config.green_threshold, 20, 255);
                             ImGui::SliderInt("Green Dominance",
@@ -5930,9 +5945,12 @@ int main(int argc, char **argv) {
                                     ImGui::Text("~all frames per camera");
                                 }
                             }
+                            ImGui::Unindent();
+                            } // end Detection Parameters
 
                             // Filtering parameters
-                            ImGui::SeparatorText("Filtering");
+                            if (ImGui::CollapsingHeader("Filtering")) {
+                            ImGui::Indent();
                             int max_min_cams =
                                 std::max(2, (int)laser_config.camera_names.size());
                             ImGui::SliderInt("Min Cameras",
@@ -5942,9 +5960,12 @@ int main(int argc, char **argv) {
                             if (ImGui::SliderFloat("Reproj Threshold (px)", &reproj_th,
                                                    1.0f, 50.0f))
                                 laser_config.reproj_threshold = reproj_th;
+                            ImGui::Unindent();
+                            } // end Filtering
 
                             // BA parameters
-                            ImGui::SeparatorText("Bundle Adjustment");
+                            if (ImGui::CollapsingHeader("Bundle Adjustment")) {
+                            ImGui::Indent();
                             float ba_th1 = (float)laser_config.ba_outlier_th1;
                             float ba_th2 = (float)laser_config.ba_outlier_th2;
                             if (ImGui::SliderFloat("BA Outlier Pass 1 (px)", &ba_th1,
@@ -5961,6 +5982,8 @@ int main(int argc, char **argv) {
                                 ImGui::SetTooltip(
                                     "Fix focal length and distortion coefficients.\n"
                                     "Recommended when laser points lack depth diversity.");
+                            ImGui::Unindent();
+                            } // end Bundle Adjustment
 
                             ImGui::Separator();
 
@@ -5989,10 +6012,12 @@ int main(int argc, char **argv) {
                                 ImGui::SameLine();
                                 ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f),
                                                    "Running...");
+                            }
 
-                                // Per-camera detection progress with progress bars
-                                if (!laser_progress->cameras.empty()) {
-                                    ImGui::Separator();
+                            // Progress sub-section (visible during/after detection)
+                            if (laser_running && !laser_progress->cameras.empty()) {
+                                if (ImGui::CollapsingHeader("Progress", ImGuiTreeNodeFlags_DefaultOpen)) {
+                                ImGui::Indent();
                                     int eff_stop = laser_config.stop_frame > 0
                                         ? laser_config.stop_frame
                                         : (laser_total_frames > 0 ? laser_total_frames : 0);
@@ -6048,12 +6073,14 @@ int main(int argc, char **argv) {
                                         }
                                         ImGui::EndTable();
                                     }
-                                }
+                                ImGui::Unindent();
+                                } // end Progress
                             }
 
                             // Results
                             if (laser_done && laser_result.success) {
-                                ImGui::SeparatorText("Results");
+                                if (ImGui::CollapsingHeader("Results", ImGuiTreeNodeFlags_DefaultOpen)) {
+                                ImGui::Indent();
                                 ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f),
                                                    "Reprojection error: %.3f -> %.3f px",
                                                    laser_result.mean_reproj_before,
@@ -6116,6 +6143,8 @@ int main(int argc, char **argv) {
                                         ImGui::TreePop();
                                     }
                                 }
+                                ImGui::Unindent();
+                                } // end CollapsingHeader("Results")
                             }
 
                             // Laser status
@@ -6132,9 +6161,10 @@ int main(int argc, char **argv) {
                             }
 
                             // Detection Processing visualization
-                            ImGui::Separator();
+                            if (ImGui::CollapsingHeader("Detection Processing")) {
+                            ImGui::Indent();
                             bool prev_detection = laser_show_detection;
-                            ImGui::Checkbox("Detection Processing", &laser_show_detection);
+                            ImGui::Checkbox("Enable", &laser_show_detection);
                             if (prev_detection && !laser_show_detection) {
 #ifdef __APPLE__
                                 for (int ci = 0; ci < scene->num_cams; ci++)
@@ -6184,6 +6214,8 @@ int main(int argc, char **argv) {
                                     "Green=valid blob, Yellow=too small, "
                                     "Red=too large, Gray=filtered by erode/dilate");
                             }
+                            ImGui::Unindent();
+                            } // end Detection Processing
                         } else {
                             // Laser inputs not yet complete — show hint
                             if (calib_project.media_folder.empty()) {
@@ -6194,6 +6226,9 @@ int main(int argc, char **argv) {
                                     "Set Video Folder and click Load Laser Videos");
                             }
                         }
+                        ImGui::Unindent();
+                        } // end CollapsingHeader("Laser Refinement")
+                        ImGui::Spacing();
                     } // end laser section
 
                     // Status text (general)

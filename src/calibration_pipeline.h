@@ -4,19 +4,13 @@
 // pairwise relative poses → chained global poses → bundle adjustment →
 // world registration → per-camera YAML output.
 
+#include "aruco_detect.h"
 #include "calibration_tool.h"
+#include "intrinsic_calibration.h"
 #include "opencv_yaml_io.h"
 #include "red_math.h"
 
 #include "../lib/ImGuiFileDialog/stb/stb_image.h"
-
-#include <opencv2/aruco/aruco_calib.hpp>
-#include <opencv2/calib3d.hpp>
-#include <opencv2/core.hpp>
-#include <opencv2/core/eigen.hpp>
-#include <opencv2/imgproc.hpp>
-#include <opencv2/objdetect/aruco_board.hpp>
-#include <opencv2/objdetect/charuco_detector.hpp>
 
 #include <ceres/ceres.h>
 #include <ceres/rotation.h>
@@ -53,7 +47,7 @@ struct CameraIntrinsics {
     int image_width = 0;
     int image_height = 0;
     // Per-image detected corners: image_index → {corner_id → pixel}
-    std::map<int, std::vector<cv::Point2f>> corners_per_image;
+    std::map<int, std::vector<Eigen::Vector2f>> corners_per_image;
     std::map<int, std::vector<int>> ids_per_image;
 };
 
@@ -132,12 +126,6 @@ inline std::string get_image_extension(const std::string &img_path,
     return ".jpg";
 }
 
-// Convert OpenCV aruco dictionary ID to predefined dictionary.
-inline cv::aruco::PredefinedDictionaryType
-aruco_dict_from_id(int id) {
-    return static_cast<cv::aruco::PredefinedDictionaryType>(id);
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Step 1: Detect ChArUco corners and calibrate intrinsics (per camera)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -173,9 +161,10 @@ detect_and_calibrate_intrinsics(
     // Per-camera detection results (filled in parallel)
     struct DetectionResult {
         CameraIntrinsics cam_data; // corners_per_image, ids_per_image, image dims
-        std::vector<std::vector<cv::Point3f>> all_obj_points;
-        std::vector<std::vector<cv::Point2f>> all_img_points;
-        cv::Size image_size;
+        std::vector<std::vector<Eigen::Vector3f>> all_obj_points;
+        std::vector<std::vector<Eigen::Vector2f>> all_img_points;
+        int det_image_width = 0;
+        int det_image_height = 0;
         bool ok = false;
         std::string error;
     };
@@ -191,12 +180,13 @@ detect_and_calibrate_intrinsics(
                 std::string ext = get_image_extension(config.img_path, serial);
                 auto &det = detections[cam_i];
 
-                auto dictionary = cv::aruco::getPredefinedDictionary(
-                    aruco_dict_from_id(cs.dictionary));
-                auto board = cv::makePtr<cv::aruco::CharucoBoard>(
-                    cv::Size(cs.w, cs.h), cs.square_side_length,
-                    cs.marker_side_length, dictionary);
-                cv::aruco::CharucoDetector detector(*board);
+                auto aruco_dict = aruco_detect::getDictionary(cs.dictionary);
+                aruco_detect::CharucoBoard board;
+                board.squares_x = cs.w;
+                board.squares_y = cs.h;
+                board.square_length = cs.square_side_length;
+                board.marker_length = cs.marker_side_length;
+                board.dictionary_id = cs.dictionary;
 
                 for (int img_num : image_numbers) {
                     std::string img_file = config.img_path + "/" + serial +
@@ -206,43 +196,39 @@ detect_and_calibrate_intrinsics(
                         stbi_load(img_file.c_str(), &w, &h, &channels, 1);
                     if (!pixels)
                         continue;
-                    cv::Mat img(h, w, CV_8UC1, pixels);
 
-                    if (det.image_size.width == 0) {
-                        det.image_size = cv::Size(w, h);
+                    if (det.det_image_width == 0) {
+                        det.det_image_width = w;
+                        det.det_image_height = h;
                         det.cam_data.image_width = w;
                         det.cam_data.image_height = h;
                     }
 
-                    std::vector<cv::Point2f> corners;
-                    std::vector<int> ids;
-                    detector.detectBoard(img, corners, ids);
+                    auto charuco = aruco_detect::detectCharucoBoard(
+                        pixels, w, h, board, aruco_dict);
 
-                    if ((int)ids.size() < 6) {
+                    if ((int)charuco.ids.size() < 6) {
                         stbi_image_free(pixels);
                         continue;
                     }
 
-                    cv::cornerSubPix(
-                        img, corners, cv::Size(3, 3), cv::Size(-1, -1),
-                        cv::TermCriteria(cv::TermCriteria::EPS +
-                                             cv::TermCriteria::COUNT,
-                                         30, 0.01));
+                    aruco_detect::cornerSubPix(
+                        pixels, w, h, charuco.corners, 5, 30, 0.01f);
 
                     stbi_image_free(pixels);
 
                     int sorted_idx = img_num_to_idx[img_num];
-                    det.cam_data.corners_per_image[sorted_idx] = corners;
-                    det.cam_data.ids_per_image[sorted_idx] =
-                        std::vector<int>(ids.begin(), ids.end());
+                    det.cam_data.corners_per_image[sorted_idx] = charuco.corners;
+                    det.cam_data.ids_per_image[sorted_idx] = charuco.ids;
 
-                    std::vector<cv::Point3f> obj_pts;
-                    std::vector<cv::Point2f> img_pts;
-                    board->matchImagePoints(corners, ids, obj_pts, img_pts);
+                    std::vector<Eigen::Vector3f> obj_pts;
+                    std::vector<Eigen::Vector2f> img_pts;
+                    aruco_detect::matchImagePoints(
+                        board, charuco.corners, charuco.ids, obj_pts, img_pts);
 
                     if ((int)obj_pts.size() >= 6) {
-                        det.all_obj_points.push_back(obj_pts);
-                        det.all_img_points.push_back(img_pts);
+                        det.all_obj_points.push_back(std::move(obj_pts));
+                        det.all_img_points.push_back(std::move(img_pts));
                     }
                 }
 
@@ -287,20 +273,14 @@ detect_and_calibrate_intrinsics(
             *status = "Calibrating intrinsics (" + std::to_string(cam_i + 1) +
                       "/" + std::to_string(num_cameras) + "): " + serial;
 
-        cv::Mat K, dist_coeffs, rvecs, tvecs;
-        int calib_flags = cv::CALIB_FIX_ASPECT_RATIO;
-        double reproj_err = cv::calibrateCamera(
-            det.all_obj_points, det.all_img_points, det.image_size, K,
-            dist_coeffs, rvecs, tvecs, calib_flags);
+        auto calib_result = intrinsic_calib::calibrateCamera(
+            det.all_obj_points, det.all_img_points,
+            det.det_image_width, det.det_image_height,
+            /*fix_aspect_ratio=*/true);
 
-        cv::cv2eigen(K, det.cam_data.K);
-
-        det.cam_data.dist.setZero();
-        int n = std::min((int)(dist_coeffs.total()), 5);
-        for (int i = 0; i < n; i++)
-            det.cam_data.dist(i) = dist_coeffs.at<double>(i);
-
-        det.cam_data.reproj_error = reproj_err;
+        det.cam_data.K = calib_result.K;
+        det.cam_data.dist = calib_result.dist;
+        det.cam_data.reproj_error = calib_result.reproj_error;
         results[cam_i] = std::move(det.cam_data);
         result_ok[cam_i] = true;
     }
@@ -350,7 +330,7 @@ inline void build_landmarks(
             for (int j = 0; j < (int)ids.size(); j++) {
                 int global_id = img_idx * max_corners + ids[j];
                 cam_landmarks[global_id] =
-                    Eigen::Vector2d(corners[j].x, corners[j].y);
+                    Eigen::Vector2d(corners[j].x(), corners[j].y());
             }
         }
     }
@@ -410,45 +390,44 @@ inline bool compute_relative_poses(
         }
 
         // Undistort 2D points
-        std::vector<cv::Point2f> pts_a_cv, pts_b_cv;
+        std::vector<Eigen::Vector2d> pts_a_undist, pts_b_undist;
         for (int id : common_ids) {
-            Eigen::Vector2d ua =
-                red_math::undistortPoint(lm_a.at(id), intr_a.K, intr_a.dist);
-            Eigen::Vector2d ub =
-                red_math::undistortPoint(lm_b.at(id), intr_b.K, intr_b.dist);
-            pts_a_cv.push_back(cv::Point2f((float)ua.x(), (float)ua.y()));
-            pts_b_cv.push_back(cv::Point2f((float)ub.x(), (float)ub.y()));
+            pts_a_undist.push_back(
+                red_math::undistortPoint(lm_a.at(id), intr_a.K, intr_a.dist));
+            pts_b_undist.push_back(
+                red_math::undistortPoint(lm_b.at(id), intr_b.K, intr_b.dist));
         }
 
-        // Normalize points for fundamental matrix estimation by converting
-        // undistorted pixel coords to normalized camera coords
-        std::vector<cv::Point2f> pts_a_norm, pts_b_norm;
+        // Normalize points: undistorted pixel coords → normalized camera coords
+        std::vector<Eigen::Vector2d> pts_a_norm, pts_b_norm;
+        pts_a_norm.reserve(common_ids.size());
+        pts_b_norm.reserve(common_ids.size());
         for (int i = 0; i < (int)common_ids.size(); i++) {
             double fx_a = intr_a.K(0, 0), fy_a = intr_a.K(1, 1);
             double cx_a = intr_a.K(0, 2), cy_a = intr_a.K(1, 2);
             double fx_b = intr_b.K(0, 0), fy_b = intr_b.K(1, 1);
             double cx_b = intr_b.K(0, 2), cy_b = intr_b.K(1, 2);
-            pts_a_norm.push_back(cv::Point2f(
-                (float)((pts_a_cv[i].x - cx_a) / fx_a),
-                (float)((pts_a_cv[i].y - cy_a) / fy_a)));
-            pts_b_norm.push_back(cv::Point2f(
-                (float)((pts_b_cv[i].x - cx_b) / fx_b),
-                (float)((pts_b_cv[i].y - cy_b) / fy_b)));
+            pts_a_norm.push_back(Eigen::Vector2d(
+                (pts_a_undist[i].x() - cx_a) / fx_a,
+                (pts_a_undist[i].y() - cy_a) / fy_a));
+            pts_b_norm.push_back(Eigen::Vector2d(
+                (pts_b_undist[i].x() - cx_b) / fx_b,
+                (pts_b_undist[i].y() - cy_b) / fy_b));
         }
 
         // Find essential matrix directly from normalized points
         // (more robust than F → E conversion)
-        cv::Mat inlier_mask;
-        cv::Mat E = cv::findEssentialMat(pts_a_norm, pts_b_norm,
-                                         cv::Mat::eye(3, 3, CV_64F),
-                                         cv::RANSAC, 0.999, 0.001,
-                                         inlier_mask);
-        if (E.empty() || E.rows != 3 || E.cols != 3) {
-            // Fallback: try with pixel coords and F matrix
-            cv::Mat F = cv::findFundamentalMat(pts_a_cv, pts_b_cv,
-                                               cv::FM_RANSAC, 3.0, 0.999,
-                                               inlier_mask);
-            if (F.empty() || F.rows != 3 || F.cols != 3) {
+        auto e_result = red_math::findEssentialMatRANSAC(
+            pts_a_norm, pts_b_norm, 0.999, 0.001);
+
+        std::vector<bool> inlier_mask;
+        Eigen::Matrix3d E;
+
+        if (!e_result.success) {
+            // Fallback: try with pixel coords and F matrix → derive E
+            auto f_result = red_math::findFundamentalMatRANSAC(
+                pts_a_undist, pts_b_undist, 0.999, 3.0);
+            if (!f_result.success) {
                 if (status)
                     *status =
                         "Error: pose estimation failed for " + serial_a +
@@ -456,22 +435,19 @@ inline bool compute_relative_poses(
                         std::to_string(common_ids.size()) + " common pts)";
                 return false;
             }
-            cv::Mat Ka_cv, Kb_cv;
-            cv::eigen2cv(intr_a.K, Ka_cv);
-            cv::eigen2cv(intr_b.K, Kb_cv);
-            E = Kb_cv.t() * F * Ka_cv;
+            // E = Kb^T * F * Ka (Eigen matrix multiply, no conversion needed)
+            E = intr_b.K.transpose() * f_result.E * intr_a.K;
+            inlier_mask = std::move(f_result.inlier_mask);
+        } else {
+            E = e_result.E;
+            inlier_mask = std::move(e_result.inlier_mask);
         }
 
         // Decompose essential matrix → 4 candidate poses
-        cv::Mat R1_cv, R2_cv, t_cv;
-        cv::decomposeEssentialMat(E, R1_cv, R2_cv, t_cv);
-
-        Eigen::Matrix3d R1, R2;
-        Eigen::Vector3d t_dir;
-        cv::cv2eigen(R1_cv, R1);
-        cv::cv2eigen(R2_cv, R2);
-        cv::cv2eigen(t_cv, t_dir);
-        t_dir.normalize();
+        auto decomp = red_math::decomposeEssentialMatrix(E);
+        Eigen::Matrix3d R1 = decomp.R1;
+        Eigen::Matrix3d R2 = decomp.R2;
+        Eigen::Vector3d t_dir = decomp.t;
 
         // Four candidates: (R1, +t), (R1, -t), (R2, +t), (R2, -t)
         struct Candidate {
@@ -494,12 +470,10 @@ inline bool compute_relative_poses(
 
             int positive_count = 0;
             for (int i = 0; i < (int)common_ids.size(); i++) {
-                if (inlier_mask.at<uchar>(i) == 0)
+                if (!inlier_mask[i])
                     continue;
-                Eigen::Vector2d pa(pts_a_cv[i].x, pts_a_cv[i].y);
-                Eigen::Vector2d pb(pts_b_cv[i].x, pts_b_cv[i].y);
                 Eigen::Vector3d X = red_math::triangulatePoints(
-                    {pa, pb}, {P_a, P_b});
+                    {pts_a_undist[i], pts_b_undist[i]}, {P_a, P_b});
 
                 // Check positive depth in both cameras
                 bool front_a = X.z() > 0;
@@ -526,12 +500,10 @@ inline bool compute_relative_poses(
             red_math::projectionFromKRt(intr_b.K, rp.Rd, rp.td);
 
         for (int i = 0; i < (int)common_ids.size(); i++) {
-            if (inlier_mask.at<uchar>(i) == 0)
+            if (!inlier_mask[i])
                 continue;
-            Eigen::Vector2d pa(pts_a_cv[i].x, pts_a_cv[i].y);
-            Eigen::Vector2d pb(pts_b_cv[i].x, pts_b_cv[i].y);
             Eigen::Vector3d X =
-                red_math::triangulatePoints({pa, pb}, {P_a, P_b});
+                red_math::triangulatePoints({pts_a_undist[i], pts_b_undist[i]}, {P_a, P_b});
 
             // Skip points behind cameras
             Eigen::Vector3d X_b = rp.Rd * X + rp.td;
