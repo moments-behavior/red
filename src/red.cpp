@@ -8,6 +8,7 @@
 #include "gui/yolo_export_window.h"
 #include "gui/jarvis_export_window.h"
 #include "gui/annotation_dialog.h"
+#include "gui/calibration_tool_window.h"
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "imgui_impl_glfw.h"
@@ -258,74 +259,14 @@ int main(int argc, char **argv) {
     // JARVIS Export Tool state
     JarvisExportState jarvis_export_state;
 
-    // Calibration Tool variables
-    bool show_calibration_tool = false;
-    CalibrationTool::CalibProject calib_project;
-    calib_project.project_root_path =
+    // Calibration Tool state (extracted to gui/calibration_tool_window.h)
+    CalibrationToolState calib_state;
+    calib_state.project.project_root_path =
         user_settings.default_project_root_path.empty()
             ? red_data_dir
             : user_settings.default_project_root_path;
     if (!user_settings.default_media_root_path.empty())
-        calib_project.config_file = user_settings.default_media_root_path;
-    bool calib_project_loaded = false;
-    bool calib_dock_pending = false; // one-shot: dock Calibration Tool next to Navigator
-    bool show_calib_create_dialog = true; // show creation dialog first
-    std::string calib_config_path;
-    CalibrationTool::CalibConfig calib_config;
-    bool calib_config_loaded = false;
-    bool calib_images_loaded = false;
-    std::string calib_status = "";
-    // Phase 2: calibration pipeline
-    bool calib_running = false;
-    bool calib_done = false;
-    CalibrationPipeline::CalibrationResult calib_result;
-    std::future<CalibrationPipeline::CalibrationResult> calib_future;
-
-    // Laser refinement runtime variables (laser section is part of calibration tool)
-    bool laser_ready = false; // true when calibration_folder + media_folder + camera_names valid
-    bool laser_load_pending = false; // deferred load: set by button, executed at frame start
-    LaserCalibration::LaserConfig laser_config;
-    int laser_total_frames = 0;
-    bool laser_running = false;
-    bool laser_done = false;
-    std::string laser_status;
-    LaserCalibration::LaserResult laser_result;
-    auto laser_progress = std::make_shared<LaserCalibration::DetectionProgress>();
-    std::future<LaserCalibration::LaserResult> laser_future;
-    bool laser_show_detection = false;
-    bool laser_focus_window = false;  // one-shot: bring window to front
-
-    // Async detection visualization state
-    struct LaserVizState {
-        // Double-buffered: "ready" results for display, "pending" being computed
-        struct CamResult {
-            int num_blobs = 0;
-            int total_mask_pixels = 0;
-            std::vector<uint8_t> rgba;       // w*h*4 RGBA mask
-            int frame_num = -1;              // frame this result corresponds to
-            bool uploaded = false;           // has this been uploaded to GPU?
-        };
-        std::vector<CamResult> ready;        // display these
-        std::vector<CamResult> pending;      // being computed in background
-        std::atomic<bool> computing{false};  // background work in flight
-        std::thread worker;
-
-#ifdef __APPLE__
-        // Metal context for GPU-accelerated viz (macOS only)
-        LaserMetalHandle metal_ctx = nullptr;
-#endif
-
-        // Params that triggered the current computation
-        int last_green_th = -1, last_green_dom = -1;
-        int last_min_blob = -1, last_max_blob = -1;
-
-        ~LaserVizState() {
-            if (worker.joinable()) worker.join();
-#ifdef __APPLE__
-            if (metal_ctx) laser_metal_destroy(metal_ctx);
-#endif
-        }
-    } laser_viz;
+        calib_state.project.config_file = user_settings.default_media_root_path;
 
     // Annotation dialog state
     AnnotationDialogState annot_state;
@@ -552,6 +493,39 @@ int main(int argc, char **argv) {
         }
     }
 
+    // Calibration Tool callbacks (bridge between extracted UI and main() locals)
+    CalibrationToolCallbacks calib_cb;
+    calib_cb.load_images = [&](std::map<std::string, std::string> &files) {
+        load_images(files, ps, pm, imgs_names, scene, dc_context,
+                    label_buffer_size, decoder_threads, is_view_focused,
+                    window_was_decoding);
+        input_is_imgs = true;
+    };
+    calib_cb.load_videos = [&]() {
+        std::map<std::string, std::string> empty_selected_files;
+        load_videos(empty_selected_files, ps, pm,
+                    window_was_decoding, demuxers, dc_context,
+                    scene, label_buffer_size, decoder_threads,
+                    is_view_focused);
+    };
+    calib_cb.unload_media = [&]() {
+        unload_media(ps, pm, demuxers, dc_context,
+                     scene, decoder_threads,
+                     is_view_focused, window_was_decoding);
+    };
+    calib_cb.copy_default_layout = [&](const std::string &proj_path) {
+        copy_default_layout_to_project(proj_path);
+    };
+    calib_cb.switch_ini = [&](const std::string &proj_path) {
+        project_ini_path = proj_path + "/imgui_layout.ini";
+        io.IniFilename = project_ini_path.c_str();
+        if (std::filesystem::exists(project_ini_path))
+            ImGui::LoadIniSettingsFromDisk(project_ini_path.c_str());
+    };
+    calib_cb.print_metadata = [&]() {
+        print_video_metadata(demuxers, pm.camera_names, dc_context->seek_interval);
+    };
+
     main_loop_running = true;
     while (!glfwWindowShouldClose(window->render_target)) {
         // Poll and handle events (inputs, window resize, etc.)
@@ -577,38 +551,31 @@ int main(int argc, char **argv) {
 
         // Deferred laser video load — must happen before any rendering
         // to avoid freeing Metal textures that ImGui draw commands still reference.
-        if (laser_load_pending) {
-            laser_load_pending = false;
+        if (calib_state.laser_load_pending) {
+            calib_state.laser_load_pending = false;
             try {
                 if (ps.video_loaded) {
-                    unload_media(ps, pm, demuxers, dc_context,
-                                 scene, decoder_threads,
-                                 is_view_focused, window_was_decoding);
+                    calib_cb.unload_media();
                 }
                 imgs_names.clear();
 #ifdef __APPLE__
                 for (int ci = 0; ci < MAX_VIEWS; ci++)
                     mac_last_uploaded_frame[ci] = -1;
 #endif
-                pm.media_folder = calib_project.media_folder;
-                for (const auto &cn : calib_project.camera_names)
+                pm.media_folder = calib_state.project.media_folder;
+                for (const auto &cn : calib_state.project.camera_names)
                     pm.camera_names.push_back("Cam" + cn);
-                std::map<std::string, std::string> empty_selected_files;
-                load_videos(empty_selected_files, ps, pm,
-                            window_was_decoding, demuxers, dc_context,
-                            scene, label_buffer_size, decoder_threads,
-                            is_view_focused);
-                print_video_metadata(demuxers, pm.camera_names,
-                                     dc_context->seek_interval);
+                calib_cb.load_videos();
+                calib_cb.print_metadata();
                 input_is_imgs = false;
-                laser_total_frames = dc_context->estimated_num_frames;
-                laser_ready = true;
-                laser_status =
+                calib_state.laser_total_frames = dc_context->estimated_num_frames;
+                calib_state.laser_ready = true;
+                calib_state.laser_status =
                     "Loaded " +
-                    std::to_string(calib_project.camera_names.size()) +
+                    std::to_string(calib_state.project.camera_names.size()) +
                     " laser videos";
             } catch (const std::exception &e) {
-                laser_status = std::string("Error loading videos: ") + e.what();
+                calib_state.laser_status = std::string("Error loading videos: ") + e.what();
             }
         }
 
@@ -702,8 +669,8 @@ int main(int argc, char **argv) {
 
                 if (ImGui::BeginMenu("Calibrate")) {
                     if (ImGui::MenuItem("Create Calibration Project")) {
-                        show_calibration_tool = true;
-                        show_calib_create_dialog = true;
+                        calib_state.show = true;
+                        calib_state.show_create_dialog = true;
                     }
                     if (ImGui::MenuItem("Load Calibration Project")) {
                         IGFD::FileDialogConfig cfg;
@@ -986,7 +953,7 @@ int main(int argc, char **argv) {
                     ImGuiFileDialog::Instance()->GetCurrentPath();
                 user_settings.default_project_root_path = chosen;
                 // Live-update open dialogs that use this default
-                calib_project.project_root_path = chosen;
+                calib_state.project.project_root_path = chosen;
                 pm.project_root_path = chosen;
                 save_user_settings(user_settings);
             }
@@ -1004,9 +971,9 @@ int main(int argc, char **argv) {
                 user_settings.default_media_root_path = chosen;
                 pm.media_folder = chosen;
                 annot_state.video_folder = chosen;
-                if (calib_project.config_file.empty() ||
-                    calib_project.config_file == old_media_root)
-                    calib_project.config_file = chosen;
+                if (calib_state.project.config_file.empty() ||
+                    calib_state.project.config_file == old_media_root)
+                    calib_state.project.config_file = chosen;
                 save_user_settings(user_settings);
             }
             ImGuiFileDialog::Instance()->Close();
@@ -1393,40 +1360,42 @@ int main(int argc, char **argv) {
             // --- Laser detection viz: dispatch once before camera loop ---
             // This must run before per-camera iteration so that hidden cameras
             // (not in a visible ImGui window) still get processed.
-            if (laser_show_detection && laser_ready) {
+            if (calib_state.laser_show_detection && calib_state.laser_ready) {
+                auto &lv = calib_state.laser_viz;
+                auto &lc = calib_state.laser_config;
                 int mac_head_dispatch = ps.play_video ? ps.read_head : select_corr_head;
                 int fn0 = scene->display_buffer[0][mac_head_dispatch].frame_number;
 
                 // Collect results from background thread
-                if (!laser_viz.computing.load(std::memory_order_acquire) &&
-                    !laser_viz.pending.empty()) {
-                    if (laser_viz.worker.joinable())
-                        laser_viz.worker.join();
-                    laser_viz.ready = std::move(laser_viz.pending);
-                    laser_viz.pending.clear();
+                if (!lv.computing.load(std::memory_order_acquire) &&
+                    !lv.pending.empty()) {
+                    if (lv.worker.joinable())
+                        lv.worker.join();
+                    lv.ready = std::move(lv.pending);
+                    lv.pending.clear();
                     // Mark all as needing GPU upload
-                    for (auto &cr : laser_viz.ready)
+                    for (auto &cr : lv.ready)
                         cr.uploaded = false;
                 }
 
                 // Check if we need new work
                 bool params_changed =
-                    laser_config.green_threshold != laser_viz.last_green_th ||
-                    laser_config.green_dominance != laser_viz.last_green_dom ||
-                    laser_config.min_blob_pixels != laser_viz.last_min_blob ||
-                    laser_config.max_blob_pixels != laser_viz.last_max_blob;
-                bool frame_changed = laser_viz.ready.empty() ||
-                    fn0 != laser_viz.ready[0].frame_num;
+                    lc.green_threshold != lv.last_green_th ||
+                    lc.green_dominance != lv.last_green_dom ||
+                    lc.min_blob_pixels != lv.last_min_blob ||
+                    lc.max_blob_pixels != lv.last_max_blob;
+                bool frame_changed = lv.ready.empty() ||
+                    fn0 != lv.ready[0].frame_num;
                 bool need_dispatch = (frame_changed || params_changed) &&
-                    !laser_viz.computing.load(std::memory_order_relaxed);
+                    !lv.computing.load(std::memory_order_relaxed);
 
                 if (need_dispatch) {
-                    if (laser_viz.worker.joinable())
-                        laser_viz.worker.join();
+                    if (lv.worker.joinable())
+                        lv.worker.join();
 
                     // Lazy-init Metal context for GPU viz
-                    if (!laser_viz.metal_ctx)
-                        laser_viz.metal_ctx = laser_metal_create();
+                    if (!lv.metal_ctx)
+                        lv.metal_ctx = laser_metal_create();
 
                     // Retain CVPixelBuffers for background thread
                     struct CamInput {
@@ -1452,22 +1421,22 @@ int main(int argc, char **argv) {
                         }
                     }
 
-                    int green_th = laser_config.green_threshold;
-                    int green_dom = laser_config.green_dominance;
-                    int min_blob = laser_config.min_blob_pixels;
-                    int max_blob = laser_config.max_blob_pixels;
+                    int green_th = lc.green_threshold;
+                    int green_dom = lc.green_dominance;
+                    int min_blob = lc.min_blob_pixels;
+                    int max_blob = lc.max_blob_pixels;
                     int ncams = scene->num_cams;
 
-                    laser_viz.computing.store(true, std::memory_order_release);
-                    laser_viz.last_green_th = green_th;
-                    laser_viz.last_green_dom = green_dom;
-                    laser_viz.last_min_blob = min_blob;
-                    laser_viz.last_max_blob = max_blob;
+                    lv.computing.store(true, std::memory_order_release);
+                    lv.last_green_th = green_th;
+                    lv.last_green_dom = green_dom;
+                    lv.last_min_blob = min_blob;
+                    lv.last_max_blob = max_blob;
 
-                    auto metal_ctx = laser_viz.metal_ctx;
-                    laser_viz.worker = std::thread(
+                    auto metal_ctx = lv.metal_ctx;
+                    lv.worker = std::thread(
                         [inputs, ncams, green_th, green_dom,
-                         min_blob, max_blob, metal_ctx, &laser_viz]() {
+                         min_blob, max_blob, metal_ctx, &lv]() {
                             std::vector<LaserVizState::CamResult> results(ncams);
 
                             // Phase 1: ALL cameras in parallel via fast detect (for stats)
@@ -1511,8 +1480,8 @@ int main(int argc, char **argv) {
                                 CVPixelBufferRelease(inp.pixel_buffer);
                             }
 
-                            laser_viz.pending = std::move(results);
-                            laser_viz.computing.store(false, std::memory_order_release);
+                            lv.pending = std::move(results);
+                            lv.computing.store(false, std::memory_order_release);
                         });
                 }
             }
@@ -1554,7 +1523,7 @@ int main(int argc, char **argv) {
 
                 if (ps.play_video) {
                     window_need_decoding[win_name].store(
-                        is_visible || (laser_show_detection && laser_ready));
+                        is_visible || (calib_state.laser_show_detection && calib_state.laser_ready));
                 };
 
                 if (is_visible) {
@@ -1573,16 +1542,17 @@ int main(int argc, char **argv) {
                         uint32_t w = scene->image_width[j];
                         uint32_t h = scene->image_height[j];
 
-                        if (laser_show_detection && laser_ready) {
+                        if (calib_state.laser_show_detection && calib_state.laser_ready) {
                             // Upload ready result for this camera if available
-                            if (j < (int)laser_viz.ready.size() &&
-                                !laser_viz.ready[j].rgba.empty() &&
-                                !laser_viz.ready[j].uploaded) {
+                            auto &lv = calib_state.laser_viz;
+                            if (j < (int)lv.ready.size() &&
+                                !lv.ready[j].rgba.empty() &&
+                                !lv.ready[j].uploaded) {
                                 metal_upload_texture(j,
-                                    laser_viz.ready[j].rgba.data(), w, h);
-                                laser_viz.ready[j].uploaded = true;
+                                    lv.ready[j].rgba.data(), w, h);
+                                lv.ready[j].uploaded = true;
                                 mac_last_uploaded_frame[j] = -1; // force re-upload when viz off
-                            } else if (fn != mac_last_uploaded_frame[j] && laser_viz.ready.empty()) {
+                            } else if (fn != mac_last_uploaded_frame[j] && lv.ready.empty()) {
                                 // No results yet — show normal frame
                                 CVPixelBufferRef pb =
                                     scene->display_buffer[j][mac_head].pixel_buffer;
@@ -3747,120 +3717,7 @@ int main(int argc, char **argv) {
             ImGuiFileDialog::Instance()->Close();
         }
 
-        // YOLO/JARVIS dialog handlers are now inside their respective Draw functions
-
-        // Calibration: Browse for root directory (creation dialog)
-        if (ImGuiFileDialog::Instance()->Display("ChooseCalibRootDir", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
-            if (ImGuiFileDialog::Instance()->IsOk()) {
-                calib_project.project_root_path =
-                    ImGuiFileDialog::Instance()->GetCurrentPath();
-            }
-            ImGuiFileDialog::Instance()->Close();
-        }
-
-        // Calibration: Browse for config.json (creation dialog)
-        if (ImGuiFileDialog::Instance()->Display("ChooseCalibConfigCreate", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
-            if (ImGuiFileDialog::Instance()->IsOk()) {
-                std::string selected =
-                    ImGuiFileDialog::Instance()->GetFilePathName();
-                if (!selected.empty())
-                    calib_project.config_file = selected;
-            }
-            ImGuiFileDialog::Instance()->Close();
-        }
-
-        // Calibration: Load existing .redproj (unified — handles both aruco and laser projects)
-        if (ImGuiFileDialog::Instance()->Display(
-                "LoadCalibProject", ImGuiWindowFlags_NoCollapse,
-                ImVec2(680, 440))) {
-            if (ImGuiFileDialog::Instance()->IsOk()) {
-                std::string selected =
-                    ImGuiFileDialog::Instance()->GetFilePathName();
-                if (!selected.empty()) {
-                    CalibrationTool::CalibProject loaded;
-                    std::string err;
-                    if (CalibrationTool::load_project(
-                            &loaded, selected, &err)) {
-                        calib_project = loaded;
-
-                        // Switch layout ini to project folder
-                        project_ini_path =
-                            calib_project.project_path +
-                            "/imgui_layout.ini";
-                        io.IniFilename = project_ini_path.c_str();
-                        if (std::filesystem::exists(project_ini_path)) {
-                            ImGui::LoadIniSettingsFromDisk(
-                                project_ini_path.c_str());
-                        }
-
-                        // Load aruco config if present
-                        if (calib_project.has_aruco()) {
-                            calib_config_path = calib_project.config_file;
-                            if (CalibrationTool::parse_config(
-                                    calib_config_path, calib_config, err)) {
-                                calib_config_loaded = true;
-                                calib_images_loaded = false;
-                                calib_done = false;
-                            } else {
-                                calib_config_loaded = false;
-                                calib_status = "Error parsing config: " + err;
-                            }
-                        }
-
-                        // Set up laser config if laser inputs present.
-                        // For pure laser projects (no aruco), auto-load videos.
-                        // For aruco+laser projects, defer to the "Load Laser Videos" button.
-                        if (calib_project.has_laser_input() &&
-                            !calib_project.has_aruco()) {
-                            laser_config.media_folder = calib_project.media_folder;
-                            laser_config.calibration_folder =
-                                calib_project.calibration_folder;
-                            laser_config.camera_names = calib_project.camera_names;
-                            laser_config.output_folder =
-                                calib_project.project_path + "/laser_calibration";
-                            laser_ready = true;
-                            laser_focus_window = true;
-
-                            // Load videos into 2x2 grid
-                            if (!ps.video_loaded) {
-                                pm.media_folder = calib_project.media_folder;
-                                pm.camera_names.clear();
-                                for (const auto &cn : calib_project.camera_names)
-                                    pm.camera_names.push_back("Cam" + cn);
-                                std::map<std::string, std::string> empty_selected_files;
-                                load_videos(empty_selected_files, ps, pm,
-                                            window_was_decoding, demuxers, dc_context,
-                                            scene, label_buffer_size, decoder_threads,
-                                            is_view_focused);
-                                print_video_metadata(demuxers, pm.camera_names, dc_context->seek_interval);
-                            }
-                            laser_total_frames = dc_context->estimated_num_frames;
-                        }
-
-                        calib_project_loaded = true;
-                        calib_dock_pending = true;
-                        show_calib_create_dialog = false;
-                        show_calibration_tool = true;
-
-                        // Status message
-                        if (calib_project.has_aruco() && calib_config_loaded) {
-                            calib_status =
-                                "Project loaded: " +
-                                std::to_string(calib_config.cam_ordered.size()) +
-                                " cameras";
-                        } else if (calib_project.has_laser_input()) {
-                            calib_status =
-                                "Project loaded: " +
-                                std::to_string(calib_project.camera_names.size()) +
-                                " cameras (laser refinement)";
-                        }
-                    } else {
-                        calib_status = "Error loading project: " + err;
-                    }
-                }
-            }
-            ImGuiFileDialog::Instance()->Close();
-        }
+        // YOLO/JARVIS/Calibration dialog handlers are now inside their respective Draw functions
 
         if (ImGui::IsKeyPressed(ImGuiKey_H, false) && !io.WantTextInput) {
             show_help_window = !show_help_window;
@@ -3877,1059 +3734,12 @@ int main(int argc, char **argv) {
 
         DrawJarvisExportWindow(jarvis_export_state, pm, skeleton);
 
-        // ── Calibration Tool: Unified Creation Dialog + Tool Window ──
-        if (show_calibration_tool) {
-
-            // Phase 1: Show creation dialog when no project is loaded
-            if (show_calib_create_dialog && !calib_project_loaded) {
-                ImGui::SetNextWindowSize(ImVec2(720, 440), ImGuiCond_FirstUseEver);
-                ImGuiWindowFlags cw_flags = ImGuiWindowFlags_NoCollapse;
-                if (ImGui::Begin("Create Calibration Project", &show_calibration_tool, cw_flags)) {
-
-                    // Error banner
-                    if (!calib_status.empty() &&
-                        calib_status.find("Error") != std::string::npos) {
-                        ImGui::PushStyleColor(ImGuiCol_Text,
-                                              ImVec4(1.0f, 0.45f, 0.45f, 1.0f));
-                        ImGui::TextUnformatted(calib_status.c_str());
-                        ImGui::PopStyleColor();
-                        ImGui::Separator();
-                    }
-
-                    if (ImGui::BeginTable(
-                            "calibCreateForm", 3,
-                            ImGuiTableFlags_SizingStretchProp |
-                                ImGuiTableFlags_PadOuterX |
-                                ImGuiTableFlags_RowBg |
-                                ImGuiTableFlags_BordersInnerV)) {
-                        ImGui::TableSetupColumn("Label",
-                                                ImGuiTableColumnFlags_WidthFixed,
-                                                180.0f);
-                        ImGui::TableSetupColumn("Field",
-                                                ImGuiTableColumnFlags_WidthStretch,
-                                                1.0f);
-                        ImGui::TableSetupColumn("Action",
-                                                ImGuiTableColumnFlags_WidthFixed,
-                                                110.0f);
-
-                        auto LabelCell = [](const char *t) {
-                            ImGui::TableSetColumnIndex(0);
-                            ImGui::AlignTextToFramePadding();
-                            ImGui::TextUnformatted(t);
-                        };
-
-                        // ── Project Name ──
-                        ImGui::TableNextRow();
-                        LabelCell("Project Name");
-                        ImGui::TableSetColumnIndex(1);
-                        ImGui::SetNextItemWidth(-FLT_MIN);
-                        ImGui::InputText("##calib_projname",
-                                         &calib_project.project_name);
-                        ImGui::TableSetColumnIndex(2);
-                        ImGui::Dummy(ImVec2(1, 1));
-
-                        // ── Project Root Path ──
-                        ImGui::TableNextRow();
-                        LabelCell("Project Root Path");
-                        ImGui::TableSetColumnIndex(1);
-                        ImGui::SetNextItemWidth(-FLT_MIN);
-                        ImGui::InputText("##calib_rootpath",
-                                         &calib_project.project_root_path);
-                        ImGui::TableSetColumnIndex(2);
-                        if (ImGui::Button("Browse##calib_root")) {
-                            IGFD::FileDialogConfig cfg;
-                            cfg.countSelectionMax = 1;
-                            cfg.path = calib_project.project_root_path;
-                            cfg.fileName = calib_project.project_name;
-                            cfg.flags = ImGuiFileDialogFlags_Modal;
-                            ImGuiFileDialog::Instance()->OpenDialog(
-                                "ChooseCalibRootDir",
-                                "Choose Project Root Directory", nullptr, cfg);
-                        }
-
-                        // ── Full Path (computed, read-only) ──
-                        {
-                            std::filesystem::path p =
-                                std::filesystem::path(
-                                    calib_project.project_root_path) /
-                                calib_project.project_name;
-                            calib_project.project_path = p.string();
-                        }
-                        ImGui::TableNextRow();
-                        LabelCell("Full Path");
-                        ImGui::TableSetColumnIndex(1);
-                        ImGui::BeginDisabled();
-                        ImGui::SetNextItemWidth(-FLT_MIN);
-                        ImGui::InputText("##calib_fullpath",
-                                         &calib_project.project_path);
-                        ImGui::EndDisabled();
-                        ImGui::TableSetColumnIndex(2);
-                        ImGui::Dummy(ImVec2(1, 1));
-
-                        // ── Config File (optional — empty for laser-only) ──
-                        ImGui::TableNextRow();
-                        LabelCell("Config File (optional)");
-                        ImGui::TableSetColumnIndex(1);
-                        ImGui::SetNextItemWidth(-FLT_MIN);
-                        ImGui::InputText("##calib_configfile",
-                                         &calib_project.config_file);
-                        ImGui::TableSetColumnIndex(2);
-                        if (ImGui::Button("Browse##calib_cfg")) {
-                            IGFD::FileDialogConfig cfg;
-                            cfg.countSelectionMax = 1;
-                            cfg.flags = ImGuiFileDialogFlags_Modal;
-                            if (!calib_project.config_file.empty()) {
-                                cfg.path =
-                                    std::filesystem::path(
-                                        calib_project.config_file)
-                                        .parent_path()
-                                        .string();
-                            } else if (!user_settings.default_media_root_path
-                                            .empty()) {
-                                cfg.path =
-                                    user_settings.default_media_root_path;
-                            }
-                            ImGuiFileDialog::Instance()->OpenDialog(
-                                "ChooseCalibConfigCreate",
-                                "Choose config.json", ".json", cfg);
-                        }
-
-                        // ── Calibration YAML Folder (optional) ──
-                        ImGui::TableNextRow();
-                        LabelCell("Calibration YAML Folder");
-                        ImGui::TableSetColumnIndex(1);
-                        ImGui::SetNextItemWidth(-FLT_MIN);
-                        ImGui::InputText("##calib_yamlfolder",
-                                         &calib_project.calibration_folder);
-                        ImGui::TableSetColumnIndex(2);
-                        if (ImGui::Button("Browse##calib_yaml")) {
-                            IGFD::FileDialogConfig cfg;
-                            cfg.countSelectionMax = 1;
-                            if (!calib_project.calibration_folder.empty())
-                                cfg.path = calib_project.calibration_folder;
-                            else if (!user_settings.default_media_root_path.empty())
-                                cfg.path = user_settings.default_media_root_path;
-                            else
-                                cfg.path = red_data_dir;
-                            cfg.flags = ImGuiFileDialogFlags_Modal;
-                            ImGuiFileDialog::Instance()->OpenDialog(
-                                "ChooseCalibYAMLFolder",
-                                "Select Calibration YAML Folder", nullptr, cfg);
-                        }
-
-                        // ── Video Folder (optional) ──
-                        ImGui::TableNextRow();
-                        LabelCell("Video Folder");
-                        ImGui::TableSetColumnIndex(1);
-                        ImGui::SetNextItemWidth(-FLT_MIN);
-                        ImGui::InputText("##calib_vidfolder",
-                                         &calib_project.media_folder);
-                        ImGui::TableSetColumnIndex(2);
-                        if (ImGui::Button("Browse##calib_vid")) {
-                            IGFD::FileDialogConfig cfg;
-                            cfg.countSelectionMax = 1;
-                            if (!calib_project.media_folder.empty())
-                                cfg.path = calib_project.media_folder;
-                            else if (!user_settings.default_media_root_path.empty())
-                                cfg.path = user_settings.default_media_root_path;
-                            else
-                                cfg.path = red_data_dir;
-                            cfg.flags = ImGuiFileDialogFlags_Modal;
-                            ImGuiFileDialog::Instance()->OpenDialog(
-                                "ChooseCalibVideoFolder",
-                                "Select Video Folder", nullptr, cfg);
-                        }
-
-                        ImGui::EndTable();
-                    }
-
-                    // Handle file dialogs for YAML and Video folder browsing
-                    if (ImGuiFileDialog::Instance()->Display(
-                            "ChooseCalibYAMLFolder", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
-                        if (ImGuiFileDialog::Instance()->IsOk())
-                            calib_project.calibration_folder =
-                                ImGuiFileDialog::Instance()->GetCurrentPath();
-                        ImGuiFileDialog::Instance()->Close();
-                    }
-                    if (ImGuiFileDialog::Instance()->Display(
-                            "ChooseCalibVideoFolder", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
-                        if (ImGuiFileDialog::Instance()->IsOk())
-                            calib_project.media_folder =
-                                ImGuiFileDialog::Instance()->GetCurrentPath();
-                        ImGuiFileDialog::Instance()->Close();
-                    }
-
-                    // Validate and show matched cameras when laser inputs provided
-                    if (!calib_project.media_folder.empty() &&
-                        !calib_project.calibration_folder.empty()) {
-                        auto matched = LaserCalibration::validate_cameras(
-                            calib_project.media_folder,
-                            calib_project.calibration_folder);
-                        calib_project.camera_names = matched;
-
-                        if (matched.empty()) {
-                            ImGui::TextColored(
-                                ImVec4(1.0f, 0.3f, 0.3f, 1.0f),
-                                "No cameras matched between videos and YAML files");
-                        } else {
-                            std::string cam_list;
-                            for (int i = 0; i < (int)matched.size(); i++) {
-                                if (i > 0) cam_list += ", ";
-                                cam_list += "Cam" + matched[i];
-                            }
-                            ImGui::Text("Matched cameras (%d): %s",
-                                        (int)matched.size(), cam_list.c_str());
-                        }
-                    } else if (!calib_project.calibration_folder.empty() &&
-                               calib_project.media_folder.empty()) {
-                        // YAML folder only — derive camera names from filenames
-                        calib_project.camera_names =
-                            CalibrationTool::derive_camera_names_from_yaml(
-                                calib_project.calibration_folder);
-                        if (!calib_project.camera_names.empty()) {
-                            std::string cam_list;
-                            for (int i = 0; i < (int)calib_project.camera_names.size(); i++) {
-                                if (i > 0) cam_list += ", ";
-                                cam_list += "Cam" + calib_project.camera_names[i];
-                            }
-                            ImGui::Text("YAML cameras (%d): %s",
-                                        (int)calib_project.camera_names.size(),
-                                        cam_list.c_str());
-                        }
-                    }
-
-                    ImGui::Separator();
-
-                    // Validation: name + root required, AND at least one of (config, calibration_folder)
-                    const bool create_ok =
-                        !calib_project.project_name.empty() &&
-                        !calib_project.project_root_path.empty() &&
-                        (!calib_project.config_file.empty() ||
-                         !calib_project.calibration_folder.empty());
-
-                    // Right-align "Create Project" button
-                    float avail = ImGui::GetContentRegionAvail().x;
-                    const char *create_label = "Create Project##calib_create";
-                    float cw = ImGui::CalcTextSize(create_label).x +
-                               ImGui::GetStyle().FramePadding.x * 2.0f;
-                    ImGui::SetCursorPosX(ImGui::GetCursorPosX() +
-                                         (avail - cw));
-
-                    ImGui::BeginDisabled(!create_ok);
-                    if (ImGui::Button(create_label)) {
-                        std::string err;
-
-                        // Parse config.json if provided (aruco path)
-                        if (!calib_project.config_file.empty()) {
-                            calib_config_path = calib_project.config_file;
-                            if (CalibrationTool::parse_config(
-                                    calib_config_path, calib_config, err)) {
-                                calib_config_loaded = true;
-                                calib_images_loaded = false;
-                                calib_done = false;
-                                calib_project.img_path = calib_config.img_path;
-                                calib_project.output_folder =
-                                    calib_project.project_path + "/aruco_calibration";
-                            } else {
-                                calib_config_loaded = false;
-                                calib_status = "Error parsing config: " + err;
-                            }
-                        }
-
-                        // Derive camera names for laser-only path (no config)
-                        if (calib_project.config_file.empty() &&
-                            !calib_project.calibration_folder.empty() &&
-                            calib_project.camera_names.empty()) {
-                            calib_project.camera_names =
-                                CalibrationTool::derive_camera_names_from_yaml(
-                                    calib_project.calibration_folder);
-                        }
-
-                        // Set laser output folder if laser inputs present
-                        if (!calib_project.calibration_folder.empty())
-                            calib_project.laser_output_folder =
-                                calib_project.project_path + "/laser_calibration";
-
-                        // Only proceed if no parse error
-                        if (calib_status.find("Error") == std::string::npos) {
-                            // Create project folder
-                            if (!ensure_dir_exists(calib_project.project_path,
-                                                   &err)) {
-                                calib_status = "Error: " + err;
-                            } else {
-                                // Copy default layout before switching ini
-                                copy_default_layout_to_project(
-                                    calib_project.project_path);
-
-                                // Save .redproj
-                                std::string proj_file =
-                                    calib_project.project_path + "/" +
-                                    calib_project.project_name + ".redproj";
-                                if (!CalibrationTool::save_project(
-                                        calib_project, proj_file, &err)) {
-                                    calib_status =
-                                        "Error saving project: " + err;
-                                } else {
-                                    // Switch layout ini
-                                    project_ini_path =
-                                        calib_project.project_path +
-                                        "/imgui_layout.ini";
-                                    io.IniFilename =
-                                        project_ini_path.c_str();
-                                    if (std::filesystem::exists(
-                                            project_ini_path)) {
-                                        ImGui::LoadIniSettingsFromDisk(
-                                            project_ini_path.c_str());
-                                    }
-
-                                    calib_project_loaded = true;
-                                    calib_dock_pending = true;
-                                    show_calib_create_dialog = false;
-
-                                    // For pure laser projects (no aruco), auto-load videos.
-                                    // For aruco+laser, defer to "Load Laser Videos" button.
-                                    if (calib_project.has_laser_input() &&
-                                        !calib_project.has_aruco()) {
-                                        laser_config.media_folder =
-                                            calib_project.media_folder;
-                                        laser_config.calibration_folder =
-                                            calib_project.calibration_folder;
-                                        laser_config.camera_names =
-                                            calib_project.camera_names;
-                                        laser_config.output_folder =
-                                            calib_project.laser_output_folder;
-                                        laser_ready = true;
-
-                                        // Load videos
-                                        if (!ps.video_loaded) {
-                                            pm.media_folder = calib_project.media_folder;
-                                            pm.camera_names.clear();
-                                            for (const auto &cn : calib_project.camera_names)
-                                                pm.camera_names.push_back("Cam" + cn);
-                                            std::map<std::string, std::string> empty_selected_files;
-                                            load_videos(empty_selected_files, ps, pm,
-                                                        window_was_decoding, demuxers, dc_context,
-                                                        scene, label_buffer_size, decoder_threads,
-                                                        is_view_focused);
-                                            print_video_metadata(demuxers, pm.camera_names, dc_context->seek_interval);
-                                        }
-                                        laser_total_frames = dc_context->estimated_num_frames;
-                                    }
-
-                                    // Status
-                                    if (calib_config_loaded) {
-                                        calib_status =
-                                            "Project created. Config: " +
-                                            std::to_string(
-                                                calib_config.cam_ordered.size()) +
-                                            " cameras";
-                                    } else {
-                                        calib_status =
-                                            "Project created: " +
-                                            std::to_string(
-                                                calib_project.camera_names.size()) +
-                                            " cameras (laser refinement)";
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    ImGui::EndDisabled();
-                }
-                ImGui::End();
-
-            } else if (calib_project_loaded) {
-                // Phase 2: Unified Calibration Tool window (project loaded)
-                // One-shot: dock as a tab next to Navigator on project load.
-                // Uses ImGuiCond_Always to override any saved undocked state,
-                // but only fires once (flag reset after docking).
-                if (calib_dock_pending) {
-                    ImGuiWindow *nav = ImGui::FindWindowByName("Navigator");
-                    if (nav && nav->DockId) {
-                        ImGui::SetNextWindowDockID(nav->DockId, ImGuiCond_Always);
-                        calib_dock_pending = false;
-                    }
-                }
-                ImGui::SetNextWindowSize(ImVec2(580, 600), ImGuiCond_FirstUseEver);
-                if (laser_focus_window) {
-                    ImGui::SetNextWindowFocus();
-                    laser_focus_window = false;
-                }
-                if (ImGui::Begin("Calibration Tool", &show_calibration_tool)) {
-
-                    // ── Section 1: Project Info ──
-                    if (ImGui::CollapsingHeader("Project", ImGuiTreeNodeFlags_DefaultOpen)) {
-                        ImGui::Indent();
-                        ImGui::Text("Project: %s",
-                                    calib_project.project_name.c_str());
-                        ImGui::Text("Path:    %s",
-                                    calib_project.project_path.c_str());
-                        ImGui::Unindent();
-                    }
-                    ImGui::Spacing();
-
-                    // ── Section 2: Aruco Calibration (if has_aruco) ──
-                    if (calib_project.has_aruco() && calib_config_loaded) {
-                    if (ImGui::CollapsingHeader("Aruco Calibration", ImGuiTreeNodeFlags_DefaultOpen)) {
-                    ImGui::Indent();
-                    ImGui::Text("Cameras:      %d",
-                                (int)calib_config.cam_ordered.size());
-                    ImGui::Text("Board:        %d x %d  (%.1f mm squares)",
-                                calib_config.charuco_setup.w,
-                                calib_config.charuco_setup.h,
-                                calib_config.charuco_setup.square_side_length);
-                    ImGui::Text("Image Path:   %s",
-                                calib_config.img_path.c_str());
-
-                    // Count images (cached)
-                    static std::string cached_img_path;
-                    static int cached_img_count = 0;
-                    static int cached_per_cam = 0;
-                    if (cached_img_path != calib_config.img_path) {
-                        cached_img_path = calib_config.img_path;
-                        auto files =
-                            CalibrationTool::discover_images(calib_config);
-                        cached_img_count = (int)files.size();
-                        if (!calib_config.cam_ordered.empty()) {
-                            cached_per_cam =
-                                CalibrationTool::count_images_per_camera(
-                                    files, calib_config.cam_ordered[0]);
-                        }
-                    }
-                    ImGui::Text("Images:       %d total (%d per camera)",
-                                cached_img_count, cached_per_cam);
-
-                    ImGui::Separator();
-
-                    // Load Images button
-                    if (!calib_images_loaded) {
-                        if (ImGui::Button("Load Images")) {
-                            auto files =
-                                CalibrationTool::discover_images(calib_config);
-                            if (files.empty()) {
-                                calib_status =
-                                    "Error: No matching images found in " +
-                                    calib_config.img_path;
-                            } else {
-                                pm.media_folder = calib_config.img_path;
-                                pm.camera_names.clear();
-                                imgs_names.clear();
-                                load_images(files, ps, pm, imgs_names, scene,
-                                            dc_context, label_buffer_size,
-                                            decoder_threads, is_view_focused,
-                                            window_was_decoding);
-                                input_is_imgs = true;
-                                calib_images_loaded = true;
-                                calib_status =
-                                    "Loaded " + std::to_string(files.size()) +
-                                    " images across " +
-                                    std::to_string(
-                                        calib_config.cam_ordered.size()) +
-                                    " cameras";
-                            }
-                        }
-                    } else {
-                        ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f),
-                                           "Images loaded");
-                    }
-
-                    ImGui::Separator();
-
-                    // Check if pipeline is running — poll future
-                    if (calib_running && calib_future.valid()) {
-                        auto fut_status = calib_future.wait_for(
-                            std::chrono::milliseconds(0));
-                        if (fut_status == std::future_status::ready) {
-                            calib_result = calib_future.get();
-                            calib_running = false;
-                            calib_done = true;
-
-                            if (calib_result.success) {
-                                // Update output_folder to the timestamped path
-                                calib_project.output_folder =
-                                    calib_result.output_folder;
-                                std::string proj_file =
-                                    calib_project.project_path + "/" +
-                                    calib_project.project_name + ".redproj";
-                                std::string save_err;
-                                CalibrationTool::save_project(
-                                    calib_project, proj_file, &save_err);
-
-                                calib_status =
-                                    "Calibration complete! Mean reproj: " +
-                                    std::to_string(
-                                        calib_result.mean_reproj_error)
-                                        .substr(0, 5) +
-                                    " px. Saved to " +
-                                    calib_project.output_folder;
-                            } else {
-                                calib_status =
-                                    "Error: " + calib_result.error;
-                            }
-                        }
-                    }
-
-                    // Run Calibration button
-                    bool can_run =
-                        calib_config_loaded && !calib_running;
-                    ImGui::BeginDisabled(!can_run);
-                    if (ImGui::Button("Run Calibration")) {
-                        calib_running = true;
-                        calib_done = false;
-                        calib_status = "Starting calibration pipeline...";
-                        std::string base_folder =
-                            calib_project.project_path + "/aruco_calibration";
-                        calib_future = std::async(
-                            std::launch::async,
-                            [config = calib_config, base_folder,
-                             status_ptr = &calib_status]() {
+        DrawCalibrationToolWindow(calib_state, pm, ps, scene, dc_context,
+                                  user_settings, red_data_dir, imgs_names, calib_cb
 #ifdef __APPLE__
-                                auto aruco_metal = aruco_metal_create();
-                                aruco_detect::GpuThresholdFunc gpu_fn =
-                                    aruco_metal ? aruco_metal_threshold_batch : nullptr;
-                                auto result = CalibrationPipeline::run_full_pipeline(
-                                    config, base_folder, status_ptr,
-                                    gpu_fn, aruco_metal);
-                                aruco_metal_destroy(aruco_metal);
-                                return result;
-#else
-                                return CalibrationPipeline::run_full_pipeline(
-                                    config, base_folder, status_ptr);
+                                  , mac_last_uploaded_frame
 #endif
-                            });
-                    }
-                    ImGui::EndDisabled();
-
-                    if (calib_running) {
-                        ImGui::SameLine();
-                        ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f),
-                                           "Running...");
-                    }
-
-                    // Show results
-                    if (calib_done && calib_result.success) {
-                        ImGui::TextColored(
-                            ImVec4(0.0f, 1.0f, 0.0f, 1.0f),
-                            "Mean reproj error: %.3f px",
-                            calib_result.mean_reproj_error);
-                        ImGui::Text("Output: %s",
-                                    calib_project.output_folder.c_str());
-                    }
-
-                    ImGui::Unindent();
-                    } // end CollapsingHeader("Aruco Calibration")
-                    ImGui::Spacing();
-                    } // end aruco section
-
-                    // ── Section 3: Laser Refinement ──
-                    bool show_laser_section =
-                        calib_project.has_laser_input() ||
-                        (calib_done && calib_result.success);
-
-                    // Auto-populate laser calibration_folder from aruco output on first success
-                    if (calib_done && calib_result.success &&
-                        calib_project.calibration_folder.empty()) {
-                        calib_project.calibration_folder = calib_project.output_folder;
-                        calib_project.camera_names =
-                            CalibrationTool::derive_camera_names_from_yaml(
-                                calib_project.calibration_folder);
-                        calib_project.laser_output_folder =
-                            calib_project.project_path + "/laser_calibration";
-                        // Save updated project
-                        std::string proj_file =
-                            calib_project.project_path + "/" +
-                            calib_project.project_name + ".redproj";
-                        std::string save_err;
-                        CalibrationTool::save_project(
-                            calib_project, proj_file, &save_err);
-                    }
-
-                    if (show_laser_section) {
-                        if (ImGui::CollapsingHeader("Laser Refinement", ImGuiTreeNodeFlags_DefaultOpen)) {
-                        ImGui::Indent();
-
-                        // Poll async result
-                        if (laser_running && laser_future.valid()) {
-                            auto fut_status = laser_future.wait_for(
-                                std::chrono::milliseconds(0));
-                            if (fut_status == std::future_status::ready) {
-                                laser_result = laser_future.get();
-                                laser_running = false;
-                                laser_done = true;
-                                if (laser_result.success) {
-                                    laser_status =
-                                        "Complete! Reproj: " +
-                                        std::to_string(
-                                            laser_result.mean_reproj_before)
-                                            .substr(0, 5) +
-                                        " -> " +
-                                        std::to_string(
-                                            laser_result.mean_reproj_after)
-                                            .substr(0, 5) +
-                                        " px. Output: " +
-                                        laser_result.output_folder;
-                                } else {
-                                    laser_status =
-                                        "Error: " + laser_result.error;
-                                }
-                            }
-                        }
-
-                        ImGui::Text("Calibration: %s",
-                                    calib_project.calibration_folder.c_str());
-
-                        // Laser Video Folder — text field + Browse + Load button
-                        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 200.0f);
-                        ImGui::InputText("##laser_vid_path",
-                                         &calib_project.media_folder);
-                        ImGui::SameLine();
-                        if (ImGui::Button("Browse##laser_vid_tool")) {
-                            IGFD::FileDialogConfig cfg;
-                            cfg.countSelectionMax = 1;
-                            if (!calib_project.media_folder.empty())
-                                cfg.path = calib_project.media_folder;
-                            else if (!user_settings.default_media_root_path.empty())
-                                cfg.path = user_settings.default_media_root_path;
-                            else
-                                cfg.path = red_data_dir;
-                            cfg.flags = ImGuiFileDialogFlags_Modal;
-                            ImGuiFileDialog::Instance()->OpenDialog(
-                                "ChooseLaserVideoTool",
-                                "Select Laser Video Folder", nullptr, cfg);
-                        }
-                        ImGui::SameLine();
-                        {
-                            // Validate cameras only when paths change (avoid per-frame filesystem I/O)
-                            static std::string last_media, last_calib;
-                            bool paths_changed = (calib_project.media_folder != last_media ||
-                                                  calib_project.calibration_folder != last_calib);
-                            if (paths_changed &&
-                                !calib_project.media_folder.empty() &&
-                                !calib_project.calibration_folder.empty()) {
-                                last_media = calib_project.media_folder;
-                                last_calib = calib_project.calibration_folder;
-                                calib_project.camera_names = LaserCalibration::validate_cameras(
-                                    calib_project.media_folder,
-                                    calib_project.calibration_folder);
-                            }
-                            bool has_valid_cameras = !calib_project.camera_names.empty();
-
-                            ImGui::BeginDisabled(
-                                calib_project.media_folder.empty() ||
-                                !has_valid_cameras || laser_running);
-                            if (ImGui::Button("Load Laser Videos")) {
-                                // Save updated media_folder to .redproj
-                                calib_project.laser_output_folder =
-                                    calib_project.project_path + "/laser_calibration";
-                                std::string proj_file =
-                                    calib_project.project_path + "/" +
-                                    calib_project.project_name + ".redproj";
-                                std::string save_err;
-                                CalibrationTool::save_project(
-                                    calib_project, proj_file, &save_err);
-
-                                // Set up laser_config
-                                laser_config.media_folder = calib_project.media_folder;
-                                laser_config.calibration_folder =
-                                    calib_project.calibration_folder;
-                                laser_config.camera_names = calib_project.camera_names;
-                                laser_config.output_folder =
-                                    calib_project.laser_output_folder;
-
-                                // Defer the actual unload+load to next frame start
-                                // (freeing Metal textures mid-frame crashes ImGui rendering)
-                                laser_load_pending = true;
-                                laser_status = "Loading laser videos...";
-                            }
-                            ImGui::EndDisabled();
-                        }
-
-                        // Handle video folder browse dialog
-                        if (ImGuiFileDialog::Instance()->Display(
-                                "ChooseLaserVideoTool", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
-                            if (ImGuiFileDialog::Instance()->IsOk()) {
-                                calib_project.media_folder =
-                                    ImGuiFileDialog::Instance()->GetCurrentPath();
-                            }
-                            ImGuiFileDialog::Instance()->Close();
-                        }
-
-                        // Show matched cameras
-                        if (!calib_project.camera_names.empty()) {
-                            char cam_header[64];
-                            snprintf(cam_header, sizeof(cam_header), "Cameras (%d matched)",
-                                     (int)calib_project.camera_names.size());
-                            if (ImGui::CollapsingHeader(cam_header, ImGuiTreeNodeFlags_DefaultOpen)) {
-                                ImGui::Indent();
-                                if (ImGui::BeginTable("##cam_grid", 4)) {
-                                    for (int i = 0; i < (int)calib_project.camera_names.size(); i++) {
-                                        ImGui::TableNextColumn();
-                                        ImGui::Text("Cam%s", calib_project.camera_names[i].c_str());
-                                    }
-                                    ImGui::EndTable();
-                                }
-                                ImGui::Unindent();
-                            }
-                        } else if (!calib_project.media_folder.empty() &&
-                                   !calib_project.calibration_folder.empty()) {
-                            ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f),
-                                "No matching videos found — update the video folder path");
-                        }
-
-                        if (laser_ready) {
-                            // Detection parameters
-                            if (ImGui::CollapsingHeader("Detection Parameters")) {
-                            ImGui::Indent();
-                            ImGui::SliderInt("Green Threshold",
-                                             &laser_config.green_threshold, 20, 255);
-                            ImGui::SliderInt("Green Dominance",
-                                             &laser_config.green_dominance, 5, 100);
-                            ImGui::SliderInt("Min Blob Pixels",
-                                             &laser_config.min_blob_pixels, 1, 100);
-                            ImGui::SliderInt("Max Blob Pixels",
-                                             &laser_config.max_blob_pixels, 50, 5000);
-
-                            int slider_max = laser_total_frames > 0 ? laser_total_frames : 100000;
-                            ImGui::SliderInt("Start Frame",
-                                             &laser_config.start_frame, 0, slider_max);
-                            ImGui::SliderInt("Stop Frame (0=all)",
-                                             &laser_config.stop_frame, 0, slider_max);
-                            ImGui::SliderInt("Every Nth Frame",
-                                             &laser_config.frame_step, 1, 100);
-                            {
-                                int eff_stop = laser_config.stop_frame > 0
-                                    ? laser_config.stop_frame
-                                    : (laser_total_frames > 0 ? laser_total_frames : 0);
-                                if (eff_stop > laser_config.start_frame && laser_config.frame_step > 0) {
-                                    int est = (eff_stop - laser_config.start_frame) / laser_config.frame_step;
-                                    ImGui::Text("~%d frames per camera", est);
-                                } else if (laser_config.stop_frame == 0 && laser_total_frames == 0) {
-                                    ImGui::Text("~all frames per camera");
-                                }
-                            }
-                            ImGui::Unindent();
-                            } // end Detection Parameters
-
-                            // Filtering parameters
-                            if (ImGui::CollapsingHeader("Filtering")) {
-                            ImGui::Indent();
-                            int max_min_cams =
-                                std::max(2, (int)laser_config.camera_names.size());
-                            ImGui::SliderInt("Min Cameras",
-                                             &laser_config.min_cameras, 2,
-                                             max_min_cams);
-                            float reproj_th = (float)laser_config.reproj_threshold;
-                            if (ImGui::SliderFloat("Reproj Threshold (px)", &reproj_th,
-                                                   1.0f, 50.0f))
-                                laser_config.reproj_threshold = reproj_th;
-                            ImGui::Unindent();
-                            } // end Filtering
-
-                            // BA parameters
-                            if (ImGui::CollapsingHeader("Bundle Adjustment")) {
-                            ImGui::Indent();
-                            float ba_th1 = (float)laser_config.ba_outlier_th1;
-                            float ba_th2 = (float)laser_config.ba_outlier_th2;
-                            if (ImGui::SliderFloat("BA Outlier Pass 1 (px)", &ba_th1,
-                                                   1.0f, 50.0f))
-                                laser_config.ba_outlier_th1 = ba_th1;
-                            if (ImGui::SliderFloat("BA Outlier Pass 2 (px)", &ba_th2,
-                                                   0.5f, 20.0f))
-                                laser_config.ba_outlier_th2 = ba_th2;
-                            ImGui::SliderInt("BA Max Iterations",
-                                             &laser_config.ba_max_iter, 10, 200);
-                            ImGui::Checkbox("Lock Intrinsics",
-                                            &laser_config.lock_intrinsics);
-                            if (ImGui::IsItemHovered())
-                                ImGui::SetTooltip(
-                                    "Fix focal length and distortion coefficients.\n"
-                                    "Recommended when laser points lack depth diversity.");
-                            ImGui::Unindent();
-                            } // end Bundle Adjustment
-
-                            ImGui::Separator();
-
-                            // Run button
-                            bool can_run_laser = !laser_running &&
-                                               !laser_config.camera_names.empty();
-                            ImGui::BeginDisabled(!can_run_laser);
-                            if (ImGui::Button("Run Laser Refinement")) {
-                                laser_running = true;
-                                laser_done = false;
-                                laser_status =
-                                    "Starting laser calibration pipeline...";
-                                laser_future = std::async(
-                                    std::launch::async,
-                                    [config = laser_config,
-                                     status_ptr = &laser_status,
-                                     prog = laser_progress]() {
-                                        return LaserCalibration::
-                                            run_laser_refinement(config, status_ptr,
-                                                                 prog.get());
-                                    });
-                            }
-                            ImGui::EndDisabled();
-
-                            if (laser_running) {
-                                ImGui::SameLine();
-                                ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f),
-                                                   "Running...");
-                            }
-
-                            // Progress sub-section (visible during/after detection)
-                            if (laser_running && !laser_progress->cameras.empty()) {
-                                if (ImGui::CollapsingHeader("Progress", ImGuiTreeNodeFlags_DefaultOpen)) {
-                                ImGui::Indent();
-                                    int eff_stop = laser_config.stop_frame > 0
-                                        ? laser_config.stop_frame
-                                        : (laser_total_frames > 0 ? laser_total_frames : 0);
-                                    int eff_start = laser_config.start_frame;
-                                    int eff_step = std::max(1, laser_config.frame_step);
-                                    int prog_total = (eff_stop > eff_start)
-                                        ? (eff_stop - eff_start + eff_step - 1) / eff_step
-                                        : 0;
-                                    int total_done = 0;
-                                    for (int ci = 0; ci < (int)laser_progress->cameras.size(); ci++)
-                                        if (laser_progress->cameras[ci]->done.load(std::memory_order_relaxed))
-                                            total_done++;
-                                    ImGui::Text("Detection: %d / %d cameras complete",
-                                                total_done, (int)laser_progress->cameras.size());
-
-                                    if (ImGui::BeginTable(
-                                            "laser_det_progress", 4,
-                                            ImGuiTableFlags_RowBg |
-                                                ImGuiTableFlags_BordersInnerV)) {
-                                        ImGui::TableSetupColumn("Camera", ImGuiTableColumnFlags_WidthFixed, 100.0f);
-                                        ImGui::TableSetupColumn("Progress", ImGuiTableColumnFlags_WidthStretch);
-                                        ImGui::TableSetupColumn("Spots", ImGuiTableColumnFlags_WidthFixed, 60.0f);
-                                        ImGui::TableSetupColumn("Rate", ImGuiTableColumnFlags_WidthFixed, 50.0f);
-                                        ImGui::TableHeadersRow();
-
-                                        for (int ci = 0; ci < (int)laser_progress->cameras.size(); ci++) {
-                                            auto &cp = laser_progress->cameras[ci];
-                                            int fr = cp->frames_processed.load(std::memory_order_relaxed);
-                                            int sp = cp->spots_detected.load(std::memory_order_relaxed);
-                                            bool dn = cp->done.load(std::memory_order_relaxed);
-                                            float frac = prog_total > 0 ? (float)fr / prog_total : 0.0f;
-                                            if (frac > 1.0f) frac = 1.0f;
-
-                                            ImGui::TableNextRow();
-                                            ImGui::TableSetColumnIndex(0);
-                                            if (ci < (int)laser_config.camera_names.size())
-                                                ImGui::Text("Cam%s", laser_config.camera_names[ci].c_str());
-                                            ImGui::TableSetColumnIndex(1);
-                                            char overlay[64];
-                                            if (prog_total > 0)
-                                                snprintf(overlay, sizeof(overlay), "%d / %d", fr, prog_total);
-                                            else
-                                                snprintf(overlay, sizeof(overlay), "%d", fr);
-                                            if (dn)
-                                                ImGui::PushStyleColor(ImGuiCol_PlotHistogram, ImVec4(0.2f, 0.8f, 0.2f, 1.0f));
-                                            ImGui::ProgressBar(frac, ImVec2(-FLT_MIN, 0), overlay);
-                                            if (dn)
-                                                ImGui::PopStyleColor();
-                                            ImGui::TableSetColumnIndex(2);
-                                            ImGui::Text("%d", sp);
-                                            ImGui::TableSetColumnIndex(3);
-                                            ImGui::Text("%.0f%%", fr > 0 ? 100.0 * sp / fr : 0.0);
-                                        }
-                                        ImGui::EndTable();
-                                    }
-                                ImGui::Unindent();
-                                } // end Progress
-                            }
-
-                            // Results
-                            if (laser_done && laser_result.success) {
-                                if (ImGui::CollapsingHeader("Results", ImGuiTreeNodeFlags_DefaultOpen)) {
-                                ImGui::Indent();
-                                ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f),
-                                                   "Reprojection error: %.3f -> %.3f px",
-                                                   laser_result.mean_reproj_before,
-                                                   laser_result.mean_reproj_after);
-                                double avg_obs = laser_result.valid_3d_points > 0
-                                    ? (double)laser_result.total_observations / laser_result.valid_3d_points
-                                    : 0.0;
-                                ImGui::Text("3D points: %d | Observations: %d (avg %.1f cameras/point)",
-                                            laser_result.valid_3d_points,
-                                            laser_result.total_observations,
-                                            avg_obs);
-                                if (laser_result.ba_outliers_removed > 0)
-                                    ImGui::Text("BA outliers removed: %d", laser_result.ba_outliers_removed);
-                                ImGui::Text("Output: %s",
-                                            laser_result.output_folder.c_str());
-
-                                // Per-camera changes table
-                                if (!laser_result.camera_changes.empty()) {
-                                    if (ImGui::TreeNode("Per-camera changes")) {
-                                        if (ImGui::BeginTable(
-                                                "laser_cam_changes", 9,
-                                                ImGuiTableFlags_RowBg |
-                                                    ImGuiTableFlags_BordersInnerV |
-                                                    ImGuiTableFlags_Resizable |
-                                                    ImGuiTableFlags_SizingFixedFit)) {
-                                            ImGui::TableSetupColumn("Camera", 0, 80.0f);
-                                            ImGui::TableSetupColumn("Spots", 0, 45.0f);
-                                            ImGui::TableSetupColumn("Obs", 0, 40.0f);
-                                            ImGui::TableSetupColumn("dfx", 0, 55.0f);
-                                            ImGui::TableSetupColumn("dfy", 0, 55.0f);
-                                            ImGui::TableSetupColumn("dcx", 0, 55.0f);
-                                            ImGui::TableSetupColumn("dcy", 0, 55.0f);
-                                            ImGui::TableSetupColumn("|dt|", 0, 55.0f);
-                                            ImGui::TableSetupColumn("drot", 0, 60.0f);
-                                            ImGui::TableHeadersRow();
-
-                                            for (const auto &cc : laser_result.camera_changes) {
-                                                ImGui::TableNextRow();
-                                                ImGui::TableSetColumnIndex(0);
-                                                ImGui::Text("Cam%s", cc.name.c_str());
-                                                ImGui::TableSetColumnIndex(1);
-                                                ImGui::Text("%d", cc.detections);
-                                                ImGui::TableSetColumnIndex(2);
-                                                ImGui::Text("%d", cc.observations);
-                                                ImGui::TableSetColumnIndex(3);
-                                                ImGui::Text("%+.2f", cc.dfx);
-                                                ImGui::TableSetColumnIndex(4);
-                                                ImGui::Text("%+.2f", cc.dfy);
-                                                ImGui::TableSetColumnIndex(5);
-                                                ImGui::Text("%+.2f", cc.dcx);
-                                                ImGui::TableSetColumnIndex(6);
-                                                ImGui::Text("%+.2f", cc.dcy);
-                                                ImGui::TableSetColumnIndex(7);
-                                                ImGui::Text("%.3f", cc.dt_norm);
-                                                ImGui::TableSetColumnIndex(8);
-                                                ImGui::Text("%.4f%s", cc.drot_deg, "\xC2\xB0");
-                                            }
-                                            ImGui::EndTable();
-                                        }
-                                        ImGui::TreePop();
-                                    }
-                                }
-                                ImGui::Unindent();
-                                } // end CollapsingHeader("Results")
-                            }
-
-                            // Laser status
-                            if (!laser_status.empty()) {
-                                ImGui::Separator();
-                                if (laser_status.find("Error") !=
-                                    std::string::npos) {
-                                    ImGui::TextColored(
-                                        ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s",
-                                        laser_status.c_str());
-                                } else {
-                                    ImGui::TextWrapped("%s", laser_status.c_str());
-                                }
-                            }
-
-                            // Detection Processing visualization
-                            if (ImGui::CollapsingHeader("Detection Processing")) {
-                            ImGui::Indent();
-                            bool prev_detection = laser_show_detection;
-                            ImGui::Checkbox("Enable", &laser_show_detection);
-                            if (prev_detection && !laser_show_detection) {
-#ifdef __APPLE__
-                                for (int ci = 0; ci < scene->num_cams; ci++)
-                                    mac_last_uploaded_frame[ci] = -1;
-#endif
-                                laser_viz.ready.clear();
-                            }
-                            if (!prev_detection && laser_show_detection && ps.video_loaded) {
-                                if (!ps.play_video) {
-                                    seek_all_cameras(scene, current_frame_num,
-                                                     dc_context->video_fps, ps, true);
-                                    ps.pause_selected = 0;
-                                }
-                                for (auto &[key, value] : window_need_decoding)
-                                    value.store(true);
-                            }
-                            if (laser_show_detection && ps.video_loaded) {
-                                if (laser_viz.computing.load(std::memory_order_relaxed))
-                                    ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f),
-                                                       "  Processing...");
-                                int detecting_count = 0;
-                                int total_cams = std::min((int)laser_viz.ready.size(), (int)scene->num_cams);
-                                for (int ci = 0; ci < total_cams; ci++) {
-                                    auto &cr = laser_viz.ready[ci];
-                                    const char *blob_str =
-                                        cr.num_blobs == 0  ? "0 blobs" :
-                                        cr.num_blobs == 1  ? "1 blob (OK)" :
-                                        cr.num_blobs == -1 ? "invalid" :
-                                        "multiple blobs";
-                                    ImVec4 col = cr.num_blobs == 1
-                                        ? ImVec4(0.0f, 1.0f, 0.0f, 1.0f)
-                                        : ImVec4(1.0f, 0.4f, 0.4f, 1.0f);
-                                    ImGui::TextColored(col, "  %s: %s, %d px",
-                                        ci < (int)pm.camera_names.size()
-                                            ? pm.camera_names[ci].c_str() : "?",
-                                        blob_str, cr.total_mask_pixels);
-                                    if (cr.num_blobs == 1) detecting_count++;
-                                }
-                                if (total_cams > 0) {
-                                    ImVec4 summary_col = (detecting_count == total_cams)
-                                        ? ImVec4(0.0f, 1.0f, 0.0f, 1.0f)
-                                        : ImVec4(1.0f, 1.0f, 0.0f, 1.0f);
-                                    ImGui::TextColored(summary_col,
-                                        "  %d/%d cameras detecting", detecting_count, total_cams);
-                                }
-                                ImGui::TextWrapped(
-                                    "Green=valid blob, Yellow=too small, "
-                                    "Red=too large, Gray=filtered by erode/dilate");
-                            }
-                            ImGui::Unindent();
-                            } // end Detection Processing
-                        } else {
-                            // Laser inputs not yet complete — show hint
-                            if (calib_project.media_folder.empty()) {
-                                ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f),
-                                    "Set Video Folder to enable laser refinement");
-                            } else if (calib_project.camera_names.empty()) {
-                                ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f),
-                                    "Set Video Folder and click Load Laser Videos");
-                            }
-                        }
-                        ImGui::Unindent();
-                        } // end CollapsingHeader("Laser Refinement")
-                        ImGui::Spacing();
-                    } // end laser section
-
-                    // Status text (general)
-                    if (!calib_status.empty()) {
-                        ImGui::Separator();
-                        if (calib_status.find("Error") != std::string::npos) {
-                            ImGui::TextColored(
-                                ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s",
-                                calib_status.c_str());
-                        } else {
-                            ImGui::Text("%s", calib_status.c_str());
-                        }
-                    }
-                }
-                ImGui::End();
-            }
-
-            // Reset state when calibration tool window is closed
-            if (!show_calibration_tool) {
-                calib_project_loaded = false;
-                show_calib_create_dialog = true;
-                calib_config_loaded = false;
-                calib_images_loaded = false;
-                calib_done = false;
-                calib_status.clear();
-                laser_ready = false;
-                laser_done = false;
-                laser_status.clear();
-                laser_show_detection = false;
-                if (laser_viz.worker.joinable())
-                    laser_viz.worker.join();
-                laser_viz.ready.clear();
-                laser_viz.pending.clear();
-#ifdef __APPLE__
-                for (int ci = 0; ci < scene->num_cams; ci++)
-                    mac_last_uploaded_frame[ci] = -1;
-#endif
-            }
-        }
+        );
 
         // Make sure this is called before any other popups in the same frame
         if (show_error) {
