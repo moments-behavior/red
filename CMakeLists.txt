@@ -58,6 +58,7 @@ if(APPLE)
     )
 
     target_include_directories(red PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
         ${DIR_IMGUI}
         ${DIR_IMGUI}/backends
         ${DIR_IMPLOT}

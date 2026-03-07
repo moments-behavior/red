@@ -1,0 +1,200 @@
+#pragma once
+#include "implot.h"
+#include "render.h"
+#include "skeleton.h"
+#include "camera.h"
+#include "red_math.h"
+#include <sstream>
+#include <vector>
+
+static void gui_plot_keypoints(KeyPoints *keypoints, SkeletonContext *skeleton,
+                               int view_idx, int num_cams) {
+    float pt_size = 6.0f;
+    for (u32 node = 0; node < skeleton->num_nodes; node++) {
+        if (keypoints->kp2d[view_idx][node].is_labeled) {
+            ImVec4 node_color;
+            if (keypoints->active_id[view_idx] == node) {
+                node_color = (ImVec4)ImColor::HSV(0.8, 1.0f, 1.0f);
+                node_color.w = 0.9;
+                pt_size = 8.0f;
+            } else {
+                node_color = skeleton->node_colors.at(node);
+                node_color.w = 0.9;
+                pt_size = 6.0f;
+            }
+            int id = skeleton->num_nodes * view_idx + node;
+            static bool drag_point_clicked;
+            static bool drag_point_hovered;
+            static bool drag_point_modified;
+            drag_point_modified = ImPlot::DragPoint(
+                id, &keypoints->kp2d[view_idx][node].position.x,
+                &keypoints->kp2d[view_idx][node].position.y, node_color,
+                pt_size, ImPlotDragToolFlags_None, &drag_point_clicked,
+                &drag_point_hovered);
+            if (drag_point_modified) {
+                keypoints->kp3d[node].is_triangulated = false;
+            }
+            if (drag_point_hovered) {
+                if (keypoints->kp3d[node].is_triangulated) {
+
+                    std::ostringstream oss;
+                    oss << std::fixed << std::setprecision(2);
+                    oss << "(" << keypoints->kp3d[node].position.x << ", "
+                        << keypoints->kp3d[node].position.y << ", "
+                        << keypoints->kp3d[node].position.z << ")";
+                    std::string label = oss.str();
+                    ImVec2 mouse_pos = ImGui::GetMousePos();
+                    ImVec2 textPos = ImVec2(mouse_pos.x + 10, mouse_pos.y + 10);
+                    ImGui::GetForegroundDrawList()->AddText(
+                        textPos, IM_COL32(220, 20, 60, 255), label.c_str());
+                }
+
+                if (ImGui::IsKeyPressed(ImGuiKey_R,
+                                        false)) // delete active keypoint
+                {
+                    keypoints->kp2d[view_idx][node].position = {1E7, 1E7};
+                    keypoints->kp2d[view_idx][node].is_labeled = false;
+                    keypoints->active_id[view_idx] = node;
+                }
+
+                if (ImGui::IsKeyPressed(
+                        ImGuiKey_F,
+                        false)) // Delete active keypoints from all the views
+                {
+                    for (int cam_idx = 0; cam_idx < num_cams; cam_idx++) {
+                        keypoints->kp2d[cam_idx][node].position = {1E7, 1E7};
+                        keypoints->kp2d[cam_idx][node].is_labeled = false;
+                        keypoints->active_id[cam_idx] = node;
+                    }
+                }
+            }
+
+            if (drag_point_clicked) {
+                keypoints->active_id[view_idx] = node;
+            }
+        }
+    }
+
+    for (u32 edge = 0; edge < skeleton->num_edges; edge++) {
+        auto [a, b] = skeleton->edges[edge];
+
+        if (keypoints->kp2d[view_idx][a].is_labeled &&
+            keypoints->kp2d[view_idx][b].is_labeled) {
+            double xs[2]{keypoints->kp2d[view_idx][a].position.x,
+                         keypoints->kp2d[view_idx][b].position.x};
+            double ys[2]{keypoints->kp2d[view_idx][a].position.y,
+                         keypoints->kp2d[view_idx][b].position.y};
+            ImPlot::PlotLine("##line", xs, ys, 2);
+        }
+    }
+}
+
+static void gui_plot_bbox_from_keypoints(KeyPoints *keypoints,
+                                         SkeletonContext *skeleton,
+                                         int view_idx, int top_left_idx,
+                                         int bottom_right_idx) {
+    if (keypoints->kp2d[view_idx][top_left_idx].is_labeled &&
+        keypoints->kp2d[view_idx][bottom_right_idx].is_labeled) {
+        double xs[5]{keypoints->kp2d[view_idx][top_left_idx].position.x,
+                     keypoints->kp2d[view_idx][bottom_right_idx].position.x,
+                     keypoints->kp2d[view_idx][bottom_right_idx].position.x,
+                     keypoints->kp2d[view_idx][top_left_idx].position.x,
+                     keypoints->kp2d[view_idx][top_left_idx].position.x};
+
+        double ys[5]{keypoints->kp2d[view_idx][top_left_idx].position.y,
+                     keypoints->kp2d[view_idx][top_left_idx].position.y,
+                     keypoints->kp2d[view_idx][bottom_right_idx].position.y,
+                     keypoints->kp2d[view_idx][bottom_right_idx].position.y,
+                     keypoints->kp2d[view_idx][top_left_idx].position.y};
+
+        ImPlot::SetNextLineStyle(ImVec4(0.5, 1.0, 1.0, 1.0), 3.0);
+        ImPlot::PlotLine("##line", xs, ys, 5);
+    }
+}
+
+bool is_in_camera_fov(const Eigen::Vector3d &point_world,
+                      const Eigen::Vector3d &rvec,
+                      const Eigen::Vector3d &tvec,
+                      const Eigen::Matrix3d &K, int image_width,
+                      int image_height) {
+    auto pt2d = red_math::projectPointNoDist(point_world, rvec, tvec, K);
+    double x = pt2d(0);
+    double y = image_height - pt2d(1);
+    if (x > 0 && x < image_width && y > 0 && y < image_height) {
+        return true;
+    }
+    return false;
+}
+
+static void reprojection(KeyPoints *keypoints, SkeletonContext *skeleton,
+                         std::vector<CameraParams> camera_params,
+                         RenderScene *scene) {
+
+    for (u32 node = 0; node < skeleton->num_nodes; node++) {
+
+        u32 num_views_labeled{0};
+        for (u32 view_idx = 0; view_idx < scene->num_cams; view_idx++) {
+            if (keypoints->kp2d[view_idx][node].is_labeled) {
+                num_views_labeled++;
+            }
+        }
+
+        if (num_views_labeled >= 2) {
+
+            std::vector<Eigen::Vector2d> undist_pts;
+            std::vector<Eigen::Matrix<double, 3, 4>> proj_mats;
+
+            for (u32 view_idx = 0; view_idx < scene->num_cams; view_idx++) {
+                if (keypoints->kp2d[view_idx][node].is_labeled) {
+                    Eigen::Vector2d pt(
+                        keypoints->kp2d[view_idx][node].position.x,
+                        (double)scene->image_height[view_idx] -
+                            keypoints->kp2d[view_idx][node].position.y);
+                    Eigen::Vector2d pt_undist = red_math::undistortPoint(
+                        pt, camera_params[view_idx].k,
+                        camera_params[view_idx].dist_coeffs);
+
+                    undist_pts.push_back(pt_undist);
+                    proj_mats.push_back(
+                        camera_params[view_idx].projection_mat);
+                }
+            }
+
+            Eigen::Vector3d pt3d =
+                red_math::triangulatePoints(undist_pts, proj_mats);
+
+            keypoints->kp3d[node].position.x = pt3d(0);
+            keypoints->kp3d[node].position.y = pt3d(1);
+            keypoints->kp3d[node].position.z = pt3d(2);
+            keypoints->kp3d[node].is_triangulated = true;
+
+            for (u32 view_idx = 0; view_idx < scene->num_cams; view_idx++) {
+                keypoints->kp2d[view_idx][node].last_position =
+                    keypoints->kp2d[view_idx][node].position;
+                keypoints->kp2d[view_idx][node].last_is_labeled =
+                    keypoints->kp2d[view_idx][node].is_labeled;
+                if (is_in_camera_fov(pt3d, camera_params[view_idx].rvec,
+                                     camera_params[view_idx].tvec,
+                                     camera_params[view_idx].k,
+                                     scene->image_width[view_idx],
+                                     scene->image_height[view_idx])) {
+                    auto reproj = red_math::projectPoint(
+                        pt3d, camera_params[view_idx].rvec,
+                        camera_params[view_idx].tvec,
+                        camera_params[view_idx].k,
+                        camera_params[view_idx].dist_coeffs);
+                    double x = reproj(0);
+                    double y = double(scene->image_height[view_idx]) -
+                               reproj(1);
+                    if (x > 0 && x < scene->image_width[view_idx] && y > 0 &&
+                        y < scene->image_height[view_idx]) {
+                        // calculate per keypoint error
+                        keypoints->kp2d[view_idx][node].position.x = x;
+                        keypoints->kp2d[view_idx][node].position.y = y;
+                        keypoints->kp2d[view_idx][node].is_labeled = true;
+                    }
+                }
+            }
+        }
+    }
+}
