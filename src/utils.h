@@ -30,6 +30,7 @@ struct PlaybackState {
     bool realtime_playback = true;
     float set_playback_speed = 1.0f;
     double inst_speed = 1.0;
+    bool slider_text_editing = false;  // true while user is typing in slider
 };
 
 bool string_ends_with(const std::string &str, const std::string &suffix);

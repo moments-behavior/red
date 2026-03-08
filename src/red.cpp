@@ -16,6 +16,7 @@
 #include "gui/main_menu_dialogs.h"
 #include "gui/main_menu_bar.h"
 #include "gui/panel_registry.h"
+#include "gui/transport_bar.h"
 #include "gui/popup_stack.h"
 #include "gui/toast.h"
 #include "imgui_impl_glfw.h"
@@ -231,7 +232,6 @@ int main(int argc, char **argv) {
     // gui states, todo: bundle this later
     LabelingToolState labeling_state;
     bool save_requested = false;
-    bool cpu_buffer_toggle = true;
     int current_frame_num = 0;
     int previous_frame_num = -1;
     std::vector<std::string> imgs_names;
@@ -272,6 +272,7 @@ int main(int argc, char **argv) {
 
     // Settings window state
     SettingsState settings_state;
+    TransportBarState transport_state;
     annot_state.video_folder = user_settings.default_media_root_path.empty()
                                    ? media_root_dir
                                    : user_settings.default_media_root_path;
@@ -496,290 +497,21 @@ int main(int argc, char **argv) {
         }
         double playback_time_now = ps.accumulated_play_time;
 
-        // Controls sidebar — always visible, pinned to left edge.
-        // Rendered BEFORE DockSpaceOverViewport so viewport work area adjusts.
-        constexpr float kControlsSidebarWidth = 450.0f;
-        static constexpr ImGuiID kSidebarDockID = 0x00000100;
-        ImGuiViewport* vp = ImGui::GetMainViewport();
-        ImGuiWindowFlags sidebar_flags = ImGuiWindowFlags_NoScrollbar |
-                                         ImGuiWindowFlags_NoSavedSettings;
-        if (ImGui::BeginViewportSideBar("##ControlsSidebar", vp, ImGuiDir_Left,
-                                         kControlsSidebarWidth, sidebar_flags)) {
-        // Controls content — auto-resizes to content height
-        if (ImGui::BeginChild("##ControlsContent", ImVec2(0, 0),
-                               ImGuiChildFlags_AutoResizeY, ImGuiWindowFlags_None)) {
-            if (!ps.video_loaded) {
-#ifndef __APPLE__
-                {
-                    const char *items[] = {"CPU Buffer", "GPU Buffer"};
-                    static int item_current = 0;
-                    ImGui::Combo("Buffer Type", &item_current, items,
-                                 IM_ARRAYSIZE(items));
-                    scene->use_cpu_buffer = (item_current == 0);
-                }
-#endif
-            }
-
-            if (ps.video_loaded) {
-                // Edit buffer isolates current_frame_num from partial typing.
-                // Syncs from current_frame_num each frame unless user is actively editing.
-                static int frame_edit_buf = 0;
-                static bool was_editing = false;
-                if (!was_editing)
-                    frame_edit_buf = current_frame_num;
-                ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x -
-                    ImGui::CalcTextSize("Current Frame").x -
-                    ImGui::GetStyle().ItemInnerSpacing.x);
-                ImGui::InputInt("Current Frame", &frame_edit_buf, 0, 0);
-                was_editing = ImGui::IsItemActive();
-                if (ImGui::IsItemDeactivatedAfterEdit()) {
-                    seek_all_cameras(scene, frame_edit_buf,
-                                     dc_context->video_fps, ps, true);
-                }
-
-                auto now_wall = std::chrono::steady_clock::now();
-                double wall_seconds =
-                    std::chrono::duration<double>(now_wall -
-                                                  ps.last_wall_time_playspeed)
-                        .count();
-                int frame_delta =
-                    current_frame_num - ps.last_frame_num_playspeed;
-                if (wall_seconds > 0.5 && ps.play_video) {
-                    ps.inst_speed =
-                        frame_delta / (dc_context->video_fps *
-                                       wall_seconds); // Real-time normalized
-                    ps.last_frame_num_playspeed = current_frame_num;
-                    ps.last_wall_time_playspeed = now_wall;
-                }
-
-                // === Transport section (always visible at top) ===
-                ImGui::SeparatorText("Transport");
-                float spacing = ImGui::GetStyle().ItemInnerSpacing.x;
-                if (ImGui::Button(ICON_FK_FAST_BACKWARD)) {
-                    int clamped_frame =
-                        std::max(0, current_frame_num -
-                                        10 * dc_context->seek_interval);
-                    seek_all_cameras(scene, clamped_frame,
-                                     dc_context->video_fps, ps, false);
-                }
-                ImGui::SameLine(0.0f, spacing);
-                if (ImGui::Button(ICON_FK_STEP_BACKWARD)) {
-                    int clamped_frame = std::max(
-                        0, current_frame_num - dc_context->seek_interval);
-                    seek_all_cameras(scene, clamped_frame,
-                                     dc_context->video_fps, ps, false);
-                }
-                ImGui::SameLine(0.0f, spacing);
-
-                if (ps.to_display_frame_number ==
-                    (dc_context->total_num_frame - 1)) {
-                    ImVec4 repeat_normal =
-                        ImVec4(0.85f, 0.75f, 0.20f, 1.0f);
-                    ImVec4 repeat_hover = ImVec4(0.90f, 0.80f, 0.25f, 1.0f);
-                    ImVec4 repeat_active =
-                        ImVec4(0.80f, 0.70f, 0.18f, 1.0f);
-                    ImGui::PushStyleColor(ImGuiCol_Button, repeat_normal);
-                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
-                                          repeat_hover);
-                    ImGui::PushStyleColor(ImGuiCol_ButtonActive,
-                                          repeat_active);
-                    if (ImGui::Button(ICON_FK_REPEAT)) {
-                        seek_all_cameras(scene, 0, dc_context->video_fps,
-                                         ps, false);
-                    }
-                    ImGui::PopStyleColor(3);
-                } else {
-                    ImVec4 normal, hover, active;
-                    if (ps.play_video) {
-                        normal = ImVec4(0.8f, 0.3f, 0.3f, 1.0f);
-                        hover = ImVec4(0.9f, 0.4f, 0.4f, 1.0f);
-                        active = ImVec4(0.7f, 0.2f, 0.2f, 1.0f);
-                    } else {
-                        normal = ImVec4(0.2f, 0.6f, 0.2f, 1.0f);
-                        hover = ImVec4(0.4f, 0.9f, 0.4f, 1.0f);
-                        active = ImVec4(0.3f, 0.75f, 0.3f, 1.0f);
-                    }
-                    ImGui::PushStyleColor(ImGuiCol_Button, normal);
-                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, hover);
-                    ImGui::PushStyleColor(ImGuiCol_ButtonActive, active);
-                    if (ImGui::Button(ps.play_video ? ICON_FK_PAUSE
-                                                    : ICON_FK_PLAY)) {
-                        ps.play_video = !ps.play_video;
-                        if (ps.play_video) {
-                            ps.pause_seeked = false;
-                            ps.last_play_time_start =
-                                std::chrono::steady_clock::now();
-                        } else {
-                            ps.pause_selected = 0;
-                        }
-                    }
-                    ImGui::PopStyleColor(3);
-                }
-
-                ImGui::SameLine(0.0f, spacing);
-                if (ImGui::Button(ICON_FK_STEP_FORWARD)) {
-                    int clamped_frame = std::min(
-                        dc_context->total_num_frame,
-                        current_frame_num + dc_context->seek_interval);
-                    seek_all_cameras(scene, clamped_frame,
-                                     dc_context->video_fps, ps, false);
-                }
-                ImGui::SameLine(0.0f, spacing);
-                if (ImGui::Button(ICON_FK_FAST_FORWARD)) {
-                    int clamped_frame = std::min(
-                        dc_context->total_num_frame,
-                        current_frame_num + 10 * dc_context->seek_interval);
-                    seek_all_cameras(scene, clamped_frame,
-                                     dc_context->video_fps, ps, false);
-                }
-                ImGui::SetNextItemWidth(-FLT_MIN);
-                ps.slider_just_changed = ImGui::SliderInt(
-                    "##frame count", &ps.slider_frame_number, 0,
-                    dc_context->estimated_num_frames);
-                float current_time_sec =
-                    ps.slider_frame_number / dc_context->video_fps;
-                float total_time_sec = dc_context->estimated_num_frames /
-                                       dc_context->video_fps;
-                std::string current_str = format_time(current_time_sec);
-                std::string total_str = format_time(total_time_sec);
-                ImGui::Text("%s / %s", current_str.c_str(),
-                            total_str.c_str());
-
-                if (ps.slider_just_changed) {
-                    seek_all_cameras(scene, ps.slider_frame_number,
-                                     dc_context->video_fps, ps, false);
-                }
-
-                // === Playback section (collapsible) ===
-                if (ImGui::CollapsingHeader("Playback", ImGuiTreeNodeFlags_DefaultOpen)) {
-                    ImGui::Checkbox("Realtime", &ps.realtime_playback);
-                    ImGui::BeginDisabled(!ps.realtime_playback);
-                    if (ImGui::BeginTable("##playback_tbl", 2,
-                                          ImGuiTableFlags_SizingStretchProp |
-                                              ImGuiTableFlags_BordersInnerV)) {
-                        ImGui::TableSetupColumn(
-                            "Label", ImGuiTableColumnFlags_WidthFixed, 170.0f);
-                        ImGui::TableSetupColumn("Control",
-                                                ImGuiTableColumnFlags_WidthStretch);
-
-                        ImGui::TableNextRow();
-                        ImGui::TableSetColumnIndex(0);
-                        ImGui::AlignTextToFramePadding();
-                        ImGui::TextUnformatted("Video FPS");
-                        ImGui::TableSetColumnIndex(1);
-                        ImGui::Text("%.1f", dc_context->video_fps);
-
-                        ImGui::TableNextRow();
-                        ImGui::TableSetColumnIndex(0);
-                        ImGui::AlignTextToFramePadding();
-                        ImGui::TextUnformatted("Set Playback Speed");
-                        ImGui::SameLine();
-                        HelpMarker("Log2 scale: 1/16x to 1x.");
-
-                        ImGui::TableSetColumnIndex(1);
-                        char speed_label[16];
-                        int denom = (int)roundf(1.0f / ps.set_playback_speed);
-                        if (denom <= 1)
-                            snprintf(speed_label, sizeof(speed_label), "1x");
-                        else
-                            snprintf(speed_label, sizeof(speed_label), "1/%dx", denom);
-                        ImGui::SetNextItemWidth(-FLT_MIN);
-                        ImGui::SliderFloat("##set_playback_speed", &ps.set_playback_speed,
-                                           1.0f / 16.0f, 1.0f, speed_label,
-                                           ImGuiSliderFlags_Logarithmic);
-
-                        ImGui::TableNextRow();
-                        ImGui::TableSetColumnIndex(0);
-                        ImGui::AlignTextToFramePadding();
-                        ImGui::TextUnformatted("Current Speed");
-                        ImGui::TableSetColumnIndex(1);
-                        ImGui::Text("%.2fx", ps.inst_speed);
-
-                        ImGui::TableNextRow();
-                        ImGui::TableSetColumnIndex(0);
-                        ImGui::AlignTextToFramePadding();
-                        ImGui::TextUnformatted("Render FPS");
-                        ImGui::TableSetColumnIndex(1);
-                        ImGui::Text("%.0f", ImGui::GetIO().Framerate);
-
-                        ImGui::EndTable();
-                    }
-                    ImGui::EndDisabled();
-
-                    ImGui::PushTextWrapPos(ImGui::GetFontSize() * 24.0f);
-                    ImGui::Spacing();
-                    ImGui::TextDisabled(
-                        "Tip: If playback is slower than real-time (< 1.0x), "
-                        "collapse camera views to improve speed.");
-                    ImGui::PopTextWrapPos();
-                }
-
-                // === Display Controls section (collapsible) ===
-                if (ImGui::CollapsingHeader("Display Controls", ImGuiTreeNodeFlags_DefaultOpen)) {
-#ifdef __APPLE__
-                    (void)0;
-#else
-                    ImGui::BeginDisabled(ps.play_video);
-#endif
-
-                    if (ImGui::BeginTable("##display_tbl", 2,
-                                          ImGuiTableFlags_SizingStretchProp |
-                                              ImGuiTableFlags_BordersInnerV)) {
-                        ImGui::TableSetupColumn(
-                            "Label", ImGuiTableColumnFlags_WidthFixed, 170.0f);
-                        ImGui::TableSetupColumn("Control",
-                                                ImGuiTableColumnFlags_WidthStretch);
-
-                        ImGui::TableNextRow();
-                        ImGui::TableSetColumnIndex(0);
-                        ImGui::AlignTextToFramePadding();
-                        ImGui::TextUnformatted("Contrast (alpha)");
-                        ImGui::SameLine();
-                        HelpMarker("1.00 = neutral. Increase to boost separation.");
-                        ImGui::TableSetColumnIndex(1);
-                        ImGui::SetNextItemWidth(-FLT_MIN);
-                        ImGui::SliderFloat("##contrast", &display.contrast, 0.0f, 3.0f,
-                                           "%.2f");
-
-                        ImGui::TableNextRow();
-                        ImGui::TableSetColumnIndex(0);
-                        ImGui::AlignTextToFramePadding();
-                        ImGui::TextUnformatted("Brightness (beta)");
-                        ImGui::SameLine();
-                        HelpMarker("Shift pixel values. 0 = neutral.");
-                        ImGui::TableSetColumnIndex(1);
-                        ImGui::SetNextItemWidth(-FLT_MIN);
-                        ImGui::SliderInt("##brightness", &display.brightness, -150, 150);
-
-                        ImGui::TableNextRow();
-                        ImGui::TableSetColumnIndex(0);
-                        ImGui::AlignTextToFramePadding();
-                        ImGui::TextUnformatted("Display Preset");
-                        ImGui::TableSetColumnIndex(1);
-                        if (ImGui::Button("Reset##display")) {
-                            display.contrast = 1.0f;
-                            display.brightness = 0;
-                            display.pivot_midgray = true;
-                        }
-                        ImGui::SameLine();
-                        ImGui::TextDisabled("(restores neutral)");
-
-                        ImGui::EndTable();
-                    }
-#ifndef __APPLE__
-                    ImGui::EndDisabled();
-#endif
-                }
+        // Instantaneous speed computation (logic, not UI)
+        if (ps.video_loaded) {
+            auto now_wall = std::chrono::steady_clock::now();
+            double wall_seconds =
+                std::chrono::duration<double>(now_wall - ps.last_wall_time_playspeed).count();
+            int frame_delta = current_frame_num - ps.last_frame_num_playspeed;
+            if (wall_seconds > 0.5 && ps.play_video) {
+                ps.inst_speed = frame_delta / (dc_context->video_fps * wall_seconds);
+                ps.last_frame_num_playspeed = current_frame_num;
+                ps.last_wall_time_playspeed = now_wall;
             }
         }
-        ImGui::EndChild();
 
-        // Dockspace fills remaining sidebar height — tool windows dock here
-        float remaining = ImGui::GetContentRegionAvail().y;
-        if (remaining > 1.0f)
-            ImGui::DockSpace(kSidebarDockID, ImVec2(0, remaining), ImGuiDockNodeFlags_None);
-        }
-        ImGui::End();
+        // Transport bar — horizontal controls below menu bar (only when video loaded)
+        DrawTransportBar(transport_state, ctx, current_frame_num);
 
         ImGui::DockSpaceOverViewport(0x00000001);
 
@@ -1429,7 +1161,7 @@ int main(int argc, char **argv) {
         glfwSwapBuffers(window->render_target);
 #endif
 
-        // Window title — project name and FPS are now in menu bar / Controls panel
+        // Window title
         glfwSetWindowTitle(window->render_target, "Red");
 
         if (ps.just_seeked) {
@@ -1481,7 +1213,8 @@ int main(int argc, char **argv) {
                     }
                     ps.read_head =
                         (ps.read_head + frame_delta) % scene->size_of_buffer;
-                    ps.slider_frame_number = ps.to_display_frame_number;
+                    if (!ps.slider_text_editing)
+                        ps.slider_frame_number = ps.to_display_frame_number;
                 }
             }
         }

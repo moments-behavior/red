@@ -69,6 +69,7 @@ struct AppContext {
     std::string &project_ini_path;
     bool &main_loop_running;
 
+
 #ifdef __APPLE__
     std::vector<int> &mac_last_uploaded_frame;
 #endif
@@ -128,6 +129,46 @@ inline void migrate_ini_window_names(const std::string &ini_path) {
     // v2 → v3: Navigator → Controls
     changed |= migrate_ini_section(content,
         "[Window][Navigator]", "[Window][Controls]");
+
+    // v3 → v4: Remove [Window][Controls] entirely (no longer a window)
+    {
+        const std::string header = "[Window][Controls]";
+        size_t pos = content.find(header);
+        if (pos != std::string::npos) {
+            size_t section_end = content.find("\n[", pos + 1);
+            if (section_end == std::string::npos)
+                section_end = content.size();
+            else
+                section_end += 1;
+            content.erase(pos, section_end - pos);
+            changed = true;
+        }
+    }
+
+    // v4 → v5: Sidebar dockspace 0x00000100 removed — remap tool windows
+    // to main dockspace and strip the stale DockSpace node entry.
+    {
+        const std::string old_dock = "DockId=0x00000100";
+        const std::string new_dock = "DockId=0x00000009";
+        size_t pos = 0;
+        while ((pos = content.find(old_dock, pos)) != std::string::npos) {
+            content.replace(pos, old_dock.size(), new_dock);
+            pos += new_dock.size();
+            changed = true;
+        }
+        // Remove stale DockSpace node line for 0x00000100
+        const std::string stale_node = "DockSpace ID=0x00000100";
+        pos = content.find(stale_node);
+        if (pos != std::string::npos) {
+            size_t line_end = content.find('\n', pos);
+            if (line_end != std::string::npos)
+                line_end += 1;
+            else
+                line_end = content.size();
+            content.erase(pos, line_end - pos);
+            changed = true;
+        }
+    }
 
     if (changed) {
         std::ofstream out(ini_path);

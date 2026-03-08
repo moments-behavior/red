@@ -572,14 +572,8 @@ inline void DrawCalibrationToolWindow(
 
     } else if (state.project_loaded) {
         // Phase 2: Unified Calibration Tool window (project loaded)
-        // One-shot: dock as a tab next to Controls on project load.
-        if (state.dock_pending) {
-            ImGuiWindow *nav = ImGui::FindWindowByName("Controls");
-            if (nav && nav->DockId) {
-                ImGui::SetNextWindowDockID(nav->DockId, ImGuiCond_Always);
-                state.dock_pending = false;
-            }
-        }
+        // Clear stale dock-pending flag (no longer auto-docking)
+        state.dock_pending = false;
         ImGui::SetNextWindowSize(ImVec2(580, 600), ImGuiCond_FirstUseEver);
         if (state.laser_focus_window) {
             ImGui::SetNextWindowFocus();

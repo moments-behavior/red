@@ -79,6 +79,16 @@ inline void DrawSettingsWindow(SettingsState &state, AppContext &ctx) {
             // No propagation needed — takes effect on next video load
         }
 
+#ifndef __APPLE__
+        // --- Hardware (Linux only) ---
+        if (ImGui::CollapsingHeader("Hardware")) {
+            const char *buf_items[] = {"CPU Buffer", "GPU Buffer"};
+            int buf_current = ctx.scene->use_cpu_buffer ? 0 : 1;
+            if (ImGui::Combo("Buffer Type", &buf_current, buf_items, IM_ARRAYSIZE(buf_items)))
+                ctx.scene->use_cpu_buffer = (buf_current == 0);
+        }
+#endif
+
         // --- Export ---
         if (ImGui::CollapsingHeader("JARVIS Export Defaults")) {
             if (ImGui::SliderFloat("Bbox Margin (px)", &s.jarvis_margin, 0.0f, 200.0f))

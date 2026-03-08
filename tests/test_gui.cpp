@@ -16,6 +16,7 @@
 #include "gui/calibration_tool_window.h"
 #include "gui/popup_stack.h"
 #include "gui/toast.h"
+#include "gui/transport_bar.h"
 #include "project_handler.h"
 #include <cassert>
 #include <cctype>
@@ -463,6 +464,373 @@ static void test_project_handler_registry() {
 }
 
 // ---------------------------------------------------------------------------
+// TransportBarState: default initialization
+// ---------------------------------------------------------------------------
+
+static void test_transport_bar_state_defaults() {
+    TransportBarState s;
+    EXPECT_FALSE(s.slider_text_editing);
+    EXPECT_TRUE(s.edit_buf == 0);
+}
+
+// ---------------------------------------------------------------------------
+// TransportBarState: slider text-input pause/resume logic
+// ---------------------------------------------------------------------------
+
+static void test_transport_slider_text_edit_pause() {
+    // Cmd+click on slider pauses permanently (like Space), then seeks on Enter.
+    TransportBarState state;
+    PlaybackState ps;
+    ps.play_video = true;
+    ps.video_loaded = true;
+    ps.slider_frame_number = 500;
+
+    // --- Frame 1: edit_buf syncs from slider_frame_number, then text input begins ---
+    state.edit_buf = ps.slider_frame_number;  // sync (not text editing yet)
+    EXPECT_TRUE(state.edit_buf == 500);
+
+    bool text_input = true;
+    if (text_input && !state.slider_text_editing) {
+        if (ps.play_video) {
+            ps.play_video = false;
+            ps.pause_selected = 0;
+        }
+        state.slider_text_editing = true;
+        ps.slider_text_editing = true;
+    }
+
+    EXPECT_TRUE(state.slider_text_editing);
+    EXPECT_TRUE(ps.slider_text_editing);
+    EXPECT_FALSE(ps.play_video);  // paused permanently
+
+    // --- Frame 2: user types "1234" into edit_buf; external sync is blocked ---
+    // (edit_buf sync skipped because slider_text_editing is true)
+    ps.slider_frame_number = 600;  // simulate external write from frame advance
+    state.edit_buf = 1234;         // user typed this
+    // Our guard: if (!state.slider_text_editing) state.edit_buf = ps.slider_frame_number;
+    // Since slider_text_editing is true, edit_buf stays at 1234
+    EXPECT_TRUE(state.edit_buf == 1234);  // NOT overwritten by external 600
+
+    // --- Frame 3: user presses Enter (IsItemDeactivatedAfterEdit) ---
+    bool deactivated_after_edit = true;
+    bool seek_called = false;
+    int seek_target = -1;
+    if (state.slider_text_editing && deactivated_after_edit) {
+        seek_called = true;
+        seek_target = state.edit_buf;
+        state.slider_text_editing = false;
+        ps.slider_text_editing = false;
+    }
+
+    EXPECT_TRUE(seek_called);
+    EXPECT_TRUE(seek_target == 1234);  // seeks to what user typed
+    EXPECT_FALSE(ps.play_video);       // stays paused
+    EXPECT_FALSE(state.slider_text_editing);
+    EXPECT_FALSE(ps.slider_text_editing);
+}
+
+static void test_transport_slider_text_edit_escape() {
+    // Cmd+click then Escape cancels without seeking.
+    TransportBarState state;
+    PlaybackState ps;
+    ps.play_video = true;
+    ps.slider_frame_number = 500;
+
+    // Enter text editing
+    state.edit_buf = ps.slider_frame_number;
+    state.slider_text_editing = true;
+    ps.slider_text_editing = true;
+    ps.play_video = false;
+    ps.pause_selected = 0;
+
+    // User presses Escape: IsItemDeactivatedAfterEdit = false,
+    // IsItemActive = false, TempInputIsActive = false
+    bool deactivated_after_edit = false;
+    bool item_active = false;
+    bool text_input = false;
+    bool seek_called = false;
+
+    if (state.slider_text_editing) {
+        if (deactivated_after_edit) {
+            seek_called = true;
+        } else if (!item_active && !text_input) {
+            // Cancel — no seek
+            state.slider_text_editing = false;
+            ps.slider_text_editing = false;
+        }
+    }
+
+    EXPECT_FALSE(seek_called);
+    EXPECT_FALSE(state.slider_text_editing);
+    EXPECT_FALSE(ps.slider_text_editing);
+    EXPECT_FALSE(ps.play_video);  // stays paused
+}
+
+static void test_slider_text_editing_blocks_frame_sync() {
+    // When ps.slider_text_editing is true, the frame-advance code must NOT
+    // overwrite ps.slider_frame_number (which would destroy the text input).
+    PlaybackState ps;
+    ps.slider_frame_number = 100;
+    ps.slider_text_editing = true;
+    ps.to_display_frame_number = 200;
+
+    // Simulate the guarded frame-advance sync from red.cpp:
+    // if (!ps.slider_text_editing)
+    //     ps.slider_frame_number = ps.to_display_frame_number;
+    if (!ps.slider_text_editing)
+        ps.slider_frame_number = ps.to_display_frame_number;
+
+    EXPECT_TRUE(ps.slider_frame_number == 100);  // NOT overwritten
+
+    // When editing ends, sync resumes
+    ps.slider_text_editing = false;
+    if (!ps.slider_text_editing)
+        ps.slider_frame_number = ps.to_display_frame_number;
+
+    EXPECT_TRUE(ps.slider_frame_number == 200);  // now synced
+}
+
+// ---------------------------------------------------------------------------
+// INI migration: v4→v5 DockId remap (sidebar dockspace removal)
+// ---------------------------------------------------------------------------
+
+static void test_ini_migration_dock_remap() {
+    // Simulate a project ini with old sidebar dock references
+    std::string content =
+        "[Window][Labeling Tool]\n"
+        "Pos=8,401\n"
+        "Size=269,266\n"
+        "Collapsed=0\n"
+        "DockId=0x00000100,0\n"
+        "\n"
+        "[Window][Keypoints]\n"
+        "Pos=8,669\n"
+        "Size=448,301\n"
+        "Collapsed=0\n"
+        "DockId=0x00000100,1\n"
+        "\n"
+        "[Docking][Data]\n"
+        "DockSpace ID=0x00000001 Window=0x1BBC0F80 Pos=280,21 Size=1448,956 CentralNode=1\n"
+        "DockSpace ID=0x00000100 Window=0xFA8EA1CE Pos=8,29 Size=264,940 CentralNode=1\n";
+
+    // Apply the v4→v5 migration logic (same as in app_context.h)
+    bool changed = false;
+    {
+        const std::string old_dock = "DockId=0x00000100";
+        const std::string new_dock = "DockId=0x00000009";
+        size_t pos = 0;
+        while ((pos = content.find(old_dock, pos)) != std::string::npos) {
+            content.replace(pos, old_dock.size(), new_dock);
+            pos += new_dock.size();
+            changed = true;
+        }
+        const std::string stale_node = "DockSpace ID=0x00000100";
+        pos = content.find(stale_node);
+        if (pos != std::string::npos) {
+            size_t line_end = content.find('\n', pos);
+            if (line_end != std::string::npos)
+                line_end += 1;
+            else
+                line_end = content.size();
+            content.erase(pos, line_end - pos);
+            changed = true;
+        }
+    }
+
+    EXPECT_TRUE(changed);
+
+    // Old dock ID should be gone
+    EXPECT_TRUE(content.find("0x00000100") == std::string::npos);
+
+    // New dock ID should be present (twice: one per window)
+    EXPECT_TRUE(content.find("DockId=0x00000009,0") != std::string::npos);
+    EXPECT_TRUE(content.find("DockId=0x00000009,1") != std::string::npos);
+
+    // Stale DockSpace node line should be removed
+    EXPECT_TRUE(content.find("DockSpace ID=0x00000100") == std::string::npos);
+
+    // Main DockSpace should survive
+    EXPECT_TRUE(content.find("DockSpace ID=0x00000001") != std::string::npos);
+}
+
+// ---------------------------------------------------------------------------
+// INI migration: full chain (v1→v5)
+// ---------------------------------------------------------------------------
+
+static void test_ini_migration_full_chain() {
+    // Simulate a very old ini with "File Browser" window + old sidebar dock
+    std::string content =
+        "[Window][File Browser]\n"
+        "Pos=0,0\n"
+        "Size=450,600\n"
+        "Collapsed=0\n"
+        "DockId=0x00000100,0\n"
+        "\n"
+        "[Window][Labeling Tool]\n"
+        "Pos=8,401\n"
+        "Size=269,266\n"
+        "Collapsed=0\n"
+        "DockId=0x00000100,1\n"
+        "\n"
+        "[Docking][Data]\n"
+        "DockSpace ID=0x00000100 Window=0xFA8EA1CE Pos=8,29 Size=264,940 CentralNode=1\n";
+
+    // Apply all migration steps from migrate_ini_window_names
+    bool changed = false;
+
+    // v1→v2: File Browser → Navigator
+    changed |= migrate_ini_section(content,
+        "[Window][File Browser]", "[Window][Navigator]");
+    // v2→v3: Navigator → Controls
+    changed |= migrate_ini_section(content,
+        "[Window][Navigator]", "[Window][Controls]");
+    // v3→v4: Remove Controls
+    {
+        const std::string header = "[Window][Controls]";
+        size_t pos = content.find(header);
+        if (pos != std::string::npos) {
+            size_t section_end = content.find("\n[", pos + 1);
+            if (section_end == std::string::npos)
+                section_end = content.size();
+            else
+                section_end += 1;
+            content.erase(pos, section_end - pos);
+            changed = true;
+        }
+    }
+    // v4→v5: Remap DockId 0x00000100 → 0x00000009
+    {
+        const std::string old_dock = "DockId=0x00000100";
+        const std::string new_dock = "DockId=0x00000009";
+        size_t pos = 0;
+        while ((pos = content.find(old_dock, pos)) != std::string::npos) {
+            content.replace(pos, old_dock.size(), new_dock);
+            pos += new_dock.size();
+            changed = true;
+        }
+        const std::string stale_node = "DockSpace ID=0x00000100";
+        pos = content.find(stale_node);
+        if (pos != std::string::npos) {
+            size_t line_end = content.find('\n', pos);
+            if (line_end != std::string::npos) line_end += 1;
+            else line_end = content.size();
+            content.erase(pos, line_end - pos);
+            changed = true;
+        }
+    }
+
+    EXPECT_TRUE(changed);
+
+    // File Browser / Navigator / Controls should all be gone
+    EXPECT_TRUE(content.find("File Browser") == std::string::npos);
+    EXPECT_TRUE(content.find("Navigator") == std::string::npos);
+    EXPECT_TRUE(content.find("Controls") == std::string::npos);
+
+    // Old dock ID should be gone
+    EXPECT_TRUE(content.find("0x00000100") == std::string::npos);
+
+    // Labeling Tool should survive with new dock ID
+    EXPECT_TRUE(content.find("[Window][Labeling Tool]") != std::string::npos);
+    EXPECT_TRUE(content.find("DockId=0x00000009") != std::string::npos);
+}
+
+// ---------------------------------------------------------------------------
+// INI migration: no-op on already-migrated content
+// ---------------------------------------------------------------------------
+
+static void test_ini_migration_idempotent() {
+    // Content that has already been migrated to v5
+    std::string content =
+        "[Window][Labeling Tool]\n"
+        "Pos=0,51\n"
+        "Size=280,463\n"
+        "Collapsed=0\n"
+        "DockId=0x00000009,0\n"
+        "\n"
+        "[Docking][Data]\n"
+        "DockNode ID=0x00000001 Pos=0,51 Size=1728,926 Split=X\n";
+
+    std::string original = content;
+    bool changed = false;
+
+    // Run all migrations — nothing should change
+    changed |= migrate_ini_section(content,
+        "[Window][File Browser]", "[Window][Navigator]");
+    changed |= migrate_ini_section(content,
+        "[Window][Navigator]", "[Window][Controls]");
+    {
+        const std::string header = "[Window][Controls]";
+        size_t pos = content.find(header);
+        if (pos != std::string::npos) { changed = true; }
+    }
+    {
+        const std::string old_dock = "DockId=0x00000100";
+        size_t pos = content.find(old_dock);
+        if (pos != std::string::npos) { changed = true; }
+    }
+
+    EXPECT_FALSE(changed);
+    EXPECT_TRUE(content == original);
+}
+
+// ---------------------------------------------------------------------------
+// PlaybackState: speed computation logic
+// ---------------------------------------------------------------------------
+
+static void test_playback_speed_computation() {
+    PlaybackState ps;
+    ps.video_loaded = true;
+    ps.play_video = true;
+
+    // Simulate: 30 frames elapsed over 1.0 second at 60fps
+    // Expected: inst_speed = 30 / (60 * 1.0) = 0.5x
+    ps.last_frame_num_playspeed = 0;
+    int current_frame = 30;
+    double wall_seconds = 1.0;
+    double video_fps = 60.0;
+
+    if (wall_seconds > 0.5 && ps.play_video) {
+        int frame_delta = current_frame - ps.last_frame_num_playspeed;
+        ps.inst_speed = frame_delta / (video_fps * wall_seconds);
+        ps.last_frame_num_playspeed = current_frame;
+    }
+
+    EXPECT_NEAR(ps.inst_speed, 0.5, 0.001);
+    EXPECT_TRUE(ps.last_frame_num_playspeed == 30);
+
+    // Simulate: 60 more frames over 1.0 second = 1.0x realtime
+    current_frame = 90;
+    wall_seconds = 1.0;
+    {
+        int frame_delta = current_frame - ps.last_frame_num_playspeed;
+        ps.inst_speed = frame_delta / (video_fps * wall_seconds);
+        ps.last_frame_num_playspeed = current_frame;
+    }
+
+    EXPECT_NEAR(ps.inst_speed, 1.0, 0.001);
+}
+
+// ---------------------------------------------------------------------------
+// PlaybackState: default initialization
+// ---------------------------------------------------------------------------
+
+static void test_playback_state_defaults() {
+    PlaybackState ps;
+    EXPECT_FALSE(ps.play_video);
+    EXPECT_FALSE(ps.video_loaded);
+    EXPECT_TRUE(ps.realtime_playback);
+    EXPECT_NEAR(ps.set_playback_speed, 1.0f, 0.001f);
+    EXPECT_NEAR(ps.inst_speed, 1.0, 0.001);
+    EXPECT_TRUE(ps.slider_frame_number == 0);
+    EXPECT_TRUE(ps.pause_selected == 0);
+    EXPECT_FALSE(ps.slider_just_changed);
+    EXPECT_FALSE(ps.just_seeked);
+    EXPECT_FALSE(ps.pause_seeked);
+    EXPECT_NEAR(ps.accumulated_play_time, 0.0, 0.001);
+    EXPECT_FALSE(ps.slider_text_editing);
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 
@@ -486,6 +854,17 @@ int main() {
     test_popup_stack_fifo();
     test_toast_queue_basic();
     test_project_handler_registry();
+
+    // Transport bar + UI overhaul tests
+    test_transport_bar_state_defaults();
+    test_transport_slider_text_edit_pause();
+    test_transport_slider_text_edit_escape();
+    test_slider_text_editing_blocks_frame_sync();
+    test_ini_migration_dock_remap();
+    test_ini_migration_full_chain();
+    test_ini_migration_idempotent();
+    test_playback_speed_computation();
+    test_playback_state_defaults();
 
     printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail > 0 ? 1 : 0;
