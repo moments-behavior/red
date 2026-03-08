@@ -483,7 +483,6 @@ int main(int argc, char **argv) {
         // App-level main menu bar (always visible)
         DrawMainMenuBar(ctx, calib_state, annot_state, settings_state,
                         jarvis_export_state, show_help_window);
-        ImGui::DockSpaceOverViewport(0x00000001);
 
         // --- Update playback time ---
         auto now = std::chrono::steady_clock::now();
@@ -497,7 +496,18 @@ int main(int argc, char **argv) {
         }
         double playback_time_now = ps.accumulated_play_time;
 
-        if (ImGui::Begin("Controls")) {
+        // Controls sidebar — always visible, pinned to left edge.
+        // Rendered BEFORE DockSpaceOverViewport so viewport work area adjusts.
+        constexpr float kControlsSidebarWidth = 450.0f;
+        static constexpr ImGuiID kSidebarDockID = 0x00000100;
+        ImGuiViewport* vp = ImGui::GetMainViewport();
+        ImGuiWindowFlags sidebar_flags = ImGuiWindowFlags_NoScrollbar |
+                                         ImGuiWindowFlags_NoSavedSettings;
+        if (ImGui::BeginViewportSideBar("##ControlsSidebar", vp, ImGuiDir_Left,
+                                         kControlsSidebarWidth, sidebar_flags)) {
+        // Controls content — auto-resizes to content height
+        if (ImGui::BeginChild("##ControlsContent", ImVec2(0, 0),
+                               ImGuiChildFlags_AutoResizeY, ImGuiWindowFlags_None)) {
             if (!ps.video_loaded) {
 #ifndef __APPLE__
                 {
@@ -517,6 +527,9 @@ int main(int argc, char **argv) {
                 static bool was_editing = false;
                 if (!was_editing)
                     frame_edit_buf = current_frame_num;
+                ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x -
+                    ImGui::CalcTextSize("Current Frame").x -
+                    ImGui::GetStyle().ItemInnerSpacing.x);
                 ImGui::InputInt("Current Frame", &frame_edit_buf, 0, 0);
                 was_editing = ImGui::IsItemActive();
                 if (ImGui::IsItemDeactivatedAfterEdit()) {
@@ -539,135 +552,236 @@ int main(int argc, char **argv) {
                     ps.last_wall_time_playspeed = now_wall;
                 }
 
-                // === Playback section ===
-                ImGui::SeparatorText("Playback");
-                ImGui::Checkbox("Realtime", &ps.realtime_playback);
-                // Two-column table: label | control
-                ImGui::BeginDisabled(!ps.realtime_playback);
-                if (ImGui::BeginTable("##playback_tbl", 2,
-                                      ImGuiTableFlags_SizingStretchProp |
-                                          ImGuiTableFlags_BordersInnerV)) {
-                    ImGui::TableSetupColumn(
-                        "Label", ImGuiTableColumnFlags_WidthFixed, 170.0f);
-                    ImGui::TableSetupColumn("Control",
-                                            ImGuiTableColumnFlags_WidthStretch);
-
-                    // Row: FPS (read-only)
-                    ImGui::TableNextRow();
-                    ImGui::TableSetColumnIndex(0);
-                    ImGui::AlignTextToFramePadding();
-                    ImGui::TextUnformatted("Video FPS");
-                    ImGui::TableSetColumnIndex(1);
-                    ImGui::Text("%.1f", dc_context->video_fps);
-
-                    // Row: Playback speed slider
-                    ImGui::TableNextRow();
-                    ImGui::TableSetColumnIndex(0);
-                    ImGui::AlignTextToFramePadding();
-                    ImGui::TextUnformatted("Set Playback Speed");
-                    ImGui::SameLine();
-                    HelpMarker("Log2 scale: 1/16x to 1x.");
-
-                    ImGui::TableSetColumnIndex(1);
-                    // Format label: show as fraction, e.g. "1/8x"
-                    char speed_label[16];
-                    int denom = (int)roundf(1.0f / ps.set_playback_speed);
-                    if (denom <= 1)
-                        snprintf(speed_label, sizeof(speed_label), "1x");
-                    else
-                        snprintf(speed_label, sizeof(speed_label), "1/%dx", denom);
-                    ImGui::SliderFloat("##set_playback_speed", &ps.set_playback_speed,
-                                       1.0f / 16.0f, 1.0f, speed_label,
-                                       ImGuiSliderFlags_Logarithmic);
-
-                    // Row: Current speed readout
-                    ImGui::TableNextRow();
-                    ImGui::TableSetColumnIndex(0);
-                    ImGui::AlignTextToFramePadding();
-                    ImGui::TextUnformatted("Current Speed");
-                    ImGui::TableSetColumnIndex(1);
-                    ImGui::Text("%.2fx", ps.inst_speed);
-
-                    // Row: Render FPS (app framerate)
-                    ImGui::TableNextRow();
-                    ImGui::TableSetColumnIndex(0);
-                    ImGui::AlignTextToFramePadding();
-                    ImGui::TextUnformatted("Render FPS");
-                    ImGui::TableSetColumnIndex(1);
-                    ImGui::Text("%.0f", ImGui::GetIO().Framerate);
-
-                    ImGui::EndTable();
+                // === Transport section (always visible at top) ===
+                ImGui::SeparatorText("Transport");
+                float spacing = ImGui::GetStyle().ItemInnerSpacing.x;
+                if (ImGui::Button(ICON_FK_FAST_BACKWARD)) {
+                    int clamped_frame =
+                        std::max(0, current_frame_num -
+                                        10 * dc_context->seek_interval);
+                    seek_all_cameras(scene, clamped_frame,
+                                     dc_context->video_fps, ps, false);
                 }
-                ImGui::EndDisabled();
+                ImGui::SameLine(0.0f, spacing);
+                if (ImGui::Button(ICON_FK_STEP_BACKWARD)) {
+                    int clamped_frame = std::max(
+                        0, current_frame_num - dc_context->seek_interval);
+                    seek_all_cameras(scene, clamped_frame,
+                                     dc_context->video_fps, ps, false);
+                }
+                ImGui::SameLine(0.0f, spacing);
 
-                // Tip (wrapped, subtle)
-                ImGui::PushTextWrapPos(ImGui::GetFontSize() * 24.0f);
-                ImGui::Spacing();
-                ImGui::TextDisabled(
-                    "Tip: If playback is slower than real-time (< 1.0x), "
-                    "collapse camera views to improve speed.");
-                ImGui::PopTextWrapPos();
-
-                // === Display section ===
-                ImGui::SeparatorText("Display Controls");
-#ifdef __APPLE__
-                // Metal compute shader applies contrast/brightness live during playback
-                (void)0;
-#else
-                ImGui::BeginDisabled(ps.play_video); // Disable if playing video
-#endif
-
-                if (ImGui::BeginTable("##display_tbl", 2,
-                                      ImGuiTableFlags_SizingStretchProp |
-                                          ImGuiTableFlags_BordersInnerV)) {
-                    ImGui::TableSetupColumn(
-                        "Label", ImGuiTableColumnFlags_WidthFixed, 170.0f);
-                    ImGui::TableSetupColumn("Control",
-                                            ImGuiTableColumnFlags_WidthStretch);
-
-                    // Contrast
-                    ImGui::TableNextRow();
-                    ImGui::TableSetColumnIndex(0);
-                    ImGui::AlignTextToFramePadding();
-                    ImGui::TextUnformatted("Contrast (alpha)");
-                    ImGui::SameLine();
-                    HelpMarker("1.00 = neutral. Increase to boost separation.");
-                    ImGui::TableSetColumnIndex(1);
-                    ImGui::SliderFloat("##contrast", &display.contrast, 0.0f, 3.0f,
-                                       "%.2f");
-
-                    // Brightness
-                    ImGui::TableNextRow();
-                    ImGui::TableSetColumnIndex(0);
-                    ImGui::AlignTextToFramePadding();
-                    ImGui::TextUnformatted("Brightness (beta)");
-                    ImGui::SameLine();
-                    HelpMarker("Shift pixel values. 0 = neutral.");
-                    ImGui::TableSetColumnIndex(1);
-                    ImGui::SliderInt("##brightness", &display.brightness, -150, 150);
-
-                    // Reset row
-                    ImGui::TableNextRow();
-                    ImGui::TableSetColumnIndex(0);
-                    ImGui::AlignTextToFramePadding();
-                    ImGui::TextUnformatted("Display Preset");
-                    ImGui::TableSetColumnIndex(1);
-                    if (ImGui::Button("Reset##display")) {
-                        display.contrast = 1.0f;
-                        display.brightness = 0;
-                        display.pivot_midgray = true;
+                if (ps.to_display_frame_number ==
+                    (dc_context->total_num_frame - 1)) {
+                    ImVec4 repeat_normal =
+                        ImVec4(0.85f, 0.75f, 0.20f, 1.0f);
+                    ImVec4 repeat_hover = ImVec4(0.90f, 0.80f, 0.25f, 1.0f);
+                    ImVec4 repeat_active =
+                        ImVec4(0.80f, 0.70f, 0.18f, 1.0f);
+                    ImGui::PushStyleColor(ImGuiCol_Button, repeat_normal);
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                                          repeat_hover);
+                    ImGui::PushStyleColor(ImGuiCol_ButtonActive,
+                                          repeat_active);
+                    if (ImGui::Button(ICON_FK_REPEAT)) {
+                        seek_all_cameras(scene, 0, dc_context->video_fps,
+                                         ps, false);
                     }
-                    ImGui::SameLine();
-                    ImGui::TextDisabled("(restores neutral)");
-
-                    ImGui::EndTable();
+                    ImGui::PopStyleColor(3);
+                } else {
+                    ImVec4 normal, hover, active;
+                    if (ps.play_video) {
+                        normal = ImVec4(0.8f, 0.3f, 0.3f, 1.0f);
+                        hover = ImVec4(0.9f, 0.4f, 0.4f, 1.0f);
+                        active = ImVec4(0.7f, 0.2f, 0.2f, 1.0f);
+                    } else {
+                        normal = ImVec4(0.2f, 0.6f, 0.2f, 1.0f);
+                        hover = ImVec4(0.4f, 0.9f, 0.4f, 1.0f);
+                        active = ImVec4(0.3f, 0.75f, 0.3f, 1.0f);
+                    }
+                    ImGui::PushStyleColor(ImGuiCol_Button, normal);
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, hover);
+                    ImGui::PushStyleColor(ImGuiCol_ButtonActive, active);
+                    if (ImGui::Button(ps.play_video ? ICON_FK_PAUSE
+                                                    : ICON_FK_PLAY)) {
+                        ps.play_video = !ps.play_video;
+                        if (ps.play_video) {
+                            ps.pause_seeked = false;
+                            ps.last_play_time_start =
+                                std::chrono::steady_clock::now();
+                        } else {
+                            ps.pause_selected = 0;
+                        }
+                    }
+                    ImGui::PopStyleColor(3);
                 }
-#ifndef __APPLE__
-                ImGui::EndDisabled();
+
+                ImGui::SameLine(0.0f, spacing);
+                if (ImGui::Button(ICON_FK_STEP_FORWARD)) {
+                    int clamped_frame = std::min(
+                        dc_context->total_num_frame,
+                        current_frame_num + dc_context->seek_interval);
+                    seek_all_cameras(scene, clamped_frame,
+                                     dc_context->video_fps, ps, false);
+                }
+                ImGui::SameLine(0.0f, spacing);
+                if (ImGui::Button(ICON_FK_FAST_FORWARD)) {
+                    int clamped_frame = std::min(
+                        dc_context->total_num_frame,
+                        current_frame_num + 10 * dc_context->seek_interval);
+                    seek_all_cameras(scene, clamped_frame,
+                                     dc_context->video_fps, ps, false);
+                }
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                ps.slider_just_changed = ImGui::SliderInt(
+                    "##frame count", &ps.slider_frame_number, 0,
+                    dc_context->estimated_num_frames);
+                float current_time_sec =
+                    ps.slider_frame_number / dc_context->video_fps;
+                float total_time_sec = dc_context->estimated_num_frames /
+                                       dc_context->video_fps;
+                std::string current_str = format_time(current_time_sec);
+                std::string total_str = format_time(total_time_sec);
+                ImGui::Text("%s / %s", current_str.c_str(),
+                            total_str.c_str());
+
+                if (ps.slider_just_changed) {
+                    seek_all_cameras(scene, ps.slider_frame_number,
+                                     dc_context->video_fps, ps, false);
+                }
+
+                // === Playback section (collapsible) ===
+                if (ImGui::CollapsingHeader("Playback", ImGuiTreeNodeFlags_DefaultOpen)) {
+                    ImGui::Checkbox("Realtime", &ps.realtime_playback);
+                    ImGui::BeginDisabled(!ps.realtime_playback);
+                    if (ImGui::BeginTable("##playback_tbl", 2,
+                                          ImGuiTableFlags_SizingStretchProp |
+                                              ImGuiTableFlags_BordersInnerV)) {
+                        ImGui::TableSetupColumn(
+                            "Label", ImGuiTableColumnFlags_WidthFixed, 170.0f);
+                        ImGui::TableSetupColumn("Control",
+                                                ImGuiTableColumnFlags_WidthStretch);
+
+                        ImGui::TableNextRow();
+                        ImGui::TableSetColumnIndex(0);
+                        ImGui::AlignTextToFramePadding();
+                        ImGui::TextUnformatted("Video FPS");
+                        ImGui::TableSetColumnIndex(1);
+                        ImGui::Text("%.1f", dc_context->video_fps);
+
+                        ImGui::TableNextRow();
+                        ImGui::TableSetColumnIndex(0);
+                        ImGui::AlignTextToFramePadding();
+                        ImGui::TextUnformatted("Set Playback Speed");
+                        ImGui::SameLine();
+                        HelpMarker("Log2 scale: 1/16x to 1x.");
+
+                        ImGui::TableSetColumnIndex(1);
+                        char speed_label[16];
+                        int denom = (int)roundf(1.0f / ps.set_playback_speed);
+                        if (denom <= 1)
+                            snprintf(speed_label, sizeof(speed_label), "1x");
+                        else
+                            snprintf(speed_label, sizeof(speed_label), "1/%dx", denom);
+                        ImGui::SetNextItemWidth(-FLT_MIN);
+                        ImGui::SliderFloat("##set_playback_speed", &ps.set_playback_speed,
+                                           1.0f / 16.0f, 1.0f, speed_label,
+                                           ImGuiSliderFlags_Logarithmic);
+
+                        ImGui::TableNextRow();
+                        ImGui::TableSetColumnIndex(0);
+                        ImGui::AlignTextToFramePadding();
+                        ImGui::TextUnformatted("Current Speed");
+                        ImGui::TableSetColumnIndex(1);
+                        ImGui::Text("%.2fx", ps.inst_speed);
+
+                        ImGui::TableNextRow();
+                        ImGui::TableSetColumnIndex(0);
+                        ImGui::AlignTextToFramePadding();
+                        ImGui::TextUnformatted("Render FPS");
+                        ImGui::TableSetColumnIndex(1);
+                        ImGui::Text("%.0f", ImGui::GetIO().Framerate);
+
+                        ImGui::EndTable();
+                    }
+                    ImGui::EndDisabled();
+
+                    ImGui::PushTextWrapPos(ImGui::GetFontSize() * 24.0f);
+                    ImGui::Spacing();
+                    ImGui::TextDisabled(
+                        "Tip: If playback is slower than real-time (< 1.0x), "
+                        "collapse camera views to improve speed.");
+                    ImGui::PopTextWrapPos();
+                }
+
+                // === Display Controls section (collapsible) ===
+                if (ImGui::CollapsingHeader("Display Controls", ImGuiTreeNodeFlags_DefaultOpen)) {
+#ifdef __APPLE__
+                    (void)0;
+#else
+                    ImGui::BeginDisabled(ps.play_video);
 #endif
+
+                    if (ImGui::BeginTable("##display_tbl", 2,
+                                          ImGuiTableFlags_SizingStretchProp |
+                                              ImGuiTableFlags_BordersInnerV)) {
+                        ImGui::TableSetupColumn(
+                            "Label", ImGuiTableColumnFlags_WidthFixed, 170.0f);
+                        ImGui::TableSetupColumn("Control",
+                                                ImGuiTableColumnFlags_WidthStretch);
+
+                        ImGui::TableNextRow();
+                        ImGui::TableSetColumnIndex(0);
+                        ImGui::AlignTextToFramePadding();
+                        ImGui::TextUnformatted("Contrast (alpha)");
+                        ImGui::SameLine();
+                        HelpMarker("1.00 = neutral. Increase to boost separation.");
+                        ImGui::TableSetColumnIndex(1);
+                        ImGui::SetNextItemWidth(-FLT_MIN);
+                        ImGui::SliderFloat("##contrast", &display.contrast, 0.0f, 3.0f,
+                                           "%.2f");
+
+                        ImGui::TableNextRow();
+                        ImGui::TableSetColumnIndex(0);
+                        ImGui::AlignTextToFramePadding();
+                        ImGui::TextUnformatted("Brightness (beta)");
+                        ImGui::SameLine();
+                        HelpMarker("Shift pixel values. 0 = neutral.");
+                        ImGui::TableSetColumnIndex(1);
+                        ImGui::SetNextItemWidth(-FLT_MIN);
+                        ImGui::SliderInt("##brightness", &display.brightness, -150, 150);
+
+                        ImGui::TableNextRow();
+                        ImGui::TableSetColumnIndex(0);
+                        ImGui::AlignTextToFramePadding();
+                        ImGui::TextUnformatted("Display Preset");
+                        ImGui::TableSetColumnIndex(1);
+                        if (ImGui::Button("Reset##display")) {
+                            display.contrast = 1.0f;
+                            display.brightness = 0;
+                            display.pivot_midgray = true;
+                        }
+                        ImGui::SameLine();
+                        ImGui::TextDisabled("(restores neutral)");
+
+                        ImGui::EndTable();
+                    }
+#ifndef __APPLE__
+                    ImGui::EndDisabled();
+#endif
+                }
             }
         }
+        ImGui::EndChild();
+
+        // Dockspace fills remaining sidebar height — tool windows dock here
+        float remaining = ImGui::GetContentRegionAvail().y;
+        if (remaining > 1.0f)
+            ImGui::DockSpace(kSidebarDockID, ImVec2(0, remaining), ImGuiDockNodeFlags_None);
+        }
         ImGui::End();
+
+        ImGui::DockSpaceOverViewport(0x00000001);
 
         // Draw all registered panels
         panels.drawAll();
@@ -1091,11 +1205,10 @@ int main(int argc, char **argv) {
                     unbind_texture();
 #endif // __APPLE__
 
-                    ImGui::BeginGroup();
                     std::string scene_name = "scene view" + std::to_string(j);
                     ImGui::BeginChild(
                         scene_name.c_str(),
-                        ImVec2(0, -ImGui::GetFrameHeightWithSpacing()));
+                        ImVec2(0, 0));
                     ImVec2 avail_size = ImGui::GetContentRegionAvail();
 
                     // ImGui::Image((void*)(intptr_t)image_texture[j],
@@ -1231,113 +1344,6 @@ int main(int argc, char **argv) {
                     }
 
                     ImGui::EndChild();
-
-                    float spacing = ImGui::GetStyle().ItemInnerSpacing.x;
-                    if (ImGui::Button(ICON_FK_FAST_BACKWARD)) {
-                        int clamped_frame =
-                            std::max(0, current_frame_num -
-                                            10 * dc_context->seek_interval);
-                        seek_all_cameras(scene, clamped_frame,
-                                         dc_context->video_fps, ps, false);
-                    }
-                    ImGui::SameLine(0.0f, spacing);
-                    if (ImGui::Button(ICON_FK_STEP_BACKWARD)) {
-                        int clamped_frame = std::max(
-                            0, current_frame_num - dc_context->seek_interval);
-                        seek_all_cameras(scene, clamped_frame,
-                                         dc_context->video_fps, ps, false);
-                    }
-                    ImGui::SameLine(0.0f, spacing);
-
-                    if (ps.to_display_frame_number ==
-                        (dc_context->total_num_frame - 1)) {
-
-                        ImVec4 repeat_normal =
-                            ImVec4(0.85f, 0.75f, 0.20f, 1.0f);
-                        ImVec4 repeat_hover = ImVec4(0.90f, 0.80f, 0.25f, 1.0f);
-                        ImVec4 repeat_active =
-                            ImVec4(0.80f, 0.70f, 0.18f, 1.0f);
-                        ImGui::PushStyleColor(ImGuiCol_Button, repeat_normal);
-                        ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
-                                              repeat_hover);
-                        ImGui::PushStyleColor(ImGuiCol_ButtonActive,
-                                              repeat_active);
-
-                        if (ImGui::Button(ICON_FK_REPEAT)) {
-                            // seek to zero
-                            seek_all_cameras(scene, 0, dc_context->video_fps,
-                                             ps, false);
-                        }
-                        ImGui::PopStyleColor(3);
-                    } else {
-                        ImVec4 normal, hover, active;
-                        if (ps.play_video) {
-                            normal = ImVec4(0.8f, 0.3f, 0.3f, 1.0f);
-                            hover = ImVec4(0.9f, 0.4f, 0.4f, 1.0f);
-                            active = ImVec4(0.7f, 0.2f, 0.2f, 1.0f);
-                        } else {
-                            // green
-                            normal = ImVec4(0.2f, 0.6f, 0.2f, 1.0f);
-                            hover = ImVec4(0.4f, 0.9f, 0.4f, 1.0f);
-                            active = ImVec4(0.3f, 0.75f, 0.3f, 1.0f);
-                        }
-                        ImGui::PushStyleColor(ImGuiCol_Button, normal);
-                        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, hover);
-                        ImGui::PushStyleColor(ImGuiCol_ButtonActive, active);
-                        if (ImGui::Button(ps.play_video ? ICON_FK_PAUSE
-                                                        : ICON_FK_PLAY)) {
-                            ps.play_video = !ps.play_video;
-                            if (ps.play_video) {
-                                ps.pause_seeked = false;
-                                ps.last_play_time_start =
-                                    std::chrono::steady_clock::now();
-                            } else {
-                                ps.pause_selected = 0;
-                            }
-                        }
-                        ImGui::PopStyleColor(3);
-                    }
-
-                    ImGui::SameLine(0.0f, spacing);
-                    if (ImGui::Button(ICON_FK_STEP_FORWARD)) {
-                        int clamped_frame = std::min(
-                            dc_context->total_num_frame,
-                            current_frame_num + dc_context->seek_interval);
-                        seek_all_cameras(scene, clamped_frame,
-                                         dc_context->video_fps, ps, false);
-                    }
-                    ImGui::SameLine(0.0f, spacing);
-                    if (ImGui::Button(ICON_FK_FAST_FORWARD)) {
-                        int clamped_frame = std::min(
-                            dc_context->total_num_frame,
-                            current_frame_num + 10 * dc_context->seek_interval);
-                        seek_all_cameras(scene, clamped_frame,
-                                         dc_context->video_fps, ps, false);
-                    }
-                    ImGui::SameLine();
-                    ps.slider_just_changed = ImGui::SliderInt(
-                        "##frame count", &ps.slider_frame_number, 0,
-                        dc_context->estimated_num_frames);
-                    ImGui::SameLine();
-                    float current_time_sec =
-                        ps.slider_frame_number / dc_context->video_fps;
-                    float total_time_sec = dc_context->estimated_num_frames /
-                                           dc_context->video_fps;
-
-                    std::string current_str = format_time(current_time_sec);
-                    std::string total_str = format_time(total_time_sec);
-                    ImGui::Text("%s / %s", current_str.c_str(),
-                                total_str.c_str());
-
-                    if (ps.slider_just_changed) {
-                        // std::cout << "main, seeking: " <<
-                        // ps.slider_frame_number
-                        //           << std::endl;
-                        seek_all_cameras(scene, ps.slider_frame_number,
-                                         dc_context->video_fps, ps, false);
-                    }
-
-                    ImGui::EndGroup();
                 }
                 ImGui::End();
             }
