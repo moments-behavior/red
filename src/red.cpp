@@ -443,6 +443,14 @@ int main(int argc, char **argv) {
         // Poll and handle events (inputs, window resize, etc.)
         glfwPollEvents();
 
+        // When minimized, block until the user restores the window.
+        // Avoids spinning the render loop (Metal nextDrawable returns nil,
+        // CPU/GPU burn for nothing).
+        if (glfwGetWindowAttrib(window->render_target, GLFW_ICONIFIED)) {
+            glfwWaitEvents();
+            continue;
+        }
+
 #ifdef __APPLE__
         // Acquire drawable and open command buffer; calls ImGui_ImplMetal_NewFrame
         if (!metal_begin_frame()) {
