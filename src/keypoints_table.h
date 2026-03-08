@@ -1,12 +1,14 @@
 #pragma once
-#include "project.h"
-#include "skeleton.h"
+#include "app_context.h"
 #include <imgui.h>
 
-void DrawKeypointsWindow(
-    ProjectManager &pm, RenderScene *scene, SkeletonContext &skeleton,
-    std::map<u32, KeyPoints *> &keypoints_map, int &current_frame_num,
-    std::vector<bool> &is_view_focused) {
+inline void DrawKeypointsWindow(AppContext &ctx, int current_frame_num) {
+    auto &pm = ctx.pm;
+    auto *scene = ctx.scene;
+    auto &skeleton = ctx.skeleton;
+    auto &keypoints_map = ctx.keypoints_map;
+    auto &is_view_focused = ctx.is_view_focused;
+
     if (ImGui::Begin("Keypoints")) {
 
         bool keypoints_find =

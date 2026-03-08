@@ -1,10 +1,7 @@
 #pragma once
+#include "app_context.h"
 #include "gui/gui_keypoints.h"
 #include "gui/gui_save_load.h"
-#include "gui/popup_stack.h"
-#include "gui/toast.h"
-#include "project.h"
-#include "skeleton.h"
 #include <ImGuiFileDialog.h>
 #include <imgui.h>
 #include <ctime>
@@ -15,12 +12,18 @@ struct LabelingToolState {
 };
 
 inline void DrawLabelingToolWindow(
-    LabelingToolState &state, ProjectManager &pm, RenderScene *scene,
-    DecoderContext *dc_context, SkeletonContext &skeleton,
-    std::map<u32, KeyPoints *> &keypoints_map, int current_frame_num,
-    bool keypoints_find, PlaybackState &ps, PopupStack &popups,
-    ToastQueue &toasts, bool input_is_imgs,
-    std::vector<std::string> &imgs_names) {
+    LabelingToolState &state, AppContext &ctx,
+    int current_frame_num, bool keypoints_find) {
+    auto &pm = ctx.pm;
+    auto *scene = ctx.scene;
+    auto *dc_context = ctx.dc_context;
+    auto &skeleton = ctx.skeleton;
+    auto &keypoints_map = ctx.keypoints_map;
+    auto &ps = ctx.ps;
+    auto &popups = ctx.popups;
+    auto &toasts = ctx.toasts;
+    bool &input_is_imgs = ctx.input_is_imgs;
+    auto &imgs_names = ctx.imgs_names;
 
     state.save_requested = false;
 

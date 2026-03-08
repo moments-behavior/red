@@ -186,6 +186,7 @@ void seek_all_cameras(RenderScene *scene, int frame_number, double video_fps,
     // Update playback state
     state.to_display_frame_number = scene->seek_context[0].seek_frame;
     state.read_head = 0;
+    state.pause_selected = 0;  // reset buffer offset so display starts at seeked frame
     state.just_seeked = true;
     state.slider_frame_number = state.to_display_frame_number;
 

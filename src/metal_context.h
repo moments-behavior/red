@@ -24,6 +24,9 @@ void metal_cleanup();
 #include <CoreVideo/CoreVideo.h>
 void metal_upload_pixelbuf(int cam_idx, CVPixelBufferRef pb, uint32_t w, uint32_t h);
 
+// Phase 3: contrast/brightness compute shader (in-place on display texture)
+void metal_apply_contrast_brightness(int cam_idx, float contrast, float brightness, bool pivot_midgray);
+
 #ifdef __cplusplus
 }
 #endif

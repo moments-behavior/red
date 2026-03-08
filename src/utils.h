@@ -28,6 +28,8 @@ struct PlaybackState {
         std::chrono::steady_clock::now();
     bool video_loaded = false;
     bool realtime_playback = true;
+    float set_playback_speed = 1.0f;
+    double inst_speed = 1.0;
 };
 
 bool string_ends_with(const std::string &str, const std::string &suffix);

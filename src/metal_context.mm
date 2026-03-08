@@ -30,6 +30,7 @@
 @property (nonatomic, strong) id<CAMetalDrawable>       drawable;
 @property (nonatomic, strong) MTLRenderPassDescriptor  *rpd;
 @property (nonatomic, strong) id<MTLCommandBuffer>      cmd;
+@property (nonatomic, strong) id<MTLComputePipelineState> contrastPSO;
 @end
 
 @implementation MetalCtx {
@@ -95,6 +96,38 @@ void metal_init(GLFWwindow *window) {
 
         // CVMetalTextureCache for zero-copy CVPixelBuffer import
         [g_ctx createTexCacheWithDevice:g_ctx.device];
+
+        // Compile contrast/brightness compute kernel
+        NSString *src = @
+            "using namespace metal;\n"
+            "kernel void contrast_brightness(\n"
+            "    texture2d<half, access::read_write> tex [[texture(0)]],\n"
+            "    constant float &contrast   [[buffer(0)]],\n"
+            "    constant float &brightness [[buffer(1)]],\n"
+            "    constant float &pivot      [[buffer(2)]],\n"
+            "    uint2 gid [[thread_position_in_grid]])\n"
+            "{\n"
+            "    if (gid.x >= tex.get_width() || gid.y >= tex.get_height()) return;\n"
+            "    half4 c = tex.read(gid);\n"
+            "    half3 rgb = c.rgb;\n"
+            "    half p = half(pivot);\n"
+            "    half con = half(contrast);\n"
+            "    half bri = half(brightness / 255.0);\n"
+            "    rgb = clamp(con * (rgb - p) + p + bri, half3(0), half3(1));\n"
+            "    tex.write(half4(rgb, c.a), gid);\n"
+            "}\n";
+        NSError *err = nil;
+        id<MTLLibrary> lib = [g_ctx.device newLibraryWithSource:src options:nil error:&err];
+        if (!lib) {
+            fprintf(stderr, "[Metal] contrast kernel compile: %s\n",
+                    err.localizedDescription.UTF8String);
+        } else {
+            id<MTLFunction> fn = [lib newFunctionWithName:@"contrast_brightness"];
+            g_ctx.contrastPSO = [g_ctx.device newComputePipelineStateWithFunction:fn error:&err];
+            if (!g_ctx.contrastPSO)
+                fprintf(stderr, "[Metal] contrast PSO: %s\n",
+                        err.localizedDescription.UTF8String);
+        }
     }
 }
 
@@ -196,6 +229,28 @@ void metal_upload_pixelbuf(int cam_idx, CVPixelBufferRef pb, uint32_t w, uint32_
 ImTextureID metal_get_texture_id(int cam_idx) {
     // ImTextureID is ImU64; store ObjC pointer as integer via bridge+intptr_t cast
     return (ImTextureID)(intptr_t)(__bridge void*)g_ctx.textures[cam_idx];
+}
+
+void metal_apply_contrast_brightness(int cam_idx, float contrast, float brightness, bool pivot_midgray) {
+    if (!g_ctx.contrastPSO || !g_ctx.cmd) return;
+    if (contrast == 1.0f && brightness == 0.0f) return;
+
+    @autoreleasepool {
+        id<MTLTexture> tex = g_ctx.textures[cam_idx];
+        float pivot = pivot_midgray ? 0.5f : 0.0f;
+
+        id<MTLComputeCommandEncoder> enc = [g_ctx.cmd computeCommandEncoder];
+        [enc setComputePipelineState:g_ctx.contrastPSO];
+        [enc setTexture:tex atIndex:0];
+        [enc setBytes:&contrast length:sizeof(float) atIndex:0];
+        [enc setBytes:&brightness length:sizeof(float) atIndex:1];
+        [enc setBytes:&pivot length:sizeof(float) atIndex:2];
+
+        MTLSize grid = MTLSizeMake(tex.width, tex.height, 1);
+        MTLSize tg   = MTLSizeMake(16, 16, 1);
+        [enc dispatchThreads:grid threadsPerThreadgroup:tg];
+        [enc endEncoding];
+    }
 }
 
 void metal_end_frame() {

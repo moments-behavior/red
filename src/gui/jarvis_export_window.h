@@ -1,11 +1,11 @@
 #pragma once
 #include "imgui.h"
+#include "app_context.h"
 #include "gui/panel.h"
-#include "project.h"
-#include "skeleton.h"
 #include "jarvis_export.h"
 #include "gui/gui_save_load.h"
 #include <ImGuiFileDialog.h>
+#include <misc/cpp/imgui_stdlib.h>
 #include <filesystem>
 #include <string>
 #include <thread>
@@ -26,9 +26,9 @@ struct JarvisExportState {
     std::string label_cache_key;
 };
 
-inline void DrawJarvisExportWindow(JarvisExportState &state,
-                                   const ProjectManager &pm,
-                                   const SkeletonContext &skeleton) {
+inline void DrawJarvisExportWindow(JarvisExportState &state, AppContext &ctx) {
+    const auto &pm = ctx.pm;
+    const auto &skeleton = ctx.skeleton;
     drawPanel("JARVIS Export Tool", state.show,
         [&]() {
         ImGui::SeparatorText("Export Configuration");

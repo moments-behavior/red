@@ -1,18 +1,15 @@
 #pragma once
 #include "imgui.h"
 #include "imgui_internal.h"
+#include "app_context.h"
 #include "calibration_tool.h"
 #include "calibration_pipeline.h"
 #include "laser_calibration.h"
 #include "aruco_metal.h"
 #include "laser_metal.h"
-#include "project.h"
-#include "render.h"
-#include "user_settings.h"
 #include <ImGuiFileDialog.h>
 #include <misc/cpp/imgui_stdlib.h>
 #include <filesystem>
-#include "deferred_queue.h"
 #include <functional>
 #include <future>
 #include <map>
@@ -107,19 +104,18 @@ struct CalibrationToolCallbacks {
 };
 
 inline void DrawCalibrationToolWindow(
-    CalibrationToolState &state,
-    ProjectManager &pm,
-    PlaybackState &ps,
-    RenderScene *scene,
-    DecoderContext *dc_context,
-    const UserSettings &user_settings,
-    const std::string &red_data_dir,
-    std::vector<std::string> &imgs_names,
-    const CalibrationToolCallbacks &cb
+    CalibrationToolState &state, AppContext &ctx,
+    const CalibrationToolCallbacks &cb) {
+    auto &pm = ctx.pm;
+    auto &ps = ctx.ps;
+    auto *scene = ctx.scene;
+    auto *dc_context = ctx.dc_context;
+    const auto &user_settings = ctx.user_settings;
+    const auto &red_data_dir = ctx.red_data_dir;
+    auto &imgs_names = ctx.imgs_names;
 #ifdef __APPLE__
-    , std::vector<int> &mac_last_uploaded_frame
+    auto &mac_last_uploaded_frame = ctx.mac_last_uploaded_frame;
 #endif
-) {
     // Always process file dialogs (even when window is hidden)
 
     // Calibration: Browse for root directory (creation dialog)

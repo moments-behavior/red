@@ -11,6 +11,10 @@
 #include "gui/annotation_dialog.h"
 #include "gui/calibration_tool_window.h"
 #include "gui/labeling_tool_window.h"
+#include "gui/project_window.h"
+#include "gui/settings_window.h"
+#include "gui/navigator_dialogs.h"
+#include "gui/panel_registry.h"
 #include "gui/popup_stack.h"
 #include "gui/toast.h"
 #include "imgui_impl_glfw.h"
@@ -28,6 +32,7 @@
 #include "utils.h"
 #include "calibration_tool.h"
 #include "calibration_pipeline.h"
+#include "app_context.h"
 #include "deferred_queue.h"
 #include "user_settings.h"
 #include "jarvis_export.h"
@@ -219,7 +224,7 @@ int main(int argc, char **argv) {
                                    .total_num_frame = int(INT_MAX),
                                    .estimated_num_frames = 0,
                                    .gpu_index = 0,
-                                   .seek_interval = 250,
+                                   .seek_interval = user_settings.default_seek_interval,
                                    .video_fps = 60.0f};
 
     // gui states, todo: bundle this later
@@ -246,6 +251,10 @@ int main(int argc, char **argv) {
 
     // JARVIS Export Tool state
     JarvisExportState jarvis_export_state;
+    jarvis_export_state.margin = user_settings.jarvis_margin;
+    jarvis_export_state.train_ratio = user_settings.jarvis_train_ratio;
+    jarvis_export_state.seed = user_settings.jarvis_seed;
+    jarvis_export_state.jpeg_quality = user_settings.jarvis_jpeg_quality;
 
     // Calibration Tool state (extracted to gui/calibration_tool_window.h)
     CalibrationToolState calib_state;
@@ -258,13 +267,16 @@ int main(int argc, char **argv) {
 
     // Annotation dialog state
     AnnotationDialogState annot_state;
+
+    // Settings window state
+    SettingsState settings_state;
     annot_state.video_folder = user_settings.default_media_root_path.empty()
                                    ? media_root_dir
                                    : user_settings.default_media_root_path;
 
     colors[ImPlotCol_Crosshairs] = ImVec4(0.3f, 0.10f, 0.64f, 1.00f);
 
-    int label_buffer_size = 64;
+    int label_buffer_size = user_settings.default_buffer_size;
     bool show_help_window = false;
     std::vector<bool> is_view_focused;
     bool input_is_imgs = false;
@@ -274,13 +286,13 @@ int main(int argc, char **argv) {
 
     std::unordered_map<std::string, bool> window_was_decoding;
     std::unordered_map<std::string, bool> window_is_visible;  // actual ImGui visibility (prev frame)
-    double inst_speed = 1.0;
-    float set_playback_speed = 1.0f;
     PlaybackState ps;
-
-    int brightness = 0;
-    float contrast = 1.0f;     // neutral contrastst
-    bool pivot_midgray = true; // typical contrast feel
+    ps.set_playback_speed = user_settings.default_playback_speed;
+    ps.realtime_playback = user_settings.default_realtime_playback;
+    DisplayState display;
+    display.brightness = user_settings.default_brightness;
+    display.contrast = user_settings.default_contrast;
+    display.pivot_midgray = user_settings.default_pivot_midgray;
 
     // variables for project management
     ProjectManager pm = ProjectManager();
@@ -291,129 +303,39 @@ int main(int argc, char **argv) {
                           ? media_root_dir
                           : user_settings.default_media_root_path;
 
-    // Copy the shipped default_imgui_layout.ini into a project folder so new
-    // projects (annotation or calibration) start with the standard dock layout.
-    // If the project already has an imgui_layout.ini, this is a no-op.
-    auto copy_default_layout_to_project = [&](const std::string &proj_path) {
-        namespace fs = std::filesystem;
-        fs::path dest = fs::path(proj_path) / "imgui_layout.ini";
-        if (fs::exists(dest))
-            return; // preserve existing layout
-        for (const auto &candidate : {
-                 window->exe_dir + "/../default_imgui_layout.ini",           // dev
-                 window->exe_dir + "/../share/red/default_imgui_layout.ini", // brew
-             }) {
-            if (fs::exists(candidate)) {
-                std::error_code ec;
-                fs::copy_file(candidate, dest, ec);
-                break;
-            }
-        }
-    };
-
-    // Switch ImGui layout ini to the project folder so each project keeps its own layout.
-    // Before the main loop (CLI path): just redirect io.IniFilename and let NewFrame()
-    // auto-load it. Mid-session (File menu): also explicitly load the project ini.
     bool main_loop_running = false;
-    // Migrate renamed windows in project ini files so saved dock settings
-    // carry over. Replaces old window name with new name. If the new name
-    // already exists, removes the old section entirely to avoid duplicates.
-    auto migrate_ini_window_names = [](const std::string &ini_path) {
-        if (!std::filesystem::exists(ini_path)) return;
-        std::ifstream in(ini_path);
-        std::string content((std::istreambuf_iterator<char>(in)),
-                            std::istreambuf_iterator<char>());
-        in.close();
-
-        // "File Browser" → "Navigator" (renamed 2026-03-07)
-        const std::string old_header = "[Window][File Browser]";
-        const std::string new_header = "[Window][Navigator]";
-        size_t old_pos = content.find(old_header);
-        if (old_pos == std::string::npos) return; // nothing to migrate
-
-        // Find the end of the old section (next "[" or end of file)
-        size_t section_end = content.find("\n[", old_pos + 1);
-        if (section_end == std::string::npos)
-            section_end = content.size();
-        else
-            section_end += 1; // include the newline before next section
-
-        if (content.find(new_header) != std::string::npos) {
-            // New name already exists — remove old section entirely
-            content.erase(old_pos, section_end - old_pos);
-        } else {
-            // No new name yet — rename the old section
-            content.replace(old_pos, old_header.size(), new_header);
-        }
-        std::ofstream out(ini_path);
-        out << content;
-    };
-
-    auto switch_ini_to_project = [&]() {
-        project_ini_path = pm.project_path + "/imgui_layout.ini";
-        // Seed new projects with the default dock layout
-        copy_default_layout_to_project(pm.project_path);
-        // Migrate old window names before loading
-        migrate_ini_window_names(project_ini_path);
-        io.IniFilename = project_ini_path.c_str();
-        if (main_loop_running && std::filesystem::exists(project_ini_path)) {
-            ImGui::LoadIniSettingsFromDisk(project_ini_path.c_str());
-            // LoadIniSettingsFromDisk clears DockId on live windows during its
-            // internal rebuild. Restore DockId/DockOrder from the loaded settings
-            // so windows can re-dock into the newly created dock nodes.
-            ImGuiContext* ctx = ImGui::GetCurrentContext();
-            for (int i = 0; i < ctx->Windows.Size; i++) {
-                ImGuiWindow* w = ctx->Windows[i];
-                if (ImGuiWindowSettings* s = ImGui::FindWindowSettingsByWindow(w)) {
-                    w->DockId = s->DockId;
-                    w->DockOrder = s->DockOrder;
-                }
-            }
-            // Mark all dock nodes alive so BeginDocked() doesn't undock windows
-            // thinking the nodes have expired.
-            for (int i = 0; i < ctx->DockContext.Nodes.Data.Size; i++) {
-                ImGuiDockNode* node = (ImGuiDockNode*)ctx->DockContext.Nodes.Data[i].val_p;
-                if (node)
-                    node->LastFrameAlive = ctx->FrameCount;
-            }
-        }
-    };
-
-    // Consolidates the post-project-load sequence used by CLI load,
-    // File > Open Project, and Annotate > Load Project.
-    auto on_project_loaded = [&]() {
-        switch_ini_to_project();
-        std::map<std::string, std::string> empty_selected_files;
-        load_videos(empty_selected_files, ps, pm,
-                    window_was_decoding, demuxers, dc_context,
-                    scene, label_buffer_size, decoder_threads,
-                    is_view_focused);
-        print_video_metadata(demuxers, pm.camera_names,
-                             dc_context->seek_interval);
-        std::string label_err;
-        std::string most_recent_folder;
-        if (!find_most_recent_labels(pm.keypoints_root_folder,
-                                     most_recent_folder, label_err)) {
-            if (load_keypoints(most_recent_folder, keypoints_map,
-                               &skeleton, scene, pm.camera_names,
-                               label_err)) {
-                free_all_keypoints(keypoints_map, scene);
-                popups.pushError(label_err);
-            }
-        }
-        print_project_summary(pm, pm.skeleton_name, most_recent_folder);
-    };
-
 
 #ifdef __APPLE__
     // Per-camera last-uploaded frame number for Metal (skip redundant uploads)
     std::vector<int> mac_last_uploaded_frame(MAX_VIEWS, -1);
 #endif
 
+    // Build AppContext — a reference bundle for all shared state
+    AppContext ctx{
+        pm, ps, scene, dc_context,
+        skeleton, skeleton_map, keypoints_map,
+        popups, toasts, deferred,
+        user_settings, red_data_dir, skeleton_dir,
+        imgs_names, demuxers, decoder_threads,
+        is_view_focused, window_was_decoding,
+        input_is_imgs, label_buffer_size,
+        display, window, project_ini_path, main_loop_running
+#ifdef __APPLE__
+        , mac_last_uploaded_frame
+#endif
+    };
+
+    // Callbacks for static console-output functions in this file
+    auto print_metadata = [&]() {
+        print_video_metadata(demuxers, pm.camera_names, dc_context->seek_interval);
+    };
+    auto print_summary = [&](const std::string &label_folder) {
+        print_project_summary(pm, pm.skeleton_name, label_folder);
+    };
+
     if (argc > 1) {
         for (int i = 1; i < argc; ++i) {
             std::filesystem::path path = argv[i];
-            // If a directory is passed, look for a sibling .redproj file
             if (std::filesystem::is_directory(path))
                 path = path.parent_path() / (path.filename().string() + ".redproj");
             ProjectManager loaded;
@@ -423,47 +345,95 @@ int main(int argc, char **argv) {
             } else {
                 pm = loaded;
                 if (setup_project(pm, skeleton, skeleton_map, &err))
-                    on_project_loaded();
+                    on_project_loaded(ctx, print_metadata, print_summary);
                 else
                     popups.pushError(err);
             }
         }
     }
 
-    // Calibration Tool callbacks (bridge between extracted UI and main() locals)
+    // Calibration Tool callbacks
     CalibrationToolCallbacks calib_cb;
-    calib_cb.load_images = [&](std::map<std::string, std::string> &files) {
-        load_images(files, ps, pm, imgs_names, scene, dc_context,
-                    label_buffer_size, decoder_threads, is_view_focused,
-                    window_was_decoding);
-        input_is_imgs = true;
+    calib_cb.load_images = [&ctx](std::map<std::string, std::string> &files) {
+        load_images(files, ctx.ps, ctx.pm, ctx.imgs_names, ctx.scene,
+                    ctx.dc_context, ctx.label_buffer_size,
+                    ctx.decoder_threads, ctx.is_view_focused,
+                    ctx.window_was_decoding);
+        ctx.input_is_imgs = true;
     };
-    calib_cb.load_videos = [&]() {
+    calib_cb.load_videos = [&ctx]() {
         std::map<std::string, std::string> empty_selected_files;
-        load_videos(empty_selected_files, ps, pm,
-                    window_was_decoding, demuxers, dc_context,
-                    scene, label_buffer_size, decoder_threads,
-                    is_view_focused);
-        input_is_imgs = false;
+        load_videos(empty_selected_files, ctx.ps, ctx.pm,
+                    ctx.window_was_decoding, ctx.demuxers, ctx.dc_context,
+                    ctx.scene, ctx.label_buffer_size, ctx.decoder_threads,
+                    ctx.is_view_focused);
+        ctx.input_is_imgs = false;
     };
-    calib_cb.unload_media = [&]() {
-        unload_media(ps, pm, demuxers, dc_context,
-                     scene, decoder_threads,
-                     is_view_focused, window_was_decoding);
+    calib_cb.unload_media = [&ctx]() {
+        unload_media(ctx.ps, ctx.pm, ctx.demuxers, ctx.dc_context,
+                     ctx.scene, ctx.decoder_threads,
+                     ctx.is_view_focused, ctx.window_was_decoding);
     };
-    calib_cb.copy_default_layout = [&](const std::string &proj_path) {
-        copy_default_layout_to_project(proj_path);
+    calib_cb.copy_default_layout = [&ctx](const std::string &proj_path) {
+        copy_default_layout_to_project(ctx, proj_path);
     };
-    calib_cb.switch_ini = [&](const std::string &proj_path) {
-        project_ini_path = proj_path + "/imgui_layout.ini";
-        io.IniFilename = project_ini_path.c_str();
-        if (std::filesystem::exists(project_ini_path))
-            ImGui::LoadIniSettingsFromDisk(project_ini_path.c_str());
+    calib_cb.switch_ini = [&ctx](const std::string &proj_path) {
+        ctx.project_ini_path = proj_path + "/imgui_layout.ini";
+        ImGuiIO &io = ImGui::GetIO();
+        io.IniFilename = ctx.project_ini_path.c_str();
+        if (std::filesystem::exists(ctx.project_ini_path))
+            ImGui::LoadIniSettingsFromDisk(ctx.project_ini_path.c_str());
     };
-    calib_cb.print_metadata = [&]() {
-        print_video_metadata(demuxers, pm.camera_names, dc_context->seek_interval);
-    };
+    calib_cb.print_metadata = print_metadata;
     calib_cb.deferred = &deferred;
+
+    // Annotation create callback (shared by annotation dialog panel)
+    AnnotationCreateCallback annot_create_cb =
+        [&](ProjectManager &pm_ref, std::string &err) -> bool {
+        if (!ensure_dir_exists(pm_ref.project_path, &err))
+            return false;
+        if (!setup_project(pm_ref, skeleton, skeleton_map, &err))
+            return false;
+        std::filesystem::path redproj_path =
+            std::filesystem::path(pm_ref.project_path) / (pm_ref.project_name + ".redproj");
+        if (!save_project_manager_json(pm_ref, redproj_path, &err))
+            return false;
+        on_project_loaded(ctx, print_metadata, print_summary);
+        return true;
+    };
+
+    // Panel registry — replaces manual draw calls
+    PanelRegistry panels;
+    panels.add({"Create Project",
+                [&]() { DrawProjectWindow(ctx); }, nullptr});
+    panels.add({"Annotation Dialog",
+                [&]() { DrawAnnotationDialog(annot_state, ctx, annot_create_cb); },
+                nullptr});
+    panels.add({"Keypoints",
+                [&]() { DrawKeypointsWindow(ctx, current_frame_num); },
+                [&]() { return pm.plot_keypoints_flag; }});
+    panels.add({"Labeling Tool",
+                [&]() {
+                    DrawLabelingToolWindow(labeling_state, ctx,
+                                           current_frame_num, keypoints_find);
+                    if (keypoints_find &&
+                        ImGui::IsKeyPressed(ImGuiKey_T, false) &&
+                        !ImGui::GetIO().WantTextInput) {
+                        reprojection(keypoints_map.at(current_frame_num),
+                                     &skeleton, pm.camera_params, scene);
+                    }
+                },
+                [&]() { return pm.plot_keypoints_flag; }});
+    panels.add({"Help", [&]() { DrawHelpWindow(show_help_window); }, nullptr});
+    panels.add({"JARVIS Export",
+                [&]() { DrawJarvisExportWindow(jarvis_export_state, ctx); },
+                nullptr});
+    panels.add({"Calibration Tool",
+                [&]() { DrawCalibrationToolWindow(calib_state, ctx, calib_cb); },
+                nullptr});
+    panels.add({"Settings",
+                [&]() { DrawSettingsWindow(settings_state, ctx); },
+                nullptr});
 
     main_loop_running = true;
     while (!glfwWindowShouldClose(window->render_target)) {
@@ -475,6 +445,22 @@ int main(int argc, char **argv) {
         if (!metal_begin_frame()) {
             // No drawable available (window minimized) — skip this frame
             continue;
+        }
+
+        // Invalidate cached uploads when display params change (forces re-upload + shader)
+        {
+            static float prev_contrast = display.contrast;
+            static int   prev_brightness = display.brightness;
+            static bool  prev_pivot = display.pivot_midgray;
+            if (display.contrast != prev_contrast ||
+                display.brightness != prev_brightness ||
+                display.pivot_midgray != prev_pivot) {
+                std::fill(mac_last_uploaded_frame.begin(),
+                          mac_last_uploaded_frame.end(), -1);
+                prev_contrast   = display.contrast;
+                prev_brightness = display.brightness;
+                prev_pivot      = display.pivot_midgray;
+            }
         }
 #endif
 
@@ -499,7 +485,7 @@ int main(int argc, char **argv) {
             ps.accumulated_play_time +=
                 std::chrono::duration<double>(now - ps.last_play_time_start)
                     .count() *
-                set_playback_speed;
+                ps.set_playback_speed;
             ps.last_play_time_start = now;
         }
         double playback_time_now = ps.accumulated_play_time;
@@ -593,32 +579,8 @@ int main(int argc, char **argv) {
                     ImGui::EndMenu();
                 }
 
-                if (ImGui::BeginMenu("Settings")) {
-                    if (ImGui::MenuItem("Default Project Root")) {
-                        IGFD::FileDialogConfig cfg;
-                        cfg.countSelectionMax = 1;
-                        cfg.path =
-                            user_settings.default_project_root_path.empty()
-                                ? red_data_dir
-                                : user_settings.default_project_root_path;
-                        cfg.flags = ImGuiFileDialogFlags_Modal;
-                        ImGuiFileDialog::Instance()->OpenDialog(
-                            "ChooseDefaultProjectRoot",
-                            "Set Default Project Root", nullptr, cfg);
-                    }
-                    if (ImGui::MenuItem("Default Media Root")) {
-                        IGFD::FileDialogConfig cfg;
-                        cfg.countSelectionMax = 1;
-                        cfg.path =
-                            user_settings.default_media_root_path.empty()
-                                ? media_root_dir
-                                : user_settings.default_media_root_path;
-                        cfg.flags = ImGuiFileDialogFlags_Modal;
-                        ImGuiFileDialog::Instance()->OpenDialog(
-                            "ChooseDefaultMediaRoot",
-                            "Set Default Media Root", nullptr, cfg);
-                    }
-                    ImGui::EndMenu();
+                if (ImGui::MenuItem("Settings...")) {
+                    settings_state.show = true;
                 }
 
                 ImGui::EndMenuBar();
@@ -662,7 +624,7 @@ int main(int argc, char **argv) {
                 int frame_delta =
                     current_frame_num - ps.last_frame_num_playspeed;
                 if (wall_seconds > 0.5 && ps.play_video) {
-                    inst_speed =
+                    ps.inst_speed =
                         frame_delta / (dc_context->video_fps *
                                        wall_seconds); // Real-time normalized
                     ps.last_frame_num_playspeed = current_frame_num;
@@ -701,12 +663,12 @@ int main(int argc, char **argv) {
                     ImGui::TableSetColumnIndex(1);
                     // Format label: show as fraction, e.g. "1/8x"
                     char speed_label[16];
-                    int denom = (int)roundf(1.0f / set_playback_speed);
+                    int denom = (int)roundf(1.0f / ps.set_playback_speed);
                     if (denom <= 1)
                         snprintf(speed_label, sizeof(speed_label), "1x");
                     else
                         snprintf(speed_label, sizeof(speed_label), "1/%dx", denom);
-                    ImGui::SliderFloat("##set_playback_speed", &set_playback_speed,
+                    ImGui::SliderFloat("##set_playback_speed", &ps.set_playback_speed,
                                        1.0f / 16.0f, 1.0f, speed_label,
                                        ImGuiSliderFlags_Logarithmic);
 
@@ -716,7 +678,7 @@ int main(int argc, char **argv) {
                     ImGui::AlignTextToFramePadding();
                     ImGui::TextUnformatted("Current Speed");
                     ImGui::TableSetColumnIndex(1);
-                    ImGui::Text("%.2fx", inst_speed);
+                    ImGui::Text("%.2fx", ps.inst_speed);
 
                     ImGui::EndTable();
                 }
@@ -732,7 +694,12 @@ int main(int argc, char **argv) {
 
                 // === Display section ===
                 ImGui::SeparatorText("Display Controls");
+#ifdef __APPLE__
+                // Metal compute shader applies contrast/brightness live during playback
+                (void)0;
+#else
                 ImGui::BeginDisabled(ps.play_video); // Disable if playing video
+#endif
 
                 if (ImGui::BeginTable("##display_tbl", 2,
                                       ImGuiTableFlags_SizingStretchProp |
@@ -750,7 +717,7 @@ int main(int argc, char **argv) {
                     ImGui::SameLine();
                     HelpMarker("1.00 = neutral. Increase to boost separation.");
                     ImGui::TableSetColumnIndex(1);
-                    ImGui::SliderFloat("##contrast", &contrast, 0.0f, 3.0f,
+                    ImGui::SliderFloat("##contrast", &display.contrast, 0.0f, 3.0f,
                                        "%.2f");
 
                     // Brightness
@@ -761,7 +728,7 @@ int main(int argc, char **argv) {
                     ImGui::SameLine();
                     HelpMarker("Shift pixel values. 0 = neutral.");
                     ImGui::TableSetColumnIndex(1);
-                    ImGui::SliderInt("##brightness", &brightness, -150, 150);
+                    ImGui::SliderInt("##brightness", &display.brightness, -150, 150);
 
                     // Reset row
                     ImGui::TableNextRow();
@@ -770,205 +737,28 @@ int main(int argc, char **argv) {
                     ImGui::TextUnformatted("Display Preset");
                     ImGui::TableSetColumnIndex(1);
                     if (ImGui::Button("Reset##display")) {
-                        contrast = 1.0f;
-                        brightness = 0;
-                        pivot_midgray = true;
+                        display.contrast = 1.0f;
+                        display.brightness = 0;
+                        display.pivot_midgray = true;
                     }
                     ImGui::SameLine();
                     ImGui::TextDisabled("(restores neutral)");
 
                     ImGui::EndTable();
                 }
+#ifndef __APPLE__
                 ImGui::EndDisabled();
+#endif
             }
         }
         ImGui::End();
 
-        DrawProjectWindow(pm, skeleton_map, skeleton, skeleton_dir, popups);
+        // Draw all registered panels
+        panels.drawAll();
 
-        // ===== Create Annotation Project dialog =====
-        {
-            std::string default_browse = user_settings.default_media_root_path.empty()
-                                             ? media_root_dir
-                                             : user_settings.default_media_root_path;
-            DrawAnnotationDialog(annot_state, pm, skeleton_map, skeleton_dir,
-                                 default_browse,
-                                 [&](ProjectManager &pm_ref, std::string &err) -> bool {
-                if (!ensure_dir_exists(pm_ref.project_path, &err))
-                    return false;
-                if (!setup_project(pm_ref, skeleton, skeleton_map, &err))
-                    return false;
-                std::filesystem::path redproj_path =
-                    std::filesystem::path(pm_ref.project_path) / (pm_ref.project_name + ".redproj");
-                if (!save_project_manager_json(pm_ref, redproj_path, &err))
-                    return false;
-                on_project_loaded();
-                return true;
-            });
-        }
-
-
-        if (ImGuiFileDialog::Instance()->Display("ChooseProjectDir", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
-            if (ImGuiFileDialog::Instance()->IsOk()) {
-                pm.project_root_path =
-                    ImGuiFileDialog::Instance()->GetCurrentPath();
-            }
-            ImGuiFileDialog::Instance()->Close();
-        }
-
-        if (ImGuiFileDialog::Instance()->Display("ChooseCalibration", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
-            if (ImGuiFileDialog::Instance()->IsOk()) {
-                pm.calibration_folder =
-                    ImGuiFileDialog::Instance()->GetCurrentPath();
-            }
-            ImGuiFileDialog::Instance()->Close();
-        }
-
-        if (ImGuiFileDialog::Instance()->Display(
-                "ChooseDefaultProjectRoot", ImGuiWindowFlags_NoCollapse,
-                ImVec2(680, 440))) {
-            if (ImGuiFileDialog::Instance()->IsOk()) {
-                std::string chosen =
-                    ImGuiFileDialog::Instance()->GetCurrentPath();
-                user_settings.default_project_root_path = chosen;
-                // Live-update open dialogs that use this default
-                calib_state.project.project_root_path = chosen;
-                pm.project_root_path = chosen;
-                save_user_settings(user_settings);
-            }
-            ImGuiFileDialog::Instance()->Close();
-        }
-
-        if (ImGuiFileDialog::Instance()->Display(
-                "ChooseDefaultMediaRoot", ImGuiWindowFlags_NoCollapse,
-                ImVec2(680, 440))) {
-            if (ImGuiFileDialog::Instance()->IsOk()) {
-                std::string chosen =
-                    ImGuiFileDialog::Instance()->GetCurrentPath();
-                std::string old_media_root =
-                    user_settings.default_media_root_path;
-                user_settings.default_media_root_path = chosen;
-                pm.media_folder = chosen;
-                annot_state.video_folder = chosen;
-                if (calib_state.project.config_file.empty() ||
-                    calib_state.project.config_file == old_media_root)
-                    calib_state.project.config_file = chosen;
-                save_user_settings(user_settings);
-            }
-            ImGuiFileDialog::Instance()->Close();
-        }
-
-        if (ImGuiFileDialog::Instance()->Display("ChooseMedia", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
-            if (ImGuiFileDialog::Instance()->IsOk()) {
-                auto selected_files =
-                    ImGuiFileDialog::Instance()->GetSelection();
-                pm.media_folder = ImGuiFileDialog::Instance()->GetCurrentPath();
-                pm.project_name =
-                    dir_difference(pm.media_folder, media_root_dir);
-                pm.media_folder = pm.media_folder;
-                load_videos(selected_files, ps, pm, window_was_decoding,
-                            demuxers, dc_context, scene, label_buffer_size,
-                            decoder_threads, is_view_focused);
-                print_video_metadata(demuxers, pm.camera_names, dc_context->seek_interval);
-            }
-            // close
-            ImGuiFileDialog::Instance()->Close();
-        }
-
-        if (ImGuiFileDialog::Instance()->Display("ChooseImages", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
-            if (ImGuiFileDialog::Instance()->IsOk()) {
-                auto selected_files =
-                    ImGuiFileDialog::Instance()->GetSelection();
-                pm.media_folder = ImGuiFileDialog::Instance()->GetCurrentPath();
-                pm.project_name =
-                    dir_difference(pm.media_folder, media_root_dir);
-                pm.media_folder = pm.media_folder;
-                load_images(selected_files, ps, pm, imgs_names, scene,
-                            dc_context, label_buffer_size, decoder_threads,
-                            is_view_focused, window_was_decoding);
-                input_is_imgs = true;
-            }
-            ImGuiFileDialog::Instance()->Close();
-        }
-
-        if (ImGuiFileDialog::Instance()->Display("ChooseProject", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
-            if (ImGuiFileDialog::Instance()->IsOk()) {
-                const auto sel = ImGuiFileDialog::Instance()->GetSelection();
-                // Choose the picked file (single-select assumed)
-                std::filesystem::path cfg_path;
-                if (!sel.empty()) {
-                    cfg_path =
-                        std::filesystem::path(sel.begin()->second); // full path
-                } else {
-                    std::string full =
-                        ImGuiFileDialog::Instance()->GetFilePathName(
-                            IGFD_ResultMode_KeepInputFile);
-                    if (!full.empty())
-                        cfg_path = std::filesystem::path(full);
-                    else
-                        cfg_path = std::filesystem::path(
-                            ImGuiFileDialog::Instance()->GetCurrentPath());
-                }
-                ProjectManager loaded;
-                std::string err;
-                if (!load_project_manager_json(&loaded, cfg_path, &err)) {
-                    popups.pushError(err);
-                } else {
-                    pm = loaded;
-                    if (setup_project(pm, skeleton, skeleton_map, &err))
-                        on_project_loaded();
-                    else
-                        popups.pushError(err);
-                }
-            }
-            ImGuiFileDialog::Instance()->Close();
-        }
-
-        if (ImGuiFileDialog::Instance()->Display("ChooseSkeleton", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
-            if (ImGuiFileDialog::Instance()->IsOk()) { // action if OK
-                pm.skeleton_file =
-                    ImGuiFileDialog::Instance()->GetFilePathName();
-            }
-            // close
-            ImGuiFileDialog::Instance()->Close();
-        }
-
-        // Annotation dialog handlers are now inside DrawAnnotationDialog()
-
-        if (ImGuiFileDialog::Instance()->Display("LoadAnnotProject", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
-            if (ImGuiFileDialog::Instance()->IsOk()) {
-                const auto sel = ImGuiFileDialog::Instance()->GetSelection();
-                std::filesystem::path cfg_path;
-                if (!sel.empty()) {
-                    cfg_path = std::filesystem::path(sel.begin()->second);
-                } else {
-                    std::string full =
-                        ImGuiFileDialog::Instance()->GetFilePathName(
-                            IGFD_ResultMode_KeepInputFile);
-                    if (!full.empty())
-                        cfg_path = std::filesystem::path(full);
-                    else
-                        cfg_path = std::filesystem::path(
-                            ImGuiFileDialog::Instance()->GetCurrentPath());
-                }
-                ProjectManager loaded;
-                std::string err;
-                if (!load_project_manager_json(&loaded, cfg_path, &err)) {
-                    popups.pushError(err);
-                } else {
-                    pm = loaded;
-                    if (setup_project(pm, skeleton, skeleton_map, &err))
-                        on_project_loaded();
-                    else
-                        popups.pushError(err);
-                }
-            }
-            ImGuiFileDialog::Instance()->Close();
-        }
-
-        // Skeleton creator dialog handlers are now inside DrawSkeletonCreatorWindow()
-
-        // (deleted: ChooseBackgroundImage, LoadSkeletonForEdit handlers moved to skeleton_creator_window.h)
+        // Handle Navigator file dialogs
+        HandleNavigatorDialogs(ctx, calib_state, annot_state,
+                               media_root_dir, print_metadata, print_summary);
 
         static int select_corr_head = 0;
         if (ps.video_loaded && (!ps.play_video)) {
@@ -1244,6 +1034,7 @@ int main(int argc, char **argv) {
                         int fn = scene->display_buffer[j][mac_head].frame_number;
                         uint32_t w = scene->image_width[j];
                         uint32_t h = scene->image_height[j];
+                        bool did_upload = false;
 
                         if (calib_state.laser_show_detection && calib_state.laser_ready) {
                             // Upload ready result for this camera if available
@@ -1255,6 +1046,7 @@ int main(int argc, char **argv) {
                                     lv.ready[j].rgba.data(), w, h);
                                 lv.ready[j].uploaded = true;
                                 mac_last_uploaded_frame[j] = -1; // force re-upload when viz off
+                                did_upload = true;
                             } else if (fn != mac_last_uploaded_frame[j] && lv.ready.empty()) {
                                 // No results yet — show normal frame
                                 CVPixelBufferRef pb =
@@ -1265,6 +1057,7 @@ int main(int argc, char **argv) {
                                     metal_upload_texture(j,
                                         scene->display_buffer[j][mac_head].frame, w, h);
                                 mac_last_uploaded_frame[j] = fn;
+                                did_upload = true;
                             }
                         } else if (fn != mac_last_uploaded_frame[j]) {
                             CVPixelBufferRef pb =
@@ -1277,7 +1070,11 @@ int main(int argc, char **argv) {
                                     w, h);
                             }
                             mac_last_uploaded_frame[j] = fn;
+                            did_upload = true;
                         }
+                        if (did_upload)
+                            metal_apply_contrast_brightness(j, display.contrast,
+                                (float)display.brightness, display.pivot_midgray);
                     }
 #else
                     if (ps.play_video) {
@@ -1355,9 +1152,9 @@ int main(int argc, char **argv) {
                             apply_contrast_brightness_rgba(
                                 scene->pbo_cuda[j].cuda_buffer,
                                 scene->image_width[j], scene->image_height[j],
-                                contrast,          // e.g. 1.0f default
-                                (float)brightness, // from ImGui slider
-                                pivot_midgray, // pivot around mid-gray (128)
+                                display.contrast,
+                                (float)display.brightness,
+                                display.pivot_midgray,
                                 0);
 
                         } else {
@@ -1678,43 +1475,10 @@ int main(int argc, char **argv) {
             }
         }
 
-        if (pm.plot_keypoints_flag) {
-            DrawKeypointsWindow(pm, scene, skeleton, keypoints_map,
-                                current_frame_num, is_view_focused);
-        }
-
-        if (pm.plot_keypoints_flag) {
-            DrawLabelingToolWindow(labeling_state, pm, scene, dc_context,
-                                   skeleton, keypoints_map, current_frame_num,
-                                   keypoints_find, ps, popups, toasts,
-                                   input_is_imgs, imgs_names);
-
-            // T-key triangulation: runs even when Labeling Tool tab is hidden
-            if (keypoints_find &&
-                ImGui::IsKeyPressed(ImGuiKey_T, false) &&
-                !io.WantTextInput) {
-                reprojection(keypoints_map.at(current_frame_num),
-                             &skeleton, pm.camera_params, scene);
-            }
-        }
-
-        // YOLO/JARVIS/Calibration dialog handlers are now inside their respective Draw functions
-
+        // H-key help toggle
         if (ImGui::IsKeyPressed(ImGuiKey_H, false) && !io.WantTextInput) {
             show_help_window = !show_help_window;
         }
-
-        DrawHelpWindow(show_help_window);
-
-
-        DrawJarvisExportWindow(jarvis_export_state, pm, skeleton);
-
-        DrawCalibrationToolWindow(calib_state, pm, ps, scene, dc_context,
-                                  user_settings, red_data_dir, imgs_names, calib_cb
-#ifdef __APPLE__
-                                  , mac_last_uploaded_frame
-#endif
-        );
 
         drawToasts(toasts);
         drawPopups(popups);

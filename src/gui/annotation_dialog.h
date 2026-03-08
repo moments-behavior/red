@@ -1,9 +1,7 @@
 #pragma once
 #include "imgui.h"
+#include "app_context.h"
 #include "gui/panel.h"
-#include "project.h"
-#include "skeleton.h"
-#include "user_settings.h"
 #include <ImGuiFileDialog.h>
 #include <misc/cpp/imgui_stdlib.h>
 #include <algorithm>
@@ -46,11 +44,15 @@ struct AnnotationDialogState {
 using AnnotationCreateCallback = std::function<bool(ProjectManager &pm, std::string &error_message)>;
 
 inline void DrawAnnotationDialog(AnnotationDialogState &state,
-                                 ProjectManager &pm,
-                                 const std::map<std::string, SkeletonPrimitive> &skeleton_map,
-                                 const std::string &skeleton_dir,
-                                 const std::string &default_browse_path,
+                                 AppContext &ctx,
                                  const AnnotationCreateCallback &on_create) {
+    auto &pm = ctx.pm;
+    const auto &skeleton_map = ctx.skeleton_map;
+    const auto &skeleton_dir = ctx.skeleton_dir;
+    const std::string default_browse_path =
+        ctx.user_settings.default_media_root_path.empty()
+            ? ctx.red_data_dir
+            : ctx.user_settings.default_media_root_path;
     drawPanel("Create Annotation Project", state.show,
         [&]() {
         // error banner
