@@ -2,7 +2,9 @@
 #include "app_context.h"
 #include "gui/gui_keypoints.h"
 #include "gui/gui_save_load.h"
-#include <ImGuiFileDialog.h>
+#include "IconsForkAwesome.h"
+#include "implot.h"
+#include "implot_internal.h"
 #include <imgui.h>
 #include <ctime>
 
@@ -28,7 +30,57 @@ inline void DrawLabelingToolWindow(
     state.save_requested = false;
 
     if (ImGui::Begin("Labeling Tool")) {
+        // Find prev/next labeled frames (used by Prev/Next buttons)
+        auto next_labeled_it = keypoints_map.end();
+        for (auto it = keypoints_map.upper_bound(current_frame_num);
+             it != keypoints_map.end(); ++it) {
+            if (has_any_labels(it->second, skeleton, scene)) {
+                next_labeled_it = it; break;
+            }
+        }
+        if (next_labeled_it == keypoints_map.end()) {
+            for (auto it = keypoints_map.begin();
+                 it != keypoints_map.upper_bound(current_frame_num); ++it) {
+                if (has_any_labels(it->second, skeleton, scene)) {
+                    next_labeled_it = it; break;
+                }
+            }
+        }
+        auto prev_labeled_it = keypoints_map.end();
+        auto lb = keypoints_map.lower_bound(current_frame_num);
+        if (lb != keypoints_map.begin()) {
+            for (auto it = std::prev(lb);;) {
+                if (has_any_labels(it->second, skeleton, scene)) {
+                    prev_labeled_it = it; break;
+                }
+                if (it == keypoints_map.begin()) break;
+                --it;
+            }
+        }
+        // Wrap around: search backward from end of map
+        if (prev_labeled_it == keypoints_map.end() && !keypoints_map.empty()) {
+            for (auto it = std::prev(keypoints_map.end());;) {
+                if (it->first <= (u32)current_frame_num) break;
+                if (has_any_labels(it->second, skeleton, scene)) {
+                    prev_labeled_it = it; break;
+                }
+                if (it == keypoints_map.begin()) break;
+                --it;
+            }
+        }
+        bool has_next = (next_labeled_it != keypoints_map.end());
+        bool has_prev = (prev_labeled_it != keypoints_map.end());
+        int next_frame = has_next ? (int)next_labeled_it->first : -1;
+        int prev_frame = has_prev ? (int)prev_labeled_it->first : -1;
+
+        // === Top row: Save, Triangulate, Prev/Next label ===
+        if (ImGui::Button(ICON_FK_FLOPPY_O " Save")) {
+            state.save_requested = true;
+        }
+
         if (scene->num_cams > 1) {
+            ImGui::SameLine();
+
             bool keypoint_triangulated_all = true;
             if (keypoints_find && scene->num_cams > 1) {
                 for (int j = 0; j < skeleton.num_nodes; j++) {
@@ -66,191 +118,248 @@ inline void DrawLabelingToolWindow(
             if (apply_color) {
                 ImGui::PopStyleColor(3);
             }
-        } else {
-            ImGui::Text("Please load a skeleton to view keypoints.");
         }
 
-        if (ImGui::Button("Update keypoints working directory")) {
-            IGFD::FileDialogConfig config;
-            config.countSelectionMax = 1;
-            config.path = pm.project_path;
-            config.flags = ImGuiFileDialogFlags_Modal;
-            ImGuiFileDialog::Instance()->OpenDialog(
-                "ChooseKeypointsFolder",
-                "Choose keypoints working directory", nullptr, config);
-        }
+        // Prev / Jump to Label / Next
         ImGui::SameLine();
-        ImGui::Text("%s", pm.keypoints_root_folder.c_str());
+        ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
+        ImGui::SameLine();
 
-        if (ImGui::Button("Save Labeled Data")) {
-            state.save_requested = true;
+        ImGui::BeginDisabled(!has_prev);
+        if (ImGui::Button(ICON_FK_CHEVRON_LEFT " Prev")) {
+            ps.play_video = false;
+            seek_all_cameras(scene, prev_frame,
+                             dc_context->video_fps, ps, true);
         }
-        if (state.last_saved != static_cast<std::time_t>(-1)) {
-            ImGui::SameLine();
-            ImGui::Text("Last saved: %s", ctime(&state.last_saved));
-        }
+        ImGui::EndDisabled();
 
-        if (ImGui::Button("Load Most Recent Labels")) {
-            free_all_keypoints(keypoints_map, scene);
-            std::string err;
-            std::string most_recent_folder;
-            if (find_most_recent_labels(pm.keypoints_root_folder,
-                                        most_recent_folder, err)) {
-                popups.pushError(err);
-            } else {
-                if (load_keypoints(most_recent_folder,
-                                   keypoints_map, &skeleton, scene,
-                                   pm.camera_names, err)) {
-                    free_all_keypoints(keypoints_map, scene);
-                    popups.pushError(err);
-                }
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(0.5f, 0.7f, 1.0f, 1.0f), "Jump");
+        ImGui::SameLine();
+
+        ImGui::BeginDisabled(!has_next);
+        if (ImGui::Button("Next " ICON_FK_CHEVRON_RIGHT)) {
+            ps.play_video = false;
+            seek_all_cameras(scene, next_frame,
+                             dc_context->video_fps, ps, true);
+        }
+        ImGui::EndDisabled();
+
+        ImGui::SameLine();
+        ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
+        ImGui::SameLine();
+
+        ImGui::BeginDisabled(!has_prev);
+        if (ImGui::Button("Copy Prev")) {
+            if (keypoints_find) {
+                free_keypoints(keypoints_map[current_frame_num], scene);
+                keypoints_map.erase(current_frame_num);
             }
+            KeyPoints *keypoints = (KeyPoints *)malloc(sizeof(KeyPoints));
+            allocate_keypoints(keypoints, scene, &skeleton);
+            keypoints_map[current_frame_num] = keypoints;
+            KeyPoints *prev = keypoints_map[prev_frame];
+            KeyPoints *curr = keypoints_map[current_frame_num];
+            copy_keypoints(curr, prev, scene, &skeleton);
         }
+        ImGui::EndDisabled();
 
-        if (ImGui::Button("Load From Selected")) {
-            IGFD::FileDialogConfig config;
-            config.countSelectionMax = 1;
-            config.path = pm.keypoints_root_folder;
-            config.flags = ImGuiFileDialogFlags_Modal;
-            ImGuiFileDialog::Instance()->OpenDialog(
-                "LoadFromSelected", "Load from selected", nullptr,
-                config);
+        if (state.last_saved != static_cast<std::time_t>(-1)) {
+            ImGui::TextDisabled("Last saved: %s", ctime(&state.last_saved));
         }
 
         ImGui::Separator();
 
-        auto next_labeled_frame_it = keypoints_map.end();
-        for (auto it = keypoints_map.upper_bound(current_frame_num);
-             it != keypoints_map.end(); ++it) {
-            if (has_any_labels(it->second, skeleton, scene)) {
-                next_labeled_frame_it = it;
-                break;
+        // === Collect labeled frames (shared by grid + timeline) ===
+        struct LabeledFrameInfo { int frame; bool complete; };
+        std::vector<LabeledFrameInfo> labeled_frames;
+        for (const auto &[fnum, kp] : keypoints_map) {
+            if (!has_any_labels(kp, skeleton, scene))
+                continue;
+            bool complete = true;
+            if (skeleton.has_skeleton && scene->num_cams > 1) {
+                for (int cam = 0; cam < scene->num_cams && cam < MAX_VIEWS; ++cam)
+                    for (int k = 0; k < skeleton.num_nodes; ++k)
+                        if (!kp->kp2d[cam][k].is_labeled) { complete = false; goto done; }
+                for (int k = 0; k < skeleton.num_nodes; ++k)
+                    if (!kp->kp3d[k].is_triangulated) { complete = false; goto done; }
+            } else {
+                complete = false;
             }
-        }
-        if (next_labeled_frame_it == keypoints_map.end()) {
-            for (auto it = keypoints_map.begin();
-                 it != keypoints_map.upper_bound(current_frame_num);
-                 ++it) {
-                if (has_any_labels(it->second, skeleton, scene)) {
-                    next_labeled_frame_it = it;
-                    break;
-                }
-            }
-        }
-
-        auto prev_labeled_frame_it = keypoints_map.end();
-        auto lb = keypoints_map.lower_bound(current_frame_num);
-        if (lb != keypoints_map.begin()) {
-            for (auto it = std::prev(lb);;) {
-                if (has_any_labels(it->second, skeleton, scene)) {
-                    prev_labeled_frame_it = it;
-                    break;
-                }
-                if (it == keypoints_map.begin())
-                    break;
-                --it;
-            }
+            done:
+            labeled_frames.push_back({(int)fnum, complete});
         }
 
-        bool has_next_frame =
-            (next_labeled_frame_it != keypoints_map.end());
-        int next_frame_num =
-            has_next_frame ? next_labeled_frame_it->first : -1;
-        bool has_prev_frame =
-            (prev_labeled_frame_it != keypoints_map.end());
-        int previous_frame_num =
-            has_prev_frame ? prev_labeled_frame_it->first : -1;
+        // === Labeled Frames grid ===
+        ImGui::Text("Labeled Frames (%zu)", labeled_frames.size());
 
-        if (ImGui::BeginTable("frame_nav_table", 2,
-                              ImGuiTableFlags_SizingFixedFit)) {
-            ImGui::TableNextRow();
+        if (!labeled_frames.empty()) {
+            const ImVec4 teal(0.2f, 0.7f, 0.7f, 1.0f);
+            const ImVec4 green(0.2f, 0.8f, 0.3f, 1.0f);
+            const ImU32 teal_u32 = IM_COL32(51, 179, 179, 255);
+            const ImU32 green_u32 = IM_COL32(51, 204, 77, 255);
+            const ImVec2 cell_size(16, 16);
+            const float gap = ImGui::GetStyle().ItemSpacing.y;
+            float avail_w = ImGui::GetContentRegionAvail().x;
 
-            ImGui::TableSetColumnIndex(0);
-            ImGui::BeginDisabled(!has_next_frame);
-            bool button_pressed =
-                ImGui::Button("Jump to next labeled frame");
-            ImGui::EndDisabled();
+            for (size_t i = 0; i < labeled_frames.size(); ++i) {
+                auto &lf = labeled_frames[i];
+                bool is_current = (lf.frame == current_frame_num);
 
-            if (button_pressed && has_next_frame) {
-                ps.play_video = false;
-                seek_all_cameras(scene, next_frame_num,
-                                 dc_context->video_fps, ps, true);
-            }
+                ImGui::PushID((int)i);
+                ImGuiColorEditFlags flags =
+                    ImGuiColorEditFlags_NoAlpha |
+                    ImGuiColorEditFlags_NoPicker |
+                    ImGuiColorEditFlags_NoTooltip |
+                    ImGuiColorEditFlags_NoDragDrop;
 
-            ImGui::TableSetColumnIndex(1);
-            if (has_next_frame)
-                ImGui::Text("%d", next_frame_num);
-            else
-                ImGui::Text("none");
+                ImVec4 color = lf.complete ? green : teal;
 
-            ImGui::TableNextRow();
-
-            ImGui::TableSetColumnIndex(0);
-            ImGui::BeginDisabled(!has_prev_frame);
-            if (ImGui::Button("Copy from previous labeled frame")) {
-                if (keypoints_find) {
-                    free_keypoints(keypoints_map[current_frame_num],
-                                   scene);
-                    keypoints_map.erase(current_frame_num);
+                if (is_current) {
+                    ImVec2 pos = ImGui::GetCursorScreenPos();
+                    ImGui::GetWindowDrawList()->AddRect(
+                        ImVec2(pos.x - 1, pos.y - 1),
+                        ImVec2(pos.x + cell_size.x + 1, pos.y + cell_size.y + 1),
+                        IM_COL32(255, 255, 255, 255), 0.0f, 0, 2.0f);
                 }
 
-                KeyPoints *keypoints =
-                    (KeyPoints *)malloc(sizeof(KeyPoints));
-                allocate_keypoints(keypoints, scene, &skeleton);
-                keypoints_map[current_frame_num] = keypoints;
+                if (ImGui::ColorButton("##cell", color, flags, cell_size)) {
+                    ps.play_video = false;
+                    seek_all_cameras(scene, lf.frame,
+                                     dc_context->video_fps, ps, true);
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Frame %d", lf.frame);
 
-                KeyPoints *prev = keypoints_map[previous_frame_num];
-                KeyPoints *curr = keypoints_map[current_frame_num];
-                copy_keypoints(curr, prev, scene, &skeleton);
+                ImGui::PopID();
+
+                if (i + 1 < labeled_frames.size()) {
+                    float next_x = ImGui::GetItemRectMax().x + gap + cell_size.x;
+                    if (next_x < ImGui::GetWindowPos().x + avail_w)
+                        ImGui::SameLine(0, gap);
+                }
             }
-            ImGui::EndDisabled();
 
-            ImGui::TableSetColumnIndex(1);
-            if (has_prev_frame)
-                ImGui::Text("%d", previous_frame_num);
-            else
-                ImGui::Text("none");
+            // === Timeline minimap (ImPlot — scroll zoom, drag pan, box select) ===
+            ImGui::Spacing();
+            int total_frames = dc_context->estimated_num_frames;
+            if (total_frames > 0) {
+                // Reserve space for rotated "Timeline" label on the left
+                float label_font = ImGui::GetFontSize();
+                float label_margin = label_font + 6.0f;
+                float timeline_w = ImGui::GetContentRegionAvail().x - label_margin;
+                float timeline_h = 60.0f;
 
-            ImGui::EndTable();
-        }
+                // Draw rotated "Timeline" label on the left
+                {
+                    ImVec2 label_pos = ImGui::GetCursorScreenPos();
+                    float text_w = ImGui::CalcTextSize("Timeline").x;
+                    ImVec2 tp(label_pos.x + (label_margin - label_font) * 0.5f,
+                              label_pos.y + (timeline_h + text_w) * 0.5f);
+                    ImPlot::AddTextVertical(ImGui::GetWindowDrawList(), tp,
+                        ImGui::GetColorU32(ImGuiCol_Text), "Timeline");
+                    ImGui::Dummy(ImVec2(label_margin, timeline_h));
+                    ImGui::SameLine();
+                }
 
-        size_t labeled_count = 0;
-        for (const auto &[frame_num, keypoints] : keypoints_map) {
-            if (has_any_labels(keypoints, skeleton, scene,
-                               /*yolo_thresh=*/0.5f)) {
-                ++labeled_count;
+                // Split labeled frames into teal/green arrays
+                std::vector<double> teal_x, green_x;
+                for (auto &lf : labeled_frames) {
+                    if (lf.complete)
+                        green_x.push_back((double)lf.frame);
+                    else
+                        teal_x.push_back((double)lf.frame);
+                }
+
+                // Double-click resets to full range: override ImPlot default
+                // by forcing limits when double-click detected on hovered plot
+                static bool reset_pending = false;
+                if (reset_pending) {
+                    ImPlot::SetNextAxesLimits(0, total_frames, 0, 1);
+                    reset_pending = false;
+                }
+
+                ImPlot::PushStyleVar(ImPlotStyleVar_PlotPadding, ImVec2(4, 2));
+                ImPlotFlags plot_flags = ImPlotFlags_NoLegend | ImPlotFlags_NoTitle |
+                                         ImPlotFlags_NoMouseText;
+                if (ImPlot::BeginPlot("##timeline", ImVec2(timeline_w, timeline_h), plot_flags)) {
+                    ImPlotAxisFlags x_flags = ImPlotAxisFlags_NoLabel;
+                    ImPlotAxisFlags y_flags = ImPlotAxisFlags_NoLabel |
+                                              ImPlotAxisFlags_NoTickLabels |
+                                              ImPlotAxisFlags_NoTickMarks |
+                                              ImPlotAxisFlags_NoGridLines |
+                                              ImPlotAxisFlags_Lock;
+                    ImPlot::SetupAxes("frame number", nullptr, x_flags, y_flags);
+                    ImPlot::SetupAxisLimits(ImAxis_X1, 0, total_frames, ImPlotCond_Once);
+                    ImPlot::SetupAxisLimits(ImAxis_Y1, 0, 1, ImPlotCond_Always);
+                    ImPlot::SetupAxisZoomConstraints(ImAxis_X1, 50, total_frames);
+
+                    // Current frame indicator
+                    double cf = (double)current_frame_num;
+                    ImPlot::SetNextLineStyle(ImVec4(1, 1, 1, 0.4f), 1.0f);
+                    ImPlot::PlotInfLines("##current", &cf, 1);
+
+                    // Teal tick marks (partially labeled)
+                    if (!teal_x.empty()) {
+                        ImPlot::SetNextLineStyle(teal, 2.0f);
+                        ImPlot::PlotInfLines("##teal", teal_x.data(), (int)teal_x.size());
+                    }
+
+                    // Green tick marks (fully labeled + triangulated)
+                    if (!green_x.empty()) {
+                        ImPlot::SetNextLineStyle(green, 2.0f);
+                        ImPlot::PlotInfLines("##green", green_x.data(), (int)green_x.size());
+                    }
+
+                    // Double-click to reset to full video range
+                    if (ImPlot::IsPlotHovered() && ImGui::IsMouseDoubleClicked(0))
+                        reset_pending = true;
+
+                    // Click on a tick mark to seek
+                    if (ImPlot::IsPlotHovered() && ImGui::IsMouseClicked(0)) {
+                        ImPlotPoint mp = ImPlot::GetPlotMousePos();
+                        ImPlotRect lims = ImPlot::GetPlotLimits();
+                        double px_per_frame = timeline_w / (lims.X.Max - lims.X.Min);
+                        double tolerance = 5.0 / px_per_frame;
+                        int nearest = -1;
+                        double nearest_dist = tolerance + 1;
+                        for (auto &lf : labeled_frames) {
+                            double d = fabs((double)lf.frame - mp.x);
+                            if (d < nearest_dist) {
+                                nearest_dist = d;
+                                nearest = lf.frame;
+                            }
+                        }
+                        if (nearest >= 0 && nearest_dist <= tolerance) {
+                            ps.play_video = false;
+                            seek_all_cameras(scene, nearest,
+                                             dc_context->video_fps, ps, true);
+                        }
+                    }
+
+                    // Tooltip for nearest tick
+                    if (ImPlot::IsPlotHovered()) {
+                        ImPlotPoint mp = ImPlot::GetPlotMousePos();
+                        ImPlotRect lims = ImPlot::GetPlotLimits();
+                        double px_per_frame = timeline_w / (lims.X.Max - lims.X.Min);
+                        double tolerance = 5.0 / px_per_frame;
+                        for (auto &lf : labeled_frames) {
+                            if (fabs((double)lf.frame - mp.x) <= tolerance) {
+                                ImGui::SetTooltip("Frame %d", lf.frame);
+                                break;
+                            }
+                        }
+                    }
+
+                    ImPlot::EndPlot();
+                }
+                ImPlot::PopStyleVar();
+
             }
         }
-        ImGui::Text("Total labeled frames : %zu", labeled_count);
 
     }
     ImGui::End();
-
-    // File dialog handlers (called every frame, inside this draw function)
-    if (ImGuiFileDialog::Instance()->Display("ChooseKeypointsFolder",
-            ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
-        if (ImGuiFileDialog::Instance()->IsOk()) {
-            pm.keypoints_root_folder =
-                ImGuiFileDialog::Instance()->GetCurrentPath();
-        }
-        ImGuiFileDialog::Instance()->Close();
-    }
-
-    if (ImGuiFileDialog::Instance()->Display("LoadFromSelected",
-            ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
-        if (ImGuiFileDialog::Instance()->IsOk()) {
-            auto selected_folder =
-                ImGuiFileDialog::Instance()->GetCurrentPath();
-            free_all_keypoints(keypoints_map, scene);
-            std::string err;
-            if (load_keypoints(selected_folder, keypoints_map, &skeleton,
-                               scene, pm.camera_names, err)) {
-                free_all_keypoints(keypoints_map, scene);
-                popups.pushError(err);
-            }
-        }
-        ImGuiFileDialog::Instance()->Close();
-    }
 
     // Ctrl+S save handling
     if (pm.plot_keypoints_flag &&

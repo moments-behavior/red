@@ -28,6 +28,7 @@
 #include "imgui_impl_opengl3.h"
 #endif
 #include "implot.h"
+#include "implot_internal.h"
 #include "project.h"
 #include "render.h"
 #include "skeleton.h"
@@ -568,44 +569,105 @@ int main(int argc, char **argv) {
                 }
             }
 
-            ImGui::SetNextWindowSize(ImVec2(500, 440), ImGuiCond_FirstUseEver);
-            if (ImGui::Begin("Frames in the buffer")) {
+            ImGui::SetNextWindowSize(ImVec2(500, 90), ImGuiCond_FirstUseEver);
+            if (ImGui::Begin("Frame Buffer")) {
+                // Horizontal scrollable row of frames with vertical text
+                float scale = 1.15f;
+                float font_size = ImGui::GetFontSize() * scale;
+                float item_w = font_size + 2.0f;
+                float item_h = ImGui::GetContentRegionAvail().y;
+                if (item_h < 40.0f) item_h = 40.0f;
+
+                ImGui::SetWindowFontScale(scale);
+                ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(1.0f, 0.0f));
+                ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(2.0f, 2.0f));
+                ImGui::BeginChild("##hscroll", ImVec2(0, 0), false,
+                                  ImGuiWindowFlags_HorizontalScrollbar |
+                                  ImGuiWindowFlags_NoScrollWithMouse |
+                                  ImGuiWindowFlags_NoScrollbar);
+                ImDrawList *dl = ImGui::GetWindowDrawList();
 
                 for (u32 i = 0; i < scene->size_of_buffer; i++) {
-                    int seletable_frame_id =
+                    int buf_idx =
                         (i + ps.read_head) % scene->size_of_buffer;
+                    int frame_num =
+                        scene->display_buffer[visible_idx][buf_idx].frame_number;
 
-                    char label[64];
-                    if (input_is_imgs) {
-                        snprintf(label, sizeof(label), "%d: %s",
-                                 scene
-                                     ->display_buffer[visible_idx]
-                                                     [seletable_frame_id]
-                                     .frame_number,
-                                 imgs_names[i].c_str());
-                    } else {
-                        snprintf(label, sizeof(label), "Frame %d",
-                                 scene
-                                     ->display_buffer[visible_idx]
-                                                     [seletable_frame_id]
-                                     .frame_number);
-                    }
+                    char label[32];
+                    if (input_is_imgs)
+                        snprintf(label, sizeof(label), "%d:%s",
+                                 frame_num, imgs_names[i].c_str());
+                    else
+                        snprintf(label, sizeof(label), "%d", frame_num);
 
                     bool is_selected = (ps.pause_selected == (int)i);
 
-                    if (ImGui::Selectable(label, is_selected)) {
-                        if (!is_selected) { // clicked a new one
+                    if (i > 0) ImGui::SameLine();
+
+                    ImGui::PushID((int)i);
+                    ImVec2 pos = ImGui::GetCursorScreenPos();
+                    if (ImGui::Selectable("##fbuf", is_selected, 0,
+                                          ImVec2(item_w, item_h))) {
+                        if (!is_selected) {
                             ps.pause_selected = (int)i;
                             selection_changed = true;
                         }
                     }
 
-                    // Only recenter when selection *changed* this frame
-                    if (selection_changed && ps.pause_selected == (int)i) {
-                        // 0.5f = roughly center; tweak if you like
-                        ImGui::SetScrollHereY(0.5f);
+                    // Draw vertical text over the selectable
+                    // Color code: green = fully labeled + triangulated,
+                    // teal = partially labeled, default = unlabeled
+                    const char *text = label;
+                    float cx = pos.x + item_w * 0.5f;
+                    ImU32 text_col;
+                    auto kp_it = keypoints_map.find((u32)frame_num);
+                    if (kp_it != keypoints_map.end() &&
+                        has_any_labels(kp_it->second, skeleton, scene)) {
+                        bool complete = true;
+                        if (skeleton.has_skeleton && scene->num_cams > 1) {
+                            for (int cam = 0; cam < scene->num_cams && cam < MAX_VIEWS; ++cam)
+                                for (int k = 0; k < skeleton.num_nodes; ++k)
+                                    if (!kp_it->second->kp2d[cam][k].is_labeled)
+                                        complete = false;
+                            if (complete)
+                                for (int k = 0; k < skeleton.num_nodes; ++k)
+                                    if (!kp_it->second->kp3d[k].is_triangulated)
+                                        complete = false;
+                        } else {
+                            complete = false;
+                        }
+                        text_col = complete
+                            ? IM_COL32(51, 204, 77, 255)   // green
+                            : IM_COL32(51, 179, 179, 255); // teal
+                    } else {
+                        text_col = is_selected
+                            ? ImGui::GetColorU32(ImGuiCol_Text)
+                            : ImGui::GetColorU32(ImGuiCol_TextDisabled);
                     }
+                    // Draw rotated text (90 deg CCW) — read bottom-to-top like a book spine
+                    // AddTextVertical draws from pos going upward (decreasing y)
+                    float str_w = ImGui::CalcTextSize(text).x;
+                    // Center horizontally: text renders rightward from pos.x by font_size
+                    // Center vertically: text goes upward from pos.y by str_w
+                    ImVec2 text_pos(pos.x + (item_w - font_size) * 0.5f,
+                                   pos.y + (item_h + str_w) * 0.5f);
+                    ImPlot::AddTextVertical(dl, text_pos, text_col, text);
+                    ImGui::PopID();
+
+                    // Auto-scroll to selection
+                    if (selection_changed && ps.pause_selected == (int)i)
+                        ImGui::SetScrollHereX(0.5f);
                 }
+
+                // Mouse wheel → horizontal scroll
+                if (ImGui::IsWindowHovered()) {
+                    float wheel = ImGui::GetIO().MouseWheel;
+                    if (wheel != 0.0f)
+                        ImGui::SetScrollX(ImGui::GetScrollX() - wheel * item_w * 3.0f);
+                }
+                ImGui::EndChild();
+                ImGui::PopStyleVar(2);  // WindowPadding, ItemSpacing
+                ImGui::SetWindowFontScale(1.0f);
             }
             ImGui::End();
 

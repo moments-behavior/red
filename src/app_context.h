@@ -145,6 +145,10 @@ inline void migrate_ini_window_names(const std::string &ini_path) {
         }
     }
 
+    // v5 → v6: Rename "Frames in the buffer" → "Frame Buffer"
+    changed |= migrate_ini_section(content,
+        "[Window][Frames in the buffer]", "[Window][Frame Buffer]");
+
     // v4 → v5: Sidebar dockspace 0x00000100 removed — remap tool windows
     // to main dockspace and strip the stale DockSpace node entry.
     {
