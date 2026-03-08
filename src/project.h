@@ -164,7 +164,6 @@ bool setup_project(ProjectManager &pm, SkeletonContext &skeleton,
     skeleton.num_nodes = 0;
     skeleton.num_edges = 0;
     skeleton.name.clear();
-    skeleton.has_bbox = false;
     skeleton.has_skeleton = true;
     skeleton.node_colors.clear();
     skeleton.edges.clear();
