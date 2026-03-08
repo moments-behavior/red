@@ -89,29 +89,6 @@ static void gui_plot_keypoints(KeyPoints *keypoints, SkeletonContext *skeleton,
     }
 }
 
-static void gui_plot_bbox_from_keypoints(KeyPoints *keypoints,
-                                         SkeletonContext *skeleton,
-                                         int view_idx, int top_left_idx,
-                                         int bottom_right_idx) {
-    if (keypoints->kp2d[view_idx][top_left_idx].is_labeled &&
-        keypoints->kp2d[view_idx][bottom_right_idx].is_labeled) {
-        double xs[5]{keypoints->kp2d[view_idx][top_left_idx].position.x,
-                     keypoints->kp2d[view_idx][bottom_right_idx].position.x,
-                     keypoints->kp2d[view_idx][bottom_right_idx].position.x,
-                     keypoints->kp2d[view_idx][top_left_idx].position.x,
-                     keypoints->kp2d[view_idx][top_left_idx].position.x};
-
-        double ys[5]{keypoints->kp2d[view_idx][top_left_idx].position.y,
-                     keypoints->kp2d[view_idx][top_left_idx].position.y,
-                     keypoints->kp2d[view_idx][bottom_right_idx].position.y,
-                     keypoints->kp2d[view_idx][bottom_right_idx].position.y,
-                     keypoints->kp2d[view_idx][top_left_idx].position.y};
-
-        ImPlot::SetNextLineStyle(ImVec4(0.5, 1.0, 1.0, 1.0), 3.0);
-        ImPlot::PlotLine("##line", xs, ys, 5);
-    }
-}
-
 bool is_in_camera_fov(const Eigen::Vector3d &point_world,
                       const Eigen::Vector3d &rvec,
                       const Eigen::Vector3d &tvec,

@@ -1,18 +1,17 @@
+#define IMGUI_DEFINE_MATH_OPERATORS
+#include "imgui.h"
+#include "imgui_internal.h"
 #include "IconsForkAwesome.h"
 #include "camera.h"
 #include "filesystem"
 #include "global.h"
 #include "gui.h"
 #include "gui/help_window.h"
-#include "gui/skeleton_creator_window.h"
-#include "gui/yolo_export_window.h"
 #include "gui/jarvis_export_window.h"
 #include "gui/annotation_dialog.h"
 #include "gui/calibration_tool_window.h"
 #include "gui/popup_stack.h"
 #include "gui/toast.h"
-#include "imgui.h"
-#include "imgui_internal.h"
 #include "imgui_impl_glfw.h"
 #ifdef __APPLE__
 #include "metal_context.h"
@@ -22,10 +21,8 @@
 #include "imgui_impl_opengl3.h"
 #endif
 #include "implot.h"
-#include "live_table.h"
 #include "project.h"
 #include "render.h"
-#include "reprojection_tool.h"
 #include "skeleton.h"
 #include "utils.h"
 #include "calibration_tool.h"
@@ -36,8 +33,6 @@
 #include "laser_calibration.h"
 #include "aruco_metal.h"
 #include "laser_metal.h"
-#include "yolo_export.h"
-#include "yolo_torch.h"
 #include <ImGuiFileDialog.h>
 #include <algorithm>
 #include <cstddef>
@@ -56,7 +51,6 @@
 #include "kernel.cuh"
 #endif
 #include "keypoints_table.h"
-#include "reprojection_tool.h"
 
 static void print_video_metadata(const std::vector<FFmpegDemuxer *> &demuxers,
                                  const std::vector<std::string> &camera_names,
@@ -214,7 +208,6 @@ int main(int argc, char **argv) {
     prepare_application_folders(red_data_dir, media_root_dir);
     UserSettings user_settings = load_user_settings();
     std::string skeleton_dir = red_data_dir + "/skeleton";
-    std::string yolo_model_dir = red_data_dir + "/yolo_model";
     std::vector<std::thread> decoder_threads;
     std::vector<FFmpegDemuxer *> demuxers;
 
@@ -249,15 +242,6 @@ int main(int argc, char **argv) {
     ImPlotStyle &style = ImPlot::GetStyle();
     ImVec4 *colors = style.Colors;
 
-    // Skeleton Creator state
-    SkeletonCreatorState skeleton_creator_state;
-    std::string skeleton_file_path = ""; // Track currently loaded skeleton file
-
-    // YOLO Export Tool state
-    YoloExportState yolo_export_state;
-    yolo_export_state.label_dir = media_root_dir + "/labeled_data";
-    yolo_export_state.video_dir = media_root_dir;
-    yolo_export_state.output_dir = media_root_dir + "/export";
 
     // JARVIS Export Tool state
     JarvisExportState jarvis_export_state;
@@ -277,47 +261,8 @@ int main(int argc, char **argv) {
                                    ? media_root_dir
                                    : user_settings.default_media_root_path;
 
-    // Bounding box class management
-    std::vector<std::string> bbox_class_names = {"Class_1"};
-    std::vector<ImVec4> bbox_class_colors = {ImVec4(0.3f, 1.0f, 1.0f, 1.0f)};
-    int current_bbox_class = 0;
-    int current_bbox_id =
-        0; // Track the currently selected bbox ID within the class
-    bool show_bbox_ids = false; // Toggle for displaying bbox IDs on frame
-    std::string new_class_name = "";
-
-    // Helper function to create a new bbox class
-    auto create_new_bbox_class = [&]() {
-        std::string new_class_name =
-            "Class_" + std::to_string(bbox_class_names.size() + 1);
-        bbox_class_names.push_back(new_class_name);
-        // Generate a unique color for the new class (HSV with different hues)
-        float hue = (bbox_class_colors.size() *
-                     0.618034f); // Golden ratio for nice color distribution
-        while (hue > 1.0f)
-            hue -= 1.0f;
-        ImVec4 new_color = (ImVec4)ImColor::HSV(hue, 0.8f, 1.0f);
-        bbox_class_colors.push_back(new_color);
-        current_bbox_class = bbox_class_names.size() - 1;
-    };
-
-    // Helper function to cleanup YOLO drag boxes
-    auto cleanup_yolo_drag_boxes = [&]() {
-        for (int cam_id = 0; cam_id < MAX_VIEWS; cam_id++) {
-            for (auto &drag_box : yolo_drag_boxes[cam_id]) {
-                if (drag_box.rect) {
-                    delete drag_box.rect;
-                    drag_box.rect = nullptr;
-                }
-            }
-            yolo_drag_boxes[cam_id].clear();
-            yolo_active_bbox_idx[cam_id] = -1;
-        }
-    };
-
     colors[ImPlotCol_Crosshairs] = ImVec4(0.3f, 0.10f, 0.64f, 1.00f);
 
-    bool yolo_detection = false;
     int label_buffer_size = 64;
     bool show_help_window = false;
     std::vector<bool> is_view_focused;
@@ -326,28 +271,11 @@ int main(int argc, char **argv) {
     ToastQueue toasts;
     DeferredQueue deferred;
 
-    int hovered_bbox_cam = -1;
-    int hovered_bbox_idx = -1;
-    float hovered_bbox_confidence = 0.0f;
-    int hovered_bbox_class = -1;
-    int hovered_bbox_id = -1; // Track the ID of the hovered bbox
-
-    // Hovered OBB tracking variables
-    int hovered_obb_cam = -1;
-    int hovered_obb_idx = -1;
-    float hovered_obb_confidence = 0.0f;
-    int hovered_obb_class = -1;
-    int hovered_obb_id = -1; // Track the ID of the hovered OBB
-
-    bool auto_yolo_labeling = false;
-    std::set<int>
-        yolo_processed_frames; // Track which frames have been processed
     std::unordered_map<std::string, bool> window_was_decoding;
     std::unordered_map<std::string, bool> window_is_visible;  // actual ImGui visibility (prev frame)
     double inst_speed = 1.0;
     float set_playback_speed = 1.0f;
     PlaybackState ps;
-    LiveTable table;
 
     int brightness = 0;
     float contrast = 1.0f;     // neutral contrastst
@@ -467,7 +395,7 @@ int main(int argc, char **argv) {
                                      most_recent_folder, label_err)) {
             if (load_keypoints(most_recent_folder, keypoints_map,
                                &skeleton, scene, pm.camera_names,
-                               label_err, bbox_class_names)) {
+                               label_err)) {
                 free_all_keypoints(keypoints_map, scene);
                 popups.pushError(label_err);
             }
@@ -475,7 +403,6 @@ int main(int argc, char **argv) {
         print_project_summary(pm, pm.skeleton_name, most_recent_folder);
     };
 
-    ReprojectionTool rp_tool;
 
 #ifdef __APPLE__
     // Per-camera last-uploaded frame number for Metal (skip redundant uploads)
@@ -563,20 +490,6 @@ int main(int argc, char **argv) {
         // Flush deferred callbacks (runs before any rendering to avoid
         // freeing Metal textures that ImGui draw commands still reference).
         deferred.flush();
-
-        // Reset hovered bbox info at start of each frame
-        hovered_bbox_cam = -1;
-        hovered_bbox_idx = -1;
-        hovered_bbox_confidence = 0.0f;
-        hovered_bbox_class = -1;
-        hovered_bbox_id = -1;
-
-        // Reset hovered OBB info at start of each frame
-        hovered_obb_cam = -1;
-        hovered_obb_idx = -1;
-        hovered_obb_confidence = 0.0f;
-        hovered_obb_class = -1;
-        hovered_obb_id = -1;
 
         // --- Update playback time ---
         auto now = std::chrono::steady_clock::now();
@@ -673,20 +586,8 @@ int main(int argc, char **argv) {
                 }
 
                 if (ImGui::BeginMenu("Tools")) {
-                    if (ImGui::MenuItem("Skeleton Creator")) {
-                        skeleton_creator_state.show = true;
-                    }
-                    if (ImGui::MenuItem("YOLO Export Tool")) {
-                        yolo_export_state.show = true;
-                    }
                     if (ImGui::MenuItem("JARVIS Export Tool")) {
                         jarvis_export_state.show = true;
-                    }
-                    if (ImGui::MenuItem("Spreadsheet")) {
-                        table.is_open = true;
-                    }
-                    if (ImGui::MenuItem("Reprojection Error")) {
-                        rp_tool.show_reprojection_error = true;
                     }
                     ImGui::EndMenu();
                 }
@@ -1153,138 +1054,6 @@ int main(int argc, char **argv) {
                 scene->display_buffer[visible_idx][select_corr_head]
                     .frame_number;
 
-#ifndef __APPLE__
-            // Automatic YOLO detection for current frame
-            if (auto_yolo_labeling && !yolo_model_path.empty() &&
-                skeleton.has_bbox) {
-                if (!frameHasYoloDetections(current_frame_num, keypoints_map,
-                                            &skeleton) &&
-                    yolo_processed_frames.find(current_frame_num) ==
-                        yolo_processed_frames.end()) {
-
-                    // Mark frame as processed to avoid duplicate processing
-                    yolo_processed_frames.insert(current_frame_num);
-
-                    // Enable YOLO detection flag
-                    yolo_detection = true;
-
-                    std::cout << "Auto YOLO: Processing frame "
-                              << current_frame_num << std::endl;
-
-                    // Run YOLO inference on all cameras for this frame
-                    for (int cam_id = 0; cam_id < scene->num_cams; cam_id++) {
-                        if (ps.pause_seeked) {
-                            unsigned char *frame_data =
-                                scene->display_buffer[cam_id][select_corr_head]
-                                    .frame;
-
-                            if (frame_data) {
-                                yolo_predictions[cam_id] = runYoloInference(
-                                    yolo_model_path, frame_data,
-                                    scene->image_width[cam_id],
-                                    scene->image_height[cam_id]);
-
-                                yolo_bboxes[cam_id].clear();
-                                for (const auto &pred :
-                                     yolo_predictions[cam_id]) {
-                                    yolo_bboxes[cam_id].emplace_back(pred);
-                                }
-                            }
-                        } else {
-                            if (window_was_decoding[pm.camera_names[cam_id]]) {
-                                unsigned char *frame_data =
-                                    scene
-                                        ->display_buffer[cam_id]
-                                                        [select_corr_head]
-                                        .frame;
-
-                                if (frame_data) {
-                                    yolo_predictions[cam_id] = runYoloInference(
-                                        yolo_model_path, frame_data,
-                                        scene->image_width[cam_id],
-                                        scene->image_height[cam_id]);
-
-                                    yolo_bboxes[cam_id].clear();
-                                    for (const auto &pred :
-                                         yolo_predictions[cam_id]) {
-                                        yolo_bboxes[cam_id].emplace_back(pred);
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // Add YOLO detections to main bounding box system
-                    if (!yolo_bboxes.empty() &&
-                        std::any_of(yolo_bboxes.begin(), yolo_bboxes.end(),
-                                    [](const auto &cam_bboxes) {
-                                        return !cam_bboxes.empty();
-                                    })) {
-                        for (int cam_id = 0; cam_id < scene->num_cams;
-                             cam_id++) {
-                            if (!yolo_bboxes[cam_id].empty()) {
-                                // Ensure keypoints structure exists
-                                bool keypoints_find =
-                                    keypoints_map.find(current_frame_num) !=
-                                    keypoints_map.end();
-                                if (!keypoints_find) {
-                                    KeyPoints *keypoints =
-                                        (KeyPoints *)malloc(sizeof(KeyPoints));
-                                    allocate_keypoints(keypoints, scene,
-                                                       &skeleton);
-                                    keypoints_map[current_frame_num] =
-                                        keypoints;
-                                }
-
-                                // Add YOLO detections to main bounding box
-                                // system
-                                int yolo_bbox_id = 0;
-                                for (const auto &yolo_bbox :
-                                     yolo_bboxes[cam_id]) {
-                                    if (yolo_bbox.is_valid) {
-                                        while (yolo_bbox.class_id >=
-                                               (int)bbox_class_colors.size()) {
-                                            create_new_bbox_class();
-                                        }
-
-                                        BoundingBox bbox;
-
-                                        bbox.rect = new ImPlotRect(
-                                            yolo_bbox.x_min, yolo_bbox.x_max,
-                                            yolo_bbox.y_min, yolo_bbox.y_max);
-
-                                        bbox.state = RectTwoPoints;
-                                        bbox.class_id = yolo_bbox.class_id;
-                                        bbox.id = yolo_bbox_id++;
-                                        bbox.confidence = yolo_bbox.confidence;
-                                        bbox.has_bbox_keypoints = false;
-                                        bbox.bbox_keypoints2d = nullptr;
-                                        bbox.active_kp_id = nullptr;
-
-                                        if (skeleton.has_bbox &&
-                                            skeleton.has_skeleton &&
-                                            skeleton.num_nodes > 0) {
-                                            allocate_bbox_keypoints(
-                                                &bbox, scene, &skeleton);
-                                        }
-
-                                        keypoints_map[current_frame_num]
-                                            ->bbox2d_list[cam_id]
-                                            .push_back(bbox);
-                                    }
-                                }
-
-                                std::cout << "Auto YOLO: Added "
-                                          << yolo_bboxes[cam_id].size()
-                                          << " detections for camera " << cam_id
-                                          << ", frame " << current_frame_num
-                                          << std::endl;
-                            }
-                        }
-                    }
-                }
-            }
-#endif // !__APPLE__
         }
 
         // Render a video frame
@@ -1675,8 +1444,7 @@ int main(int argc, char **argv) {
                                     }
                                 }
 
-                                if (keypoints_find && skeleton.has_skeleton &&
-                                    !skeleton.has_bbox) {
+                                if (keypoints_find && skeleton.has_skeleton) {
                                     u32 *kp = &(keypoints_map[current_frame_num]
                                                     ->active_id[j]);
                                     if (ImGui::IsKeyPressed(ImGuiKey_W,
@@ -1735,1112 +1503,14 @@ int main(int argc, char **argv) {
                                         keypoints_find = false;
                                     }
                                 }
-                                if (skeleton.has_bbox) {
-                                    static bool shift_was_pressed = false;
-                                    bool shift_pressed =
-                                        ImGui::GetIO().KeyShift;
-
-                                    bool keypoints_find =
-                                        keypoints_map.find(current_frame_num) !=
-                                        keypoints_map.end();
-                                    if (!keypoints_find) {
-                                        KeyPoints *keypoints =
-                                            (KeyPoints *)malloc(
-                                                sizeof(KeyPoints));
-                                        allocate_keypoints(keypoints, scene,
-                                                           &skeleton);
-                                        keypoints_map[current_frame_num] =
-                                            keypoints;
-                                    }
-
-                                    if (shift_pressed && !shift_was_pressed) {
-                                        ImPlotPoint mouse =
-                                            ImPlot::GetPlotMousePos();
-
-                                        // Clamp mouse coordinates to frame
-                                        // bounds
-                                        double clamped_x = std::max(
-                                            0.0,
-                                            std::min(
-                                                (double)scene->image_width[j],
-                                                mouse.x));
-                                        double clamped_y = std::max(
-                                            0.0,
-                                            std::min(
-                                                (double)scene->image_height[j],
-                                                mouse.y));
-
-                                        // Delete existing bbox with the
-                                        // same class_id and id
-                                        if (keypoints_map.find(
-                                                current_frame_num) !=
-                                            keypoints_map.end()) {
-                                            auto &bbox_list =
-                                                keypoints_map[current_frame_num]
-                                                    ->bbox2d_list[j];
-
-                                            // Find and remove bbox with
-                                            // same class_id and id
-                                            bbox_list.erase(
-                                                std::remove_if(
-                                                    bbox_list.begin(),
-                                                    bbox_list.end(),
-                                                    [current_bbox_class,
-                                                     current_bbox_id](
-                                                        const BoundingBox
-                                                            &bbox) {
-                                                        return bbox.class_id ==
-                                                                   current_bbox_class &&
-                                                               bbox.id ==
-                                                                   current_bbox_id;
-                                                    }),
-                                                bbox_list.end());
-                                        }
-
-                                        BoundingBox new_bbox;
-                                        new_bbox.rect = new ImPlotRect(
-                                            clamped_x, clamped_x, clamped_y,
-                                            clamped_y);
-                                        new_bbox.state = RectOnePoint;
-                                        new_bbox.class_id =
-                                            current_bbox_class; // Use
-                                                                // currently
-                                                                // selected
-                                                                // class
-                                        new_bbox.id =
-                                            current_bbox_id; // Set bbox ID
-                                        new_bbox.confidence = 1.0f;
-                                        new_bbox.has_bbox_keypoints = false;
-                                        new_bbox.bbox_keypoints2d = nullptr;
-                                        new_bbox.active_kp_id = nullptr;
-
-                                        // Allocate keypoints for this
-                                        // bounding box only if skeleton has
-                                        // both bbox and skeleton
-                                        if (skeleton.has_bbox &&
-                                            skeleton.has_skeleton &&
-                                            skeleton.num_nodes > 0) {
-                                            allocate_bbox_keypoints(
-                                                &new_bbox, scene, &skeleton);
-                                        }
-
-                                        keypoints_map[current_frame_num]
-                                            ->bbox2d_list[j]
-                                            .push_back(new_bbox);
-                                    }
-
-                                    // Only process bbox operations if
-                                    // keypoints exist for this frame
-                                    if (keypoints_map.find(current_frame_num) !=
-                                        keypoints_map.end()) {
-                                        for (auto &bbox :
-                                             keypoints_map[current_frame_num]
-                                                 ->bbox2d_list[j]) {
-                                            if (bbox.state == RectOnePoint &&
-                                                shift_pressed) {
-                                                ImPlotPoint mouse =
-                                                    ImPlot::GetPlotMousePos();
-                                                // Clamp mouse coordinates
-                                                // to frame bounds
-                                                double clamped_x = std::max(
-                                                    0.0,
-                                                    std::min(
-                                                        (double)scene
-                                                            ->image_width[j],
-                                                        mouse.x));
-                                                double clamped_y = std::max(
-                                                    0.0,
-                                                    std::min(
-                                                        (double)scene
-                                                            ->image_height[j],
-                                                        mouse.y));
-                                                bbox.rect->X.Max = clamped_x;
-                                                bbox.rect->Y.Max = clamped_y;
-                                            }
-
-                                            if (bbox.state == RectOnePoint &&
-                                                !shift_pressed &&
-                                                shift_was_pressed) {
-                                                bbox.state = RectTwoPoints;
-
-                                                double x_min =
-                                                    std::min(bbox.rect->X.Min,
-                                                             bbox.rect->X.Max);
-                                                double x_max =
-                                                    std::max(bbox.rect->X.Min,
-                                                             bbox.rect->X.Max);
-                                                double y_min =
-                                                    std::min(bbox.rect->Y.Min,
-                                                             bbox.rect->Y.Max);
-                                                double y_max =
-                                                    std::max(bbox.rect->Y.Min,
-                                                             bbox.rect->Y.Max);
-
-                                                bbox.rect->X.Min = x_min;
-                                                bbox.rect->X.Max = x_max;
-                                                bbox.rect->Y.Min = y_min;
-                                                bbox.rect->Y.Max = y_max;
-
-                                                // Auto-increment bbox ID
-                                                // after finishing drawing
-                                                current_bbox_id++;
-                                            }
-                                        }
-                                    }
-
-                                    shift_was_pressed = shift_pressed;
-                                }
                             } else {
                                 is_view_focused[j] = false;
                             }
 
-                            // Plot bounding boxes (both with and without
-                            // keypoints)
-                            if (skeleton.has_bbox) {
-                                bool keypoints_find =
-                                    keypoints_map.find(current_frame_num) !=
-                                    keypoints_map.end();
-                                if (!keypoints_find) {
-                                    KeyPoints *keypoints =
-                                        (KeyPoints *)malloc(sizeof(KeyPoints));
-                                    allocate_keypoints(keypoints, scene,
-                                                       &skeleton);
-                                    keypoints_map[current_frame_num] =
-                                        keypoints;
-                                }
-
-                                // Determine which bbox is active (under
-                                // mouse cursor)
-                                ImPlotPoint mouse = ImPlot::GetPlotMousePos();
-                                int active_bbox_idx = -1;
-
-                                // Check which bbox the mouse is hovering
-                                // over
-                                for (int bbox_idx = 0;
-                                     bbox_idx < keypoints_map[current_frame_num]
-                                                    ->bbox2d_list[j]
-                                                    .size();
-                                     bbox_idx++) {
-                                    BoundingBox &bbox =
-                                        keypoints_map[current_frame_num]
-                                            ->bbox2d_list[j][bbox_idx];
-                                    if (bbox.rect &&
-                                        bbox.state == RectTwoPoints &&
-                                        is_point_in_bbox(mouse.x, mouse.y,
-                                                         bbox.rect)) {
-                                        active_bbox_idx = bbox_idx;
-                                        break;
-                                    }
-                                }
-
-                                // Update global active bbox tracking for
-                                // this camera
-                                if (j < user_active_bbox_idx.size()) {
-                                    user_active_bbox_idx[j] = active_bbox_idx;
-                                }
-
-                                // Plot multiple bounding boxes
-                                for (int bbox_idx = 0;
-                                     bbox_idx < keypoints_map[current_frame_num]
-                                                    ->bbox2d_list[j]
-                                                    .size();
-                                     bbox_idx++) {
-                                    BoundingBox &bbox =
-                                        keypoints_map[current_frame_num]
-                                            ->bbox2d_list[j][bbox_idx];
-                                    if (bbox.rect) {
-                                        // Get color based on class_id
-                                        ImVec4 bbox_color =
-                                            ImVec4(0.5f, 1.0f, 1.0f,
-                                                   1.0f); // Default fallback
-                                        if (bbox.class_id >= 0 &&
-                                            bbox.class_id <
-                                                bbox_class_colors.size()) {
-                                            bbox_color = bbox_class_colors
-                                                [bbox.class_id];
-                                        }
-
-                                        // Reduce opacity for inactive
-                                        // bboxes
-                                        bool is_active_bbox =
-                                            (bbox_idx == active_bbox_idx);
-                                        if (!is_active_bbox) {
-                                            bbox_color.w =
-                                                0.6f; // Make inactive
-                                                      // bboxes more
-                                                      // transparent
-                                        }
-
-                                        // Draw completed bounding boxes
-                                        if (bbox.state == RectTwoPoints) {
-                                            bool bbox_clicked = false,
-                                                 bbox_hovered = false,
-                                                 bbox_held = false;
-
-                                            // Store previous rect for this
-                                            // specific bbox
-                                            static std::map<std::pair<int, int>,
-                                                            ImPlotRect>
-                                                bbox_prev_rects; // frame ->
-                                                                 // {camera,
-                                                                 // bbox_idx}
-                                                                 // ->
-                                                                 // prev_rect
-                                            auto bbox_key =
-                                                std::make_pair(j, bbox_idx);
-
-                                            // Initialize previous rect if
-                                            // not exists
-                                            if (bbox_prev_rects.find(
-                                                    bbox_key) ==
-                                                bbox_prev_rects.end()) {
-                                                bbox_prev_rects[bbox_key] =
-                                                    *bbox.rect;
-                                            }
-
-                                            ImPlotRect prev_bbox_rect =
-                                                bbox_prev_rects[bbox_key];
-
-                                            // Only allow interaction if
-                                            // this is the active bbox or no
-                                            // bbox is active
-                                            ImPlotDragToolFlags drag_flags =
-                                                ImPlotDragToolFlags_None;
-                                            if (!is_active_bbox &&
-                                                active_bbox_idx != -1) {
-                                                drag_flags =
-                                                    ImPlotDragToolFlags_NoInputs;
-                                            }
-
-                                            bool bbox_modified = MyDragRect(
-                                                1000 + bbox_idx,
-                                                &bbox.rect->X.Min,
-                                                &bbox.rect->Y.Min,
-                                                &bbox.rect->X.Max,
-                                                &bbox.rect->Y.Max, bbox_color,
-                                                drag_flags, &bbox_clicked,
-                                                &bbox_hovered, &bbox_held);
-
-                                            // Clamp bbox coordinates to
-                                            // frame bounds after any
-                                            // modification
-                                            if (bbox_modified || bbox_held) {
-                                                bbox.rect->X.Min = std::max(
-                                                    0.0,
-                                                    std::min(
-                                                        (double)scene
-                                                            ->image_width[j],
-                                                        bbox.rect->X.Min));
-                                                bbox.rect->Y.Min = std::max(
-                                                    0.0,
-                                                    std::min(
-                                                        (double)scene
-                                                            ->image_height[j],
-                                                        bbox.rect->Y.Min));
-                                                bbox.rect->X.Max = std::max(
-                                                    0.0,
-                                                    std::min(
-                                                        (double)scene
-                                                            ->image_width[j],
-                                                        bbox.rect->X.Max));
-                                                bbox.rect->Y.Max = std::max(
-                                                    0.0,
-                                                    std::min(
-                                                        (double)scene
-                                                            ->image_height[j],
-                                                        bbox.rect->Y.Max));
-                                            }
-
-                                            // Display bbox ID on frame if
-                                            // enabled
-                                            if (show_bbox_ids) {
-                                                // Position text above
-                                                // top-right corner of bbox
-                                                double text_x =
-                                                    bbox.rect->X.Max -
-                                                    10.0; // Offset to the
-                                                          // left
-                                                double text_y =
-                                                    bbox.rect->Y.Max -
-                                                    10.0; // Offset above
-                                                          // the box
-                                                ImPlot::PushStyleColor(
-                                                    ImPlotCol_InlayText,
-                                                    ImVec4(1.0f, 1.0f, 1.0f,
-                                                           1.0f));
-                                                ImPlot::PlotText(
-                                                    std::to_string(bbox.id)
-                                                        .c_str(),
-                                                    text_x, text_y);
-                                            }
-
-                                            if (bbox_clicked || bbox_held ||
-                                                bbox_modified) {
-                                                active_bbox_idx = bbox_idx;
-                                            }
-
-                                            bool is_active_bbox =
-                                                (bbox_idx == active_bbox_idx);
-
-                                            // Scale bbox keypoints if bbox
-                                            // was resized and this is the
-                                            // active bbox
-                                            if (bbox_modified &&
-                                                bbox.has_bbox_keypoints &&
-                                                bbox.bbox_keypoints2d &&
-                                                is_active_bbox) {
-                                                scale_bbox_keypoints(
-                                                    &bbox, scene, &skeleton,
-                                                    &prev_bbox_rect, bbox.rect);
-                                                bbox_prev_rects[bbox_key] =
-                                                    *bbox.rect; // Update
-                                                                // stored
-                                                                // previous
-                                                                // rect
-                                            }
-
-                                            // Update previous rect when not
-                                            // being dragged
-                                            if (!bbox_held) {
-                                                bbox_prev_rects[bbox_key] =
-                                                    *bbox.rect;
-                                            }
-
-                                            // Handle keyboard shortcuts
-                                            // when hovering over bounding
-                                            // box
-                                            if (bbox_hovered) {
-                                                // Update hovered bbox info
-                                                // for display
-                                                hovered_bbox_cam = j;
-                                                hovered_bbox_idx = bbox_idx;
-                                                hovered_bbox_confidence =
-                                                    bbox.confidence;
-                                                hovered_bbox_class =
-                                                    bbox.class_id;
-                                                hovered_bbox_id = bbox.id;
-
-                                                // Delete bounding box from
-                                                // current camera when 'T'
-                                                // key is pressed while
-                                                // hovering
-                                                if (ImGui::IsKeyPressed(
-                                                        ImGuiKey_F, false) &&
-                                                    !io.WantTextInput) {
-                                                    // Clean up bbox
-                                                    // keypoints before
-                                                    // deletion
-                                                    if (bbox.has_bbox_keypoints &&
-                                                        bbox.bbox_keypoints2d) {
-                                                        free(
-                                                            bbox.bbox_keypoints2d);
-                                                        bbox.bbox_keypoints2d =
-                                                            nullptr;
-                                                        free(bbox.active_kp_id);
-                                                        bbox.active_kp_id =
-                                                            nullptr;
-                                                    }
-                                                    // Mark for deletion by
-                                                    // setting state to
-                                                    // RectNull
-                                                    delete bbox.rect;
-                                                    bbox.rect = nullptr;
-                                                    bbox.state = RectNull;
-                                                    bbox.has_bbox_keypoints =
-                                                        false;
-                                                }
-
-                                                // Delete bounding box from
-                                                // all cameras when 'O' key
-                                                // is pressed while hovering
-                                                if (ImGui::IsKeyPressed(
-                                                        ImGuiKey_O, false) &&
-                                                    !io.WantTextInput) {
-                                                    // Find this bbox's
-                                                    // class_id and delete
-                                                    // all bboxes with same
-                                                    // class from all
-                                                    // cameras
-                                                    int target_class_id =
-                                                        bbox.class_id;
-                                                    for (int cam_idx = 0;
-                                                         cam_idx <
-                                                         scene->num_cams;
-                                                         cam_idx++) {
-                                                        auto &bbox_list =
-                                                            keypoints_map
-                                                                [current_frame_num]
-                                                                    ->bbox2d_list
-                                                                        [cam_idx];
-                                                        for (auto &other_bbox :
-                                                             bbox_list) {
-                                                            if (other_bbox
-                                                                        .class_id ==
-                                                                    target_class_id &&
-                                                                other_bbox
-                                                                        .state !=
-                                                                    RectNull &&
-                                                                other_bbox
-                                                                        .rect !=
-                                                                    nullptr) {
-                                                                // Clean up
-                                                                // bbox
-                                                                // keypoints
-                                                                // before
-                                                                // deletion
-                                                                if (other_bbox
-                                                                        .has_bbox_keypoints &&
-                                                                    other_bbox
-                                                                        .bbox_keypoints2d) {
-                                                                    free(
-                                                                        other_bbox
-                                                                            .bbox_keypoints2d);
-                                                                    other_bbox
-                                                                        .bbox_keypoints2d =
-                                                                        nullptr;
-                                                                    free(
-                                                                        other_bbox
-                                                                            .active_kp_id);
-                                                                    other_bbox
-                                                                        .active_kp_id =
-                                                                        nullptr;
-                                                                }
-                                                                delete other_bbox
-                                                                    .rect;
-                                                                other_bbox
-                                                                    .rect =
-                                                                    nullptr;
-                                                                other_bbox
-                                                                    .state =
-                                                                    RectNull;
-                                                                other_bbox
-                                                                    .has_bbox_keypoints =
-                                                                    false;
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        // Draw bounding boxes being created
-                                        // (one point set)
-                                        else if (bbox.state == RectOnePoint) {
-                                            // Draw a preview rectangle
-                                            // while dragging
-                                            double xs[5] = {bbox.rect->X.Min,
-                                                            bbox.rect->X.Max,
-                                                            bbox.rect->X.Max,
-                                                            bbox.rect->X.Min,
-                                                            bbox.rect->X.Min};
-                                            double ys[5] = {bbox.rect->Y.Max,
-                                                            bbox.rect->Y.Max,
-                                                            bbox.rect->Y.Min,
-                                                            bbox.rect->Y.Min,
-                                                            bbox.rect->Y.Max};
-                                            ImPlot::SetNextLineStyle(bbox_color,
-                                                                     2.0f);
-                                            ImPlot::PlotLine("##bbox_preview",
-                                                             xs, ys, 5);
-                                        }
-
-                                        // Plot keypoints within this
-                                        // bounding box (only if keypoints
-                                        // are enabled and skeleton has
-                                        // keypoints)
-                                        if (bbox.state == RectTwoPoints &&
-                                            keypoints_find &&
-                                            skeleton.has_skeleton &&
-                                            bbox.has_bbox_keypoints) {
-                                            bool is_saved = true;
-                                            // Only allow interaction with
-                                            // keypoints if this is the
-                                            // active bbox
-                                            gui_plot_bbox_keypoints(
-                                                &bbox, &skeleton, j,
-                                                scene->num_cams, is_active_bbox,
-                                                is_saved, bbox_idx);
-
-                                            // Handle keypoint labeling with
-                                            // W key for bounding box
-                                            // keypoints (only on active
-                                            // bbox)
-                                            if (is_active_bbox &&
-                                                ImGui::IsKeyPressed(ImGuiKey_W,
-                                                                    false) &&
-                                                !io.WantTextInput) {
-                                                ImPlotPoint mouse =
-                                                    ImPlot::GetPlotMousePos();
-                                                if (is_point_in_bbox(
-                                                        mouse.x, mouse.y,
-                                                        bbox.rect)) {
-                                                    u32 active_kp =
-                                                        bbox.active_kp_id[j];
-                                                    if (active_kp <
-                                                        skeleton.num_nodes) {
-                                                        bbox.bbox_keypoints2d
-                                                            [j][active_kp]
-                                                                .position = {
-                                                            mouse.x, mouse.y};
-                                                        bbox.bbox_keypoints2d
-                                                            [j][active_kp]
-                                                                .is_labeled =
-                                                            true;
-                                                        constrain_keypoint_to_bbox(
-                                                            &bbox.bbox_keypoints2d
-                                                                 [j][active_kp],
-                                                            bbox.rect);
-                                                        if (active_kp <
-                                                            (skeleton
-                                                                 .num_nodes -
-                                                             1)) {
-                                                            bbox.active_kp_id
-                                                                [j]++;
-                                                        }
-                                                    }
-                                                }
-                                            }
-
-                                            if (is_active_bbox) {
-                                                u32 *active_kp =
-                                                    &(bbox.active_kp_id[j]);
-
-                                                if (ImGui::IsKeyPressed(
-                                                        ImGuiKey_A, true) &&
-                                                    !io.WantTextInput) {
-                                                    if (*active_kp <= 0) {
-                                                        *active_kp = 0;
-                                                    } else {
-                                                        (*active_kp)--;
-                                                    }
-                                                }
-
-                                                if (ImGui::IsKeyPressed(
-                                                        ImGuiKey_D, true) &&
-                                                    !io.WantTextInput) {
-                                                    if (*active_kp >=
-                                                        skeleton.num_nodes -
-                                                            1) {
-                                                        *active_kp =
-                                                            skeleton.num_nodes -
-                                                            1;
-                                                    } else {
-                                                        (*active_kp)++;
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            // Plot oriented bounding boxes
-                            if (skeleton.has_obb) {
-                                bool keypoints_find =
-                                    keypoints_map.find(current_frame_num) !=
-                                    keypoints_map.end();
-                                if (!keypoints_find) {
-                                    KeyPoints *keypoints =
-                                        (KeyPoints *)malloc(sizeof(KeyPoints));
-                                    allocate_keypoints(keypoints, scene,
-                                                       &skeleton);
-                                    keypoints_map[current_frame_num] =
-                                        keypoints;
-                                }
-
-                                // ESC key cancels OBB creation
-                                if (is_view_focused[j] &&
-                                    ImGui::IsKeyPressed(ImGuiKey_Escape,
-                                                        false) &&
-                                    !io.WantTextInput) {
-                                    // Find and cancel any incomplete OBB
-                                    for (auto &obb :
-                                         keypoints_map[current_frame_num]
-                                             ->obb2d_list[j]) {
-                                        if (obb.state == OBBFirstAxisPoint ||
-                                            obb.state == OBBSecondAxisPoint) {
-                                            obb.state = OBBNull;
-                                            break;
-                                        }
-                                    }
-                                }
-
-                                // Handle OBB interaction with W key
-                                if (is_view_focused[j] &&
-                                    ImGui::IsKeyPressed(ImGuiKey_W, false) &&
-                                    !io.WantTextInput) {
-                                    ImPlotPoint mouse =
-                                        ImPlot::GetPlotMousePos();
-
-                                    // Find an OBB to continue or create a
-                                    // new one
-                                    bool found_incomplete_obb = false;
-                                    for (auto &obb :
-                                         keypoints_map[current_frame_num]
-                                             ->obb2d_list[j]) {
-                                        if (obb.state == OBBNull) {
-                                            // Start new OBB - place first
-                                            // axis point Clamp mouse
-                                            // coordinates to frame bounds
-                                            double clamped_x = std::max(
-                                                0.0,
-                                                std::min((double)scene
-                                                             ->image_width[j],
-                                                         (double)mouse.x));
-                                            double clamped_y = std::max(
-                                                0.0,
-                                                std::min((double)scene
-                                                             ->image_height[j],
-                                                         (double)mouse.y));
-                                            obb.axis_point1 =
-                                                ImVec2(clamped_x, clamped_y);
-                                            obb.state = OBBFirstAxisPoint;
-                                            obb.class_id =
-                                                current_bbox_class; // Use
-                                                                    // currently
-                                                                    // selected
-                                                                    // class
-                                            obb.confidence = 1.0f;
-                                            found_incomplete_obb = true;
-                                            break;
-                                        } else if (obb.state ==
-                                                   OBBFirstAxisPoint) {
-                                            // Place second axis point
-                                            // Clamp mouse coordinates to
-                                            // frame bounds
-                                            double clamped_x = std::max(
-                                                0.0,
-                                                std::min((double)scene
-                                                             ->image_width[j],
-                                                         (double)mouse.x));
-                                            double clamped_y = std::max(
-                                                0.0,
-                                                std::min((double)scene
-                                                             ->image_height[j],
-                                                         (double)mouse.y));
-                                            obb.axis_point2 =
-                                                ImVec2(clamped_x, clamped_y);
-                                            obb.state = OBBSecondAxisPoint;
-                                            found_incomplete_obb = true;
-                                            break;
-                                        } else if (obb.state ==
-                                                   OBBSecondAxisPoint) {
-                                            // Place corner point and
-                                            // complete the OBB Clamp mouse
-                                            // coordinates to frame bounds
-                                            double clamped_x = std::max(
-                                                0.0,
-                                                std::min((double)scene
-                                                             ->image_width[j],
-                                                         (double)mouse.x));
-                                            double clamped_y = std::max(
-                                                0.0,
-                                                std::min((double)scene
-                                                             ->image_height[j],
-                                                         (double)mouse.y));
-                                            obb.corner_point =
-                                                ImVec2(clamped_x, clamped_y);
-                                            obb.state = OBBThirdPoint;
-                                            calculate_obb_properties(&obb);
-                                            obb.state = OBBComplete;
-
-                                            // Clear the construction points
-                                            // after completion
-                                            obb.axis_point1 = ImVec2(0, 0);
-                                            obb.axis_point2 = ImVec2(0, 0);
-                                            obb.corner_point = ImVec2(0, 0);
-
-                                            // Auto-increment bbox ID after
-                                            // finishing drawing OBB
-                                            current_bbox_id++;
-
-                                            found_incomplete_obb = true;
-                                            break;
-                                        }
-                                    }
-
-                                    // If no incomplete OBB found, create a
-                                    // new one
-                                    if (!found_incomplete_obb) {
-                                        // Delete existing OBB with the same
-                                        // class_id and id
-                                        auto &obb_list =
-                                            keypoints_map[current_frame_num]
-                                                ->obb2d_list[j];
-                                        obb_list.erase(
-                                            std::remove_if(
-                                                obb_list.begin(),
-                                                obb_list.end(),
-                                                [current_bbox_class,
-                                                 current_bbox_id](
-                                                    const OrientedBoundingBox
-                                                        &obb) {
-                                                    return obb.class_id ==
-                                                               current_bbox_class &&
-                                                           obb.id ==
-                                                               current_bbox_id;
-                                                }),
-                                            obb_list.end());
-
-                                        OrientedBoundingBox new_obb;
-                                        // Clamp mouse coordinates to frame
-                                        // bounds for new OBB
-                                        double clamped_x = std::max(
-                                            0.0,
-                                            std::min(
-                                                (double)scene->image_width[j],
-                                                (double)mouse.x));
-                                        double clamped_y = std::max(
-                                            0.0,
-                                            std::min(
-                                                (double)scene->image_height[j],
-                                                (double)mouse.y));
-                                        new_obb.axis_point1 =
-                                            ImVec2(clamped_x, clamped_y);
-                                        new_obb.axis_point2 = ImVec2(0, 0);
-                                        new_obb.corner_point = ImVec2(0, 0);
-                                        new_obb.center = ImVec2(0, 0);
-                                        new_obb.width = 0;
-                                        new_obb.height = 0;
-                                        new_obb.rotation = 0;
-                                        new_obb.state = OBBFirstAxisPoint;
-                                        new_obb.class_id =
-                                            current_bbox_class; // Use
-                                                                // currently
-                                                                // selected
-                                                                // class
-                                        new_obb.id =
-                                            current_bbox_id; // Set OBB ID
-                                        new_obb.confidence = 1.0f;
-                                        keypoints_map[current_frame_num]
-                                            ->obb2d_list[j]
-                                            .push_back(new_obb);
-                                    }
-                                }
-
-                                // Handle OBB manipulation and interaction
-                                static bool obb_dragging = false;
-                                static size_t dragged_obb_idx = 0;
-
-                                // Handle OBB construction point dragging
-                                static bool obb_point_dragging = false;
-                                static size_t dragged_point_obb_idx = 0;
-                                static int dragged_point_type =
-                                    0; // 0 = axis_point1, 1 = axis_point2,
-                                       // 2 = corner_point
-
-                                // Handle construction point dragging
-                                if (is_view_focused[j] &&
-                                    ImPlot::IsPlotHovered()) {
-                                    ImPlotPoint mouse =
-                                        ImPlot::GetPlotMousePos();
-                                    ImVec2 mouse_vec = ImVec2(mouse.x, mouse.y);
-
-                                    // Start dragging construction points
-                                    if (ImGui::IsMouseClicked(
-                                            ImGuiMouseButton_Left) &&
-                                        !obb_point_dragging && !obb_dragging) {
-                                        for (size_t obb_idx = 0;
-                                             obb_idx <
-                                             keypoints_map[current_frame_num]
-                                                 ->obb2d_list[j]
-                                                 .size();
-                                             obb_idx++) {
-                                            auto &obb =
-                                                keypoints_map[current_frame_num]
-                                                    ->obb2d_list[j][obb_idx];
-
-                                            // Only allow dragging for
-                                            // incomplete OBBs
-                                            if (obb.state >=
-                                                    OBBFirstAxisPoint &&
-                                                obb.state < OBBComplete) {
-                                                // Check if clicking near
-                                                // axis_point1
-                                                if (obb.state >=
-                                                        OBBFirstAxisPoint &&
-                                                    is_point_near(
-                                                        mouse_vec,
-                                                        obb.axis_point1)) {
-                                                    obb_point_dragging = true;
-                                                    dragged_point_obb_idx =
-                                                        obb_idx;
-                                                    dragged_point_type = 0;
-                                                    break;
-                                                }
-                                                // Check if clicking near
-                                                // axis_point2
-                                                if (obb.state >=
-                                                        OBBSecondAxisPoint &&
-                                                    is_point_near(
-                                                        mouse_vec,
-                                                        obb.axis_point2)) {
-                                                    obb_point_dragging = true;
-                                                    dragged_point_obb_idx =
-                                                        obb_idx;
-                                                    dragged_point_type = 1;
-                                                    break;
-                                                }
-                                                // Check if clicking near
-                                                // corner_point
-                                                if (obb.state >=
-                                                        OBBThirdPoint &&
-                                                    is_point_near(
-                                                        mouse_vec,
-                                                        obb.corner_point)) {
-                                                    obb_point_dragging = true;
-                                                    dragged_point_obb_idx =
-                                                        obb_idx;
-                                                    dragged_point_type = 2;
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                    }
-
-                                    // Continue dragging
-                                    if (obb_point_dragging &&
-                                        ImGui::IsMouseDragging(
-                                            ImGuiMouseButton_Left)) {
-                                        auto &obb =
-                                            keypoints_map[current_frame_num]
-                                                ->obb2d_list
-                                                    [j][dragged_point_obb_idx];
-
-                                        // Clamp mouse coordinates to frame
-                                        // bounds
-                                        double clamped_x = std::max(
-                                            0.0,
-                                            std::min(
-                                                (double)scene->image_width[j],
-                                                (double)mouse_vec.x));
-                                        double clamped_y = std::max(
-                                            0.0,
-                                            std::min(
-                                                (double)scene->image_height[j],
-                                                (double)mouse_vec.y));
-                                        ImVec2 clamped_mouse =
-                                            ImVec2(clamped_x, clamped_y);
-
-                                        if (dragged_point_type == 0) {
-                                            obb.axis_point1 = clamped_mouse;
-                                        } else if (dragged_point_type == 1) {
-                                            obb.axis_point2 = clamped_mouse;
-                                        } else if (dragged_point_type == 2) {
-                                            obb.corner_point = clamped_mouse;
-                                            // Recalculate OBB properties if
-                                            // dragging corner point
-                                            if (obb.state == OBBThirdPoint) {
-                                                calculate_obb_properties(&obb);
-                                            }
-                                        }
-                                    }
-
-                                    // Stop dragging
-                                    if (obb_point_dragging &&
-                                        ImGui::IsMouseReleased(
-                                            ImGuiMouseButton_Left)) {
-                                        obb_point_dragging = false;
-                                    }
-                                }
-
-                                // Track which OBB is being hovered
-                                int current_hovered_obb = -1;
-
-                                // Check for hover when not dragging
-                                if (!obb_dragging && !obb_point_dragging &&
-                                    ImPlot::IsPlotHovered()) {
-                                    ImPlotPoint mouse =
-                                        ImPlot::GetPlotMousePos();
-
-                                    // Check if hovering over any OBB
-                                    for (size_t obb_idx = 0;
-                                         obb_idx <
-                                         keypoints_map[current_frame_num]
-                                             ->obb2d_list[j]
-                                             .size();
-                                         obb_idx++) {
-                                        auto &obb =
-                                            keypoints_map[current_frame_num]
-                                                ->obb2d_list[j][obb_idx];
-
-                                        // Check if mouse is inside the OBB
-                                        if (is_point_inside_obb(
-                                                ImVec2(mouse.x, mouse.y),
-                                                obb)) {
-                                            current_hovered_obb = obb_idx;
-                                            hovered_obb_cam = j;
-                                            hovered_obb_idx = obb_idx;
-                                            hovered_obb_class = obb.class_id;
-                                            hovered_obb_confidence =
-                                                obb.confidence;
-                                            hovered_obb_id = obb.id;
-
-                                            // Handle key presses for OBB
-                                            // manipulation (similar to
-                                            // bbox) Delete OBB from current
-                                            // camera when 'T' key is
-                                            // pressed while hovering
-                                            if (ImGui::IsKeyPressed(ImGuiKey_T,
-                                                                    false) &&
-                                                !io.WantTextInput) {
-                                                obb.state = OBBNull;
-                                            }
-
-                                            // Delete OBB from all cameras
-                                            // when 'F' key is pressed while
-                                            // hovering
-                                            if (ImGui::IsKeyPressed(ImGuiKey_F,
-                                                                    false) &&
-                                                !io.WantTextInput) {
-                                                int target_class_id =
-                                                    obb.class_id;
-                                                for (int cam = 0;
-                                                     cam < scene->num_cams;
-                                                     cam++) {
-                                                    if (keypoints_map.count(
-                                                            current_frame_num) >
-                                                        0) {
-                                                        auto &obb_list =
-                                                            keypoints_map
-                                                                [current_frame_num]
-                                                                    ->obb2d_list
-                                                                        [cam];
-                                                        for (auto &other_obb :
-                                                             obb_list) {
-                                                            if (other_obb
-                                                                    .class_id ==
-                                                                target_class_id) {
-                                                                other_obb
-                                                                    .state =
-                                                                    OBBNull;
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-
-                                            // Switch OBB class when 'A' or
-                                            // 'D' key is pressed while
-                                            // hovering
-                                            if (ImGui::IsKeyPressed(ImGuiKey_A,
-                                                                    true) &&
-                                                !io.WantTextInput) {
-                                                obb.class_id =
-                                                    (obb.class_id - 1 +
-                                                     bbox_class_names.size()) %
-                                                    bbox_class_names.size();
-                                            }
-                                            if (ImGui::IsKeyPressed(ImGuiKey_D,
-                                                                    true) &&
-                                                !io.WantTextInput) {
-                                                obb.class_id =
-                                                    (obb.class_id + 1) %
-                                                    bbox_class_names.size();
-                                            }
-
-                                            break;
-                                        }
-                                    }
-                                }
-
-                                // Draw all OBBs for this camera
-                                ImPlotPoint current_mouse =
-                                    ImPlot::GetPlotMousePos();
-                                // Clamp mouse coordinates for preview to
-                                // frame bounds
-                                double clamped_mouse_x = std::max(
-                                    0.0, std::min((double)scene->image_width[j],
-                                                  current_mouse.x));
-                                double clamped_mouse_y = std::max(
-                                    0.0,
-                                    std::min((double)scene->image_height[j],
-                                             current_mouse.y));
-                                ImVec2 clamped_preview_mouse =
-                                    ImVec2(clamped_mouse_x, clamped_mouse_y);
-                                for (size_t obb_idx = 0;
-                                     obb_idx < keypoints_map[current_frame_num]
-                                                   ->obb2d_list[j]
-                                                   .size();
-                                     obb_idx++) {
-                                    auto &obb = keypoints_map[current_frame_num]
-                                                    ->obb2d_list[j][obb_idx];
-
-                                    if (obb.state != OBBNull) {
-                                        // Get color based on class_id (same
-                                        // system as bboxes)
-                                        ImVec4 obb_color =
-                                            ImVec4(0.3f, 1.0f, 1.0f,
-                                                   1.0f); // Default color
-                                        if (obb.class_id >= 0 &&
-                                            obb.class_id <
-                                                bbox_class_colors.size()) {
-                                            obb_color =
-                                                bbox_class_colors[obb.class_id];
-                                        }
-
-                                        // Highlight when hovering,
-                                        // dragging, or during construction
-                                        bool is_active =
-                                            (obb_dragging &&
-                                             dragged_obb_idx == obb_idx) ||
-                                            (current_hovered_obb ==
-                                             (int)obb_idx) ||
-                                            (!obb_dragging &&
-                                             obb.state < OBBComplete);
-
-                                        // Show preview when we have at
-                                        // least one point and mouse is in
-                                        // plot area
-                                        bool show_preview =
-                                            ((obb.state == OBBFirstAxisPoint ||
-                                              obb.state ==
-                                                  OBBSecondAxisPoint) &&
-                                             ImPlot::IsPlotHovered() &&
-                                             !obb_dragging &&
-                                             !obb_point_dragging &&
-                                             current_hovered_obb == -1);
-
-                                        draw_obb(obb, is_active, obb_color,
-                                                 clamped_preview_mouse,
-                                                 show_preview);
-
-                                        // Display OBB ID on frame if
-                                        // enabled and OBB is complete
-                                        if (show_bbox_ids &&
-                                            obb.state == OBBComplete) {
-                                            // Position text above top-right
-                                            // corner of OBB
-                                            double text_x =
-                                                obb.center.x + obb.width / 2 +
-                                                5.0; // Right side of OBB
-                                            double text_y =
-                                                obb.center.y + obb.height / 2 +
-                                                5.0; // Above the OBB
-                                            ImPlot::PlotText(
-                                                std::to_string(obb.id).c_str(),
-                                                text_x, text_y);
-                                        }
-                                    }
-                                }
-                            }
-
-                            if (keypoints_find) {
-                                // Only plot keypoints if skeleton has
-                                // keypoints and we're not in bbox+keypoints
-                                // mode
-                                if (skeleton.has_skeleton &&
-                                    !skeleton.has_bbox) {
-                                    gui_plot_keypoints(
-                                        keypoints_map.at(current_frame_num),
-                                        &skeleton, j, scene->num_cams);
-                                }
-
-                                if (skeleton.name == "Rat4Box" ||
-                                    skeleton.name == "Rat4Box3Ball") {
-                                    gui_plot_bbox_from_keypoints(
-                                        keypoints_map.at(current_frame_num),
-                                        &skeleton, j, 4, 5);
-                                }
+                            if (keypoints_find && skeleton.has_skeleton) {
+                                gui_plot_keypoints(
+                                    keypoints_map.at(current_frame_num),
+                                    &skeleton, j, scene->num_cams);
                             }
                         }
                         ImPlot::EndPlot();
@@ -2969,43 +1639,6 @@ int main(int argc, char **argv) {
                 }
             }
 
-            // Bounding box class switching keybinds
-            if (ImGui::IsKeyPressed(ImGuiKey_Z, false) && !io.WantTextInput) {
-                // Switch to previous class
-                if (bbox_class_names.size() > 0) {
-                    current_bbox_class =
-                        (current_bbox_class - 1 + bbox_class_names.size()) %
-                        bbox_class_names.size();
-                    current_bbox_id = 0; // Reset bbox ID when switching classes
-                }
-            }
-
-            if (ImGui::IsKeyPressed(ImGuiKey_X, false) && !io.WantTextInput) {
-                if (bbox_class_names.size() > 0) {
-                    // Switch to next class
-                    current_bbox_class =
-                        (current_bbox_class + 1) % bbox_class_names.size();
-                    current_bbox_id = 0; // Reset bbox ID when switching classes
-                }
-            }
-
-            // Bounding box ID switching keybinds within current class
-            if (ImGui::IsKeyPressed(ImGuiKey_C, false) && !io.WantTextInput) {
-                // Decrease bbox ID, stop at 0
-                if (current_bbox_id > 0) {
-                    current_bbox_id--;
-                }
-            }
-
-            if (ImGui::IsKeyPressed(ImGuiKey_V, false) && !io.WantTextInput) {
-                // Increment bbox ID (no wrap around)
-                current_bbox_id++;
-            }
-            if (ImGui::IsKeyPressed(ImGuiKey_N, false) && !io.WantTextInput) {
-                create_new_bbox_class();
-                // reset bbox id to 0
-                current_bbox_id = 0;
-            }
 
             if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow, false) &&
                 !io.WantTextInput) {
@@ -3045,20 +1678,10 @@ int main(int argc, char **argv) {
         }
 
         if (pm.plot_keypoints_flag) {
-            DrawKeypointsWindow(
-                pm, scene, skeleton, keypoints_map, current_frame_num,
-                is_view_focused, bbox_class_names, current_bbox_class,
-                bbox_class_colors, current_bbox_id, hovered_bbox_cam,
-                hovered_bbox_idx, hovered_bbox_id, hovered_bbox_confidence,
-                hovered_bbox_class, hovered_obb_cam, hovered_obb_idx,
-                hovered_obb_id, hovered_obb_confidence, hovered_obb_class,
-                show_bbox_ids, new_class_name);
+            DrawKeypointsWindow(pm, scene, skeleton, keypoints_map,
+                                current_frame_num, is_view_focused);
         }
 
-        if (keypoints_find) {
-            DrawReprojectionWindow(keypoints_map[current_frame_num],
-                                   pm.camera_names, scene, skeleton, rp_tool);
-        }
 
         // Ctrl+S save: global so it works even when Labeling Tool tab
         // is hidden.  The flag is consumed by the save block inside
@@ -3140,37 +1763,22 @@ int main(int argc, char **argv) {
                     ImGui::Text("Last saved: %s", ctime(&last_saved));
                 }
 
-                static bool load_old_format = false;
                 if (ImGui::Button("Load Most Recent Labels")) {
                     free_all_keypoints(keypoints_map, scene);
                     std::string err;
-                    if (load_old_format) {
-                        if (load_keypoints_depreciated(keypoints_map, &skeleton,
-                                                       pm.keypoints_root_folder,
-                                                       scene, pm.camera_names,
-                                                       err)) {
+                    std::string most_recent_folder;
+                    if (find_most_recent_labels(pm.keypoints_root_folder,
+                                                most_recent_folder, err)) {
+                        popups.pushError(err);
+                    } else {
+                        if (load_keypoints(most_recent_folder,
+                                           keypoints_map, &skeleton, scene,
+                                           pm.camera_names, err)) {
                             free_all_keypoints(keypoints_map, scene);
                             popups.pushError(err);
                         }
-
-                    } else {
-                        std::string most_recent_folder;
-                        if (find_most_recent_labels(pm.keypoints_root_folder,
-                                                    most_recent_folder, err)) {
-                            popups.pushError(err);
-                        } else {
-                            if (load_keypoints(most_recent_folder,
-                                               keypoints_map, &skeleton, scene,
-                                               pm.camera_names, err,
-                                               bbox_class_names)) {
-                                free_all_keypoints(keypoints_map, scene);
-                                popups.pushError(err);
-                            }
-                        }
                     }
                 }
-                ImGui::SameLine();
-                ImGui::Checkbox("Old format", &load_old_format);
 
                 if (ImGui::Button("Load From Selected")) {
                     IGFD::FileDialogConfig config;
@@ -3295,241 +1903,6 @@ int main(int argc, char **argv) {
                 }
                 ImGui::Text("Total labeled frames : %zu", labeled_count);
 
-                // Only show YOLO button when current skeleton has bounding
-                // boxes
-                if (skeleton.has_bbox) {
-                    if (ImGui::Button("Select YOLO")) {
-                        IGFD::FileDialogConfig config;
-                        config.countSelectionMax = 1;
-                        config.path = yolo_model_dir;
-                        config.flags = ImGuiFileDialogFlags_Modal;
-                        ImGuiFileDialog::Instance()->OpenDialog(
-                            "ChooseYoloModel", "Choose YOLO Model",
-                            ".torchscript", config);
-                    }
-                }
-
-                if (ImGuiFileDialog::Instance()->Display("ChooseYoloModel", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
-                    if (ImGuiFileDialog::Instance()->IsOk()) {
-                        std::string model_path =
-                            ImGuiFileDialog::Instance()->GetFilePathName();
-                        if (!model_path.empty()) {
-                            yolo_model_path = model_path;
-                            std::cout
-                                << "Selected YOLO model: " << yolo_model_path
-                                << std::endl;
-                        }
-                    }
-                    // close
-                    ImGuiFileDialog::Instance()->Close();
-                }
-
-                // Show model path and run prediction button (only if model
-                // is selected)
-                if (!yolo_model_path.empty()) {
-                    ImGui::Text("Selected model: %s", yolo_model_path.c_str());
-
-                    // Automatic YOLO labeling checkbox
-                    ImGui::Checkbox("Automatic YOLO Labeling",
-                                    &auto_yolo_labeling);
-                    if (ImGui::IsItemHovered()) {
-                        ImGui::SetTooltip(
-                            "Automatically run YOLO detection on current "
-                            "and subsequent frames");
-                    }
-
-                    // YOLO parameter sliders
-                    ImGui::SliderFloat("Confidence Threshold",
-                                       &confidence_threshold, 0.01f, 0.99f,
-                                       "%.2f");
-                    if (ImGui::IsItemHovered()) {
-                        ImGui::SetTooltip(
-                            "Minimum confidence score for detections");
-                    }
-
-                    ImGui::SliderFloat("NMS IoU Threshold", &iou_threshold,
-                                       0.01f, 0.99f, "%.2f");
-                    if (ImGui::IsItemHovered()) {
-                        ImGui::SetTooltip(
-                            "Non-Maximum Suppression IoU threshold");
-                    }
-
-#ifndef __APPLE__
-                    if (ImGui::Button("Run YOLO Prediction")) {
-                        std::cout << "Running YOLO prediction on frame "
-                                  << ps.to_display_frame_number << std::endl;
-
-                        yolo_detection = true;
-
-                        // Clear existing bounding boxes for current frame
-                        // before running inference
-                        if (skeleton.has_bbox) {
-                            bool keypoints_find =
-                                keypoints_map.find(current_frame_num) !=
-                                keypoints_map.end();
-                            if (keypoints_find) {
-                                for (int cam_id = 0; cam_id < scene->num_cams;
-                                     cam_id++) {
-                                    auto &bbox_list =
-                                        keypoints_map[current_frame_num]
-                                            ->bbox2d_list[cam_id];
-                                    // Clear all bounding boxes for this
-                                    // camera
-                                    for (auto &bbox : bbox_list) {
-                                        if (bbox.rect) {
-                                            delete bbox.rect;
-                                            bbox.rect = nullptr;
-                                        }
-                                        if (bbox.has_bbox_keypoints &&
-                                            bbox.bbox_keypoints2d) {
-                                            free(bbox.bbox_keypoints2d);
-                                            bbox.bbox_keypoints2d = nullptr;
-                                            free(bbox.active_kp_id);
-                                            bbox.active_kp_id = nullptr;
-                                        }
-                                    }
-                                    bbox_list.clear();
-                                }
-                                std::cout << "Cleared existing bounding "
-                                             "boxes for frame "
-                                          << current_frame_num << std::endl;
-                            }
-                        }
-                        yolo_processed_frames.insert(current_frame_num);
-                        for (int cam_id = 0; cam_id < scene->num_cams;
-                             cam_id++) {
-                            if (ps.pause_seeked) {
-                                unsigned char *frame_data =
-                                    scene
-                                        ->display_buffer[cam_id]
-                                                        [select_corr_head]
-                                        .frame;
-
-                                if (frame_data) {
-                                    yolo_predictions[cam_id] = runYoloInference(
-                                        yolo_model_path, frame_data,
-                                        scene->image_width[cam_id],
-                                        scene->image_height[cam_id]);
-
-                                    yolo_bboxes[cam_id].clear();
-                                    for (const auto &pred :
-                                         yolo_predictions[cam_id]) {
-                                        yolo_bboxes[cam_id].emplace_back(pred);
-                                    }
-                                }
-                            } else {
-                                if (window_was_decoding
-                                        [pm.camera_names[cam_id]]) {
-                                    unsigned char *frame_data =
-                                        scene
-                                            ->display_buffer[cam_id]
-                                                            [select_corr_head]
-                                            .frame;
-
-                                    if (frame_data) {
-                                        yolo_predictions[cam_id] =
-                                            runYoloInference(
-                                                yolo_model_path, frame_data,
-                                                scene->image_width[cam_id],
-                                                scene->image_height[cam_id]);
-
-                                        yolo_bboxes[cam_id].clear();
-                                        for (const auto &pred :
-                                             yolo_predictions[cam_id]) {
-                                            yolo_bboxes[cam_id].emplace_back(
-                                                pred);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        if (!yolo_bboxes.empty() &&
-                            std::any_of(yolo_bboxes.begin(), yolo_bboxes.end(),
-                                        [](const auto &cam_bboxes) {
-                                            return !cam_bboxes.empty();
-                                        })) {
-                            // Convert YOLO detections to main bounding box
-                            // system
-                            for (int cam_id = 0; cam_id < scene->num_cams;
-                                 cam_id++) {
-                                if (!yolo_bboxes[cam_id].empty()) {
-                                    // Ensure keypoints structure exists
-                                    bool keypoints_find =
-                                        keypoints_map.find(current_frame_num) !=
-                                        keypoints_map.end();
-                                    if (!keypoints_find) {
-                                        KeyPoints *keypoints =
-                                            (KeyPoints *)malloc(
-                                                sizeof(KeyPoints));
-                                        allocate_keypoints(keypoints, scene,
-                                                           &skeleton);
-                                        keypoints_map[current_frame_num] =
-                                            keypoints;
-                                    }
-
-                                    // Add YOLO detections to main bounding
-                                    // box system
-                                    int yolo_bbox_id = 0;
-                                    for (const auto &yolo_bbox :
-                                         yolo_bboxes[cam_id]) {
-                                        if (yolo_bbox.is_valid) {
-                                            while (yolo_bbox.class_id >=
-                                                   (int)bbox_class_colors.size()) {
-                                                create_new_bbox_class();
-                                            }
-
-                                            BoundingBox bbox;
-
-                                            // Create ImPlotRect from YOLO
-                                            // coordinates (no Y-axis
-                                            // flipping)
-                                            bbox.rect = new ImPlotRect(
-                                                yolo_bbox.x_min, // X.Min
-                                                yolo_bbox.x_max, // X.Max
-                                                yolo_bbox.y_min, // Y.Min
-                                                yolo_bbox.y_max  // Y.Max
-                                            );
-
-                                            bbox.state = RectTwoPoints;
-                                            bbox.class_id = yolo_bbox.class_id;
-                                            bbox.id = yolo_bbox_id++;
-                                            bbox.confidence =
-                                                yolo_bbox.confidence;
-                                            bbox.has_bbox_keypoints = false;
-                                            bbox.bbox_keypoints2d = nullptr;
-                                            bbox.active_kp_id = nullptr;
-
-                                            // Allocate keypoints if
-                                            // skeleton supports both bbox
-                                            // and skeleton
-                                            if (skeleton.has_bbox &&
-                                                skeleton.has_skeleton &&
-                                                skeleton.num_nodes > 0) {
-                                                allocate_bbox_keypoints(
-                                                    &bbox, scene, &skeleton);
-                                            }
-
-                                            // Add to main bounding box
-                                            // system
-                                            keypoints_map[current_frame_num]
-                                                ->bbox2d_list[cam_id]
-                                                .push_back(bbox);
-                                        }
-                                    }
-
-                                    std::cout << "Added "
-                                              << yolo_bboxes[cam_id].size()
-                                              << " YOLO detections to main "
-                                                 "bounding "
-                                                 "box system for camera "
-                                              << cam_id << std::endl;
-                                }
-                            }
-                        }
-                    }
-#endif // !__APPLE__
-                }
             }
             ImGui::End();
 
@@ -3543,84 +1916,10 @@ int main(int argc, char **argv) {
 
             // Ctrl+S save: runs even when Labeling Tool tab is hidden
             if (save_requested) {
-                if (skeleton.has_skeleton && !skeleton.has_bbox) {
-                    save_keypoints(keypoints_map, &skeleton,
-                                   pm.keypoints_root_folder,
-                                   scene->num_cams, pm.camera_names,
-                                   &input_is_imgs, imgs_names);
-                    std::cout << "Saved skeleton keypoints data"
-                              << std::endl;
-                } else if (!skeleton.has_skeleton && skeleton.has_bbox) {
-                    save_bboxes(keypoints_map, &skeleton,
-                                pm.keypoints_root_folder, scene->num_cams,
-                                pm.camera_names, &input_is_imgs,
-                                imgs_names);
-                    std::cout << "Saved bounding boxes data" << std::endl;
-                } else if (skeleton.has_obb) {
-                    save_obb(keypoints_map, &skeleton,
-                             pm.keypoints_root_folder, pm.camera_names,
-                             scene->num_cams, &imgs_names, &input_is_imgs,
-                             bbox_class_names);
-                    std::cout << "Saved oriented bounding boxes data"
-                              << std::endl;
-                } else if (skeleton.has_skeleton && skeleton.has_bbox) {
-                    bool has_bbox_keypoints = false;
-                    for (const auto &[frame_num, keypoints] :
-                         keypoints_map) {
-                        if (!keypoints)
-                            continue;
-                        for (int cam_id = 0;
-                             cam_id < scene->num_cams &&
-                             cam_id < MAX_VIEWS && !has_bbox_keypoints;
-                             cam_id++) {
-                            for (const auto &bbox :
-                                 keypoints->bbox2d_list[cam_id]) {
-                                if (bbox.state == RectTwoPoints &&
-                                    bbox.has_bbox_keypoints) {
-                                    has_bbox_keypoints = true;
-                                    break;
-                                }
-                            }
-                        }
-                        if (has_bbox_keypoints)
-                            break;
-                    }
-
-                    if (has_bbox_keypoints) {
-                        save_keypoints(keypoints_map, &skeleton,
-                                       pm.keypoints_root_folder,
-                                       scene->num_cams, pm.camera_names,
-                                       &input_is_imgs, imgs_names);
-                        save_bbox_keypoints(
-                            keypoints_map, &skeleton,
-                            pm.keypoints_root_folder, scene->num_cams,
-                            pm.camera_names, &input_is_imgs, imgs_names);
-                        std::cout << "Saved skeleton keypoints and "
-                                     "bounding box "
-                                     "keypoints data"
-                                  << std::endl;
-                    } else {
-                        save_keypoints(keypoints_map, &skeleton,
-                                       pm.keypoints_root_folder,
-                                       scene->num_cams, pm.camera_names,
-                                       &input_is_imgs, imgs_names);
-                        save_bboxes(keypoints_map, &skeleton,
-                                    pm.keypoints_root_folder,
-                                    scene->num_cams, pm.camera_names,
-                                    &input_is_imgs, imgs_names);
-                        std::cout << "Saved skeleton keypoints and "
-                                     "bounding boxes data"
-                                  << std::endl;
-                    }
-                } else {
-                    save_keypoints(keypoints_map, &skeleton,
-                                   pm.keypoints_root_folder,
-                                   scene->num_cams, pm.camera_names,
-                                   &input_is_imgs, imgs_names);
-                    std::cout << "Saved skeleton keypoints data (fallback)"
-                              << std::endl;
-                }
-
+                save_keypoints(keypoints_map, &skeleton,
+                               pm.keypoints_root_folder,
+                               scene->num_cams, pm.camera_names,
+                               &input_is_imgs, imgs_names);
                 last_saved = time(NULL);
                 toasts.pushSuccess("Labels saved");
             }
@@ -3642,8 +1941,7 @@ int main(int argc, char **argv) {
                 free_all_keypoints(keypoints_map, scene);
                 std::string err;
                 if (load_keypoints(selected_folder, keypoints_map, &skeleton,
-                                   scene, pm.camera_names, err,
-                                   bbox_class_names)) {
+                                   scene, pm.camera_names, err)) {
                     free_all_keypoints(keypoints_map, scene);
                     popups.pushError(err);
                 }
@@ -3660,12 +1958,6 @@ int main(int argc, char **argv) {
 
         DrawHelpWindow(show_help_window);
 
-        DrawSkeletonCreatorWindow(skeleton_creator_state, skeleton_dir);
-
-        DrawLiveTable(table, "Spreadsheet", scene, dc_context->video_fps, ps,
-                      pm.project_path);
-
-        DrawYoloExportWindow(yolo_export_state, pm, skeleton_file_path, yolo_model_dir);
 
         DrawJarvisExportWindow(jarvis_export_state, pm, skeleton);
 
@@ -3758,7 +2050,6 @@ int main(int argc, char **argv) {
         }
     }
     // Cleanup
-    cleanup_yolo_drag_boxes(); // Clean up YOLO drag boxes memory
 #ifdef __APPLE__
     metal_cleanup();  // waits for GPU, shuts down ImGui Metal backend
 #else

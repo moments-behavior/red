@@ -34,8 +34,6 @@ if(APPLE)
     file(GLOB SRC_FILES src/*.cpp)
     list(REMOVE_ITEM SRC_FILES
         "${CMAKE_SOURCE_DIR}/src/NvDecoder.cpp"
-        "${CMAKE_SOURCE_DIR}/src/yolo_torch.cpp"
-        "${CMAKE_SOURCE_DIR}/src/yolo_export.cpp"
     )
 
     # Objective-C++ source files (.mm)

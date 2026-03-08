@@ -1105,15 +1105,10 @@ int load_keypoints(std::string keypoints_folder,
                    std::map<u32, KeyPoints *> &keypoints_map,
                    SkeletonContext *skeleton, RenderScene *scene,
                    std::vector<std::string> &camera_names,
-                   std::string &error_message,
-                   std::vector<std::string> &class_names) {
+                   std::string &error_message) {
 
-    // Intelligent loading based on skeleton configuration
-    bool has_skeleton = skeleton->has_skeleton;
-    bool has_bbox = skeleton->has_bbox;
-
-    // Load 3D keypoints if skeleton supports them and multi-camera setup
-    if (has_skeleton && scene->num_cams > 1) {
+    // Load 3D keypoints if multi-camera setup
+    if (skeleton->has_skeleton && scene->num_cams > 1) {
         std::string kp_3d = keypoints_folder + "/keypoints3d.csv";
         std::ifstream fin(kp_3d);
         if (!fin) {
@@ -1190,7 +1185,7 @@ int load_keypoints(std::string keypoints_folder,
         fin.close();
     }
 
-    // Load appropriate files based on skeleton configuration
+    // Load 2D keypoints per camera
     std::vector<std::thread> handles;
     std::vector<std::promise<int>> promises(scene->num_cams);
     std::vector<std::future<int>> results;
@@ -1199,84 +1194,18 @@ int load_keypoints(std::string keypoints_folder,
     for (int i = 0; i < scene->num_cams; i++) {
         results.push_back(promises[i].get_future());
 
-        // Determine which files to load based on skeleton configuration
-        if (has_skeleton && has_bbox) {
-            std::string bbox_kp_file = keypoints_folder + "/" +
-                                       camera_names[i] + "_bbox_keypoints.csv";
-            std::string kp2d_file =
-                keypoints_folder + "/" + camera_names[i] + ".csv";
+        std::string kp2d_file =
+            keypoints_folder + "/" + camera_names[i] + ".csv";
 
-            handles.emplace_back(
-                [&keypoints_map, skeleton, bbox_kp_file, kp2d_file, i, scene,
-                 &error_messages, &promises](int cam_idx) {
-                    int ret = load_bbox_keypoints(keypoints_map, skeleton,
-                                                  bbox_kp_file, i, scene,
-                                                  error_messages[i]);
-                    if (ret != 0) {
-                        // Fallback to regular 2D keypoints
-                        ret = load_2d_keypoints(keypoints_map, skeleton,
-                                                kp2d_file, i, scene,
-                                                error_messages[i]);
-                    }
-                    promises[cam_idx].set_value(ret);
-                },
-                i);
-        } else if (skeleton->has_obb) {
-            std::string obb_file =
-                keypoints_folder + "/" + camera_names[i] + "_obb.csv";
-
-            handles.emplace_back(
-                [&keypoints_map, skeleton, obb_file, i, scene, &error_messages,
-                 &promises, &class_names](int cam_idx) {
-                    int ret = load_obb(keypoints_map, skeleton, obb_file, i,
-                                       scene, error_messages[i], class_names);
-                    promises[cam_idx].set_value(ret);
-                },
-                i);
-        } else if (has_bbox && !has_skeleton) {
-            std::string bbox_kp_file = keypoints_folder + "/" +
-                                       camera_names[i] + "_bbox_keypoints.csv";
-            std::string bbox_file =
-                keypoints_folder + "/" + camera_names[i] + "_bboxes.csv";
-
-            handles.emplace_back(
-                [&keypoints_map, skeleton, bbox_kp_file, bbox_file, i, scene,
-                 &error_messages, &promises](int cam_idx) {
-                    // Try bbox keypoints first
-                    int ret = load_bbox_keypoints(keypoints_map, skeleton,
-                                                  bbox_kp_file, i, scene,
-                                                  error_messages[i]);
-                    if (ret != 0) {
-                        // Fallback to bbox only
-                        ret = load_bboxes(keypoints_map, skeleton, bbox_file, i,
-                                          scene, error_messages[i]);
-                    }
-                    promises[cam_idx].set_value(ret);
-                },
-                i);
-        } else if (has_skeleton && !has_bbox) {
-            std::string kp2d_file =
-                keypoints_folder + "/" + camera_names[i] + ".csv";
-
-            handles.emplace_back(
-                [&keypoints_map, skeleton, kp2d_file, i, scene, &error_messages,
-                 &promises](int cam_idx) {
-                    int ret =
-                        load_2d_keypoints(keypoints_map, skeleton, kp2d_file, i,
-                                          scene, error_messages[i]);
-                    promises[cam_idx].set_value(ret);
-                },
-                i);
-        } else {
-            handles.emplace_back(
-                [&error_messages, &promises](int cam_idx) {
-                    error_messages[cam_idx] =
-                        "Skeleton configuration has neither skeleton nor bbox "
-                        "support";
-                    promises[cam_idx].set_value(1);
-                },
-                i);
-        }
+        handles.emplace_back(
+            [&keypoints_map, skeleton, kp2d_file, i, scene, &error_messages,
+             &promises](int cam_idx) {
+                int ret =
+                    load_2d_keypoints(keypoints_map, skeleton, kp2d_file, i,
+                                      scene, error_messages[i]);
+                promises[cam_idx].set_value(ret);
+            },
+            i);
     }
 
     // Join threads
