@@ -7,112 +7,56 @@ See `UI_STYLE_GUIDE.md` for naming conventions, panel categories, and content pa
 
 ## Current State (updated 2026-03-07)
 
-- `src/red.cpp`: **3,779 LOC** (down from 6,450). Main loop + 4 inline windows.
-- `src/gui/`: **5,453 LOC** across 15 files. 10 windows extracted as state struct + draw function.
+- `src/red.cpp`: **1,818 LOC** (down from 3,779 after tool removal + extraction).
+- `src/gui/`: extracted GUI modules. 7 windows as state struct + draw function.
 - Infrastructure: DeferredQueue, drawPanel(), PopupStack, ToastQueue, ProjectHandlerRegistry
 - Architectural style: structs + free functions (no class hierarchies)
 - Algorithms (red_math.h, aruco_detect.h, calibration_pipeline.h) well-isolated
 - No circular dependencies
+- Unused tools removed: bbox, OBB, YOLO, skeleton creator, spreadsheet, reprojection
+  (documented in old_tools.md)
 
 ### What remains inline in red.cpp
 
-| Section | Lines | LOC | Priority |
-|---------|-------|-----|----------|
-| Camera viewport loop | 1423-2959 | **1,537** | High — largest section |
-| Labeling Tool window | 3076-3534 | **458** | High — straightforward extraction |
-| Navigator window | 593-883 | **291** | Medium — includes menu bar |
-| File dialog handlers | 909-1065 | **157** | Medium — 9 dialog blocks |
-| Frames in Buffer window | 1110-1156 | **47** | Low — small |
-| Laser detection viz | 1290-1420 | **130** | Low — macOS-only, tied to render |
-
-### Duplicated patterns in red.cpp
-
-| Pattern | Occurrences | Fix |
-|---------|-------------|-----|
-| "Ensure keypoints exist" (malloc + allocate + insert) | 7 | Helper function |
-| Coordinate clamping to frame bounds | ~30 | `clamp_to_frame()` helper |
-| Project load sequence (load_json + setup + on_project_loaded) | 3 | `load_project_from_path()` helper |
-| Static variables as hidden state (bbox drag, OBB state) | 15 | Move into state structs |
+| Section | ~LOC | Notes |
+|---------|------|-------|
+| Navigator window (menu bar + playback + display) | 279 | Tightly coupled to main() locals |
+| Camera viewport loop (upload + plot + labeling keys + transport) | 487 | Platform-specific, deep main loop integration |
+| File dialog handlers (9 dialogs) | 148 | Opened by Navigator, results modify main() locals |
+| Laser detection viz (macOS) | 132 | GPU dispatch, tied to render pipeline |
+| Frame buffer navigation | 86 | Small, self-contained |
+| Initialization + cleanup + playback sync | ~686 | Application skeleton |
 
 ---
 
-## Phase 1: Extract Remaining Windows _(in progress)_
+## Phase 1: Extract Remaining Windows _(complete)_
 
-**Goal:** Get red.cpp under 2,000 lines by extracting the 4 remaining inline windows.
-Same state-struct + draw-function pattern used by all 10 existing extracted windows.
+**Result:** red.cpp dropped from 3,779 to **1,818 lines**.
 
-### 1a. Camera Viewport — `gui/camera_viewport.h` _(highest impact)_
+### What was done
 
-The 1,537-line camera loop contains 5 distinct concerns that can be separated:
+1. **Tool removal** — Deleted 11 files (~5,600 LOC) of unused tools: bbox labeling,
+   OBB labeling, YOLO inference/export, skeleton creator, spreadsheet, reprojection.
+   Documented in `old_tools.md`.
 
-| New function | What it does | ~LOC |
-|-------------|-------------|------|
-| `UploadCameraTexture()` | Platform-specific texture upload (Metal/CUDA/PBO) | 150 |
-| `HandleKeypointInteraction()` | W/A/D/E/Q key labeling, keypoint creation | 90 |
-| `HandleBboxInteraction()` | Shift-drag creation, MyDragRect, deletion, bbox keypoints | 600 |
-| `HandleObbInteraction()` | 3-point OBB construction, drag, deletion | 490 |
-| `DrawTransportControls()` | Rewind/step/play/pause/FF buttons, frame slider | 110 |
+2. **Skeleton/save simplification** — Removed BoundingBox, OrientedBoundingBox, RectState,
+   OBBState structs. Simplified allocate/free/copy_keypoints, load_keypoints, save logic.
+   skeleton.h: 161→81, skeleton.cpp: 899→405, gui_save_load.h: 1301→352,
+   keypoints_table.h: 508→127.
 
-**State to bundle:**
-```cpp
-struct BboxInteractionState {
-    std::vector<std::string> class_names = {"Class_1"};
-    std::vector<ImVec4> class_colors;
-    int current_class = 0;
-    int current_id = 0;
-    bool show_ids = false;
-    int hovered_cam = -1, hovered_idx = -1;
-    float hovered_confidence = 0.0f;
-    int hovered_class = -1, hovered_id = -1;
-};
+3. **Labeling Tool extraction** — `gui/labeling_tool_window.h` with LabelingToolState +
+   DrawLabelingToolWindow(). Includes file dialog handlers for keypoints folder and
+   load-from-selected.
 
-struct ObbInteractionState {
-    int hovered_cam = -1, hovered_idx = -1;
-    float hovered_confidence = 0.0f;
-    int hovered_class = -1, hovered_id = -1;
-    // Move the 6 static variables (lines 2521-2527) here
-};
-```
+### What was NOT extracted (and why)
 
-The per-camera loop stays in red.cpp but becomes ~50 lines calling these functions.
-
-### 1b. Labeling Tool — `gui/labeling_tool_window.h`
-
-458 lines following the standard extraction pattern:
-```cpp
-struct LabelingToolState { bool show = true; /* ... */ };
-inline void DrawLabelingToolWindow(LabelingToolState &state, ...);
-```
-
-Contains: save/load label buttons, frame navigation, YOLO model selection,
-YOLO inference trigger, label statistics.
-
-### 1c. Navigator — `gui/navigator_window.h`
-
-291 lines. The menu bar + playback controls + display controls.
-```cpp
-struct NavigatorState { /* brightness, contrast, playback settings */ };
-inline void DrawNavigatorWindow(NavigatorState &state, ...);
-```
-
-### 1d. Helper functions — `src/app_helpers.h`
-
-Eliminate duplicated patterns:
-```cpp
-// Ensure keypoints exist for current frame (replaces 7 copies)
-inline KeyPoints *ensure_keypoints(std::map<u32, KeyPoints *> &map,
-                                   int frame, RenderScene *scene,
-                                   SkeletonContext *skeleton);
-
-// Clamp point to camera frame bounds (replaces ~30 copies)
-inline ImVec2 clamp_to_frame(double x, double y, int width, int height);
-
-// Load a .redproj and run on_project_loaded (replaces 3 copies)
-inline void load_project_from_path(const std::filesystem::path &path,
-                                   ProjectManager &pm, ...);
-```
-
-**Target:** red.cpp drops from 3,779 to ~1,500-2,000 lines after Phase 1.
+- **Navigator** — Tightly coupled to main() locals (pm, ps, scene, dc_context,
+  calib_state, annot_state, user_settings). Extraction would require a massive
+  parameter list or context struct (see Phase 2a) without reducing complexity.
+- **Camera viewport** — Platform-specific frame upload intertwined with ImPlot
+  context and labeling keys. Better to extract after AppContext (Phase 2a).
+- **File dialogs** — Opened by Navigator menu, results modify main() locals.
+  Will naturally move when Navigator is extracted.
 
 ---
 
@@ -185,14 +129,14 @@ Adding a new window = one .h file + one `panels.add()` call. No editing menus or
 
 ## Phase 3: State Bundling
 
-**Goal:** Reduce the ~60 loose variables in main() to a handful of state structs.
+**Goal:** Reduce the remaining loose variables in main() to a handful of state structs.
+
+After tool removal, main() has ~25 local variables (down from ~60).
+The biggest remaining candidates:
 
 | Struct | Variables absorbed | ~Count |
 |--------|-------------------|--------|
-| `BboxInteractionState` | class_names, colors, current_class/id, hovered_bbox_* | 15 |
-| `ObbInteractionState` | hovered_obb_*, drag statics | 10 |
 | `DisplayState` | brightness, contrast, pivot_midgray | 3 |
-| `YoloState` | detection, model_path, auto_labeling, processed_frames, thresholds | 10 |
 | `AppLayout` | project_ini_path, main_loop_running, switch_ini lambda | 5 |
 
 Each struct is defined near where it's used (in the relevant gui/ header).
@@ -285,3 +229,7 @@ These are new features, not refactoring. Each requires its own design work.
 | 2026-03-07 | Converted 5 windows to use drawPanel() (Help, JARVIS, YOLO, Skeleton, Annotation) |
 | 2026-03-07 | Added toast notification on Ctrl+S save |
 | 2026-03-07 | Updated this plan to reflect current state and revised architecture |
+| 2026-03-07 | Removed 11 unused tool files (~5,600 LOC): bbox, OBB, YOLO, skeleton creator, spreadsheet, reprojection |
+| 2026-03-07 | Simplified skeleton.h/cpp (removed BoundingBox, OBB structs), gui_save_load.h, keypoints_table.h |
+| 2026-03-07 | Extracted Labeling Tool → gui/labeling_tool_window.h |
+| 2026-03-07 | red.cpp: 3,779 → 1,818 LOC. Phase 1 complete. |

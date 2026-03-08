@@ -62,14 +62,10 @@ Every UI surface in RED falls into one of these categories:
 | **Navigator** | Anchor | Menu bar, project info, playback controls, buffer settings |
 | **Calibration** | Workspace | Calibration pipeline controls (ChArUco detect, intrinsics, BA) |
 | **Labeling Tool** | Workspace | Keypoint annotation, triangulation, save controls |
-| **Keypoints** | Workspace | Keypoint list, bounding box classes, color assignment |
+| **Keypoints** | Workspace | Per-camera keypoint status table |
 | **Frames in the buffer** | Workspace | Frame buffer browser, frame selection |
 | **Help Menu** | Workspace | Keyboard shortcuts reference |
 | **JARVIS Export Tool** | Tool window | JARVIS/COCO format export |
-| **YOLO Export Tool** | Tool window | YOLO format export |
-| **Skeleton Creator** | Tool window | Interactive skeleton graph editor |
-| **Spreadsheet** | Tool window | CSV/TSV data viewer |
-| **Reprojection** | Tool window | Reprojection error visualization |
 
 ### Planned
 
@@ -152,7 +148,7 @@ The Navigator's menu bar is the primary entry point for all actions:
 | **File** | Open Video(s), Open Images, Create Project, Load Project |
 | **Annotate** | Create Annotation Project, Load Annotation Project |
 | **Calibrate** | Create Calibration Project, Load Calibration Project |
-| **Tools** | Skeleton Creator, YOLO Export, JARVIS Export, Spreadsheet, Reprojection |
+| **Tools** | JARVIS Export |
 | **Settings** | Default Project Root, Default Media Root, Reset Layout |
 
 ### Rules
