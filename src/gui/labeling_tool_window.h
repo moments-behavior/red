@@ -260,6 +260,12 @@ inline void DrawLabelingToolWindow(
         state.save_requested = true;
     }
 
+    // Toolbar Save button (from main menu bar)
+    if (ctx.save_requested) {
+        state.save_requested = true;
+        ctx.save_requested = false;
+    }
+
     if (state.save_requested) {
         save_keypoints(keypoints_map, &skeleton,
                        pm.keypoints_root_folder,

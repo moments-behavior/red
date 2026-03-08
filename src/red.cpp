@@ -13,7 +13,8 @@
 #include "gui/labeling_tool_window.h"
 #include "gui/project_window.h"
 #include "gui/settings_window.h"
-#include "gui/navigator_dialogs.h"
+#include "gui/main_menu_dialogs.h"
+#include "gui/main_menu_bar.h"
 #include "gui/panel_registry.h"
 #include "gui/popup_stack.h"
 #include "gui/toast.h"
@@ -229,6 +230,7 @@ int main(int argc, char **argv) {
 
     // gui states, todo: bundle this later
     LabelingToolState labeling_state;
+    bool save_requested = false;
     bool cpu_buffer_toggle = true;
     int current_frame_num = 0;
     int previous_frame_num = -1;
@@ -319,7 +321,7 @@ int main(int argc, char **argv) {
         imgs_names, demuxers, decoder_threads,
         is_view_focused, window_was_decoding,
         input_is_imgs, label_buffer_size,
-        display, window, project_ini_path, main_loop_running
+        display, window, save_requested, project_ini_path, main_loop_running
 #ifdef __APPLE__
         , mac_last_uploaded_frame
 #endif
@@ -478,6 +480,11 @@ int main(int argc, char **argv) {
         // freeing Metal textures that ImGui draw commands still reference).
         deferred.flush();
 
+        // App-level main menu bar (always visible)
+        DrawMainMenuBar(ctx, calib_state, annot_state, settings_state,
+                        jarvis_export_state, show_help_window);
+        ImGui::DockSpaceOverViewport(0x00000001);
+
         // --- Update playback time ---
         auto now = std::chrono::steady_clock::now();
 
@@ -490,101 +497,7 @@ int main(int argc, char **argv) {
         }
         double playback_time_now = ps.accumulated_play_time;
 
-        if (ImGui::Begin("Navigator", NULL, ImGuiWindowFlags_MenuBar)) {
-            if (ImGui::BeginMenuBar()) {
-                if (ImGui::BeginMenu("File")) {
-                    ImGui::BeginDisabled(ps.video_loaded);
-                    if (ImGui::MenuItem("Open Video(s)")) {
-                        IGFD::FileDialogConfig config;
-                        config.countSelectionMax = 0;
-                        config.path = pm.media_folder;
-                        config.flags = ImGuiFileDialogFlags_Modal;
-                        ImGuiFileDialog::Instance()->OpenDialog(
-                            "ChooseMedia", "Choose Media", ".mp4", config);
-                    }
-                    if (ImGui::MenuItem("Open Images")) {
-                        IGFD::FileDialogConfig config;
-                        config.countSelectionMax = 0;
-                        config.path = pm.media_folder;
-                        config.flags = ImGuiFileDialogFlags_Modal;
-                        ImGuiFileDialog::Instance()->OpenDialog(
-                            "ChooseImages", "Choose Images",
-                            ".jpg,.tiff,.jpeg,.png", config);
-                    }
-                    ImGui::EndDisabled();
-                    ImGui::BeginDisabled(!ps.video_loaded);
-                    if (ImGui::MenuItem("Create Project")) {
-                        pm.show_project_window = true;
-                    }
-                    ImGui::EndDisabled();
-                    ImGui::BeginDisabled(ps.video_loaded);
-                    if (ImGui::MenuItem("Load Project")) {
-                        IGFD::FileDialogConfig config;
-                        config.countSelectionMax = 1;
-                        config.path = pm.project_root_path;
-                        config.flags = ImGuiFileDialogFlags_Modal;
-                        ImGuiFileDialog::Instance()->OpenDialog(
-                            "ChooseProject", "Choose Project File", ".redproj",
-                            config);
-                    }
-                    ImGui::EndDisabled();
-                    ImGui::EndMenu();
-                }
-
-                if (ImGui::BeginMenu("Annotate")) {
-                    ImGui::BeginDisabled(ps.video_loaded);
-                    if (ImGui::MenuItem("Create Annotation Project")) {
-                        annot_state.show = true;
-                        annot_state.discovered_cameras.clear();
-                        annot_state.camera_selected.clear();
-                        annot_state.status.clear();
-                    }
-                    if (ImGui::MenuItem("Load Annotation Project")) {
-                        IGFD::FileDialogConfig cfg;
-                        cfg.countSelectionMax = 1;
-                        cfg.path = pm.project_root_path;
-                        cfg.flags = ImGuiFileDialogFlags_Modal;
-                        ImGuiFileDialog::Instance()->OpenDialog(
-                            "LoadAnnotProject", "Load Annotation Project",
-                            "Red Project{.redproj}", cfg);
-                    }
-                    ImGui::EndDisabled();
-                    ImGui::EndMenu();
-                }
-
-                if (ImGui::BeginMenu("Calibrate")) {
-                    if (ImGui::MenuItem("Create Calibration Project")) {
-                        calib_state.show = true;
-                        calib_state.show_create_dialog = true;
-                    }
-                    if (ImGui::MenuItem("Load Calibration Project")) {
-                        IGFD::FileDialogConfig cfg;
-                        cfg.countSelectionMax = 1;
-                        cfg.path =
-                            user_settings.default_project_root_path.empty()
-                                ? red_data_dir
-                                : user_settings.default_project_root_path;
-                        cfg.flags = ImGuiFileDialogFlags_Modal;
-                        ImGuiFileDialog::Instance()->OpenDialog(
-                            "LoadCalibProject", "Load Calibration Project",
-                            "Red Project{.redproj}", cfg);
-                    }
-                    ImGui::EndMenu();
-                }
-
-                if (ImGui::BeginMenu("Tools")) {
-                    if (ImGui::MenuItem("JARVIS Export Tool")) {
-                        jarvis_export_state.show = true;
-                    }
-                    ImGui::EndMenu();
-                }
-
-                if (ImGui::MenuItem("Settings...")) {
-                    settings_state.show = true;
-                }
-
-                ImGui::EndMenuBar();
-            }
+        if (ImGui::Begin("Controls")) {
             if (!ps.video_loaded) {
 #ifndef __APPLE__
                 {
@@ -598,11 +511,8 @@ int main(int argc, char **argv) {
             }
 
             if (ps.video_loaded) {
-                ImGui::InputInt("Seek Step", &dc_context->seek_interval, 10,
-                                100);
                 static int seek_accurate_frame_num = 0;
-                ImGui::InputInt("Seek Accurate", &seek_accurate_frame_num, 1,
-                                100);
+                ImGui::InputInt("Seek Accurate", &seek_accurate_frame_num, 0, 0);
                 if (ImGui::IsItemDeactivatedAfterEdit()) {
                     seek_all_cameras(scene, seek_accurate_frame_num,
                                      dc_context->video_fps, ps, true);
@@ -671,6 +581,14 @@ int main(int argc, char **argv) {
                     ImGui::TextUnformatted("Current Speed");
                     ImGui::TableSetColumnIndex(1);
                     ImGui::Text("%.2fx", ps.inst_speed);
+
+                    // Row: Render FPS (app framerate)
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0);
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::TextUnformatted("Render FPS");
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::Text("%.0f", ImGui::GetIO().Framerate);
 
                     ImGui::EndTable();
                 }
@@ -748,9 +666,9 @@ int main(int argc, char **argv) {
         // Draw all registered panels
         panels.drawAll();
 
-        // Handle Navigator file dialogs
-        HandleNavigatorDialogs(ctx, calib_state, annot_state,
-                               media_root_dir, print_metadata, print_summary);
+        // Handle main menu file dialogs
+        HandleMainMenuDialogs(ctx, calib_state, annot_state,
+                              media_root_dir, print_metadata, print_summary);
 
         static int select_corr_head = 0;
         if (ps.video_loaded && (!ps.play_video)) {
@@ -1499,16 +1417,8 @@ int main(int argc, char **argv) {
         glfwSwapBuffers(window->render_target);
 #endif
 
-        // Update window title with project name + FPS
-        {
-            char title[128];
-            if (pm.project_name.empty())
-                snprintf(title, sizeof(title), "Red — %.0f fps", ImGui::GetIO().Framerate);
-            else
-                snprintf(title, sizeof(title), "Red — %s | %.0f fps",
-                         pm.project_name.c_str(), ImGui::GetIO().Framerate);
-            glfwSetWindowTitle(window->render_target, title);
-        }
+        // Window title — project name and FPS are now in menu bar / Controls panel
+        glfwSetWindowTitle(window->render_target, "Red");
 
         if (ps.just_seeked) {
             ps.just_seeked = false;

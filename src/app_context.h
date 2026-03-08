@@ -62,6 +62,9 @@ struct AppContext {
     // Layout
     gx_context *window;
 
+    // Save trigger (set by toolbar Save button, consumed by labeling tool)
+    bool &save_requested;
+
     // Per-project ini path (lives in main, referenced here)
     std::string &project_ini_path;
     bool &main_loop_running;
@@ -92,6 +95,24 @@ inline void copy_default_layout_to_project(const AppContext &ctx, const std::str
     }
 }
 
+// Migrate a single window header in an ini string. Returns true if content was modified.
+inline bool migrate_ini_section(std::string &content,
+                                const std::string &old_header,
+                                const std::string &new_header) {
+    size_t old_pos = content.find(old_header);
+    if (old_pos == std::string::npos) return false;
+    size_t section_end = content.find("\n[", old_pos + 1);
+    if (section_end == std::string::npos)
+        section_end = content.size();
+    else
+        section_end += 1;
+    if (content.find(new_header) != std::string::npos)
+        content.erase(old_pos, section_end - old_pos);
+    else
+        content.replace(old_pos, old_header.size(), new_header);
+    return true;
+}
+
 // Migrate renamed windows in project ini files so saved dock settings carry over.
 inline void migrate_ini_window_names(const std::string &ini_path) {
     if (!std::filesystem::exists(ini_path)) return;
@@ -100,24 +121,18 @@ inline void migrate_ini_window_names(const std::string &ini_path) {
                         std::istreambuf_iterator<char>());
     in.close();
 
-    const std::string old_header = "[Window][File Browser]";
-    const std::string new_header = "[Window][Navigator]";
-    size_t old_pos = content.find(old_header);
-    if (old_pos == std::string::npos) return;
+    bool changed = false;
+    // v1 → v2: File Browser → Navigator (then Navigator → Controls below)
+    changed |= migrate_ini_section(content,
+        "[Window][File Browser]", "[Window][Navigator]");
+    // v2 → v3: Navigator → Controls
+    changed |= migrate_ini_section(content,
+        "[Window][Navigator]", "[Window][Controls]");
 
-    size_t section_end = content.find("\n[", old_pos + 1);
-    if (section_end == std::string::npos)
-        section_end = content.size();
-    else
-        section_end += 1;
-
-    if (content.find(new_header) != std::string::npos) {
-        content.erase(old_pos, section_end - old_pos);
-    } else {
-        content.replace(old_pos, old_header.size(), new_header);
+    if (changed) {
+        std::ofstream out(ini_path);
+        out << content;
     }
-    std::ofstream out(ini_path);
-    out << content;
 }
 
 // Switch ImGui layout ini to the project folder.

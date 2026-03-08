@@ -5,9 +5,9 @@
 #include <ImGuiFileDialog.h>
 #include <filesystem>
 
-// Handle all Navigator-originated file dialogs. Called once per frame.
+// Handle all main-menu-originated file dialogs. Called once per frame.
 // Extra state refs that aren't in AppContext are passed explicitly.
-inline void HandleNavigatorDialogs(
+inline void HandleMainMenuDialogs(
     AppContext &ctx,
     CalibrationToolState &calib_state,
     AnnotationDialogState &annot_state,
