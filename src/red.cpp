@@ -511,10 +511,16 @@ int main(int argc, char **argv) {
             }
 
             if (ps.video_loaded) {
-                static int seek_accurate_frame_num = 0;
-                ImGui::InputInt("Seek Accurate", &seek_accurate_frame_num, 0, 0);
+                // Edit buffer isolates current_frame_num from partial typing.
+                // Syncs from current_frame_num each frame unless user is actively editing.
+                static int frame_edit_buf = 0;
+                static bool was_editing = false;
+                if (!was_editing)
+                    frame_edit_buf = current_frame_num;
+                ImGui::InputInt("Current Frame", &frame_edit_buf, 0, 0);
+                was_editing = ImGui::IsItemActive();
                 if (ImGui::IsItemDeactivatedAfterEdit()) {
-                    seek_all_cameras(scene, seek_accurate_frame_num,
+                    seek_all_cameras(scene, frame_edit_buf,
                                      dc_context->video_fps, ps, true);
                 }
 
