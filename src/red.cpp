@@ -585,10 +585,6 @@ int main(int argc, char **argv) {
 
                 ImGui::EndMenuBar();
             }
-            ImGui::Text("Application average %.3f ms/frame (%.1f FPS)",
-                        1000.0f / ImGui::GetIO().Framerate,
-                        ImGui::GetIO().Framerate);
-
             if (!ps.video_loaded) {
 #ifndef __APPLE__
                 {
@@ -1502,6 +1498,17 @@ int main(int argc, char **argv) {
 
         glfwSwapBuffers(window->render_target);
 #endif
+
+        // Update window title with project name + FPS
+        {
+            char title[128];
+            if (pm.project_name.empty())
+                snprintf(title, sizeof(title), "Red — %.0f fps", ImGui::GetIO().Framerate);
+            else
+                snprintf(title, sizeof(title), "Red — %s | %.0f fps",
+                         pm.project_name.c_str(), ImGui::GetIO().Framerate);
+            glfwSetWindowTitle(window->render_target, title);
+        }
 
         if (ps.just_seeked) {
             ps.just_seeked = false;
