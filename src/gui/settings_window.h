@@ -75,8 +75,12 @@ inline void DrawSettingsWindow(SettingsState &state, AppContext &ctx) {
                 playback_changed = true;
             if (ImGui::Checkbox("Realtime Playback", &s.default_realtime_playback))
                 playback_changed = true;
+            ImGui::BeginDisabled(ctx.ps.video_loaded);
             if (ImGui::InputInt("Buffer Size", &s.default_buffer_size))
                 playback_changed = true;
+            ImGui::EndDisabled();
+            if (ctx.ps.video_loaded)
+                ImGui::SameLine(), ImGui::TextDisabled("(locked while video loaded)");
             // Seek interval is auto-detected per-video from keyframe spacing
             // (shown as "Seek Step" in Navigator for runtime adjustment).
         }
@@ -116,8 +120,8 @@ inline void DrawSettingsWindow(SettingsState &state, AppContext &ctx) {
         if (playback_changed) {
             ctx.ps.set_playback_speed = s.default_playback_speed;
             ctx.ps.realtime_playback = s.default_realtime_playback;
-            // NOTE: seek_interval is NOT propagated here — it's auto-detected
-            // per-video from the actual keyframe interval (media_loader.h).
+            if (!ctx.ps.video_loaded)
+                ctx.label_buffer_size = s.default_buffer_size;
         }
         },
         [&]() {

@@ -602,7 +602,9 @@ int main(int argc, char **argv) {
                     }
                 }
 
-                ImGui::InputInt("Buffer Size", &label_buffer_size);
+                ImGui::Text("Buffer Size: %d", label_buffer_size);
+                ImGui::SameLine();
+                ImGui::TextDisabled("(Settings)");
             }
 
             if (ps.video_loaded) {
