@@ -1,11 +1,8 @@
 #pragma once
-#include <imgui.h>
+#include "gui/panel.h"
 
 inline void DrawHelpWindow(bool &show) {
-    if (!show)
-        return;
-
-    if (ImGui::Begin("Help Menu")) {
+    drawPanel("Help Menu", show, []() {
         ImGui::SeparatorText("General");
         ImGui::Text("<h>: toggle this help menu");
         ImGui::Text("<Space>: toggle play and pause");
@@ -44,6 +41,5 @@ inline void DrawHelpWindow(bool &show) {
         ImGui::Text("<n>: create new bbox class");
         ImGui::Text("<c>: bbox id--");
         ImGui::Text("<v>: bbox id++");
-    }
-    ImGui::End();
+    });
 }

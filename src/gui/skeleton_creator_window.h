@@ -1,6 +1,7 @@
 #pragma once
 #include "imgui.h"
 #include "implot.h"
+#include "gui/panel.h"
 #include "skeleton.h"
 #include "json.hpp"
 #include <ImGuiFileDialog.h>
@@ -39,154 +40,8 @@ struct SkeletonCreatorState {
 
 inline void DrawSkeletonCreatorWindow(SkeletonCreatorState &state,
                                       const std::string &skeleton_dir) {
-    // Always process file dialogs (even when window is hidden)
-
-    // Handle background image selection
-    if (ImGuiFileDialog::Instance()->Display("ChooseBackgroundImage", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
-        if (ImGuiFileDialog::Instance()->IsOk()) {
-            auto file_selection =
-                ImGuiFileDialog::Instance()->GetSelection();
-            if (!file_selection.empty()) {
-                state.background_image_path = file_selection.begin()->second;
-                state.background_image_selected = true;
-
-                // Load the background image texture
-#ifndef __APPLE__
-                if (state.background_texture != 0) {
-                    glDeleteTextures(1, &state.background_texture);
-                    state.background_texture = 0;
-                }
-
-                // Load image using stb_image
-                int channels;
-                unsigned char *image_data = stbi_load(
-                    state.background_image_path.c_str(), &state.background_width,
-                    &state.background_height, &channels, 0);
-                if (image_data) {
-                    glGenTextures(1, &state.background_texture);
-                    glBindTexture(GL_TEXTURE_2D, state.background_texture);
-
-                    GLenum format = GL_RGB;
-                    if (channels == 4)
-                        format = GL_RGBA;
-                    else if (channels == 1)
-                        format = GL_RED;
-
-                    glTexImage2D(GL_TEXTURE_2D, 0, format, state.background_width,
-                                 state.background_height, 0, format,
-                                 GL_UNSIGNED_BYTE, image_data);
-                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
-                                    GL_LINEAR);
-                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER,
-                                    GL_LINEAR);
-
-                    stbi_image_free(image_data);
-                }
-#else
-                // Background texture not supported on macOS/Metal yet
-                (void)state.background_width; (void)state.background_height;
-#endif
-            }
-        }
-        ImGuiFileDialog::Instance()->Close();
-    }
-
-    // Handle skeleton load dialog for editing
-    if (ImGuiFileDialog::Instance()->Display("LoadSkeletonForEdit", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
-        if (ImGuiFileDialog::Instance()->IsOk()) {
-            std::string file_path =
-                ImGuiFileDialog::Instance()->GetFilePathName();
-
-            std::ifstream file(file_path);
-            if (file.is_open()) {
-                nlohmann::json skeleton_json;
-                file >> skeleton_json;
-                file.close();
-
-                // Clear existing data
-                state.nodes.clear();
-                state.edges.clear();
-                state.selected_node_for_edge = -1;
-                state.next_node_id = 0;
-
-                // Load skeleton data
-                if (skeleton_json.contains("name")) {
-                    state.name = skeleton_json["name"];
-                }
-
-                if (skeleton_json.contains("has_bbox")) {
-                    state.has_bbox = skeleton_json["has_bbox"];
-                }
-
-                if (skeleton_json.contains("node_names") &&
-                    skeleton_json.contains("node_positions")) {
-                    std::vector<std::string> node_names =
-                        skeleton_json["node_names"];
-                    std::vector<std::vector<double>> node_positions =
-                        skeleton_json["node_positions"];
-
-                    for (size_t i = 0;
-                         i < node_names.size() && i < node_positions.size();
-                         i++) {
-                        if (node_positions[i].size() >= 2) {
-                            SkeletonCreatorNode node;
-                            node.id = state.next_node_id++;
-                            node.name = node_names[i];
-                            node.position = ImPlotPoint(
-                                node_positions[i][0], node_positions[i][1]);
-                            node.color = (ImVec4)ImColor::HSV(
-                                node.id / 10.0f, 1.0f, 1.0f);
-                            state.nodes.push_back(node);
-                        }
-                    }
-                } else if (skeleton_json.contains("node_names")) {
-                    // Fallback for skeletons without saved positions
-                    std::vector<std::string> node_names =
-                        skeleton_json["node_names"];
-                    double spacing = 0.8 / (node_names.size() + 1);
-
-                    for (size_t i = 0; i < node_names.size(); i++) {
-                        SkeletonCreatorNode node;
-                        node.id = state.next_node_id++;
-                        node.name = node_names[i];
-                        node.position =
-                            ImPlotPoint(0.1 + spacing * (i + 1), 0.5);
-                        node.color = (ImVec4)ImColor::HSV(node.id / 10.0f,
-                                                          1.0f, 1.0f);
-                        state.nodes.push_back(node);
-                    }
-                }
-
-                if (skeleton_json.contains("edges")) {
-                    std::vector<std::vector<int>> edges_array =
-                        skeleton_json["edges"];
-                    for (const auto &edge : edges_array) {
-                        if (edge.size() >= 2 &&
-                            edge[0] < (int)state.nodes.size() &&
-                            edge[1] < (int)state.nodes.size()) {
-                            SkeletonCreatorEdge creator_edge;
-                            creator_edge.node1_id =
-                                state.nodes[edge[0]].id;
-                            creator_edge.node2_id =
-                                state.nodes[edge[1]].id;
-                            state.edges.push_back(creator_edge);
-                        }
-                    }
-                }
-
-                std::cout << "Skeleton loaded from: " << file_path
-                          << " (with " << state.nodes.size() << " nodes)"
-                          << std::endl;
-            }
-        }
-        ImGuiFileDialog::Instance()->Close();
-    }
-
-    if (!state.show)
-        return;
-
-    ImGui::SetNextWindowSize(ImVec2(800, 600), ImGuiCond_FirstUseEver);
-    if (ImGui::Begin("Skeleton Creator", &state.show)) {
+    drawPanel("Skeleton Creator", state.show,
+        [&]() {
         ImGui::SeparatorText("Skeleton Configuration");
         ImGui::InputText("Skeleton Name", &state.name);
         ImGui::Checkbox("Has Bounding Box", &state.has_bbox);
@@ -505,6 +360,150 @@ inline void DrawSkeletonCreatorWindow(SkeletonCreatorState &state,
                 ImGui::EndTable();
             }
         }
-    }
-    ImGui::End();
+        },
+        [&]() {
+        // File dialog handlers (run every frame)
+
+        // Handle background image selection
+        if (ImGuiFileDialog::Instance()->Display("ChooseBackgroundImage", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
+            if (ImGuiFileDialog::Instance()->IsOk()) {
+                auto file_selection =
+                    ImGuiFileDialog::Instance()->GetSelection();
+                if (!file_selection.empty()) {
+                    state.background_image_path = file_selection.begin()->second;
+                    state.background_image_selected = true;
+
+                    // Load the background image texture
+#ifndef __APPLE__
+                    if (state.background_texture != 0) {
+                        glDeleteTextures(1, &state.background_texture);
+                        state.background_texture = 0;
+                    }
+
+                    // Load image using stb_image
+                    int channels;
+                    unsigned char *image_data = stbi_load(
+                        state.background_image_path.c_str(), &state.background_width,
+                        &state.background_height, &channels, 0);
+                    if (image_data) {
+                        glGenTextures(1, &state.background_texture);
+                        glBindTexture(GL_TEXTURE_2D, state.background_texture);
+
+                        GLenum format = GL_RGB;
+                        if (channels == 4)
+                            format = GL_RGBA;
+                        else if (channels == 1)
+                            format = GL_RED;
+
+                        glTexImage2D(GL_TEXTURE_2D, 0, format, state.background_width,
+                                     state.background_height, 0, format,
+                                     GL_UNSIGNED_BYTE, image_data);
+                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
+                                        GL_LINEAR);
+                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER,
+                                        GL_LINEAR);
+
+                        stbi_image_free(image_data);
+                    }
+#else
+                    // Background texture not supported on macOS/Metal yet
+                    (void)state.background_width; (void)state.background_height;
+#endif
+                }
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        // Handle skeleton load dialog for editing
+        if (ImGuiFileDialog::Instance()->Display("LoadSkeletonForEdit", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
+            if (ImGuiFileDialog::Instance()->IsOk()) {
+                std::string file_path =
+                    ImGuiFileDialog::Instance()->GetFilePathName();
+
+                std::ifstream file(file_path);
+                if (file.is_open()) {
+                    nlohmann::json skeleton_json;
+                    file >> skeleton_json;
+                    file.close();
+
+                    // Clear existing data
+                    state.nodes.clear();
+                    state.edges.clear();
+                    state.selected_node_for_edge = -1;
+                    state.next_node_id = 0;
+
+                    // Load skeleton data
+                    if (skeleton_json.contains("name")) {
+                        state.name = skeleton_json["name"];
+                    }
+
+                    if (skeleton_json.contains("has_bbox")) {
+                        state.has_bbox = skeleton_json["has_bbox"];
+                    }
+
+                    if (skeleton_json.contains("node_names") &&
+                        skeleton_json.contains("node_positions")) {
+                        std::vector<std::string> node_names =
+                            skeleton_json["node_names"];
+                        std::vector<std::vector<double>> node_positions =
+                            skeleton_json["node_positions"];
+
+                        for (size_t i = 0;
+                             i < node_names.size() && i < node_positions.size();
+                             i++) {
+                            if (node_positions[i].size() >= 2) {
+                                SkeletonCreatorNode node;
+                                node.id = state.next_node_id++;
+                                node.name = node_names[i];
+                                node.position = ImPlotPoint(
+                                    node_positions[i][0], node_positions[i][1]);
+                                node.color = (ImVec4)ImColor::HSV(
+                                    node.id / 10.0f, 1.0f, 1.0f);
+                                state.nodes.push_back(node);
+                            }
+                        }
+                    } else if (skeleton_json.contains("node_names")) {
+                        // Fallback for skeletons without saved positions
+                        std::vector<std::string> node_names =
+                            skeleton_json["node_names"];
+                        double spacing = 0.8 / (node_names.size() + 1);
+
+                        for (size_t i = 0; i < node_names.size(); i++) {
+                            SkeletonCreatorNode node;
+                            node.id = state.next_node_id++;
+                            node.name = node_names[i];
+                            node.position =
+                                ImPlotPoint(0.1 + spacing * (i + 1), 0.5);
+                            node.color = (ImVec4)ImColor::HSV(node.id / 10.0f,
+                                                              1.0f, 1.0f);
+                            state.nodes.push_back(node);
+                        }
+                    }
+
+                    if (skeleton_json.contains("edges")) {
+                        std::vector<std::vector<int>> edges_array =
+                            skeleton_json["edges"];
+                        for (const auto &edge : edges_array) {
+                            if (edge.size() >= 2 &&
+                                edge[0] < (int)state.nodes.size() &&
+                                edge[1] < (int)state.nodes.size()) {
+                                SkeletonCreatorEdge creator_edge;
+                                creator_edge.node1_id =
+                                    state.nodes[edge[0]].id;
+                                creator_edge.node2_id =
+                                    state.nodes[edge[1]].id;
+                                state.edges.push_back(creator_edge);
+                            }
+                        }
+                    }
+
+                    std::cout << "Skeleton loaded from: " << file_path
+                              << " (with " << state.nodes.size() << " nodes)"
+                              << std::endl;
+                }
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+        },
+        ImVec2(800, 600));
 }

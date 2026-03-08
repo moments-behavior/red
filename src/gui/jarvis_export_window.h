@@ -1,5 +1,6 @@
 #pragma once
 #include "imgui.h"
+#include "gui/panel.h"
 #include "project.h"
 #include "skeleton.h"
 #include "jarvis_export.h"
@@ -28,22 +29,8 @@ struct JarvisExportState {
 inline void DrawJarvisExportWindow(JarvisExportState &state,
                                    const ProjectManager &pm,
                                    const SkeletonContext &skeleton) {
-    // Always process file dialog (even when window is hidden)
-    if (ImGuiFileDialog::Instance()->Display(
-            "ChooseJarvisExportOutputDir", ImGuiWindowFlags_NoCollapse,
-            ImVec2(680, 440))) {
-        if (ImGuiFileDialog::Instance()->IsOk()) {
-            state.output_dir =
-                ImGuiFileDialog::Instance()->GetCurrentPath();
-        }
-        ImGuiFileDialog::Instance()->Close();
-    }
-
-    if (!state.show)
-        return;
-
-    ImGui::SetNextWindowSize(ImVec2(550, 400), ImGuiCond_FirstUseEver);
-    if (ImGui::Begin("JARVIS Export Tool", &state.show)) {
+    drawPanel("JARVIS Export Tool", state.show,
+        [&]() {
         ImGui::SeparatorText("Export Configuration");
 
         // Auto-detect label folder (cached to avoid per-frame work)
@@ -180,7 +167,18 @@ inline void DrawJarvisExportWindow(JarvisExportState &state,
                 ImGui::Text("%s", state.status.c_str());
             }
         }
-
-    }
-    ImGui::End();
+        },
+        [&]() {
+        // File dialog handler (runs every frame)
+        if (ImGuiFileDialog::Instance()->Display(
+                "ChooseJarvisExportOutputDir", ImGuiWindowFlags_NoCollapse,
+                ImVec2(680, 440))) {
+            if (ImGuiFileDialog::Instance()->IsOk()) {
+                state.output_dir =
+                    ImGuiFileDialog::Instance()->GetCurrentPath();
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+        },
+        ImVec2(550, 400));
 }

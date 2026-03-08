@@ -1,6 +1,8 @@
 #pragma once
 #include "camera.h"
 #include "global.h"
+#include "gui/popup_stack.h"
+#include "project_handler.h"
 #include "render.h"
 #include "skeleton.h"
 #include "utils.h"
@@ -62,9 +64,14 @@ inline void from_json(const nlohmann::json &j, ProjectManager &p) {
 inline bool save_project_manager_json(const ProjectManager &p,
                                       const std::filesystem::path &file,
                                       std::string *err = nullptr,
-                                      int indent = 2) {
+                                      int indent = 2,
+                                      const ProjectHandlerRegistry *reg = nullptr) {
     try {
         nlohmann::json j = p;
+
+        // Merge registered subsystem sections
+        if (reg)
+            project_handlers_save(*reg, j);
 
         // Ensure parent directory exists
         std::error_code ec;
@@ -92,7 +99,8 @@ inline bool save_project_manager_json(const ProjectManager &p,
 
 inline bool load_project_manager_json(ProjectManager *out,
                                       const std::filesystem::path &file,
-                                      std::string *err = nullptr) {
+                                      std::string *err = nullptr,
+                                      const ProjectHandlerRegistry *reg = nullptr) {
     if (!out) {
         if (err)
             *err = "Output pointer is null";
@@ -108,6 +116,11 @@ inline bool load_project_manager_json(ProjectManager *out,
         nlohmann::json j;
         ifs >> j;
         *out = j.get<ProjectManager>();
+
+        // Extract registered subsystem sections
+        if (reg)
+            project_handlers_load(*reg, j);
+
         return true;
     } catch (const std::exception &e) {
         if (err)
@@ -186,7 +199,7 @@ inline void
 DrawProjectWindow(ProjectManager &pm,
                   std::map<std::string, SkeletonPrimitive> &skeleton_map,
                   SkeletonContext &skeleton, std::string &skeleton_dir,
-                  bool &show_error, std::string &error_message) {
+                  PopupStack &popups) {
     if (!pm.show_project_window)
         return;
 
@@ -195,15 +208,6 @@ DrawProjectWindow(ProjectManager &pm,
     ImGui::SetNextWindowSize(ImVec2(720, 460), ImGuiCond_FirstUseEver);
 
     if (ImGui::Begin("Create Project", &pm.show_project_window, win_flags)) {
-
-        // error banner
-        if (show_error && !error_message.empty()) {
-            ImGui::PushStyleColor(ImGuiCol_Text,
-                                  ImVec4(1.0f, 0.45f, 0.45f, 1.0f));
-            ImGui::TextUnformatted(error_message.c_str());
-            ImGui::PopStyleColor();
-            ImGui::Separator();
-        }
 
         if (ImGui::BeginTable(
                 "projectForm", 3,
@@ -377,8 +381,9 @@ DrawProjectWindow(ProjectManager &pm,
 
         ImGui::BeginDisabled(!needed_ok);
         if (ImGui::Button(create_label)) {
-            if (!ensure_dir_exists(pm.project_path, &error_message))
-                show_error = true;
+            std::string err;
+            if (!ensure_dir_exists(pm.project_path, &err))
+                popups.pushError(err);
 
             // Configure the dialog
             IGFD::FileDialogConfig config;
@@ -405,11 +410,11 @@ DrawProjectWindow(ProjectManager &pm,
                 outPath += ".redproj";
             }
 
-            show_error =
-                !setup_project(pm, skeleton, skeleton_map, &error_message);
-            if (!show_error) {
-                if (!save_project_manager_json(pm, outPath, &error_message))
-                    show_error = true;
+            std::string err;
+            if (!setup_project(pm, skeleton, skeleton_map, &err)) {
+                popups.pushError(err);
+            } else if (!save_project_manager_json(pm, outPath, &err)) {
+                popups.pushError(err);
             }
         }
         ImGuiFileDialog::Instance()->Close();

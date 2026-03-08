@@ -12,6 +12,7 @@
 #include <ImGuiFileDialog.h>
 #include <misc/cpp/imgui_stdlib.h>
 #include <filesystem>
+#include "deferred_queue.h"
 #include <functional>
 #include <future>
 #include <map>
@@ -72,7 +73,6 @@ struct CalibrationToolState {
 
     // Laser refinement
     bool laser_ready = false;
-    bool laser_load_pending = false;
     LaserCalibration::LaserConfig laser_config;
     int laser_total_frames = 0;
     bool laser_running = false;
@@ -102,6 +102,8 @@ struct CalibrationToolCallbacks {
     std::function<void(const std::string &project_path)> switch_ini;
     // Print video metadata to console
     std::function<void()> print_metadata;
+    // Deferred queue for scheduling main-thread work from callbacks
+    DeferredQueue *deferred = nullptr;
 };
 
 inline void DrawCalibrationToolWindow(
@@ -866,8 +868,37 @@ inline void DrawCalibrationToolWindow(
 
                         // Defer the actual unload+load to next frame start
                         // (freeing Metal textures mid-frame crashes ImGui rendering)
-                        state.laser_load_pending = true;
                         state.laser_status = "Loading laser videos...";
+                        cb.deferred->enqueue([&state, &pm, &ps, &cb, &imgs_names,
+                                              dc_context
+#ifdef __APPLE__
+                                              , &mac_last_uploaded_frame
+#endif
+                        ]() {
+                            try {
+                                if (ps.video_loaded)
+                                    cb.unload_media();
+                                imgs_names.clear();
+#ifdef __APPLE__
+                                for (size_t ci = 0; ci < mac_last_uploaded_frame.size(); ci++)
+                                    mac_last_uploaded_frame[ci] = -1;
+#endif
+                                pm.media_folder = state.project.media_folder;
+                                for (const auto &cn : state.project.camera_names)
+                                    pm.camera_names.push_back("Cam" + cn);
+                                cb.load_videos();
+                                cb.print_metadata();
+                                state.laser_total_frames = dc_context->estimated_num_frames;
+                                state.laser_ready = true;
+                                state.laser_status =
+                                    "Loaded " +
+                                    std::to_string(state.project.camera_names.size()) +
+                                    " laser videos";
+                            } catch (const std::exception &e) {
+                                state.laser_status =
+                                    std::string("Error loading videos: ") + e.what();
+                            }
+                        });
                     }
                     ImGui::EndDisabled();
                 }

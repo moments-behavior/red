@@ -1,5 +1,6 @@
 #pragma once
 #include "imgui.h"
+#include "gui/panel.h"
 #include "project.h"
 #include "skeleton.h"
 #include "user_settings.h"
@@ -50,50 +51,8 @@ inline void DrawAnnotationDialog(AnnotationDialogState &state,
                                  const std::string &skeleton_dir,
                                  const std::string &default_browse_path,
                                  const AnnotationCreateCallback &on_create) {
-    // Always process file dialogs (even when window is hidden)
-    if (ImGuiFileDialog::Instance()->Display("ChooseAnnotVideoDir", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
-        if (ImGuiFileDialog::Instance()->IsOk()) {
-            std::filesystem::path chosen(
-                ImGuiFileDialog::Instance()->GetCurrentPath());
-            state.video_folder = chosen.string();
-            state.discovered_cameras = discover_mp4_cameras(state.video_folder);
-            state.camera_selected.assign(state.discovered_cameras.size(), true);
-            // Auto-fill project name from folder name
-            if (pm.project_name.empty())
-                pm.project_name = chosen.filename().string();
-        }
-        ImGuiFileDialog::Instance()->Close();
-    }
-
-    if (ImGuiFileDialog::Instance()->Display("ChooseAnnotRootDir", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
-        if (ImGuiFileDialog::Instance()->IsOk()) {
-            pm.project_root_path =
-                ImGuiFileDialog::Instance()->GetCurrentPath();
-        }
-        ImGuiFileDialog::Instance()->Close();
-    }
-
-    if (ImGuiFileDialog::Instance()->Display("ChooseAnnotSkeleton", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
-        if (ImGuiFileDialog::Instance()->IsOk()) {
-            pm.skeleton_file = ImGuiFileDialog::Instance()->GetFilePathName();
-        }
-        ImGuiFileDialog::Instance()->Close();
-    }
-
-    if (ImGuiFileDialog::Instance()->Display("ChooseAnnotCalib", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
-        if (ImGuiFileDialog::Instance()->IsOk()) {
-            pm.calibration_folder = ImGuiFileDialog::Instance()->GetCurrentPath();
-        }
-        ImGuiFileDialog::Instance()->Close();
-    }
-
-    if (!state.show)
-        return;
-
-    ImGuiWindowFlags annot_flags = ImGuiWindowFlags_NoCollapse;
-    ImGui::SetNextWindowSize(ImVec2(720, 460), ImGuiCond_FirstUseEver);
-
-    if (ImGui::Begin("Create Annotation Project", &state.show, annot_flags)) {
+    drawPanel("Create Annotation Project", state.show,
+        [&]() {
         // error banner
         if (!state.status.empty()) {
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.45f, 0.45f, 1.0f));
@@ -348,6 +307,43 @@ inline void DrawAnnotationDialog(AnnotationDialogState &state,
             }
         }
         ImGui::EndDisabled();
-    }
-    ImGui::End();
+        },
+        [&]() {
+        // File dialog handlers (run every frame)
+        if (ImGuiFileDialog::Instance()->Display("ChooseAnnotVideoDir", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
+            if (ImGuiFileDialog::Instance()->IsOk()) {
+                std::filesystem::path chosen(
+                    ImGuiFileDialog::Instance()->GetCurrentPath());
+                state.video_folder = chosen.string();
+                state.discovered_cameras = discover_mp4_cameras(state.video_folder);
+                state.camera_selected.assign(state.discovered_cameras.size(), true);
+                if (pm.project_name.empty())
+                    pm.project_name = chosen.filename().string();
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        if (ImGuiFileDialog::Instance()->Display("ChooseAnnotRootDir", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
+            if (ImGuiFileDialog::Instance()->IsOk()) {
+                pm.project_root_path =
+                    ImGuiFileDialog::Instance()->GetCurrentPath();
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        if (ImGuiFileDialog::Instance()->Display("ChooseAnnotSkeleton", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
+            if (ImGuiFileDialog::Instance()->IsOk()) {
+                pm.skeleton_file = ImGuiFileDialog::Instance()->GetFilePathName();
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        if (ImGuiFileDialog::Instance()->Display("ChooseAnnotCalib", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
+            if (ImGuiFileDialog::Instance()->IsOk()) {
+                pm.calibration_folder = ImGuiFileDialog::Instance()->GetCurrentPath();
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+        },
+        ImVec2(720, 460), ImGuiWindowFlags_NoCollapse);
 }

@@ -10,13 +10,18 @@
 #undef STB_IMAGE_WRITE_IMPLEMENTATION
 
 #include "camera.h"
+#include "deferred_queue.h"
 #include "global.h"
 #include "gui.h"
 #include "gui/calibration_tool_window.h"
+#include "gui/popup_stack.h"
+#include "gui/toast.h"
+#include "project_handler.h"
 #include <cassert>
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <thread>
 
 // ---------------------------------------------------------------------------
 // Minimal test framework
@@ -297,7 +302,6 @@ static void test_calib_state_defaults() {
 
     // Laser defaults
     EXPECT_FALSE(s.laser_ready);
-    EXPECT_FALSE(s.laser_load_pending);
     EXPECT_TRUE(s.laser_total_frames == 0);
     EXPECT_FALSE(s.laser_running);
     EXPECT_FALSE(s.laser_done);
@@ -509,6 +513,158 @@ static void test_calib_menu_open_patterns() {
 }
 
 // ---------------------------------------------------------------------------
+// DeferredQueue
+// ---------------------------------------------------------------------------
+
+static void test_deferred_queue_basic() {
+    DeferredQueue q;
+    EXPECT_TRUE(q.size() == 0);
+
+    int counter = 0;
+    q.enqueue([&]() { counter += 1; });
+    q.enqueue([&]() { counter += 10; });
+    EXPECT_TRUE(q.size() == 2);
+
+    q.flush();
+    EXPECT_TRUE(counter == 11);
+    EXPECT_TRUE(q.size() == 0);
+
+    // Flush on empty queue is a no-op
+    q.flush();
+    EXPECT_TRUE(counter == 11);
+}
+
+static void test_deferred_queue_thread_safety() {
+    DeferredQueue q;
+    std::atomic<int> counter{0};
+
+    // Enqueue from multiple threads
+    std::vector<std::thread> threads;
+    for (int i = 0; i < 10; i++) {
+        threads.emplace_back([&]() {
+            for (int j = 0; j < 100; j++)
+                q.enqueue([&]() { counter++; });
+        });
+    }
+    for (auto &t : threads)
+        t.join();
+
+    EXPECT_TRUE(q.size() == 1000);
+    q.flush();
+    EXPECT_TRUE(counter.load() == 1000);
+    EXPECT_TRUE(q.size() == 0);
+}
+
+// ---------------------------------------------------------------------------
+// PopupStack
+// ---------------------------------------------------------------------------
+
+static void test_popup_stack_basic() {
+    PopupStack ps;
+    EXPECT_TRUE(ps.pending.empty());
+    EXPECT_FALSE(ps.has_active);
+
+    ps.pushError("Something went wrong");
+    EXPECT_TRUE(ps.pending.size() == 1);
+    EXPECT_TRUE(ps.pending[0].type == PopupEntry::Error);
+    EXPECT_TRUE(ps.pending[0].message == "Something went wrong");
+    EXPECT_TRUE(ps.pending[0].title == "Error");
+}
+
+static void test_popup_stack_confirm() {
+    PopupStack ps;
+    bool confirmed = false;
+    ps.pushConfirm("Delete?", "Are you sure?", [&]() { confirmed = true; });
+    EXPECT_TRUE(ps.pending.size() == 1);
+    EXPECT_TRUE(ps.pending[0].type == PopupEntry::Confirm);
+    EXPECT_TRUE(ps.pending[0].on_confirm != nullptr);
+
+    // Simulate calling on_confirm
+    ps.pending[0].on_confirm();
+    EXPECT_TRUE(confirmed);
+}
+
+static void test_popup_stack_fifo() {
+    PopupStack ps;
+    ps.pushError("First");
+    ps.pushInfo("Info", "Second");
+    ps.pushError("Third");
+    EXPECT_TRUE(ps.pending.size() == 3);
+    EXPECT_TRUE(ps.pending[0].message == "First");
+    EXPECT_TRUE(ps.pending[1].message == "Second");
+    EXPECT_TRUE(ps.pending[2].message == "Third");
+}
+
+// ---------------------------------------------------------------------------
+// ToastQueue
+// ---------------------------------------------------------------------------
+
+static void test_toast_queue_basic() {
+    ToastQueue tq;
+    EXPECT_TRUE(tq.size() == 0);
+
+    tq.push("Hello");
+    EXPECT_TRUE(tq.size() == 1);
+    EXPECT_TRUE(tq.toasts[0].level == Toast::Info);
+    EXPECT_NEAR(tq.toasts[0].duration_sec, 4.0f, 0.01f);
+
+    tq.pushSuccess("Done!");
+    EXPECT_TRUE(tq.size() == 2);
+    EXPECT_TRUE(tq.toasts[1].level == Toast::Success);
+    EXPECT_NEAR(tq.toasts[1].duration_sec, 5.0f, 0.01f);
+
+    tq.pushError("Bad!");
+    EXPECT_TRUE(tq.size() == 3);
+    EXPECT_TRUE(tq.toasts[2].level == Toast::Error);
+    EXPECT_NEAR(tq.toasts[2].duration_sec, 8.0f, 0.01f);
+}
+
+// ---------------------------------------------------------------------------
+// ProjectHandlerRegistry
+// ---------------------------------------------------------------------------
+
+static void test_project_handler_registry() {
+    ProjectHandlerRegistry reg;
+    EXPECT_TRUE(reg.size() == 0);
+
+    int save_calls = 0;
+    int load_calls = 0;
+    std::string loaded_value;
+
+    reg.add({"test_section",
+             [&]() -> nlohmann::json {
+                 save_calls++;
+                 return {{"key", "value"}};
+             },
+             [&](const nlohmann::json &j) {
+                 load_calls++;
+                 loaded_value = j.value("key", std::string{});
+             }});
+
+    EXPECT_TRUE(reg.size() == 1);
+
+    // Test save
+    nlohmann::json j;
+    j["existing"] = 42;
+    project_handlers_save(reg, j);
+    EXPECT_TRUE(save_calls == 1);
+    EXPECT_TRUE(j.contains("test_section"));
+    EXPECT_TRUE(j["test_section"]["key"] == "value");
+    EXPECT_TRUE(j["existing"] == 42); // preserved
+
+    // Test load
+    project_handlers_load(reg, j);
+    EXPECT_TRUE(load_calls == 1);
+    EXPECT_TRUE(loaded_value == "value");
+
+    // Test load with missing section (should silently skip)
+    nlohmann::json j2;
+    j2["other"] = "data";
+    project_handlers_load(reg, j2);
+    EXPECT_TRUE(load_calls == 1); // not called again
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 
@@ -531,6 +687,15 @@ int main() {
     test_laser_viz_double_buffer();
     test_laser_viz_params_changed();
     test_calib_menu_open_patterns();
+
+    // Infrastructure tests
+    test_deferred_queue_basic();
+    test_deferred_queue_thread_safety();
+    test_popup_stack_basic();
+    test_popup_stack_confirm();
+    test_popup_stack_fifo();
+    test_toast_queue_basic();
+    test_project_handler_registry();
 
     printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail > 0 ? 1 : 0;

@@ -1,5 +1,6 @@
 #pragma once
 #include "imgui.h"
+#include "gui/panel.h"
 #include "project.h"
 #include "types.h"
 #include "yolo_export.h"
@@ -32,68 +33,8 @@ inline void DrawYoloExportWindow(YoloExportState &state,
                                  const ProjectManager &pm,
                                  const std::string &skeleton_file_path,
                                  const std::string &yolo_model_dir) {
-    // --- File dialog handlers (always process, even when window is hidden) ---
-    if (ImGuiFileDialog::Instance()->Display(
-            "ChooseYoloExportLabelDir", ImGuiWindowFlags_NoCollapse,
-            ImVec2(680, 440))) {
-        if (ImGuiFileDialog::Instance()->IsOk()) {
-            std::string selected_path =
-                ImGuiFileDialog::Instance()->GetCurrentPath();
-            state.label_dir = selected_path;
-        }
-        ImGuiFileDialog::Instance()->Close();
-    }
-
-    if (ImGuiFileDialog::Instance()->Display(
-            "ChooseYoloExportVideoDir", ImGuiWindowFlags_NoCollapse,
-            ImVec2(680, 440))) {
-        if (ImGuiFileDialog::Instance()->IsOk()) {
-            std::string selected_path =
-                ImGuiFileDialog::Instance()->GetCurrentPath();
-            state.video_dir = selected_path;
-        }
-        ImGuiFileDialog::Instance()->Close();
-    }
-
-    if (ImGuiFileDialog::Instance()->Display(
-            "ChooseYoloExportOutputDir", ImGuiWindowFlags_NoCollapse,
-            ImVec2(680, 440))) {
-        if (ImGuiFileDialog::Instance()->IsOk()) {
-            std::string selected_path =
-                ImGuiFileDialog::Instance()->GetCurrentPath();
-            state.output_dir = selected_path;
-        }
-        ImGuiFileDialog::Instance()->Close();
-    }
-
-    if (ImGuiFileDialog::Instance()->Display(
-            "ChooseYoloExportSkeletonFile", ImGuiWindowFlags_NoCollapse,
-            ImVec2(680, 440))) {
-        if (ImGuiFileDialog::Instance()->IsOk()) {
-            std::string selected_file =
-                ImGuiFileDialog::Instance()->GetFilePathName();
-            state.skeleton_file = selected_file;
-        }
-        ImGuiFileDialog::Instance()->Close();
-    }
-
-    if (ImGuiFileDialog::Instance()->Display(
-            "ChooseYoloExportClassFile", ImGuiWindowFlags_NoCollapse,
-            ImVec2(680, 440))) {
-        if (ImGuiFileDialog::Instance()->IsOk()) {
-            std::string selected_file =
-                ImGuiFileDialog::Instance()->GetFilePathName();
-            state.class_names_file = selected_file;
-        }
-        ImGuiFileDialog::Instance()->Close();
-    }
-
-    // --- Early return if window is not shown ---
-    if (!state.show)
-        return;
-
-    ImGui::SetNextWindowSize(ImVec2(600, 700), ImGuiCond_FirstUseEver);
-    if (ImGui::Begin("YOLO Export Tool", &state.show)) {
+    drawPanel("YOLO Export Tool", state.show,
+        [&]() {
         ImGui::SeparatorText("Export Configuration");
 
         // Export mode selection
@@ -398,6 +339,58 @@ inline void DrawYoloExportWindow(YoloExportState &state,
                 state.skeleton_file = skeleton_file_path;
             }
         }
-    }
-    ImGui::End();
+        },
+        [&]() {
+        // File dialog handlers (run every frame)
+        if (ImGuiFileDialog::Instance()->Display(
+                "ChooseYoloExportLabelDir", ImGuiWindowFlags_NoCollapse,
+                ImVec2(680, 440))) {
+            if (ImGuiFileDialog::Instance()->IsOk()) {
+                state.label_dir =
+                    ImGuiFileDialog::Instance()->GetCurrentPath();
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        if (ImGuiFileDialog::Instance()->Display(
+                "ChooseYoloExportVideoDir", ImGuiWindowFlags_NoCollapse,
+                ImVec2(680, 440))) {
+            if (ImGuiFileDialog::Instance()->IsOk()) {
+                state.video_dir =
+                    ImGuiFileDialog::Instance()->GetCurrentPath();
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        if (ImGuiFileDialog::Instance()->Display(
+                "ChooseYoloExportOutputDir", ImGuiWindowFlags_NoCollapse,
+                ImVec2(680, 440))) {
+            if (ImGuiFileDialog::Instance()->IsOk()) {
+                state.output_dir =
+                    ImGuiFileDialog::Instance()->GetCurrentPath();
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        if (ImGuiFileDialog::Instance()->Display(
+                "ChooseYoloExportSkeletonFile", ImGuiWindowFlags_NoCollapse,
+                ImVec2(680, 440))) {
+            if (ImGuiFileDialog::Instance()->IsOk()) {
+                state.skeleton_file =
+                    ImGuiFileDialog::Instance()->GetFilePathName();
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        if (ImGuiFileDialog::Instance()->Display(
+                "ChooseYoloExportClassFile", ImGuiWindowFlags_NoCollapse,
+                ImVec2(680, 440))) {
+            if (ImGuiFileDialog::Instance()->IsOk()) {
+                state.class_names_file =
+                    ImGuiFileDialog::Instance()->GetFilePathName();
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+        },
+        ImVec2(600, 700));
 }

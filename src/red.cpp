@@ -9,6 +9,8 @@
 #include "gui/jarvis_export_window.h"
 #include "gui/annotation_dialog.h"
 #include "gui/calibration_tool_window.h"
+#include "gui/popup_stack.h"
+#include "gui/toast.h"
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "imgui_impl_glfw.h"
@@ -28,6 +30,7 @@
 #include "utils.h"
 #include "calibration_tool.h"
 #include "calibration_pipeline.h"
+#include "deferred_queue.h"
 #include "user_settings.h"
 #include "jarvis_export.h"
 #include "laser_calibration.h"
@@ -319,8 +322,9 @@ int main(int argc, char **argv) {
     bool show_help_window = false;
     std::vector<bool> is_view_focused;
     bool input_is_imgs = false;
-    bool show_error = false;
-    std::string error_message;
+    PopupStack popups;
+    ToastQueue toasts;
+    DeferredQueue deferred;
 
     int hovered_bbox_cam = -1;
     int hovered_bbox_idx = -1;
@@ -446,6 +450,31 @@ int main(int argc, char **argv) {
         }
     };
 
+    // Consolidates the post-project-load sequence used by CLI load,
+    // File > Open Project, and Annotate > Load Project.
+    auto on_project_loaded = [&]() {
+        switch_ini_to_project();
+        std::map<std::string, std::string> empty_selected_files;
+        load_videos(empty_selected_files, ps, pm,
+                    window_was_decoding, demuxers, dc_context,
+                    scene, label_buffer_size, decoder_threads,
+                    is_view_focused);
+        print_video_metadata(demuxers, pm.camera_names,
+                             dc_context->seek_interval);
+        std::string label_err;
+        std::string most_recent_folder;
+        if (!find_most_recent_labels(pm.keypoints_root_folder,
+                                     most_recent_folder, label_err)) {
+            if (load_keypoints(most_recent_folder, keypoints_map,
+                               &skeleton, scene, pm.camera_names,
+                               label_err, bbox_class_names)) {
+                free_all_keypoints(keypoints_map, scene);
+                popups.pushError(label_err);
+            }
+        }
+        print_project_summary(pm, pm.skeleton_name, most_recent_folder);
+    };
+
     ReprojectionTool rp_tool;
 
 #ifdef __APPLE__
@@ -460,35 +489,15 @@ int main(int argc, char **argv) {
             if (std::filesystem::is_directory(path))
                 path = path.parent_path() / (path.filename().string() + ".redproj");
             ProjectManager loaded;
-            if (!load_project_manager_json(&loaded, path, &error_message)) {
-                show_error = true;
+            std::string err;
+            if (!load_project_manager_json(&loaded, path, &err)) {
+                popups.pushError(err);
             } else {
                 pm = loaded;
-                bool ok =
-                    setup_project(pm, skeleton, skeleton_map, &error_message);
-                if (ok) {
-                    switch_ini_to_project();
-                    std::map<std::string, std::string> empty_selected_files;
-                    load_videos(empty_selected_files, ps, pm,
-                                window_was_decoding, demuxers, dc_context,
-                                scene, label_buffer_size, decoder_threads,
-                                is_view_focused);
-                    print_video_metadata(demuxers, pm.camera_names, dc_context->seek_interval);
-                    std::string most_recent_folder;
-                    if (!find_most_recent_labels(pm.keypoints_root_folder,
-                                                 most_recent_folder,
-                                                 error_message)) {
-                        if (load_keypoints(most_recent_folder, keypoints_map,
-                                           &skeleton, scene, pm.camera_names,
-                                           error_message, bbox_class_names)) {
-                            free_all_keypoints(keypoints_map, scene);
-                            show_error = true;
-                        }
-                    }
-                    print_project_summary(pm, pm.skeleton_name, most_recent_folder);
-                } else {
-                    show_error = true;
-                }
+                if (setup_project(pm, skeleton, skeleton_map, &err))
+                    on_project_loaded();
+                else
+                    popups.pushError(err);
             }
         }
     }
@@ -507,6 +516,7 @@ int main(int argc, char **argv) {
                     window_was_decoding, demuxers, dc_context,
                     scene, label_buffer_size, decoder_threads,
                     is_view_focused);
+        input_is_imgs = false;
     };
     calib_cb.unload_media = [&]() {
         unload_media(ps, pm, demuxers, dc_context,
@@ -525,6 +535,7 @@ int main(int argc, char **argv) {
     calib_cb.print_metadata = [&]() {
         print_video_metadata(demuxers, pm.camera_names, dc_context->seek_interval);
     };
+    calib_cb.deferred = &deferred;
 
     main_loop_running = true;
     while (!glfwWindowShouldClose(window->render_target)) {
@@ -549,35 +560,9 @@ int main(int argc, char **argv) {
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
 
-        // Deferred laser video load — must happen before any rendering
-        // to avoid freeing Metal textures that ImGui draw commands still reference.
-        if (calib_state.laser_load_pending) {
-            calib_state.laser_load_pending = false;
-            try {
-                if (ps.video_loaded) {
-                    calib_cb.unload_media();
-                }
-                imgs_names.clear();
-#ifdef __APPLE__
-                for (int ci = 0; ci < MAX_VIEWS; ci++)
-                    mac_last_uploaded_frame[ci] = -1;
-#endif
-                pm.media_folder = calib_state.project.media_folder;
-                for (const auto &cn : calib_state.project.camera_names)
-                    pm.camera_names.push_back("Cam" + cn);
-                calib_cb.load_videos();
-                calib_cb.print_metadata();
-                input_is_imgs = false;
-                calib_state.laser_total_frames = dc_context->estimated_num_frames;
-                calib_state.laser_ready = true;
-                calib_state.laser_status =
-                    "Loaded " +
-                    std::to_string(calib_state.project.camera_names.size()) +
-                    " laser videos";
-            } catch (const std::exception &e) {
-                calib_state.laser_status = std::string("Error loading videos: ") + e.what();
-            }
-        }
+        // Flush deferred callbacks (runs before any rendering to avoid
+        // freeing Metal textures that ImGui draw commands still reference).
+        deferred.flush();
 
         // Reset hovered bbox info at start of each frame
         hovered_bbox_cam = -1;
@@ -897,8 +882,7 @@ int main(int argc, char **argv) {
         }
         ImGui::End();
 
-        DrawProjectWindow(pm, skeleton_map, skeleton, skeleton_dir, show_error,
-                          error_message);
+        DrawProjectWindow(pm, skeleton_map, skeleton, skeleton_dir, popups);
 
         // ===== Create Annotation Project dialog =====
         {
@@ -912,18 +896,11 @@ int main(int argc, char **argv) {
                     return false;
                 if (!setup_project(pm_ref, skeleton, skeleton_map, &err))
                     return false;
-                switch_ini_to_project();
                 std::filesystem::path redproj_path =
                     std::filesystem::path(pm_ref.project_path) / (pm_ref.project_name + ".redproj");
                 if (!save_project_manager_json(pm_ref, redproj_path, &err))
                     return false;
-                std::map<std::string, std::string> empty_selected_files;
-                load_videos(empty_selected_files, ps, pm_ref,
-                            window_was_decoding, demuxers, dc_context,
-                            scene, label_buffer_size, decoder_threads,
-                            is_view_focused);
-                print_video_metadata(demuxers, pm_ref.camera_names, dc_context->seek_interval);
-                print_project_summary(pm_ref, pm_ref.skeleton_name, "");
+                on_project_loaded();
                 return true;
             });
         }
@@ -1031,39 +1008,15 @@ int main(int argc, char **argv) {
                             ImGuiFileDialog::Instance()->GetCurrentPath());
                 }
                 ProjectManager loaded;
-                if (!load_project_manager_json(&loaded, cfg_path,
-                                               &error_message)) {
-                    show_error = true;
+                std::string err;
+                if (!load_project_manager_json(&loaded, cfg_path, &err)) {
+                    popups.pushError(err);
                 } else {
                     pm = loaded;
-                    bool ok = setup_project(pm, skeleton, skeleton_map,
-                                            &error_message);
-                    if (ok) {
-                        switch_ini_to_project();
-                        std::map<std::string, std::string> empty_selected_files;
-                        load_videos(empty_selected_files, ps, pm,
-                                    window_was_decoding, demuxers, dc_context,
-                                    scene, label_buffer_size, decoder_threads,
-                                    is_view_focused);
-                        print_video_metadata(demuxers, pm.camera_names, dc_context->seek_interval);
-
-                        std::string most_recent_folder;
-                        if (!find_most_recent_labels(pm.keypoints_root_folder,
-                                                     most_recent_folder,
-                                                     error_message)) {
-                            if (load_keypoints(most_recent_folder,
-                                               keypoints_map, &skeleton, scene,
-                                               pm.camera_names, error_message,
-                                               bbox_class_names)) {
-                                free_all_keypoints(keypoints_map, scene);
-                                show_error = true;
-                            }
-                        }
-                        print_project_summary(pm, pm.skeleton_name, most_recent_folder);
-
-                    } else {
-                        show_error = true;
-                    }
+                    if (setup_project(pm, skeleton, skeleton_map, &err))
+                        on_project_loaded();
+                    else
+                        popups.pushError(err);
                 }
             }
             ImGuiFileDialog::Instance()->Close();
@@ -1097,35 +1050,15 @@ int main(int argc, char **argv) {
                             ImGuiFileDialog::Instance()->GetCurrentPath());
                 }
                 ProjectManager loaded;
-                if (!load_project_manager_json(&loaded, cfg_path, &error_message)) {
-                    show_error = true;
+                std::string err;
+                if (!load_project_manager_json(&loaded, cfg_path, &err)) {
+                    popups.pushError(err);
                 } else {
                     pm = loaded;
-                    bool ok = setup_project(pm, skeleton, skeleton_map, &error_message);
-                    if (ok) {
-                        switch_ini_to_project();
-                        std::map<std::string, std::string> empty_selected_files;
-                        load_videos(empty_selected_files, ps, pm,
-                                    window_was_decoding, demuxers, dc_context,
-                                    scene, label_buffer_size, decoder_threads,
-                                    is_view_focused);
-                        print_video_metadata(demuxers, pm.camera_names, dc_context->seek_interval);
-
-                        std::string most_recent_folder;
-                        if (!find_most_recent_labels(pm.keypoints_root_folder,
-                                                     most_recent_folder,
-                                                     error_message)) {
-                            if (load_keypoints(most_recent_folder, keypoints_map,
-                                               &skeleton, scene, pm.camera_names,
-                                               error_message, bbox_class_names)) {
-                                free_all_keypoints(keypoints_map, scene);
-                                show_error = true;
-                            }
-                        }
-                        print_project_summary(pm, pm.skeleton_name, most_recent_folder);
-                    } else {
-                        show_error = true;
-                    }
+                    if (setup_project(pm, skeleton, skeleton_map, &err))
+                        on_project_loaded();
+                    else
+                        popups.pushError(err);
                 }
             }
             ImGuiFileDialog::Instance()->Close();
@@ -3210,28 +3143,28 @@ int main(int argc, char **argv) {
                 static bool load_old_format = false;
                 if (ImGui::Button("Load Most Recent Labels")) {
                     free_all_keypoints(keypoints_map, scene);
+                    std::string err;
                     if (load_old_format) {
                         if (load_keypoints_depreciated(keypoints_map, &skeleton,
                                                        pm.keypoints_root_folder,
                                                        scene, pm.camera_names,
-                                                       error_message)) {
+                                                       err)) {
                             free_all_keypoints(keypoints_map, scene);
-                            show_error = true;
+                            popups.pushError(err);
                         }
 
                     } else {
                         std::string most_recent_folder;
                         if (find_most_recent_labels(pm.keypoints_root_folder,
-                                                    most_recent_folder,
-                                                    error_message)) {
-                            show_error = true;
+                                                    most_recent_folder, err)) {
+                            popups.pushError(err);
                         } else {
                             if (load_keypoints(most_recent_folder,
                                                keypoints_map, &skeleton, scene,
-                                               pm.camera_names, error_message,
+                                               pm.camera_names, err,
                                                bbox_class_names)) {
                                 free_all_keypoints(keypoints_map, scene);
-                                show_error = true;
+                                popups.pushError(err);
                             }
                         }
                     }
@@ -3689,6 +3622,7 @@ int main(int argc, char **argv) {
                 }
 
                 last_saved = time(NULL);
+                toasts.pushSuccess("Labels saved");
             }
         }
 
@@ -3706,11 +3640,12 @@ int main(int argc, char **argv) {
                 auto selected_folder =
                     ImGuiFileDialog::Instance()->GetCurrentPath();
                 free_all_keypoints(keypoints_map, scene);
+                std::string err;
                 if (load_keypoints(selected_folder, keypoints_map, &skeleton,
-                                   scene, pm.camera_names, error_message,
+                                   scene, pm.camera_names, err,
                                    bbox_class_names)) {
                     free_all_keypoints(keypoints_map, scene);
-                    show_error = true;
+                    popups.pushError(err);
                 }
             }
             // close
@@ -3741,24 +3676,8 @@ int main(int argc, char **argv) {
 #endif
         );
 
-        // Make sure this is called before any other popups in the same frame
-        if (show_error) {
-            ImGui::OpenPopup("Error");
-            show_error = false; // Reset the flag so it only opens once
-        }
-
-        // Ensures popup is drawn in front of others
-        if (ImGui::BeginPopupModal("Error", NULL,
-                                   ImGuiWindowFlags_AlwaysAutoResize)) {
-            ImGui::Text("%s", error_message.c_str());
-            ImGui::Separator();
-
-            if (ImGui::Button("OK")) {
-                ImGui::CloseCurrentPopup();
-            }
-
-            ImGui::EndPopup();
-        }
+        drawToasts(toasts);
+        drawPopups(popups);
 
         // Rendering
         ImGui::Render();
