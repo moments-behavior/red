@@ -75,8 +75,8 @@ inline void DrawSettingsWindow(SettingsState &state, AppContext &ctx) {
                 playback_changed = true;
             if (ImGui::Checkbox("Realtime Playback", &s.default_realtime_playback))
                 playback_changed = true;
-            if (ImGui::InputInt("Buffer Size", &s.default_buffer_size))
-                playback_changed = true;
+            ImGui::InputInt("Buffer Size", &s.default_buffer_size);
+            // No propagation needed — takes effect on next video load
         }
 
         // --- Export ---
