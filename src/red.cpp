@@ -599,9 +599,6 @@ int main(int argc, char **argv) {
                     scene->use_cpu_buffer = (item_current == 0);
                 }
 #endif
-                ImGui::Text("Buffer Size: %d", label_buffer_size);
-                ImGui::SameLine();
-                ImGui::TextDisabled("(Settings)");
             }
 
             if (ps.video_loaded) {
