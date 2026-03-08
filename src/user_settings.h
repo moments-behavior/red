@@ -20,7 +20,6 @@ struct UserSettings {
     float default_playback_speed = 1.0f;
     bool default_realtime_playback = true;
     int default_buffer_size = 64;
-    int default_seek_interval = 250;
 
     // Export defaults
     float jarvis_margin = 50.0f;
@@ -39,7 +38,6 @@ inline void to_json(nlohmann::json &j, const UserSettings &s) {
         {"default_playback_speed", s.default_playback_speed},
         {"default_realtime_playback", s.default_realtime_playback},
         {"default_buffer_size", s.default_buffer_size},
-        {"default_seek_interval", s.default_seek_interval},
         {"jarvis_margin", s.jarvis_margin},
         {"jarvis_train_ratio", s.jarvis_train_ratio},
         {"jarvis_seed", s.jarvis_seed},
@@ -57,7 +55,6 @@ inline void from_json(const nlohmann::json &j, UserSettings &s) {
     s.default_playback_speed = j.value("default_playback_speed", 1.0f);
     s.default_realtime_playback = j.value("default_realtime_playback", true);
     s.default_buffer_size = j.value("default_buffer_size", 64);
-    s.default_seek_interval = j.value("default_seek_interval", 250);
     s.jarvis_margin = j.value("jarvis_margin", 50.0f);
     s.jarvis_train_ratio = j.value("jarvis_train_ratio", 0.9f);
     s.jarvis_seed = j.value("jarvis_seed", 42);

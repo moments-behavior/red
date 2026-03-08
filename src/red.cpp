@@ -224,7 +224,7 @@ int main(int argc, char **argv) {
                                    .total_num_frame = int(INT_MAX),
                                    .estimated_num_frames = 0,
                                    .gpu_index = 0,
-                                   .seek_interval = user_settings.default_seek_interval,
+                                   .seek_interval = 250,  // overwritten by auto-detect in media_loader
                                    .video_fps = 60.0f};
 
     // gui states, todo: bundle this later
