@@ -590,18 +590,15 @@ int main(int argc, char **argv) {
                         ImGui::GetIO().Framerate);
 
             if (!ps.video_loaded) {
+#ifndef __APPLE__
                 {
                     const char *items[] = {"CPU Buffer", "GPU Buffer"};
                     static int item_current = 0;
                     ImGui::Combo("Buffer Type", &item_current, items,
                                  IM_ARRAYSIZE(items));
-                    if (item_current == 0) {
-                        scene->use_cpu_buffer = true;
-                    } else {
-                        scene->use_cpu_buffer = false;
-                    }
+                    scene->use_cpu_buffer = (item_current == 0);
                 }
-
+#endif
                 ImGui::Text("Buffer Size: %d", label_buffer_size);
                 ImGui::SameLine();
                 ImGui::TextDisabled("(Settings)");
