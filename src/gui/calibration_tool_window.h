@@ -120,6 +120,7 @@ struct CalibrationToolState {
 
     // 3D calibration viewer
     CalibViewerState calib_viewer;
+    CalibrationPipeline::CalibrationResult loaded_result; // for loading from disk
 };
 
 struct CalibrationToolCallbacks {
@@ -800,6 +801,40 @@ inline void DrawCalibrationToolWindow(
                         state.img_result.mean_reproj_error);
                     ImGui::Text("Output: %s",
                         state.project.image_output_folder.c_str());
+                }
+
+                // Show 3D button for image experimental results (loads from disk if needed)
+                {
+                    std::string exp_folder = state.project.project_path + "/aruco_image_experimental";
+                    bool has_db = CalibrationPipeline::has_calibration_database(exp_folder);
+                    bool already_showing = (state.calib_viewer.show &&
+                        state.calib_viewer.result == &state.exp_img_result);
+                    // Also check if experimental result is in memory
+                    if (!has_db && state.exp_img_done && state.exp_img_result.success)
+                        has_db = true;
+                    ImGui::BeginDisabled(!has_db);
+                    if (ImGui::Button("Show 3D##img_exp_load")) {
+                        if (state.exp_img_done && state.exp_img_result.success) {
+                            // Use in-memory result
+                            state.calib_viewer.result = &state.exp_img_result;
+                        } else {
+                            // Load from disk
+                            state.loaded_result = CalibrationPipeline::load_calibration_from_folder(
+                                exp_folder, state.config.cam_ordered);
+                            if (state.loaded_result.success)
+                                state.calib_viewer.result = &state.loaded_result;
+                            else
+                                state.status = "Error loading 3D: " + state.loaded_result.error;
+                        }
+                        state.calib_viewer.show = true;
+                        state.calib_viewer.selected_camera = -1;
+                        state.calib_viewer.cached_selection = -2;
+                    }
+                    ImGui::EndDisabled();
+                    if (!has_db) {
+                        ImGui::SameLine();
+                        ImGui::TextDisabled("(run Experimental first)");
+                    }
                 }
 
                 ImGui::Spacing();

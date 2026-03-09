@@ -2087,6 +2087,218 @@ inline void write_calibration_database(const CalibrationDatabase &db,
     if (f.is_open()) f << j.dump(2);
 }
 
+// Check if a calibration_data.json exists in a folder
+inline bool has_calibration_database(const std::string &folder) {
+    if (folder.empty()) return false;
+    // Check the folder itself and the most recent timestamped subfolder
+    namespace fs = std::filesystem;
+    if (fs::exists(folder + "/calibration_data.json")) return true;
+    // Search for most recent timestamped subfolder
+    if (!fs::is_directory(folder)) return false;
+    std::string latest;
+    for (const auto &entry : fs::directory_iterator(folder)) {
+        if (entry.is_directory()) {
+            std::string name = entry.path().filename().string();
+            if (name.size() >= 10 && name[4] == '_') { // timestamp format
+                if (name > latest) latest = name;
+            }
+        }
+    }
+    if (!latest.empty() && fs::exists(folder + "/" + latest + "/calibration_data.json"))
+        return true;
+    return false;
+}
+
+// Find the most recent calibration_data.json in a folder
+inline std::string find_calibration_database_path(const std::string &folder) {
+    namespace fs = std::filesystem;
+    if (fs::exists(folder + "/calibration_data.json"))
+        return folder + "/calibration_data.json";
+    if (!fs::is_directory(folder)) return "";
+    std::string latest;
+    for (const auto &entry : fs::directory_iterator(folder)) {
+        if (entry.is_directory()) {
+            std::string name = entry.path().filename().string();
+            if (name.size() >= 10 && name[4] == '_') {
+                if (name > latest) latest = name;
+            }
+        }
+    }
+    if (!latest.empty()) {
+        std::string path = folder + "/" + latest + "/calibration_data.json";
+        if (fs::exists(path)) return path;
+    }
+    return "";
+}
+
+// Load a CalibrationResult from an output folder (YAML files + calibration_data.json)
+inline CalibrationResult load_calibration_from_folder(
+    const std::string &folder, const std::vector<std::string> &cam_names) {
+    CalibrationResult result;
+    namespace fs = std::filesystem;
+
+    // Find the actual timestamped subfolder
+    std::string data_folder = folder;
+    if (!fs::exists(folder + "/calibration_data.json")) {
+        std::string latest;
+        if (fs::is_directory(folder)) {
+            for (const auto &entry : fs::directory_iterator(folder)) {
+                if (entry.is_directory()) {
+                    std::string name = entry.path().filename().string();
+                    if (name.size() >= 10 && name[4] == '_' && name > latest)
+                        latest = name;
+                }
+            }
+        }
+        if (!latest.empty()) data_folder = folder + "/" + latest;
+    }
+
+    std::string db_path = data_folder + "/calibration_data.json";
+    if (!fs::exists(db_path)) { result.error = "No calibration_data.json"; return result; }
+
+    // Load YAML camera files
+    result.cam_names = cam_names;
+    result.cameras.resize(cam_names.size());
+    for (int i = 0; i < (int)cam_names.size(); i++) {
+        std::string yaml_path = data_folder + "/Cam" + cam_names[i] + ".yaml";
+        if (!fs::exists(yaml_path)) { result.error = "Missing " + yaml_path; return result; }
+        try {
+            auto yf = opencv_yaml::read(yaml_path);
+            result.cameras[i].K = yf.getMatrix("camera_matrix");
+            Eigen::MatrixXd dist_mat = yf.getMatrix("distortion_coefficients");
+            for (int j = 0; j < 5 && j < (int)dist_mat.rows(); j++)
+                result.cameras[i].dist(j) = dist_mat(j, 0);
+            result.cameras[i].R = yf.getMatrix("rc_ext");
+            Eigen::MatrixXd t_mat = yf.getMatrix("tc_ext");
+            result.cameras[i].t = Eigen::Vector3d(t_mat(0,0), t_mat(1,0), t_mat(2,0));
+            int iw = yf.getInt("image_width"), ih = yf.getInt("image_height");
+            if (i == 0) { result.image_width = iw; result.image_height = ih; }
+        } catch (const std::exception &e) {
+            result.error = yaml_path + ": " + e.what(); return result;
+        }
+    }
+
+    // Load database JSON
+    try {
+        std::ifstream dbf(db_path);
+        nlohmann::json j;
+        dbf >> j;
+
+        // Board poses
+        if (j.contains("board_poses")) {
+            for (auto &[cam, frames_j] : j["board_poses"].items()) {
+                for (auto &[fi_str, pose_j] : frames_j.items()) {
+                    CalibrationDatabase::BoardPose bp;
+                    bp.reproj = pose_j.value("reproj", 0.0);
+                    bp.num_corners = pose_j.value("corners", 0);
+                    auto &t_arr = pose_j["t"];
+                    bp.t = Eigen::Vector3d(t_arr[0], t_arr[1], t_arr[2]);
+                    auto &R_arr = pose_j["R"];
+                    for (int r = 0; r < 3; r++)
+                        for (int c = 0; c < 3; c++)
+                            bp.R(r, c) = R_arr[r][c];
+                    result.db.board_poses[cam][std::stoi(fi_str)] = bp;
+                }
+            }
+        }
+
+        // Registration order
+        if (j.contains("registration_order")) {
+            for (const auto &s : j["registration_order"]) {
+                result.db.registration_order.push_back({
+                    s.value("camera", ""), s.value("idx", -1),
+                    s.value("parent", ""), s.value("frames", 0),
+                    s.value("points", 0), s.value("method", "")});
+            }
+        }
+
+        // BA passes
+        if (j.contains("ba_passes")) {
+            for (const auto &p : j["ba_passes"]) {
+                result.db.ba_passes.push_back({
+                    p.value("pass", 0), p.value("mode", 0),
+                    p.value("cauchy", 1.0), p.value("cost_before", 0.0),
+                    p.value("cost_after", 0.0), p.value("iters", 0),
+                    p.value("time", 0.0), p.value("outliers", 0)});
+            }
+        }
+
+        // Landmarks from summary_data (if available)
+        std::string lm_path = data_folder + "/summary_data/landmarks.json";
+        if (fs::exists(lm_path)) {
+            std::ifstream lmf(lm_path);
+            nlohmann::json lm_j;
+            lmf >> lm_j;
+            for (auto &[cam, cam_j] : lm_j.items()) {
+                auto &ids = cam_j["ids"];
+                auto &pts = cam_j["landmarks"];
+                for (int i = 0; i < (int)ids.size(); i++) {
+                    result.db.landmarks[cam][ids[i].get<int>()] =
+                        Eigen::Vector2d(pts[i][0].get<double>(), pts[i][1].get<double>());
+                }
+            }
+        }
+
+        // 3D points from summary_data
+        std::string pts_path = data_folder + "/summary_data/bundle_adjustment/ba_points.json";
+        if (fs::exists(pts_path)) {
+            std::ifstream pf(pts_path);
+            nlohmann::json pts_j;
+            pf >> pts_j;
+            for (auto &[id_str, pt] : pts_j.items()) {
+                result.points_3d[std::stoi(id_str)] =
+                    Eigen::Vector3d(pt[0].get<double>(), pt[1].get<double>(), pt[2].get<double>());
+            }
+        }
+
+        // Compute per-camera metrics from landmarks + points
+        result.per_camera_metrics.resize(cam_names.size());
+        for (int c = 0; c < (int)cam_names.size(); c++) {
+            auto &m = result.per_camera_metrics[c];
+            m.name = cam_names[c];
+            auto bp_it = result.db.board_poses.find(cam_names[c]);
+            if (bp_it != result.db.board_poses.end())
+                m.detection_count = (int)bp_it->second.size();
+            auto lm_it = result.db.landmarks.find(cam_names[c]);
+            if (lm_it != result.db.landmarks.end()) {
+                m.observation_count = (int)lm_it->second.size();
+                auto rv = red_math::rotationMatrixToVector(result.cameras[c].R);
+                std::vector<double> errs;
+                for (const auto &[pid, px] : lm_it->second) {
+                    auto pt_it = result.points_3d.find(pid);
+                    if (pt_it == result.points_3d.end()) continue;
+                    double e = (red_math::projectPoint(pt_it->second, rv,
+                        result.cameras[c].t, result.cameras[c].K, result.cameras[c].dist) - px).norm();
+                    errs.push_back(e);
+                }
+                if (!errs.empty()) {
+                    double s = 0; for (double e : errs) s += e;
+                    m.mean_reproj = s / errs.size();
+                    std::sort(errs.begin(), errs.end());
+                    m.median_reproj = errs[errs.size() / 2];
+                    m.max_reproj = errs.back();
+                }
+            }
+        }
+
+        // Compute overall mean
+        double total_err = 0; int total_obs = 0;
+        for (const auto &m : result.per_camera_metrics) {
+            total_err += m.mean_reproj * m.observation_count;
+            total_obs += m.observation_count;
+        }
+        result.mean_reproj_error = (total_obs > 0) ? total_err / total_obs : 0;
+
+    } catch (const std::exception &e) {
+        result.error = std::string("JSON parse error: ") + e.what();
+        return result;
+    }
+
+    result.output_folder = data_folder;
+    result.success = true;
+    return result;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // Experimental pipeline: PnP-all-then-BA (no spanning tree)
 // ═══════════════════════════════════════════════════════════════════════════════
