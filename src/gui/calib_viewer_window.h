@@ -171,14 +171,16 @@ inline void DrawCalibViewerWindow(CalibViewerState &state) {
     if (!state.show_axes_box)
         plot_flags |= ImPlot3DFlags_CanvasOnly;
 
-    // Transparent plot background when axes are hidden
+    // Hide all plot chrome when axes are off
     if (!state.show_axes_box) {
         ImPlot3D::PushStyleColor(ImPlot3DCol_PlotBg, ImVec4(0, 0, 0, 0));
         ImPlot3D::PushStyleColor(ImPlot3DCol_FrameBg, ImVec4(0, 0, 0, 0));
+        ImPlot3D::PushStyleColor(ImPlot3DCol_PlotBorder, ImVec4(0, 0, 0, 0));
     }
 
     if (ImPlot3D::BeginPlot("##calib3d", avail, plot_flags)) {
-        ImPlot3DAxisFlags ax_flags = state.show_axes_box ? 0 : ImPlot3DAxisFlags_NoDecorations;
+        ImPlot3DAxisFlags ax_flags = state.show_axes_box ? 0 :
+            (ImPlot3DAxisFlags_NoDecorations | ImPlot3DAxisFlags_NoTickMarks);
         ImPlot3D::SetupAxis(ImAxis3D_X, state.show_axes_box ? "X (mm)" : nullptr, ax_flags);
         ImPlot3D::SetupAxis(ImAxis3D_Y, state.show_axes_box ? "Y (mm)" : nullptr, ax_flags);
         ImPlot3D::SetupAxis(ImAxis3D_Z, state.show_axes_box ? "Z (mm)" : nullptr, ax_flags);
@@ -392,7 +394,7 @@ inline void DrawCalibViewerWindow(CalibViewerState &state) {
         ImPlot3D::EndPlot();
     }
     if (!state.show_axes_box)
-        ImPlot3D::PopStyleColor(2);
+        ImPlot3D::PopStyleColor(3);
 
     // ── Hover tooltip ──
     if (state.hovered_camera >= 0 && state.hovered_camera < nc) {
