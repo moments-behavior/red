@@ -1066,6 +1066,74 @@ inline void cornerSubPix(const uint8_t *gray, int w, int h,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Saddle-point subpixel corner refinement (ROCHADE-inspired)
+// ─────────────────────────────────────────────────────────────────────────────
+// Fits I(x,y) = a*x^2 + b*x*y + c*y^2 + d*x + e*y + f to a cone-weighted
+// image patch around each corner, then computes the saddle point analytically.
+// Non-iterative and affine-invariant. Better than cornerSubPix for checkerboard
+// X-junctions. Based on Lucchese & Mitra (2002) and Placht et al. (ECCV 2014).
+
+inline void saddlePointRefine(const uint8_t *gray, int w, int h,
+                               std::vector<Eigen::Vector2f> &corners,
+                               int half_win = 5) {
+    const int win = 2 * half_win + 1;
+    const float R = (float)half_win + 0.5f;
+
+    // Build cone (Bartlett) filter kernel + design matrix entries
+    struct PixelEntry { double row[6]; double weight; };
+    std::vector<PixelEntry> entries(win * win);
+    Eigen::Matrix<double, 6, 6> AtWA = Eigen::Matrix<double, 6, 6>::Zero();
+
+    int idx = 0;
+    for (int dy = -half_win; dy <= half_win; dy++) {
+        for (int dx = -half_win; dx <= half_win; dx++) {
+            double x = (double)dx, y = (double)dy;
+            float r = std::sqrt((float)(dx * dx + dy * dy));
+            double wt = std::max(0.0, 1.0 - r / R);
+            entries[idx] = {{x*x, x*y, y*y, x, y, 1.0}, wt};
+            for (int i = 0; i < 6; i++)
+                for (int j = 0; j < 6; j++)
+                    AtWA(i, j) += entries[idx].row[i] * wt * entries[idx].row[j];
+            idx++;
+        }
+    }
+    Eigen::Matrix<double, 6, 6> AtWA_inv = AtWA.inverse();
+
+    for (auto &corner : corners) {
+        int ix = (int)std::round(corner.x());
+        int iy = (int)std::round(corner.y());
+        if (ix - half_win < 0 || ix + half_win >= w ||
+            iy - half_win < 0 || iy + half_win >= h)
+            continue;
+
+        Eigen::Matrix<double, 6, 1> AtWI = Eigen::Matrix<double, 6, 1>::Zero();
+        idx = 0;
+        for (int dy = -half_win; dy <= half_win; dy++) {
+            for (int dx = -half_win; dx <= half_win; dx++) {
+                double I_val = (double)gray[(iy + dy) * w + (ix + dx)];
+                double wt = entries[idx].weight;
+                for (int i = 0; i < 6; i++)
+                    AtWI(i) += entries[idx].row[i] * wt * I_val;
+                idx++;
+            }
+        }
+
+        Eigen::Matrix<double, 6, 1> p = AtWA_inv * AtWI;
+        double a = p(0), b = p(1), c = p(2), d = p(3), e = p(4);
+        double det = 4.0 * a * c - b * b;
+        if (det >= -1e-10) continue; // not a saddle point
+
+        double x_s = (b * e - 2.0 * c * d) / det;
+        double y_s = (b * d - 2.0 * a * e) / det;
+        if (std::abs(x_s) > half_win || std::abs(y_s) > half_win) continue;
+
+        float nx = std::max(0.0f, std::min((float)(w - 1), (float)ix + (float)x_s));
+        float ny = std::max(0.0f, std::min((float)(h - 1), (float)iy + (float)y_s));
+        corner = Eigen::Vector2f(nx, ny);
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // ChArUco board layout helpers
 // ─────────────────────────────────────────────────────────────────────────────
 namespace detail {
