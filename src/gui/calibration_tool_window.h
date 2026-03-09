@@ -1311,22 +1311,50 @@ inline void DrawCalibrationToolWindow(
                             }
                         }
 
-                        // Per-camera detail table
+                        // Per-camera detail table (sortable)
                         if (ImGui::TreeNode("Per-Camera Details")) {
                             if (ImGui::BeginTable("exp_cam_details", 7,
                                     ImGuiTableFlags_RowBg |
                                     ImGuiTableFlags_BordersInnerV |
-                                    ImGuiTableFlags_SizingFixedFit)) {
-                                ImGui::TableSetupColumn("Camera", 0, 80.0f);
-                                ImGui::TableSetupColumn("Dets", 0, 45.0f);
-                                ImGui::TableSetupColumn("Obs", 0, 50.0f);
-                                ImGui::TableSetupColumn("Mean", 0, 55.0f);
-                                ImGui::TableSetupColumn("Median", 0, 55.0f);
-                                ImGui::TableSetupColumn("Std", 0, 55.0f);
-                                ImGui::TableSetupColumn("Max", 0, 55.0f);
+                                    ImGuiTableFlags_SizingFixedFit |
+                                    ImGuiTableFlags_Sortable |
+                                    ImGuiTableFlags_SortTristate)) {
+                                ImGui::TableSetupColumn("Camera", ImGuiTableColumnFlags_DefaultSort, 80.0f);
+                                ImGui::TableSetupColumn("Dets",   ImGuiTableColumnFlags_PreferSortDescending, 45.0f);
+                                ImGui::TableSetupColumn("Obs",    ImGuiTableColumnFlags_PreferSortDescending, 50.0f);
+                                ImGui::TableSetupColumn("Mean",   ImGuiTableColumnFlags_PreferSortAscending, 55.0f);
+                                ImGui::TableSetupColumn("Median", ImGuiTableColumnFlags_PreferSortAscending, 55.0f);
+                                ImGui::TableSetupColumn("Std",    ImGuiTableColumnFlags_PreferSortAscending, 55.0f);
+                                ImGui::TableSetupColumn("Max",    ImGuiTableColumnFlags_PreferSortAscending, 55.0f);
                                 ImGui::TableHeadersRow();
 
-                                for (const auto &m : metrics) {
+                                // Build sorted index array
+                                std::vector<int> sorted_idx(nc);
+                                std::iota(sorted_idx.begin(), sorted_idx.end(), 0);
+                                if (ImGuiTableSortSpecs *sort_specs = ImGui::TableGetSortSpecs()) {
+                                    if (sort_specs->SpecsCount > 0) {
+                                        int col = sort_specs->Specs[0].ColumnIndex;
+                                        bool asc = (sort_specs->Specs[0].SortDirection == ImGuiSortDirection_Ascending);
+                                        std::sort(sorted_idx.begin(), sorted_idx.end(),
+                                            [&](int a, int b) {
+                                                double va = 0, vb = 0;
+                                                switch (col) {
+                                                    case 0: return asc ? (metrics[a].name < metrics[b].name)
+                                                                       : (metrics[a].name > metrics[b].name);
+                                                    case 1: va = metrics[a].detection_count; vb = metrics[b].detection_count; break;
+                                                    case 2: va = metrics[a].observation_count; vb = metrics[b].observation_count; break;
+                                                    case 3: va = metrics[a].mean_reproj; vb = metrics[b].mean_reproj; break;
+                                                    case 4: va = metrics[a].median_reproj; vb = metrics[b].median_reproj; break;
+                                                    case 5: va = metrics[a].std_reproj; vb = metrics[b].std_reproj; break;
+                                                    case 6: va = metrics[a].max_reproj; vb = metrics[b].max_reproj; break;
+                                                }
+                                                return asc ? (va < vb) : (va > vb);
+                                            });
+                                    }
+                                }
+
+                                for (int i : sorted_idx) {
+                                    const auto &m = metrics[i];
                                     ImGui::TableNextRow();
                                     ImGui::TableSetColumnIndex(0);
                                     ImGui::Text("%s", m.name.c_str());
