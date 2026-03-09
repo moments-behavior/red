@@ -1258,23 +1258,28 @@ inline void DrawCalibrationToolWindow(
 
                         // Bar chart: Per-camera reprojection error (mean + median)
                         if (ImPlot::BeginPlot("Per-Camera Reprojection Error",
-                                ImVec2(-1, 200))) {
-                            ImPlot::SetupAxes("Camera", "Error (px)");
-                            ImPlot::SetupAxisTicks(ImAxis_X1, tick_positions.data(),
-                                                    nc, labels.data());
+                                ImVec2(-1, 240))) {
+                            ImPlot::SetupAxes("", "Error (px)");
+                            ImPlot::SetupAxisTicks(ImAxis_X1, tick_positions.data(), nc, nullptr);
                             ImPlot::PlotBars("Mean", mean_errs.data(), nc, 0.3, -0.15);
                             ImPlot::PlotBars("Median", median_errs.data(), nc, 0.3, 0.15);
+                            // Vertical camera labels
+                            for (int i = 0; i < nc; i++)
+                                ImPlot::PlotText(labels[i], tick_positions[i], 0,
+                                    ImVec2(0, 10), ImPlotTextFlags_Vertical);
                             ImPlot::EndPlot();
                         }
 
                         // Bar chart: Detection count per camera
                         if (ImPlot::BeginPlot("Detections Per Camera",
-                                ImVec2(-1, 160))) {
-                            ImPlot::SetupAxes("Camera", "Frames");
-                            ImPlot::SetupAxisTicks(ImAxis_X1, tick_positions.data(),
-                                                    nc, labels.data());
+                                ImVec2(-1, 200))) {
+                            ImPlot::SetupAxes("", "Frames");
+                            ImPlot::SetupAxisTicks(ImAxis_X1, tick_positions.data(), nc, nullptr);
                             ImPlot::PlotBars("Detections", det_counts.data(),
                                               nc, 0.5);
+                            for (int i = 0; i < nc; i++)
+                                ImPlot::PlotText(labels[i], tick_positions[i], 0,
+                                    ImVec2(0, 10), ImPlotTextFlags_Vertical);
                             ImPlot::EndPlot();
                         }
 
