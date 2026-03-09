@@ -2,9 +2,10 @@
 
 This document records the full history of porting RED from a Linux/NVIDIA-only
 application to a native macOS Apple Silicon build, and subsequent development
-of the calibration pipeline. The work was done by Rob Johnson (Johnson Lab,
-HHMI Janelia) with Claude Code assistance across eleven development phases
-spanning February 24 – March 6, 2026.
+of the calibration pipeline, UI overhaul, and experimental calibration
+research. The work was done by Rob Johnson (Johnson Lab, HHMI Janelia)
+with Claude Code assistance across fourteen development phases
+spanning February 24 – March 9, 2026.
 
 All macOS changes use `#ifdef __APPLE__` guards. The Linux/NVIDIA build is
 completely untouched throughout.
@@ -20,6 +21,8 @@ completely untouched throughout.
 | `rob_dev_metal` | Feb 26 – Mar 1 | Native Metal rendering, async VT decode, Homebrew tap, JARVIS export |
 | `rob_dev_no_opencv` | Mar 1 | Remove OpenCV dependency, replace with Eigen + turbojpeg |
 | `rob_dev_calib` | Mar 1–6 | Calibration pipeline, laser refinement, unified projects |
+| `rob_calib_no_opencv` | Mar 6 | Remove OpenCV from calibration (Eigen + Ceres replacements) |
+| `rob_ui_overhaul` | Mar 6–9 | UI overhaul, experimental calibration pipeline, ImPlot3D |
 
 Each branch builds on the previous one (linear history, no merges to main).
 Main branch merging is handled by Jinyao Yan.
@@ -1029,24 +1032,208 @@ pipeline.
 
 ---
 
+## Phase 13 — UI Overhaul (branch: `rob_ui_overhaul`)
+
+**Commits:** `fabb75e` through `086be20` (Mar 6–8, 2026)
+
+### Goal
+
+Complete UI restructuring: modularize monolithic gui.h/red.cpp into
+domain-specific extracted windows, replace the Controls sidebar with a
+horizontal transport bar, add per-project imgui_layout.ini persistence,
+and remove unused tools (bbox, OBB, YOLO, skeleton creator, spreadsheet).
+
+### Key changes
+
+- **gui.h split** into 4 domain files + forwarding header (bbox/obb code removed):
+  `gui_helpers.h`, `gui_save_load.h`, `gui_keypoints.h`, `gui_world.h`
+- **10 windows extracted** from red.cpp into `src/gui/`:
+  `help_window.h`, `jarvis_export_window.h`, `annotation_dialog.h`,
+  `labeling_tool_window.h`, `calibration_tool_window.h`, `project_window.h`,
+  `settings_window.h`, `transport_bar.h`, `main_menu_dialogs.h`, `panel_registry.h`
+- **AppContext** reference bundle: all draw functions take `AppContext &ctx`
+  instead of 5-13 individual parameters; `DisplayState`, free functions
+  for copy_default_layout, migrate_ini, switch_ini, on_project_loaded
+- **Transport bar** (34px horizontal, ImGuiDir_Up) replaces Controls sidebar;
+  menus moved to app-level main menu bar
+- **PanelRegistry**: replaces manual draw calls with registered panel entries
+- **DeferredQueue**: safe scheduling of main-thread work from callbacks
+  (prevents Metal drawable crashes from mid-frame texture frees)
+- **Settings window** with 14 user settings fields (display, playback, export)
+- **Metal contrast/brightness shader** in Settings
+- **Minimized-window fix**: `glfwWaitEvents()` blocks when minimized to avoid
+  Metal drawable errors and CPU spin
+
+### File statistics after UI overhaul
+
+- `src/red.cpp`: ~1552 lines (reduced from 1818 by AppContext/PanelRegistry)
+- `src/gui/`: 10 extracted window headers
+- Removed: bbox, OBB, YOLO tools, skeleton creator, spreadsheet, reprojection tool
+
+---
+
+## Phase 14 — Experimental Calibration Pipeline (branch: `rob_ui_overhaul`)
+
+**Commits:** `b4f89a2` through `82a1b82` (Mar 8–9, 2026)
+
+### Motivation
+
+The original 7-step pipeline (detect → intrinsics → essential matrix → chain
+along spanning tree → BA → registration) produces 0.474 px on the aruco image
+dataset but degrades to 0.813 px on video at step=1 due to a fragile
+spanning tree chain: bad intrinsics on one camera propagate through relative
+pose estimation to all downstream cameras.
+
+### New architecture: PnP-all-then-BA
+
+The experimental pipeline replaces Steps 2–5 with a fundamentally different
+approach that eliminates error propagation:
+
+```
+Step 1: Detection + Intrinsics (reused, with quality gate)
+Step 2: Intrinsic quality gate (re-calibrate cameras with reproj > 1.0 px)
+Step 3: Per-frame PnP + greedy incremental camera registration
+Step 4: Multi-view triangulation (50 px initial threshold)
+Step 5: 3-stage hierarchical BA with GNC
+Step 6: Global registration (reused)
+Step 7: Write YAMLs (reused)
+```
+
+### Key techniques (ranked by measured impact)
+
+**1. Graduated Non-Convexity (GNC) — biggest single improvement**
+CauchyLoss scale starts at 16 px (nearly quadratic) and decreases through
+4 → 1 across 7 BA passes. This allows the optimizer to find the right basin
+of attraction before tightening, avoiding local minima from premature outlier
+rejection. Inspired by Yang et al. (2020) and COLMAP's default Cauchy loss.
+
+**2. 3-stage hierarchical BA**
+- Stage 0: Extrinsics only (fix K, dist, points) — CauchyLoss 16→4→1
+- Re-triangulation with updated poses (1126→1096 landmarks, better quality)
+- Stage 1: Extrinsics + points (fix K, dist) — CauchyLoss 4→1
+- Stage 2: Full joint (all parameters free) — CauchyLoss 1.0
+- Progressive Anipose-style outlier rejection: 20→10→5→3 px thresholds
+
+**3. Multi-frame Markley weighted quaternion averaging**
+For each camera pair, collect relative poses from ALL shared frames (not
+just the single best). Average rotations using the optimal eigenvector method
+(M = sum(w_i * q_i * q_i^T), take largest eigenvector). Weight by
+1/(1+err^2). Uses `Eigen::SelfAdjointEigenSolver<Matrix4d>`.
+
+**4. Greedy incremental camera registration (COLMAP-inspired)**
+- Select best initial camera pair (most shared frames)
+- Triangulate initial 3D point cloud
+- Greedily add cameras by most 2D-3D correspondences to existing 3D points
+- Each camera registered via multi-frame Markley averaging against ALL
+  initialized cameras (not just one reference)
+- Triangulate new points after each addition
+
+**5. Per-frame Ceres PnP refinement**
+After homography-based PnP, refine pose with Ceres LM minimizing geometric
+reprojection error (6 DOF, intrinsics fixed). Uses `PnPRefineCost` functor
+with DENSE_QR solver, 20 iterations.
+
+### Results
+
+| Dataset | Original Pipeline | Experimental Pipeline | Improvement |
+|---------|------------------|----------------------|-------------|
+| Aruco images (83/cam) | 0.474 px | **0.447 px** | 5.7% |
+| Aruco video step=1 (389/cam) | 0.813 px | **0.586 px** | 28% |
+
+### Extensive experimentation (5 waves, 20+ configurations tested)
+
+**Wave 1** (parameter tuning): Best was triang=50 + iters=200 + 3*std
+outlier threshold → 0.667 px. Key finding: outlier threshold most impactful
+single parameter; CauchyLoss(1.0) is correct; HuberLoss and tighter
+CauchyLoss(0.5) both worse.
+
+**Wave 2** (architectural): GNC + 3-stage BA + re-triangulation + progressive
+outlier rejection → 0.444 px (beat baseline). This was the breakthrough.
+
+**Wave 3** (initialization): PnP refinement, Markley averaging, greedy
+incremental registration — all neutral on results because GNC BA is powerful
+enough to overcome initialization differences.
+
+**Wave 4** (BA tuning): Fix intrinsics for sparse cameras, per-camera
+observation weighting, finer GNC schedule — all neutral or worse. The BA
+pipeline is well-tuned.
+
+**Wave 5** (upstream): ITERATIVE_SCHUR solver (neutral), saddle-point corner
+refinement (WORSE for ChArUco — ArUco markers break saddle symmetry),
+cornerSubPix half_win=6 (marginal improvement from 5).
+
+### Diagnostic findings
+
+- Camera 2008665: 2.60 px intrinsic reproj on video (bad K from video frames)
+- Camera 2006051: 0.43 px intrinsic reproj but 1.45 px BA error (geometric)
+- CHOLMOD "Matrix not positive definite" warnings during BA Pass 5
+- 9 cameras have 42-58 detections vs 7 with 235-357
+- The GNC schedule makes initialization quality nearly irrelevant
+
+### New files and features
+
+| File | Lines | Purpose |
+|---|---|---|
+| `src/gui/calib_viewer_window.h` | 166 | 3D calibration viewer (ImPlot3D) |
+| `lib/implot3d/` | ~8,200 | ImPlot3D library for 3D plotting |
+| `tests/test_video_pipeline.cpp` | 465 | Video calibration pipeline tests |
+
+- `PerCameraMetrics` struct for per-camera quality tracking
+- Quality Dashboard with ImPlot bar charts + error histogram
+- "Experimental" buttons in Calibration Tool UI
+- `saddlePointRefine()` in aruco_detect.h (for future pure checkerboard use)
+- `--video --step N` flags for test_pipeline_run
+
+### Research conducted
+
+9 research agents surveyed COLMAP, Kalibr, mrcal, Anipose, Multical,
+MC-Calib, EPnP/IPPE, ROCHADE, libcbdetect. Key actionable findings:
+- GNC (graduated non-convexity) is the standard in production SfM
+- Anipose-style progressive outlier rejection outperforms adaptive thresholds
+- For 16 cameras, global BA is cheap enough to run after every camera addition
+- Saddle-point refinement is for pure checkerboard corners, not ChArUco
+- Theoretical corner detection limit: ~0.01 px; practical multi-camera: 0.2-0.3 px
+- ImPlot3D is the best approach for embedded 3D visualization in ImGui
+
+### Next steps
+
+- Test on new calibration dataset (expected soon)
+- Rational distortion model (k4,k5,k6) — requires parameter block expansion
+- Two-pass corner detection (re-detect with known intrinsics + undistortion)
+- Wire up CalibViewerWindow to Calibration Tool "Show 3D" button
+- Evaluate on diverse camera rigs for robustness
+
+---
+
 ## File Summary
 
-New files added during the port and calibration work:
+New files added during the port, calibration, and UI overhaul work:
 
 | File | Purpose |
 |---|---|
 | `src/metal_context.h/mm` | Native Metal rendering context |
-| `src/vt_async_decoder.h/mm` | Async VideoToolbox decoder |
-| `src/red_math.h` | Eigen-based camera math (replaces OpenCV sfm/calib3d) |
+| `src/vt_async_decoder.h/mm` | Async VideoToolbox decoder with PTS reorder |
+| `src/red_math.h` | Eigen-based camera math (504 LOC, replaces OpenCV sfm/calib3d) |
 | `src/opencv_yaml_io.h` | OpenCV YAML format reader/writer (no OpenCV dep) |
 | `src/ffmpeg_frame_reader.h` | FFmpeg C API frame reader |
 | `src/jarvis_export.h` | Built-in JARVIS/COCO export tool |
-| `src/calibration_pipeline.h` | 7-step multiview_calib port (ChArUco → BA → YAML) |
-| `src/calibration_tool.h` | Calibration project config, discovery, save/load |
-| `src/intrinsic_calibration.h` | Zhang's camera calibration with Ceres refinement |
-| `src/aruco_detect.h` | Custom ArUco/ChArUco detection (no OpenCV) |
-| `src/laser_calibration.h` | Laser spot detection, filtering, triangulation, BA |
+| `src/calibration_pipeline.h` | Calibration pipeline: original + experimental (2910 LOC) |
+| `src/calibration_tool.h` | Calibration project config, discovery, save/load (343 LOC) |
+| `src/intrinsic_calibration.h` | Zhang's camera calibration with Ceres (436 LOC) |
+| `src/aruco_detect.h` | Custom ArUco/ChArUco detection + saddle-point refine (1449 LOC) |
+| `src/aruco_metal.h/mm` | Metal GPU adaptive threshold + video frame processing |
+| `src/laser_calibration.h` | Laser spot detection, filtering, triangulation, BA (1439 LOC) |
 | `src/laser_metal.h/mm` | Metal GPU compute shader for laser spot detection |
-| `src/user_settings.h` | Persistent user settings (default paths, preferences) |
+| `src/user_settings.h` | Persistent user settings (14 fields) |
+| `src/app_context.h` | AppContext reference bundle + DisplayState |
+| `src/media_loader.h` | load_videos, load_images, unload_media |
+| `src/gui/calib_viewer_window.h` | 3D calibration viewer with ImPlot3D (166 LOC) |
+| `src/gui/calibration_tool_window.h` | Calibration Tool UI with Quality Dashboard (1829 LOC) |
+| `src/gui/labeling_tool_window.h` | Labeling Tool window |
+| `src/gui/transport_bar.h` | Horizontal transport bar |
+| `src/gui/panel_registry.h` | PanelEntry + PanelRegistry |
+| `src/gui/main_menu_dialogs.h` | File dialog handlers + .redproj routing |
+| `src/gui/settings_window.h` | Settings window |
+| `lib/implot3d/` | ImPlot3D library for 3D plotting |
 | `packaging/homebrew/red.rb` | Homebrew formula |
 | `.github/workflows/release.yml` | GitHub Actions release workflow |
