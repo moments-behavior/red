@@ -114,6 +114,7 @@ if(APPLE)
         ${MM_SRC_FILES}
         ${IMGUI_SRC}
         ${IMPLOT_SRC}
+        ${IMPLOT3D_SRC}
         tests/test_gui.cpp
     )
 
@@ -122,6 +123,7 @@ if(APPLE)
         ${DIR_IMGUI}
         ${DIR_IMGUI}/backends
         ${DIR_IMPLOT}
+        ${DIR_IMPLOT3D}
         ${DIR_FILEBROWSER}
         lib/nvcodec
         lib/IconFontCppHeaders
