@@ -55,17 +55,30 @@ inline FrustumGeometry compute_frustum(
     return f;
 }
 
-// Find which 3D points are visible to a specific camera (reproj error < threshold)
-inline std::vector<int> find_camera_visible_points(
-    const CalibrationPipeline::CalibrationResult &res, int cam_idx, double thresh = 5.0) {
+// Find which 3D points this camera actually observed during calibration.
+// Uses the landmark map from the database (exact associations from BA),
+// falling back to projection-based visibility if no database available.
+inline std::vector<int> find_camera_observed_points(
+    const CalibrationPipeline::CalibrationResult &res, int cam_idx) {
     std::vector<int> ids;
-    if (cam_idx < 0 || cam_idx >= (int)res.cameras.size()) return ids;
+    if (cam_idx < 0 || cam_idx >= (int)res.cam_names.size()) return ids;
+    const auto &cam_name = res.cam_names[cam_idx];
+
+    // Use actual landmark associations from the database
+    auto lm_it = res.db.landmarks.find(cam_name);
+    if (lm_it != res.db.landmarks.end()) {
+        for (const auto &[pid, px] : lm_it->second) {
+            if (res.points_3d.count(pid))
+                ids.push_back(pid);
+        }
+        return ids;
+    }
+
+    // Fallback: projection-based (less accurate)
     const auto &cam = res.cameras[cam_idx];
     Eigen::Vector3d rvec = red_math::rotationMatrixToVector(cam.R);
     for (const auto &[pid, pt3d] : res.points_3d) {
         Eigen::Vector2d proj = red_math::projectPoint(pt3d, rvec, cam.t, cam.K, cam.dist);
-        // We don't have the original 2D observation, but we can check if the point
-        // projects inside the image bounds (a proxy for "this camera saw this point")
         if (proj.x() >= 0 && proj.x() < res.image_width &&
             proj.y() >= 0 && proj.y() < res.image_height)
             ids.push_back(pid);
@@ -123,7 +136,7 @@ inline void DrawCalibViewerWindow(CalibViewerState &state) {
     if (state.cached_selection != state.selected_camera) {
         state.cached_selection = state.selected_camera;
         if (state.selected_camera >= 0)
-            state.selected_cam_point_ids = find_camera_visible_points(res, state.selected_camera);
+            state.selected_cam_point_ids = find_camera_observed_points(res, state.selected_camera);
         else
             state.selected_cam_point_ids.clear();
     }
@@ -243,7 +256,7 @@ inline void DrawCalibViewerWindow(CalibViewerState &state) {
                 }
                 if (!px.empty()) {
                     ImPlot3D::PlotScatter(
-                        ("Visible to " + res.cam_names[state.selected_camera]).c_str(),
+                        ("Observed by " + res.cam_names[state.selected_camera]).c_str(),
                         px.data(), py.data(), pz.data(), (int)px.size(),
                         {ImPlot3DProp_MarkerSize, 2.0, ImPlot3DProp_MarkerFillColor, (ImU32)IM_COL32(255,200,50,200)});
                 }
