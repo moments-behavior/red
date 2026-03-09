@@ -29,6 +29,7 @@ if(APPLE)
 
     set(DIR_IMGUI "${CMAKE_SOURCE_DIR}/lib/imgui")
     set(DIR_IMPLOT "${CMAKE_SOURCE_DIR}/lib/implot")
+    set(DIR_IMPLOT3D "${CMAKE_SOURCE_DIR}/lib/implot3d")
     set(DIR_FILEBROWSER "${CMAKE_SOURCE_DIR}/lib/ImGuiFileDialog")
 
     file(GLOB SRC_FILES src/*.cpp)
@@ -47,12 +48,15 @@ if(APPLE)
         ${DIR_FILEBROWSER}/ImGuiFileDialog.cpp
     )
     file(GLOB IMPLOT_SRC ${DIR_IMPLOT}/*.cpp)
+    file(GLOB IMPLOT3D_SRC ${DIR_IMPLOT3D}/*.cpp)
+    list(REMOVE_ITEM IMPLOT3D_SRC "${DIR_IMPLOT3D}/implot3d_demo.cpp")
 
     add_executable(red
         ${SRC_FILES}
         ${MM_SRC_FILES}
         ${IMGUI_SRC}
         ${IMPLOT_SRC}
+        ${IMPLOT3D_SRC}
     )
 
     target_include_directories(red PRIVATE
@@ -60,6 +64,7 @@ if(APPLE)
         ${DIR_IMGUI}
         ${DIR_IMGUI}/backends
         ${DIR_IMPLOT}
+        ${DIR_IMPLOT3D}
         ${DIR_FILEBROWSER}
         lib/nvcodec
         lib/IconFontCppHeaders

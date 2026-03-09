@@ -5,6 +5,7 @@
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "implot.h"
+#include "implot3d.h"
 #include "types.h"
 #include <GLFW/glfw3.h>
 #include <cstdio>
@@ -86,6 +87,7 @@ inline void gx_imgui_init(gx_context *context) {
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImPlotContext *implotCtx = ImPlot::CreateContext();
+    ImPlot3D::CreateContext();
 
     ImGuiIO &io = ImGui::GetIO();
     (void)io;
