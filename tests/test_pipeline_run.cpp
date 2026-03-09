@@ -9,12 +9,23 @@
 #include "aruco_metal.h"
 #endif
 
+// Logger required by FFmpegDemuxer (NvCodec logging infrastructure)
+#include "Logger.h"
+simplelogger::Logger *logger =
+    simplelogger::LoggerFactory::CreateConsoleLogger();
+
 #include <iostream>
 
 static const char *CONFIG_PATH =
     "/Users/johnsonr/datasets/QuanShare/CalibrationDataset/2026_03_01/config.json";
 
-int main() {
+int main(int argc, char **argv) {
+    bool run_experimental = false;
+    for (int i = 1; i < argc; i++) {
+        if (std::string(argv[i]) == "--experimental")
+            run_experimental = true;
+    }
+
     CalibrationTool::CalibConfig config;
     std::string error;
     if (!CalibrationTool::parse_config(CONFIG_PATH, config, error)) {
@@ -40,8 +51,18 @@ int main() {
 #endif
 
     std::string status;
-    auto result = CalibrationPipeline::run_full_pipeline(
-        config, "/tmp/calib_test_output", &status, gpu_fn, gpu_ctx);
+    CalibrationPipeline::CalibrationResult result;
+
+    if (run_experimental) {
+        std::cout << "\n=== Running EXPERIMENTAL pipeline ===\n\n";
+        result = CalibrationPipeline::run_experimental_pipeline(
+            config, "/tmp/calib_test_experimental", &status,
+            gpu_fn, gpu_ctx);
+    } else {
+        result = CalibrationPipeline::run_full_pipeline(
+            config, "/tmp/calib_test_output", &status,
+            gpu_fn, gpu_ctx);
+    }
 
 #ifdef __APPLE__
     aruco_metal_destroy(aruco_metal);
@@ -57,6 +78,21 @@ int main() {
     std::cout << "Cameras: " << result.cameras.size() << "\n";
     std::cout << "3D points: " << result.points_3d.size() << "\n";
     std::cout << "Output: " << result.output_folder << "\n";
+
+    if (run_experimental && !result.per_camera_metrics.empty()) {
+        std::cout << "\nPer-camera metrics:\n";
+        for (const auto &m : result.per_camera_metrics) {
+            std::cout << "  " << m.name
+                      << ": dets=" << m.detection_count
+                      << " obs=" << m.observation_count
+                      << " mean=" << m.mean_reproj
+                      << " median=" << m.median_reproj
+                      << " std=" << m.std_reproj
+                      << " max=" << m.max_reproj << "\n";
+        }
+        std::cout << "BA rounds: " << result.ba_rounds
+                  << "  Outliers removed: " << result.outliers_removed << "\n";
+    }
 
     // Validation
     double threshold = 15.0;

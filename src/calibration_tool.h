@@ -140,6 +140,44 @@ discover_images(const CalibConfig &config) {
     return result;
 }
 
+// Scan aruco_video_folder for videos matching cam_ordered serials.
+// Returns map: {"serial" -> "/full/path/CamSerial.mp4"}
+// Matches Cam{serial}.mp4/.avi/.mov/.mkv pattern.
+inline std::map<std::string, std::string>
+discover_aruco_videos(const std::string &video_folder,
+                      const std::vector<std::string> &cam_ordered) {
+    namespace fs = std::filesystem;
+    std::map<std::string, std::string> result;
+
+    if (video_folder.empty() || !fs::is_directory(video_folder))
+        return result;
+
+    const std::vector<std::string> exts = {".mp4", ".avi", ".mov", ".mkv"};
+
+    // Build stem → path map
+    std::map<std::string, std::string> stem_to_path;
+    for (const auto &entry : fs::directory_iterator(video_folder)) {
+        if (!entry.is_regular_file())
+            continue;
+        std::string ext = entry.path().extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(),
+                       [](unsigned char c) { return std::tolower(c); });
+        if (std::find(exts.begin(), exts.end(), ext) == exts.end())
+            continue;
+        stem_to_path[entry.path().stem().string()] = entry.path().string();
+    }
+
+    for (const auto &serial : cam_ordered) {
+        std::string stem = "Cam" + serial;
+        auto it = stem_to_path.find(stem);
+        if (it == stem_to_path.end())
+            it = stem_to_path.find(serial); // fallback: exact match
+        if (it != stem_to_path.end())
+            result[serial] = it->second;
+    }
+    return result;
+}
+
 // Count images per camera from a discovered file map.
 inline int count_images_per_camera(
     const std::map<std::string, std::string> &files,
@@ -170,6 +208,7 @@ struct CalibProject {
     // Aruco calibration (optional — empty for laser-only projects)
     std::string config_file;       // path to config.json
     std::string img_path;          // image directory (from config)
+    std::string aruco_video_folder; // folder with aruco board .mp4 videos
 
     // Laser refinement (optional — empty until laser phase)
     std::string media_folder;      // folder with laser .mp4 videos
@@ -177,8 +216,12 @@ struct CalibProject {
     std::vector<std::string> camera_names; // validated camera serials
 
     // Output
-    std::string output_folder;     // aruco YAML output (project_path/calibration)
-    std::string laser_output_folder; // laser YAML output (project_path/laser_calibration)
+    std::string output_folder;           // legacy (migrated to image/video on save)
+    std::string image_output_folder;     // aruco image YAML output
+    std::string video_output_folder;     // aruco video YAML output
+    std::string image_experimental_folder; // experimental image YAML output
+    std::string video_experimental_folder; // experimental video YAML output
+    std::string laser_output_folder;     // laser YAML output
 
     // Mode helpers
     bool has_aruco() const { return !config_file.empty(); }
@@ -192,10 +235,14 @@ inline void to_json(nlohmann::json &j, const CalibProject &p) {
                        {"project_root_path", p.project_root_path},
                        {"config_file", p.config_file},
                        {"img_path", p.img_path},
+                       {"aruco_video_folder", p.aruco_video_folder},
                        {"media_folder", p.media_folder},
                        {"calibration_folder", p.calibration_folder},
                        {"camera_names", p.camera_names},
-                       {"output_folder", p.output_folder},
+                       {"image_output_folder", p.image_output_folder},
+                       {"video_output_folder", p.video_output_folder},
+                       {"image_experimental_folder", p.image_experimental_folder},
+                       {"video_experimental_folder", p.video_experimental_folder},
                        {"laser_output_folder", p.laser_output_folder}};
 }
 
@@ -205,10 +252,17 @@ inline void from_json(const nlohmann::json &j, CalibProject &p) {
     p.project_root_path = j.value("project_root_path", std::string{});
     p.config_file = j.value("config_file", std::string{});
     p.img_path = j.value("img_path", std::string{});
+    p.aruco_video_folder = j.value("aruco_video_folder", std::string{});
     p.media_folder = j.value("media_folder", std::string{});
     p.calibration_folder = j.value("calibration_folder", std::string{});
     p.camera_names = j.value("camera_names", std::vector<std::string>{});
-    p.output_folder = j.value("output_folder", std::string{});
+    p.image_output_folder = j.value("image_output_folder", std::string{});
+    p.video_output_folder = j.value("video_output_folder", std::string{});
+    p.image_experimental_folder = j.value("image_experimental_folder", std::string{});
+    p.video_experimental_folder = j.value("video_experimental_folder", std::string{});
+    // Backward compat: migrate old output_folder → image_output_folder
+    if (p.image_output_folder.empty() && j.contains("output_folder"))
+        p.image_output_folder = j.value("output_folder", std::string{});
     p.laser_output_folder = j.value("laser_output_folder", std::string{});
 }
 
