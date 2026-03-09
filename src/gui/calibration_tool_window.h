@@ -1180,12 +1180,14 @@ inline void DrawCalibrationToolWindow(
                         // Prepare data arrays for ImPlot
                         std::vector<double> mean_errs(nc), median_errs(nc);
                         std::vector<double> det_counts(nc);
+                        std::vector<double> tick_positions(nc);
                         std::vector<const char *> labels(nc);
                         std::vector<std::string> label_strs(nc);
                         for (int i = 0; i < nc; i++) {
                             mean_errs[i] = metrics[i].mean_reproj;
                             median_errs[i] = metrics[i].median_reproj;
                             det_counts[i] = (double)metrics[i].detection_count;
+                            tick_positions[i] = (double)i;
                             label_strs[i] = metrics[i].name;
                             labels[i] = label_strs[i].c_str();
                         }
@@ -1194,8 +1196,8 @@ inline void DrawCalibrationToolWindow(
                         if (ImPlot::BeginPlot("Per-Camera Reprojection Error",
                                 ImVec2(-1, 200))) {
                             ImPlot::SetupAxes("Camera", "Error (px)");
-                            ImPlot::SetupAxisTicks(ImAxis_X1, nullptr, nc,
-                                                    labels.data());
+                            ImPlot::SetupAxisTicks(ImAxis_X1, tick_positions.data(),
+                                                    nc, labels.data());
                             ImPlot::PlotBars("Mean", mean_errs.data(), nc, 0.3, -0.15);
                             ImPlot::PlotBars("Median", median_errs.data(), nc, 0.3, 0.15);
                             ImPlot::EndPlot();
@@ -1205,8 +1207,8 @@ inline void DrawCalibrationToolWindow(
                         if (ImPlot::BeginPlot("Detections Per Camera",
                                 ImVec2(-1, 160))) {
                             ImPlot::SetupAxes("Camera", "Frames");
-                            ImPlot::SetupAxisTicks(ImAxis_X1, nullptr, nc,
-                                                    labels.data());
+                            ImPlot::SetupAxisTicks(ImAxis_X1, tick_positions.data(),
+                                                    nc, labels.data());
                             ImPlot::PlotBars("Detections", det_counts.data(),
                                               nc, 0.5);
                             ImPlot::EndPlot();
