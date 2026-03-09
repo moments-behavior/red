@@ -1964,6 +1964,61 @@ inline bool write_intermediate_output(
 // Experimental pipeline: PnP-all-then-BA (no spanning tree)
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// Ceres cost functor for per-frame PnP refinement (6 DOF: angle-axis + translation).
+// Intrinsics are fixed; only extrinsics are optimized.
+struct PnPRefineCost {
+    double obs_x, obs_y, obj_x, obj_y, obj_z;
+    double fx, fy, cx, cy, k1, k2, p1, p2, k3;
+    PnPRefineCost(double ox, double oy, double objx, double objy, double objz,
+                  const Eigen::Matrix3d &K, const Eigen::Matrix<double,5,1> &d)
+        : obs_x(ox), obs_y(oy), obj_x(objx), obj_y(objy), obj_z(objz),
+          fx(K(0,0)), fy(K(1,1)), cx(K(0,2)), cy(K(1,2)),
+          k1(d(0)), k2(d(1)), p1(d(2)), p2(d(3)), k3(d(4)) {}
+    template<typename T> bool operator()(const T *pose, T *residuals) const {
+        T pt[3] = {T(obj_x), T(obj_y), T(obj_z)};
+        T p[3]; ceres::AngleAxisRotatePoint(pose, pt, p);
+        p[0]+=pose[3]; p[1]+=pose[4]; p[2]+=pose[5];
+        T xp=p[0]/p[2], yp=p[1]/p[2];
+        T r2=xp*xp+yp*yp, r4=r2*r2, r6=r4*r2;
+        T rad=T(1)+T(k1)*r2+T(k2)*r4+T(k3)*r6;
+        T xpp=xp*rad+T(2)*T(p1)*xp*yp+T(p2)*(r2+T(2)*xp*xp);
+        T ypp=yp*rad+T(p1)*(r2+T(2)*yp*yp)+T(2)*T(p2)*xp*yp;
+        residuals[0]=T(fx)*xpp+T(cx)-T(obs_x);
+        residuals[1]=T(fy)*ypp+T(cy)-T(obs_y);
+        return true;
+    }
+};
+
+// Refine PnP pose using Ceres LM (minimizes geometric reprojection error).
+// obj_pts_3d: board 3D points, img_pts: pixel observations (distorted).
+// K, dist: intrinsics (fixed). R, t: initial pose (refined in-place).
+inline void refinePnPPose(
+    const std::vector<Eigen::Vector3d> &obj_pts_3d,
+    const std::vector<Eigen::Vector2d> &img_pts,
+    const Eigen::Matrix3d &K, const Eigen::Matrix<double,5,1> &dist,
+    Eigen::Matrix3d &R, Eigen::Vector3d &t) {
+    if ((int)obj_pts_3d.size() < 4) return;
+    Eigen::Vector3d rvec = red_math::rotationMatrixToVector(R);
+    double pose[6] = {rvec.x(), rvec.y(), rvec.z(), t.x(), t.y(), t.z()};
+    ceres::Problem problem;
+    for (int i = 0; i < (int)obj_pts_3d.size(); i++) {
+        problem.AddResidualBlock(
+            new ceres::AutoDiffCostFunction<PnPRefineCost, 2, 6>(
+                new PnPRefineCost(img_pts[i].x(), img_pts[i].y(),
+                    obj_pts_3d[i].x(), obj_pts_3d[i].y(), obj_pts_3d[i].z(), K, dist)),
+            nullptr, pose);
+    }
+    ceres::Solver::Options opt;
+    opt.linear_solver_type = ceres::DENSE_QR;
+    opt.max_num_iterations = 20;
+    opt.function_tolerance = 1e-12;
+    opt.minimizer_progress_to_stdout = false;
+    ceres::Solver::Summary sum;
+    ceres::Solve(opt, &problem, &sum);
+    R = red_math::rotationVectorToMatrix(Eigen::Vector3d(pose[0], pose[1], pose[2]));
+    t = Eigen::Vector3d(pose[3], pose[4], pose[5]);
+}
+
 inline bool solvePnPHomography(
     const std::vector<Eigen::Vector2d> &obj_pts_2d,
     const std::vector<Eigen::Vector2d> &img_pts_und,
@@ -2020,6 +2075,8 @@ inline bool initialize_extrinsics_pnp(
             if ((int)o2d.size()<4) continue;
             Eigen::Matrix3d Rf; Eigen::Vector3d tf;
             if (!solvePnPHomography(o2d,iund,intr.K,Rf,tf)) continue;
+            // Refine algebraic PnP with Ceres LM (geometric reprojection minimization)
+            refinePnPPose(o3d, iraw, intr.K, intr.dist, Rf, tf);
             auto rv=red_math::rotationMatrixToVector(Rf);
             auto pr=red_math::projectPoints(o3d,rv,tf,intr.K,intr.dist);
             double es=0; for(int i=0;i<(int)pr.size();i++) es+=(pr[i]-iraw[i]).norm();
@@ -2070,22 +2127,30 @@ inline bool initialize_extrinsics_pnp(
                 config.cam_ordered[ci].c_str(), cands[0].err);
             continue;
         }
-        // Quaternion averaging for rotation
-        Eigen::Quaterniond q0(cands[0].R); q0.normalize();
-        Eigen::Quaterniond qsum = q0;
-        for (size_t i=1;i<cands.size();i++) {
+        // Markley weighted quaternion averaging (eigenvector of M = sum(w_i * q_i * q_i^T))
+        // Weight by n_corners / reproj^2 — frames with more corners and lower error contribute more
+        Eigen::Matrix4d M = Eigen::Matrix4d::Zero();
+        for (size_t i=0;i<cands.size();i++) {
             Eigen::Quaterniond qi(cands[i].R); qi.normalize();
-            if (qi.dot(q0) < 0.0) qi.coeffs() = -qi.coeffs();
-            qsum.coeffs() += qi.coeffs();
+            // Ensure consistent hemisphere with first quaternion
+            if (i > 0) { Eigen::Quaterniond q0(cands[0].R); q0.normalize();
+                if (qi.dot(q0) < 0.0) qi.coeffs() = -qi.coeffs(); }
+            double w = 1.0 / (1.0 + cands[i].err * cands[i].err); // inverse squared error weight
+            Eigen::Vector4d qv = qi.coeffs(); // (x,y,z,w)
+            M += w * qv * qv.transpose();
         }
-        qsum.normalize();
-        Eigen::Matrix3d avgR = qsum.toRotationMatrix();
-        // Median translation (component-wise)
-        std::vector<double> tx(cands.size()),ty(cands.size()),tz(cands.size());
-        for (size_t i=0;i<cands.size();i++){tx[i]=cands[i].t.x();ty[i]=cands[i].t.y();tz[i]=cands[i].t.z();}
-        auto median_of=[](std::vector<double>&v)->double{std::sort(v.begin(),v.end());
-            size_t n=v.size();return(n%2==1)?v[n/2]:0.5*(v[n/2-1]+v[n/2]);};
-        Eigen::Vector3d avgT(median_of(tx), median_of(ty), median_of(tz));
+        Eigen::SelfAdjointEigenSolver<Eigen::Matrix4d> eig(M);
+        Eigen::Vector4d best_q = eig.eigenvectors().col(3); // largest eigenvalue
+        Eigen::Quaterniond avgQ(best_q(3), best_q(0), best_q(1), best_q(2)); // Eigen stores as (w,x,y,z)
+        avgQ.normalize();
+        Eigen::Matrix3d avgR = avgQ.toRotationMatrix();
+        // Weighted translation (inverse squared error weight, same as rotation)
+        Eigen::Vector3d avgT = Eigen::Vector3d::Zero(); double wsum = 0;
+        for (size_t i=0;i<cands.size();i++) {
+            double w = 1.0 / (1.0 + cands[i].err * cands[i].err);
+            avgT += w * cands[i].t; wsum += w;
+        }
+        avgT /= wsum;
         poses[ci]={avgR, avgT, intr.K, intr.dist}; init[ci]=true; ic++;
         fprintf(stderr,"[Experimental]   PnP %s: via ref (%d frames averaged)\n",
             config.cam_ordered[ci].c_str(), (int)cands.size());
