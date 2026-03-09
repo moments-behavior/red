@@ -75,6 +75,11 @@ int main(int argc, char **argv) {
     }
 
     std::cout << "\nMean reproj error: " << result.mean_reproj_error << " px\n";
+    if (!result.all_reproj_errors.empty()) {
+        auto sorted = result.all_reproj_errors;
+        std::sort(sorted.begin(), sorted.end());
+        std::cout << "Median reproj error: " << sorted[sorted.size()/2] << " px\n";
+    }
     std::cout << "Cameras: " << result.cameras.size() << "\n";
     std::cout << "3D points: " << result.points_3d.size() << "\n";
     std::cout << "Output: " << result.output_folder << "\n";

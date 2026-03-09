@@ -2033,19 +2033,62 @@ inline bool initialize_extrinsics_pnp(
     poses[ref]={Eigen::Matrix3d::Identity(),Eigen::Vector3d::Zero(),ri.K,ri.dist};
     fprintf(stderr,"[Experimental]   Reference camera: %s (%d PnP frames)\n",config.cam_ordered[ref].c_str(),mf);
     std::vector<bool> init(num_cameras,false); init[ref]=true; int ic=1;
+    // Multi-frame pose averaging: collect relative poses from ALL shared frames,
+    // average rotations via quaternion averaging, translations via median.
     for (int ci=0;ci<num_cameras;ci++) {
         if (ci==ref) continue;
         const auto &intr=intrinsics.at(config.cam_ordered[ci]);
-        double be=1e10; Eigen::Matrix3d bR; Eigen::Vector3d bt;
+        // Collect relative poses from all shared frames where both have reproj < 2.0
+        struct RelP { Eigen::Matrix3d R; Eigen::Vector3d t; double err; };
+        std::vector<RelP> cands;
         for (const auto &[fi,fp] : pnp[ci]) {
             auto it=pnp[ref].find(fi); if(it==pnp[ref].end()) continue;
+            if (fp.reproj >= 2.0 || it->second.reproj >= 2.0) continue;
             Eigen::Matrix3d Rr=fp.R*it->second.R.transpose();
             Eigen::Vector3d tr=fp.t-Rr*it->second.t;
-            double ce=fp.reproj+it->second.reproj;
-            if (ce<be){be=ce;bR=Rr;bt=tr;}
+            cands.push_back({Rr, tr, fp.reproj+it->second.reproj});
         }
-        if (be<1e9){poses[ci]={bR,bt,intr.K,intr.dist};init[ci]=true;ic++;
-            fprintf(stderr,"[Experimental]   PnP %s: via ref (err %.2f)\n",config.cam_ordered[ci].c_str(),be);}
+        if (cands.empty()) {
+            // Fallback: no frames pass 2.0 filter, use best single frame (no filter)
+            double be=1e10; Eigen::Matrix3d bR; Eigen::Vector3d bt;
+            for (const auto &[fi,fp] : pnp[ci]) {
+                auto it=pnp[ref].find(fi); if(it==pnp[ref].end()) continue;
+                Eigen::Matrix3d Rr=fp.R*it->second.R.transpose();
+                Eigen::Vector3d tr=fp.t-Rr*it->second.t;
+                double ce=fp.reproj+it->second.reproj;
+                if (ce<be){be=ce;bR=Rr;bt=tr;}
+            }
+            if (be<1e9){poses[ci]={bR,bt,intr.K,intr.dist};init[ci]=true;ic++;
+                fprintf(stderr,"[Experimental]   PnP %s: via ref (1 frame fallback, err %.2f)\n",
+                    config.cam_ordered[ci].c_str(),be);}
+            continue;
+        }
+        if (cands.size()==1) {
+            poses[ci]={cands[0].R, cands[0].t, intr.K, intr.dist};
+            init[ci]=true; ic++;
+            fprintf(stderr,"[Experimental]   PnP %s: via ref (1 frame, err %.2f)\n",
+                config.cam_ordered[ci].c_str(), cands[0].err);
+            continue;
+        }
+        // Quaternion averaging for rotation
+        Eigen::Quaterniond q0(cands[0].R); q0.normalize();
+        Eigen::Quaterniond qsum = q0;
+        for (size_t i=1;i<cands.size();i++) {
+            Eigen::Quaterniond qi(cands[i].R); qi.normalize();
+            if (qi.dot(q0) < 0.0) qi.coeffs() = -qi.coeffs();
+            qsum.coeffs() += qi.coeffs();
+        }
+        qsum.normalize();
+        Eigen::Matrix3d avgR = qsum.toRotationMatrix();
+        // Median translation (component-wise)
+        std::vector<double> tx(cands.size()),ty(cands.size()),tz(cands.size());
+        for (size_t i=0;i<cands.size();i++){tx[i]=cands[i].t.x();ty[i]=cands[i].t.y();tz[i]=cands[i].t.z();}
+        auto median_of=[](std::vector<double>&v)->double{std::sort(v.begin(),v.end());
+            size_t n=v.size();return(n%2==1)?v[n/2]:0.5*(v[n/2-1]+v[n/2]);};
+        Eigen::Vector3d avgT(median_of(tx), median_of(ty), median_of(tz));
+        poses[ci]={avgR, avgT, intr.K, intr.dist}; init[ci]=true; ic++;
+        fprintf(stderr,"[Experimental]   PnP %s: via ref (%d frames averaged)\n",
+            config.cam_ordered[ci].c_str(), (int)cands.size());
     }
     if (ic<num_cameras) for (int ci=0;ci<num_cameras;ci++) {
         if (init[ci]) continue;
@@ -2102,63 +2145,163 @@ inline bool bundle_adjust_experimental(
     std::map<int,Eigen::Vector3d> &points_3d,
     CalibrationResult &result, std::string *status) {
     int nc=(int)config.cam_ordered.size();
-    std::vector<std::array<double,15>> cp(nc);
-    for(int i=0;i<nc;i++){auto rv=red_math::rotationMatrixToVector(poses[i].R);
-        cp[i]={rv.x(),rv.y(),rv.z(),poses[i].t.x(),poses[i].t.y(),poses[i].t.z(),
-               poses[i].K(0,0),poses[i].K(1,1),poses[i].K(0,2),poses[i].K(1,2),
-               poses[i].dist(0),poses[i].dist(1),poses[i].dist(2),poses[i].dist(3),poses[i].dist(4)};}
-    std::vector<int> pio; for(const auto&[id,_]:points_3d) pio.push_back(id);
-    std::sort(pio.begin(),pio.end());
-    std::map<int,int> pidx; std::vector<std::array<double,3>> pp(pio.size());
-    for(int i=0;i<(int)pio.size();i++){pidx[pio[i]]=i;const auto&pt=points_3d[pio[i]];pp[i]={pt.x(),pt.y(),pt.z()};}
+
+    // Helper: pack camera params from poses
+    auto pack_cameras = [&](std::vector<std::array<double,15>> &cp) {
+        cp.resize(nc);
+        for(int i=0;i<nc;i++){auto rv=red_math::rotationMatrixToVector(poses[i].R);
+            cp[i]={rv.x(),rv.y(),rv.z(),poses[i].t.x(),poses[i].t.y(),poses[i].t.z(),
+                   poses[i].K(0,0),poses[i].K(1,1),poses[i].K(0,2),poses[i].K(1,2),
+                   poses[i].dist(0),poses[i].dist(1),poses[i].dist(2),poses[i].dist(3),poses[i].dist(4)};}
+    };
+    // Helper: unpack camera params back to poses
+    auto unpack_cameras = [&](const std::vector<std::array<double,15>> &cp) {
+        for(int i=0;i<nc;i++){Eigen::Vector3d rv(cp[i][0],cp[i][1],cp[i][2]);
+            poses[i].R=red_math::rotationVectorToMatrix(rv);poses[i].t=Eigen::Vector3d(cp[i][3],cp[i][4],cp[i][5]);
+            poses[i].K=Eigen::Matrix3d::Identity();poses[i].K(0,0)=cp[i][6];poses[i].K(1,1)=cp[i][7];poses[i].K(0,2)=cp[i][8];poses[i].K(1,2)=cp[i][9];
+            poses[i].dist<<cp[i][10],cp[i][11],cp[i][12],cp[i][13],cp[i][14];}
+    };
+    // Helper: pack 3D points
+    auto pack_points = [&](std::vector<int> &pio, std::map<int,int> &pidx,
+                           std::vector<std::array<double,3>> &pp) {
+        pio.clear(); for(const auto&[id,_]:points_3d) pio.push_back(id);
+        std::sort(pio.begin(),pio.end());
+        pidx.clear(); pp.resize(pio.size());
+        for(int i=0;i<(int)pio.size();i++){pidx[pio[i]]=i;const auto&pt=points_3d[pio[i]];pp[i]={pt.x(),pt.y(),pt.z()};}
+    };
+    // Helper: unpack points
+    auto unpack_points = [&](const std::vector<int> &pio, const std::vector<std::array<double,3>> &pp) {
+        for(int i=0;i<(int)pio.size();i++)points_3d[pio[i]]=Eigen::Vector3d(pp[i][0],pp[i][1],pp[i][2]);
+    };
+
     struct Obs{int ci,pi;double px,py;};
-    std::vector<Obs> observations;
-    for(int c=0;c<nc;c++){auto it=landmarks.find(config.cam_ordered[c]);if(it==landmarks.end())continue;
-        for(const auto&[pid,px]:it->second){auto pit=pidx.find(pid);if(pit!=pidx.end())observations.push_back({c,pit->second,px.x(),px.y()});}}
+    auto build_observations = [&](const std::map<int,int> &pidx) {
+        std::vector<Obs> obs;
+        for(int c=0;c<nc;c++){auto it=landmarks.find(config.cam_ordered[c]);if(it==landmarks.end())continue;
+            for(const auto&[pid,px]:it->second){auto pit=pidx.find(pid);if(pit!=pidx.end())obs.push_back({c,pit->second,px.x(),px.y()});}}
+        return obs;
+    };
+
+    // Helper: compute reprojection errors for all observations
+    auto compute_errors = [&](const std::vector<Obs> &obs, const std::vector<std::array<double,15>> &cp,
+                              const std::vector<std::array<double,3>> &pp) {
+        std::vector<double> errors; errors.reserve(obs.size());
+        for(const auto&o:obs){
+            Eigen::Vector3d rv(cp[o.ci][0],cp[o.ci][1],cp[o.ci][2]),tv(cp[o.ci][3],cp[o.ci][4],cp[o.ci][5]);
+            Eigen::Matrix3d K=Eigen::Matrix3d::Identity();K(0,0)=cp[o.ci][6];K(1,1)=cp[o.ci][7];K(0,2)=cp[o.ci][8];K(1,2)=cp[o.ci][9];
+            Eigen::Matrix<double,5,1> d;d<<cp[o.ci][10],cp[o.ci][11],cp[o.ci][12],cp[o.ci][13],cp[o.ci][14];
+            auto&p=pp[o.pi];auto pr=red_math::projectPoint(Eigen::Vector3d(p[0],p[1],p[2]),rv,tv,K,d);
+            errors.push_back((pr-Eigen::Vector2d(o.px,o.py)).norm());}
+        return errors;
+    };
+
+    std::vector<std::array<double,15>> cp;
+    std::vector<int> pio; std::map<int,int> pidx; std::vector<std::array<double,3>> pp;
+    pack_cameras(cp); pack_points(pio,pidx,pp);
+    auto observations = build_observations(pidx);
     if(observations.empty()){if(status)*status="Error: no observations";return false;}
+
     int total_outliers=0,total_rounds=0;
-    for(int stage=0;stage<2;stage++){
-        for(int round=0;round<3;round++){
-            total_rounds++;
-            if(status){char b[128];snprintf(b,sizeof(b),"BA stage %d/2 round %d (%d obs)...",stage+1,round+1,(int)observations.size());*status=b;}
-            ceres::Problem problem;
-            for(const auto&obs:observations)
-                problem.AddResidualBlock(ReprojectionCost::Create(obs.px,obs.py),new ceres::CauchyLoss(1.0),cp[obs.ci].data(),pp[obs.pi].data());
-            if(stage==0){for(int c=0;c<nc;c++){std::vector<int> fix={6,7,8,9,10,11,12,13,14};
+
+    // 3-stage hierarchical BA with GNC:
+    //   Stage 0: Extrinsics only, GNC CauchyLoss 16→4→1
+    //   (Re-triangulate after stage 0)
+    //   Stage 1: Extrinsics + points, CauchyLoss 4→1
+    //   Stage 2: Full joint (extrinsics + intrinsics + points), CauchyLoss 1.0
+    // Outlier rejection: progressive Anipose-style thresholds
+    struct BAPass {
+        int fix_mode; // 0=fix intrinsics+points, 1=fix intrinsics, 2=free all
+        double cauchy_scale;
+        double outlier_px; // fixed px threshold (0 = skip outlier rejection)
+    };
+    std::vector<BAPass> passes = {
+        // Stage 0: extrinsics only, GNC
+        {0, 16.0, 0},
+        {0,  4.0, 0},
+        {0,  1.0, 20.0},
+        // Re-triangulation happens here (handled below)
+        // Stage 1: extrinsics + points
+        {1,  4.0, 0},
+        {1,  1.0, 10.0},
+        // Stage 2: full joint
+        {2,  1.0, 5.0},
+        {2,  1.0, 3.0},
+    };
+
+    bool did_retri = false;
+    for(int pi_pass=0;pi_pass<(int)passes.size();pi_pass++){
+        auto &bp = passes[pi_pass];
+
+        // Re-triangulate after stage 0 (between fix_mode 0 and 1)
+        if(!did_retri && bp.fix_mode >= 1) {
+            did_retri = true;
+            unpack_cameras(cp);
+            unpack_points(pio,pp);
+            // Re-triangulate with updated extrinsics
+            points_3d.clear();
+            int np = triangulate_landmarks_multiview(config,landmarks,poses,points_3d,10.0);
+            fprintf(stderr,"[Experimental]   Re-triangulated: %d landmarks\n",np);
+            pack_points(pio,pidx,pp);
+            observations = build_observations(pidx);
+        }
+
+        total_rounds++;
+        if(status){char b[128];snprintf(b,sizeof(b),"BA pass %d/%d (mode=%d cauchy=%.0f %d obs)...",
+            pi_pass+1,(int)passes.size(),bp.fix_mode,bp.cauchy_scale,(int)observations.size());*status=b;}
+
+        ceres::Problem problem;
+        for(const auto&obs:observations)
+            problem.AddResidualBlock(ReprojectionCost::Create(obs.px,obs.py),
+                new ceres::CauchyLoss(bp.cauchy_scale),cp[obs.ci].data(),pp[obs.pi].data());
+
+        if(bp.fix_mode==0){
+            // Fix intrinsics + points
+            for(int c=0;c<nc;c++){std::vector<int> fix={6,7,8,9,10,11,12,13,14};
                 problem.SetManifold(cp[c].data(),new ceres::SubsetManifold(15,fix));}
-                for(int i=0;i<(int)pp.size();i++)if(problem.HasParameterBlock(pp[i].data()))problem.SetParameterBlockConstant(pp[i].data());}
-            if(stage==1&&!config.ba_config.is_null()){
-                bool ub=config.ba_config.value("bounds",false);std::vector<double> bcp;
-                if(config.ba_config.contains("bounds_cp")&&config.ba_config["bounds_cp"].is_array())bcp=config.ba_config["bounds_cp"].get<std::vector<double>>();
-                if(ub&&bcp.size()>=15)for(int c=0;c<nc;c++){std::vector<int> ci;
-                    for(int p=0;p<15;p++){double b=bcp[p];if(b>0){problem.SetParameterLowerBound(cp[c].data(),p,cp[c][p]-b);problem.SetParameterUpperBound(cp[c].data(),p,cp[c][p]+b);}else if(b==0)ci.push_back(p);}
-                    if(!ci.empty())problem.SetManifold(cp[c].data(),new ceres::SubsetManifold(15,ci));}}
-            ceres::Solver::Options opt; opt.linear_solver_type=ceres::SPARSE_SCHUR;
-            opt.max_num_iterations=50; opt.function_tolerance=1e-8; opt.parameter_tolerance=1e-8;
-            opt.minimizer_progress_to_stdout=false; opt.num_threads=std::max(1,(int)std::thread::hardware_concurrency());
-            ceres::Solver::Summary sum; ceres::Solve(opt,&problem,&sum);
-            fprintf(stderr,"[Experimental] BA stage %d round %d: %s cost %.2f→%.2f iters=%d time=%.2fs\n",
-                stage+1,round+1,sum.IsSolutionUsable()?"OK":"FAIL",sum.initial_cost,sum.final_cost,(int)sum.iterations.size(),sum.total_time_in_seconds);
-            std::vector<double> errors; errors.reserve(observations.size());
-            for(const auto&obs:observations){
-                Eigen::Vector3d rv(cp[obs.ci][0],cp[obs.ci][1],cp[obs.ci][2]),tv(cp[obs.ci][3],cp[obs.ci][4],cp[obs.ci][5]);
-                Eigen::Matrix3d K=Eigen::Matrix3d::Identity();K(0,0)=cp[obs.ci][6];K(1,1)=cp[obs.ci][7];K(0,2)=cp[obs.ci][8];K(1,2)=cp[obs.ci][9];
-                Eigen::Matrix<double,5,1> d;d<<cp[obs.ci][10],cp[obs.ci][11],cp[obs.ci][12],cp[obs.ci][13],cp[obs.ci][14];
-                auto&p=pp[obs.pi];auto pr=red_math::projectPoint(Eigen::Vector3d(p[0],p[1],p[2]),rv,tv,K,d);
-                errors.push_back((pr-Eigen::Vector2d(obs.px,obs.py)).norm());}
-            auto se=errors;std::sort(se.begin(),se.end());double med=se[se.size()/2],ssq=0;
-            for(double e:errors)ssq+=(e-med)*(e-med);double sd=std::sqrt(ssq/errors.size()),th=med+2.0*sd;
-            std::vector<Obs> inl;for(int i=0;i<(int)observations.size();i++)if(errors[i]<th)inl.push_back(observations[i]);
+            for(int i=0;i<(int)pp.size();i++)if(problem.HasParameterBlock(pp[i].data()))problem.SetParameterBlockConstant(pp[i].data());
+        } else if(bp.fix_mode==1){
+            // Fix intrinsics only, points free
+            for(int c=0;c<nc;c++){std::vector<int> fix={6,7,8,9,10,11,12,13,14};
+                problem.SetManifold(cp[c].data(),new ceres::SubsetManifold(15,fix));}
+        }
+        // fix_mode==2: everything free
+
+        // Apply ba_config bounds in full joint mode
+        if(bp.fix_mode==2&&!config.ba_config.is_null()){
+            bool ub=config.ba_config.value("bounds",false);std::vector<double> bcp;
+            if(config.ba_config.contains("bounds_cp")&&config.ba_config["bounds_cp"].is_array())bcp=config.ba_config["bounds_cp"].get<std::vector<double>>();
+            if(ub&&bcp.size()>=15)for(int c=0;c<nc;c++){std::vector<int> ci;
+                for(int p=0;p<15;p++){double b=bcp[p];if(b>0){problem.SetParameterLowerBound(cp[c].data(),p,cp[c][p]-b);problem.SetParameterUpperBound(cp[c].data(),p,cp[c][p]+b);}else if(b==0)ci.push_back(p);}
+                if(!ci.empty())problem.SetManifold(cp[c].data(),new ceres::SubsetManifold(15,ci));}}
+
+        ceres::Solver::Options opt; opt.linear_solver_type=ceres::SPARSE_SCHUR;
+        opt.max_num_iterations=100;
+        opt.function_tolerance=1e-10; opt.parameter_tolerance=1e-10; opt.gradient_tolerance=1e-12;
+        opt.use_inner_iterations=true;
+        opt.minimizer_progress_to_stdout=false;
+        opt.num_threads=std::max(1,(int)std::thread::hardware_concurrency());
+        ceres::Solver::Summary sum; ceres::Solve(opt,&problem,&sum);
+        fprintf(stderr,"[Experimental] Pass %d/%d (mode=%d cauchy=%.0f): %s cost %.2f→%.2f iters=%d time=%.2fs\n",
+            pi_pass+1,(int)passes.size(),bp.fix_mode,bp.cauchy_scale,
+            sum.IsSolutionUsable()?"OK":"FAIL",sum.initial_cost,sum.final_cost,
+            (int)sum.iterations.size(),sum.total_time_in_seconds);
+
+        // Progressive outlier rejection (Anipose-style fixed px threshold)
+        if(bp.outlier_px > 0) {
+            auto errors = compute_errors(observations,cp,pp);
+            std::vector<Obs> inl;
+            for(int i=0;i<(int)observations.size();i++)
+                if(errors[i]<bp.outlier_px) inl.push_back(observations[i]);
             int rem=(int)observations.size()-(int)inl.size();total_outliers+=rem;
-            fprintf(stderr,"[Experimental]   Outlier rejection: median=%.3f std=%.3f threshold=%.3f removed=%d\n",med,sd,th,rem);
-            if(rem==0)break; observations=std::move(inl);
+            fprintf(stderr,"[Experimental]   Outlier rejection: threshold=%.1f px removed=%d\n",bp.outlier_px,rem);
+            if(rem>0) observations=std::move(inl);
         }
     }
-    for(int i=0;i<nc;i++){Eigen::Vector3d rv(cp[i][0],cp[i][1],cp[i][2]);
-        poses[i].R=red_math::rotationVectorToMatrix(rv);poses[i].t=Eigen::Vector3d(cp[i][3],cp[i][4],cp[i][5]);
-        poses[i].K=Eigen::Matrix3d::Identity();poses[i].K(0,0)=cp[i][6];poses[i].K(1,1)=cp[i][7];poses[i].K(0,2)=cp[i][8];poses[i].K(1,2)=cp[i][9];
-        poses[i].dist<<cp[i][10],cp[i][11],cp[i][12],cp[i][13],cp[i][14];}
-    for(int i=0;i<(int)pio.size();i++)points_3d[pio[i]]=Eigen::Vector3d(pp[i][0],pp[i][1],pp[i][2]);
+
+    // Unpack final results
+    unpack_cameras(cp); unpack_points(pio,pp);
+
+    // Collect per-camera metrics
     result.per_camera_metrics.resize(nc);result.all_reproj_errors.clear();
     for(int c=0;c<nc;c++){auto&m=result.per_camera_metrics[c];m.name=config.cam_ordered[c];
         auto it=landmarks.find(m.name);if(it==landmarks.end())continue;
@@ -2200,8 +2343,8 @@ inline CalibrationResult run_experimental_pipeline(
     if(!initialize_extrinsics_pnp(config,intrinsics,poses,status)){result.error=status?*status:"PnP failed";return result;}
     if(status)*status="Step 4: Triangulation...";
     std::map<int,Eigen::Vector3d> points_3d;
-    int np=triangulate_landmarks_multiview(config,landmarks,poses,points_3d,10.0);
-    fprintf(stderr,"[Experimental] Triangulated %d landmarks\n",np);
+    int np=triangulate_landmarks_multiview(config,landmarks,poses,points_3d,50.0);
+    fprintf(stderr,"[Experimental] Triangulated %d landmarks (threshold=50px)\n",np);
     if(np<10){result.error="Too few points ("+std::to_string(np)+")";return result;}
     if(status)*status="Step 5: Bundle adjustment...";
     if(!bundle_adjust_experimental(config,landmarks,poses,points_3d,result,status)){result.error=status?*status:"BA failed";return result;}
