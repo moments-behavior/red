@@ -99,17 +99,17 @@ inline void DrawCalibViewerWindow(CalibViewerState &state) {
     int nc = (int)res.cameras.size();
 
     // ── Controls ──
-    ImGui::SliderFloat("Frustum (mm)", &state.frustum_scale, 10.0f, 500.0f);
-    ImGui::SameLine();
-    ImGui::Checkbox("Points", &state.show_points);
-    ImGui::SameLine();
-    ImGui::Checkbox("Labels", &state.show_labels);
-    ImGui::SameLine();
-    ImGui::Checkbox("Reg. Graph", &state.show_reg_graph);
-    ImGui::SameLine();
-    ImGui::Checkbox("Boards", &state.show_board_poses);
-    ImGui::SameLine();
-    ImGui::Checkbox("Axes", &state.show_axes_box);
+    ImVec4 label_col(0.5f, 0.7f, 1.0f, 1.0f); // light blue, matches Labeling Tool
+    ImGui::SetNextItemWidth(120);
+    ImGui::SliderFloat("##frustum", &state.frustum_scale, 10.0f, 500.0f, "%.0f mm");
+    ImGui::SameLine(); ImGui::TextColored(label_col, "Frustum");
+    ImGui::PushStyleColor(ImGuiCol_Text, label_col);
+    ImGui::SameLine(); ImGui::Checkbox("Points", &state.show_points);
+    ImGui::SameLine(); ImGui::Checkbox("Labels", &state.show_labels);
+    ImGui::SameLine(); ImGui::Checkbox("Reg. Graph", &state.show_reg_graph);
+    ImGui::SameLine(); ImGui::Checkbox("Boards", &state.show_board_poses);
+    ImGui::SameLine(); ImGui::Checkbox("Axes", &state.show_axes_box);
+    ImGui::PopStyleColor();
 
     // Camera selector
     {
