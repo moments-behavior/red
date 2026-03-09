@@ -122,6 +122,56 @@ struct PerCameraMetrics {
     double intrinsic_reproj = 0.0;
 };
 
+// Calibration diagnostic database — stores intermediate data for inspection.
+// Serialized to calibration_data.json alongside the YAML output.
+struct CalibrationDatabase {
+    // Per-frame board poses from PnP (camera_name → {frame_idx → pose})
+    struct BoardPose {
+        Eigen::Matrix3d R = Eigen::Matrix3d::Identity();
+        Eigen::Vector3d t = Eigen::Vector3d::Zero();
+        double reproj = 0; int num_corners = 0;
+    };
+    std::map<std::string, std::map<int, BoardPose>> board_poses;
+
+    // Landmark map (camera_name → {landmark_id → pixel})
+    std::map<std::string, std::map<int, Eigen::Vector2d>> landmarks;
+
+    // Registration graph (experimental pipeline)
+    struct RegistrationStep {
+        std::string camera_name;
+        int camera_idx = -1;
+        std::string parent_camera; // registered against this camera (or "initial_pair")
+        int num_shared_frames = 0;
+        int num_3d_points = 0;
+        std::string method; // "initial_pair", "markley_avg", "bridge"
+    };
+    std::vector<RegistrationStep> registration_order;
+
+    // BA pass history
+    struct BAPassInfo {
+        int pass_number = 0;
+        int fix_mode = 0;
+        double cauchy_scale = 1.0;
+        double cost_before = 0, cost_after = 0;
+        int iterations = 0;
+        double time_sec = 0;
+        int outliers_removed = 0;
+    };
+    std::vector<BAPassInfo> ba_passes;
+
+    // Per-observation residuals (after final BA)
+    struct Residual {
+        int camera_idx; int landmark_id;
+        float obs_x, obs_y, pred_x, pred_y, error;
+    };
+    std::vector<Residual> residuals;
+
+    // Pipeline timing
+    double detection_time_sec = 0;
+    double ba_time_sec = 0;
+    double total_time_sec = 0;
+};
+
 struct CalibrationResult {
     std::vector<CameraPose> cameras;
     std::vector<std::string> cam_names;
@@ -136,6 +186,8 @@ struct CalibrationResult {
     std::vector<double> all_reproj_errors;
     int ba_rounds = 0;
     int outliers_removed = 0;
+    // Diagnostic database (populated during experimental pipeline)
+    CalibrationDatabase db;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1960,6 +2012,81 @@ inline bool write_intermediate_output(
     return true;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Write CalibrationDatabase to JSON for 3D viewer inspection
+// ─────────────────────────────────────────────────────────────────────────────
+
+inline void write_calibration_database(const CalibrationDatabase &db,
+    const std::string &output_folder) {
+    nlohmann::json j;
+    j["version"] = 1;
+
+    // Board poses: camera → {frame → {R, t, reproj, corners}}
+    nlohmann::json bp_j;
+    for (const auto &[cam, frames] : db.board_poses) {
+        nlohmann::json cam_j;
+        for (const auto &[fi, bp] : frames) {
+            nlohmann::json pose_j;
+            pose_j["reproj"] = bp.reproj;
+            pose_j["corners"] = bp.num_corners;
+            pose_j["t"] = {bp.t.x(), bp.t.y(), bp.t.z()};
+            nlohmann::json R_j = nlohmann::json::array();
+            for (int r = 0; r < 3; r++) {
+                nlohmann::json row = nlohmann::json::array();
+                for (int c = 0; c < 3; c++) row.push_back(bp.R(r, c));
+                R_j.push_back(row);
+            }
+            pose_j["R"] = R_j;
+            cam_j[std::to_string(fi)] = pose_j;
+        }
+        bp_j[cam] = cam_j;
+    }
+    j["board_poses"] = bp_j;
+
+    // Registration order
+    nlohmann::json reg_j = nlohmann::json::array();
+    for (const auto &step : db.registration_order) {
+        reg_j.push_back({{"camera", step.camera_name}, {"idx", step.camera_idx},
+            {"parent", step.parent_camera}, {"frames", step.num_shared_frames},
+            {"points", step.num_3d_points}, {"method", step.method}});
+    }
+    j["registration_order"] = reg_j;
+
+    // BA passes
+    nlohmann::json ba_j = nlohmann::json::array();
+    for (const auto &p : db.ba_passes) {
+        ba_j.push_back({{"pass", p.pass_number}, {"mode", p.fix_mode},
+            {"cauchy", p.cauchy_scale}, {"cost_before", p.cost_before},
+            {"cost_after", p.cost_after}, {"iters", p.iterations},
+            {"time", p.time_sec}, {"outliers", p.outliers_removed}});
+    }
+    j["ba_passes"] = ba_j;
+
+    // Per-observation residuals (compact: parallel arrays)
+    if (!db.residuals.empty()) {
+        nlohmann::json res_j;
+        std::vector<int> cam_idxs, lm_ids;
+        std::vector<float> errors;
+        for (const auto &r : db.residuals) {
+            cam_idxs.push_back(r.camera_idx);
+            lm_ids.push_back(r.landmark_id);
+            errors.push_back(r.error);
+        }
+        res_j["camera_idx"] = cam_idxs;
+        res_j["landmark_id"] = lm_ids;
+        res_j["error"] = errors;
+        res_j["count"] = (int)db.residuals.size();
+        j["residuals"] = res_j;
+    }
+
+    j["timing"] = {{"detection_sec", db.detection_time_sec},
+                    {"ba_sec", db.ba_time_sec},
+                    {"total_sec", db.total_time_sec}};
+
+    std::ofstream f(output_folder + "/calibration_data.json");
+    if (f.is_open()) f << j.dump(2);
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // Experimental pipeline: PnP-all-then-BA (no spanning tree)
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -2047,7 +2174,8 @@ inline bool solvePnPHomography(
 inline bool initialize_extrinsics_pnp(
     const CalibrationTool::CalibConfig &config,
     const std::map<std::string, CameraIntrinsics> &intrinsics,
-    std::vector<CameraPose> &poses, std::string *status) {
+    std::vector<CameraPose> &poses, std::string *status,
+    CalibrationDatabase *db = nullptr) {
     int num_cameras = (int)config.cam_ordered.size();
     const auto &cs = config.charuco_setup;
     poses.resize(num_cameras);
@@ -2082,6 +2210,17 @@ inline bool initialize_extrinsics_pnp(
             double es=0; for(int i=0;i<(int)pr.size();i++) es+=(pr[i]-iraw[i]).norm();
             double me=es/pr.size();
             if (me<10.0) pnp[ci][fi]={Rf,tf,me};
+        }
+    }
+    // Save board poses to database
+    if (db) {
+        for (int ci = 0; ci < num_cameras; ci++) {
+            const auto &serial = config.cam_ordered[ci];
+            for (const auto &[fi, fp] : pnp[ci]) {
+                db->board_poses[serial][fi] = {fp.R, fp.t, fp.reproj,
+                    (int)intrinsics.at(serial).corners_per_image.count(fi) ?
+                    (int)intrinsics.at(serial).corners_per_image.at(fi).size() : 0};
+            }
         }
     }
     // ── Greedy incremental registration (COLMAP-inspired) ──
@@ -2172,6 +2311,10 @@ inline bool initialize_extrinsics_pnp(
     init[best_b] = true; ic++;
     fprintf(stderr, "[Experimental]   Initial pair: %s + %s (%d shared frames)\n",
         config.cam_ordered[best_a].c_str(), config.cam_ordered[best_b].c_str(), best_shared);
+    if (db) {
+        db->registration_order.push_back({config.cam_ordered[best_a], best_a, "origin", best_shared, 0, "initial_pair"});
+        db->registration_order.push_back({config.cam_ordered[best_b], best_b, config.cam_ordered[best_a], best_shared, 0, "initial_pair"});
+    }
 
     // Step 2: Triangulate initial 3D point cloud from the pair
     // Build landmarks for just these two cameras
@@ -2350,6 +2493,8 @@ inline bool initialize_extrinsics_pnp(
             fprintf(stderr, "[Experimental]   PnP %s: %d frames from %d+ init cameras (%d 3D pts)\n",
                 config.cam_ordered[best_ci].c_str(), (int)all_cands.size(),
                 ic - 1, best_count);
+            if (db) db->registration_order.push_back({config.cam_ordered[best_ci], best_ci,
+                config.cam_ordered[best_a], (int)all_cands.size(), best_count, "markley_avg"});
         }
 
         // Triangulate new points visible from newly registered camera and existing cameras
@@ -2571,15 +2716,21 @@ inline bool bundle_adjust_experimental(
             (int)sum.iterations.size(),sum.total_time_in_seconds);
 
         // Progressive outlier rejection (Anipose-style fixed px threshold)
+        int pass_outliers = 0;
         if(bp.outlier_px > 0) {
             auto errors = compute_errors(observations,cp,pp);
             std::vector<Obs> inl;
             for(int i=0;i<(int)observations.size();i++)
                 if(errors[i]<bp.outlier_px) inl.push_back(observations[i]);
-            int rem=(int)observations.size()-(int)inl.size();total_outliers+=rem;
-            fprintf(stderr,"[Experimental]   Outlier rejection: threshold=%.1f px removed=%d\n",bp.outlier_px,rem);
-            if(rem>0) observations=std::move(inl);
+            pass_outliers=(int)observations.size()-(int)inl.size();total_outliers+=pass_outliers;
+            fprintf(stderr,"[Experimental]   Outlier rejection: threshold=%.1f px removed=%d\n",bp.outlier_px,pass_outliers);
+            if(pass_outliers>0) observations=std::move(inl);
         }
+
+        // Record BA pass info in database
+        result.db.ba_passes.push_back({pi_pass+1, bp.fix_mode, bp.cauchy_scale,
+            sum.initial_cost, sum.final_cost, (int)sum.iterations.size(),
+            sum.total_time_in_seconds, pass_outliers});
     }
 
     // Unpack final results
@@ -2690,8 +2841,11 @@ inline CalibrationResult run_experimental_pipeline(
     if(status)*status="Step 3: PnP initialization...";
     std::map<std::string,std::map<int,Eigen::Vector2d>> landmarks;
     build_landmarks(config,intrinsics,landmarks);
+    result.db.landmarks = landmarks; // Save landmark map for 3D viewer
+    result.db.detection_time_sec = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - std::chrono::steady_clock::now()).count(); // placeholder
     std::vector<CameraPose> poses;
-    if(!initialize_extrinsics_pnp(config,intrinsics,poses,status)){result.error=status?*status:"PnP failed";return result;}
+    if(!initialize_extrinsics_pnp(config,intrinsics,poses,status,&result.db)){result.error=status?*status:"PnP failed";return result;}
     if(status)*status="Step 4: Triangulation...";
     std::map<int,Eigen::Vector3d> points_3d;
     int np=triangulate_landmarks_multiview(config,landmarks,poses,points_3d,50.0);
@@ -2704,17 +2858,25 @@ inline CalibrationResult run_experimental_pipeline(
     if(status)*status="Step 7: Writing files...";
     if(!write_calibration(poses,config.cam_ordered,outf,result.image_width,result.image_height,status)){result.error=status?*status:"Write failed";return result;}
     write_intermediate_output(config,intrinsics,landmarks,poses,points_3d,outf);
+    // Collect final residuals and write database
     double te=0;int to=0;result.all_reproj_errors.clear();
+    result.db.residuals.clear();
     for(int c=0;c<nc;c++){auto li=landmarks.find(config.cam_ordered[c]);if(li==landmarks.end())continue;
         auto rv=red_math::rotationMatrixToVector(poses[c].R);std::vector<double>ce;
         for(const auto&[pid,px]:li->second){auto pt=points_3d.find(pid);if(pt==points_3d.end())continue;
-            double e=(red_math::projectPoint(pt->second,rv,poses[c].t,poses[c].K,poses[c].dist)-px).norm();
-            te+=e;to++;ce.push_back(e);result.all_reproj_errors.push_back(e);}
+            auto proj=red_math::projectPoint(pt->second,rv,poses[c].t,poses[c].K,poses[c].dist);
+            double e=(proj-px).norm();
+            te+=e;to++;ce.push_back(e);result.all_reproj_errors.push_back(e);
+            result.db.residuals.push_back({c, pid, (float)px.x(), (float)px.y(),
+                (float)proj.x(), (float)proj.y(), (float)e});}
         auto&m=result.per_camera_metrics[c];m.observation_count=(int)ce.size();if(!ce.empty()){
             double s=0;for(double e:ce)s+=e;m.mean_reproj=s/ce.size();std::sort(ce.begin(),ce.end());
             m.median_reproj=ce[ce.size()/2];m.max_reproj=ce.back();double v=0;for(double e:ce)v+=(e-m.mean_reproj)*(e-m.mean_reproj);m.std_reproj=std::sqrt(v/ce.size());}}
     result.mean_reproj_error=(to>0)?(te/to):0;result.output_folder=outf;result.cameras=std::move(poses);result.points_3d=std::move(points_3d);result.success=true;
-    fprintf(stderr,"[Experimental] === Done: %.3f px (%d obs, %d cameras) ===\n\n",result.mean_reproj_error,to,nc);
+    // Write calibration database for 3D viewer inspection
+    write_calibration_database(result.db, outf);
+    fprintf(stderr,"[Experimental] === Done: %.3f px (%d obs, %d cameras, %d board poses, %d residuals) ===\n\n",
+        result.mean_reproj_error,to,nc,(int)result.db.board_poses.size(),(int)result.db.residuals.size());
     if(status)*status="Experimental done! "+std::to_string(result.mean_reproj_error).substr(0,5)+" px ("+std::to_string(to)+" obs, "+std::to_string(result.ba_rounds)+" BA rounds, "+std::to_string(result.outliers_removed)+" outliers)";
     return result;
 }
