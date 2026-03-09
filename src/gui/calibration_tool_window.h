@@ -5,6 +5,7 @@
 #include "app_context.h"
 #include "calibration_tool.h"
 #include "calibration_pipeline.h"
+#include "calib_viewer_window.h"
 #include "laser_calibration.h"
 #include "aruco_metal.h"
 #include "laser_metal.h"
@@ -116,6 +117,9 @@ struct CalibrationToolState {
 
     // Laser visualization
     LaserVizState laser_viz;
+
+    // 3D calibration viewer
+    CalibViewerState calib_viewer;
 };
 
 struct CalibrationToolCallbacks {
@@ -870,6 +874,11 @@ inline void DrawCalibrationToolWindow(
                         state.exp_img_result.mean_reproj_error);
                     ImGui::Text("Output: %s",
                         state.project.image_experimental_folder.c_str());
+                    ImGui::SameLine();
+                    if (ImGui::Button("Show 3D##exp_img")) {
+                        state.calib_viewer.result = &state.exp_img_result;
+                        state.calib_viewer.show = true;
+                    }
                 }
 
                 ImGui::Unindent();
@@ -1147,6 +1156,11 @@ inline void DrawCalibrationToolWindow(
                         state.exp_vid_result.mean_reproj_error);
                     ImGui::Text("Output: %s",
                         state.project.video_experimental_folder.c_str());
+                    ImGui::SameLine();
+                    if (ImGui::Button("Show 3D##exp_vid")) {
+                        state.calib_viewer.result = &state.exp_vid_result;
+                        state.calib_viewer.show = true;
+                    }
                 }
 
                 ImGui::Unindent();
@@ -1804,8 +1818,12 @@ inline void DrawCalibrationToolWindow(
         ImGui::End();
     }
 
+    // Draw 3D viewer as a separate window (if active)
+    DrawCalibViewerWindow(state.calib_viewer);
+
     // Reset state when calibration tool window is closed
     if (!state.show) {
+        state.calib_viewer.show = false;
         state.project_loaded = false;
         state.show_create_dialog = true;
         state.config_loaded = false;
