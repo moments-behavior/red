@@ -1,6 +1,6 @@
 // test_pipeline_run.cpp — Run full calibration pipeline and report results.
 // Build: cmake target "test_pipeline_run"
-// Run:   ./test_pipeline_run
+// Run:   ./test_pipeline_run [--experimental] [--video] [--step N]
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "calibration_pipeline.h"
@@ -18,12 +18,19 @@ simplelogger::Logger *logger =
 
 static const char *CONFIG_PATH =
     "/Users/johnsonr/datasets/QuanShare/CalibrationDataset/2026_03_01/config.json";
+static const char *VIDEO_FOLDER =
+    "/Users/johnsonr/datasets/QuanShare/CalibrationDataset/2026_03_01/videos/"
+    "2026_03_01_17_05_11";
 
 int main(int argc, char **argv) {
     bool run_experimental = false;
+    bool run_video = false;
+    int frame_step = 1;
     for (int i = 1; i < argc; i++) {
-        if (std::string(argv[i]) == "--experimental")
-            run_experimental = true;
+        std::string arg = argv[i];
+        if (arg == "--experimental") run_experimental = true;
+        else if (arg == "--video") run_video = true;
+        else if (arg == "--step" && i + 1 < argc) frame_step = std::atoi(argv[++i]);
     }
 
     CalibrationTool::CalibConfig config;
@@ -33,6 +40,10 @@ int main(int argc, char **argv) {
         return 1;
     }
     std::cout << "Config loaded: " << config.cam_ordered.size() << " cameras\n";
+    if (run_video)
+        std::cout << "Mode: VIDEO (step=" << frame_step << ")\n";
+    else
+        std::cout << "Mode: IMAGES\n";
 
     // Create Metal GPU context for accelerated threshold (macOS only)
     aruco_detect::GpuThresholdFunc gpu_fn = nullptr;
@@ -50,18 +61,34 @@ int main(int argc, char **argv) {
     std::cout << "Metal GPU acceleration: N/A (Linux)\n";
 #endif
 
+    // Set up video frame range if needed
+    CalibrationPipeline::VideoFrameRange vfr;
+    CalibrationPipeline::VideoFrameRange *vfr_ptr = nullptr;
+    if (run_video) {
+        vfr.video_folder = VIDEO_FOLDER;
+        vfr.cam_ordered = config.cam_ordered;
+        vfr.start_frame = 0;
+        vfr.stop_frame = 0; // all frames
+        vfr.frame_step = frame_step;
+        vfr_ptr = &vfr;
+    }
+
     std::string status;
     CalibrationPipeline::CalibrationResult result;
+
+    std::string out_base = run_video
+        ? "/tmp/calib_test_video_step" + std::to_string(frame_step)
+        : "/tmp/calib_test_output";
 
     if (run_experimental) {
         std::cout << "\n=== Running EXPERIMENTAL pipeline ===\n\n";
         result = CalibrationPipeline::run_experimental_pipeline(
-            config, "/tmp/calib_test_experimental", &status,
-            nullptr, gpu_fn, gpu_ctx);
+            config, out_base + "_experimental", &status,
+            vfr_ptr, gpu_fn, gpu_ctx);
     } else {
         result = CalibrationPipeline::run_full_pipeline(
-            config, "/tmp/calib_test_output", &status,
-            nullptr, gpu_fn, gpu_ctx);
+            config, out_base, &status,
+            vfr_ptr, gpu_fn, gpu_ctx);
     }
 
 #ifdef __APPLE__
