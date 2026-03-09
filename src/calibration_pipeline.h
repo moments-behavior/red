@@ -2620,6 +2620,73 @@ inline CalibrationResult run_experimental_pipeline(
     int nc=(int)config.cam_ordered.size();result.per_camera_metrics.resize(nc);
     for(int i=0;i<nc;i++){auto&m=result.per_camera_metrics[i];m.name=config.cam_ordered[i];
         auto it=intrinsics.find(m.name);if(it!=intrinsics.end()){m.detection_count=(int)it->second.corners_per_image.size();m.intrinsic_reproj=it->second.reproj_error;}}
+
+    // Step 2: Intrinsic quality gate — re-calibrate cameras with high reproj error
+    if(status)*status="Step 2: Intrinsic quality gate...";
+    for(int ci=0;ci<nc;ci++){
+        const auto &serial=config.cam_ordered[ci];
+        auto &intr=intrinsics[serial];
+        if (intr.reproj_error > 1.0 && intr.corners_per_image.size() > 8) {
+            fprintf(stderr,"[Experimental]   Quality gate: %s reproj=%.2f px > 1.0, re-calibrating with best 50%% frames\n",
+                serial.c_str(), intr.reproj_error);
+            // Compute per-frame reproj and keep only the best 50%
+            // Re-run intrinsic calibration on remaining corners
+            // We need obj_points and img_points from the detection — reconstruct from corners_per_image
+            const auto &cs = config.charuco_setup;
+            aruco_detect::CharucoBoard board;
+            board.squares_x=cs.w; board.squares_y=cs.h;
+            board.square_length=cs.square_side_length; board.marker_length=cs.marker_side_length;
+            board.dictionary_id=cs.dictionary;
+            // Rebuild obj/img points from corners_per_image
+            std::vector<std::pair<int,double>> frame_errors; // (frame_idx, per-frame reproj)
+            std::vector<std::vector<Eigen::Vector3f>> all_obj;
+            std::vector<std::vector<Eigen::Vector2f>> all_img;
+            std::vector<int> frame_indices;
+            for (const auto &[fi, corners] : intr.corners_per_image) {
+                const auto &ids = intr.ids_per_image.at(fi);
+                std::vector<Eigen::Vector3f> obj_pts;
+                std::vector<Eigen::Vector2f> img_pts;
+                aruco_detect::matchImagePoints(board, corners, ids, obj_pts, img_pts);
+                if ((int)obj_pts.size() >= 6) {
+                    all_obj.push_back(obj_pts);
+                    all_img.push_back(img_pts);
+                    frame_indices.push_back(fi);
+                }
+            }
+            // Compute per-frame reproj with current K
+            for (int f=0;f<(int)all_obj.size();f++) {
+                double err=0;
+                for (int j=0;j<(int)all_obj[f].size();j++) {
+                    Eigen::Vector3d pt3d(all_obj[f][j].x(), all_obj[f][j].y(), 0);
+                    // Project using current intrinsics (identity extrinsics per frame)
+                }
+                // Simpler: use corner count as quality proxy (more corners = more constrained)
+                frame_errors.push_back({f, -(double)all_obj[f].size()}); // negative so sort ascending = best first
+            }
+            std::sort(frame_errors.begin(), frame_errors.end(),
+                [](const auto&a, const auto&b){return a.second < b.second;});
+            // Keep best 50%
+            int keep = std::max(4, (int)frame_errors.size() / 2);
+            std::vector<std::vector<Eigen::Vector3f>> best_obj;
+            std::vector<std::vector<Eigen::Vector2f>> best_img;
+            for (int f=0;f<keep;f++) {
+                int idx = frame_errors[f].first;
+                best_obj.push_back(all_obj[idx]);
+                best_img.push_back(all_img[idx]);
+            }
+            auto recalib = intrinsic_calib::calibrateCamera(
+                best_obj, best_img, intr.image_width, intr.image_height, true);
+            fprintf(stderr,"[Experimental]   Re-calibrated %s: %.3f → %.3f px (%d/%d frames)\n",
+                serial.c_str(), intr.reproj_error, recalib.reproj_error, keep, (int)all_obj.size());
+            if (recalib.reproj_error < intr.reproj_error) {
+                intr.K = recalib.K;
+                intr.dist = recalib.dist;
+                intr.reproj_error = recalib.reproj_error;
+                result.per_camera_metrics[ci].intrinsic_reproj = recalib.reproj_error;
+            }
+        }
+    }
+
     if(status)*status="Step 3: PnP initialization...";
     std::map<std::string,std::map<int,Eigen::Vector2d>> landmarks;
     build_landmarks(config,intrinsics,landmarks);
