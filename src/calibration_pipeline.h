@@ -350,7 +350,7 @@ detect_and_calibrate_intrinsics(
                     }
 
                     aruco_detect::cornerSubPix(
-                        pixels, w, h, charuco.corners, 5, 30, 0.01f);
+                        pixels, w, h, charuco.corners, 6, 30, 0.01f);
 
 #ifdef __APPLE__
                     free(pixels);
@@ -633,7 +633,7 @@ inline bool detect_and_calibrate_intrinsics_video(
                             gray.data(), w, h, board, aruco_dict,
                             nullptr, nullptr, &ds_images, num_passes);
                         if ((int)charuco.ids.size() >= 6) {
-                            aruco_detect::cornerSubPix(gray.data(), w, h, charuco.corners, 5, 30, 0.01f);
+                            aruco_detect::cornerSubPix(gray.data(), w, h, charuco.corners, 6, 30, 0.01f);
                             int sorted_idx = frame_to_idx[frame];
                             det.cam_data.corners_per_image[sorted_idx] = charuco.corners;
                             det.cam_data.ids_per_image[sorted_idx] = charuco.ids;
@@ -667,7 +667,7 @@ inline bool detect_and_calibrate_intrinsics_video(
                         CVPixelBufferUnlockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
                         auto charuco = aruco_detect::detectCharucoBoard(gray.data(), w, h, board, aruco_dict);
                         if ((int)charuco.ids.size() >= 6) {
-                            aruco_detect::cornerSubPix(gray.data(), w, h, charuco.corners, 5, 30, 0.01f);
+                            aruco_detect::cornerSubPix(gray.data(), w, h, charuco.corners, 6, 30, 0.01f);
                             int sorted_idx = frame_to_idx[frame];
                             det.cam_data.corners_per_image[sorted_idx] = charuco.corners;
                             det.cam_data.ids_per_image[sorted_idx] = charuco.ids;
@@ -719,7 +719,7 @@ inline bool detect_and_calibrate_intrinsics_video(
                         gray[i] = (uint8_t)((rgb[i*3]*77 + rgb[i*3+1]*150 + rgb[i*3+2]*29) >> 8);
                     auto charuco = aruco_detect::detectCharucoBoard(gray.data(), w, h, board, aruco_dict);
                     if ((int)charuco.ids.size() >= 6) {
-                        aruco_detect::cornerSubPix(gray.data(), w, h, charuco.corners, 5, 30, 0.01f);
+                        aruco_detect::cornerSubPix(gray.data(), w, h, charuco.corners, 6, 30, 0.01f);
                         int sorted_idx = frame_to_idx[frame_num];
                         det.cam_data.corners_per_image[sorted_idx] = charuco.corners;
                         det.cam_data.ids_per_image[sorted_idx] = charuco.ids;
