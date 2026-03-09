@@ -1,11 +1,12 @@
 #pragma once
 // calib_viewer_window.h — Interactive 3D visualization of calibration results.
-// Camera frustums, 3D point cloud, per-camera error coloring,
-// hover tooltips with calibration metadata. Uses ImPlot3D.
+// Camera frustums, 3D point cloud, per-camera inspection with hover tooltips.
+// Uses ImPlot3D for immediate-mode 3D rendering inside an ImGui window.
 
 #include "imgui.h"
 #include "implot3d.h"
 #include "calibration_pipeline.h"
+#include "red_math.h"
 
 #include <Eigen/Core>
 #include <Eigen/Geometry>
@@ -21,9 +22,12 @@ struct CalibViewerState {
     bool show_points = true;
     bool show_frustums = true;
     bool show_labels = true;
-    bool show_grid = true;
     bool color_by_error = true;
     int hovered_camera = -1;
+    int selected_camera = -1; // -1 = show all cameras
+    // Cached per-camera point indices (built on selection change)
+    std::vector<int> selected_cam_point_ids;
+    int cached_selection = -2; // force rebuild on first frame
 };
 
 struct FrustumGeometry {
@@ -48,9 +52,22 @@ inline FrustumGeometry compute_frustum(
     return f;
 }
 
-// Helper to convert ImVec4 color to ImU32 for ImPlot3D
-inline ImU32 Vec4ToU32(const ImVec4 &c) {
-    return IM_COL32((int)(c.x*255), (int)(c.y*255), (int)(c.z*255), (int)(c.w*255));
+// Find which 3D points are visible to a specific camera (reproj error < threshold)
+inline std::vector<int> find_camera_visible_points(
+    const CalibrationPipeline::CalibrationResult &res, int cam_idx, double thresh = 5.0) {
+    std::vector<int> ids;
+    if (cam_idx < 0 || cam_idx >= (int)res.cameras.size()) return ids;
+    const auto &cam = res.cameras[cam_idx];
+    Eigen::Vector3d rvec = red_math::rotationMatrixToVector(cam.R);
+    for (const auto &[pid, pt3d] : res.points_3d) {
+        Eigen::Vector2d proj = red_math::projectPoint(pt3d, rvec, cam.t, cam.K, cam.dist);
+        // We don't have the original 2D observation, but we can check if the point
+        // projects inside the image bounds (a proxy for "this camera saw this point")
+        if (proj.x() >= 0 && proj.x() < res.image_width &&
+            proj.y() >= 0 && proj.y() < res.image_height)
+            ids.push_back(pid);
+    }
+    return ids;
 }
 
 inline void DrawCalibViewerWindow(CalibViewerState &state) {
@@ -64,24 +81,63 @@ inline void DrawCalibViewerWindow(CalibViewerState &state) {
     const auto &res = *state.result;
     int nc = (int)res.cameras.size();
 
-    // Controls
+    // ── Controls ──
     ImGui::SliderFloat("Frustum (mm)", &state.frustum_scale, 10.0f, 500.0f);
     ImGui::SameLine();
     ImGui::Checkbox("Points", &state.show_points);
     ImGui::SameLine();
     ImGui::Checkbox("Labels", &state.show_labels);
-    ImGui::SameLine();
-    ImGui::Checkbox("Grid", &state.show_grid);
 
-    ImGui::Text("Mean: %.3f px | Cameras: %d | Points: %d",
-        res.mean_reproj_error, nc, (int)res.points_3d.size());
+    // Camera selector
+    {
+        const char *preview = (state.selected_camera < 0) ? "All Cameras" :
+            (state.selected_camera < nc ? res.cam_names[state.selected_camera].c_str() : "?");
+        ImGui::SetNextItemWidth(180);
+        if (ImGui::BeginCombo("Camera", preview)) {
+            if (ImGui::Selectable("All Cameras", state.selected_camera < 0))
+                state.selected_camera = -1;
+            for (int c = 0; c < nc; c++) {
+                char label[128];
+                if (c < (int)res.per_camera_metrics.size())
+                    snprintf(label, sizeof(label), "%s (%.3f px, %d dets)",
+                        res.cam_names[c].c_str(),
+                        res.per_camera_metrics[c].mean_reproj,
+                        res.per_camera_metrics[c].detection_count);
+                else
+                    snprintf(label, sizeof(label), "%s", res.cam_names[c].c_str());
+                if (ImGui::Selectable(label, state.selected_camera == c))
+                    state.selected_camera = c;
+            }
+            ImGui::EndCombo();
+        }
+    }
+
+    // Rebuild cached point list when selection changes
+    if (state.cached_selection != state.selected_camera) {
+        state.cached_selection = state.selected_camera;
+        if (state.selected_camera >= 0)
+            state.selected_cam_point_ids = find_camera_visible_points(res, state.selected_camera);
+        else
+            state.selected_cam_point_ids.clear();
+    }
+
+    // Summary
+    if (state.selected_camera < 0) {
+        ImGui::Text("Mean: %.3f px | Cameras: %d | Points: %d",
+            res.mean_reproj_error, nc, (int)res.points_3d.size());
+    } else if (state.selected_camera < (int)res.per_camera_metrics.size()) {
+        const auto &m = res.per_camera_metrics[state.selected_camera];
+        ImGui::Text("%s: reproj mean=%.3f median=%.3f px | %d dets | %d obs | %d visible 3D pts",
+            m.name.c_str(), m.mean_reproj, m.median_reproj,
+            m.detection_count, m.observation_count,
+            (int)state.selected_cam_point_ids.size());
+    }
 
     // Precompute frustums
     std::vector<FrustumGeometry> frustums(nc);
     for (int c = 0; c < nc; c++)
         frustums[c] = compute_frustum(res.cameras[c], res.image_width, res.image_height, state.frustum_scale);
 
-    // Auto-scale axes
     float scene_extent = 0;
     for (int c = 0; c < nc; c++)
         scene_extent = std::max(scene_extent, (float)frustums[c].center.norm());
@@ -92,64 +148,108 @@ inline void DrawCalibViewerWindow(CalibViewerState &state) {
         ImPlot3D::SetupAxes("X (mm)", "Y (mm)", "Z (mm)");
 
         state.hovered_camera = -1;
+        bool single_cam = (state.selected_camera >= 0);
 
         // ── Camera frustums ──
-        if (state.show_frustums) {
-            for (int c = 0; c < nc; c++) {
-                const auto &f = frustums[c];
+        for (int c = 0; c < nc; c++) {
+            const auto &f = frustums[c];
+            bool is_selected = (c == state.selected_camera);
+            bool is_dimmed = single_cam && !is_selected;
 
-                // Color
-                ImU32 col = IM_COL32(150, 200, 255, 255);
-                if (state.color_by_error && c < (int)res.per_camera_metrics.size()) {
-                    float err = (float)res.per_camera_metrics[c].mean_reproj;
-                    float t = std::min(err / 1.5f, 1.0f);
-                    col = IM_COL32((int)(t*255), (int)((1.0f-t*0.7f)*255), 25, 255);
-                }
-                float lw = 2.0f;
-
-                // Hover detection
-                ImVec2 cam_scr = ImPlot3D::PlotToPixels(f.center.x(), f.center.y(), f.center.z());
-                ImVec2 mouse = ImGui::GetMousePos();
-                float dx = cam_scr.x - mouse.x, dy = cam_scr.y - mouse.y;
-                if (dx*dx + dy*dy < 400.0f) {
-                    state.hovered_camera = c;
-                    col = IM_COL32(255, 255, 80, 255);
-                    lw = 3.0f;
-                }
-
-                // Frustum edges (4 lines from center to corners)
-                float xs[8], ys[8], zs[8];
-                for (int i = 0; i < 4; i++) {
-                    xs[i*2]=(float)f.center.x(); ys[i*2]=(float)f.center.y(); zs[i*2]=(float)f.center.z();
-                    xs[i*2+1]=(float)f.corners[i].x(); ys[i*2+1]=(float)f.corners[i].y(); zs[i*2+1]=(float)f.corners[i].z();
-                }
-                ImPlot3D::PlotLine(("##cam_"+std::to_string(c)).c_str(), xs, ys, zs, 8,
-                    {ImPlot3DProp_LineColor, col, ImPlot3DProp_LineWeight, lw, ImPlot3DProp_Flags, (double)ImPlot3DLineFlags_Segments});
-
-                // Image plane rectangle
-                float rxs[5], rys[5], rzs[5];
-                for (int i = 0; i < 4; i++) {
-                    rxs[i]=(float)f.corners[i].x(); rys[i]=(float)f.corners[i].y(); rzs[i]=(float)f.corners[i].z();
-                }
-                rxs[4]=rxs[0]; rys[4]=rys[0]; rzs[4]=rzs[0];
-                ImPlot3D::PlotLine(("##rect_"+std::to_string(c)).c_str(), rxs, rys, rzs, 5,
-                    {ImPlot3DProp_LineColor, col, ImPlot3DProp_LineWeight, lw*0.75f});
-
-                // Label
-                if (state.show_labels && c < (int)res.cam_names.size())
-                    ImPlot3D::PlotText(res.cam_names[c].c_str(), f.center.x(), f.center.y(), f.center.z());
+            // Color
+            ImU32 col;
+            float lw = 2.0f;
+            if (is_dimmed) {
+                col = IM_COL32(100, 100, 100, 60); // gray ghost
+                lw = 1.0f;
+            } else if (state.color_by_error && c < (int)res.per_camera_metrics.size()) {
+                float err = (float)res.per_camera_metrics[c].mean_reproj;
+                float t = std::min(err / 1.5f, 1.0f);
+                col = IM_COL32((int)(t*255), (int)((1.0f-t*0.7f)*255), 25, 255);
+            } else {
+                col = IM_COL32(150, 200, 255, 255);
             }
+            if (is_selected) {
+                col = IM_COL32(255, 220, 50, 255); // gold for selected
+                lw = 3.0f;
+            }
+
+            // Hover detection (only for non-dimmed cameras)
+            if (!is_dimmed) {
+                ImVec2 scr = ImPlot3D::PlotToPixels(f.center.x(), f.center.y(), f.center.z());
+                ImVec2 mouse = ImGui::GetMousePos();
+                float dx = scr.x-mouse.x, dy = scr.y-mouse.y;
+                if (dx*dx+dy*dy < 400.0f) {
+                    state.hovered_camera = c;
+                    if (!is_selected) { col = IM_COL32(255,255,80,255); lw = 3.0f; }
+                }
+            }
+
+            // Frustum edges
+            float xs[8], ys[8], zs[8];
+            for (int i = 0; i < 4; i++) {
+                xs[i*2]=(float)f.center.x(); ys[i*2]=(float)f.center.y(); zs[i*2]=(float)f.center.z();
+                xs[i*2+1]=(float)f.corners[i].x(); ys[i*2+1]=(float)f.corners[i].y(); zs[i*2+1]=(float)f.corners[i].z();
+            }
+            ImPlot3D::PlotLine(("##cam_"+std::to_string(c)).c_str(), xs, ys, zs, 8,
+                {ImPlot3DProp_LineColor, col, ImPlot3DProp_LineWeight, lw,
+                 ImPlot3DProp_Flags, (double)ImPlot3DLineFlags_Segments});
+
+            // Image plane
+            float rxs[5], rys[5], rzs[5];
+            for (int i = 0; i < 4; i++) {
+                rxs[i]=(float)f.corners[i].x(); rys[i]=(float)f.corners[i].y(); rzs[i]=(float)f.corners[i].z();
+            }
+            rxs[4]=rxs[0]; rys[4]=rys[0]; rzs[4]=rzs[0];
+            ImPlot3D::PlotLine(("##rect_"+std::to_string(c)).c_str(), rxs, rys, rzs, 5,
+                {ImPlot3DProp_LineColor, col, ImPlot3DProp_LineWeight, lw*0.75f});
+
+            // Optical axis (selected camera only)
+            if (is_selected) {
+                Eigen::Matrix3d Rt = res.cameras[c].R.transpose();
+                Eigen::Vector3d look_dir = Rt * Eigen::Vector3d(0, 0, 1); // camera Z in world
+                Eigen::Vector3d axis_end = f.center + look_dir * state.frustum_scale * 1.5;
+                float lx[2]={(float)f.center.x(),(float)axis_end.x()};
+                float ly[2]={(float)f.center.y(),(float)axis_end.y()};
+                float lz[2]={(float)f.center.z(),(float)axis_end.z()};
+                ImPlot3D::PlotLine("##axis", lx, ly, lz, 2,
+                    {ImPlot3DProp_LineColor, (ImU32)IM_COL32(255,255,0,180), ImPlot3DProp_LineWeight, 1.5});
+            }
+
+            // Label
+            if (state.show_labels && !is_dimmed && c < (int)res.cam_names.size())
+                ImPlot3D::PlotText(res.cam_names[c].c_str(), f.center.x(), f.center.y(), f.center.z());
         }
 
-        // ── 3D point cloud ──
-        if (state.show_points && !res.points_3d.empty()) {
-            std::vector<float> px, py, pz;
-            px.reserve(res.points_3d.size()); py.reserve(res.points_3d.size()); pz.reserve(res.points_3d.size());
-            for (const auto &[id, pt] : res.points_3d) {
-                px.push_back((float)pt.x()); py.push_back((float)pt.y()); pz.push_back((float)pt.z());
+        // ── 3D points ──
+        if (state.show_points) {
+            if (single_cam && !state.selected_cam_point_ids.empty()) {
+                // Show only points visible to the selected camera
+                std::vector<float> px, py, pz;
+                for (int pid : state.selected_cam_point_ids) {
+                    auto it = res.points_3d.find(pid);
+                    if (it != res.points_3d.end()) {
+                        px.push_back((float)it->second.x());
+                        py.push_back((float)it->second.y());
+                        pz.push_back((float)it->second.z());
+                    }
+                }
+                if (!px.empty()) {
+                    ImPlot3D::PlotScatter(
+                        ("Visible to " + res.cam_names[state.selected_camera]).c_str(),
+                        px.data(), py.data(), pz.data(), (int)px.size(),
+                        {ImPlot3DProp_MarkerSize, 2.0, ImPlot3DProp_MarkerFillColor, (ImU32)IM_COL32(255,200,50,200)});
+                }
+            } else if (!single_cam && !res.points_3d.empty()) {
+                // Show all points
+                std::vector<float> px, py, pz;
+                px.reserve(res.points_3d.size()); py.reserve(res.points_3d.size()); pz.reserve(res.points_3d.size());
+                for (const auto &[id, pt] : res.points_3d) {
+                    px.push_back((float)pt.x()); py.push_back((float)pt.y()); pz.push_back((float)pt.z());
+                }
+                ImPlot3D::PlotScatter("Landmarks", px.data(), py.data(), pz.data(), (int)px.size(),
+                    {ImPlot3DProp_MarkerSize, 1.5, ImPlot3DProp_MarkerFillColor, (ImU32)IM_COL32(80,130,255,160)});
             }
-            ImPlot3D::PlotScatter("Landmarks", px.data(), py.data(), pz.data(), (int)px.size(),
-                {ImPlot3DProp_MarkerSize, 1.5, ImPlot3DProp_MarkerFillColor, (ImU32)IM_COL32(80,130,255,160)});
         }
 
         // ── World axes ──
@@ -160,19 +260,6 @@ inline void DrawCalibViewerWindow(CalibViewerState &state) {
             ImPlot3D::PlotLine("Y", bx, by, bz, 2, {ImPlot3DProp_LineColor, (ImU32)IM_COL32(60,255,60,255), ImPlot3DProp_LineWeight, 2.5});
             float cx2[2]={0,0}, cy2[2]={0,0}, cz2[2]={0,axis_len};
             ImPlot3D::PlotLine("Z", cx2, cy2, cz2, 2, {ImPlot3DProp_LineColor, (ImU32)IM_COL32(80,80,255,255), ImPlot3DProp_LineWeight, 2.5});
-        }
-
-        // ── Ground grid ──
-        if (state.show_grid) {
-            float gs = std::max(50.0f, std::round(scene_extent/5.0f/50.0f)*50.0f);
-            float gr = gs * 5;
-            ImU32 grid_col = IM_COL32(128,128,128,50);
-            for (float v = -gr; v <= gr; v += gs) {
-                float gx[2]={-gr,gr}, gy[2]={v,v}, gz[2]={0,0};
-                ImPlot3D::PlotLine("##g", gx, gy, gz, 2, {ImPlot3DProp_LineColor, grid_col, ImPlot3DProp_LineWeight, 1.0});
-                float gx2[2]={v,v}, gy2[2]={-gr,gr}, gz2[2]={0,0};
-                ImPlot3D::PlotLine("##g", gx2, gy2, gz2, 2, {ImPlot3DProp_LineColor, grid_col, ImPlot3DProp_LineWeight, 1.0});
-            }
         }
 
         ImPlot3D::EndPlot();
@@ -196,11 +283,17 @@ inline void DrawCalibViewerWindow(CalibViewerState &state) {
         if (c < (int)res.per_camera_metrics.size()) {
             const auto &m = res.per_camera_metrics[c];
             ImGui::Separator();
-            ImGui::Text("Detections: %d frames | Observations: %d", m.detection_count, m.observation_count);
+            ImGui::Text("Detections: %d frames | Obs: %d", m.detection_count, m.observation_count);
             ImGui::Text("Reproj: mean=%.3f  median=%.3f  max=%.3f px", m.mean_reproj, m.median_reproj, m.max_reproj);
             ImGui::Text("Intrinsic reproj: %.3f px", m.intrinsic_reproj);
         }
+        ImGui::Text("(Click to select)");
         ImGui::EndTooltip();
+
+        // Click to select
+        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+            state.selected_camera = (state.selected_camera == c) ? -1 : c;
+        }
     }
 
     ImGui::End();
