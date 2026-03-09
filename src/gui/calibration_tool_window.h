@@ -813,18 +813,21 @@ inline void DrawCalibrationToolWindow(
                     if (!has_db && state.exp_img_done && state.exp_img_result.success)
                         has_db = true;
                     ImGui::BeginDisabled(!has_db);
-                    if (ImGui::Button("Show 3D##img_exp_load")) {
+                    if (ImGui::Button("Load Calibration##img_exp_load")) {
                         if (state.exp_img_done && state.exp_img_result.success) {
-                            // Use in-memory result
                             state.calib_viewer.result = &state.exp_img_result;
                         } else {
-                            // Load from disk
                             state.loaded_result = CalibrationPipeline::load_calibration_from_folder(
                                 exp_folder, state.config.cam_ordered);
-                            if (state.loaded_result.success)
-                                state.calib_viewer.result = &state.loaded_result;
-                            else
-                                state.status = "Error loading 3D: " + state.loaded_result.error;
+                            if (state.loaded_result.success) {
+                                state.exp_img_result = state.loaded_result;
+                                state.exp_img_done = true; // enables Quality Dashboard
+                                state.calib_viewer.result = &state.exp_img_result;
+                                state.status = "Loaded calibration: " +
+                                    std::to_string(state.exp_img_result.mean_reproj_error).substr(0,5) + " px";
+                            } else {
+                                state.status = "Error: " + state.loaded_result.error;
+                            }
                         }
                         state.calib_viewer.show = true;
                         state.calib_viewer.selected_camera = -1;
@@ -861,6 +864,11 @@ inline void DrawCalibrationToolWindow(
                                 std::to_string(
                                     state.exp_img_result.mean_reproj_error)
                                     .substr(0, 5) + " px";
+                            // Auto-open 3D viewer
+                            state.calib_viewer.result = &state.exp_img_result;
+                            state.calib_viewer.show = true;
+                            state.calib_viewer.selected_camera = -1;
+                            state.calib_viewer.cached_selection = -2;
                         } else {
                             state.status =
                                 "Error: " + state.exp_img_result.error;
@@ -910,7 +918,7 @@ inline void DrawCalibrationToolWindow(
                     ImGui::Text("Output: %s",
                         state.project.image_experimental_folder.c_str());
                     ImGui::SameLine();
-                    if (ImGui::Button("Show 3D##exp_img")) {
+                    if (ImGui::Button("Load Calibration##exp_img")) {
                         state.calib_viewer.result = &state.exp_img_result;
                         state.calib_viewer.show = true;
                     }
@@ -1135,6 +1143,11 @@ inline void DrawCalibrationToolWindow(
                                 std::to_string(
                                     state.exp_vid_result.mean_reproj_error)
                                     .substr(0, 5) + " px";
+                            // Auto-open 3D viewer
+                            state.calib_viewer.result = &state.exp_vid_result;
+                            state.calib_viewer.show = true;
+                            state.calib_viewer.selected_camera = -1;
+                            state.calib_viewer.cached_selection = -2;
                         } else {
                             state.status =
                                 "Error: " + state.exp_vid_result.error;
@@ -1192,9 +1205,11 @@ inline void DrawCalibrationToolWindow(
                     ImGui::Text("Output: %s",
                         state.project.video_experimental_folder.c_str());
                     ImGui::SameLine();
-                    if (ImGui::Button("Show 3D##exp_vid")) {
+                    if (ImGui::Button("Load Calibration##exp_vid")) {
                         state.calib_viewer.result = &state.exp_vid_result;
                         state.calib_viewer.show = true;
+                        state.calib_viewer.selected_camera = -1;
+                        state.calib_viewer.cached_selection = -2;
                     }
                 }
 
