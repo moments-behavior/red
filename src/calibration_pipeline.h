@@ -2084,96 +2084,315 @@ inline bool initialize_extrinsics_pnp(
             if (me<10.0) pnp[ci][fi]={Rf,tf,me};
         }
     }
-    int ref=0; int mf=0;
-    for (int ci=0;ci<num_cameras;ci++) if((int)pnp[ci].size()>mf){mf=(int)pnp[ci].size();ref=ci;}
-    const auto &ri=intrinsics.at(config.cam_ordered[ref]);
-    poses[ref]={Eigen::Matrix3d::Identity(),Eigen::Vector3d::Zero(),ri.K,ri.dist};
-    fprintf(stderr,"[Experimental]   Reference camera: %s (%d PnP frames)\n",config.cam_ordered[ref].c_str(),mf);
-    std::vector<bool> init(num_cameras,false); init[ref]=true; int ic=1;
-    // Multi-frame pose averaging: collect relative poses from ALL shared frames,
-    // average rotations via quaternion averaging, translations via median.
-    for (int ci=0;ci<num_cameras;ci++) {
-        if (ci==ref) continue;
-        const auto &intr=intrinsics.at(config.cam_ordered[ci]);
-        // Collect relative poses from all shared frames where both have reproj < 2.0
+    // ── Greedy incremental registration (COLMAP-inspired) ──
+    // Step 1: Find best initial pair (most shared frames with both reproj < 2.0)
+    int best_a = -1, best_b = -1, best_shared = 0;
+    for (int a = 0; a < num_cameras; a++) {
+        for (int b = a + 1; b < num_cameras; b++) {
+            int shared = 0;
+            for (const auto &[fi, fp_a] : pnp[a]) {
+                auto it = pnp[b].find(fi);
+                if (it != pnp[b].end() && fp_a.reproj < 2.0 && it->second.reproj < 2.0)
+                    shared++;
+            }
+            if (shared > best_shared) { best_shared = shared; best_a = a; best_b = b; }
+        }
+    }
+    if (best_a < 0 || best_shared < 1) {
+        if (status) *status = "Error: no camera pair shares frames";
+        return false;
+    }
+
+    // Initialize pair: camera A at identity, B via multi-frame Markley averaging
+    std::vector<bool> init(num_cameras, false);
+    int ic = 0;
+
+    // Helper: compute relative pose from camera ci to camera bi using Markley averaging
+    auto compute_relative_markley = [&](int ci, int bi, Eigen::Matrix3d &Rout, Eigen::Vector3d &tout) -> bool {
         struct RelP { Eigen::Matrix3d R; Eigen::Vector3d t; double err; };
         std::vector<RelP> cands;
-        for (const auto &[fi,fp] : pnp[ci]) {
-            auto it=pnp[ref].find(fi); if(it==pnp[ref].end()) continue;
+        for (const auto &[fi, fp] : pnp[ci]) {
+            auto it = pnp[bi].find(fi);
+            if (it == pnp[bi].end()) continue;
             if (fp.reproj >= 2.0 || it->second.reproj >= 2.0) continue;
-            Eigen::Matrix3d Rr=fp.R*it->second.R.transpose();
-            Eigen::Vector3d tr=fp.t-Rr*it->second.t;
-            cands.push_back({Rr, tr, fp.reproj+it->second.reproj});
+            Eigen::Matrix3d Rr = fp.R * it->second.R.transpose();
+            Eigen::Vector3d tr = fp.t - Rr * it->second.t;
+            cands.push_back({Rr, tr, fp.reproj + it->second.reproj});
         }
         if (cands.empty()) {
-            // Fallback: no frames pass 2.0 filter, use best single frame (no filter)
-            double be=1e10; Eigen::Matrix3d bR; Eigen::Vector3d bt;
-            for (const auto &[fi,fp] : pnp[ci]) {
-                auto it=pnp[ref].find(fi); if(it==pnp[ref].end()) continue;
-                Eigen::Matrix3d Rr=fp.R*it->second.R.transpose();
-                Eigen::Vector3d tr=fp.t-Rr*it->second.t;
-                double ce=fp.reproj+it->second.reproj;
-                if (ce<be){be=ce;bR=Rr;bt=tr;}
+            // Fallback: best single frame without filter
+            double be = 1e10;
+            for (const auto &[fi, fp] : pnp[ci]) {
+                auto it = pnp[bi].find(fi);
+                if (it == pnp[bi].end()) continue;
+                Eigen::Matrix3d Rr = fp.R * it->second.R.transpose();
+                Eigen::Vector3d tr = fp.t - Rr * it->second.t;
+                double ce = fp.reproj + it->second.reproj;
+                if (ce < be) { be = ce; Rout = Rr; tout = tr; }
             }
-            if (be<1e9){poses[ci]={bR,bt,intr.K,intr.dist};init[ci]=true;ic++;
-                fprintf(stderr,"[Experimental]   PnP %s: via ref (1 frame fallback, err %.2f)\n",
-                    config.cam_ordered[ci].c_str(),be);}
-            continue;
+            return be < 1e9;
         }
-        if (cands.size()==1) {
-            poses[ci]={cands[0].R, cands[0].t, intr.K, intr.dist};
-            init[ci]=true; ic++;
-            fprintf(stderr,"[Experimental]   PnP %s: via ref (1 frame, err %.2f)\n",
-                config.cam_ordered[ci].c_str(), cands[0].err);
-            continue;
-        }
-        // Markley weighted quaternion averaging (eigenvector of M = sum(w_i * q_i * q_i^T))
-        // Weight by n_corners / reproj^2 — frames with more corners and lower error contribute more
-        Eigen::Matrix4d M = Eigen::Matrix4d::Zero();
-        for (size_t i=0;i<cands.size();i++) {
+        if (cands.size() == 1) { Rout = cands[0].R; tout = cands[0].t; return true; }
+        // Markley weighted quaternion averaging
+        Eigen::Matrix4d Mqat = Eigen::Matrix4d::Zero();
+        for (size_t i = 0; i < cands.size(); i++) {
             Eigen::Quaterniond qi(cands[i].R); qi.normalize();
-            // Ensure consistent hemisphere with first quaternion
             if (i > 0) { Eigen::Quaterniond q0(cands[0].R); q0.normalize();
                 if (qi.dot(q0) < 0.0) qi.coeffs() = -qi.coeffs(); }
-            double w = 1.0 / (1.0 + cands[i].err * cands[i].err); // inverse squared error weight
-            Eigen::Vector4d qv = qi.coeffs(); // (x,y,z,w)
-            M += w * qv * qv.transpose();
-        }
-        Eigen::SelfAdjointEigenSolver<Eigen::Matrix4d> eig(M);
-        Eigen::Vector4d best_q = eig.eigenvectors().col(3); // largest eigenvalue
-        Eigen::Quaterniond avgQ(best_q(3), best_q(0), best_q(1), best_q(2)); // Eigen stores as (w,x,y,z)
-        avgQ.normalize();
-        Eigen::Matrix3d avgR = avgQ.toRotationMatrix();
-        // Weighted translation (inverse squared error weight, same as rotation)
-        Eigen::Vector3d avgT = Eigen::Vector3d::Zero(); double wsum = 0;
-        for (size_t i=0;i<cands.size();i++) {
             double w = 1.0 / (1.0 + cands[i].err * cands[i].err);
-            avgT += w * cands[i].t; wsum += w;
+            Eigen::Vector4d qv = qi.coeffs();
+            Mqat += w * qv * qv.transpose();
         }
-        avgT /= wsum;
-        poses[ci]={avgR, avgT, intr.K, intr.dist}; init[ci]=true; ic++;
-        fprintf(stderr,"[Experimental]   PnP %s: via ref (%d frames averaged)\n",
-            config.cam_ordered[ci].c_str(), (int)cands.size());
+        Eigen::SelfAdjointEigenSolver<Eigen::Matrix4d> eig(Mqat);
+        Eigen::Vector4d bq = eig.eigenvectors().col(3);
+        Eigen::Quaterniond avgQ(bq(3), bq(0), bq(1), bq(2));
+        avgQ.normalize(); Rout = avgQ.toRotationMatrix();
+        Eigen::Vector3d avgT = Eigen::Vector3d::Zero(); double ws = 0;
+        for (size_t i = 0; i < cands.size(); i++) {
+            double w = 1.0 / (1.0 + cands[i].err * cands[i].err);
+            avgT += w * cands[i].t; ws += w;
+        }
+        tout = avgT / ws;
+        return true;
+    };
+
+    // Initialize camera A at identity
+    const auto &intr_a = intrinsics.at(config.cam_ordered[best_a]);
+    poses[best_a] = {Eigen::Matrix3d::Identity(), Eigen::Vector3d::Zero(), intr_a.K, intr_a.dist};
+    init[best_a] = true; ic++;
+
+    // Initialize camera B via relative pose to A
+    Eigen::Matrix3d Rab; Eigen::Vector3d tab;
+    if (!compute_relative_markley(best_b, best_a, Rab, tab)) {
+        if (status) *status = "Error: cannot compute relative pose for initial pair";
+        return false;
     }
-    if (ic<num_cameras) for (int ci=0;ci<num_cameras;ci++) {
-        if (init[ci]) continue;
-        const auto &intr=intrinsics.at(config.cam_ordered[ci]);
-        double be=1e10; Eigen::Matrix3d bR; Eigen::Vector3d bt;
-        for (int bi=0;bi<num_cameras;bi++) { if(!init[bi]||bi==ci) continue;
-            for (const auto &[fi,fp] : pnp[ci]) {
-                auto it=pnp[bi].find(fi); if(it==pnp[bi].end()) continue;
-                Eigen::Matrix3d Rcb=fp.R*it->second.R.transpose();
-                Eigen::Vector3d tcb=fp.t-Rcb*it->second.t;
-                Eigen::Matrix3d Rw=Rcb*poses[bi].R; Eigen::Vector3d tw=Rcb*poses[bi].t+tcb;
-                double ce=fp.reproj+it->second.reproj;
-                if(ce<be){be=ce;bR=Rw;bt=tw;}
+    const auto &intr_b = intrinsics.at(config.cam_ordered[best_b]);
+    poses[best_b] = {Rab, tab, intr_b.K, intr_b.dist};
+    init[best_b] = true; ic++;
+    fprintf(stderr, "[Experimental]   Initial pair: %s + %s (%d shared frames)\n",
+        config.cam_ordered[best_a].c_str(), config.cam_ordered[best_b].c_str(), best_shared);
+
+    // Step 2: Triangulate initial 3D point cloud from the pair
+    // Build landmarks for just these two cameras
+    int max_corners = (cs.w - 1) * (cs.h - 1);
+    std::map<int, Eigen::Vector3d> init_points;
+    {
+        const auto &intr_aa = intrinsics.at(config.cam_ordered[best_a]);
+        const auto &intr_bb = intrinsics.at(config.cam_ordered[best_b]);
+        // For each frame where both cameras detect the board
+        for (const auto &[fi, corners_a] : intr_aa.corners_per_image) {
+            auto it_b = intr_bb.corners_per_image.find(fi);
+            if (it_b == intr_bb.corners_per_image.end()) continue;
+            const auto &ids_a = intr_aa.ids_per_image.at(fi);
+            const auto &ids_b = intr_bb.ids_per_image.at(fi);
+            const auto &corners_b = it_b->second;
+            // Find common corner IDs
+            std::map<int, Eigen::Vector2d> obs_a, obs_b;
+            for (int j = 0; j < (int)ids_a.size(); j++)
+                obs_a[ids_a[j]] = Eigen::Vector2d(corners_a[j].x(), corners_a[j].y());
+            for (int j = 0; j < (int)ids_b.size(); j++)
+                obs_b[ids_b[j]] = Eigen::Vector2d(corners_b[j].x(), corners_b[j].y());
+            for (const auto &[cid, px_a] : obs_a) {
+                auto it = obs_b.find(cid);
+                if (it == obs_b.end()) continue;
+                int global_id = fi * max_corners + cid;
+                if (init_points.count(global_id)) continue;
+                // Triangulate
+                Eigen::Vector2d ua = red_math::undistortPoint(px_a, poses[best_a].K, poses[best_a].dist);
+                Eigen::Vector2d ub = red_math::undistortPoint(it->second, poses[best_b].K, poses[best_b].dist);
+                auto Pa = red_math::projectionFromKRt(poses[best_a].K, poses[best_a].R, poses[best_a].t);
+                auto Pb = red_math::projectionFromKRt(poses[best_b].K, poses[best_b].R, poses[best_b].t);
+                auto X = red_math::triangulatePoints({ua, ub}, {Pa, Pb});
+                // Check reproj in both cameras
+                auto rva = red_math::rotationMatrixToVector(poses[best_a].R);
+                auto rvb = red_math::rotationMatrixToVector(poses[best_b].R);
+                double ea = (red_math::projectPoint(X, rva, poses[best_a].t, poses[best_a].K, poses[best_a].dist) - px_a).norm();
+                double eb = (red_math::projectPoint(X, rvb, poses[best_b].t, poses[best_b].K, poses[best_b].dist) - it->second).norm();
+                if (ea < 10.0 && eb < 10.0) init_points[global_id] = X;
             }
         }
-        if(be<1e9){poses[ci]={bR,bt,intr.K,intr.dist};init[ci]=true;ic++;
-            fprintf(stderr,"[Experimental]   PnP %s: via bridge (err %.2f)\n",config.cam_ordered[ci].c_str(),be);}
     }
-    if (ic<num_cameras){if(status)*status="Error: not all cameras initialized";return false;}
-    if(status)*status="PnP init done ("+std::to_string(num_cameras)+" cameras)";
+    fprintf(stderr, "[Experimental]   Initial triangulation: %d points\n", (int)init_points.size());
+
+    // Step 3: Greedily register remaining cameras
+    // Each iteration: pick unregistered camera with most 2D correspondences to existing 3D points,
+    // compute its pose via multi-frame Markley averaging against ALL initialized cameras,
+    // triangulate new points, optionally run quick BA.
+    while (ic < num_cameras) {
+        // Score each unregistered camera: count landmarks it observes that are in init_points
+        int best_ci = -1, best_count = 0;
+        for (int ci = 0; ci < num_cameras; ci++) {
+            if (init[ci]) continue;
+            const auto &intr_ci = intrinsics.at(config.cam_ordered[ci]);
+            int count = 0;
+            for (const auto &[fi, corners_ci] : intr_ci.corners_per_image) {
+                const auto &ids_ci = intr_ci.ids_per_image.at(fi);
+                for (int j = 0; j < (int)ids_ci.size(); j++) {
+                    int global_id = fi * max_corners + ids_ci[j];
+                    if (init_points.count(global_id)) count++;
+                }
+            }
+            if (count > best_count) { best_count = count; best_ci = ci; }
+        }
+
+        if (best_ci < 0 || best_count < 4) {
+            // No camera has enough 3D correspondences — fall back to multi-frame
+            // relative pose against any initialized camera
+            for (int ci = 0; ci < num_cameras; ci++) {
+                if (init[ci]) continue;
+                const auto &intr_ci = intrinsics.at(config.cam_ordered[ci]);
+                // Try all initialized cameras, pick best
+                double best_err = 1e10;
+                Eigen::Matrix3d best_R; Eigen::Vector3d best_t;
+                for (int bi = 0; bi < num_cameras; bi++) {
+                    if (!init[bi]) continue;
+                    Eigen::Matrix3d Rcb; Eigen::Vector3d tcb;
+                    if (!compute_relative_markley(ci, bi, Rcb, tcb)) continue;
+                    // Chain: ci in world = Rcb * bi_world
+                    Eigen::Matrix3d Rw = Rcb * poses[bi].R;
+                    Eigen::Vector3d tw = Rcb * poses[bi].t + tcb;
+                    // Score by counting inlier reproj against init_points
+                    auto rv = red_math::rotationMatrixToVector(Rw);
+                    int inliers = 0;
+                    for (const auto &[fi, corners_ci] : intr_ci.corners_per_image) {
+                        const auto &ids_ci = intr_ci.ids_per_image.at(fi);
+                        for (int j = 0; j < (int)ids_ci.size(); j++) {
+                            int gid = fi * max_corners + ids_ci[j];
+                            auto pt = init_points.find(gid);
+                            if (pt == init_points.end()) continue;
+                            double e = (red_math::projectPoint(pt->second, rv, tw, intr_ci.K, intr_ci.dist) -
+                                       Eigen::Vector2d(corners_ci[j].x(), corners_ci[j].y())).norm();
+                            if (e < 5.0) inliers++;
+                        }
+                    }
+                    double err = (inliers > 0) ? 1.0 / inliers : 1e10;
+                    if (err < best_err) { best_err = err; best_R = Rw; best_t = tw; }
+                }
+                if (best_err < 1e9) {
+                    poses[ci] = {best_R, best_t, intr_ci.K, intr_ci.dist};
+                    init[ci] = true; ic++;
+                    fprintf(stderr, "[Experimental]   PnP %s: via bridge (fallback)\n",
+                        config.cam_ordered[ci].c_str());
+                }
+            }
+            break; // exit greedy loop
+        }
+
+        // Register best_ci via multi-frame Markley averaging against ALL initialized cameras
+        const auto &intr_ci = intrinsics.at(config.cam_ordered[best_ci]);
+        struct RelP { Eigen::Matrix3d R; Eigen::Vector3d t; double err; };
+        std::vector<RelP> all_cands;
+        for (int bi = 0; bi < num_cameras; bi++) {
+            if (!init[bi]) continue;
+            for (const auto &[fi, fp_ci] : pnp[best_ci]) {
+                auto it = pnp[bi].find(fi);
+                if (it == pnp[bi].end()) continue;
+                if (fp_ci.reproj >= 2.0 || it->second.reproj >= 2.0) continue;
+                // Relative pose ci→bi in board frame, then chain to world
+                Eigen::Matrix3d Rcb = fp_ci.R * it->second.R.transpose();
+                Eigen::Vector3d tcb = fp_ci.t - Rcb * it->second.t;
+                Eigen::Matrix3d Rw = Rcb * poses[bi].R;
+                Eigen::Vector3d tw = Rcb * poses[bi].t + tcb;
+                all_cands.push_back({Rw, tw, fp_ci.reproj + it->second.reproj});
+            }
+        }
+
+        if (all_cands.empty()) {
+            // No good frames with any initialized camera — try unfiltered
+            double be = 1e10; Eigen::Matrix3d bR; Eigen::Vector3d bt;
+            for (int bi = 0; bi < num_cameras; bi++) {
+                if (!init[bi]) continue;
+                for (const auto &[fi, fp_ci] : pnp[best_ci]) {
+                    auto it = pnp[bi].find(fi);
+                    if (it == pnp[bi].end()) continue;
+                    Eigen::Matrix3d Rcb = fp_ci.R * it->second.R.transpose();
+                    Eigen::Vector3d tcb = fp_ci.t - Rcb * it->second.t;
+                    Eigen::Matrix3d Rw = Rcb * poses[bi].R;
+                    Eigen::Vector3d tw = Rcb * poses[bi].t + tcb;
+                    double ce = fp_ci.reproj + it->second.reproj;
+                    if (ce < be) { be = ce; bR = Rw; bt = tw; }
+                }
+            }
+            if (be < 1e9) {
+                poses[best_ci] = {bR, bt, intr_ci.K, intr_ci.dist};
+                init[best_ci] = true; ic++;
+                fprintf(stderr, "[Experimental]   PnP %s: fallback single frame (err %.2f)\n",
+                    config.cam_ordered[best_ci].c_str(), be);
+            }
+        } else if (all_cands.size() == 1) {
+            poses[best_ci] = {all_cands[0].R, all_cands[0].t, intr_ci.K, intr_ci.dist};
+            init[best_ci] = true; ic++;
+            fprintf(stderr, "[Experimental]   PnP %s: 1 frame from init cameras (err %.2f)\n",
+                config.cam_ordered[best_ci].c_str(), all_cands[0].err);
+        } else {
+            // Markley averaging across ALL candidates from ALL initialized cameras
+            Eigen::Matrix4d Mqat = Eigen::Matrix4d::Zero();
+            for (size_t i = 0; i < all_cands.size(); i++) {
+                Eigen::Quaterniond qi(all_cands[i].R); qi.normalize();
+                if (i > 0) { Eigen::Quaterniond q0(all_cands[0].R); q0.normalize();
+                    if (qi.dot(q0) < 0.0) qi.coeffs() = -qi.coeffs(); }
+                double w = 1.0 / (1.0 + all_cands[i].err * all_cands[i].err);
+                Eigen::Vector4d qv = qi.coeffs();
+                Mqat += w * qv * qv.transpose();
+            }
+            Eigen::SelfAdjointEigenSolver<Eigen::Matrix4d> eig(Mqat);
+            Eigen::Vector4d bq = eig.eigenvectors().col(3);
+            Eigen::Quaterniond avgQ(bq(3), bq(0), bq(1), bq(2));
+            avgQ.normalize();
+            Eigen::Vector3d avgT = Eigen::Vector3d::Zero(); double ws = 0;
+            for (size_t i = 0; i < all_cands.size(); i++) {
+                double w = 1.0 / (1.0 + all_cands[i].err * all_cands[i].err);
+                avgT += w * all_cands[i].t; ws += w;
+            }
+            poses[best_ci] = {avgQ.toRotationMatrix(), avgT / ws, intr_ci.K, intr_ci.dist};
+            init[best_ci] = true; ic++;
+            fprintf(stderr, "[Experimental]   PnP %s: %d frames from %d+ init cameras (%d 3D pts)\n",
+                config.cam_ordered[best_ci].c_str(), (int)all_cands.size(),
+                ic - 1, best_count);
+        }
+
+        // Triangulate new points visible from newly registered camera and existing cameras
+        if (init[best_ci]) {
+            const auto &intr_new = intrinsics.at(config.cam_ordered[best_ci]);
+            for (const auto &[fi, corners_new] : intr_new.corners_per_image) {
+                const auto &ids_new = intr_new.ids_per_image.at(fi);
+                for (int j = 0; j < (int)ids_new.size(); j++) {
+                    int global_id = fi * max_corners + ids_new[j];
+                    if (init_points.count(global_id)) continue; // already have this point
+                    Eigen::Vector2d px_new(corners_new[j].x(), corners_new[j].y());
+                    // Find another initialized camera that also sees this corner in this frame
+                    for (int bi = 0; bi < num_cameras; bi++) {
+                        if (!init[bi] || bi == best_ci) continue;
+                        const auto &intr_bi = intrinsics.at(config.cam_ordered[bi]);
+                        auto fi_it = intr_bi.corners_per_image.find(fi);
+                        if (fi_it == intr_bi.corners_per_image.end()) continue;
+                        const auto &ids_bi = intr_bi.ids_per_image.at(fi);
+                        const auto &corners_bi = fi_it->second;
+                        for (int k = 0; k < (int)ids_bi.size(); k++) {
+                            if (ids_bi[k] != ids_new[j]) continue;
+                            Eigen::Vector2d px_bi(corners_bi[k].x(), corners_bi[k].y());
+                            auto ua = red_math::undistortPoint(px_new, poses[best_ci].K, poses[best_ci].dist);
+                            auto ub = red_math::undistortPoint(px_bi, poses[bi].K, poses[bi].dist);
+                            auto Pa = red_math::projectionFromKRt(poses[best_ci].K, poses[best_ci].R, poses[best_ci].t);
+                            auto Pb = red_math::projectionFromKRt(poses[bi].K, poses[bi].R, poses[bi].t);
+                            auto X = red_math::triangulatePoints({ua, ub}, {Pa, Pb});
+                            auto rva = red_math::rotationMatrixToVector(poses[best_ci].R);
+                            double e = (red_math::projectPoint(X, rva, poses[best_ci].t, poses[best_ci].K, poses[best_ci].dist) - px_new).norm();
+                            if (e < 10.0) { init_points[global_id] = X; break; }
+                        }
+                        if (init_points.count(global_id)) break;
+                    }
+                }
+            }
+        }
+    }
+
+    if (ic < num_cameras) {
+        if (status) *status = "Error: not all cameras initialized (" + std::to_string(ic) + "/" + std::to_string(num_cameras) + ")";
+        return false;
+    }
+    if (status) *status = "PnP init done (" + std::to_string(num_cameras) + " cameras, " + std::to_string(init_points.size()) + " points)";
     return true;
 }
 
