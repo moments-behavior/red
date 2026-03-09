@@ -178,29 +178,80 @@ if(APPLE)
     add_executable(test_pipeline_run
         tests/test_pipeline_run.cpp
         src/aruco_metal.mm
+        src/FFmpegDemuxer.cpp
+        src/vt_async_decoder.mm
     )
     target_include_directories(test_pipeline_run PRIVATE
         src
+        lib/nvcodec
         ${HOMEBREW_PREFIX}/include
         ${HOMEBREW_PREFIX}/include/eigen3
+        ${FFMPEG_INCLUDE_DIRS}
         ${TURBOJPEG_INCLUDE_DIRS}
     )
-    target_link_directories(test_pipeline_run PRIVATE ${TURBOJPEG_LIBRARY_DIRS})
+    target_link_directories(test_pipeline_run PRIVATE
+        ${FFMPEG_LIBRARY_DIRS} ${TURBOJPEG_LIBRARY_DIRS})
     target_link_libraries(test_pipeline_run PRIVATE
         Eigen3::Eigen
         Ceres::ceres
+        ${FFMPEG_LIBRARIES}
         ${TURBOJPEG_LIBRARIES}
         "-framework Metal"
         "-framework Foundation"
         "-framework CoreGraphics"
+        "-framework CoreVideo"
+        "-framework CoreMedia"
+        "-framework VideoToolbox"
         "-framework IOKit"
         pthread
     )
     set_source_files_properties(
         src/aruco_metal.mm
+        src/vt_async_decoder.mm
         PROPERTIES COMPILE_FLAGS "-fobjc-arc"
     )
     set_target_properties(test_pipeline_run PROPERTIES
+        CXX_STANDARD 17
+        CXX_STANDARD_REQUIRED ON
+    )
+
+    # Video pipeline test: tests video-based aruco calibration
+    add_executable(test_video_pipeline
+        tests/test_video_pipeline.cpp
+        src/aruco_metal.mm
+        src/FFmpegDemuxer.cpp
+        src/vt_async_decoder.mm
+    )
+    target_include_directories(test_video_pipeline PRIVATE
+        src
+        lib/nvcodec
+        ${HOMEBREW_PREFIX}/include
+        ${HOMEBREW_PREFIX}/include/eigen3
+        ${FFMPEG_INCLUDE_DIRS}
+        ${TURBOJPEG_INCLUDE_DIRS}
+    )
+    target_link_directories(test_video_pipeline PRIVATE
+        ${FFMPEG_LIBRARY_DIRS} ${TURBOJPEG_LIBRARY_DIRS})
+    target_link_libraries(test_video_pipeline PRIVATE
+        Eigen3::Eigen
+        Ceres::ceres
+        ${FFMPEG_LIBRARIES}
+        ${TURBOJPEG_LIBRARIES}
+        "-framework Metal"
+        "-framework Foundation"
+        "-framework CoreGraphics"
+        "-framework CoreVideo"
+        "-framework CoreMedia"
+        "-framework VideoToolbox"
+        "-framework IOKit"
+        pthread
+    )
+    set_source_files_properties(
+        src/aruco_metal.mm
+        src/vt_async_decoder.mm
+        PROPERTIES COMPILE_FLAGS "-fobjc-arc"
+    )
+    set_target_properties(test_video_pipeline PROPERTIES
         CXX_STANDARD 17
         CXX_STANDARD_REQUIRED ON
     )
@@ -225,6 +276,7 @@ if(APPLE)
         "-framework Foundation"
         "-framework CoreGraphics"
         "-framework IOKit"
+        "-framework CoreVideo"
         pthread
     )
     set_source_files_properties(
@@ -257,6 +309,7 @@ if(APPLE)
         "-framework Foundation"
         "-framework CoreGraphics"
         "-framework IOKit"
+        "-framework CoreVideo"
         pthread
     )
     set_source_files_properties(
@@ -288,6 +341,7 @@ if(APPLE)
         "-framework Foundation"
         "-framework CoreGraphics"
         "-framework IOKit"
+        "-framework CoreVideo"
         pthread
     )
     set_source_files_properties(

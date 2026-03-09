@@ -56,6 +56,10 @@ public:
     // Used during seek when we know the callback has already fired.
     CVPixelBufferRef drain_one();
 
+    // Pop one decoded frame and return its PTS in seconds.
+    // Returns nullptr if no frame available. out_pts_sec is only set on success.
+    CVPixelBufferRef drain_one_with_pts(double *out_pts_sec);
+
     // Drain all pending frames from VT and empty the reorder queue.
     // Releases all retained CVPixelBuffers.
     void flush();

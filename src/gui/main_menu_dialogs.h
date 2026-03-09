@@ -124,16 +124,62 @@ inline void HandleMainMenuDialogs(
                     cfg_path = std::filesystem::path(
                         ImGuiFileDialog::Instance()->GetCurrentPath());
             }
-            ProjectManager loaded;
-            std::string err;
-            if (!load_project_manager_json(&loaded, cfg_path, &err)) {
-                popups.pushError(err);
-            } else {
-                pm = loaded;
-                if (setup_project(pm, skeleton, skeleton_map, &err))
-                    on_project_loaded(ctx, print_metadata_fn, print_summary_fn);
-                else
+
+            // Check if this is a calibration project (.redproj with type=calibration)
+            bool is_calib_project = false;
+            if (cfg_path.extension() == ".redproj") {
+                try {
+                    std::ifstream probe(cfg_path, std::ios::binary);
+                    if (probe) {
+                        nlohmann::json j;
+                        probe >> j;
+                        std::string type = j.value("type", std::string{});
+                        if (type == "calibration" || type == "laser_calibration")
+                            is_calib_project = true;
+                    }
+                } catch (...) {}
+            }
+
+            if (is_calib_project) {
+                // Route to Calibration Tool loader
+                CalibrationTool::CalibProject loaded;
+                std::string err;
+                if (CalibrationTool::load_project(&loaded, cfg_path.string(), &err)) {
+                    calib_state.project = loaded;
+                    if (calib_state.project.has_aruco()) {
+                        calib_state.config_path = calib_state.project.config_file;
+                        if (CalibrationTool::parse_config(
+                                calib_state.config_path, calib_state.config, err)) {
+                            calib_state.config_loaded = true;
+                            calib_state.images_loaded = false;
+                            calib_state.img_done = false;
+                            calib_state.vid_done = false;
+                        } else {
+                            calib_state.config_loaded = false;
+                            calib_state.status = "Error parsing config: " + err;
+                        }
+                    }
+                    calib_state.project_loaded = true;
+                    calib_state.dock_pending = true;
+                    calib_state.show_create_dialog = false;
+                    calib_state.show = true;
+                    calib_state.status = "Project loaded: " +
+                        calib_state.project.project_name;
+                } else {
                     popups.pushError(err);
+                }
+            } else {
+                ProjectManager loaded;
+                std::string err;
+                if (!load_project_manager_json(&loaded, cfg_path, &err)) {
+                    popups.pushError(err);
+                } else {
+                    pm = loaded;
+                    if (setup_project(pm, skeleton, skeleton_map, &err))
+                        on_project_loaded(ctx, print_metadata_fn, print_summary_fn);
+                    else
+                        popups.pushError(err);
+                }
             }
         }
         ImGuiFileDialog::Instance()->Close();

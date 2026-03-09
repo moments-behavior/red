@@ -96,8 +96,10 @@ static void test_calib_state_defaults() {
     EXPECT_FALSE(s.config_loaded);
     EXPECT_FALSE(s.images_loaded);
     EXPECT_TRUE(s.status.empty());
-    EXPECT_FALSE(s.running);
-    EXPECT_FALSE(s.done);
+    EXPECT_FALSE(s.img_running);
+    EXPECT_FALSE(s.img_done);
+    EXPECT_FALSE(s.vid_running);
+    EXPECT_FALSE(s.vid_done);
 
     // Laser defaults
     EXPECT_FALSE(s.laser_ready);
@@ -128,7 +130,7 @@ static void test_calib_state_reset_on_close() {
     s.show_create_dialog = false;
     s.config_loaded = true;
     s.images_loaded = true;
-    s.done = true;
+    s.img_done = true;
     s.status = "Calibration complete!";
     s.laser_ready = true;
     s.laser_done = true;
@@ -142,7 +144,8 @@ static void test_calib_state_reset_on_close() {
     s.show_create_dialog = true;
     s.config_loaded = false;
     s.images_loaded = false;
-    s.done = false;
+    s.img_done = false;
+    s.vid_done = false;
     s.status.clear();
     s.laser_ready = false;
     s.laser_done = false;
@@ -159,7 +162,8 @@ static void test_calib_state_reset_on_close() {
     EXPECT_TRUE(s.show_create_dialog);
     EXPECT_FALSE(s.config_loaded);
     EXPECT_FALSE(s.images_loaded);
-    EXPECT_FALSE(s.done);
+    EXPECT_FALSE(s.img_done);
+    EXPECT_FALSE(s.vid_done);
     EXPECT_TRUE(s.status.empty());
     EXPECT_FALSE(s.laser_ready);
     EXPECT_FALSE(s.laser_done);

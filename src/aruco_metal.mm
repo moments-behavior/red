@@ -134,6 +134,20 @@ kernel void downsample_binary_3x(
     }
     ds_out[tid.y * dst_w + tid.x] = val;
 }
+// Kernel 4: BGRA texture → grayscale buffer.
+// One thread per pixel. Reads from a 2D texture (zero-copy CVPixelBuffer),
+// writes luminance to a shared buffer for CPU readback.
+kernel void bgra_to_gray(
+    texture2d<half, access::read> src [[texture(0)]],
+    device uint8_t *gray [[buffer(0)]],
+    constant uint &width [[buffer(1)]],
+    uint2 gid [[thread_position_in_grid]])
+{
+    if (gid.x >= width) return;
+    half4 px = src.read(gid);
+    half lum = 0.299h * px.r + 0.587h * px.g + 0.114h * px.b;
+    gray[gid.y * width + gid.x] = uint8_t(saturate(lum) * 255.0h);
+}
 )METAL";
 
 // Maximum number of simultaneous threshold passes per call
@@ -149,6 +163,8 @@ struct ArucoMetalContext {
     id<MTLComputePipelineState> pso_horizontal;
     id<MTLComputePipelineState> pso_vertical;
     id<MTLComputePipelineState> pso_downsample;
+    id<MTLComputePipelineState> pso_bgra_gray;
+    CVMetalTextureCacheRef      texCache = nullptr;
 
     // Pre-allocated buffers (reused across calls, protected by mutex)
     std::mutex mtx;
@@ -211,13 +227,25 @@ ArucoMetalHandle aruco_metal_create() {
         ctx->pso_horizontal = make_pso("horizontal_box_sum");
         ctx->pso_vertical   = make_pso("vertical_sum_threshold");
         ctx->pso_downsample = make_pso("downsample_binary_3x");
+        ctx->pso_bgra_gray  = make_pso("bgra_to_gray");
 
-        if (!ctx->pso_horizontal || !ctx->pso_vertical || !ctx->pso_downsample) {
+        if (!ctx->pso_horizontal || !ctx->pso_vertical ||
+            !ctx->pso_downsample || !ctx->pso_bgra_gray) {
             delete ctx;
             return nullptr;
         }
 
-        fprintf(stderr, "[ArucoMetal] Initialized (separable box filter)\n");
+        // Create texture cache for zero-copy CVPixelBuffer import
+        CVReturn cvr = CVMetalTextureCacheCreate(kCFAllocatorDefault, NULL,
+                                                  ctx->device, NULL,
+                                                  &ctx->texCache);
+        if (cvr != kCVReturnSuccess) {
+            fprintf(stderr, "[ArucoMetal] CVMetalTextureCacheCreate failed: %d\n", cvr);
+            delete ctx;
+            return nullptr;
+        }
+
+        fprintf(stderr, "[ArucoMetal] Initialized (separable box filter + video pipeline)\n");
         return ctx;
     }
 }
@@ -377,12 +405,190 @@ void aruco_metal_threshold_batch(
 }
 
 
+void aruco_metal_process_video_frame(
+    ArucoMetalHandle ctx_handle,
+    CVPixelBufferRef pb,
+    int w, int h,
+    const int *window_sizes, int C, int num_passes,
+    uint8_t **binary_outputs,
+    uint8_t *gray_output)
+{
+    auto *ctx = ctx_handle;
+    if (!ctx || !pb || num_passes <= 0) return;
+    if (num_passes > kMaxPasses) num_passes = kMaxPasses;
+
+    std::lock_guard<std::mutex> lock(ctx->mtx);
+
+    @autoreleasepool {
+        auto t_start = std::chrono::steady_clock::now();
+
+        size_t gray_size = (size_t)w * h;
+        size_t hsum_size = (size_t)w * h * sizeof(int32_t);
+        int dw = w / 3, dh = h / 3;
+        size_t ds_size = (size_t)dw * dh;
+
+        // Re-allocate buffers only when image dimensions change
+        if (ctx->alloc_w != w || ctx->alloc_h != h) {
+            ctx->grayBuf = [ctx->device newBufferWithLength:gray_size
+                                                    options:MTLResourceStorageModeShared];
+            ctx->hSumBuf = [ctx->device newBufferWithLength:hsum_size
+                                                    options:MTLResourceStorageModeShared];
+            ctx->fullResBuf = [ctx->device newBufferWithLength:gray_size
+                                                        options:MTLResourceStorageModePrivate];
+            for (int p = 0; p < kMaxPasses; p++) {
+                ctx->dsBufs[p] = [ctx->device newBufferWithLength:ds_size
+                                                            options:MTLResourceStorageModeShared];
+            }
+            ctx->alloc_w = w;
+            ctx->alloc_h = h;
+            ctx->ds_w = dw;
+            ctx->ds_h = dh;
+            fprintf(stderr, "[ArucoMetal] Video buffers allocated for %dx%d\n", w, h);
+        }
+
+        // Zero-copy: wrap CVPixelBuffer as MTLTexture via IOSurface
+        CVMetalTextureRef cvTex = NULL;
+        CVReturn rv = CVMetalTextureCacheCreateTextureFromImage(
+            kCFAllocatorDefault, ctx->texCache, pb, NULL,
+            MTLPixelFormatBGRA8Unorm, w, h, 0, &cvTex);
+        if (rv != kCVReturnSuccess || !cvTex) {
+            fprintf(stderr, "[ArucoMetal] CVMetalTexture create failed: %d\n", rv);
+            return;
+        }
+        id<MTLTexture> srcTex = CVMetalTextureGetTexture(cvTex);
+
+        // Small parameter buffers
+        uint32_t width_val = (uint32_t)w;
+        uint32_t height_val = (uint32_t)h;
+        int32_t C_val = (int32_t)C;
+        uint32_t ds_w_val = (uint32_t)dw;
+        uint32_t ds_h_val = (uint32_t)dh;
+
+        id<MTLBuffer> widthBuf  = [ctx->device newBufferWithBytes:&width_val
+                                                            length:sizeof(uint32_t)
+                                                           options:MTLResourceStorageModeShared];
+        id<MTLBuffer> heightBuf = [ctx->device newBufferWithBytes:&height_val
+                                                            length:sizeof(uint32_t)
+                                                           options:MTLResourceStorageModeShared];
+        id<MTLBuffer> cBuf      = [ctx->device newBufferWithBytes:&C_val
+                                                            length:sizeof(int32_t)
+                                                           options:MTLResourceStorageModeShared];
+        id<MTLBuffer> dsWBuf    = [ctx->device newBufferWithBytes:&ds_w_val
+                                                            length:sizeof(uint32_t)
+                                                           options:MTLResourceStorageModeShared];
+        id<MTLBuffer> dsHBuf    = [ctx->device newBufferWithBytes:&ds_h_val
+                                                            length:sizeof(uint32_t)
+                                                           options:MTLResourceStorageModeShared];
+
+        // Single command buffer: bgra_to_gray + threshold passes
+        id<MTLCommandBuffer> cmdBuf = [ctx->queue commandBuffer];
+
+        // Kernel 0: BGRA texture → grayBuf (2D dispatch)
+        {
+            id<MTLComputeCommandEncoder> enc = [cmdBuf computeCommandEncoder];
+            [enc setComputePipelineState:ctx->pso_bgra_gray];
+            [enc setTexture:srcTex atIndex:0];
+            [enc setBuffer:ctx->grayBuf offset:0 atIndex:0];
+            [enc setBuffer:widthBuf     offset:0 atIndex:1];
+            NSUInteger tg_w = MIN((NSUInteger)w, 16u);
+            NSUInteger tg_h = MIN((NSUInteger)h, 16u);
+            [enc dispatchThreads:MTLSizeMake(w, h, 1)
+                threadsPerThreadgroup:MTLSizeMake(tg_w, tg_h, 1)];
+            [enc endEncoding];
+        }
+
+        // Threshold passes (same pattern as aruco_metal_threshold_batch)
+        for (int p = 0; p < num_passes; p++) {
+            int32_t hw_val = window_sizes[p] / 2;
+            id<MTLBuffer> hwBuf = [ctx->device newBufferWithBytes:&hw_val
+                                                            length:sizeof(int32_t)
+                                                           options:MTLResourceStorageModeShared];
+
+            // Horizontal running sum
+            {
+                id<MTLComputeCommandEncoder> enc = [cmdBuf computeCommandEncoder];
+                [enc setComputePipelineState:ctx->pso_horizontal];
+                [enc setBuffer:ctx->grayBuf offset:0 atIndex:0];
+                [enc setBuffer:ctx->hSumBuf offset:0 atIndex:1];
+                [enc setBuffer:widthBuf     offset:0 atIndex:2];
+                [enc setBuffer:heightBuf    offset:0 atIndex:3];
+                [enc setBuffer:hwBuf        offset:0 atIndex:4];
+                [enc dispatchThreads:MTLSizeMake(h, 1, 1)
+                    threadsPerThreadgroup:MTLSizeMake(
+                        MIN((NSUInteger)h, ctx->pso_horizontal.maxTotalThreadsPerThreadgroup), 1, 1)];
+                [enc endEncoding];
+            }
+
+            // Vertical sum + threshold → fullResBuf
+            {
+                id<MTLComputeCommandEncoder> enc = [cmdBuf computeCommandEncoder];
+                [enc setComputePipelineState:ctx->pso_vertical];
+                [enc setBuffer:ctx->grayBuf    offset:0 atIndex:0];
+                [enc setBuffer:ctx->hSumBuf    offset:0 atIndex:1];
+                [enc setBuffer:ctx->fullResBuf offset:0 atIndex:2];
+                [enc setBuffer:widthBuf        offset:0 atIndex:3];
+                [enc setBuffer:heightBuf       offset:0 atIndex:4];
+                [enc setBuffer:hwBuf           offset:0 atIndex:5];
+                [enc setBuffer:cBuf            offset:0 atIndex:6];
+                [enc dispatchThreads:MTLSizeMake(w, 1, 1)
+                    threadsPerThreadgroup:MTLSizeMake(
+                        MIN((NSUInteger)w, ctx->pso_vertical.maxTotalThreadsPerThreadgroup), 1, 1)];
+                [enc endEncoding];
+            }
+
+            // 3x downsample → dsBufs[p]
+            {
+                id<MTLComputeCommandEncoder> enc = [cmdBuf computeCommandEncoder];
+                [enc setComputePipelineState:ctx->pso_downsample];
+                [enc setBuffer:ctx->fullResBuf offset:0 atIndex:0];
+                [enc setBuffer:ctx->dsBufs[p]  offset:0 atIndex:1];
+                [enc setBuffer:widthBuf        offset:0 atIndex:2];
+                [enc setBuffer:heightBuf       offset:0 atIndex:3];
+                [enc setBuffer:dsWBuf          offset:0 atIndex:4];
+                [enc setBuffer:dsHBuf          offset:0 atIndex:5];
+                NSUInteger ds_tw = MIN((NSUInteger)dw, 16u);
+                NSUInteger ds_th = MIN((NSUInteger)dh, 16u);
+                [enc dispatchThreads:MTLSizeMake(dw, dh, 1)
+                    threadsPerThreadgroup:MTLSizeMake(ds_tw, ds_th, 1)];
+                [enc endEncoding];
+            }
+        }
+
+        [cmdBuf commit];
+        [cmdBuf waitUntilCompleted];
+
+        // Copy results to caller-owned buffers (inside mutex)
+        memcpy(gray_output, ctx->grayBuf.contents, gray_size);
+        for (int p = 0; p < num_passes; p++) {
+            memcpy(binary_outputs[p], ctx->dsBufs[p].contents, ds_size);
+        }
+
+        // Release CVMetalTexture (after GPU complete)
+        CFRelease(cvTex);
+
+        auto t_end = std::chrono::steady_clock::now();
+        double ms = std::chrono::duration<double, std::milli>(t_end - t_start).count();
+        ctx->total_ms += ms;
+        ctx->call_count++;
+
+        if (ctx->call_count % 100 == 0) {
+            fprintf(stderr, "[ArucoMetal] %d calls, avg %.2f ms/call (video pipeline)\n",
+                    ctx->call_count, ctx->total_ms / ctx->call_count);
+        }
+    }
+}
+
+
 void aruco_metal_destroy(ArucoMetalHandle ctx) {
     if (!ctx) return;
     if (ctx->call_count > 0) {
         fprintf(stderr, "[ArucoMetal] Final: %d calls, avg %.2f ms/call (%.1fs total)\n",
                 ctx->call_count, ctx->total_ms / ctx->call_count,
                 ctx->total_ms / 1000.0);
+    }
+    if (ctx->texCache) {
+        CFRelease(ctx->texCache);
+        ctx->texCache = nullptr;
     }
     delete ctx;
 }

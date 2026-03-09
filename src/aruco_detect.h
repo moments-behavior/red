@@ -716,7 +716,9 @@ inline void cornerSubPix(const uint8_t *gray, int w, int h,
 
 inline std::vector<DetectedMarker>
 detectMarkers(const uint8_t *gray, int w, int h, const ArUcoDictionary &dict,
-              GpuThresholdFunc gpu_thresh = nullptr, void *gpu_ctx = nullptr) {
+              GpuThresholdFunc gpu_thresh = nullptr, void *gpu_ctx = nullptr,
+              const std::vector<std::vector<uint8_t>> *precomputed_ds = nullptr,
+              int precomputed_num_passes = 0) {
     if (!dict.valid() || !gray || w < 10 || h < 10)
         return {};
 
@@ -768,7 +770,25 @@ detectMarkers(const uint8_t *gray, int w, int h, const ArUcoDictionary &dict,
         return contours;
     };
 
-    if (gpu_thresh && gpu_ctx) {
+    if (precomputed_ds && precomputed_num_passes > 0) {
+        // Pre-computed binary path: binaries already produced by GPU video pipeline.
+        // Skip both GPU threshold call and CPU threshold — just find contours.
+        int dw = w / 3, dh = h / 3;
+        auto find_ds_contours = [&](const std::vector<uint8_t> &ds) {
+            auto contours = detail::findContours(ds, dw, dh,
+                                                 nullptr, max_contour_len / ds_factor);
+            for (auto &contour : contours)
+                for (auto &pt : contour) { pt.x() *= ds_factor; pt.y() *= ds_factor; }
+            return contours;
+        };
+        all_contours = find_ds_contours((*precomputed_ds)[0]);
+        if (precomputed_num_passes > 1 && all_contours.size() >= 4) {
+            auto pass2 = find_ds_contours((*precomputed_ds)[1]);
+            all_contours.insert(all_contours.end(),
+                               std::make_move_iterator(pass2.begin()),
+                               std::make_move_iterator(pass2.end()));
+        }
+    } else if (gpu_thresh && gpu_ctx) {
         // GPU path: threshold + 3x downsample fused on GPU.
         // Only (w/3)*(h/3) bytes transferred back per pass (~784KB vs 7MB).
         int dw = w / 3, dh = h / 3;
@@ -1130,11 +1150,14 @@ inline CharucoResult
 detectCharucoBoard(const uint8_t *gray, int w, int h,
                    const CharucoBoard &board, const ArUcoDictionary &dict,
                    GpuThresholdFunc gpu_thresh = nullptr,
-                   void *gpu_ctx = nullptr) {
+                   void *gpu_ctx = nullptr,
+                   const std::vector<std::vector<uint8_t>> *precomputed_ds = nullptr,
+                   int precomputed_num_passes = 0) {
     CharucoResult result;
 
     // Step 1: Detect ArUco markers
-    auto markers = detectMarkers(gray, w, h, dict, gpu_thresh, gpu_ctx);
+    auto markers = detectMarkers(gray, w, h, dict, gpu_thresh, gpu_ctx,
+                                 precomputed_ds, precomputed_num_passes);
     if (markers.empty())
         return result;
 

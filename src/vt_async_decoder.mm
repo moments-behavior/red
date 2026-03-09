@@ -365,6 +365,16 @@ CVPixelBufferRef VTAsyncDecoder::drain_one() {
     return e.buf;  // caller owns
 }
 
+CVPixelBufferRef VTAsyncDecoder::drain_one_with_pts(double *out_pts_sec) {
+    std::lock_guard<std::mutex> lk(mutex_);
+    if (queue_.empty()) return nullptr;
+    FrameEntry e = queue_.top();
+    queue_.pop();
+    if (out_pts_sec)
+        *out_pts_sec = CMTimeGetSeconds(e.pts);
+    return e.buf;  // caller owns
+}
+
 // ---------------------------------------------------------------------------
 // VTAsyncDecoder::pop_next
 // ---------------------------------------------------------------------------
