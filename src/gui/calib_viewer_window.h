@@ -24,6 +24,7 @@ struct CalibViewerState {
     bool show_labels = true;
     bool show_reg_graph = false;
     bool show_board_poses = false;
+    bool show_axes_box = false; // show 3D box, axis labels, grid
     bool color_by_error = true;
     int hovered_camera = -1;
     int hovered_edge = -1;
@@ -107,6 +108,8 @@ inline void DrawCalibViewerWindow(CalibViewerState &state) {
     ImGui::Checkbox("Reg. Graph", &state.show_reg_graph);
     ImGui::SameLine();
     ImGui::Checkbox("Boards", &state.show_board_poses);
+    ImGui::SameLine();
+    ImGui::Checkbox("Axes", &state.show_axes_box);
 
     // Camera selector
     {
@@ -164,8 +167,21 @@ inline void DrawCalibViewerWindow(CalibViewerState &state) {
     float axis_len = std::max(100.0f, scene_extent * 0.3f);
 
     auto avail = ImGui::GetContentRegionAvail();
-    if (ImPlot3D::BeginPlot("##calib3d", avail, ImPlot3DFlags_Equal)) {
-        ImPlot3D::SetupAxes("X (mm)", "Y (mm)", "Z (mm)");
+    ImPlot3DFlags plot_flags = ImPlot3DFlags_Equal | ImPlot3DFlags_NoClip;
+    if (!state.show_axes_box)
+        plot_flags |= ImPlot3DFlags_CanvasOnly;
+
+    // Transparent plot background when axes are hidden
+    if (!state.show_axes_box) {
+        ImPlot3D::PushStyleColor(ImPlot3DCol_PlotBg, ImVec4(0, 0, 0, 0));
+        ImPlot3D::PushStyleColor(ImPlot3DCol_FrameBg, ImVec4(0, 0, 0, 0));
+    }
+
+    if (ImPlot3D::BeginPlot("##calib3d", avail, plot_flags)) {
+        ImPlot3DAxisFlags ax_flags = state.show_axes_box ? 0 : ImPlot3DAxisFlags_NoDecorations;
+        ImPlot3D::SetupAxis(ImAxis3D_X, state.show_axes_box ? "X (mm)" : nullptr, ax_flags);
+        ImPlot3D::SetupAxis(ImAxis3D_Y, state.show_axes_box ? "Y (mm)" : nullptr, ax_flags);
+        ImPlot3D::SetupAxis(ImAxis3D_Z, state.show_axes_box ? "Z (mm)" : nullptr, ax_flags);
 
         state.hovered_camera = -1;
         bool single_cam = (state.selected_camera >= 0);
@@ -375,6 +391,8 @@ inline void DrawCalibViewerWindow(CalibViewerState &state) {
 
         ImPlot3D::EndPlot();
     }
+    if (!state.show_axes_box)
+        ImPlot3D::PopStyleColor(2);
 
     // ── Hover tooltip ──
     if (state.hovered_camera >= 0 && state.hovered_camera < nc) {
