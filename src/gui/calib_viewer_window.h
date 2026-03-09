@@ -22,8 +22,11 @@ struct CalibViewerState {
     bool show_points = true;
     bool show_frustums = true;
     bool show_labels = true;
+    bool show_reg_graph = false;
+    bool show_board_poses = false;
     bool color_by_error = true;
     int hovered_camera = -1;
+    int hovered_edge = -1;
     int selected_camera = -1; // -1 = show all cameras
     // Cached per-camera point indices (built on selection change)
     std::vector<int> selected_cam_point_ids;
@@ -87,6 +90,10 @@ inline void DrawCalibViewerWindow(CalibViewerState &state) {
     ImGui::Checkbox("Points", &state.show_points);
     ImGui::SameLine();
     ImGui::Checkbox("Labels", &state.show_labels);
+    ImGui::SameLine();
+    ImGui::Checkbox("Reg. Graph", &state.show_reg_graph);
+    ImGui::SameLine();
+    ImGui::Checkbox("Boards", &state.show_board_poses);
 
     // Camera selector
     {
@@ -252,6 +259,97 @@ inline void DrawCalibViewerWindow(CalibViewerState &state) {
             }
         }
 
+        // ── Registration graph ──
+        state.hovered_edge = -1;
+        if (state.show_reg_graph && !res.db.registration_order.empty()) {
+            const auto &steps = res.db.registration_order;
+            // Build camera name → index map
+            std::map<std::string, int> name_to_idx;
+            for (int c = 0; c < nc; c++) name_to_idx[res.cam_names[c]] = c;
+
+            for (int e = 0; e < (int)steps.size(); e++) {
+                const auto &step = steps[e];
+                auto it_child = name_to_idx.find(step.camera_name);
+                auto it_parent = name_to_idx.find(step.parent_camera);
+                if (it_child == name_to_idx.end()) continue;
+                if (step.parent_camera == "origin") continue; // skip the root camera
+                if (it_parent == name_to_idx.end()) continue;
+
+                const auto &fc = frustums[it_child->second].center;
+                const auto &fp = frustums[it_parent->second].center;
+
+                // Color by shared frame count
+                float t = std::min((float)step.num_shared_frames / 100.0f, 1.0f);
+                ImU32 edge_col = IM_COL32((int)((1-t)*255), (int)(t*255), 50, 180);
+                float edge_w = 2.0f;
+
+                // Hover detection on edge midpoint
+                Eigen::Vector3d mid = (fc + fp) * 0.5;
+                ImVec2 mid_scr = ImPlot3D::PlotToPixels(mid.x(), mid.y(), mid.z());
+                ImVec2 mouse = ImGui::GetMousePos();
+                float dx = mid_scr.x-mouse.x, dy = mid_scr.y-mouse.y;
+                if (dx*dx+dy*dy < 400.0f) {
+                    state.hovered_edge = e;
+                    edge_col = IM_COL32(255, 255, 100, 255);
+                    edge_w = 3.5f;
+                }
+
+                float ex[2]={(float)fc.x(),(float)fp.x()};
+                float ey[2]={(float)fc.y(),(float)fp.y()};
+                float ez[2]={(float)fc.z(),(float)fp.z()};
+                ImPlot3D::PlotLine(("##edge_"+std::to_string(e)).c_str(), ex, ey, ez, 2,
+                    {ImPlot3DProp_LineColor, edge_col, ImPlot3DProp_LineWeight, edge_w});
+            }
+        }
+
+        // ── Board poses (selected camera only) ──
+        if (state.show_board_poses && state.selected_camera >= 0 &&
+            state.selected_camera < nc) {
+            const auto &cam_name = res.cam_names[state.selected_camera];
+            auto bp_it = res.db.board_poses.find(cam_name);
+            if (bp_it != res.db.board_poses.end()) {
+                const auto &cs = res.db.board_poses.at(cam_name);
+                // Board geometry: rectangle from (0,0,0) to (board_w, board_h, 0)
+                // We'll use a small square for each frame's board position
+                for (const auto &[fi, bp] : cs) {
+                    // Board corners in board frame: 4 corners of the ChArUco board
+                    // Approximate: use 240mm x 240mm board (5x5 @ 60mm squares = 4x4 corners over 240mm)
+                    float bw = 240.0f, bh = 240.0f; // approximate board size
+                    Eigen::Vector3d bc[4] = {
+                        {0, 0, 0}, {bw, 0, 0}, {bw, bh, 0}, {0, bh, 0}
+                    };
+                    // Transform to world using PnP pose: X_cam = R*X_board + t
+                    // Then to world using camera pose: X_world = R_cam^T * (X_cam - t_cam)
+                    // But the PnP pose IS the camera-to-board transform, so board corners
+                    // in camera frame are: R_pnp * corner + t_pnp
+                    // World frame: R_cam_world^T * (R_pnp * corner + t_pnp - t_cam)
+                    // Actually, the PnP pose gives camera-in-board-frame coordinates.
+                    // Board corner in camera frame: R_pnp * [x,y,0] + t_pnp
+                    // Board corner in world: Rt_cam * (R_pnp * [x,y,0] + t_pnp - t_cam_world)
+                    // Simpler: just transform board corners through PnP pose then camera inverse
+                    const auto &cam = res.cameras[state.selected_camera];
+                    Eigen::Matrix3d Rt_cam = cam.R.transpose();
+                    Eigen::Vector3d cam_center = -Rt_cam * cam.t;
+
+                    float rxs[5], rys[5], rzs[5];
+                    for (int i = 0; i < 4; i++) {
+                        Eigen::Vector3d pt_cam = bp.R * bc[i] + bp.t;
+                        Eigen::Vector3d pt_world = Rt_cam * (pt_cam - cam.t);
+                        rxs[i] = (float)pt_world.x();
+                        rys[i] = (float)pt_world.y();
+                        rzs[i] = (float)pt_world.z();
+                    }
+                    rxs[4]=rxs[0]; rys[4]=rys[0]; rzs[4]=rzs[0];
+
+                    // Color by PnP reproj error
+                    float t = std::min((float)bp.reproj / 2.0f, 1.0f);
+                    ImU32 board_col = IM_COL32((int)(t*255), (int)((1-t)*200), 100, 150);
+                    ImPlot3D::PlotLine(("##board_"+std::to_string(fi)).c_str(), rxs, rys, rzs, 5,
+                        {ImPlot3DProp_LineColor, board_col, ImPlot3DProp_LineWeight, 1.5});
+                }
+            }
+        }
+
         // ── World axes ──
         {
             float ax[2]={0,axis_len}, ay[2]={0,0}, az[2]={0,0};
@@ -294,6 +392,21 @@ inline void DrawCalibViewerWindow(CalibViewerState &state) {
         if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
             state.selected_camera = (state.selected_camera == c) ? -1 : c;
         }
+    }
+
+    // ── Registration edge tooltip ──
+    if (state.hovered_edge >= 0 && state.hovered_edge < (int)res.db.registration_order.size()) {
+        const auto &step = res.db.registration_order[state.hovered_edge];
+        ImGui::BeginTooltip();
+        ImGui::Text("Registration step %d/%d", state.hovered_edge + 1,
+            (int)res.db.registration_order.size());
+        ImGui::Separator();
+        ImGui::Text("%s -> %s", step.parent_camera.c_str(), step.camera_name.c_str());
+        ImGui::Text("Method: %s", step.method.c_str());
+        ImGui::Text("Shared frames: %d", step.num_shared_frames);
+        if (step.num_3d_points > 0)
+            ImGui::Text("3D points visible: %d", step.num_3d_points);
+        ImGui::EndTooltip();
     }
 
     ImGui::End();
