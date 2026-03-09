@@ -13,6 +13,11 @@
 #include "../lib/ImGuiFileDialog/stb/stb_image.h"
 #ifdef __APPLE__
 #include <turbojpeg.h>
+#include "FFmpegDemuxer.h"
+#include "vt_async_decoder.h"
+#include "aruco_metal.h"
+#else
+#include "ffmpeg_frame_reader.h"
 #endif
 
 #include <ceres/ceres.h>
@@ -67,6 +72,44 @@ struct CameraPose {
     Eigen::Matrix3d K = Eigen::Matrix3d::Identity();
     Eigen::Matrix<double, 5, 1> dist = Eigen::Matrix<double, 5, 1>::Zero();
 };
+
+// Per-camera detection results (used by both image and video pipelines)
+struct DetectionResult {
+    CameraIntrinsics cam_data;
+    std::vector<std::vector<Eigen::Vector3f>> all_obj_points;
+    std::vector<std::vector<Eigen::Vector2f>> all_img_points;
+    int det_image_width = 0;
+    int det_image_height = 0;
+    bool ok = false;
+    std::string error;
+};
+
+// Video frame range for video-based calibration
+struct VideoFrameRange {
+    std::string video_folder;
+    std::vector<std::string> cam_ordered;
+    int start_frame = 0;
+    int stop_frame = 0;    // 0 = all
+    int frame_step = 1;
+};
+
+// Get video frame count using FFmpeg
+inline int get_video_frame_count(const std::string &path) {
+    AVFormatContext *ctx = nullptr;
+    if (avformat_open_input(&ctx, path.c_str(), nullptr, nullptr) < 0) return 0;
+    if (avformat_find_stream_info(ctx, nullptr) < 0) { avformat_close_input(&ctx); return 0; }
+    for (unsigned i = 0; i < ctx->nb_streams; i++) {
+        if (ctx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
+            int64_t nb = ctx->streams[i]->nb_frames;
+            if (nb > 0) { avformat_close_input(&ctx); return (int)nb; }
+            double dur = ctx->duration / (double)AV_TIME_BASE;
+            AVRational rate = ctx->streams[i]->avg_frame_rate;
+            double fps = (rate.num > 0 && rate.den > 0) ? (double)rate.num / rate.den : 30.0;
+            avformat_close_input(&ctx); return (int)(dur * fps);
+        }
+    }
+    avformat_close_input(&ctx); return 0;
+}
 
 struct PerCameraMetrics {
     std::string name;
@@ -446,6 +489,329 @@ detect_and_calibrate_intrinsics(
         for (const auto &[name, intr] : intrinsics)
             msg += " " + name + "=" +
                    std::to_string(intr.reproj_error).substr(0, 5);
+        *status = msg;
+    }
+    return true;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Step 1 (video path): detect ChArUco corners from video files + calibrate intrinsics
+// ─────────────────────────────────────────────────────────────────────────────
+
+inline bool detect_and_calibrate_intrinsics_video(
+    const CalibrationTool::CalibConfig &config,
+    const VideoFrameRange &vfr,
+    std::map<std::string, CameraIntrinsics> &intrinsics,
+    std::vector<int> *out_frame_numbers,
+    std::string *status,
+    aruco_detect::GpuThresholdFunc gpu_thresh = nullptr,
+    void *gpu_ctx = nullptr) {
+
+    const auto &cs = config.charuco_setup;
+
+    // Discover videos
+    auto video_files = CalibrationTool::discover_aruco_videos(
+        vfr.video_folder, vfr.cam_ordered);
+    if (video_files.empty()) {
+        if (status) *status = "Error: No aruco videos found in " + vfr.video_folder;
+        return false;
+    }
+
+    // Probe frame count from first video
+    int total_video_frames = 0;
+    { auto first_it = video_files.begin();
+      total_video_frames = get_video_frame_count(first_it->second); }
+
+    // Build frame list
+    int stop_fr = vfr.stop_frame;
+    if (stop_fr <= 0) stop_fr = total_video_frames;
+    int step = std::max(1, vfr.frame_step);
+    std::vector<int> frame_numbers;
+    for (int f = vfr.start_frame; f < stop_fr; f += step)
+        frame_numbers.push_back(f);
+    if (frame_numbers.empty()) {
+        if (status) *status = "Error: No frames in range";
+        return false;
+    }
+    std::map<int, int> frame_to_idx;
+    for (int i = 0; i < (int)frame_numbers.size(); i++)
+        frame_to_idx[frame_numbers[i]] = i;
+    if (out_frame_numbers) *out_frame_numbers = frame_numbers;
+
+    int num_cameras = (int)vfr.cam_ordered.size();
+    std::mutex status_mutex;
+    std::atomic<int> cameras_done{0};
+    std::vector<DetectionResult> detections(num_cameras);
+    int frames_per_cam = (int)frame_numbers.size();
+    int total_frames = num_cameras * frames_per_cam;
+    std::atomic<int> frames_done{0};
+    auto phase1_start = std::chrono::steady_clock::now();
+
+    if (status) *status = "Detecting ChArUco corners from video (0/" +
+                          std::to_string(total_frames) + " frames)...";
+    fprintf(stderr, "[Calibration] Phase 1 (video): %d frames across %d cameras...\n",
+            total_frames, num_cameras);
+
+    {
+        std::vector<std::future<void>> futures;
+        for (int cam_i = 0; cam_i < num_cameras; cam_i++) {
+            auto vid_it = video_files.find(vfr.cam_ordered[cam_i]);
+            if (vid_it == video_files.end()) {
+                detections[cam_i].error = "No video for " + vfr.cam_ordered[cam_i];
+                continue;
+            }
+            futures.push_back(std::async(std::launch::async,
+                [&, cam_i, video_path = vid_it->second]() {
+                const std::string &serial = vfr.cam_ordered[cam_i];
+                auto &det = detections[cam_i];
+                auto aruco_dict = aruco_detect::getDictionary(cs.dictionary);
+                aruco_detect::CharucoBoard board;
+                board.squares_x = cs.w; board.squares_y = cs.h;
+                board.square_length = cs.square_side_length;
+                board.marker_length = cs.marker_side_length;
+                board.dictionary_id = cs.dictionary;
+
+#ifdef __APPLE__
+                // macOS: FFmpegDemuxer + VTAsyncDecoder + Metal GPU
+                std::unique_ptr<FFmpegDemuxer> demuxer;
+                try { demuxer = std::make_unique<FFmpegDemuxer>(
+                    video_path.c_str(), std::map<std::string, std::string>{});
+                } catch (...) { det.error = "Failed to open demuxer: " + video_path; return; }
+
+                int w = (int)demuxer->GetWidth(), h = (int)demuxer->GetHeight();
+                det.det_image_width = w; det.det_image_height = h;
+                det.cam_data.image_width = w; det.cam_data.image_height = h;
+
+                VTAsyncDecoder vt;
+                if (!vt.init(demuxer->GetExtradata(), demuxer->GetExtradataSize(),
+                             demuxer->GetVideoCodec())) {
+                    det.error = "VT init failed for " + video_path; return;
+                }
+
+                // Compute window sizes for adaptive threshold
+                std::vector<int> window_sizes;
+                { int small_win = std::max(3, std::min(w, h) / 40);
+                  if (small_win % 2 == 0) small_win++;
+                  int large_win = std::max(w, h) / 10;
+                  if (large_win % 2 == 0) large_win++;
+                  large_win = std::min(large_win, 255);
+                  window_sizes.push_back(small_win);
+                  if (large_win > small_win + 10) window_sizes.push_back(large_win); }
+                int C = 7;
+                int num_passes = (int)window_sizes.size();
+
+                std::vector<uint8_t> gray(w * h);
+                int dw = w / 3, dh = h / 3;
+                std::vector<std::vector<uint8_t>> ds_images(num_passes);
+                std::vector<uint8_t *> ds_ptrs(num_passes);
+                for (int p = 0; p < num_passes; p++) {
+                    ds_images[p].resize((size_t)dw * dh);
+                    ds_ptrs[p] = ds_images[p].data();
+                }
+
+                int frame = 0;
+                bool first_pkt_from_seek = false;
+                uint8_t *seek_pkt = nullptr; size_t seek_pkt_size = 0;
+                PacketData seek_pkt_info;
+                if (vfr.start_frame > 0) {
+                    SeekContext seek_ctx((uint64_t)vfr.start_frame, PREV_KEY_FRAME, BY_NUMBER);
+                    if (demuxer->Seek(seek_ctx, seek_pkt, seek_pkt_size, seek_pkt_info)) {
+                        frame = (int)demuxer->FrameNumberFromTs(seek_ctx.out_frame_pts);
+                        if (frame < 0) frame = 0;
+                        first_pkt_from_seek = true;
+                    }
+                }
+
+                auto process_frame = [&](CVPixelBufferRef pb) {
+                    bool should_detect = frame_to_idx.count(frame) > 0;
+                    if (should_detect && gpu_ctx) {
+                        aruco_metal_process_video_frame(
+                            (ArucoMetalHandle)gpu_ctx, pb, w, h,
+                            window_sizes.data(), C, num_passes,
+                            ds_ptrs.data(), gray.data());
+                        auto charuco = aruco_detect::detectCharucoBoard(
+                            gray.data(), w, h, board, aruco_dict,
+                            nullptr, nullptr, &ds_images, num_passes);
+                        if ((int)charuco.ids.size() >= 6) {
+                            aruco_detect::cornerSubPix(gray.data(), w, h, charuco.corners, 5, 30, 0.01f);
+                            int sorted_idx = frame_to_idx[frame];
+                            det.cam_data.corners_per_image[sorted_idx] = charuco.corners;
+                            det.cam_data.ids_per_image[sorted_idx] = charuco.ids;
+                            std::vector<Eigen::Vector3f> obj_pts;
+                            std::vector<Eigen::Vector2f> img_pts;
+                            aruco_detect::matchImagePoints(board, charuco.corners, charuco.ids, obj_pts, img_pts);
+                            if ((int)obj_pts.size() >= 6) {
+                                det.all_obj_points.push_back(std::move(obj_pts));
+                                det.all_img_points.push_back(std::move(img_pts));
+                            }
+                        }
+                        int done_f = ++frames_done;
+                        if (done_f % 20 == 0) {
+                            auto now = std::chrono::steady_clock::now();
+                            double elapsed = std::chrono::duration<double>(now - phase1_start).count();
+                            double rate = done_f / elapsed;
+                            double eta = (total_frames - done_f) / rate;
+                            std::lock_guard<std::mutex> lock(status_mutex);
+                            if (status) { char buf[128];
+                                snprintf(buf, sizeof(buf), "Detecting corners (%d/%d frames, %.0f f/s, ~%.0fs left)...",
+                                    done_f, total_frames, rate, eta);
+                                *status = buf; }
+                        }
+                    } else if (should_detect) {
+                        CVPixelBufferLockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
+                        const uint8_t *bgra = (const uint8_t *)CVPixelBufferGetBaseAddress(pb);
+                        int stride = (int)CVPixelBufferGetBytesPerRow(pb);
+                        for (int y = 0; y < h; y++) { const uint8_t *row = bgra + y * stride;
+                            for (int x = 0; x < w; x++)
+                                gray[y*w+x] = (uint8_t)((row[x*4+2]*77 + row[x*4+1]*150 + row[x*4]*29) >> 8); }
+                        CVPixelBufferUnlockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
+                        auto charuco = aruco_detect::detectCharucoBoard(gray.data(), w, h, board, aruco_dict);
+                        if ((int)charuco.ids.size() >= 6) {
+                            aruco_detect::cornerSubPix(gray.data(), w, h, charuco.corners, 5, 30, 0.01f);
+                            int sorted_idx = frame_to_idx[frame];
+                            det.cam_data.corners_per_image[sorted_idx] = charuco.corners;
+                            det.cam_data.ids_per_image[sorted_idx] = charuco.ids;
+                            std::vector<Eigen::Vector3f> obj_pts;
+                            std::vector<Eigen::Vector2f> img_pts;
+                            aruco_detect::matchImagePoints(board, charuco.corners, charuco.ids, obj_pts, img_pts);
+                            if ((int)obj_pts.size() >= 6) {
+                                det.all_obj_points.push_back(std::move(obj_pts));
+                                det.all_img_points.push_back(std::move(img_pts));
+                            }
+                        }
+                        ++frames_done;
+                    }
+                    CFRelease(pb);
+                    frame++;
+                };
+
+                while (true) {
+                    if (frame >= stop_fr) break;
+                    uint8_t *pkt_data = nullptr; size_t pkt_size = 0; PacketData pkt_info;
+                    if (first_pkt_from_seek) {
+                        pkt_data = seek_pkt; pkt_size = seek_pkt_size;
+                        pkt_info = seek_pkt_info; first_pkt_from_seek = false;
+                    } else { if (!demuxer->Demux(pkt_data, pkt_size, pkt_info)) break; }
+                    bool is_key = (pkt_info.flags & AV_PKT_FLAG_KEY) != 0;
+                    vt.submit_blocking(pkt_data, pkt_size, pkt_info.pts,
+                                       pkt_info.dts, demuxer->GetTimebase(), is_key);
+                    while (CVPixelBufferRef pb = vt.drain_one()) {
+                        process_frame(pb); if (frame >= stop_fr) break; }
+                    if (frame >= stop_fr) break;
+                }
+                while (frame < stop_fr) {
+                    CVPixelBufferRef pb = vt.drain_one();
+                    if (!pb) break; process_frame(pb);
+                }
+#else
+                // Linux: ffmpeg_reader::FrameReader (CPU decode)
+                ffmpeg_reader::FrameReader reader;
+                if (!reader.open(video_path)) {
+                    det.error = "Failed to open video: " + video_path; return; }
+                int w = reader.width(), h = reader.height();
+                det.det_image_width = w; det.det_image_height = h;
+                det.cam_data.image_width = w; det.cam_data.image_height = h;
+                std::vector<uint8_t> gray(w * h);
+                for (int frame_num : frame_numbers) {
+                    const uint8_t *rgb = reader.readFrame(frame_num);
+                    if (!rgb) continue;
+                    for (int i = 0; i < w * h; i++)
+                        gray[i] = (uint8_t)((rgb[i*3]*77 + rgb[i*3+1]*150 + rgb[i*3+2]*29) >> 8);
+                    auto charuco = aruco_detect::detectCharucoBoard(gray.data(), w, h, board, aruco_dict);
+                    if ((int)charuco.ids.size() >= 6) {
+                        aruco_detect::cornerSubPix(gray.data(), w, h, charuco.corners, 5, 30, 0.01f);
+                        int sorted_idx = frame_to_idx[frame_num];
+                        det.cam_data.corners_per_image[sorted_idx] = charuco.corners;
+                        det.cam_data.ids_per_image[sorted_idx] = charuco.ids;
+                        std::vector<Eigen::Vector3f> obj_pts;
+                        std::vector<Eigen::Vector2f> img_pts;
+                        aruco_detect::matchImagePoints(board, charuco.corners, charuco.ids, obj_pts, img_pts);
+                        if ((int)obj_pts.size() >= 6) {
+                            det.all_obj_points.push_back(std::move(obj_pts));
+                            det.all_img_points.push_back(std::move(img_pts));
+                        }
+                    }
+                    int done_f = ++frames_done;
+                    if (done_f % 20 == 0) {
+                        auto now = std::chrono::steady_clock::now();
+                        double elapsed = std::chrono::duration<double>(now - phase1_start).count();
+                        double rate = done_f / elapsed;
+                        double eta = (total_frames - done_f) / rate;
+                        std::lock_guard<std::mutex> lk(status_mutex);
+                        if (status) { char buf[128];
+                            snprintf(buf, sizeof(buf), "Detecting corners (%d/%d frames, %.0f f/s, ~%.0fs left)...",
+                                done_f, total_frames, rate, eta);
+                            *status = buf; }
+                    }
+                }
+#endif
+                if (det.all_obj_points.size() < 4) {
+                    det.error = "Too few valid frames for camera " + serial +
+                                " (" + std::to_string(det.all_obj_points.size()) + ")";
+                } else { det.ok = true; }
+                int done = ++cameras_done;
+                { std::lock_guard<std::mutex> lock(status_mutex);
+                  if (status) *status = "Detecting corners — camera " +
+                    std::to_string(done) + "/" + std::to_string(num_cameras) + " done"; }
+            }));
+        }
+        for (auto &f : futures) f.get();
+    }
+
+    { auto phase1_end = std::chrono::steady_clock::now();
+      double phase1_s = std::chrono::duration<double>(phase1_end - phase1_start).count();
+      fprintf(stderr, "[Calibration] Phase 1 (video) done: %d frames in %.1fs (%.0f f/s)\n",
+              total_frames, phase1_s, total_frames / phase1_s);
+      for (int cam_i = 0; cam_i < num_cameras; cam_i++)
+          fprintf(stderr, "[Calibration]   %s: %d frames with detections\n",
+                  vfr.cam_ordered[cam_i].c_str(),
+                  (int)detections[cam_i].cam_data.corners_per_image.size()); }
+
+    for (int cam_i = 0; cam_i < num_cameras; cam_i++) {
+        if (!detections[cam_i].ok) {
+            if (status) *status = "Error: " + detections[cam_i].error;
+            return false;
+        }
+    }
+
+    // Phase 2: calibrate intrinsics in parallel
+    std::vector<CameraIntrinsics> results(num_cameras);
+    std::vector<bool> result_ok(num_cameras, false);
+    std::atomic<int> calib_done{0};
+    if (status) *status = "Calibrating intrinsics (0/" + std::to_string(num_cameras) + ")...";
+    {
+        std::vector<std::future<void>> calib_futures;
+        for (int cam_i = 0; cam_i < num_cameras; cam_i++) {
+            calib_futures.push_back(std::async(std::launch::async, [&, cam_i]() {
+                auto &det = detections[cam_i];
+                auto calib_result = intrinsic_calib::calibrateCamera(
+                    det.all_obj_points, det.all_img_points,
+                    det.det_image_width, det.det_image_height, true);
+                det.cam_data.K = calib_result.K;
+                det.cam_data.dist = calib_result.dist;
+                det.cam_data.reproj_error = calib_result.reproj_error;
+                results[cam_i] = std::move(det.cam_data);
+                result_ok[cam_i] = true;
+                int done = ++calib_done;
+                { std::lock_guard<std::mutex> lock(status_mutex);
+                  if (status) *status = "Calibrating intrinsics (" +
+                    std::to_string(done) + "/" + std::to_string(num_cameras) + ")..."; }
+            }));
+        }
+        for (auto &f : calib_futures) f.get();
+    }
+
+    for (int i = 0; i < num_cameras; i++) {
+        if (!result_ok[i]) {
+            if (status) *status = "Error: calibration failed for camera " + vfr.cam_ordered[i];
+            return false;
+        }
+        intrinsics[vfr.cam_ordered[i]] = std::move(results[i]);
+    }
+    if (status) {
+        std::string msg = "Intrinsics done. Reproj errors:";
+        for (const auto &[name, intr] : intrinsics)
+            msg += " " + name + "=" + std::to_string(intr.reproj_error).substr(0, 5);
         *status = msg;
     }
     return true;
@@ -1163,7 +1529,8 @@ inline bool bundle_adjust(
 inline bool global_registration(
     const CalibrationTool::CalibConfig &config,
     std::vector<CameraPose> &poses,
-    std::map<int, Eigen::Vector3d> &points_3d, std::string *status) {
+    std::map<int, Eigen::Vector3d> &points_3d, std::string *status,
+    const std::vector<int> *frame_numbers = nullptr) {
 
     if (config.gt_pts.empty() || config.world_coordinate_imgs.empty()) {
         if (status)
@@ -1175,12 +1542,18 @@ inline bool global_registration(
     int max_corners =
         (config.charuco_setup.w - 1) * (config.charuco_setup.h - 1);
 
-    // Get sorted image numbers to map image name → sorted index
-    auto image_numbers =
-        get_sorted_image_numbers(config.img_path, config.cam_ordered[0]);
+    // Build image number → sorted index map.
+    // For video path, use frame_numbers directly; for image path, scan filesystem.
     std::map<int, int> img_num_to_idx;
-    for (int i = 0; i < (int)image_numbers.size(); i++)
-        img_num_to_idx[image_numbers[i]] = i;
+    if (frame_numbers && !frame_numbers->empty()) {
+        for (int i = 0; i < (int)frame_numbers->size(); i++)
+            img_num_to_idx[(*frame_numbers)[i]] = i;
+    } else {
+        auto image_numbers =
+            get_sorted_image_numbers(config.img_path, config.cam_ordered[0]);
+        for (int i = 0; i < (int)image_numbers.size(); i++)
+            img_num_to_idx[image_numbers[i]] = i;
+    }
 
     // Collect corresponding pairs: BA 3D point ↔ world coordinate
     std::vector<Eigen::Vector3d> src_pts; // BA frame
@@ -1213,6 +1586,13 @@ inline bool global_registration(
     }
 
     if (src_pts.size() < 3) {
+        // In video mode, world_coordinate_imgs may reference image numbers
+        // not in the sampled video frame range — skip gracefully.
+        if (frame_numbers && !frame_numbers->empty()) {
+            if (status) *status = "Skipping global registration (world_coordinate_imgs "
+                                  "not in video frame range)";
+            return true;
+        }
         if (status)
             *status = "Error: only " + std::to_string(src_pts.size()) +
                       " matching points for global registration (need ≥3)";
@@ -1797,7 +2177,7 @@ inline bool bundle_adjust_experimental(
 
 inline CalibrationResult run_experimental_pipeline(
     const CalibrationTool::CalibConfig &config, const std::string &base_folder,
-    std::string *status,
+    std::string *status, const VideoFrameRange *vfr=nullptr,
     aruco_detect::GpuThresholdFunc gpu_thresh=nullptr, void *gpu_ctx=nullptr) {
     CalibrationResult result; result.cam_names=config.cam_ordered;
     auto now=std::chrono::system_clock::now();auto t=std::chrono::system_clock::to_time_t(now);
@@ -1806,8 +2186,9 @@ inline CalibrationResult run_experimental_pipeline(
     {namespace fs=std::filesystem;std::error_code ec;fs::create_directories(outf,ec);if(ec){result.error="Cannot create: "+ec.message();return result;}}
     fprintf(stderr,"\n[Experimental] === Starting experimental pipeline ===\n");
     if(status)*status="Step 1: Detecting + calibrating intrinsics...";
-    std::map<std::string,CameraIntrinsics> intrinsics;
-    if(!detect_and_calibrate_intrinsics(config,intrinsics,status,gpu_thresh,gpu_ctx)){result.error=status?*status:"failed";return result;}
+    std::map<std::string,CameraIntrinsics> intrinsics;std::vector<int> video_frame_numbers;
+    if(vfr){if(!detect_and_calibrate_intrinsics_video(config,*vfr,intrinsics,&video_frame_numbers,status,gpu_thresh,gpu_ctx)){result.error=status?*status:"failed";return result;}}
+    else{if(!detect_and_calibrate_intrinsics(config,intrinsics,status,gpu_thresh,gpu_ctx)){result.error=status?*status:"failed";return result;}}
     result.image_width=intrinsics.begin()->second.image_width;result.image_height=intrinsics.begin()->second.image_height;
     int nc=(int)config.cam_ordered.size();result.per_camera_metrics.resize(nc);
     for(int i=0;i<nc;i++){auto&m=result.per_camera_metrics[i];m.name=config.cam_ordered[i];
@@ -1825,7 +2206,7 @@ inline CalibrationResult run_experimental_pipeline(
     if(status)*status="Step 5: Bundle adjustment...";
     if(!bundle_adjust_experimental(config,landmarks,poses,points_3d,result,status)){result.error=status?*status:"BA failed";return result;}
     if(status)*status="Step 6: Global registration...";
-    if(!global_registration(config,poses,points_3d,status)){result.error=status?*status:"Registration failed";return result;}
+    if(!global_registration(config,poses,points_3d,status,vfr?&video_frame_numbers:nullptr)){result.error=status?*status:"Registration failed";return result;}
     if(status)*status="Step 7: Writing files...";
     if(!write_calibration(poses,config.cam_ordered,outf,result.image_width,result.image_height,status)){result.error=status?*status:"Write failed";return result;}
     write_intermediate_output(config,intrinsics,landmarks,poses,points_3d,outf);
@@ -1852,6 +2233,7 @@ inline CalibrationResult
 run_full_pipeline(const CalibrationTool::CalibConfig &config,
                   const std::string &base_folder,
                   std::string *status,
+                  const VideoFrameRange *vfr = nullptr,
                   aruco_detect::GpuThresholdFunc gpu_thresh = nullptr,
                   void *gpu_ctx = nullptr) {
     CalibrationResult result;
@@ -1880,10 +2262,20 @@ run_full_pipeline(const CalibrationTool::CalibConfig &config,
     if (status)
         *status = "Step 1/7: Detecting ChArUco corners...";
     std::map<std::string, CameraIntrinsics> intrinsics;
-    if (!detect_and_calibrate_intrinsics(config, intrinsics, status,
-                                         gpu_thresh, gpu_ctx)) {
-        result.error = status ? *status : "Intrinsic calibration failed";
-        return result;
+    std::vector<int> video_frame_numbers;
+    if (vfr) {
+        if (!detect_and_calibrate_intrinsics_video(
+                config, *vfr, intrinsics, &video_frame_numbers, status,
+                gpu_thresh, gpu_ctx)) {
+            result.error = status ? *status : "Intrinsic calibration failed";
+            return result;
+        }
+    } else {
+        if (!detect_and_calibrate_intrinsics(config, intrinsics, status,
+                                             gpu_thresh, gpu_ctx)) {
+            result.error = status ? *status : "Intrinsic calibration failed";
+            return result;
+        }
     }
 
     // Get image dimensions from first camera
@@ -1965,7 +2357,8 @@ run_full_pipeline(const CalibrationTool::CalibConfig &config,
     // Step 6: Global registration
     if (status)
         *status = "Step 6/7: Global registration...";
-    if (!global_registration(config, poses, points_3d, status)) {
+    if (!global_registration(config, poses, points_3d, status,
+                             vfr ? &video_frame_numbers : nullptr)) {
         result.error = status ? *status : "Global registration failed";
         return result;
     }

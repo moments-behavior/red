@@ -57,11 +57,11 @@ int main(int argc, char **argv) {
         std::cout << "\n=== Running EXPERIMENTAL pipeline ===\n\n";
         result = CalibrationPipeline::run_experimental_pipeline(
             config, "/tmp/calib_test_experimental", &status,
-            gpu_fn, gpu_ctx);
+            nullptr, gpu_fn, gpu_ctx);
     } else {
         result = CalibrationPipeline::run_full_pipeline(
             config, "/tmp/calib_test_output", &status,
-            gpu_fn, gpu_ctx);
+            nullptr, gpu_fn, gpu_ctx);
     }
 
 #ifdef __APPLE__
