@@ -1175,9 +1175,13 @@ int main(int argc, char **argv) {
                                     }
 
                                     // delete all keypoints on a frame
+                                    // (skip if SAM has active prompts — Backspace is SAM undo)
                                     if (ImGui::IsKeyPressed(ImGuiKey_Backspace,
                                                             false) &&
-                                        !io.WantTextInput) {
+                                        !io.WantTextInput &&
+                                        !(sam_tool_state.enabled &&
+                                          (!sam_tool_state.fg_points.empty() ||
+                                           !sam_tool_state.bg_points.empty()))) {
                                         annotations.erase(current_frame_num);
                                         keypoints_find = false;
                                     }

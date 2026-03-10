@@ -428,13 +428,14 @@ inline nlohmann::json generate_annotation_json(
                         auto cit = fit->second.find(cam_idx);
                         if (cit != fit->second.end()) {
                             // Flatten [[x,y],[x,y],...] → [x1,y1,x2,y2,...] (COCO format)
-                            // Y-flip already applied during annotations.json save
+                            // annotations.json stores ImPlot coords (Y=0 at bottom)
+                            // COCO/JARVIS needs image coords (Y=0 at top)
                             for (const auto &jpoly : cit->second) {
                                 nlohmann::json flat = nlohmann::json::array();
                                 for (const auto &jpt : jpoly) {
                                     flat.push_back(jpt[0].get<double>());
                                     double y = jpt[1].get<double>();
-                                    flat.push_back(img_h - y); // Y-flip to image coords
+                                    flat.push_back(img_h - y); // ImPlot → image coords
                                 }
                                 seg.push_back(flat);
                             }

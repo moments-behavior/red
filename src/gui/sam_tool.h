@@ -42,9 +42,11 @@ struct SamToolState {
     std::string decoder_path;
 };
 
-// Draw accepted (stored) mask polygons from the AnnotationMap
+// Draw accepted (stored) mask polygons from the AnnotationMap.
+// mask_polygons are stored in ImPlot coords (same as keypoints).
 inline void draw_accepted_masks(const AnnotationMap &amap, u32 frame,
                                  int cam_idx, int img_w, int img_h) {
+    (void)img_w; (void)img_h;
     auto it = amap.find(frame);
     if (it == amap.end()) return;
     const auto &fa = it->second;
@@ -55,13 +57,13 @@ inline void draw_accepted_masks(const AnnotationMap &amap, u32 frame,
     for (const auto &poly : cam.extras->mask_polygons) {
         if (poly.size() < 3) continue;
 
-        // Outline (solid green)
+        // Outline (solid green) — already in ImPlot coords
         std::vector<double> xs, ys;
         xs.reserve(poly.size() + 1);
         ys.reserve(poly.size() + 1);
         for (const auto &pt : poly) {
             xs.push_back(pt.x);
-            ys.push_back(img_h - pt.y);
+            ys.push_back(pt.y); // already ImPlot coords
         }
         xs.push_back(xs[0]); ys.push_back(ys[0]); // close
 
@@ -150,8 +152,8 @@ inline void sam_handle_input(SamToolState &state, SamState &sam,
     if (!state.enabled) return;
     if (!ImPlot::IsPlotHovered()) return;
 
-    // Reset prompts if frame changed (NOT camera — mask persists across viewports)
-    if (frame != state.prompt_frame) {
+    // Reset prompts if frame or camera changed
+    if (frame != state.prompt_frame || cam_idx != state.prompt_cam) {
         state.fg_points.clear();
         state.bg_points.clear();
         state.current_polygons.clear();
@@ -159,9 +161,8 @@ inline void sam_handle_input(SamToolState &state, SamState &sam,
         state.selected_mask = 0;
         state.has_pending_mask = false;
         state.prompt_frame = frame;
+        state.prompt_cam = cam_idx;
     }
-    // Track which camera the user is clicking on
-    state.prompt_cam = cam_idx;
 
     ImPlotPoint mouse = ImPlot::GetPlotMousePos();
 
@@ -188,14 +189,15 @@ inline void sam_handle_input(SamToolState &state, SamState &sam,
         }
     };
 
-    // Left click: add foreground point
-    if (was_click(ImGuiMouseButton_Left) && !ImGui::GetIO().KeyShift) {
+    // Left click: add foreground point (only when model loaded)
+    if (was_click(ImGuiMouseButton_Left) && !ImGui::GetIO().KeyShift &&
+        sam.loaded) {
         state.fg_points.push_back({img_x, img_y});
         run_sam();
     }
 
-    // Right click: add background point
-    if (was_click(ImGuiMouseButton_Right)) {
+    // Right click: add background point (only when model loaded)
+    if (was_click(ImGuiMouseButton_Right) && sam.loaded) {
         state.bg_points.push_back({img_x, img_y});
         run_sam();
     }
@@ -215,12 +217,18 @@ inline void sam_handle_input(SamToolState &state, SamState &sam,
     }
 
     // Enter: accept mask -> store in annotation
+    // Normalize from image coords (Y=0 top) to ImPlot coords (Y=0 bottom)
+    // so that mask_polygons match the same convention as keypoints.
     if (state.has_pending_mask && ImGui::IsKeyPressed(ImGuiKey_Enter)) {
         if (!state.current_polygons.empty()) {
             auto &fa = get_or_create_frame(amap, frame, num_nodes, num_cameras);
             if (cam_idx < (int)fa.cameras.size()) {
                 auto &ext = fa.cameras[cam_idx].get_extras();
                 ext.mask_polygons = state.current_polygons;
+                // Convert image coords → ImPlot coords (Y-flip)
+                for (auto &poly : ext.mask_polygons)
+                    for (auto &pt : poly)
+                        pt.y = img_h - pt.y;
                 ext.has_mask = true;
             }
         }
@@ -231,10 +239,16 @@ inline void sam_handle_input(SamToolState &state, SamState &sam,
         state.has_pending_mask = false;
     }
 
-    // Backspace: undo last point
-    if (ImGui::IsKeyPressed(ImGuiKey_Backspace)) {
+    // Backspace: undo last point and refresh mask
+    if (ImGui::IsKeyPressed(ImGuiKey_Backspace) && state.enabled) {
         if (!state.bg_points.empty()) state.bg_points.pop_back();
         else if (!state.fg_points.empty()) state.fg_points.pop_back();
+        if (!state.fg_points.empty())
+            run_sam(); // refresh mask with remaining points
+        else {
+            state.current_polygons.clear();
+            state.has_pending_mask = false;
+        }
     }
 
     // Escape: clear all prompts
