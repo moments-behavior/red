@@ -1612,6 +1612,481 @@ static void test_save_load_with_extended_data() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// Y-flip consistency tests
+// ═══════════════════════════════════════════════════════════════════════════
+
+static void test_yolo_pose_y_flip() {
+    printf("  test_yolo_pose_y_flip...\n");
+    namespace fs = std::filesystem;
+
+    // Setup: single camera, single frame, known ImPlot coords
+    std::string tmpdir = "/tmp/test_yflip_yolo_" + std::to_string(getpid());
+    std::string calib_dir = tmpdir + "/calib";
+    std::string output_dir = tmpdir + "/output";
+    fs::create_directories(calib_dir);
+    fs::create_directories(output_dir);
+    write_mock_calib_yaml(calib_dir + "/cam0.yaml", 640, 480);
+
+    AnnotationMap amap;
+    auto &fa = get_or_create_frame(amap, 100, 1, 1);
+    auto &inst = fa.instances[0];
+    // ImPlot y=400, image_height=480 → image y = 480-400 = 80
+    inst.cameras[0].keypoints[0] = {320.0, 400.0};
+    inst.cameras[0].kp_labeled[0] = true;
+
+    ExportFormats::ExportConfig cfg;
+    cfg.calibration_folder = calib_dir;
+    cfg.output_folder = output_dir;
+    cfg.camera_names = {"cam0"};
+    cfg.skeleton_name = "Test";
+    cfg.node_names = {"pt"};
+    cfg.num_keypoints = 1;
+    cfg.bbox_margin = 20.0f;
+    cfg.train_ratio = 1.0f;
+    cfg.seed = 1;
+
+    std::string status;
+    ExportFormats::export_yolo(cfg, amap, true, &status);
+
+    // Read the label file
+    std::string lbl_path = output_dir + "/labels/train/cam0/Frame_100.txt";
+    EXPECT_TRUE(fs::exists(lbl_path));
+    std::ifstream f(lbl_path);
+    std::string line;
+    std::getline(f, line);
+
+    // Parse: class cx cy w h kx ky vis
+    std::stringstream ss(line);
+    int cls; double cx, cy, bw, bh, kx, ky; int vis;
+    ss >> cls >> cx >> cy >> bw >> bh >> kx >> ky >> vis;
+
+    // YOLO ky = (480 - 400) / 480 = 80/480 = 0.16667
+    EXPECT_NEAR(ky, 80.0 / 480.0, 0.001);
+    // kx = 320 / 640 = 0.5
+    EXPECT_NEAR(kx, 320.0 / 640.0, 0.001);
+    EXPECT_EQ(vis, 2);
+
+    fs::remove_all(tmpdir);
+}
+
+static void test_dlc_y_flip() {
+    printf("  test_dlc_y_flip...\n");
+    namespace fs = std::filesystem;
+
+    std::string tmpdir = "/tmp/test_yflip_dlc_" + std::to_string(getpid());
+    std::string calib_dir = tmpdir + "/calib";
+    std::string output_dir = tmpdir + "/output";
+    fs::create_directories(calib_dir);
+    fs::create_directories(output_dir);
+    write_mock_calib_yaml(calib_dir + "/cam0.yaml", 640, 480);
+
+    AnnotationMap amap;
+    auto &fa = get_or_create_frame(amap, 100, 1, 1);
+    auto &inst = fa.instances[0];
+    // Same coords: ImPlot y=400, h=480 → DLC y = 480-400 = 80
+    inst.cameras[0].keypoints[0] = {320.0, 400.0};
+    inst.cameras[0].kp_labeled[0] = true;
+
+    ExportFormats::ExportConfig cfg;
+    cfg.calibration_folder = calib_dir;
+    cfg.output_folder = output_dir;
+    cfg.camera_names = {"cam0"};
+    cfg.skeleton_name = "Test";
+    cfg.node_names = {"pt"};
+    cfg.num_keypoints = 1;
+    cfg.seed = 1;
+
+    std::string status;
+    ExportFormats::export_deeplabcut(cfg, amap, &status);
+
+    // Read the CSV — skip 3 header rows
+    std::string csv_path = output_dir + "/cam0/CollectedData.csv";
+    EXPECT_TRUE(fs::exists(csv_path));
+    std::ifstream f(csv_path);
+    std::string line;
+    std::getline(f, line); // scorer
+    std::getline(f, line); // bodyparts
+    std::getline(f, line); // coords
+    std::getline(f, line); // first data row
+
+    // Parse: path,x,y
+    auto comma1 = line.find(',');
+    auto comma2 = line.find(',', comma1 + 1);
+    double x = std::stod(line.substr(comma1 + 1, comma2 - comma1 - 1));
+    double y = std::stod(line.substr(comma2 + 1));
+    EXPECT_NEAR(x, 320.0, 0.01);
+    EXPECT_NEAR(y, 80.0, 0.01); // 480 - 400 = 80
+
+    fs::remove_all(tmpdir);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Multi-instance export
+// ═══════════════════════════════════════════════════════════════════════════
+
+static void test_export_coco_multi_instance() {
+    printf("  test_export_coco_multi_instance...\n");
+    namespace fs = std::filesystem;
+
+    std::string tmpdir = "/tmp/test_multi_inst_" + std::to_string(getpid());
+    std::string calib_dir = tmpdir + "/calib";
+    std::string output_dir = tmpdir + "/output";
+    fs::create_directories(calib_dir);
+    fs::create_directories(output_dir);
+    write_mock_calib_yaml(calib_dir + "/cam0.yaml", 640, 480);
+
+    // Frame with 2 instances
+    AnnotationMap amap;
+    FrameAnnotation fa;
+    fa.frame_number = 10;
+    for (int i = 0; i < 2; ++i) {
+        auto inst = make_instance(2, 1, i, 0);
+        inst.cameras[0].keypoints[0] = {100.0 + i * 200, 300.0};
+        inst.cameras[0].kp_labeled[0] = true;
+        inst.cameras[0].keypoints[1] = {120.0 + i * 200, 280.0};
+        inst.cameras[0].kp_labeled[1] = true;
+        fa.instances.push_back(std::move(inst));
+    }
+    amap[10] = std::move(fa);
+
+    ExportFormats::ExportConfig cfg;
+    cfg.calibration_folder = calib_dir;
+    cfg.output_folder = output_dir;
+    cfg.camera_names = {"cam0"};
+    cfg.skeleton_name = "Test";
+    cfg.node_names = {"pt0", "pt1"};
+    cfg.num_keypoints = 2;
+    cfg.bbox_margin = 10.0f;
+    cfg.train_ratio = 1.0f;
+    cfg.seed = 1;
+
+    auto coco = ExportFormats::build_coco_json(amap, {10}, cfg, 0, "cam0", 640, 480);
+
+    // 1 image, 2 annotations (one per instance)
+    EXPECT_EQ((int)coco["images"].size(), 1);
+    EXPECT_EQ((int)coco["annotations"].size(), 2);
+
+    // Both annotations reference the same image
+    EXPECT_EQ(coco["annotations"][0]["image_id"].get<int>(),
+              coco["annotations"][1]["image_id"].get<int>());
+
+    fs::remove_all(tmpdir);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SAM preprocessing unit tests (no ONNX needed)
+// ═══════════════════════════════════════════════════════════════════════════
+
+static void test_sam_preprocess_mobilesam() {
+    printf("  test_sam_preprocess_mobilesam...\n");
+    // 4x3 white image (RGB=255)
+    const int w = 4, h = 3;
+    uint8_t rgb[w * h * 3];
+    memset(rgb, 255, sizeof(rgb));
+
+    float scale; int pad_x, pad_y;
+    auto result = sam_detail::preprocess_mobilesam(rgb, w, h, scale, pad_x, pad_y);
+
+    // Output shape: 3 * 1024 * 1024
+    EXPECT_EQ((int)result.size(), 3 * 1024 * 1024);
+
+    // Scale = 1024 / max(4,3) = 256
+    EXPECT_NEAR(scale, 1024.0f / 4.0f, 0.1f);
+
+    // Check normalization: pixel 255, mean=123.675, std=58.395
+    // Normalized = (255 - 123.675) / 58.395 ≈ 2.249
+    // The resized region should have roughly this value
+    float v = result[0]; // First pixel of R channel
+    EXPECT_NEAR(v, (255.0f - 123.675f) / 58.395f, 0.1f);
+
+    // Padding region (outside resized area) should be ~= (0-mean)/std = negative
+    // For R channel: (0 - 123.675) / 58.395 ≈ -2.118
+    // Pixel at bottom-right corner (1023, 1023) in R channel is padded → 0
+    // Actually padding uses 0.0f directly (no normalization of zeros)
+    // The code initializes to 0.0f and only writes the resized region
+    float padded = result[0 * 1024 * 1024 + 1023 * 1024 + 1023];
+    EXPECT_NEAR(padded, 0.0f, 0.001f);
+}
+
+static void test_sam_preprocess_sam2() {
+    printf("  test_sam_preprocess_sam2...\n");
+    // 8x8 mid-gray image (RGB=128)
+    const int w = 8, h = 8;
+    uint8_t rgb[w * h * 3];
+    memset(rgb, 128, sizeof(rgb));
+
+    auto result = sam_detail::preprocess_sam2(rgb, w, h);
+
+    // Output shape: 3 * 1024 * 1024
+    EXPECT_EQ((int)result.size(), 3 * 1024 * 1024);
+
+    // SAM2 normalizes to 0-1 first: pixel/255 = 128/255 ≈ 0.502
+    // Then (0.502 - mean) / std
+    // R channel: (0.502 - 0.485) / 0.229 ≈ 0.074
+    float v = result[0]; // First pixel of R channel
+    double expected_r = (128.0 / 255.0 - 0.485) / 0.229;
+    EXPECT_NEAR(v, expected_r, 0.05);
+
+    // G channel: (0.502 - 0.456) / 0.224 ≈ 0.205
+    float v_g = result[1 * 1024 * 1024];
+    double expected_g = (128.0 / 255.0 - 0.456) / 0.224;
+    EXPECT_NEAR(v_g, expected_g, 0.05);
+}
+
+static void test_sam_bilinear_resize() {
+    printf("  test_sam_bilinear_resize...\n");
+    // 2x2 gradient source → 4x4 output
+    float src[4] = {0.0f, 0.5f, 0.5f, 1.0f}; // smooth gradient
+    auto dst = sam_detail::bilinear_resize(src, 2, 2, 4, 4);
+
+    EXPECT_EQ((int)dst.size(), 16);
+
+    // Output should be finite (half-pixel centering can slightly overshoot
+    // source range for some patterns, so just check finiteness)
+    for (float v : dst) {
+        EXPECT_TRUE(std::isfinite(v));
+    }
+
+    // Larger resize: 3x3 → 6x6 (output shape correctness)
+    float src2[9] = {0, 1, 2, 3, 4, 5, 6, 7, 8};
+    auto dst2 = sam_detail::bilinear_resize(src2, 3, 3, 6, 6);
+    EXPECT_EQ((int)dst2.size(), 36);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Contour extraction for complex shapes
+// ═══════════════════════════════════════════════════════════════════════════
+
+static void test_sam_contour_l_shape() {
+    printf("  test_sam_contour_l_shape...\n");
+    // 10x10 mask with L-shape
+    const int w = 10, h = 10;
+    uint8_t mask[w * h];
+    memset(mask, 0, sizeof(mask));
+
+    // L-shape: rows 1-8 col 1-3, rows 6-8 col 1-7
+    for (int y = 1; y <= 8; ++y)
+        for (int x = 1; x <= 3; ++x)
+            mask[y * w + x] = 255;
+    for (int y = 6; y <= 8; ++y)
+        for (int x = 4; x <= 7; ++x)
+            mask[y * w + x] = 255;
+
+    auto contours = sam_detail::extract_contours(mask, w, h);
+    EXPECT_TRUE(!contours.empty());
+    // Concave L-shape should have more than 4 points
+    EXPECT_TRUE(contours[0].size() > 4);
+}
+
+static void test_sam_contour_single_pixel() {
+    printf("  test_sam_contour_single_pixel...\n");
+    // 5x5 mask with single pixel
+    const int w = 5, h = 5;
+    uint8_t mask[w * h];
+    memset(mask, 0, sizeof(mask));
+    mask[2 * w + 2] = 255; // single pixel at (2,2)
+
+    // Should not crash
+    auto contours = sam_detail::extract_contours(mask, w, h);
+    // Single pixel = single boundary pixel, can't form a closed contour with 3+ points
+    // Graceful: either empty or a small contour
+    // (no crash is the main assertion)
+    EXPECT_TRUE(true); // survived without crash
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Export schema validation
+// ═══════════════════════════════════════════════════════════════════════════
+
+static void test_coco_json_schema() {
+    printf("  test_coco_json_schema...\n");
+
+    ExportTestFixture fix;
+
+    auto coco = ExportFormats::build_coco_json(
+        fix.amap, {0, 10, 20, 30, 40}, fix.cfg, 0, "cam0", 640, 480);
+
+    // Top-level keys
+    EXPECT_TRUE(coco.contains("images"));
+    EXPECT_TRUE(coco.contains("annotations"));
+    EXPECT_TRUE(coco.contains("categories"));
+    EXPECT_TRUE(coco.is_object());
+
+    // Images: each must have id, file_name, width, height
+    for (const auto &img : coco["images"]) {
+        EXPECT_TRUE(img.contains("id"));
+        EXPECT_TRUE(img.contains("file_name"));
+        EXPECT_TRUE(img.contains("width"));
+        EXPECT_TRUE(img.contains("height"));
+        EXPECT_EQ(img["width"].get<int>(), 640);
+        EXPECT_EQ(img["height"].get<int>(), 480);
+    }
+
+    // Annotations: each must have required fields
+    for (const auto &ann : coco["annotations"]) {
+        EXPECT_TRUE(ann.contains("id"));
+        EXPECT_TRUE(ann.contains("image_id"));
+        EXPECT_TRUE(ann.contains("category_id"));
+        EXPECT_TRUE(ann.contains("keypoints"));
+        EXPECT_TRUE(ann.contains("num_keypoints"));
+        EXPECT_TRUE(ann.contains("bbox"));
+        EXPECT_TRUE(ann.contains("area"));
+        EXPECT_TRUE(ann.contains("iscrowd"));
+        // Keypoints array: 3 values per keypoint (x, y, vis)
+        EXPECT_EQ((int)ann["keypoints"].size(), 3 * 3); // 3 keypoints × 3 values
+        // Area must be positive
+        EXPECT_TRUE(ann["area"].get<double>() > 0);
+    }
+
+    // Categories: skeleton edges must be 1-indexed
+    auto &cat = coco["categories"][0];
+    EXPECT_TRUE(cat.contains("skeleton"));
+    for (const auto &edge : cat["skeleton"]) {
+        EXPECT_TRUE(edge[0].get<int>() >= 1); // 1-indexed
+        EXPECT_TRUE(edge[1].get<int>() >= 1);
+    }
+}
+
+static void test_yolo_label_format_validation() {
+    printf("  test_yolo_label_format_validation...\n");
+    namespace fs = std::filesystem;
+
+    ExportTestFixture fix;
+    fix.cfg.train_ratio = 1.0f; // all train
+
+    std::string status;
+    ExportFormats::export_yolo(fix.cfg, fix.amap, true, &status);
+
+    // Validate every label file
+    std::string lbl_dir = fix.output_dir + "/labels/train/cam0";
+    for (auto &e : fs::directory_iterator(lbl_dir)) {
+        if (e.path().extension() != ".txt") continue;
+        std::ifstream f(e.path());
+        std::string line;
+        while (std::getline(f, line)) {
+            if (line.empty()) continue;
+            std::stringstream ss(line);
+            std::vector<double> values;
+            double v;
+            while (ss >> v) values.push_back(v);
+
+            // YOLO pose: class + 4 bbox + 3*num_keypoints = 5 + 9 = 14
+            EXPECT_EQ((int)values.size(), 14);
+
+            // Class index
+            EXPECT_TRUE(values[0] >= 0);
+
+            // Bbox values normalized 0-1
+            for (int i = 1; i <= 4; ++i)
+                EXPECT_TRUE(values[i] >= 0.0 && values[i] <= 1.0);
+
+            // Keypoint x,y values (every 3rd starting at 5) normalized 0-1
+            for (int k = 0; k < 3; ++k) {
+                int base = 5 + k * 3;
+                double kx = values[base];
+                double ky = values[base + 1];
+                int kvis = (int)values[base + 2];
+                if (kvis > 0) {
+                    EXPECT_TRUE(kx >= 0.0 && kx <= 1.0);
+                    EXPECT_TRUE(ky >= 0.0 && ky <= 1.0);
+                }
+            }
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Bridge integration test
+// ═══════════════════════════════════════════════════════════════════════════
+
+static void test_bridge_keypoints_and_extended_roundtrip() {
+    printf("  test_bridge_keypoints_and_extended_roundtrip...\n");
+    namespace fs = std::filesystem;
+
+    auto scene = make_mock_scene(2);
+    auto skel = make_mock_skeleton(3);
+    std::vector<std::string> camera_names = {"cam0", "cam1"};
+
+    std::string tmpdir = "/tmp/test_bridge_rt_" + std::to_string(getpid());
+    std::string label_root = tmpdir + "/labeled_data";
+    fs::create_directories(label_root);
+
+    // Step 1: Create keypoints in keypoints_map (simulating user labeling)
+    std::map<u32, KeyPoints *> km;
+    KeyPoints *kp = (KeyPoints *)malloc(sizeof(KeyPoints));
+    allocate_keypoints(kp, &scene, &skel);
+    kp->kp2d[0][0].position = {100.0, 200.0};
+    kp->kp2d[0][0].is_labeled = true;
+    kp->kp2d[0][1].position = {150.0, 250.0};
+    kp->kp2d[0][1].is_labeled = true;
+    kp->kp2d[1][0].position = {110.0, 210.0};
+    kp->kp2d[1][0].is_labeled = true;
+    km[50] = kp;
+
+    // Step 2: Bridge → AnnotationMap
+    AnnotationMap amap = migrate_keypoints_map(km, skel, &scene);
+    EXPECT_EQ((int)amap.size(), 1);
+    EXPECT_TRUE(amap[50].instances[0].cameras[0].kp_labeled[0]);
+
+    // Step 3: Add bbox via AnnotationMap (simulating annotation tool)
+    amap[50].instances[0].cameras[0].bbox_x = 50.0;
+    amap[50].instances[0].cameras[0].bbox_y = 100.0;
+    amap[50].instances[0].cameras[0].bbox_w = 200.0;
+    amap[50].instances[0].cameras[0].bbox_h = 300.0;
+    amap[50].instances[0].cameras[0].has_bbox = true;
+
+    // Step 4: Save keypoints (CSV) and extended annotations (JSON)
+    bool is_imgs = false;
+    std::vector<std::string> input_files;
+    save_keypoints(km, &skel, label_root, 2, camera_names, &is_imgs, input_files);
+    std::string saved_folder, find_err;
+    EXPECT_TRUE(!find_most_recent_labels(label_root, saved_folder, find_err));
+    EXPECT_TRUE(save_annotations_json(amap, saved_folder));
+
+    // Step 5: Simulate restart — load into fresh structures
+    std::map<u32, KeyPoints *> km2;
+    std::string load_err;
+    int load_ret = load_keypoints(saved_folder, km2, &skel, &scene, camera_names, load_err);
+    EXPECT_EQ(load_ret, 0);
+
+    // Bridge: migrate then load extended
+    AnnotationMap amap2 = migrate_keypoints_map(km2, skel, &scene);
+    EXPECT_TRUE(load_annotations_json(amap2, saved_folder));
+
+    // Step 6: Verify keypoints survived
+    EXPECT_EQ((int)amap2.size(), 1);
+    EXPECT_TRUE(amap2.count(50));
+    EXPECT_TRUE(amap2[50].instances[0].cameras[0].kp_labeled[0]);
+    EXPECT_NEAR(amap2[50].instances[0].cameras[0].keypoints[0].x, 100.0, 0.01);
+    EXPECT_NEAR(amap2[50].instances[0].cameras[0].keypoints[0].y, 200.0, 0.01);
+    EXPECT_TRUE(amap2[50].instances[0].cameras[0].kp_labeled[1]);
+    EXPECT_TRUE(amap2[50].instances[0].cameras[1].kp_labeled[0]);
+
+    // Step 7: Verify bbox survived
+    EXPECT_TRUE(amap2[50].instances[0].cameras[0].has_bbox);
+    EXPECT_NEAR(amap2[50].instances[0].cameras[0].bbox_x, 50.0, 0.01);
+    EXPECT_NEAR(amap2[50].instances[0].cameras[0].bbox_w, 200.0, 0.01);
+    EXPECT_NEAR(amap2[50].instances[0].cameras[0].bbox_h, 300.0, 0.01);
+
+    // Step 8: Simulate user editing keypoints → refresh_keypoints_in_amap
+    kp->kp2d[0][2].position = {175.0, 275.0};
+    kp->kp2d[0][2].is_labeled = true;
+    refresh_keypoints_in_amap(amap, km, skel, &scene);
+
+    // Bbox should still be there after refresh
+    EXPECT_TRUE(amap[50].instances[0].cameras[0].has_bbox);
+    EXPECT_NEAR(amap[50].instances[0].cameras[0].bbox_x, 50.0, 0.01);
+    // New keypoint should be reflected
+    EXPECT_TRUE(amap[50].instances[0].cameras[0].kp_labeled[2]);
+    EXPECT_NEAR(amap[50].instances[0].cameras[0].keypoints[2].x, 175.0, 0.01);
+
+    // Cleanup
+    for (auto &[f, k] : km)  free_keypoints(k, &scene);
+    for (auto &[f, k] : km2) free_keypoints(k, &scene);
+    fs::remove_all(tmpdir);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Main
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -1698,6 +2173,29 @@ int main() {
     printf("\n--- Save/Load Roundtrip ---\n");
     test_save_load_keypoints_roundtrip();
     test_save_load_with_extended_data();
+
+    printf("\n--- Y-flip Consistency ---\n");
+    test_yolo_pose_y_flip();
+    test_dlc_y_flip();
+
+    printf("\n--- Multi-instance Export ---\n");
+    test_export_coco_multi_instance();
+
+    printf("\n--- SAM Preprocessing ---\n");
+    test_sam_preprocess_mobilesam();
+    test_sam_preprocess_sam2();
+    test_sam_bilinear_resize();
+
+    printf("\n--- Contour Extraction ---\n");
+    test_sam_contour_l_shape();
+    test_sam_contour_single_pixel();
+
+    printf("\n--- Export Schema Validation ---\n");
+    test_coco_json_schema();
+    test_yolo_label_format_validation();
+
+    printf("\n--- Bridge Integration ---\n");
+    test_bridge_keypoints_and_extended_roundtrip();
 
     printf("\n=== Results: %d passed, %d failed ===\n", g_pass, g_fail);
     return g_fail > 0 ? 1 : 0;

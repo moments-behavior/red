@@ -169,6 +169,53 @@ inline AnnotationMap migrate_keypoints_map(const std::map<u32, KeyPoints *> &km,
     return amap;
 }
 
+// Refresh keypoint data from keypoints_map into an existing AnnotationMap,
+// preserving bbox/OBB/mask data that annotation tools wrote.
+// Call this after save_keypoints() to keep the two systems in sync.
+inline void refresh_keypoints_in_amap(AnnotationMap &amap,
+                                       const std::map<u32, KeyPoints *> &km,
+                                       const SkeletonContext &skel,
+                                       const RenderScene *scene) {
+    int nn = skel.num_nodes;
+    int nc = (int)scene->num_cams;
+    for (const auto &[frame, kp] : km) {
+        if (!kp) continue;
+        auto it = amap.find(frame);
+        if (it == amap.end()) {
+            FrameAnnotation fa;
+            fa.frame_number = frame;
+            fa.instances.push_back(instance_from_keypoints(kp, skel, scene));
+            amap[frame] = std::move(fa);
+        } else {
+            if (it->second.instances.empty())
+                it->second.instances.push_back(instance_from_keypoints(kp, skel, scene));
+            else {
+                auto &inst = it->second.instances[0];
+                if (kp->kp3d)
+                    for (int k = 0; k < nn; ++k) {
+                        inst.kp3d[k] = kp->kp3d[k].position;
+                        inst.kp3d_triangulated[k] = kp->kp3d[k].is_triangulated;
+                        inst.kp3d_confidence[k] = kp->kp3d[k].confidence;
+                    }
+                if (kp->kp2d)
+                    for (int c = 0; c < nc; ++c) {
+                        inst.cameras[c].active_id = kp->active_id[c];
+                        for (int k = 0; k < nn; ++k) {
+                            inst.cameras[c].keypoints[k] = kp->kp2d[c][k].position;
+                            inst.cameras[c].kp_labeled[k] = kp->kp2d[c][k].is_labeled;
+                            inst.cameras[c].kp_confidence[k] = kp->kp2d[c][k].confidence;
+                        }
+                    }
+            }
+        }
+    }
+    // Remove frames from amap that no longer exist in keypoints_map
+    std::vector<u32> to_remove;
+    for (const auto &[f, _] : amap)
+        if (km.find(f) == km.end()) to_remove.push_back(f);
+    for (u32 f : to_remove) amap.erase(f);
+}
+
 // Write back AnnotationMap to old KeyPoints* system (for backward compat with
 // existing code paths that still use keypoints_map directly)
 inline void sync_to_keypoints_map(const AnnotationMap &amap,

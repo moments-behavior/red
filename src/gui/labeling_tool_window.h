@@ -380,6 +380,14 @@ inline void DrawLabelingToolWindow(
                        pm.keypoints_root_folder,
                        scene->num_cams, pm.camera_names,
                        &input_is_imgs, imgs_names);
+        // Bridge: sync keypoints into AnnotationMap (preserving bbox/obb/mask)
+        refresh_keypoints_in_amap(ctx.annotations, keypoints_map, skeleton, scene);
+        // Save extended annotations alongside CSVs
+        {
+            std::string saved_folder, find_err;
+            if (!find_most_recent_labels(pm.keypoints_root_folder, saved_folder, find_err))
+                save_annotations_json(ctx.annotations, saved_folder);
+        }
         state.last_saved = time(NULL);
         toasts.pushSuccess("Labels saved");
     }

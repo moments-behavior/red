@@ -34,12 +34,15 @@ struct ExportWindowState {
 };
 
 inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
-                              const AnnotationMap &amap) {
+                              AnnotationMap &amap) {
     const auto &pm = ctx.pm;
     const auto &skeleton = ctx.skeleton;
 
     drawPanel("Export Tool", state.show,
         [&]() {
+        // Live refresh: ensure AnnotationMap reflects latest keypoints
+        refresh_keypoints_in_amap(amap, ctx.keypoints_map, ctx.skeleton, ctx.scene);
+
         // Format selector
         ImGui::SeparatorText("Format");
         static const char *format_labels[] = {

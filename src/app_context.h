@@ -232,6 +232,12 @@ inline void on_project_loaded(AppContext &ctx,
                            label_err)) {
             free_all_keypoints(ctx.keypoints_map, ctx.scene);
             ctx.popups.pushError(label_err);
+        } else {
+            // Bridge: populate AnnotationMap from loaded keypoints
+            ctx.annotations = migrate_keypoints_map(ctx.keypoints_map,
+                                                     ctx.skeleton, ctx.scene);
+            // Load extended annotations (bbox, obb, mask) on top
+            load_annotations_json(ctx.annotations, most_recent_folder);
         }
     }
     if (print_summary_fn) print_summary_fn(most_recent_folder);

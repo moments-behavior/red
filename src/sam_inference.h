@@ -344,8 +344,9 @@ inline bool sam_encode(SamState &s, const uint8_t *rgb, int w, int h,
 #ifdef RED_HAS_ONNXRUNTIME
     if (!s.loaded) return false;
 
-    // Skip if already cached
-    if (s.cached_frame == frame_num && s.cached_cam == cam_idx)
+    // Skip if already cached (guard against default sentinel -1)
+    if (frame_num >= 0 && cam_idx >= 0 &&
+        s.cached_frame == frame_num && s.cached_cam == cam_idx)
         return true;
 
     auto t0 = std::chrono::steady_clock::now();
