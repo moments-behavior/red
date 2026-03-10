@@ -27,4 +27,4 @@ red_exporter_env/
 .venv/
 venv/
 env/
-ENV/
+ENV/models/

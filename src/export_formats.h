@@ -113,6 +113,7 @@ inline nlohmann::json build_coco_json(
     for (u32 frame : frames) {
         auto it = amap.find(frame);
         if (it == amap.end()) continue;
+        const auto &fa = it->second;
 
         std::string filename = cam_name + "/Frame_" + std::to_string(frame) + ".jpg";
         nlohmann::json img;
@@ -122,68 +123,67 @@ inline nlohmann::json build_coco_json(
         img["height"] = img_h;
         images.push_back(img);
 
-        for (const auto &inst : it->second.instances) {
-            if (cam_idx >= (int)inst.cameras.size()) continue;
-            const auto &cam = inst.cameras[cam_idx];
+        if (cam_idx >= (int)fa.cameras.size()) { img_id++; continue; }
+        const auto &cam = fa.cameras[cam_idx];
 
-            // Count visible keypoints
-            int num_visible = 0;
-            for (size_t k = 0; k < cam.kp_labeled.size(); ++k)
-                if (cam.kp_labeled[k]) ++num_visible;
-            if (num_visible == 0) continue;
+        // Count visible keypoints
+        int num_visible = 0;
+        for (size_t k = 0; k < cam.keypoints.size(); ++k)
+            if (cam.keypoints[k].labeled) ++num_visible;
+        if (num_visible == 0) { img_id++; continue; }
 
-            // Build flat keypoints array [x,y,v, x,y,v, ...]
-            nlohmann::json kp_flat = nlohmann::json::array();
-            double x_min = 1e9, x_max = -1e9, y_min = 1e9, y_max = -1e9;
-            for (size_t k = 0; k < cam.keypoints.size(); ++k) {
-                if (cam.kp_labeled[k]) {
-                    double x = cam.keypoints[k].x;
-                    double y = img_h - cam.keypoints[k].y; // ImPlot Y-flip
-                    kp_flat.push_back(x); kp_flat.push_back(y); kp_flat.push_back(2);
-                    x_min = std::min(x_min, x); x_max = std::max(x_max, x);
-                    y_min = std::min(y_min, y); y_max = std::max(y_max, y);
-                } else {
-                    kp_flat.push_back(0); kp_flat.push_back(0); kp_flat.push_back(0);
-                }
-            }
-
-            // Bbox from keypoints + margin (or from explicit bbox)
-            double bx, by, bw, bh;
-            if (cam.has_bbox) {
-                bx = cam.bbox_x; by = cam.bbox_y;
-                bw = cam.bbox_w; bh = cam.bbox_h;
+        // Build flat keypoints array [x,y,v, x,y,v, ...]
+        nlohmann::json kp_flat = nlohmann::json::array();
+        double x_min = 1e9, x_max = -1e9, y_min = 1e9, y_max = -1e9;
+        for (size_t k = 0; k < cam.keypoints.size(); ++k) {
+            if (cam.keypoints[k].labeled) {
+                double x = cam.keypoints[k].x;
+                double y = img_h - cam.keypoints[k].y; // ImPlot Y-flip
+                kp_flat.push_back(x); kp_flat.push_back(y); kp_flat.push_back(2);
+                x_min = std::min(x_min, x); x_max = std::max(x_max, x);
+                y_min = std::min(y_min, y); y_max = std::max(y_max, y);
             } else {
-                bx = std::max(x_min - cfg.bbox_margin, 0.0);
-                by = std::max(y_min - cfg.bbox_margin, 0.0);
-                bw = std::min(x_max + cfg.bbox_margin, (double)img_w) - bx;
-                bh = std::min(y_max + cfg.bbox_margin, (double)img_h) - by;
+                kp_flat.push_back(0); kp_flat.push_back(0); kp_flat.push_back(0);
             }
-
-            // Segmentation (mask polygons if available)
-            nlohmann::json seg = nlohmann::json::array();
-            if (cam.has_mask) {
-                for (const auto &poly : cam.mask_polygons) {
-                    nlohmann::json flat_poly = nlohmann::json::array();
-                    for (const auto &pt : poly) {
-                        flat_poly.push_back(pt.x);
-                        flat_poly.push_back(img_h - pt.y);
-                    }
-                    seg.push_back(flat_poly);
-                }
-            }
-
-            nlohmann::json ann;
-            ann["id"] = ann_id++;
-            ann["image_id"] = img_id;
-            ann["category_id"] = inst.category_id;
-            ann["keypoints"] = kp_flat;
-            ann["num_keypoints"] = num_visible;
-            ann["bbox"] = {bx, by, bw, bh};
-            ann["area"] = bw * bh;
-            ann["iscrowd"] = 0;
-            ann["segmentation"] = seg;
-            annotations.push_back(ann);
         }
+
+        // Bbox from keypoints + margin (or from explicit bbox)
+        double bx, by, bw, bh;
+        if (cam.has_bbox()) {
+            bx = cam.extras->bbox_x; by = cam.extras->bbox_y;
+            bw = cam.extras->bbox_w; bh = cam.extras->bbox_h;
+        } else {
+            bx = std::max(x_min - cfg.bbox_margin, 0.0);
+            by = std::max(y_min - cfg.bbox_margin, 0.0);
+            bw = std::min(x_max + cfg.bbox_margin, (double)img_w) - bx;
+            bh = std::min(y_max + cfg.bbox_margin, (double)img_h) - by;
+        }
+
+        // Segmentation (mask polygons if available)
+        nlohmann::json seg = nlohmann::json::array();
+        if (cam.has_mask()) {
+            for (const auto &poly : cam.extras->mask_polygons) {
+                nlohmann::json flat_poly = nlohmann::json::array();
+                for (const auto &pt : poly) {
+                    flat_poly.push_back(pt.x);
+                    flat_poly.push_back(img_h - pt.y);
+                }
+                seg.push_back(flat_poly);
+            }
+        }
+
+        nlohmann::json ann;
+        ann["id"] = ann_id++;
+        ann["image_id"] = img_id;
+        ann["category_id"] = fa.category_id;
+        ann["keypoints"] = kp_flat;
+        ann["num_keypoints"] = num_visible;
+        ann["bbox"] = {bx, by, bw, bh};
+        ann["area"] = bw * bh;
+        ann["iscrowd"] = 0;
+        ann["segmentation"] = seg;
+        annotations.push_back(ann);
+
         img_id++;
     }
 
@@ -294,72 +294,71 @@ inline bool export_yolo(const ExportConfig &cfg, const AnnotationMap &amap,
 
     auto write_split = [&](const std::vector<u32> &frames, const std::string &split) {
         for (int ci = 0; ci < (int)cfg.camera_names.size(); ++ci) {
-            const auto &cam = cfg.camera_names[ci];
-            int w = img_w[cam], h = img_h[cam];
+            const auto &cam_name = cfg.camera_names[ci];
+            int w = img_w[cam_name], h = img_h[cam_name];
 
-            std::string img_dir = cfg.output_folder + "/images/" + split + "/" + cam;
-            std::string lbl_dir = cfg.output_folder + "/labels/" + split + "/" + cam;
+            std::string img_dir = cfg.output_folder + "/images/" + split + "/" + cam_name;
+            std::string lbl_dir = cfg.output_folder + "/labels/" + split + "/" + cam_name;
             fs::create_directories(img_dir);
             fs::create_directories(lbl_dir);
 
             for (u32 frame : frames) {
                 auto it = amap.find(frame);
                 if (it == amap.end()) continue;
+                const auto &fa = it->second;
+
+                if (ci >= (int)fa.cameras.size()) continue;
+                const auto &c2d = fa.cameras[ci];
 
                 std::string fname = "Frame_" + std::to_string(frame);
                 std::ofstream lbl(lbl_dir + "/" + fname + ".txt");
 
-                for (const auto &inst : it->second.instances) {
-                    if (ci >= (int)inst.cameras.size()) continue;
-                    const auto &c2d = inst.cameras[ci];
-
-                    // Compute bbox (normalized)
-                    double bx, by, bw, bh;
-                    if (c2d.has_bbox) {
-                        bx = c2d.bbox_x; by = c2d.bbox_y;
-                        bw = c2d.bbox_w; bh = c2d.bbox_h;
-                    } else {
-                        // Derive from keypoints
-                        double xmin = 1e9, xmax = -1e9, ymin = 1e9, ymax = -1e9;
-                        bool any = false;
-                        for (size_t k = 0; k < c2d.kp_labeled.size(); ++k) {
-                            if (!c2d.kp_labeled[k]) continue;
-                            double x = c2d.keypoints[k].x;
-                            double y = h - c2d.keypoints[k].y; // Y-flip
-                            xmin = std::min(xmin, x); xmax = std::max(xmax, x);
-                            ymin = std::min(ymin, y); ymax = std::max(ymax, y);
-                            any = true;
-                        }
-                        if (!any) continue;
-                        bx = std::max(xmin - cfg.bbox_margin, 0.0);
-                        by = std::max(ymin - cfg.bbox_margin, 0.0);
-                        bw = std::min(xmax + cfg.bbox_margin, (double)w) - bx;
-                        bh = std::min(ymax + cfg.bbox_margin, (double)h) - by;
+                // Compute bbox (normalized)
+                double bx, by, bw, bh;
+                if (c2d.has_bbox()) {
+                    bx = c2d.extras->bbox_x; by = c2d.extras->bbox_y;
+                    bw = c2d.extras->bbox_w; bh = c2d.extras->bbox_h;
+                } else {
+                    // Derive from keypoints
+                    double xmin = 1e9, xmax = -1e9, ymin = 1e9, ymax = -1e9;
+                    bool any = false;
+                    for (size_t k = 0; k < c2d.keypoints.size(); ++k) {
+                        if (!c2d.keypoints[k].labeled) continue;
+                        double x = c2d.keypoints[k].x;
+                        double y = h - c2d.keypoints[k].y; // Y-flip
+                        xmin = std::min(xmin, x); xmax = std::max(xmax, x);
+                        ymin = std::min(ymin, y); ymax = std::max(ymax, y);
+                        any = true;
                     }
-
-                    // YOLO format: cx cy w h (all normalized 0-1)
-                    double cx = (bx + bw / 2.0) / w;
-                    double cy = (by + bh / 2.0) / h;
-                    double nw = bw / w;
-                    double nh = bh / h;
-
-                    lbl << inst.category_id << " "
-                        << std::fixed << std::setprecision(6)
-                        << cx << " " << cy << " " << nw << " " << nh;
-
-                    if (include_keypoints) {
-                        for (size_t k = 0; k < c2d.keypoints.size(); ++k) {
-                            if (c2d.kp_labeled[k]) {
-                                double kx = c2d.keypoints[k].x / w;
-                                double ky = (h - c2d.keypoints[k].y) / h; // Y-flip
-                                lbl << " " << kx << " " << ky << " 2";
-                            } else {
-                                lbl << " 0 0 0";
-                            }
-                        }
-                    }
-                    lbl << "\n";
+                    if (!any) continue;
+                    bx = std::max(xmin - cfg.bbox_margin, 0.0);
+                    by = std::max(ymin - cfg.bbox_margin, 0.0);
+                    bw = std::min(xmax + cfg.bbox_margin, (double)w) - bx;
+                    bh = std::min(ymax + cfg.bbox_margin, (double)h) - by;
                 }
+
+                // YOLO format: cx cy w h (all normalized 0-1)
+                double cx = (bx + bw / 2.0) / w;
+                double cy = (by + bh / 2.0) / h;
+                double nw = bw / w;
+                double nh = bh / h;
+
+                lbl << fa.category_id << " "
+                    << std::fixed << std::setprecision(6)
+                    << cx << " " << cy << " " << nw << " " << nh;
+
+                if (include_keypoints) {
+                    for (size_t k = 0; k < c2d.keypoints.size(); ++k) {
+                        if (c2d.keypoints[k].labeled) {
+                            double kx = c2d.keypoints[k].x / w;
+                            double ky = (h - c2d.keypoints[k].y) / h; // Y-flip
+                            lbl << " " << kx << " " << ky << " 2";
+                        } else {
+                            lbl << " 0 0 0";
+                        }
+                    }
+                }
+                lbl << "\n";
             }
         }
     };
@@ -449,14 +448,13 @@ inline bool export_deeplabcut(const ExportConfig &cfg, const AnnotationMap &amap
         for (u32 frame : labeled) {
             auto it = amap.find(frame);
             if (it == amap.end()) continue;
-            if (it->second.instances.empty()) continue;
-            const auto &inst = it->second.instances[0];
-            if (ci >= (int)inst.cameras.size()) continue;
-            const auto &c2d = inst.cameras[ci];
+            const auto &fa = it->second;
+            if (ci >= (int)fa.cameras.size()) continue;
+            const auto &c2d = fa.cameras[ci];
 
             f << "labeled-data/" << cam << "/Frame_" << frame << ".png";
             for (size_t k = 0; k < c2d.keypoints.size(); ++k) {
-                if (c2d.kp_labeled[k]) {
+                if (c2d.keypoints[k].labeled) {
                     double x = c2d.keypoints[k].x;
                     double y = h - c2d.keypoints[k].y; // Y-flip
                     f << "," << std::fixed << std::setprecision(2) << x << "," << y;

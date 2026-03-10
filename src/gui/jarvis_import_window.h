@@ -1,9 +1,10 @@
 #pragma once
 #include "imgui.h"
 #include "app_context.h"
+#include "annotation.h"
+#include "annotation_csv.h"
 #include "gui/panel.h"
 #include "jarvis_import.h"
-#include "gui/gui_save_load.h"
 #include <ImGuiFileDialog.h>
 #include <misc/cpp/imgui_stdlib.h>
 #include <filesystem>
@@ -21,7 +22,7 @@ inline void DrawJarvisImportWindow(JarvisImportState &state, AppContext &ctx) {
     const auto &pm = ctx.pm;
     const auto &skeleton = ctx.skeleton;
     auto &scene = ctx.scene;
-    auto &keypoints_map = ctx.keypoints_map;
+    auto &annotations = ctx.annotations;
 
     drawPanel("JARVIS Import Tool", state.show,
         [&]() {
@@ -101,18 +102,19 @@ inline void DrawJarvisImportWindow(JarvisImportState &state, AppContext &ctx) {
             ImGui::Separator();
             if (ImGui::Button("Load into RED")) {
                 std::string err;
-                std::vector<std::string> cam_names = pm.camera_names;
-                int ret = load_keypoints(
+                AnnotationMap loaded;
+                int ret = AnnotationCSV::load_all(
                     state.result.output_folder,
-                    keypoints_map, &ctx.skeleton, scene,
-                    cam_names, err);
+                    loaded,
+                    skeleton.name,
+                    skeleton.num_nodes,
+                    scene->num_cams,
+                    pm.camera_names,
+                    err);
                 if (ret == 0) {
-                    // Load confidence data
-                    JarvisImport::load_confidence(
-                        state.result.output_folder,
-                        keypoints_map,
-                        scene->num_cams,
-                        skeleton.num_nodes);
+                    // Merge loaded annotations into main map
+                    for (auto &[frame, fa] : loaded)
+                        annotations[frame] = std::move(fa);
                     state.result.error.clear();
                     ImGui::TextColored(ImVec4(0,1,0,1),
                         "Predictions loaded!");

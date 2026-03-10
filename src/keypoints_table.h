@@ -6,13 +6,13 @@ inline void DrawKeypointsWindow(AppContext &ctx, int current_frame_num) {
     auto &pm = ctx.pm;
     auto *scene = ctx.scene;
     auto &skeleton = ctx.skeleton;
-    auto &keypoints_map = ctx.keypoints_map;
+    auto &annotations = ctx.annotations;
     auto &is_view_focused = ctx.is_view_focused;
 
     if (ImGui::Begin("Keypoints")) {
 
         bool keypoints_find =
-            keypoints_map.find(current_frame_num) != keypoints_map.end();
+            annotations.find(current_frame_num) != annotations.end();
 
         if (skeleton.num_nodes > 0 && skeleton.has_skeleton) {
             const int rows_count = scene->num_cams;
@@ -75,23 +75,23 @@ inline void DrawKeypointsWindow(AppContext &ctx, int current_frame_num) {
                     for (int column = 1; column < columns_count; column++) {
                         if (ImGui::TableSetColumnIndex(column)) {
                             if (keypoints_find) {
+                                const auto &fa = annotations.at(current_frame_num);
                                 ImVec4 node_color = ImVec4(0, 0, 0, 0);
 
-                                if (keypoints_map[current_frame_num]
-                                        ->active_id[row] == column - 1) {
+                                if (row < (int)fa.cameras.size() &&
+                                    fa.cameras[row].active_id == (u32)(column - 1)) {
                                     node_color = (ImVec4)ImColor::HSV(
                                         0.8f, 1.0f, 1.0f);
-                                } else if (keypoints_map[current_frame_num]
-                                               ->kp2d[row][column - 1]
-                                               .is_labeled) {
+                                } else if (row < (int)fa.cameras.size() &&
+                                           (column - 1) < (int)fa.cameras[row].keypoints.size() &&
+                                           fa.cameras[row].keypoints[column - 1].labeled) {
                                     node_color =
                                         skeleton.node_colors[column - 1];
                                     node_color.w = 0.9f;
                                 }
 
-                                if (keypoints_map[current_frame_num]
-                                        ->kp3d[column - 1]
-                                        .is_triangulated) {
+                                if ((column - 1) < (int)fa.kp3d.size() &&
+                                    fa.kp3d[column - 1].triangulated) {
                                     ImGui::TextColored(
                                         ImVec4(1.0f, 1.0f, 1.0f, 1.0f),
                                         "T");

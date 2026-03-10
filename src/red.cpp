@@ -243,11 +243,10 @@ int main(int argc, char **argv) {
 
     // for labeling
     SkeletonContext skeleton;
-    std::map<u32, KeyPoints *> keypoints_map;
     bool keypoints_find = false;
     std::map<std::string, SkeletonPrimitive> skeleton_map = skeleton_get_all();
 
-    // Unified annotation model (coexists with keypoints_map during migration)
+    // Annotation model
     AnnotationMap annotations;
 
     // others
@@ -337,7 +336,7 @@ int main(int argc, char **argv) {
     // Build AppContext — a reference bundle for all shared state
     AppContext ctx{
         pm, ps, scene, dc_context,
-        skeleton, skeleton_map, keypoints_map,
+        skeleton, skeleton_map,
         annotations,
         popups, toasts, deferred,
         user_settings, red_data_dir, skeleton_dir,
@@ -444,7 +443,7 @@ int main(int argc, char **argv) {
                     if (keypoints_find &&
                         ImGui::IsKeyPressed(ImGuiKey_T, false) &&
                         !ImGui::GetIO().WantTextInput) {
-                        reprojection(keypoints_map.at(current_frame_num),
+                        reprojection(annotations.at(current_frame_num),
                                      &skeleton, pm.camera_params, scene);
                     }
                 },
@@ -658,21 +657,14 @@ int main(int argc, char **argv) {
                     const char *text = label;
                     float cx = pos.x + item_w * 0.5f;
                     ImU32 text_col;
-                    auto kp_it = keypoints_map.find((u32)frame_num);
-                    if (kp_it != keypoints_map.end() &&
-                        has_any_labels(kp_it->second, skeleton, scene)) {
-                        bool complete = true;
-                        if (skeleton.has_skeleton && scene->num_cams > 1) {
-                            for (int cam = 0; cam < scene->num_cams && cam < MAX_VIEWS; ++cam)
-                                for (int k = 0; k < skeleton.num_nodes; ++k)
-                                    if (!kp_it->second->kp2d[cam][k].is_labeled)
-                                        complete = false;
-                            if (complete)
-                                for (int k = 0; k < skeleton.num_nodes; ++k)
-                                    if (!kp_it->second->kp3d[k].is_triangulated)
-                                        complete = false;
-                        } else {
-                            complete = false;
+                    auto ann_it = annotations.find((u32)frame_num);
+                    if (ann_it != annotations.end() &&
+                        frame_has_any_labels(ann_it->second)) {
+                        bool complete = frame_is_complete(ann_it->second);
+                        if (complete && skeleton.has_skeleton && scene->num_cams > 1) {
+                            for (int k = 0; k < skeleton.num_nodes; ++k)
+                                if (!ann_it->second.kp3d[k].triangulated)
+                                    complete = false;
                         }
                         text_col = complete
                             ? IM_COL32(51, 204, 77, 255)   // green
@@ -1055,12 +1047,8 @@ int main(int argc, char **argv) {
                     // avail_size);
                     //
                     if (pm.plot_keypoints_flag) {
-                        if (keypoints_map.find(current_frame_num) ==
-                            keypoints_map.end()) {
-                            keypoints_find = false;
-                        } else {
-                            keypoints_find = true;
-                        }
+                        keypoints_find = (annotations.find(current_frame_num) !=
+                                          annotations.end());
                     }
 
                     if (ImPlot::BeginPlot("##no_plot_name", avail_size,
@@ -1090,33 +1078,29 @@ int main(int argc, char **argv) {
                                 is_view_focused[j] = true;
                                 if (ImGui::IsKeyPressed(ImGuiKey_B, false) &&
                                     !io.WantTextInput) {
-                                    // create keypoints
+                                    // create frame annotation
                                     if (!keypoints_find) {
-                                        KeyPoints *keypoints =
-                                            (KeyPoints *)malloc(
-                                                sizeof(KeyPoints));
-                                        allocate_keypoints(keypoints, scene,
-                                                           &skeleton);
-                                        keypoints_map[current_frame_num] =
-                                            keypoints;
+                                        get_or_create_frame(annotations,
+                                            current_frame_num,
+                                            skeleton.num_nodes,
+                                            scene->num_cams);
                                     }
                                 }
 
                                 if (keypoints_find && skeleton.has_skeleton) {
-                                    u32 *kp = &(keypoints_map[current_frame_num]
-                                                    ->active_id[j]);
+                                    u32 *kp = &annotations.at(current_frame_num)
+                                                   .cameras[j].active_id;
                                     if (ImGui::IsKeyPressed(ImGuiKey_W,
                                                             false) &&
                                         !io.WantTextInput) {
                                         // labeling sequentially each view
                                         ImPlotPoint mouse =
                                             ImPlot::GetPlotMousePos();
-                                        keypoints_map[current_frame_num]
-                                            ->kp2d[j][*kp]
-                                            .position = {mouse.x, mouse.y};
-                                        keypoints_map[current_frame_num]
-                                            ->kp2d[j][*kp]
-                                            .is_labeled = true;
+                                        auto &fa = annotations.at(current_frame_num);
+                                        auto &kp2d = fa.cameras[j].keypoints[*kp];
+                                        kp2d.x = mouse.x;
+                                        kp2d.y = mouse.y;
+                                        kp2d.labeled = true;
                                         if (*kp < (skeleton.num_nodes - 1)) {
                                             (*kp)++;
                                         }
@@ -1150,14 +1134,11 @@ int main(int argc, char **argv) {
                                         *kp = 0;
                                     }
 
-                                    // delete all keypoint on a frame
+                                    // delete all keypoints on a frame
                                     if (ImGui::IsKeyPressed(ImGuiKey_Backspace,
                                                             false) &&
                                         !io.WantTextInput) {
-                                        free_keypoints(
-                                            keypoints_map[current_frame_num],
-                                            scene);
-                                        keypoints_map.erase(current_frame_num);
+                                        annotations.erase(current_frame_num);
                                         keypoints_find = false;
                                     }
                                 }
@@ -1167,7 +1148,7 @@ int main(int argc, char **argv) {
 
                             if (keypoints_find && skeleton.has_skeleton) {
                                 gui_plot_keypoints(
-                                    keypoints_map.at(current_frame_num),
+                                    annotations.at(current_frame_num),
                                     &skeleton, j, scene->num_cams);
                             }
                         }

@@ -1,7 +1,8 @@
 #pragma once
 #include "app_context.h"
+#include "annotation.h"
+#include "annotation_csv.h"
 #include "gui/gui_keypoints.h"
-#include "gui/gui_save_load.h"
 #include "IconsForkAwesome.h"
 #include "implot.h"
 #include "implot_internal.h"
@@ -20,56 +21,54 @@ inline void DrawLabelingToolWindow(
     auto *scene = ctx.scene;
     auto *dc_context = ctx.dc_context;
     auto &skeleton = ctx.skeleton;
-    auto &keypoints_map = ctx.keypoints_map;
+    auto &annotations = ctx.annotations;
     auto &ps = ctx.ps;
     auto &popups = ctx.popups;
     auto &toasts = ctx.toasts;
-    bool &input_is_imgs = ctx.input_is_imgs;
-    auto &imgs_names = ctx.imgs_names;
 
     state.save_requested = false;
 
     if (ImGui::Begin("Labeling Tool")) {
         // Find prev/next labeled frames (used by Prev/Next buttons)
-        auto next_labeled_it = keypoints_map.end();
-        for (auto it = keypoints_map.upper_bound(current_frame_num);
-             it != keypoints_map.end(); ++it) {
-            if (has_any_labels(it->second, skeleton, scene)) {
+        auto next_labeled_it = annotations.end();
+        for (auto it = annotations.upper_bound(current_frame_num);
+             it != annotations.end(); ++it) {
+            if (frame_has_any_labels(it->second)) {
                 next_labeled_it = it; break;
             }
         }
-        if (next_labeled_it == keypoints_map.end()) {
-            for (auto it = keypoints_map.begin();
-                 it != keypoints_map.upper_bound(current_frame_num); ++it) {
-                if (has_any_labels(it->second, skeleton, scene)) {
+        if (next_labeled_it == annotations.end()) {
+            for (auto it = annotations.begin();
+                 it != annotations.upper_bound(current_frame_num); ++it) {
+                if (frame_has_any_labels(it->second)) {
                     next_labeled_it = it; break;
                 }
             }
         }
-        auto prev_labeled_it = keypoints_map.end();
-        auto lb = keypoints_map.lower_bound(current_frame_num);
-        if (lb != keypoints_map.begin()) {
+        auto prev_labeled_it = annotations.end();
+        auto lb = annotations.lower_bound(current_frame_num);
+        if (lb != annotations.begin()) {
             for (auto it = std::prev(lb);;) {
-                if (has_any_labels(it->second, skeleton, scene)) {
+                if (frame_has_any_labels(it->second)) {
                     prev_labeled_it = it; break;
                 }
-                if (it == keypoints_map.begin()) break;
+                if (it == annotations.begin()) break;
                 --it;
             }
         }
         // Wrap around: search backward from end of map
-        if (prev_labeled_it == keypoints_map.end() && !keypoints_map.empty()) {
-            for (auto it = std::prev(keypoints_map.end());;) {
+        if (prev_labeled_it == annotations.end() && !annotations.empty()) {
+            for (auto it = std::prev(annotations.end());;) {
                 if (it->first <= (u32)current_frame_num) break;
-                if (has_any_labels(it->second, skeleton, scene)) {
+                if (frame_has_any_labels(it->second)) {
                     prev_labeled_it = it; break;
                 }
-                if (it == keypoints_map.begin()) break;
+                if (it == annotations.begin()) break;
                 --it;
             }
         }
-        bool has_next = (next_labeled_it != keypoints_map.end());
-        bool has_prev = (prev_labeled_it != keypoints_map.end());
+        bool has_next = (next_labeled_it != annotations.end());
+        bool has_prev = (prev_labeled_it != annotations.end());
         int next_frame = has_next ? (int)next_labeled_it->first : -1;
         int prev_frame = has_prev ? (int)prev_labeled_it->first : -1;
 
@@ -83,10 +82,9 @@ inline void DrawLabelingToolWindow(
 
             bool keypoint_triangulated_all = true;
             if (keypoints_find && scene->num_cams > 1) {
+                const auto &fa = annotations.at(current_frame_num);
                 for (int j = 0; j < skeleton.num_nodes; j++) {
-                    if (!keypoints_map.at(current_frame_num)
-                             ->kp3d[j]
-                             .is_triangulated) {
+                    if (!fa.kp3d[j].triangulated) {
                         keypoint_triangulated_all = false;
                         break;
                     }
@@ -110,7 +108,7 @@ inline void DrawLabelingToolWindow(
 
             ImGui::BeginDisabled(!keypoints_find);
             if (ImGui::Button("Triangulate")) {
-                reprojection(keypoints_map.at(current_frame_num),
+                reprojection(annotations.at(current_frame_num),
                              &skeleton, pm.camera_params, scene);
             }
             ImGui::EndDisabled();
@@ -151,16 +149,20 @@ inline void DrawLabelingToolWindow(
 
         ImGui::BeginDisabled(!has_prev);
         if (ImGui::Button("Copy Prev")) {
-            if (keypoints_find) {
-                free_keypoints(keypoints_map[current_frame_num], scene);
-                keypoints_map.erase(current_frame_num);
+            // Copy annotations from prev frame into current frame
+            const auto &prev_fa = annotations.at(prev_frame);
+            FrameAnnotation new_fa = make_frame(skeleton.num_nodes, scene->num_cams, current_frame_num);
+            // Copy keypoints from prev frame
+            for (int c = 0; c < scene->num_cams && c < (int)prev_fa.cameras.size(); ++c) {
+                for (int k = 0; k < skeleton.num_nodes && k < (int)prev_fa.cameras[c].keypoints.size(); ++k) {
+                    new_fa.cameras[c].keypoints[k] = prev_fa.cameras[c].keypoints[k];
+                }
+                new_fa.cameras[c].active_id = prev_fa.cameras[c].active_id;
             }
-            KeyPoints *keypoints = (KeyPoints *)malloc(sizeof(KeyPoints));
-            allocate_keypoints(keypoints, scene, &skeleton);
-            keypoints_map[current_frame_num] = keypoints;
-            KeyPoints *prev = keypoints_map[prev_frame];
-            KeyPoints *curr = keypoints_map[current_frame_num];
-            copy_keypoints(curr, prev, scene, &skeleton);
+            for (int k = 0; k < skeleton.num_nodes && k < (int)prev_fa.kp3d.size(); ++k) {
+                new_fa.kp3d[k] = prev_fa.kp3d[k];
+            }
+            annotations[current_frame_num] = std::move(new_fa);
         }
         ImGui::EndDisabled();
 
@@ -173,16 +175,18 @@ inline void DrawLabelingToolWindow(
         // === Collect labeled frames (shared by grid + timeline) ===
         struct LabeledFrameInfo { int frame; bool complete; };
         std::vector<LabeledFrameInfo> labeled_frames;
-        for (const auto &[fnum, kp] : keypoints_map) {
-            if (!has_any_labels(kp, skeleton, scene))
+        for (const auto &[fnum, fa] : annotations) {
+            if (!frame_has_any_labels(fa))
                 continue;
             bool complete = true;
             if (skeleton.has_skeleton && scene->num_cams > 1) {
-                for (int cam = 0; cam < scene->num_cams && cam < MAX_VIEWS; ++cam)
+                for (int cam = 0; cam < scene->num_cams && cam < (int)fa.cameras.size(); ++cam)
                     for (int k = 0; k < skeleton.num_nodes; ++k)
-                        if (!kp->kp2d[cam][k].is_labeled) { complete = false; goto done; }
+                        if (k >= (int)fa.cameras[cam].keypoints.size() ||
+                            !fa.cameras[cam].keypoints[k].labeled) { complete = false; goto done; }
                 for (int k = 0; k < skeleton.num_nodes; ++k)
-                    if (!kp->kp3d[k].is_triangulated) { complete = false; goto done; }
+                    if (k >= (int)fa.kp3d.size() ||
+                        !fa.kp3d[k].triangulated) { complete = false; goto done; }
             } else {
                 complete = false;
             }
@@ -240,7 +244,7 @@ inline void DrawLabelingToolWindow(
                 }
             }
 
-            // === Timeline minimap (ImPlot — scroll zoom, drag pan, box select) ===
+            // === Timeline minimap (ImPlot -- scroll zoom, drag pan, box select) ===
             ImGui::Spacing();
             int total_frames = dc_context->estimated_num_frames;
             if (total_frames > 0) {
@@ -376,19 +380,16 @@ inline void DrawLabelingToolWindow(
     }
 
     if (state.save_requested) {
-        save_keypoints(keypoints_map, &skeleton,
-                       pm.keypoints_root_folder,
-                       scene->num_cams, pm.camera_names,
-                       &input_is_imgs, imgs_names);
-        // Bridge: sync keypoints into AnnotationMap (preserving bbox/obb/mask)
-        refresh_keypoints_in_amap(ctx.annotations, keypoints_map, skeleton, scene);
-        // Save extended annotations alongside CSVs
-        {
-            std::string saved_folder, find_err;
-            if (!find_most_recent_labels(pm.keypoints_root_folder, saved_folder, find_err))
-                save_annotations_json(ctx.annotations, saved_folder);
+        std::string save_err;
+        std::string saved_folder = AnnotationCSV::save_all(
+            pm.keypoints_root_folder, skeleton.name,
+            annotations, scene->num_cams, skeleton.num_nodes,
+            pm.camera_names, &save_err);
+        if (saved_folder.empty()) {
+            toasts.pushError("Save failed: " + save_err);
+        } else {
+            state.last_saved = time(NULL);
+            toasts.pushSuccess("Labels saved");
         }
-        state.last_saved = time(NULL);
-        toasts.pushSuccess("Labels saved");
     }
 }

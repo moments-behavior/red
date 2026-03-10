@@ -6,7 +6,7 @@
 //   2. Toggle "SAM Assist" on
 //   3. Left-click = foreground prompt, Right-click = background prompt
 //   4. SAM decoder runs in <20ms, mask overlaid instantly
-//   5. "Accept" stores mask polygon in Camera2D::mask_polygons
+//   5. "Accept" stores mask polygon in CameraAnnotation extras
 
 #include "imgui.h"
 #include "implot.h"
@@ -140,18 +140,15 @@ inline void sam_handle_input(SamToolState &state, SamState &sam,
         }
     }
 
-    // Enter: accept mask → store in annotation
+    // Enter: accept mask -> store in annotation
     if (state.has_pending_mask && ImGui::IsKeyPressed(ImGuiKey_Enter)) {
         auto polys = sam_mask_to_polygon(state.current_mask);
         if (!polys.empty()) {
             auto &fa = get_or_create_frame(amap, frame, num_nodes, num_cameras);
-            // Store on first instance (or create one)
-            if (fa.instances.empty())
-                fa.instances.push_back(make_instance(num_nodes, num_cameras));
-            auto &inst = fa.instances[0];
-            if (cam_idx < (int)inst.cameras.size()) {
-                inst.cameras[cam_idx].mask_polygons = polys;
-                inst.cameras[cam_idx].has_mask = true;
+            if (cam_idx < (int)fa.cameras.size()) {
+                auto &ext = fa.cameras[cam_idx].get_extras();
+                ext.mask_polygons = polys;
+                ext.has_mask = true;
             }
         }
         // Reset

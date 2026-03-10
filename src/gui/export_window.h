@@ -1,5 +1,5 @@
 #pragma once
-// export_window.h — Unified export window with format selector
+// export_window.h -- Unified export window with format selector
 //
 // Replaces jarvis_export_window.h. Same layout pattern but with a format
 // dropdown at top. Format-specific options appear/disappear based on selection.
@@ -8,7 +8,7 @@
 #include "annotation.h"
 #include "app_context.h"
 #include "export_formats.h"
-#include "gui/gui_save_load.h"
+#include "annotation_csv.h"
 #include "gui/panel.h"
 #include <ImGuiFileDialog.h>
 #include <misc/cpp/imgui_stdlib.h>
@@ -40,8 +40,6 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
 
     drawPanel("Export Tool", state.show,
         [&]() {
-        // Live refresh: ensure AnnotationMap reflects latest keypoints
-        refresh_keypoints_in_amap(amap, ctx.keypoints_map, ctx.skeleton, ctx.scene);
 
         // Format selector
         ImGui::SeparatorText("Format");
@@ -61,7 +59,7 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
             state.label_display = "(none)";
             if (!pm.keypoints_root_folder.empty()) {
                 std::string most_recent, tmp_err;
-                if (find_most_recent_labels(pm.keypoints_root_folder,
+                if (AnnotationCSV::find_most_recent_labels(pm.keypoints_root_folder,
                                             most_recent, tmp_err) == 0) {
                     state.label_folder = most_recent;
                     state.label_display =

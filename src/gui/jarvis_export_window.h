@@ -3,7 +3,7 @@
 #include "app_context.h"
 #include "gui/panel.h"
 #include "jarvis_export.h"
-#include "gui/gui_save_load.h"
+#include "annotation_csv.h"
 #include <ImGuiFileDialog.h>
 #include <misc/cpp/imgui_stdlib.h>
 #include <filesystem>
@@ -41,7 +41,7 @@ inline void DrawJarvisExportWindow(JarvisExportState &state, AppContext &ctx) {
             if (!pm.keypoints_root_folder.empty()) {
                 std::string most_recent;
                 std::string tmp_err;
-                if (find_most_recent_labels(pm.keypoints_root_folder,
+                if (AnnotationCSV::find_most_recent_labels(pm.keypoints_root_folder,
                                             most_recent, tmp_err) == 0) {
                     state.label_folder = most_recent;
                     state.label_display =

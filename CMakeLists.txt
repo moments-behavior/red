@@ -232,6 +232,54 @@ if(APPLE)
         CXX_STANDARD_REQUIRED ON
     )
 
+    # SAM integration test: same deps as test_annotation
+    add_executable(test_sam_integration
+        ${TEST_GUI_SRC_FILES}
+        ${MM_SRC_FILES}
+        ${IMGUI_SRC}
+        ${IMPLOT_SRC}
+        ${IMPLOT3D_SRC}
+        tests/test_sam_integration.cpp
+    )
+    target_include_directories(test_sam_integration PRIVATE
+        src
+        ${DIR_IMGUI}
+        ${DIR_IMGUI}/backends
+        ${DIR_IMPLOT}
+        ${DIR_IMPLOT3D}
+        ${DIR_FILEBROWSER}
+        lib/nvcodec
+        lib/IconFontCppHeaders
+        ${FFMPEG_INCLUDE_DIRS}
+        ${HOMEBREW_PREFIX}/include
+        ${HOMEBREW_PREFIX}/include/eigen3
+    )
+    target_link_directories(test_sam_integration PRIVATE ${FFMPEG_LIBRARY_DIRS} ${TURBOJPEG_LIBRARY_DIRS})
+    target_link_libraries(test_sam_integration PRIVATE
+        Eigen3::Eigen
+        glfw
+        "-framework Metal"
+        "-framework QuartzCore"
+        "-framework VideoToolbox"
+        "-framework CoreMedia"
+        "-framework CoreFoundation"
+        "-framework CoreVideo"
+        "-framework Cocoa"
+        ${FFMPEG_LIBRARIES}
+        ${TURBOJPEG_LIBRARIES}
+        Ceres::ceres
+        pthread
+    )
+    if(HAS_ONNXRUNTIME)
+        target_compile_definitions(test_sam_integration PRIVATE RED_HAS_ONNXRUNTIME)
+        target_include_directories(test_sam_integration PRIVATE "${ONNXRUNTIME_DIR}/include")
+        target_link_libraries(test_sam_integration PRIVATE "${ONNXRUNTIME_DIR}/lib/libonnxruntime.dylib")
+    endif()
+    set_target_properties(test_sam_integration PROPERTIES
+        CXX_STANDARD 17
+        CXX_STANDARD_REQUIRED ON
+    )
+
     # Calibration debug test: Eigen + Ceres only (no OpenCV)
     add_executable(test_calib_debug tests/test_calib_debug.cpp)
     target_include_directories(test_calib_debug PRIVATE

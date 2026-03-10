@@ -87,8 +87,10 @@ struct ExportConfig {
 // CSV readers — match data_exporter/utils.py
 // ---------------------------------------------------------------------------
 
-// 3D CSV: header line (skeleton name), then frame_id, node_idx, x, y, z, ...
-// Returns map of frame_id -> Nx3 vector. Frames with any 1e7 sentinel are excluded.
+// 3D CSV: Reads both v1 and v2 formats.
+//   v1: skeleton_name header, then frame,idx,x,y,z,idx,x,y,z,...  (groups of 4)
+//   v2: #red_csv v2 + #skeleton + column header, then frame,x,y,z,c,x,y,z,c,... (groups of 4)
+// Returns map of frame_id -> Nx3 vector. Frames with any 1e7/empty sentinel are excluded.
 inline std::map<int, std::vector<std::vector<double>>>
 read_csv_3d(const std::string &path) {
     std::map<int, std::vector<std::vector<double>>> result;
@@ -97,37 +99,71 @@ read_csv_3d(const std::string &path) {
         return result;
 
     std::string line;
-    // skip header
+    bool is_v2 = false;
+
+    // Read first line to detect format
     if (!std::getline(file, line))
         return result;
+    if (line.find("#red_csv") != std::string::npos)
+        is_v2 = true;
+
+    // Skip remaining header lines
+    if (is_v2) {
+        // Skip #skeleton line and column header line
+        while (std::getline(file, line)) {
+            if (line.empty() || line[0] == '#') continue;
+            if (line.find("frame,") == 0 || line.find("frame ") == 0) continue;
+            break; // first data line
+        }
+        // Process this first data line, then continue loop
+        if (line.empty()) return result;
+        goto parse_line;
+    }
 
     while (std::getline(file, line)) {
+parse_line:
         if (line.empty())
             continue;
+        // Skip any comment or header lines encountered mid-file
+        if (line[0] == '#') continue;
+
         std::stringstream ss(line);
         std::string token;
 
         // frame_id
         if (!std::getline(ss, token, ','))
             continue;
-        int frame_id = std::stoi(token);
+        int frame_id;
+        try { frame_id = std::stoi(token); }
+        catch (...) { continue; }
 
-        // remaining: node_idx, x, y, z, node_idx, x, y, z, ...
+        // Read all remaining values
         std::vector<double> values;
         while (std::getline(ss, token, ',')) {
-            values.push_back(std::stod(token));
+            if (token.empty()) { values.push_back(1e7); continue; } // empty = unlabeled
+            try { values.push_back(std::stod(token)); }
+            catch (...) { values.push_back(1e7); }
         }
 
-        // group into [node_idx, x, y, z] quads, keep only x,y,z
+        // v1: groups of 4 (idx, x, y, z) — skip idx
+        // v2: groups of 4 (x, y, z, c) — skip c
         std::vector<std::vector<double>> kps;
         bool has_invalid = false;
-        for (size_t i = 0; i + 3 < values.size(); i += 4) {
-            double x = values[i + 1];
-            double y = values[i + 2];
-            double z = values[i + 3];
-            if (x == 1e7 || y == 1e7 || z == 1e7)
-                has_invalid = true;
-            kps.push_back({x, y, z});
+        if (is_v2) {
+            for (size_t i = 0; i + 2 < values.size(); i += 4) {
+                double x = values[i], y = values[i+1], z = values[i+2];
+                // i+3 is confidence (skip)
+                if (x == 1e7 || y == 1e7 || z == 1e7)
+                    has_invalid = true;
+                kps.push_back({x, y, z});
+            }
+        } else {
+            for (size_t i = 0; i + 3 < values.size(); i += 4) {
+                double x = values[i+1], y = values[i+2], z = values[i+3];
+                if (x == 1e7 || y == 1e7 || z == 1e7)
+                    has_invalid = true;
+                kps.push_back({x, y, z});
+            }
         }
 
         if (!has_invalid)
@@ -136,9 +172,11 @@ read_csv_3d(const std::string &path) {
     return result;
 }
 
-// 2D CSV: header line, then frame_id, node_idx, x, y, node_idx, x, y, ...
+// 2D CSV: Reads both v1 and v2 formats.
+//   v1: skeleton_name header, then frame,idx,x,y,idx,x,y,...  (groups of 3)
+//   v2: #red_csv v2 + #skeleton + column header, then frame,x,y,c,s,x,y,c,s,...  (groups of 4)
 // Applies Y-flip: y = img_height - y (converts ImPlot bottom-left to image top-left)
-// Returns map of frame_id -> Nx2 vector. 1e7 sentinels → NaN.
+// Returns map of frame_id -> Nx2 vector. Unlabeled sentinels → NaN.
 inline std::map<int, std::vector<std::vector<double>>>
 read_csv_2d(const std::string &path, int img_height) {
     std::map<int, std::vector<std::vector<double>>> result;
@@ -147,37 +185,86 @@ read_csv_2d(const std::string &path, int img_height) {
         return result;
 
     std::string line;
-    // skip header
+    bool is_v2 = false;
+
+    // Read first line to detect format
     if (!std::getline(file, line))
         return result;
+    if (line.find("#red_csv") != std::string::npos)
+        is_v2 = true;
+
+    // Skip remaining header lines for v2
+    if (is_v2) {
+        while (std::getline(file, line)) {
+            if (line.empty() || line[0] == '#') continue;
+            if (line.find("frame,") == 0 || line.find("frame ") == 0) continue;
+            break; // first data line
+        }
+        if (line.empty()) return result;
+        goto parse_line;
+    }
 
     while (std::getline(file, line)) {
+parse_line:
         if (line.empty())
             continue;
+        if (line[0] == '#') continue;
+
         std::stringstream ss(line);
         std::string token;
 
         if (!std::getline(ss, token, ','))
             continue;
-        int frame_id = std::stoi(token);
+        int frame_id;
+        try { frame_id = std::stoi(token); }
+        catch (...) { continue; }
 
         std::vector<double> values;
+        std::vector<bool> cell_empty;
         while (std::getline(ss, token, ',')) {
-            values.push_back(std::stod(token));
+            if (token.empty() || token == "P" || token == "I" || token == "M") {
+                values.push_back(1e7);
+                cell_empty.push_back(true);
+            } else {
+                try {
+                    values.push_back(std::stod(token));
+                    cell_empty.push_back(false);
+                } catch (...) {
+                    values.push_back(1e7);
+                    cell_empty.push_back(true);
+                }
+            }
         }
 
-        // group into [node_idx, x, y] triples, keep only x,y
         std::vector<std::vector<double>> kps;
-        for (size_t i = 0; i + 2 < values.size(); i += 3) {
-            double x = values[i + 1];
-            double y = values[i + 2];
-            if (x == 1e7)
-                x = std::nan("");
-            if (y == 1e7)
-                y = std::nan("");
-            else
-                y = img_height - y; // flip Y
-            kps.push_back({x, y});
+        if (is_v2) {
+            // v2: groups of 4 (x, y, c, s) — extract x,y, skip c,s
+            for (size_t i = 0; i + 1 < values.size(); i += 4) {
+                double x = values[i];
+                double y = values[i + 1];
+                bool is_empty = (i < cell_empty.size() && cell_empty[i]) ||
+                                (i+1 < cell_empty.size() && cell_empty[i+1]);
+                if (is_empty || x == 1e7)
+                    x = std::nan("");
+                if (is_empty || y == 1e7)
+                    y = std::nan("");
+                else
+                    y = img_height - y; // flip Y
+                kps.push_back({x, y});
+            }
+        } else {
+            // v1: groups of 3 (idx, x, y) — skip idx
+            for (size_t i = 0; i + 2 < values.size(); i += 3) {
+                double x = values[i + 1];
+                double y = values[i + 2];
+                if (x == 1e7)
+                    x = std::nan("");
+                if (y == 1e7)
+                    y = std::nan("");
+                else
+                    y = img_height - y; // flip Y
+                kps.push_back({x, y});
+            }
         }
         result[frame_id] = std::move(kps);
     }

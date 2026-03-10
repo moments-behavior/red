@@ -2,8 +2,8 @@
 /*  jarvis_import.h  — Import JARVIS predictions into RED label format
  *
  *  Reads JARVIS data3D.csv (3D keypoints + per-keypoint confidence),
- *  projects to 2D per camera, and writes RED-format label CSVs that
- *  load_keypoints() can read directly.
+ *  projects to 2D per camera, and writes RED-format label CSVs compatible
+ *  with the v2 annotation format (AnnotationCSV).
  */
 
 #include "camera.h"
@@ -123,7 +123,7 @@ project_to_camera(const std::map<int, Prediction3D> &preds,
 // ---------------------------------------------------------------------------
 // Write RED-format label CSVs:
 //   keypoints3d.csv + <camera>.csv per camera + confidence.csv
-// Output matches save_keypoints() format so load_keypoints() can read it.
+// Output matches the CSV format used by AnnotationCSV::load_all().
 // ---------------------------------------------------------------------------
 inline bool
 write_prediction_csvs(const std::string &output_folder,
@@ -206,49 +206,7 @@ write_prediction_csvs(const std::string &output_folder,
 }
 
 // ---------------------------------------------------------------------------
-// Load confidence.csv into keypoints_map (companion to load_keypoints)
-// Requires skeleton.h to be included before this header.
-// ---------------------------------------------------------------------------
-#ifdef RED_SKELETON
-inline int
-load_confidence(const std::string &folder,
-                std::map<uint32_t, KeyPoints *> &keypoints_map,
-                int num_cameras, int num_nodes) {
-    std::string path = folder + "/confidence.csv";
-    std::ifstream fin(path);
-    if (!fin) return 0; // not an error — file is optional
-
-    std::string line;
-    int line_num = 0;
-    int loaded = 0;
-    while (std::getline(fin, line)) {
-        if (line_num++ == 0) continue; // skip header
-
-        std::stringstream ss(line);
-        std::string token;
-        std::getline(ss, token, ',');
-        uint32_t frame_id = (uint32_t)std::stoul(token);
-
-        auto it = keypoints_map.find(frame_id);
-        if (it == keypoints_map.end()) continue;
-
-        auto *kp = it->second;
-        for (int j = 0; j < num_nodes; j++) {
-            if (!std::getline(ss, token, ',')) break;
-            float conf = std::stof(token);
-            kp->kp3d[j].confidence = conf;
-            for (int c = 0; c < num_cameras; c++) {
-                kp->kp2d[c][j].confidence = conf;
-            }
-        }
-        loaded++;
-    }
-    return loaded;
-}
-#endif // RED_SKELETON
-
-// ---------------------------------------------------------------------------
-// Full import: read data3D.csv → write RED CSVs → ready for load_keypoints()
+// Full import: read data3D.csv → write RED CSVs → ready for AnnotationCSV::load_all()
 // ---------------------------------------------------------------------------
 struct ImportResult {
     int frames_imported = 0;

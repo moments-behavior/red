@@ -366,21 +366,59 @@ inline bool sam_encode(SamState &s, const uint8_t *rgb, int w, int h,
         s.pad_y = 0;
     }
 
-    // Create input tensor
+    // Create input tensor — query model for actual input name and shape
     Ort::MemoryInfo mem_info = Ort::MemoryInfo::CreateCpu(
         OrtArenaAllocator, OrtMemTypeDefault);
-    std::array<int64_t, 4> input_shape = {1, 3, 1024, 1024};
-    Ort::Value input_val = Ort::Value::CreateTensor<float>(
-        mem_info, input_tensor.data(), input_tensor.size(),
-        input_shape.data(), input_shape.size());
+
+    // Get encoder input name from model (handles different export conventions)
+    Ort::AllocatorWithDefaultOptions allocator;
+    auto enc_input_name = s.encoder_session->GetInputNameAllocated(0, allocator);
+    const char *enc_input_names[] = {enc_input_name.get()};
+
+    // Detect input format: CHW [1,3,1024,1024] vs HWC [H,W,3]
+    auto enc_type_info = s.encoder_session->GetInputTypeInfo(0);
+    auto enc_shape = enc_type_info.GetTensorTypeAndShapeInfo().GetShape();
+    bool is_hwc = (enc_shape.size() == 3); // [H, W, 3] = HWC
+
+    Ort::Value input_val{nullptr};
+    std::vector<float> hwc_tensor; // keep alive for HWC case
+    if (is_hwc) {
+        // Convert CHW preprocessed tensor to HWC for this model
+        int target = 1024;
+        if (s.model == SamModel::MobileSAM) {
+            float sc = (float)target / std::max(w, h);
+            int nw = (int)(w * sc + 0.5f), nh = (int)(h * sc + 0.5f);
+            hwc_tensor.resize(nh * nw * 3, 0.0f);
+            for (int c = 0; c < 3; ++c)
+                for (int y = 0; y < nh; ++y)
+                    for (int x = 0; x < nw; ++x)
+                        hwc_tensor[(y * nw + x) * 3 + c] = input_tensor[c * target * target + y * target + x];
+            std::array<int64_t, 3> hwc_shape = {nh, nw, 3};
+            input_val = Ort::Value::CreateTensor<float>(
+                mem_info, hwc_tensor.data(), hwc_tensor.size(),
+                hwc_shape.data(), hwc_shape.size());
+        } else {
+            hwc_tensor.resize(target * target * 3);
+            for (int c = 0; c < 3; ++c)
+                for (int i = 0; i < target * target; ++i)
+                    hwc_tensor[i * 3 + c] = input_tensor[c * target * target + i];
+            std::array<int64_t, 3> hwc_shape = {target, target, 3};
+            input_val = Ort::Value::CreateTensor<float>(
+                mem_info, hwc_tensor.data(), hwc_tensor.size(),
+                hwc_shape.data(), hwc_shape.size());
+        }
+    } else {
+        std::array<int64_t, 4> input_shape = {1, 3, 1024, 1024};
+        input_val = Ort::Value::CreateTensor<float>(
+            mem_info, input_tensor.data(), input_tensor.size(),
+            input_shape.data(), input_shape.size());
+    }
 
     // Run encoder
-    const char *input_names[] = {"image"};
-
     if (s.model == SamModel::MobileSAM) {
         const char *output_names[] = {"image_embeddings"};
         auto outputs = s.encoder_session->Run(
-            Ort::RunOptions{nullptr}, input_names, &input_val, 1,
+            Ort::RunOptions{nullptr}, enc_input_names, &input_val, 1,
             output_names, 1);
 
         // Copy embedding: [1, 256, 64, 64]
@@ -395,7 +433,7 @@ inline bool sam_encode(SamState &s, const uint8_t *rgb, int w, int h,
         const char *output_names[] = {"image_embed", "high_res_feats_0",
                                        "high_res_feats_1"};
         auto outputs = s.encoder_session->Run(
-            Ort::RunOptions{nullptr}, input_names, &input_val, 1,
+            Ort::RunOptions{nullptr}, enc_input_names, &input_val, 1,
             output_names, 3);
 
         // image_embed [1, 256, 64, 64]

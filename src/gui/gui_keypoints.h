@@ -1,4 +1,5 @@
 #pragma once
+#include "annotation.h"
 #include "implot.h"
 #include "render.h"
 #include "skeleton.h"
@@ -7,13 +8,17 @@
 #include <sstream>
 #include <vector>
 
-static void gui_plot_keypoints(KeyPoints *keypoints, SkeletonContext *skeleton,
+static void gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
                                int view_idx, int num_cams) {
+    if (view_idx >= (int)fa.cameras.size()) return;
+    auto &cam = fa.cameras[view_idx];
+
     float pt_size = 6.0f;
     for (u32 node = 0; node < skeleton->num_nodes; node++) {
-        if (keypoints->kp2d[view_idx][node].is_labeled) {
+        if (node >= (u32)cam.keypoints.size()) break;
+        if (cam.keypoints[node].labeled) {
             ImVec4 node_color;
-            if (keypoints->active_id[view_idx] == node) {
+            if (cam.active_id == node) {
                 node_color = (ImVec4)ImColor::HSV(0.8, 1.0f, 1.0f);
                 node_color.w = 0.9;
                 pt_size = 8.0f;
@@ -27,21 +32,21 @@ static void gui_plot_keypoints(KeyPoints *keypoints, SkeletonContext *skeleton,
             static bool drag_point_hovered;
             static bool drag_point_modified;
             drag_point_modified = ImPlot::DragPoint(
-                id, &keypoints->kp2d[view_idx][node].position.x,
-                &keypoints->kp2d[view_idx][node].position.y, node_color,
+                id, &cam.keypoints[node].x,
+                &cam.keypoints[node].y, node_color,
                 pt_size, ImPlotDragToolFlags_None, &drag_point_clicked,
                 &drag_point_hovered);
             if (drag_point_modified) {
-                keypoints->kp3d[node].is_triangulated = false;
+                fa.kp3d[node].triangulated = false;
             }
             if (drag_point_hovered) {
-                if (keypoints->kp3d[node].is_triangulated) {
+                if (fa.kp3d[node].triangulated) {
 
                     std::ostringstream oss;
                     oss << std::fixed << std::setprecision(2);
-                    oss << "(" << keypoints->kp3d[node].position.x << ", "
-                        << keypoints->kp3d[node].position.y << ", "
-                        << keypoints->kp3d[node].position.z << ")";
+                    oss << "(" << fa.kp3d[node].x << ", "
+                        << fa.kp3d[node].y << ", "
+                        << fa.kp3d[node].z << ")";
                     std::string label = oss.str();
                     ImVec2 mouse_pos = ImGui::GetMousePos();
                     ImVec2 textPos = ImVec2(mouse_pos.x + 10, mouse_pos.y + 10);
@@ -52,9 +57,8 @@ static void gui_plot_keypoints(KeyPoints *keypoints, SkeletonContext *skeleton,
                 if (ImGui::IsKeyPressed(ImGuiKey_R,
                                         false)) // delete active keypoint
                 {
-                    keypoints->kp2d[view_idx][node].position = {1E7, 1E7};
-                    keypoints->kp2d[view_idx][node].is_labeled = false;
-                    keypoints->active_id[view_idx] = node;
+                    cam.keypoints[node] = Keypoint2D{}; // reset all fields
+                    cam.active_id = node;
                 }
 
                 if (ImGui::IsKeyPressed(
@@ -62,15 +66,15 @@ static void gui_plot_keypoints(KeyPoints *keypoints, SkeletonContext *skeleton,
                         false)) // Delete active keypoints from all the views
                 {
                     for (int cam_idx = 0; cam_idx < num_cams; cam_idx++) {
-                        keypoints->kp2d[cam_idx][node].position = {1E7, 1E7};
-                        keypoints->kp2d[cam_idx][node].is_labeled = false;
-                        keypoints->active_id[cam_idx] = node;
+                        if (cam_idx >= (int)fa.cameras.size()) break;
+                        fa.cameras[cam_idx].keypoints[node] = Keypoint2D{};
+                        fa.cameras[cam_idx].active_id = node;
                     }
                 }
             }
 
             if (drag_point_clicked) {
-                keypoints->active_id[view_idx] = node;
+                cam.active_id = node;
             }
         }
     }
@@ -78,12 +82,10 @@ static void gui_plot_keypoints(KeyPoints *keypoints, SkeletonContext *skeleton,
     for (u32 edge = 0; edge < skeleton->num_edges; edge++) {
         auto [a, b] = skeleton->edges[edge];
 
-        if (keypoints->kp2d[view_idx][a].is_labeled &&
-            keypoints->kp2d[view_idx][b].is_labeled) {
-            double xs[2]{keypoints->kp2d[view_idx][a].position.x,
-                         keypoints->kp2d[view_idx][b].position.x};
-            double ys[2]{keypoints->kp2d[view_idx][a].position.y,
-                         keypoints->kp2d[view_idx][b].position.y};
+        if (a < (u32)cam.keypoints.size() && b < (u32)cam.keypoints.size() &&
+            cam.keypoints[a].labeled && cam.keypoints[b].labeled) {
+            double xs[2]{cam.keypoints[a].x, cam.keypoints[b].x};
+            double ys[2]{cam.keypoints[a].y, cam.keypoints[b].y};
             ImPlot::PlotLine("##line", xs, ys, 2);
         }
     }
@@ -103,7 +105,7 @@ bool is_in_camera_fov(const Eigen::Vector3d &point_world,
     return false;
 }
 
-static void reprojection(KeyPoints *keypoints, SkeletonContext *skeleton,
+static void reprojection(FrameAnnotation &fa, SkeletonContext *skeleton,
                          std::vector<CameraParams> camera_params,
                          RenderScene *scene) {
 
@@ -111,7 +113,9 @@ static void reprojection(KeyPoints *keypoints, SkeletonContext *skeleton,
 
         u32 num_views_labeled{0};
         for (u32 view_idx = 0; view_idx < scene->num_cams; view_idx++) {
-            if (keypoints->kp2d[view_idx][node].is_labeled) {
+            if (view_idx < (u32)fa.cameras.size() &&
+                node < (u32)fa.cameras[view_idx].keypoints.size() &&
+                fa.cameras[view_idx].keypoints[node].labeled) {
                 num_views_labeled++;
             }
         }
@@ -122,11 +126,13 @@ static void reprojection(KeyPoints *keypoints, SkeletonContext *skeleton,
             std::vector<Eigen::Matrix<double, 3, 4>> proj_mats;
 
             for (u32 view_idx = 0; view_idx < scene->num_cams; view_idx++) {
-                if (keypoints->kp2d[view_idx][node].is_labeled) {
+                if (view_idx >= (u32)fa.cameras.size()) continue;
+                if (node >= (u32)fa.cameras[view_idx].keypoints.size()) continue;
+                if (fa.cameras[view_idx].keypoints[node].labeled) {
                     Eigen::Vector2d pt(
-                        keypoints->kp2d[view_idx][node].position.x,
+                        fa.cameras[view_idx].keypoints[node].x,
                         (double)scene->image_height[view_idx] -
-                            keypoints->kp2d[view_idx][node].position.y);
+                            fa.cameras[view_idx].keypoints[node].y);
                     Eigen::Vector2d pt_undist = red_math::undistortPoint(
                         pt, camera_params[view_idx].k,
                         camera_params[view_idx].dist_coeffs);
@@ -140,16 +146,14 @@ static void reprojection(KeyPoints *keypoints, SkeletonContext *skeleton,
             Eigen::Vector3d pt3d =
                 red_math::triangulatePoints(undist_pts, proj_mats);
 
-            keypoints->kp3d[node].position.x = pt3d(0);
-            keypoints->kp3d[node].position.y = pt3d(1);
-            keypoints->kp3d[node].position.z = pt3d(2);
-            keypoints->kp3d[node].is_triangulated = true;
+            fa.kp3d[node].x = pt3d(0);
+            fa.kp3d[node].y = pt3d(1);
+            fa.kp3d[node].z = pt3d(2);
+            fa.kp3d[node].triangulated = true;
 
             for (u32 view_idx = 0; view_idx < scene->num_cams; view_idx++) {
-                keypoints->kp2d[view_idx][node].last_position =
-                    keypoints->kp2d[view_idx][node].position;
-                keypoints->kp2d[view_idx][node].last_is_labeled =
-                    keypoints->kp2d[view_idx][node].is_labeled;
+                if (view_idx >= (u32)fa.cameras.size()) continue;
+                if (node >= (u32)fa.cameras[view_idx].keypoints.size()) continue;
                 if (is_in_camera_fov(pt3d, camera_params[view_idx].rvec,
                                      camera_params[view_idx].tvec,
                                      camera_params[view_idx].k,
@@ -166,9 +170,9 @@ static void reprojection(KeyPoints *keypoints, SkeletonContext *skeleton,
                     if (x > 0 && x < scene->image_width[view_idx] && y > 0 &&
                         y < scene->image_height[view_idx]) {
                         // calculate per keypoint error
-                        keypoints->kp2d[view_idx][node].position.x = x;
-                        keypoints->kp2d[view_idx][node].position.y = y;
-                        keypoints->kp2d[view_idx][node].is_labeled = true;
+                        fa.cameras[view_idx].keypoints[node].x = x;
+                        fa.cameras[view_idx].keypoints[node].y = y;
+                        fa.cameras[view_idx].keypoints[node].labeled = true;
                     }
                 }
             }

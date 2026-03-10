@@ -5,7 +5,7 @@
 #include "gui/popup_stack.h"
 #include "gui/toast.h"
 #include "annotation.h"
-#include "gui/gui_save_load.h"
+#include "annotation_csv.h"
 #include "media_loader.h"
 #include "project.h"
 #include "render.h"
@@ -36,9 +36,8 @@ struct AppContext {
     // Skeleton + keypoints
     SkeletonContext &skeleton;
     std::map<std::string, SkeletonPrimitive> &skeleton_map;
-    std::map<u32, KeyPoints *> &keypoints_map;
 
-    // Unified annotation model (new — coexists with keypoints_map during migration)
+    // Annotation model
     AnnotationMap &annotations;
 
     // UI infrastructure
@@ -225,17 +224,31 @@ inline void on_project_loaded(AppContext &ctx,
     if (print_metadata_fn) print_metadata_fn();
     std::string label_err;
     std::string most_recent_folder;
-    if (!find_most_recent_labels(ctx.pm.keypoints_root_folder,
-                                 most_recent_folder, label_err)) {
-        if (load_keypoints(most_recent_folder, ctx.keypoints_map,
-                           &ctx.skeleton, ctx.scene, ctx.pm.camera_names,
-                           label_err)) {
-            free_all_keypoints(ctx.keypoints_map, ctx.scene);
+    if (!AnnotationCSV::find_most_recent_labels(ctx.pm.keypoints_root_folder,
+                                                 most_recent_folder, label_err)) {
+        // Check for v1 format and convert if needed
+        if (AnnotationCSV::is_v1_format(most_recent_folder, ctx.pm.camera_names)) {
+            std::string v2_folder = most_recent_folder + "_v2";
+            std::string conv_err;
+            if (!AnnotationCSV::convert_v1_to_v2(most_recent_folder, v2_folder,
+                                                   ctx.skeleton.name,
+                                                   ctx.skeleton.num_nodes,
+                                                   ctx.pm.camera_names, &conv_err)) {
+                ctx.popups.pushError("V1 conversion failed: " + conv_err);
+            } else {
+                most_recent_folder = v2_folder;
+            }
+        }
+        // Load v2 annotations
+        ctx.annotations.clear();
+        int num_cameras = ctx.scene ? (int)ctx.scene->num_cams : 0;
+        if (AnnotationCSV::load_all(most_recent_folder, ctx.annotations,
+                                      ctx.skeleton.name,
+                                      ctx.skeleton.num_nodes, num_cameras,
+                                      ctx.pm.camera_names, label_err)) {
             ctx.popups.pushError(label_err);
+            ctx.annotations.clear();
         } else {
-            // Bridge: populate AnnotationMap from loaded keypoints
-            ctx.annotations = migrate_keypoints_map(ctx.keypoints_map,
-                                                     ctx.skeleton, ctx.scene);
             // Load extended annotations (bbox, obb, mask) on top
             load_annotations_json(ctx.annotations, most_recent_folder);
         }

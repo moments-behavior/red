@@ -2,7 +2,7 @@
 // bbox_tool.h — Axis-aligned bounding box labeling tool
 //
 // Shift+drag draws a new bbox. Bboxes are stored in the unified
-// AnnotationMap (Camera2D::has_bbox + bbox fields). Class/ID selection,
+// AnnotationMap (CameraAnnotation extras). Class/ID selection,
 // keyboard shortcuts, and ImPlot interaction follow the original patterns.
 
 #include "imgui.h"
@@ -31,7 +31,7 @@ struct BBoxToolState {
     double start_x = 0, start_y = 0;
 
     // Hover state
-    int hovered_instance = -1;  // instance index under cursor
+    bool hovered = false;       // bbox under cursor on this frame
     int hovered_cam = -1;
 
     ImVec4 next_class_color() const {
@@ -46,56 +46,54 @@ inline void bbox_draw_overlays(BBoxToolState &state, const AnnotationMap &amap,
                                 u32 frame, int cam_idx, int img_w, int img_h) {
     auto it = amap.find(frame);
     if (it == amap.end()) return;
+    const auto &fa = it->second;
 
-    for (int i = 0; i < (int)it->second.instances.size(); ++i) {
-        const auto &inst = it->second.instances[i];
-        if (cam_idx >= (int)inst.cameras.size()) continue;
-        const auto &cam = inst.cameras[cam_idx];
-        if (!cam.has_bbox) continue;
+    if (cam_idx >= (int)fa.cameras.size()) return;
+    const auto &cam = fa.cameras[cam_idx];
+    if (!cam.has_bbox()) return;
 
-        int ci = inst.category_id;
-        ImVec4 color = (ci < (int)state.class_colors.size())
-                           ? state.class_colors[ci]
-                           : ImVec4(1, 1, 1, 1);
+    int ci = fa.category_id;
+    ImVec4 color = (ci < (int)state.class_colors.size())
+                       ? state.class_colors[ci]
+                       : ImVec4(1, 1, 1, 1);
 
-        // Highlight hovered
-        if (i != state.hovered_instance || cam_idx != state.hovered_cam)
-            color.w *= 0.6f;
+    // Highlight hovered
+    if (!state.hovered || cam_idx != state.hovered_cam)
+        color.w *= 0.6f;
 
-        // Draw filled rect
-        double x1 = cam.bbox_x;
-        double y1_img = cam.bbox_y; // top-left in image coords
-        double x2 = x1 + cam.bbox_w;
-        double y2_img = y1_img + cam.bbox_h;
-        // Convert to ImPlot coords (Y is flipped: ImPlot y = img_h - img_y)
-        double y1_plot = img_h - y2_img;
-        double y2_plot = img_h - y1_img;
+    // Draw filled rect
+    double x1 = cam.extras->bbox_x;
+    double y1_img = cam.extras->bbox_y; // top-left in image coords
+    double x2 = x1 + cam.extras->bbox_w;
+    double y2_img = y1_img + cam.extras->bbox_h;
+    // Convert to ImPlot coords (Y is flipped: ImPlot y = img_h - img_y)
+    double y1_plot = img_h - y2_img;
+    double y2_plot = img_h - y1_img;
 
-        ImPlot::PushStyleColor(ImPlotCol_Fill, ImVec4(color.x, color.y, color.z, 0.15f));
-        ImPlot::PushStyleColor(ImPlotCol_Line, color);
-        double xs[] = {x1, x2, x2, x1, x1};
-        double ys[] = {y1_plot, y1_plot, y2_plot, y2_plot, y1_plot};
-        ImPlot::PlotLine("##bbox", xs, ys, 5);
-        ImPlot::PopStyleColor(2);
+    ImPlot::PushStyleColor(ImPlotCol_Fill, ImVec4(color.x, color.y, color.z, 0.15f));
+    ImPlot::PushStyleColor(ImPlotCol_Line, color);
+    double xs[] = {x1, x2, x2, x1, x1};
+    double ys[] = {y1_plot, y1_plot, y2_plot, y2_plot, y1_plot};
+    ImPlot::PlotLine("##bbox", xs, ys, 5);
+    ImPlot::PopStyleColor(2);
 
-        // Label
-        if (state.show_ids) {
-            char label[64];
-            snprintf(label, sizeof(label), "%s #%d",
-                     (ci < (int)state.class_names.size()) ? state.class_names[ci].c_str() : "?",
-                     inst.instance_id);
-            ImPlot::PlotText(label, x1 + 4, y2_plot - 4);
-        }
+    // Label
+    if (state.show_ids) {
+        char label[64];
+        snprintf(label, sizeof(label), "%s #%d",
+                 (ci < (int)state.class_names.size()) ? state.class_names[ci].c_str() : "?",
+                 fa.instance_id);
+        ImPlot::PlotText(label, x1 + 4, y2_plot - 4);
     }
 
     // Draw in-progress bbox (while shift-dragging)
     if (state.drawing) {
         ImPlotPoint mouse = ImPlot::GetPlotMousePos();
-        double xs[] = {state.start_x, mouse.x, mouse.x, state.start_x, state.start_x};
-        double ys[] = {state.start_y, state.start_y, mouse.y, mouse.y, state.start_y};
+        double dxs[] = {state.start_x, mouse.x, mouse.x, state.start_x, state.start_x};
+        double dys[] = {state.start_y, state.start_y, mouse.y, mouse.y, state.start_y};
         ImVec4 c = state.class_colors[state.current_class];
         ImPlot::PushStyleColor(ImPlotCol_Line, c);
-        ImPlot::PlotLine("##bbox_new", xs, ys, 5);
+        ImPlot::PlotLine("##bbox_new", dxs, dys, 5);
         ImPlot::PopStyleColor();
     }
 }
@@ -126,7 +124,7 @@ inline void bbox_handle_input(BBoxToolState &state, AnnotationMap &amap,
     if (state.drawing && !shift) {
         state.drawing = false;
 
-        // Normalize coords (ImPlot → image space)
+        // Normalize coords (ImPlot -> image space)
         double x1 = std::min(state.start_x, mx);
         double x2 = std::max(state.start_x, mx);
         double y1_plot = std::min(state.start_y, my);
@@ -141,78 +139,59 @@ inline void bbox_handle_input(BBoxToolState &state, AnnotationMap &amap,
         double bbox_w = x2 - x1;
         double bbox_h = y2_plot - y1_plot;
 
-        // Get or create frame + instance
+        // Get or create frame annotation
         auto &fa = get_or_create_frame(amap, frame, num_nodes, num_cameras);
+        fa.category_id  = state.current_class;
+        fa.instance_id  = state.current_instance;
 
-        // Find or create instance with matching class/id
-        InstanceAnnotation *target = nullptr;
-        for (auto &inst : fa.instances) {
-            if (inst.category_id == state.current_class &&
-                inst.instance_id == state.current_instance) {
-                target = &inst;
-                break;
-            }
-        }
-        if (!target) {
-            fa.instances.push_back(make_instance(num_nodes, num_cameras,
-                                                  state.current_instance,
-                                                  state.current_class));
-            target = &fa.instances.back();
-        }
-
-        if (cam_idx < (int)target->cameras.size()) {
-            auto &cam = target->cameras[cam_idx];
-            cam.bbox_x = bbox_x;
-            cam.bbox_y = bbox_y;
-            cam.bbox_w = bbox_w;
-            cam.bbox_h = bbox_h;
-            cam.has_bbox = true;
+        if (cam_idx < (int)fa.cameras.size()) {
+            auto &ext = fa.cameras[cam_idx].get_extras();
+            ext.bbox_x = bbox_x;
+            ext.bbox_y = bbox_y;
+            ext.bbox_w = bbox_w;
+            ext.bbox_h = bbox_h;
+            ext.has_bbox = true;
         }
     }
 
     // Hover detection
-    state.hovered_instance = -1;
+    state.hovered = false;
     state.hovered_cam = -1;
     auto it = amap.find(frame);
     if (it != amap.end()) {
-        for (int i = 0; i < (int)it->second.instances.size(); ++i) {
-            const auto &inst = it->second.instances[i];
-            if (cam_idx >= (int)inst.cameras.size()) continue;
-            const auto &cam = inst.cameras[cam_idx];
-            if (!cam.has_bbox) continue;
-
-            double plot_y = img_h - cam.bbox_y - cam.bbox_h; // bottom in plot
-            if (mx >= cam.bbox_x && mx <= cam.bbox_x + cam.bbox_w &&
-                my >= plot_y && my <= plot_y + cam.bbox_h) {
-                state.hovered_instance = i;
-                state.hovered_cam = cam_idx;
-                break;
+        const auto &fa = it->second;
+        if (cam_idx < (int)fa.cameras.size()) {
+            const auto &cam = fa.cameras[cam_idx];
+            if (cam.has_bbox()) {
+                double plot_y = img_h - cam.extras->bbox_y - cam.extras->bbox_h; // bottom in plot
+                if (mx >= cam.extras->bbox_x && mx <= cam.extras->bbox_x + cam.extras->bbox_w &&
+                    my >= plot_y && my <= plot_y + cam.extras->bbox_h) {
+                    state.hovered = true;
+                    state.hovered_cam = cam_idx;
+                }
             }
         }
     }
 
     // F key: delete hovered bbox from this camera
-    if (state.hovered_instance >= 0 && ImGui::IsKeyPressed(ImGuiKey_F)) {
-        auto &inst = amap[frame].instances[state.hovered_instance];
-        if (cam_idx < (int)inst.cameras.size()) {
-            inst.cameras[cam_idx].has_bbox = false;
+    if (state.hovered && ImGui::IsKeyPressed(ImGuiKey_F)) {
+        auto &fa = amap[frame];
+        if (cam_idx < (int)fa.cameras.size()) {
+            fa.cameras[cam_idx].get_extras().has_bbox = false;
         }
-        state.hovered_instance = -1;
+        state.hovered = false;
     }
 
-    // O key: delete all bboxes of hovered class from ALL cameras
-    if (state.hovered_instance >= 0 && ImGui::IsKeyPressed(ImGuiKey_O)) {
-        auto it = amap.find(frame);
-        if (it != amap.end()) {
-            int cat = it->second.instances[state.hovered_instance].category_id;
-            for (auto &inst : it->second.instances) {
-                if (inst.category_id == cat) {
-                    for (auto &cam : inst.cameras)
-                        cam.has_bbox = false;
-                }
+    // O key: delete all bboxes from ALL cameras on this frame
+    if (state.hovered && ImGui::IsKeyPressed(ImGuiKey_O)) {
+        auto it2 = amap.find(frame);
+        if (it2 != amap.end()) {
+            for (auto &cam : it2->second.cameras) {
+                if (cam.has_bbox())
+                    cam.get_extras().has_bbox = false;
             }
         }
-        state.hovered_instance = -1;
+        state.hovered = false;
     }
 
     // Z/X: switch class
