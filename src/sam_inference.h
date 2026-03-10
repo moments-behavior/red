@@ -37,11 +37,21 @@ struct SamMask {
     bool valid = false;
 };
 
+// Multiple masks from a single SAM decode (different granularity levels)
+struct SamMultiMask {
+    std::vector<SamMask> masks;  // typically 3-4, sorted by IoU descending
+    int best_idx = 0;            // index of highest-IoU mask
+};
+
 enum class SamModel { MobileSAM, SAM2 };
 
 struct SamState {
     bool loaded = false;
+#ifdef RED_HAS_ONNXRUNTIME
+    bool available = true;
+#else
     bool available = false;
+#endif
     SamModel model = SamModel::MobileSAM;
 
     // Model paths
@@ -474,19 +484,17 @@ inline bool sam_encode(SamState &s, const uint8_t *rgb, int w, int h,
 #endif
 }
 
-// Run decoder with point/bbox prompts. Returns binary mask.
-inline SamMask sam_decode(SamState &s,
+// Run decoder with point/bbox prompts. Returns all mask candidates.
+inline SamMultiMask sam_decode_multi(SamState &s,
                            const std::vector<tuple_d> &fg_points,
                            const std::vector<tuple_d> &bg_points,
                            const double *bbox_prompt = nullptr) {
-    SamMask result;
-    result.width = s.orig_w;
-    result.height = s.orig_h;
+    SamMultiMask multi;
 
 #ifdef RED_HAS_ONNXRUNTIME
     if (!s.loaded || s.image_embedding.empty()) {
         s.status = "No cached embedding";
-        return result;
+        return multi;
     }
 
     auto t0 = std::chrono::steady_clock::now();
@@ -501,7 +509,7 @@ inline SamMask sam_decode(SamState &s,
 
     if (n_points == 0) {
         s.status = "No prompts";
-        return result;
+        return multi;
     }
 
     std::vector<float> coords(n_points * 2);
@@ -597,21 +605,22 @@ inline SamMask sam_decode(SamState &s,
         const float *masks_data = masks_tensor.GetTensorData<float>();
         const float *iou_data = iou_tensor.GetTensorData<float>();
 
-        // Select best mask by IoU
-        int best = 0;
-        for (int i = 1; i < n_masks; ++i)
-            if (iou_data[i] > iou_data[best]) best = i;
-
-        result.iou_score = iou_data[best];
-        result.width = mw;
-        result.height = mh;
-        result.data.resize(mw * mh);
-
-        const float *best_mask = masks_data + best * mh * mw;
-        for (int i = 0; i < mh * mw; ++i)
-            result.data[i] = (best_mask[i] > 0.0f) ? 255 : 0;
-
-        result.valid = true;
+        // Return all masks, sorted by IoU descending
+        multi.best_idx = 0;
+        for (int m = 0; m < n_masks; ++m) {
+            SamMask mask;
+            mask.width = mw;
+            mask.height = mh;
+            mask.iou_score = iou_data[m];
+            mask.data.resize(mw * mh);
+            const float *mask_data = masks_data + m * mh * mw;
+            for (int i = 0; i < mh * mw; ++i)
+                mask.data[i] = (mask_data[i] > 0.0f) ? 255 : 0;
+            mask.valid = true;
+            multi.masks.push_back(std::move(mask));
+            if (iou_data[m] > iou_data[multi.best_idx])
+                multi.best_idx = m;
+        }
 
     } else {
         // SAM 2.1 decoder inputs
@@ -659,38 +668,51 @@ inline SamMask sam_decode(SamState &s,
         const float *masks_data = masks_tensor.GetTensorData<float>();
         const float *iou_data = iou_tensor.GetTensorData<float>();
 
-        // Select best mask by IoU
-        int best = 0;
-        for (int i = 1; i < n_masks; ++i)
-            if (iou_data[i] > iou_data[best]) best = i;
-
-        result.iou_score = iou_data[best];
-
-        // Resize mask from 256x256 to original image size
-        const float *best_mask = masks_data + best * mh * mw;
-        auto resized = sam_detail::bilinear_resize(best_mask, mw, mh,
-                                                    s.orig_w, s.orig_h);
-
-        result.width = s.orig_w;
-        result.height = s.orig_h;
-        result.data.resize(s.orig_w * s.orig_h);
-        for (int i = 0; i < s.orig_w * s.orig_h; ++i)
-            result.data[i] = (resized[i] > 0.0f) ? 255 : 0;
-
-        result.valid = true;
+        // Return all masks, resized to original image size
+        multi.best_idx = 0;
+        for (int m = 0; m < n_masks; ++m) {
+            const float *mask_logits = masks_data + m * mh * mw;
+            auto resized = sam_detail::bilinear_resize(mask_logits, mw, mh,
+                                                        s.orig_w, s.orig_h);
+            SamMask mask;
+            mask.width = s.orig_w;
+            mask.height = s.orig_h;
+            mask.iou_score = iou_data[m];
+            mask.data.resize(s.orig_w * s.orig_h);
+            for (int i = 0; i < s.orig_w * s.orig_h; ++i)
+                mask.data[i] = (resized[i] > 0.0f) ? 255 : 0;
+            mask.valid = true;
+            multi.masks.push_back(std::move(mask));
+            if (iou_data[m] > iou_data[multi.best_idx])
+                multi.best_idx = m;
+        }
     }
 
     auto t1 = std::chrono::steady_clock::now();
     s.last_decode_ms = std::chrono::duration<float, std::milli>(t1 - t0).count();
-    return result;
+    return multi;
 #else
     (void)fg_points; (void)bg_points; (void)bbox_prompt;
     s.status = "ONNX Runtime not available";
-    return result;
+    return multi;
 #endif
 }
 
-// High-level: encode if needed, then decode. This is the main entry point.
+// Backward-compatible single-mask decode (returns best mask by IoU)
+inline SamMask sam_decode(SamState &s,
+                           const std::vector<tuple_d> &fg_points,
+                           const std::vector<tuple_d> &bg_points,
+                           const double *bbox_prompt = nullptr) {
+    auto multi = sam_decode_multi(s, fg_points, bg_points, bbox_prompt);
+    if (!multi.masks.empty())
+        return multi.masks[multi.best_idx];
+    SamMask empty;
+    empty.width = s.orig_w;
+    empty.height = s.orig_h;
+    return empty;
+}
+
+// High-level: encode if needed, then decode. Returns best mask.
 inline SamMask sam_segment(SamState &s, const uint8_t *rgb, int w, int h,
                             const std::vector<tuple_d> &fg_points,
                             const std::vector<tuple_d> &bg_points,
@@ -717,6 +739,31 @@ inline SamMask sam_segment(SamState &s, const uint8_t *rgb, int w, int h,
     (void)bbox_prompt; (void)frame_num; (void)cam_idx;
     s.status = "ONNX Runtime not available";
     return result;
+#endif
+}
+
+// High-level: encode if needed, then decode. Returns ALL mask candidates.
+inline SamMultiMask sam_segment_multi(SamState &s, const uint8_t *rgb, int w, int h,
+                                       const std::vector<tuple_d> &fg_points,
+                                       const std::vector<tuple_d> &bg_points,
+                                       const double *bbox_prompt = nullptr,
+                                       int frame_num = -1, int cam_idx = -1) {
+    SamMultiMask multi;
+#ifdef RED_HAS_ONNXRUNTIME
+    if (!s.loaded) {
+        s.status = "SAM not initialized";
+        return multi;
+    }
+    if (!sam_encode(s, rgb, w, h, frame_num, cam_idx)) {
+        s.status = "Encoder failed";
+        return multi;
+    }
+    return sam_decode_multi(s, fg_points, bg_points, bbox_prompt);
+#else
+    (void)rgb; (void)fg_points; (void)bg_points;
+    (void)bbox_prompt; (void)frame_num; (void)cam_idx;
+    s.status = "ONNX Runtime not available";
+    return multi;
 #endif
 }
 

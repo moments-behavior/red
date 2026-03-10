@@ -293,6 +293,26 @@ int main(int argc, char **argv) {
     OBBToolState obb_state;
     SamToolState sam_tool_state;
     SamState sam_state;
+
+    // Default SAM model paths: look relative to exe (../models/mobilesam/)
+    // and in the source tree. User can override in SAM Assist panel.
+    {
+        std::string exe = window->exe_dir;
+        std::vector<std::string> search = {
+            exe + "/../models/mobilesam",   // build tree (release/)
+            exe + "/models/mobilesam",      // installed
+            exe + "/../share/red/models/mobilesam", // Homebrew
+        };
+        for (const auto &dir : search) {
+            std::string enc = dir + "/mobile_sam_encoder.onnx";
+            std::string dec = dir + "/mobile_sam_decoder.onnx";
+            if (std::filesystem::exists(enc) && std::filesystem::exists(dec)) {
+                sam_tool_state.encoder_path = std::filesystem::canonical(enc).string();
+                sam_tool_state.decoder_path = std::filesystem::canonical(dec).string();
+                break;
+            }
+        }
+    }
     annot_state.video_folder = user_settings.default_media_root_path.empty()
                                    ? media_root_dir
                                    : user_settings.default_media_root_path;
@@ -1053,7 +1073,8 @@ int main(int argc, char **argv) {
 
                     if (ImPlot::BeginPlot("##no_plot_name", avail_size,
                                           ImPlotFlags_Equal |
-                                              ImPlotFlags_Crosshairs)) {
+                                              ImPlotFlags_Crosshairs |
+                                              ImPlotFlags_NoMenus)) {
                         ImPlot::SetupAxisLimits(
                             ImAxis_X1, 0, scene->image_width[j],
                             ImPlotCond_Once);
@@ -1180,11 +1201,68 @@ int main(int argc, char **argv) {
 
                             // SAM assist
                             if (sam_tool_state.enabled) {
+                                const uint8_t *sam_rgb = nullptr;
+#ifdef __APPLE__
+                                // Extract RGB from CVPixelBuffer on click
+                                // (lazy — only when SAM needs to run)
+                                static std::vector<uint8_t> sam_rgb_buf;
+                                static int sam_rgb_frame = -1;
+                                static int sam_rgb_cam = -1;
+                                bool need_rgb = ImPlot::IsPlotHovered() &&
+                                    (ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
+                                     ImGui::IsMouseClicked(ImGuiMouseButton_Right));
+                                if (need_rgb || (sam_rgb_frame == (int)frame && sam_rgb_cam == j)) {
+                                    if (sam_rgb_frame != (int)frame || sam_rgb_cam != j) {
+                                        int mh = ps.play_video ? ps.read_head : select_corr_head;
+                                        CVPixelBufferRef pb = scene->display_buffer[j][mh].pixel_buffer;
+                                        if (pb) {
+                                            sam_rgb_buf.resize(iw * ih * 3);
+                                            CVPixelBufferLockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
+                                            const uint8_t *bgra = (const uint8_t *)CVPixelBufferGetBaseAddress(pb);
+                                            int stride = (int)CVPixelBufferGetBytesPerRow(pb);
+                                            for (int y = 0; y < ih; y++) {
+                                                const uint8_t *src = bgra + y * stride;
+                                                uint8_t *dst = sam_rgb_buf.data() + y * iw * 3;
+                                                for (int x = 0; x < iw; x++) {
+                                                    dst[x*3+0] = src[x*4+2]; // R from BGRA
+                                                    dst[x*3+1] = src[x*4+1]; // G
+                                                    dst[x*3+2] = src[x*4+0]; // B
+                                                }
+                                            }
+                                            CVPixelBufferUnlockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
+                                            sam_rgb_frame = (int)frame;
+                                            sam_rgb_cam = j;
+                                        }
+                                    }
+                                    if (sam_rgb_frame == (int)frame && sam_rgb_cam == j)
+                                        sam_rgb = sam_rgb_buf.data();
+                                }
+#endif
                                 sam_handle_input(sam_tool_state, sam_state,
                                                  annotations, frame, j,
-                                                 nn, nc, iw, ih);
+                                                 nn, nc, iw, ih, sam_rgb);
                             }
                             sam_draw_overlay(sam_tool_state, j, iw, ih);
+                        }
+
+                        // Plot context menu: press 1 key while hovering
+                        // (right-click reserved for SAM background points)
+                        if (ImPlot::IsPlotHovered() &&
+                            ImGui::IsKeyPressed(ImGuiKey_1, false) &&
+                            !io.WantTextInput) {
+                            ImGui::OpenPopup("##plot_settings");
+                        }
+                        if (ImGui::BeginPopup("##plot_settings")) {
+                            ImGui::SeparatorText("Plot Settings");
+                            if (ImGui::MenuItem("Fit X Axis"))
+                                ImPlot::SetupAxisLimits(ImAxis_X1, 0, scene->image_width[j]);
+                            if (ImGui::MenuItem("Fit Y Axis"))
+                                ImPlot::SetupAxisLimits(ImAxis_Y1, 0, scene->image_height[j]);
+                            if (ImGui::MenuItem("Fit Both")) {
+                                ImPlot::SetupAxisLimits(ImAxis_X1, 0, scene->image_width[j]);
+                                ImPlot::SetupAxisLimits(ImAxis_Y1, 0, scene->image_height[j]);
+                            }
+                            ImGui::EndPopup();
                         }
 
                         ImPlot::EndPlot();

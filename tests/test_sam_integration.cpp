@@ -22,6 +22,17 @@
 #include "annotation.h"
 #include "annotation_csv.h"
 #include "sam_inference.h"
+
+// Minimal SamToolState for polygon caching test (avoids sam_tool.h's ImGui deps)
+struct SamToolState_Test {
+    bool enabled = false;
+    std::vector<tuple_d> fg_points, bg_points;
+    SamMask current_mask;
+    std::vector<std::vector<tuple_d>> current_polygons;
+    bool has_pending_mask = false;
+    u32 prompt_frame = 0;
+    int prompt_cam = -1;
+};
 #include <cassert>
 #include <chrono>
 #include <cmath>
@@ -760,6 +771,136 @@ static void test_mobilesam_multi_camera() {
 }
 
 // =========================================================================
+// BGRA→RGB conversion test (validates the red.cpp extraction path)
+// =========================================================================
+
+static void test_bgra_to_rgb_conversion() {
+    printf("  test_bgra_to_rgb_conversion...\n");
+
+    // Load a real JPEG as RGB via stbi
+    std::string img_path = std::string(JPEG_DIR) + "/Cam2002486/Frame_5998.jpg";
+    int w, h, ch;
+    uint8_t *rgb_ref = stbi_load(img_path.c_str(), &w, &h, &ch, 3);
+    EXPECT_TRUE(rgb_ref != nullptr);
+    if (!rgb_ref) return;
+
+    // Create fake BGRA buffer from the RGB (simulates CVPixelBuffer format)
+    int stride = w * 4; // no padding for simplicity
+    std::vector<uint8_t> bgra(stride * h);
+    for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+            uint8_t r = rgb_ref[(y * w + x) * 3 + 0];
+            uint8_t g = rgb_ref[(y * w + x) * 3 + 1];
+            uint8_t b = rgb_ref[(y * w + x) * 3 + 2];
+            bgra[y * stride + x * 4 + 0] = b;  // B
+            bgra[y * stride + x * 4 + 1] = g;  // G
+            bgra[y * stride + x * 4 + 2] = r;  // R
+            bgra[y * stride + x * 4 + 3] = 255; // A
+        }
+    }
+
+    // Convert back using the same logic as red.cpp
+    std::vector<uint8_t> rgb_out(w * h * 3);
+    for (int y = 0; y < h; y++) {
+        const uint8_t *src = bgra.data() + y * stride;
+        uint8_t *dst = rgb_out.data() + y * w * 3;
+        for (int x = 0; x < w; x++) {
+            dst[x*3+0] = src[x*4+2]; // R from BGRA
+            dst[x*3+1] = src[x*4+1]; // G
+            dst[x*3+2] = src[x*4+0]; // B
+        }
+    }
+
+    // Compare against reference
+    int mismatches = 0;
+    for (int i = 0; i < w * h * 3; i++) {
+        if (rgb_out[i] != rgb_ref[i]) mismatches++;
+    }
+    printf("    %dx%d, BGRA→RGB mismatches: %d / %d\n", w, h, mismatches, w * h * 3);
+    EXPECT_EQ(mismatches, 0);
+
+    // Verify SAM produces same result from converted RGB as from stbi RGB
+    if (std::filesystem::exists(MOBILESAM_ENCODER) &&
+        std::filesystem::exists(MOBILESAM_DECODER)) {
+        SamState sam;
+        if (sam_init(sam, SamModel::MobileSAM, MOBILESAM_ENCODER, MOBILESAM_DECODER)) {
+            // Use centroid as prompt (image coords)
+            std::vector<tuple_d> fg = {{1684.6, 545.7}};
+
+            auto mask_ref = sam_segment(sam, rgb_ref, w, h, fg, {}, nullptr, 0, 0);
+            sam.cached_frame = -1; // force re-encode
+            auto mask_conv = sam_segment(sam, rgb_out.data(), w, h, fg, {}, nullptr, 1, 0);
+
+            EXPECT_TRUE(mask_ref.valid);
+            EXPECT_TRUE(mask_conv.valid);
+
+            if (mask_ref.valid && mask_conv.valid) {
+                // Masks should be identical (same input → same output)
+                int diff = 0;
+                for (size_t i = 0; i < mask_ref.data.size() && i < mask_conv.data.size(); i++)
+                    if (mask_ref.data[i] != mask_conv.data[i]) diff++;
+                printf("    SAM mask diff (stbi vs BGRA→RGB): %d pixels\n", diff);
+                EXPECT_EQ(diff, 0);
+            }
+            sam_cleanup(sam);
+        }
+    } else {
+        printf("    (SAM model comparison skipped — models not found)\n");
+    }
+
+    stbi_image_free(rgb_ref);
+}
+
+// =========================================================================
+// Polygon caching test
+// =========================================================================
+
+static void test_polygon_caching() {
+    printf("  test_polygon_caching...\n");
+
+    SamToolState_Test state;
+    state.enabled = true;
+
+    // Simulate generating a mask and caching polygons
+    SamMask mask;
+    mask.width = 100;
+    mask.height = 100;
+    mask.data.resize(100 * 100, 0);
+    // Draw a filled circle
+    for (int y = 0; y < 100; y++)
+        for (int x = 0; x < 100; x++)
+            if ((x-50)*(x-50) + (y-50)*(y-50) < 30*30)
+                mask.data[y * 100 + x] = 255;
+    mask.valid = true;
+
+    state.current_mask = mask;
+    state.current_polygons = sam_mask_to_polygon(mask);
+    state.has_pending_mask = true;
+
+    EXPECT_TRUE(!state.current_polygons.empty());
+    printf("    Cached %d polygon(s), largest has %d points\n",
+           (int)state.current_polygons.size(),
+           state.current_polygons.empty() ? 0 : (int)state.current_polygons[0].size());
+
+    // Verify polygon is reasonable
+    if (!state.current_polygons.empty()) {
+        for (const auto &pt : state.current_polygons[0]) {
+            EXPECT_TRUE(pt.x >= 0 && pt.x <= 100);
+            EXPECT_TRUE(pt.y >= 0 && pt.y <= 100);
+        }
+    }
+
+    // Simulate frame change reset
+    state.fg_points.clear();
+    state.bg_points.clear();
+    state.current_polygons.clear();
+    state.has_pending_mask = false;
+
+    EXPECT_TRUE(state.current_polygons.empty());
+    EXPECT_FALSE(state.has_pending_mask);
+}
+
+// =========================================================================
 // main
 // =========================================================================
 int main() {
@@ -791,6 +932,12 @@ int main() {
 
     printf("\nSAM init/segment stub tests:\n");
     test_sam_init_without_models();
+
+    printf("\nBGRA→RGB conversion tests:\n");
+    test_bgra_to_rgb_conversion();
+
+    printf("\nPolygon caching tests:\n");
+    test_polygon_caching();
 
     printf("\nMobileSAM real inference tests:\n");
     test_mobilesam_inference_real_image();

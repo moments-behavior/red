@@ -26,8 +26,10 @@ struct SamToolState {
     std::vector<tuple_d> fg_points;  // foreground clicks
     std::vector<tuple_d> bg_points;  // background clicks
 
-    // Current mask result
-    SamMask current_mask;
+    // Current mask results (multiple candidates from SAM)
+    SamMultiMask multi_mask;
+    int selected_mask = 0; // index into multi_mask.masks (scroll wheel to change)
+    std::vector<std::vector<tuple_d>> current_polygons; // cached from selected mask
     bool has_pending_mask = false;
 
     // Which frame/camera the current prompts apply to
@@ -74,20 +76,37 @@ inline void sam_draw_overlay(SamToolState &state, int cam_idx,
         ImPlot::PopStyleColor();
     }
 
-    // Draw mask overlay (semi-transparent blue polygon)
-    if (state.has_pending_mask && state.current_mask.valid) {
-        auto polys = sam_mask_to_polygon(state.current_mask);
-        for (const auto &poly : polys) {
+    // Draw mask overlay (semi-transparent blue polygon outline)
+    if (state.has_pending_mask && !state.current_polygons.empty()) {
+        for (const auto &poly : state.current_polygons) {
+            if (poly.size() < 3) continue;
             std::vector<double> xs, ys;
+            xs.reserve(poly.size() + 1);
+            ys.reserve(poly.size() + 1);
             for (const auto &pt : poly) {
                 xs.push_back(pt.x);
                 ys.push_back(img_h - pt.y);
             }
             xs.push_back(xs[0]); ys.push_back(ys[0]); // close
-            ImPlot::PushStyleColor(ImPlotCol_Line, ImVec4(0.2f, 0.5f, 1.0f, 0.8f));
+            ImPlot::PushStyleColor(ImPlotCol_Line, ImVec4(0.2f, 0.5f, 1.0f, 0.9f));
+            ImPlot::PushStyleVar(ImPlotStyleVar_LineWeight, 3.0f);
             ImPlot::PlotLine("##sam_mask", xs.data(), ys.data(), (int)xs.size());
+            ImPlot::PopStyleVar();
             ImPlot::PopStyleColor();
         }
+    }
+}
+
+// Update cached polygons from the currently selected mask
+inline void sam_update_polygons(SamToolState &state) {
+    if (state.selected_mask < (int)state.multi_mask.masks.size() &&
+        state.multi_mask.masks[state.selected_mask].valid) {
+        state.current_polygons = sam_mask_to_polygon(
+            state.multi_mask.masks[state.selected_mask]);
+        state.has_pending_mask = true;
+    } else {
+        state.current_polygons.clear();
+        state.has_pending_mask = false;
     }
 }
 
@@ -106,6 +125,9 @@ inline void sam_handle_input(SamToolState &state, SamState &sam,
     if (frame != state.prompt_frame || cam_idx != state.prompt_cam) {
         state.fg_points.clear();
         state.bg_points.clear();
+        state.current_polygons.clear();
+        state.multi_mask = {};
+        state.selected_mask = 0;
         state.has_pending_mask = false;
         state.prompt_frame = frame;
         state.prompt_cam = cam_idx;
@@ -115,45 +137,61 @@ inline void sam_handle_input(SamToolState &state, SamState &sam,
     double img_x = std::clamp(mouse.x, 0.0, (double)img_w);
     double img_y = std::clamp((double)img_h - mouse.y, 0.0, (double)img_h);
 
-    // Left click: add foreground point
-    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::GetIO().KeyShift) {
-        state.fg_points.push_back({img_x, img_y});
+    // Distinguish click from click-drag: only place SAM point on release
+    // if mouse didn't move more than a few pixels (drag threshold).
+    auto was_click = [](ImGuiMouseButton btn) -> bool {
+        if (!ImGui::IsMouseReleased(btn)) return false;
+        ImVec2 drag = ImGui::GetMouseDragDelta(btn);
+        return (drag.x * drag.x + drag.y * drag.y) < 25.0f; // 5px threshold
+    };
 
-        // Run SAM decoder
+    // Helper: run SAM and update polygons from best mask
+    auto run_sam = [&]() {
         if (sam.loaded && frame_rgb) {
-            state.current_mask = sam_segment(sam, frame_rgb, img_w, img_h,
-                                              state.fg_points, state.bg_points,
-                                              nullptr, frame, cam_idx);
-            state.has_pending_mask = state.current_mask.valid;
+            state.multi_mask = sam_segment_multi(sam, frame_rgb, img_w, img_h,
+                                                  state.fg_points, state.bg_points,
+                                                  nullptr, frame, cam_idx);
+            state.selected_mask = state.multi_mask.best_idx;
+            sam_update_polygons(state);
         }
+    };
+
+    // Left click: add foreground point
+    if (was_click(ImGuiMouseButton_Left) && !ImGui::GetIO().KeyShift) {
+        state.fg_points.push_back({img_x, img_y});
+        run_sam();
     }
 
     // Right click: add background point
-    if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+    if (was_click(ImGuiMouseButton_Right)) {
         state.bg_points.push_back({img_x, img_y});
+        run_sam();
+    }
 
-        if (sam.loaded && frame_rgb) {
-            state.current_mask = sam_segment(sam, frame_rgb, img_w, img_h,
-                                              state.fg_points, state.bg_points,
-                                              nullptr, frame, cam_idx);
-            state.has_pending_mask = state.current_mask.valid;
+    // Scroll wheel: cycle through mask candidates (different sizes)
+    if (state.has_pending_mask && !state.multi_mask.masks.empty()) {
+        float wheel = ImGui::GetIO().MouseWheel;
+        if (wheel != 0.0f) {
+            int n = (int)state.multi_mask.masks.size();
+            state.selected_mask = (state.selected_mask + (wheel > 0 ? 1 : n - 1)) % n;
+            sam_update_polygons(state);
         }
     }
 
     // Enter: accept mask -> store in annotation
     if (state.has_pending_mask && ImGui::IsKeyPressed(ImGuiKey_Enter)) {
-        auto polys = sam_mask_to_polygon(state.current_mask);
-        if (!polys.empty()) {
+        if (!state.current_polygons.empty()) {
             auto &fa = get_or_create_frame(amap, frame, num_nodes, num_cameras);
             if (cam_idx < (int)fa.cameras.size()) {
                 auto &ext = fa.cameras[cam_idx].get_extras();
-                ext.mask_polygons = polys;
+                ext.mask_polygons = state.current_polygons;
                 ext.has_mask = true;
             }
         }
         // Reset
         state.fg_points.clear();
         state.bg_points.clear();
+        state.current_polygons.clear();
         state.has_pending_mask = false;
     }
 
@@ -167,6 +205,9 @@ inline void sam_handle_input(SamToolState &state, SamState &sam,
     if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
         state.fg_points.clear();
         state.bg_points.clear();
+        state.current_polygons.clear();
+        state.multi_mask = {};
+        state.selected_mask = 0;
         state.has_pending_mask = false;
     }
 }
@@ -245,9 +286,12 @@ inline void DrawSamToolWindow(SamToolState &state, SamState &sam,
                         sam.last_encode_ms, sam.last_decode_ms);
         }
 
-        if (state.has_pending_mask) {
+        if (state.has_pending_mask && !state.multi_mask.masks.empty()) {
+            float iou = state.multi_mask.masks[state.selected_mask].iou_score;
             ImGui::TextColored(ImVec4(0.2f, 0.8f, 1, 1),
-                               "Mask ready (IoU: %.3f)", state.current_mask.iou_score);
+                               "Mask %d/%d (IoU: %.3f) — scroll to resize",
+                               state.selected_mask + 1,
+                               (int)state.multi_mask.masks.size(), iou);
         }
 
         ImGui::Text("FG: %d  BG: %d",
