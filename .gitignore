@@ -18,6 +18,7 @@ cmake-build-debug/
 __pycache__
 
 lib/libtorch/
+lib/onnxruntime/
 
 skeleton/*.json
 

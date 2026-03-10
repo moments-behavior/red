@@ -27,6 +27,16 @@ if(APPLE)
     pkg_check_modules(TURBOJPEG REQUIRED libturbojpeg)
     find_package(Ceres REQUIRED)
 
+    # Optional ONNX Runtime for SAM inference (use official release, not Homebrew)
+    set(ONNXRUNTIME_DIR "${CMAKE_SOURCE_DIR}/lib/onnxruntime")
+    if(EXISTS "${ONNXRUNTIME_DIR}/include/onnxruntime_cxx_api.h")
+        set(HAS_ONNXRUNTIME TRUE)
+        message(STATUS "ONNX Runtime found at ${ONNXRUNTIME_DIR}")
+    else()
+        set(HAS_ONNXRUNTIME FALSE)
+        message(STATUS "ONNX Runtime not found — SAM inference disabled")
+    endif()
+
     set(DIR_IMGUI "${CMAKE_SOURCE_DIR}/lib/imgui")
     set(DIR_IMPLOT "${CMAKE_SOURCE_DIR}/lib/implot")
     set(DIR_IMPLOT3D "${CMAKE_SOURCE_DIR}/lib/implot3d")
@@ -93,6 +103,13 @@ if(APPLE)
     )
     # Removed: Vulkan::Vulkan, -framework Accelerate (vImage no longer used)
 
+    # Optional ONNX Runtime for SAM inference
+    if(HAS_ONNXRUNTIME)
+        target_compile_definitions(red PRIVATE RED_HAS_ONNXRUNTIME)
+        target_include_directories(red PRIVATE "${ONNXRUNTIME_DIR}/include")
+        target_link_libraries(red PRIVATE "${ONNXRUNTIME_DIR}/lib/libonnxruntime.dylib")
+    endif()
+
     # Enable ARC for all Objective-C++ translation units
     set_source_files_properties(
         ${MM_SRC_FILES}
@@ -156,7 +173,61 @@ if(APPLE)
         PROPERTIES COMPILE_FLAGS "-fobjc-arc"
     )
 
+    if(HAS_ONNXRUNTIME)
+        target_compile_definitions(test_gui PRIVATE RED_HAS_ONNXRUNTIME)
+        target_include_directories(test_gui PRIVATE "${ONNXRUNTIME_DIR}/include")
+        target_link_libraries(test_gui PRIVATE "${ONNXRUNTIME_DIR}/lib/libonnxruntime.dylib")
+    endif()
+
     set_target_properties(test_gui PROPERTIES
+        CXX_STANDARD 17
+        CXX_STANDARD_REQUIRED ON
+    )
+
+    # Annotation system test: same deps as test_gui
+    add_executable(test_annotation
+        ${TEST_GUI_SRC_FILES}
+        ${MM_SRC_FILES}
+        ${IMGUI_SRC}
+        ${IMPLOT_SRC}
+        ${IMPLOT3D_SRC}
+        tests/test_annotation.cpp
+    )
+    target_include_directories(test_annotation PRIVATE
+        src
+        ${DIR_IMGUI}
+        ${DIR_IMGUI}/backends
+        ${DIR_IMPLOT}
+        ${DIR_IMPLOT3D}
+        ${DIR_FILEBROWSER}
+        lib/nvcodec
+        lib/IconFontCppHeaders
+        ${FFMPEG_INCLUDE_DIRS}
+        ${HOMEBREW_PREFIX}/include
+        ${HOMEBREW_PREFIX}/include/eigen3
+    )
+    target_link_directories(test_annotation PRIVATE ${FFMPEG_LIBRARY_DIRS} ${TURBOJPEG_LIBRARY_DIRS})
+    target_link_libraries(test_annotation PRIVATE
+        Eigen3::Eigen
+        glfw
+        "-framework Metal"
+        "-framework QuartzCore"
+        "-framework VideoToolbox"
+        "-framework CoreMedia"
+        "-framework CoreFoundation"
+        "-framework CoreVideo"
+        "-framework Cocoa"
+        ${FFMPEG_LIBRARIES}
+        ${TURBOJPEG_LIBRARIES}
+        Ceres::ceres
+        pthread
+    )
+    if(HAS_ONNXRUNTIME)
+        target_compile_definitions(test_annotation PRIVATE RED_HAS_ONNXRUNTIME)
+        target_include_directories(test_annotation PRIVATE "${ONNXRUNTIME_DIR}/include")
+        target_link_libraries(test_annotation PRIVATE "${ONNXRUNTIME_DIR}/lib/libonnxruntime.dylib")
+    endif()
+    set_target_properties(test_annotation PROPERTIES
         CXX_STANDARD 17
         CXX_STANDARD_REQUIRED ON
     )

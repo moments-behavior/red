@@ -1,14 +1,12 @@
 #pragma once
 // sam_tool.h — SAM-assisted segmentation UI
 //
-// Provides a point-prompt interface for MobileSAM:
-//   1. Toggle "SAM Assist" on
-//   2. Left-click = foreground prompt, Right-click = background prompt
-//   3. SAM decoder runs in <10ms, mask overlaid instantly
-//   4. "Accept" stores mask polygon in Camera2D::mask_polygons
-//
-// Requires sam_inference.h. Guarded by #ifdef RED_HAS_ONNXRUNTIME for
-// the actual inference; UI is always available to show status.
+// Provides a point-prompt interface for MobileSAM / SAM 2.1:
+//   1. Select model + load ONNX files
+//   2. Toggle "SAM Assist" on
+//   3. Left-click = foreground prompt, Right-click = background prompt
+//   4. SAM decoder runs in <20ms, mask overlaid instantly
+//   5. "Accept" stores mask polygon in Camera2D::mask_polygons
 
 #include "imgui.h"
 #include "implot.h"
@@ -16,6 +14,7 @@
 #include "app_context.h"
 #include "gui/panel.h"
 #include "sam_inference.h"
+#include <ImGuiFileDialog.h>
 #include <string>
 #include <vector>
 
@@ -34,6 +33,11 @@ struct SamToolState {
     // Which frame/camera the current prompts apply to
     u32 prompt_frame = 0;
     int prompt_cam = -1;
+
+    // Model selection UI state
+    int model_idx = 0; // 0 = MobileSAM, 1 = SAM 2.1 Tiny
+    std::string encoder_path;
+    std::string decoder_path;
 };
 
 // Draw SAM mask overlay on a camera's ImPlot view
@@ -70,8 +74,7 @@ inline void sam_draw_overlay(SamToolState &state, int cam_idx,
         ImPlot::PopStyleColor();
     }
 
-    // Draw mask overlay (semi-transparent blue)
-    // For now, draw mask bounding polygon if available
+    // Draw mask overlay (semi-transparent blue polygon)
     if (state.has_pending_mask && state.current_mask.valid) {
         auto polys = sam_mask_to_polygon(state.current_mask);
         for (const auto &poly : polys) {
@@ -180,35 +183,78 @@ inline void DrawSamToolWindow(SamToolState &state, SamState &sam,
         if (!sam.available) {
             ImGui::TextColored(ImVec4(1, 0.5f, 0, 1),
                                "ONNX Runtime not available");
-            ImGui::TextWrapped("Recompile with -DRED_HAS_ONNXRUNTIME to enable "
-                               "SAM-assisted segmentation.");
+            ImGui::TextWrapped("Compile with ONNX Runtime in lib/onnxruntime/ "
+                               "to enable SAM-assisted segmentation.");
             return;
         }
 
-        if (!sam.loaded) {
-            ImGui::TextColored(ImVec4(1, 1, 0, 1), "Models not loaded");
-            // TODO: model path input + load button
-            ImGui::TextWrapped("Download MobileSAM ONNX models (~50MB) and load them.");
-            return;
-        }
-
-        ImGui::Checkbox("Enable SAM Assist", &state.enabled);
+        // --- Model selection + loading ---
+        ImGui::Text("Model");
+        const char *model_names[] = {"MobileSAM (~9 MB)", "SAM 2.1 Tiny (~117 MB)"};
+        ImGui::Combo("##sam_model", &state.model_idx, model_names, 2);
 
         ImGui::Separator();
-        ImGui::Text("Encoder: %.1f ms", sam.last_encode_ms);
-        ImGui::Text("Decoder: %.1f ms", sam.last_decode_ms);
+        ImGui::Text("Encoder ONNX");
+        ImGui::SetNextItemWidth(-60);
+        ImGui::InputText("##sam_enc", &state.encoder_path);
+        ImGui::SameLine();
+        if (ImGui::Button("...##enc")) {
+            IGFD::FileDialogConfig cfg;
+            cfg.countSelectionMax = 1;
+            cfg.flags = ImGuiFileDialogFlags_Modal;
+            ImGuiFileDialog::Instance()->OpenDialog(
+                "SamBrowseEncoder", "Select Encoder ONNX", ".onnx", cfg);
+        }
+
+        ImGui::Text("Decoder ONNX");
+        ImGui::SetNextItemWidth(-60);
+        ImGui::InputText("##sam_dec", &state.decoder_path);
+        ImGui::SameLine();
+        if (ImGui::Button("...##dec")) {
+            IGFD::FileDialogConfig cfg;
+            cfg.countSelectionMax = 1;
+            cfg.flags = ImGuiFileDialogFlags_Modal;
+            ImGuiFileDialog::Instance()->OpenDialog(
+                "SamBrowseDecoder", "Select Decoder ONNX", ".onnx", cfg);
+        }
+
+        // Load button
+        bool can_load = !state.encoder_path.empty() && !state.decoder_path.empty();
+        if (!can_load) ImGui::BeginDisabled();
+        if (ImGui::Button("Load Model")) {
+            SamModel model_type = (state.model_idx == 0) ? SamModel::MobileSAM
+                                                          : SamModel::SAM2;
+            sam_init(sam, model_type, state.encoder_path.c_str(),
+                     state.decoder_path.c_str());
+        }
+        if (!can_load) ImGui::EndDisabled();
+
+        ImGui::SameLine();
+        if (sam.loaded) {
+            ImGui::TextColored(ImVec4(0, 1, 0, 1), "Loaded");
+        } else if (!sam.status.empty()) {
+            ImGui::TextColored(ImVec4(1, 1, 0, 1), "%s", sam.status.c_str());
+        }
+
+        ImGui::Separator();
+
+        // --- Enable / usage ---
+        if (!sam.loaded) ImGui::BeginDisabled();
+        ImGui::Checkbox("Enable SAM Assist", &state.enabled);
+        if (!sam.loaded) ImGui::EndDisabled();
+
+        if (sam.loaded) {
+            ImGui::Text("Encoder: %.1f ms  Decoder: %.1f ms",
+                        sam.last_encode_ms, sam.last_decode_ms);
+        }
 
         if (state.has_pending_mask) {
             ImGui::TextColored(ImVec4(0.2f, 0.8f, 1, 1),
                                "Mask ready (IoU: %.3f)", state.current_mask.iou_score);
-            if (ImGui::Button("Accept (Enter)")) {
-                // Simulate Enter key press for acceptance
-                // (actual acceptance handled in sam_handle_input)
-            }
         }
 
-        ImGui::Text("FG points: %d", (int)state.fg_points.size());
-        ImGui::Text("BG points: %d", (int)state.bg_points.size());
+        ImGui::Text("FG: %d  BG: %d",
+                     (int)state.fg_points.size(), (int)state.bg_points.size());
 
         if (ImGui::Button("Clear Points")) {
             state.fg_points.clear();
@@ -222,11 +268,23 @@ inline void DrawSamToolWindow(SamToolState &state, SamState &sam,
         ImGui::TextWrapped("Enter: accept mask");
         ImGui::TextWrapped("Backspace: undo last point");
         ImGui::TextWrapped("Escape: clear all");
-
-        if (!sam.status.empty()) {
-            ImGui::Separator();
-            ImGui::TextWrapped("%s", sam.status.c_str());
-        }
         },
-        nullptr, ImVec2(300, 400));
+        // always_fn: handle file dialog results every frame
+        [&]() {
+            if (ImGuiFileDialog::Instance()->Display("SamBrowseEncoder")) {
+                if (ImGuiFileDialog::Instance()->IsOk()) {
+                    state.encoder_path =
+                        ImGuiFileDialog::Instance()->GetFilePathName();
+                }
+                ImGuiFileDialog::Instance()->Close();
+            }
+            if (ImGuiFileDialog::Instance()->Display("SamBrowseDecoder")) {
+                if (ImGuiFileDialog::Instance()->IsOk()) {
+                    state.decoder_path =
+                        ImGuiFileDialog::Instance()->GetFilePathName();
+                }
+                ImGuiFileDialog::Instance()->Close();
+            }
+        },
+        ImVec2(320, 480));
 }
