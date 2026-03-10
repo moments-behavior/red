@@ -254,6 +254,8 @@ int main(int argc, char **argv) {
 
     // JARVIS Export Tool state
     JarvisExportState jarvis_export_state;
+    // JARVIS Import Tool state
+    JarvisImportState jarvis_import_state;
     jarvis_export_state.margin = user_settings.jarvis_margin;
     jarvis_export_state.train_ratio = user_settings.jarvis_train_ratio;
     jarvis_export_state.seed = user_settings.jarvis_seed;
@@ -432,6 +434,9 @@ int main(int argc, char **argv) {
     panels.add({"JARVIS Export",
                 [&]() { DrawJarvisExportWindow(jarvis_export_state, ctx); },
                 nullptr});
+    panels.add({"JARVIS Import",
+                [&]() { DrawJarvisImportWindow(jarvis_import_state, ctx); },
+                nullptr});
     panels.add({"Calibration Tool",
                 [&]() { DrawCalibrationToolWindow(calib_state, ctx, calib_cb); },
                 nullptr});
@@ -492,7 +497,8 @@ int main(int argc, char **argv) {
 
         // App-level main menu bar (always visible)
         DrawMainMenuBar(ctx, calib_state, annot_state, settings_state,
-                        jarvis_export_state, show_help_window);
+                        jarvis_export_state, jarvis_import_state,
+                        show_help_window);
 
         // --- Update playback time ---
         auto now = std::chrono::steady_clock::now();

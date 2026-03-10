@@ -3,6 +3,7 @@
 #include "gui/annotation_dialog.h"
 #include "gui/calibration_tool_window.h"
 #include "gui/jarvis_export_window.h"
+#include "gui/jarvis_import_window.h"
 #include "gui/settings_window.h"
 #include "IconsForkAwesome.h"
 #include <ImGuiFileDialog.h>
@@ -12,6 +13,7 @@ inline void DrawMainMenuBar(AppContext &ctx,
                             AnnotationDialogState &annot_state,
                             SettingsState &settings_state,
                             JarvisExportState &jarvis_export_state,
+                            JarvisImportState &jarvis_import_state,
                             bool &show_help_window) {
     auto &pm = ctx.pm;
     auto &ps = ctx.ps;
@@ -105,6 +107,9 @@ inline void DrawMainMenuBar(AppContext &ctx,
     if (ImGui::BeginMenu("Tools")) {
         if (ImGui::MenuItem("JARVIS Export Tool")) {
             jarvis_export_state.show = true;
+        }
+        if (ImGui::MenuItem("JARVIS Import Tool")) {
+            jarvis_import_state.show = true;
         }
         ImGui::EndMenu();
     }
