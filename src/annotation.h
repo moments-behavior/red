@@ -328,7 +328,7 @@ inline void annotations_from_json(const nlohmann::json &root, AnnotationMap &ama
             }
             if (!target) continue;
 
-            if (ji.contains("bbox3d_center")) {
+            if (ji.contains("bbox3d_center") && ji.contains("bbox3d_size")) {
                 auto &c = ji["bbox3d_center"];
                 target->bbox3d_center = {c[0].get<double>(), c[1].get<double>(), c[2].get<double>()};
                 auto &s = ji["bbox3d_size"];

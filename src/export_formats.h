@@ -130,7 +130,7 @@ inline nlohmann::json build_coco_json(
             int num_visible = 0;
             for (size_t k = 0; k < cam.kp_labeled.size(); ++k)
                 if (cam.kp_labeled[k]) ++num_visible;
-            if (num_visible == 0) { img_id++; continue; }
+            if (num_visible == 0) continue;
 
             // Build flat keypoints array [x,y,v, x,y,v, ...]
             nlohmann::json kp_flat = nlohmann::json::array();

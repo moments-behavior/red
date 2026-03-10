@@ -200,6 +200,21 @@ inline void bbox_handle_input(BBoxToolState &state, AnnotationMap &amap,
         state.hovered_instance = -1;
     }
 
+    // O key: delete all bboxes of hovered class from ALL cameras
+    if (state.hovered_instance >= 0 && ImGui::IsKeyPressed(ImGuiKey_O)) {
+        auto it = amap.find(frame);
+        if (it != amap.end()) {
+            int cat = it->second.instances[state.hovered_instance].category_id;
+            for (auto &inst : it->second.instances) {
+                if (inst.category_id == cat) {
+                    for (auto &cam : inst.cameras)
+                        cam.has_bbox = false;
+                }
+            }
+        }
+        state.hovered_instance = -1;
+    }
+
     // Z/X: switch class
     if (ImGui::IsKeyPressed(ImGuiKey_Z)) {
         state.current_class = (state.current_class - 1 + (int)state.class_names.size())
@@ -208,6 +223,14 @@ inline void bbox_handle_input(BBoxToolState &state, AnnotationMap &amap,
     }
     if (ImGui::IsKeyPressed(ImGuiKey_X)) {
         state.current_class = (state.current_class + 1) % (int)state.class_names.size();
+        state.current_instance = 0;
+    }
+    // N key: create new class
+    if (ImGui::IsKeyPressed(ImGuiKey_N)) {
+        int n = (int)state.class_names.size();
+        state.class_names.push_back("Class_" + std::to_string(n + 1));
+        state.class_colors.push_back(state.next_class_color());
+        state.current_class = n;
         state.current_instance = 0;
     }
     // C/V: switch instance ID
@@ -232,8 +255,10 @@ inline void DrawBBoxToolWindow(BBoxToolState &state, AppContext &ctx) {
 
         ImGui::Separator();
         ImGui::TextWrapped("Shift+drag: draw bbox");
-        ImGui::TextWrapped("F: delete hovered bbox");
-        ImGui::TextWrapped("Z/X: prev/next class, C/V: prev/next instance");
+        ImGui::TextWrapped("F: delete hovered bbox (this camera)");
+        ImGui::TextWrapped("O: delete hovered class (all cameras)");
+        ImGui::TextWrapped("Z/X: prev/next class, N: new class");
+        ImGui::TextWrapped("C/V: prev/next instance ID");
 
         // Class list
         ImGui::SeparatorText("Classes");

@@ -89,6 +89,16 @@ inline void DrawSettingsWindow(SettingsState &state, AppContext &ctx) {
         }
 #endif
 
+        // --- Annotation Tools ---
+        if (ImGui::CollapsingHeader("Annotation Tools")) {
+            auto &ac = ctx.pm.annotation_config;
+            ImGui::Checkbox("Keypoints", &ac.enable_keypoints);
+            ImGui::Checkbox("Bounding Boxes", &ac.enable_bboxes);
+            ImGui::Checkbox("Oriented Bounding Boxes", &ac.enable_obbs);
+            ImGui::Checkbox("Segmentation (SAM)", &ac.enable_segmentation);
+            ImGui::TextDisabled("Enable tools to show their panels in the Tools menu.");
+        }
+
         // --- Export ---
         if (ImGui::CollapsingHeader("JARVIS Export Defaults")) {
             if (ImGui::SliderFloat("Bbox Margin (px)", &s.jarvis_margin, 0.0f, 200.0f))

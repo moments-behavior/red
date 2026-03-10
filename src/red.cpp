@@ -467,13 +467,13 @@ int main(int argc, char **argv) {
                 nullptr});
     panels.add({"Bbox Tool",
                 [&]() { DrawBBoxToolWindow(bbox_state, ctx); },
-                [&]() { return pm.annotation_config.enable_bboxes; }});
+                nullptr});
     panels.add({"OBB Tool",
                 [&]() { DrawOBBToolWindow(obb_state, ctx); },
-                [&]() { return pm.annotation_config.enable_obbs; }});
+                nullptr});
     panels.add({"SAM Assist",
                 [&]() { DrawSamToolWindow(sam_tool_state, sam_state, ctx); },
-                [&]() { return pm.annotation_config.enable_segmentation; }});
+                nullptr});
 
     main_loop_running = true;
     while (!glfwWindowShouldClose(window->render_target)) {
@@ -1084,23 +1084,14 @@ int main(int argc, char **argv) {
                                    scene->image_height[j]));
 
                         if (pm.plot_keypoints_flag) {
-                            // plot arena for testing camera parameters
-                            // gui_plot_perimeter(&camera_params[j],
-                            // scene->image_height[j]); if (scene->num_cams
-                            // > 1)
-                            // {
-                            //     gui_plot_world_coordinates(&camera_params[j],
-                            //     j, scene->image_height[j]);
-                            // }
-
-                            // labeling
+                            // labeling (keypoints)
+                            // OBB tool uses G key (not W), so no keypoint conflict
                             if (ImPlot::IsPlotHovered()) {
                                 is_view_focused[j] = true;
                                 if (ImGui::IsKeyPressed(ImGuiKey_B, false) &&
                                     !io.WantTextInput) {
                                     // create keypoints
                                     if (!keypoints_find) {
-                                        // not found
                                         KeyPoints *keypoints =
                                             (KeyPoints *)malloc(
                                                 sizeof(KeyPoints));
@@ -1180,6 +1171,41 @@ int main(int argc, char **argv) {
                                     &skeleton, j, scene->num_cams);
                             }
                         }
+
+                        // --- Annotation tool overlays + input (bbox, OBB, SAM) ---
+                        {
+                            int iw = (int)scene->image_width[j];
+                            int ih = (int)scene->image_height[j];
+                            u32 frame = (u32)current_frame_num;
+                            int nn = skeleton.num_nodes;
+                            int nc = (int)scene->num_cams;
+
+                            // Bbox tool
+                            if (bbox_state.enabled) {
+                                bbox_handle_input(bbox_state, annotations,
+                                                  frame, j, nn, nc, iw, ih);
+                            }
+                            bbox_draw_overlays(bbox_state, annotations,
+                                               frame, j, iw, ih);
+
+                            // OBB tool
+                            if (obb_state.enabled) {
+                                obb_handle_input(obb_state, bbox_state,
+                                                 annotations, frame, j,
+                                                 nn, nc, iw, ih);
+                            }
+                            obb_draw_overlays(obb_state, bbox_state,
+                                              annotations, frame, j, iw, ih);
+
+                            // SAM assist
+                            if (sam_tool_state.enabled) {
+                                sam_handle_input(sam_tool_state, sam_state,
+                                                 annotations, frame, j,
+                                                 nn, nc, iw, ih);
+                            }
+                            sam_draw_overlay(sam_tool_state, j, iw, ih);
+                        }
+
                         ImPlot::EndPlot();
                     }
 

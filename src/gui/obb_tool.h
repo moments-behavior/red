@@ -203,8 +203,9 @@ inline void obb_handle_input(OBBToolState &state, BBoxToolState &bbox_state,
     double mx = std::clamp(mouse.x, 0.0, (double)img_w);
     double my = std::clamp(mouse.y, 0.0, (double)img_h);
 
-    // W key advances the OBB state machine
-    if (ImGui::IsKeyPressed(ImGuiKey_W)) {
+    // G key advances the OBB state machine (G for "geometry";
+    // W is reserved for keypoint labeling to avoid conflict)
+    if (ImGui::IsKeyPressed(ImGuiKey_G)) {
         switch (state.draw_state) {
         case OBBDrawState::Idle:
             state.ax1_x = mx; state.ax1_y = my;
@@ -311,7 +312,7 @@ inline void DrawOBBToolWindow(OBBToolState &state, AppContext &ctx) {
         ImGui::Text("State: %s", state_labels[(int)state.draw_state]);
 
         ImGui::Separator();
-        ImGui::TextWrapped("W (3x): place axis point 1, axis point 2, corner");
+        ImGui::TextWrapped("G (3x): place axis point 1, axis point 2, corner");
         ImGui::TextWrapped("Escape: cancel construction");
         ImGui::TextWrapped("T: delete hovered OBB");
         },
