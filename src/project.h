@@ -8,6 +8,31 @@
 #include <string>
 #include <vector>
 
+// Annotation capabilities — saved in project JSON
+struct AnnotationConfig {
+    bool enable_keypoints    = true;  // default on (existing behavior)
+    bool enable_bboxes       = false;
+    bool enable_obbs         = false;
+    bool enable_segmentation = false;
+    std::vector<std::string> class_names = {"animal"};
+};
+
+inline void to_json(nlohmann::json &j, const AnnotationConfig &a) {
+    j = nlohmann::json{
+        {"enable_keypoints", a.enable_keypoints},
+        {"enable_bboxes", a.enable_bboxes},
+        {"enable_obbs", a.enable_obbs},
+        {"enable_segmentation", a.enable_segmentation},
+        {"class_names", a.class_names}};
+}
+inline void from_json(const nlohmann::json &j, AnnotationConfig &a) {
+    a.enable_keypoints    = j.value("enable_keypoints", true);
+    a.enable_bboxes       = j.value("enable_bboxes", false);
+    a.enable_obbs         = j.value("enable_obbs", false);
+    a.enable_segmentation = j.value("enable_segmentation", false);
+    a.class_names         = j.value("class_names", std::vector<std::string>{"animal"});
+}
+
 struct ProjectManager {
     bool show_project_window = false;
     std::string project_root_path;
@@ -22,6 +47,7 @@ struct ProjectManager {
     std::vector<std::string> camera_names;
     std::string skeleton_name;
     std::string media_folder;
+    AnnotationConfig annotation_config; // annotation capabilities
 };
 
 inline void to_json(nlohmann::json &j, const ProjectManager &p) {
@@ -35,7 +61,8 @@ inline void to_json(nlohmann::json &j, const ProjectManager &p) {
                        {"plot_keypoints_flag", p.plot_keypoints_flag},
                        {"camera_names", p.camera_names},
                        {"skeleton_name", p.skeleton_name},
-                       {"media_folder", p.media_folder}};
+                       {"media_folder", p.media_folder},
+                       {"annotation_config", p.annotation_config}};
 }
 
 inline void from_json(const nlohmann::json &j, ProjectManager &p) {
@@ -50,6 +77,8 @@ inline void from_json(const nlohmann::json &j, ProjectManager &p) {
     p.camera_names = j.value("camera_names", std::vector<std::string>{});
     p.skeleton_name = j.value("skeleton_name", std::string{});
     p.media_folder = j.value("media_folder", std::string{});
+    if (j.contains("annotation_config"))
+        p.annotation_config = j["annotation_config"].get<AnnotationConfig>();
 }
 
 inline bool save_project_manager_json(const ProjectManager &p,

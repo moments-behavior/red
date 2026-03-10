@@ -4,6 +4,10 @@
 #include "gui/calibration_tool_window.h"
 #include "gui/jarvis_export_window.h"
 #include "gui/jarvis_import_window.h"
+#include "gui/export_window.h"
+#include "gui/bbox_tool.h"
+#include "gui/obb_tool.h"
+#include "gui/sam_tool.h"
 #include "gui/settings_window.h"
 #include "IconsForkAwesome.h"
 #include <ImGuiFileDialog.h>
@@ -14,6 +18,10 @@ inline void DrawMainMenuBar(AppContext &ctx,
                             SettingsState &settings_state,
                             JarvisExportState &jarvis_export_state,
                             JarvisImportState &jarvis_import_state,
+                            ExportWindowState &export_state,
+                            BBoxToolState &bbox_state,
+                            OBBToolState &obb_state,
+                            SamToolState &sam_tool_state,
                             bool &show_help_window) {
     auto &pm = ctx.pm;
     auto &ps = ctx.ps;
@@ -105,11 +113,25 @@ inline void DrawMainMenuBar(AppContext &ctx,
     }
 
     if (ImGui::BeginMenu("Tools")) {
+        if (ImGui::MenuItem("Export Tool")) {
+            export_state.show = true;
+        }
+        ImGui::Separator();
         if (ImGui::MenuItem("JARVIS Export Tool")) {
             jarvis_export_state.show = true;
         }
         if (ImGui::MenuItem("JARVIS Import Tool")) {
             jarvis_import_state.show = true;
+        }
+        ImGui::Separator();
+        if (ImGui::MenuItem("Bbox Tool")) {
+            bbox_state.show = true;
+        }
+        if (ImGui::MenuItem("OBB Tool")) {
+            obb_state.show = true;
+        }
+        if (ImGui::MenuItem("SAM Assist")) {
+            sam_tool_state.show = true;
         }
         ImGui::EndMenu();
     }

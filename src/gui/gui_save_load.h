@@ -2,6 +2,7 @@
 #include "implot.h"
 #include "render.h"
 #include "skeleton.h"
+#include "json.hpp"
 #include <algorithm>
 #include <cmath>
 #include <filesystem>

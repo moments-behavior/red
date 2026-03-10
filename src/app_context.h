@@ -4,6 +4,7 @@
 #include "deferred_queue.h"
 #include "gui/popup_stack.h"
 #include "gui/toast.h"
+#include "annotation.h"
 #include "gui/gui_save_load.h"
 #include "media_loader.h"
 #include "project.h"
@@ -36,6 +37,9 @@ struct AppContext {
     SkeletonContext &skeleton;
     std::map<std::string, SkeletonPrimitive> &skeleton_map;
     std::map<u32, KeyPoints *> &keypoints_map;
+
+    // Unified annotation model (new — coexists with keypoints_map during migration)
+    AnnotationMap &annotations;
 
     // UI infrastructure
     PopupStack &popups;

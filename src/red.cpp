@@ -8,6 +8,10 @@
 #include "gui.h"
 #include "gui/help_window.h"
 #include "gui/jarvis_export_window.h"
+#include "gui/export_window.h"
+#include "gui/bbox_tool.h"
+#include "gui/obb_tool.h"
+#include "gui/sam_tool.h"
 #include "gui/annotation_dialog.h"
 #include "gui/calibration_tool_window.h"
 #include "gui/labeling_tool_window.h"
@@ -243,6 +247,9 @@ int main(int argc, char **argv) {
     bool keypoints_find = false;
     std::map<std::string, SkeletonPrimitive> skeleton_map = skeleton_get_all();
 
+    // Unified annotation model (coexists with keypoints_map during migration)
+    AnnotationMap annotations;
+
     // others
     ImVec4 clear_color = ImVec4(0.0f, 0.0f, 0.0f, 1.00f);
     ImGuiIO &io = ImGui::GetIO();
@@ -276,6 +283,17 @@ int main(int argc, char **argv) {
     // Settings window state
     SettingsState settings_state;
     TransportBarState transport_state;
+
+    // New annotation tools state
+    ExportWindowState export_state;
+    export_state.margin = user_settings.jarvis_margin;
+    export_state.train_ratio = user_settings.jarvis_train_ratio;
+    export_state.seed = user_settings.jarvis_seed;
+    export_state.jpeg_quality = user_settings.jarvis_jpeg_quality;
+    BBoxToolState bbox_state;
+    OBBToolState obb_state;
+    SamToolState sam_tool_state;
+    SamState sam_state;
     annot_state.video_folder = user_settings.default_media_root_path.empty()
                                    ? media_root_dir
                                    : user_settings.default_media_root_path;
@@ -320,6 +338,7 @@ int main(int argc, char **argv) {
     AppContext ctx{
         pm, ps, scene, dc_context,
         skeleton, skeleton_map, keypoints_map,
+        annotations,
         popups, toasts, deferred,
         user_settings, red_data_dir, skeleton_dir,
         imgs_names, demuxers, decoder_threads,
@@ -443,6 +462,18 @@ int main(int argc, char **argv) {
     panels.add({"Settings",
                 [&]() { DrawSettingsWindow(settings_state, ctx); },
                 nullptr});
+    panels.add({"Export Tool",
+                [&]() { DrawExportWindow(export_state, ctx, annotations); },
+                nullptr});
+    panels.add({"Bbox Tool",
+                [&]() { DrawBBoxToolWindow(bbox_state, ctx); },
+                [&]() { return pm.annotation_config.enable_bboxes; }});
+    panels.add({"OBB Tool",
+                [&]() { DrawOBBToolWindow(obb_state, ctx); },
+                [&]() { return pm.annotation_config.enable_obbs; }});
+    panels.add({"SAM Assist",
+                [&]() { DrawSamToolWindow(sam_tool_state, sam_state, ctx); },
+                [&]() { return pm.annotation_config.enable_segmentation; }});
 
     main_loop_running = true;
     while (!glfwWindowShouldClose(window->render_target)) {
@@ -498,6 +529,7 @@ int main(int argc, char **argv) {
         // App-level main menu bar (always visible)
         DrawMainMenuBar(ctx, calib_state, annot_state, settings_state,
                         jarvis_export_state, jarvis_import_state,
+                        export_state, bbox_state, obb_state, sam_tool_state,
                         show_help_window);
 
         // --- Update playback time ---
