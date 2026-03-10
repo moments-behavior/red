@@ -42,7 +42,38 @@ struct SamToolState {
     std::string decoder_path;
 };
 
-// Draw SAM mask overlay on a camera's ImPlot view
+// Draw accepted (stored) mask polygons from the AnnotationMap
+inline void draw_accepted_masks(const AnnotationMap &amap, u32 frame,
+                                 int cam_idx, int img_w, int img_h) {
+    auto it = amap.find(frame);
+    if (it == amap.end()) return;
+    const auto &fa = it->second;
+    if (cam_idx >= (int)fa.cameras.size()) return;
+    const auto &cam = fa.cameras[cam_idx];
+    if (!cam.has_mask()) return;
+
+    for (const auto &poly : cam.extras->mask_polygons) {
+        if (poly.size() < 3) continue;
+
+        // Outline (solid green)
+        std::vector<double> xs, ys;
+        xs.reserve(poly.size() + 1);
+        ys.reserve(poly.size() + 1);
+        for (const auto &pt : poly) {
+            xs.push_back(pt.x);
+            ys.push_back(img_h - pt.y);
+        }
+        xs.push_back(xs[0]); ys.push_back(ys[0]); // close
+
+        ImPlot::PushStyleColor(ImPlotCol_Line, ImVec4(0.2f, 0.8f, 0.3f, 0.7f));
+        ImPlot::PushStyleVar(ImPlotStyleVar_LineWeight, 2.0f);
+        ImPlot::PlotLine("##stored_mask", xs.data(), ys.data(), (int)xs.size());
+        ImPlot::PopStyleVar();
+        ImPlot::PopStyleColor();
+    }
+}
+
+// Draw SAM mask overlay on a camera's ImPlot view (pending/preview mask)
 inline void sam_draw_overlay(SamToolState &state, int cam_idx,
                               int img_w, int img_h) {
     if (!state.enabled) return;
@@ -119,10 +150,8 @@ inline void sam_handle_input(SamToolState &state, SamState &sam,
     if (!state.enabled) return;
     if (!ImPlot::IsPlotHovered()) return;
 
-    ImPlotPoint mouse = ImPlot::GetPlotMousePos();
-
-    // Reset prompts if frame/camera changed
-    if (frame != state.prompt_frame || cam_idx != state.prompt_cam) {
+    // Reset prompts if frame changed (NOT camera — mask persists across viewports)
+    if (frame != state.prompt_frame) {
         state.fg_points.clear();
         state.bg_points.clear();
         state.current_polygons.clear();
@@ -130,8 +159,11 @@ inline void sam_handle_input(SamToolState &state, SamState &sam,
         state.selected_mask = 0;
         state.has_pending_mask = false;
         state.prompt_frame = frame;
-        state.prompt_cam = cam_idx;
     }
+    // Track which camera the user is clicking on
+    state.prompt_cam = cam_idx;
+
+    ImPlotPoint mouse = ImPlot::GetPlotMousePos();
 
     // Convert ImPlot coords to image coords (Y-flip)
     double img_x = std::clamp(mouse.x, 0.0, (double)img_w);
@@ -168,9 +200,13 @@ inline void sam_handle_input(SamToolState &state, SamState &sam,
         run_sam();
     }
 
-    // Scroll wheel: cycle through mask candidates (different sizes)
-    if (state.has_pending_mask && !state.multi_mask.masks.empty()) {
+    // Shift+scroll wheel: cycle through mask candidates (different sizes)
+    // (plain scroll wheel reserved for zoom)
+    // Note: macOS converts Shift+scroll to horizontal scroll, so check both axes
+    if (state.has_pending_mask && !state.multi_mask.masks.empty() &&
+        ImGui::GetIO().KeyShift) {
         float wheel = ImGui::GetIO().MouseWheel;
+        if (wheel == 0.0f) wheel = ImGui::GetIO().MouseWheelH; // macOS Shift+scroll
         if (wheel != 0.0f) {
             int n = (int)state.multi_mask.masks.size();
             state.selected_mask = (state.selected_mask + (wheel > 0 ? 1 : n - 1)) % n;
@@ -288,10 +324,15 @@ inline void DrawSamToolWindow(SamToolState &state, SamState &sam,
 
         if (state.has_pending_mask && !state.multi_mask.masks.empty()) {
             float iou = state.multi_mask.masks[state.selected_mask].iou_score;
-            ImGui::TextColored(ImVec4(0.2f, 0.8f, 1, 1),
-                               "Mask %d/%d (IoU: %.3f) — scroll to resize",
-                               state.selected_mask + 1,
-                               (int)state.multi_mask.masks.size(), iou);
+            int n = (int)state.multi_mask.masks.size();
+            if (n > 1) {
+                ImGui::TextColored(ImVec4(0.2f, 0.8f, 1, 1),
+                    "Mask %d/%d (IoU: %.3f) — Shift+scroll to cycle",
+                    state.selected_mask + 1, n, iou);
+            } else {
+                ImGui::TextColored(ImVec4(0.2f, 0.8f, 1, 1),
+                    "Mask (IoU: %.3f)", iou);
+            }
         }
 
         ImGui::Text("FG: %d  BG: %d",

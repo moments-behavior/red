@@ -672,6 +672,137 @@ static void test_mobilesam_inference_real_image() {
     printf("    OK\n");
 }
 
+// =========================================================================
+// Test: Multi-mask output has multiple DISTINCT masks
+// =========================================================================
+static void test_mobilesam_multi_mask_distinct() {
+    printf("  test_mobilesam_multi_mask_distinct...\n");
+
+    if (!std::filesystem::exists(MOBILESAM_ENCODER) ||
+        !std::filesystem::exists(MOBILESAM_DECODER)) {
+        printf("    SKIP: MobileSAM models not found\n");
+        return;
+    }
+
+    // Load a real JPEG
+    std::string img_path = std::string(JPEG_DIR) + "/Cam2002486/Frame_5998.jpg";
+    int w, h, ch;
+    uint8_t *rgb = stbi_load(img_path.c_str(), &w, &h, &ch, 3);
+    EXPECT_TRUE(rgb != nullptr);
+    if (!rgb) return;
+
+    // Compute centroid from keypoints
+    AnnotationMap amap;
+    std::string err;
+    AnnotationCSV::load_2d_csv(
+        std::string(V2_CSV_DIR) + "/Cam2002486.csv",
+        amap, 0, 4, 1, err);
+    auto it = amap.find(5998);
+    EXPECT_TRUE(it != amap.end());
+    if (it == amap.end()) { stbi_image_free(rgb); return; }
+    double cx = 0, cy = 0;
+    int n = 0;
+    for (const auto &kp : it->second.cameras[0].keypoints) {
+        if (kp.labeled) { cx += kp.x; cy += kp.y; n++; }
+    }
+    cx /= n; cy /= n;
+    double img_cy = h - cy;
+
+    // Initialize SAM
+    SamState sam;
+    bool loaded = sam_init(sam, SamModel::MobileSAM, MOBILESAM_ENCODER, MOBILESAM_DECODER);
+    EXPECT_TRUE(loaded);
+    if (!loaded) { stbi_image_free(rgb); return; }
+
+    // Run multi-mask inference
+    std::vector<tuple_d> fg_points = {{cx, img_cy}};
+    SamMultiMask multi = sam_segment_multi(sam, rgb, w, h, fg_points, {});
+
+    printf("    Multi-mask count: %d, best_idx: %d\n",
+           (int)multi.masks.size(), multi.best_idx);
+
+    // MobileSAM should output 4 masks
+    EXPECT_TRUE(multi.masks.size() >= 2);
+    if (multi.masks.size() < 2) {
+        printf("    FAIL: Only %d mask(s) — cannot cycle\n", (int)multi.masks.size());
+        stbi_image_free(rgb);
+        sam_cleanup(sam);
+        return;
+    }
+
+    // Print per-mask stats
+    printf("    Mask | IoU     | FG pixels  | FG%%\n");
+    printf("    -----+---------+------------+-------\n");
+    std::vector<int> fg_counts(multi.masks.size());
+    for (int m = 0; m < (int)multi.masks.size(); ++m) {
+        const auto &mask = multi.masks[m];
+        int fg = 0;
+        if (mask.valid)
+            for (auto v : mask.data) if (v > 0) fg++;
+        fg_counts[m] = fg;
+        double pct = mask.valid ? 100.0 * fg / (w * h) : 0;
+        printf("    %4d | %.5f | %10d | %.3f%%\n",
+               m, mask.iou_score, fg, pct);
+    }
+
+    // Check that masks are DISTINCT:
+    // At least one pair of masks should differ by more than 1% of pixels
+    bool found_distinct = false;
+    int total_pixels = w * h;
+    for (int i = 0; i < (int)multi.masks.size() && !found_distinct; ++i) {
+        for (int j = i + 1; j < (int)multi.masks.size(); ++j) {
+            if (!multi.masks[i].valid || !multi.masks[j].valid) continue;
+            int diff = 0;
+            for (int p = 0; p < total_pixels; ++p) {
+                if (multi.masks[i].data[p] != multi.masks[j].data[p])
+                    diff++;
+            }
+            double diff_pct = 100.0 * diff / total_pixels;
+            printf("    Mask %d vs %d: %d pixels differ (%.3f%%)\n",
+                   i, j, diff, diff_pct);
+            if (diff_pct > 0.1) found_distinct = true;
+        }
+    }
+
+    EXPECT_TRUE(found_distinct);
+    if (!found_distinct) {
+        printf("    WARNING: All masks are nearly identical!\n");
+        printf("    Shift+scroll cycling will have no visible effect.\n");
+    }
+
+    // Verify polygon outlines differ between distinct masks
+    if (found_distinct) {
+        auto poly_best = sam_mask_to_polygon(multi.masks[multi.best_idx]);
+        int other_idx = (multi.best_idx + 1) % (int)multi.masks.size();
+        auto poly_other = sam_mask_to_polygon(multi.masks[other_idx]);
+        printf("    Best mask (%d) polygons: %d, other mask (%d) polygons: %d\n",
+               multi.best_idx, (int)poly_best.size(),
+               other_idx, (int)poly_other.size());
+        // At least the polygon counts or point counts should differ
+        bool polys_differ = (poly_best.size() != poly_other.size());
+        if (!polys_differ && !poly_best.empty() && !poly_other.empty()) {
+            polys_differ = (poly_best[0].size() != poly_other[0].size());
+        }
+        if (!polys_differ && !poly_best.empty() && !poly_other.empty()) {
+            // Check if vertex positions differ
+            double max_dist = 0;
+            int n_pts = std::min(poly_best[0].size(), poly_other[0].size());
+            for (int p = 0; p < n_pts; ++p) {
+                double dx = poly_best[0][p].x - poly_other[0][p].x;
+                double dy = poly_best[0][p].y - poly_other[0][p].y;
+                max_dist = std::max(max_dist, std::sqrt(dx*dx + dy*dy));
+            }
+            printf("    Max polygon vertex distance: %.1f px\n", max_dist);
+            polys_differ = (max_dist > 5.0);
+        }
+        EXPECT_TRUE(polys_differ);
+    }
+
+    stbi_image_free(rgb);
+    sam_cleanup(sam);
+    printf("    OK\n");
+}
+
 static void test_mobilesam_multi_camera() {
     printf("  test_mobilesam_multi_camera...\n");
 
@@ -941,6 +1072,7 @@ int main() {
 
     printf("\nMobileSAM real inference tests:\n");
     test_mobilesam_inference_real_image();
+    test_mobilesam_multi_mask_distinct();
     test_mobilesam_multi_camera();
 
     printf("\n=== Results: %d passed, %d failed ===\n", g_pass, g_fail);

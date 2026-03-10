@@ -316,12 +316,39 @@ inline nlohmann::json generate_annotation_json(
     nlohmann::json images_arr = nlohmann::json::array();
     std::map<int, std::vector<int>> set_of_frames; // frame_num -> [image_ids]
 
+    // Load mask polygons from annotations.json (if present)
+    // mask_lookup[frame_num][cam_idx] = [[x,y],[x,y],...] polygon array
+    std::map<int, std::map<int, nlohmann::json>> mask_lookup;
+    {
+        std::string mask_path = label_folder + "/annotations.json";
+        if (std::filesystem::exists(mask_path)) {
+            try {
+                std::ifstream mf(mask_path);
+                nlohmann::json mj;
+                mf >> mj;
+                if (mj.contains("frames")) {
+                    for (const auto &jf : mj["frames"]) {
+                        int fnum = jf["frame"].get<int>();
+                        if (jf.contains("cameras")) {
+                            for (const auto &jc : jf["cameras"]) {
+                                int c = jc["cam"].get<int>();
+                                if (jc.contains("mask"))
+                                    mask_lookup[fnum][c] = jc["mask"];
+                            }
+                        }
+                    }
+                }
+            } catch (...) {} // non-fatal
+        }
+    }
+
     int annotation_id = 0;
     int image_id = 0;
     int n_complete = 0, n_incomplete = 0;
 
     // Outer loop = cameras, inner loop = frames (matches Python iteration order)
-    for (const auto &cam : config.camera_names) {
+    for (int cam_idx = 0; cam_idx < (int)config.camera_names.size(); ++cam_idx) {
+        const auto &cam = config.camera_names[cam_idx];
         int img_h = image_height.at(cam);
         int img_w = image_width.at(cam);
 
@@ -393,7 +420,28 @@ inline nlohmann::json generate_annotation_json(
                 annotation_entry["iscrowd"] = 0;
                 annotation_entry["keypoints"] = keypoints_flat;
                 annotation_entry["num_keypoints"] = config.num_keypoints;
-                annotation_entry["segmentation"] = nlohmann::json::array();
+                // Segmentation: populate from mask_lookup if available
+                {
+                    nlohmann::json seg = nlohmann::json::array();
+                    auto fit = mask_lookup.find(frame_num);
+                    if (fit != mask_lookup.end()) {
+                        auto cit = fit->second.find(cam_idx);
+                        if (cit != fit->second.end()) {
+                            // Flatten [[x,y],[x,y],...] → [x1,y1,x2,y2,...] (COCO format)
+                            // Y-flip already applied during annotations.json save
+                            for (const auto &jpoly : cit->second) {
+                                nlohmann::json flat = nlohmann::json::array();
+                                for (const auto &jpt : jpoly) {
+                                    flat.push_back(jpt[0].get<double>());
+                                    double y = jpt[1].get<double>();
+                                    flat.push_back(img_h - y); // Y-flip to image coords
+                                }
+                                seg.push_back(flat);
+                            }
+                        }
+                    }
+                    annotation_entry["segmentation"] = seg;
+                }
             }
 
             // Track framesets

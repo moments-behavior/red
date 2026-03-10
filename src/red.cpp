@@ -1071,6 +1071,25 @@ int main(int argc, char **argv) {
                                           annotations.end());
                     }
 
+                    // When SAM mask cycling is active THIS FRAME
+                    // (Shift held + pending mask), temporarily set
+                    // ImPlot's ZoomMod to require Ctrl so that
+                    // Shift+scroll does NOT zoom.  Default ZoomMod =
+                    // ImGuiMod_None means scroll always zooms, stealing
+                    // the event from SAM.  We only override when Shift
+                    // is actually held to preserve normal scroll-to-zoom.
+                    bool sam_override_zoom = false;
+                    int saved_zoom_mod = 0;
+                    if (sam_tool_state.enabled &&
+                        sam_tool_state.has_pending_mask &&
+                        !sam_tool_state.multi_mask.masks.empty() &&
+                        ImGui::GetIO().KeyShift) {
+                        auto &imap = ImPlot::GetInputMap();
+                        saved_zoom_mod = imap.ZoomMod;
+                        imap.ZoomMod = ImGuiMod_Ctrl;
+                        sam_override_zoom = true;
+                    }
+
                     if (ImPlot::BeginPlot("##no_plot_name", avail_size,
                                           ImPlotFlags_Equal |
                                               ImPlotFlags_Crosshairs |
@@ -1167,7 +1186,8 @@ int main(int argc, char **argv) {
                                 is_view_focused[j] = false;
                             }
 
-                            if (keypoints_find && skeleton.has_skeleton) {
+                            if (keypoints_find && skeleton.has_skeleton &&
+                                display.show_keypoints) {
                                 gui_plot_keypoints(
                                     annotations.at(current_frame_num),
                                     &skeleton, j, scene->num_cams);
@@ -1187,8 +1207,10 @@ int main(int argc, char **argv) {
                                 bbox_handle_input(bbox_state, annotations,
                                                   frame, j, nn, nc, iw, ih);
                             }
-                            bbox_draw_overlays(bbox_state, annotations,
-                                               frame, j, iw, ih);
+                            if (display.show_bboxes) {
+                                bbox_draw_overlays(bbox_state, annotations,
+                                                   frame, j, iw, ih);
+                            }
 
                             // OBB tool
                             if (obb_state.enabled) {
@@ -1196,8 +1218,15 @@ int main(int argc, char **argv) {
                                                  annotations, frame, j,
                                                  nn, nc, iw, ih);
                             }
-                            obb_draw_overlays(obb_state, bbox_state,
-                                              annotations, frame, j, iw, ih);
+                            if (display.show_bboxes) {
+                                obb_draw_overlays(obb_state, bbox_state,
+                                                  annotations, frame, j, iw, ih);
+                            }
+
+                            // Accepted mask overlays (stored in AnnotationMap)
+                            if (display.show_masks) {
+                                draw_accepted_masks(annotations, frame, j, iw, ih);
+                            }
 
                             // SAM assist
                             if (sam_tool_state.enabled) {
@@ -1242,13 +1271,14 @@ int main(int argc, char **argv) {
                                                  annotations, frame, j,
                                                  nn, nc, iw, ih, sam_rgb);
                             }
-                            sam_draw_overlay(sam_tool_state, j, iw, ih);
+                            if (display.show_masks)
+                                sam_draw_overlay(sam_tool_state, j, iw, ih);
                         }
 
                         // Plot context menu: press 1 key while hovering
                         // (right-click reserved for SAM background points)
                         if (ImPlot::IsPlotHovered() &&
-                            ImGui::IsKeyPressed(ImGuiKey_1, false) &&
+                            ImGui::IsKeyPressed(ImGuiKey_2, false) &&
                             !io.WantTextInput) {
                             ImGui::OpenPopup("##plot_settings");
                         }
@@ -1262,10 +1292,19 @@ int main(int argc, char **argv) {
                                 ImPlot::SetupAxisLimits(ImAxis_X1, 0, scene->image_width[j]);
                                 ImPlot::SetupAxisLimits(ImAxis_Y1, 0, scene->image_height[j]);
                             }
+                            ImGui::SeparatorText("Visibility");
+                            ImGui::Checkbox("Keypoints", &display.show_keypoints);
+                            ImGui::Checkbox("Masks / Contours", &display.show_masks);
+                            ImGui::Checkbox("Bounding Boxes", &display.show_bboxes);
                             ImGui::EndPopup();
                         }
 
                         ImPlot::EndPlot();
+                    }
+
+                    // Restore ImPlot zoom modifier if we overrode it
+                    if (sam_override_zoom) {
+                        ImPlot::GetInputMap().ZoomMod = saved_zoom_mod;
                     }
 
                     ImGui::EndChild();
