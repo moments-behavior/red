@@ -222,6 +222,22 @@ if(APPLE)
         CXX_STANDARD_REQUIRED ON
     )
 
+    # JARVIS import test: header-only Eigen math (no OpenCV, no GUI, no Metal)
+    add_executable(test_jarvis_import tests/test_jarvis_import.cpp)
+    target_include_directories(test_jarvis_import PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_SOURCE_DIR}/lib/eigen
+        ${HOMEBREW_PREFIX}/include
+        ${HOMEBREW_PREFIX}/include/eigen3
+    )
+    target_link_libraries(test_jarvis_import PRIVATE
+        Eigen3::Eigen
+    )
+    set_target_properties(test_jarvis_import PROPERTIES
+        CXX_STANDARD 17
+        CXX_STANDARD_REQUIRED ON
+    )
+
     # Video pipeline test: tests video-based aruco calibration
     add_executable(test_video_pipeline
         tests/test_video_pipeline.cpp

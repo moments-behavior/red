@@ -207,10 +207,12 @@ write_prediction_csvs(const std::string &output_folder,
 
 // ---------------------------------------------------------------------------
 // Load confidence.csv into keypoints_map (companion to load_keypoints)
+// Requires skeleton.h to be included before this header.
 // ---------------------------------------------------------------------------
+#ifdef RED_SKELETON
 inline int
 load_confidence(const std::string &folder,
-                std::map<uint32_t, struct KeyPoints *> &keypoints_map,
+                std::map<uint32_t, KeyPoints *> &keypoints_map,
                 int num_cameras, int num_nodes) {
     std::string path = folder + "/confidence.csv";
     std::ifstream fin(path);
@@ -243,6 +245,7 @@ load_confidence(const std::string &folder,
     }
     return loaded;
 }
+#endif // RED_SKELETON
 
 // ---------------------------------------------------------------------------
 // Full import: read data3D.csv → write RED CSVs → ready for load_keypoints()
