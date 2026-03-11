@@ -64,7 +64,7 @@ static CVPixelBufferRef resize_pixelbuf(CVPixelBufferRef src, int dst_w, int dst
     vImage_Buffer dst_buf = {dst_data, (vImagePixelCount)dst_h,
                              (vImagePixelCount)dst_w, dst_stride};
 
-    vImageScale_ARGB8888(&src_buf, &dst_buf, NULL, kvImageHighQualityResampling);
+    vImageScale_ARGB8888(&src_buf, &dst_buf, NULL, kvImageNoFlags); // bilinear — fast, sufficient for NN input
 
     CVPixelBufferUnlockBaseAddress(dst, 0);
     CVPixelBufferUnlockBaseAddress(src, kCVPixelBufferLock_ReadOnly);
@@ -113,22 +113,22 @@ struct HMPeak { float x, y, confidence; };
 static HMPeak heatmap_argmax(MLMultiArray *hm, int channel, int hm_h, int hm_w) {
     // hm shape: [1, C, H, W] — access channel-th plane
     const void *raw = hm.dataPointer;
-    int offset = channel * hm_h * hm_w;
-
-    int max_idx = 0;
+    vDSP_Length n = (vDSP_Length)(hm_h * hm_w);
     float max_val = -1e9f;
+    vDSP_Length max_idx = 0;
 
     if (hm.dataType == MLMultiArrayDataTypeFloat16) {
-        const __fp16 *data = (const __fp16 *)raw + offset;
-        for (int i = 0; i < hm_h * hm_w; ++i) {
-            float v = (float)data[i];
-            if (v > max_val) { max_val = v; max_idx = i; }
-        }
+        // Convert float16 plane to float32, then use vDSP_maxvi
+        const __fp16 *fp16 = (const __fp16 *)raw + channel * n;
+        // Use Accelerate vImageConvert for NEON-accelerated fp16→fp32
+        vImage_Buffer src_buf = {(void *)fp16, 1, n, n * sizeof(__fp16)};
+        std::vector<float> fp32(n);
+        vImage_Buffer dst_buf = {fp32.data(), 1, n, n * sizeof(float)};
+        vImageConvert_Planar16FtoPlanarF(&src_buf, &dst_buf, kvImageNoFlags);
+        vDSP_maxvi(fp32.data(), 1, &max_val, &max_idx, n);
     } else {
-        const float *data = (const float *)raw + offset;
-        for (int i = 0; i < hm_h * hm_w; ++i) {
-            if (data[i] > max_val) { max_val = data[i]; max_idx = i; }
-        }
+        const float *data = (const float *)raw + channel * n;
+        vDSP_maxvi(data, 1, &max_val, &max_idx, n);
     }
 
     HMPeak peak;
@@ -221,102 +221,89 @@ bool jarvis_coreml_predict_frame(
         MLModel *cd_model = (__bridge MLModel *)s.center_model;
         MLModel *kd_model = (__bridge MLModel *)s.keypoint_model;
 
-        // Phase 1: CenterDetect on all cameras
+        // Helper: find the largest 4D heatmap output from a CoreML prediction
+        auto find_heatmap = [](id<MLFeatureProvider> output) -> MLMultiArray * {
+            MLMultiArray *best = nil;
+            for (NSString *name in output.featureNames) {
+                MLFeatureValue *fv = [output featureValueForName:name];
+                if (fv.multiArrayValue && fv.multiArrayValue.shape.count == 4) {
+                    MLMultiArray *arr = fv.multiArrayValue;
+                    int h = [arr.shape[2] intValue];
+                    if (!best || h > [best.shape[2] intValue])
+                        best = arr;
+                }
+            }
+            return best;
+        };
+
+        // Per-camera pipeline: CenterDetect → crop → KeypointDetect
+        // Processing each camera fully before moving to the next improves
+        // cache locality and enables early exit when center confidence is low.
         auto t1 = std::chrono::steady_clock::now();
-        struct CenterResult { float x, y, confidence; };
-        std::vector<CenterResult> centers(num_cams, {0, 0, 0});
+        float center_ms_total = 0, kp_ms_total = 0;
 
         for (int c = 0; c < num_cams; ++c) {
             if (!pixel_buffers[c]) continue;
 
-            // Resize to CenterDetect input size
+            // --- CenterDetect ---
+            auto tc0 = std::chrono::steady_clock::now();
             int sz = s.center_input_size;
             CVPixelBufferRef resized = resize_pixelbuf(pixel_buffers[c], sz, sz);
             if (!resized) continue;
 
             NSError *error = nil;
-            MLFeatureValue *imgVal = [MLFeatureValue featureValueWithPixelBuffer:resized];
-            NSDictionary *dict = @{@"image": imgVal};
-            MLDictionaryFeatureProvider *input =
-                [[MLDictionaryFeatureProvider alloc] initWithDictionary:dict error:&error];
-
-            id<MLFeatureProvider> output = [cd_model predictionFromFeatures:input error:&error];
+            id<MLFeatureProvider> cd_input =
+                [[MLDictionaryFeatureProvider alloc] initWithDictionary:
+                    @{@"image": [MLFeatureValue featureValueWithPixelBuffer:resized]}
+                    error:&error];
+            id<MLFeatureProvider> cd_output = [cd_model predictionFromFeatures:cd_input error:&error];
             CVPixelBufferRelease(resized);
-            if (!output) continue;
+            if (!cd_output) continue;
 
-            // Find the heatmap output (name varies by conversion)
-            MLMultiArray *hm = nil;
-            for (NSString *name in output.featureNames) {
-                MLFeatureValue *fv = [output featureValueForName:name];
-                if (fv.multiArrayValue && fv.multiArrayValue.shape.count == 4) {
-                    // Use the larger heatmap (stride-2)
-                    MLMultiArray *arr = fv.multiArrayValue;
-                    int h = [arr.shape[2] intValue];
-                    if (!hm || h > [hm.shape[2] intValue])
-                        hm = arr;
-                }
-            }
-            if (!hm) continue;
+            MLMultiArray *cd_hm = find_heatmap(cd_output);
+            if (!cd_hm) continue;
 
-            int hm_h = [hm.shape[2] intValue];
-            int hm_w = [hm.shape[3] intValue];
+            int cd_hm_h = [cd_hm.shape[2] intValue];
+            int cd_hm_w = [cd_hm.shape[3] intValue];
             float ds_x = (float)cam_widths[c] / sz;
             float ds_y = (float)cam_heights[c] / sz;
 
-            HMPeak peak = heatmap_argmax(hm, 0, hm_h, hm_w);
-            centers[c] = {peak.x * ds_x, peak.y * ds_y, peak.confidence};
-        }
-        auto t2 = std::chrono::steady_clock::now();
-        s.last_center_ms = std::chrono::duration<float, std::milli>(t2 - t1).count();
+            HMPeak center = heatmap_argmax(cd_hm, 0, cd_hm_h, cd_hm_w);
+            center.x *= ds_x;
+            center.y *= ds_y;
+            auto tc1 = std::chrono::steady_clock::now();
+            center_ms_total += std::chrono::duration<float, std::milli>(tc1 - tc0).count();
 
-        // Phase 2: KeypointDetect on all cameras
-        for (int c = 0; c < num_cams; ++c) {
-            if (!pixel_buffers[c] || centers[c].confidence < confidence_threshold)
-                continue;
+            // Skip KeypointDetect if center confidence is too low
+            if (center.confidence < confidence_threshold) continue;
 
+            // --- KeypointDetect ---
+            auto tk0 = std::chrono::steady_clock::now();
             int bbox_size = s.keypoint_input_size;
-            int cx = (int)centers[c].x;
-            int cy = (int)centers[c].y;
-
-            // Clamp center
             int half = bbox_size / 2;
-            cx = std::clamp(cx, half, cam_widths[c] - half);
-            cy = std::clamp(cy, half, cam_heights[c] - half);
+            int cx = std::clamp((int)center.x, half, cam_widths[c] - half);
+            int cy = std::clamp((int)center.y, half, cam_heights[c] - half);
 
-            // Crop around center (vImage, ~50μs)
             CVPixelBufferRef crop = crop_pixelbuf(pixel_buffers[c], cx, cy, bbox_size);
             if (!crop) continue;
 
-            NSError *error = nil;
-            MLFeatureValue *imgVal = [MLFeatureValue featureValueWithPixelBuffer:crop];
-            NSDictionary *dict = @{@"image": imgVal};
-            MLDictionaryFeatureProvider *input =
-                [[MLDictionaryFeatureProvider alloc] initWithDictionary:dict error:&error];
-
-            id<MLFeatureProvider> output = [kd_model predictionFromFeatures:input error:&error];
+            id<MLFeatureProvider> kd_input =
+                [[MLDictionaryFeatureProvider alloc] initWithDictionary:
+                    @{@"image": [MLFeatureValue featureValueWithPixelBuffer:crop]}
+                    error:&error];
+            id<MLFeatureProvider> kd_output = [kd_model predictionFromFeatures:kd_input error:&error];
             CVPixelBufferRelease(crop);
-            if (!output) continue;
+            if (!kd_output) continue;
 
-            // Find the heatmap output
-            MLMultiArray *hm = nil;
-            for (NSString *name in output.featureNames) {
-                MLFeatureValue *fv = [output featureValueForName:name];
-                if (fv.multiArrayValue && fv.multiArrayValue.shape.count == 4) {
-                    MLMultiArray *arr = fv.multiArrayValue;
-                    int h = [arr.shape[2] intValue];
-                    if (!hm || h > [hm.shape[2] intValue])
-                        hm = arr;
-                }
-            }
-            if (!hm) continue;
+            MLMultiArray *kd_hm = find_heatmap(kd_output);
+            if (!kd_hm) continue;
 
-            int hm_h = [hm.shape[2] intValue];
-            int hm_w = [hm.shape[3] intValue];
-            int n_joints = std::min([hm.shape[1] intValue], (int)fa.cameras[c].keypoints.size());
+            int kd_hm_h = [kd_hm.shape[2] intValue];
+            int kd_hm_w = [kd_hm.shape[3] intValue];
+            int n_joints = std::min([kd_hm.shape[1] intValue], (int)fa.cameras[c].keypoints.size());
 
             for (int k = 0; k < n_joints; ++k) {
-                HMPeak peak = heatmap_argmax(hm, k, hm_h, hm_w);
-                // Convert from crop-local to full-image coordinates
+                HMPeak peak = heatmap_argmax(kd_hm, k, kd_hm_h, kd_hm_w);
                 float img_x = peak.x + (float)(cx - half);
                 float img_y = peak.y + (float)(cy - half);
 
@@ -327,9 +314,11 @@ bool jarvis_coreml_predict_frame(
                 kp.confidence = peak.confidence;
                 kp.source = LabelSource::Predicted;
             }
+            auto tk1 = std::chrono::steady_clock::now();
+            kp_ms_total += std::chrono::duration<float, std::milli>(tk1 - tk0).count();
         }
-        auto t3 = std::chrono::steady_clock::now();
-        s.last_keypoint_ms = std::chrono::duration<float, std::milli>(t3 - t2).count();
+        s.last_center_ms = center_ms_total;
+        s.last_keypoint_ms = kp_ms_total;
 
         auto t4 = std::chrono::steady_clock::now();
         s.last_total_ms = std::chrono::duration<float, std::milli>(t4 - t0).count();
