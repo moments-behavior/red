@@ -70,9 +70,6 @@ struct ExportConfig {
     float train_ratio = 0.9f;
     int seed = 42;
     int jpeg_quality = 95;
-
-    // Progress counter (optional, atomic — safe for cross-thread read)
-    std::atomic<int> *images_saved_counter = nullptr;
 };
 
 // ── Train/val split helper ──
@@ -125,8 +122,6 @@ inline bool extract_images(const ExportConfig &cfg,
     for (u32 f : train) { frame_to_mode[(int)f] = "train"; train_int.push_back((int)f); }
     for (u32 f : val)   { frame_to_mode[(int)f] = "val";   val_int.push_back((int)f); }
 
-    std::atomic<int> local_counter{0};
-    std::atomic<int> *counter = images_saved_counter ? images_saved_counter : &local_counter;
     std::mutex status_mutex;
     std::vector<std::thread> threads;
 
@@ -137,7 +132,7 @@ inline bool extract_images(const ExportConfig &cfg,
             JarvisExport::extract_jpegs_for_camera,
             cam, trial_name, video_path, cfg.output_folder,
             train_int, val_int, frame_to_mode,
-            status, &status_mutex, counter, cfg.jpeg_quality);
+            status, &status_mutex, images_saved_counter, cfg.jpeg_quality);
     }
     for (auto &t : threads) t.join();
 
@@ -291,7 +286,8 @@ inline nlohmann::json build_coco_json(
 }
 
 inline bool export_coco(const ExportConfig &cfg, const AnnotationMap &amap,
-                        std::string *status) {
+                        std::string *status,
+                        std::atomic<int> *img_counter = nullptr) {
     namespace fs = std::filesystem;
     auto labeled = get_labeled_frames(amap);
     if (labeled.empty()) {
@@ -339,7 +335,7 @@ inline bool export_coco(const ExportConfig &cfg, const AnnotationMap &amap,
     // Extract images from video (if media_folder available)
     if (!cfg.media_folder.empty()) {
         if (status) *status = "Extracting images...";
-        if (!extract_images(cfg, train, val, "", status, cfg.images_saved_counter))
+        if (!extract_images(cfg, train, val, "", status, img_counter))
             return false;
     }
 
@@ -356,7 +352,8 @@ inline bool export_coco(const ExportConfig &cfg, const AnnotationMap &amap,
 // Each line: <class> <cx> <cy> <w> <h> [<kp_x> <kp_y> <vis> ...]
 
 inline bool export_yolo(const ExportConfig &cfg, const AnnotationMap &amap,
-                        bool include_keypoints, std::string *status) {
+                        bool include_keypoints, std::string *status,
+                        std::atomic<int> *img_counter = nullptr) {
     namespace fs = std::filesystem;
     auto labeled = get_keypoint_frames(amap);
     if (labeled.empty()) {
@@ -475,7 +472,7 @@ inline bool export_yolo(const ExportConfig &cfg, const AnnotationMap &amap,
         // We need to use output_folder + "/images" as the extraction root
         ExportConfig img_cfg = cfg;
         img_cfg.output_folder = cfg.output_folder + "/images";
-        if (!extract_images(img_cfg, train, val, "", status, cfg.images_saved_counter))
+        if (!extract_images(img_cfg, train, val, "", status, img_counter))
             return false;
     }
 
@@ -493,7 +490,8 @@ inline bool export_yolo(const ExportConfig &cfg, const AnnotationMap &amap,
 // Row format: frame_path, x1, y1, x2, y2, ...
 
 inline bool export_deeplabcut(const ExportConfig &cfg, const AnnotationMap &amap,
-                              std::string *status) {
+                              std::string *status,
+                              std::atomic<int> *img_counter = nullptr) {
     namespace fs = std::filesystem;
     auto labeled = get_keypoint_frames(amap);
     if (labeled.empty()) {
@@ -592,8 +590,6 @@ inline bool export_deeplabcut(const ExportConfig &cfg, const AnnotationMap &amap
         for (u32 f : labeled) frame_ints.push_back((int)f);
         std::map<int, std::string> frame_to_mode;
         for (int f : frame_ints) frame_to_mode[f] = "labeled-data";
-        std::atomic<int> local_saved{0};
-        std::atomic<int> *counter = cfg.images_saved_counter ? cfg.images_saved_counter : &local_saved;
         std::mutex smtx;
         std::vector<int> empty_int;
         std::vector<std::thread> threads;
@@ -605,7 +601,7 @@ inline bool export_deeplabcut(const ExportConfig &cfg, const AnnotationMap &amap
                 JarvisExport::extract_jpegs_for_camera,
                 cam, "", vid, cfg.output_folder,
                 frame_ints, empty_int, frame_to_mode,
-                status, &smtx, counter, cfg.jpeg_quality);
+                status, &smtx, img_counter, cfg.jpeg_quality);
         }
         for (auto &t : threads) t.join();
     }
@@ -620,7 +616,8 @@ inline bool export_deeplabcut(const ExportConfig &cfg, const AnnotationMap &amap
 // JARVIS export — delegates to existing jarvis_export.h
 // ═══════════════════════════════════════════════════════════════════════════
 inline bool export_jarvis(const ExportConfig &cfg, const AnnotationMap &amap,
-                          std::string *status) {
+                          std::string *status,
+                          std::atomic<int> *img_counter = nullptr) {
     JarvisExport::ExportConfig jcfg;
     jcfg.label_folder       = cfg.label_folder;
     jcfg.calibration_folder = cfg.calibration_folder;
@@ -635,16 +632,17 @@ inline bool export_jarvis(const ExportConfig &cfg, const AnnotationMap &amap,
     jcfg.train_ratio        = cfg.train_ratio;
     jcfg.seed               = cfg.seed;
     jcfg.jpeg_quality       = cfg.jpeg_quality;
-    return JarvisExport::export_jarvis_dataset(jcfg, amap, status, cfg.images_saved_counter);
+    return JarvisExport::export_jarvis_dataset(jcfg, amap, status, img_counter);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
 // JARVIS-TR export — JARVIS + video_index.json for unlabeled frames
 // ═══════════════════════════════════════════════════════════════════════════
 inline bool export_jarvis_tr(const ExportConfig &cfg, const AnnotationMap &amap,
-                             std::string *status) {
+                             std::string *status,
+                             std::atomic<int> *img_counter = nullptr) {
     // First do standard JARVIS export
-    if (!export_jarvis(cfg, amap, status)) return false;
+    if (!export_jarvis(cfg, amap, status, img_counter)) return false;
 
     // Then write video_index.json pointing to source videos
     namespace fs = std::filesystem;
@@ -679,17 +677,18 @@ inline bool export_jarvis_tr(const ExportConfig &cfg, const AnnotationMap &amap,
 // Main dispatch
 // ═══════════════════════════════════════════════════════════════════════════
 inline bool export_dataset(Format fmt, const ExportConfig &cfg,
-                           const AnnotationMap &amap, std::string *status) {
+                           const AnnotationMap &amap, std::string *status,
+                           std::atomic<int> *img_counter = nullptr) {
     namespace fs = std::filesystem;
     fs::create_directories(cfg.output_folder);
 
     switch (fmt) {
-    case JARVIS:      return export_jarvis(cfg, amap, status);
-    case JARVIS_TR:   return export_jarvis_tr(cfg, amap, status);
-    case COCO:        return export_coco(cfg, amap, status);
-    case YOLO_POSE:   return export_yolo(cfg, amap, true, status);
-    case YOLO_DETECT: return export_yolo(cfg, amap, false, status);
-    case DEEPLABCUT:  return export_deeplabcut(cfg, amap, status);
+    case JARVIS:      return export_jarvis(cfg, amap, status, img_counter);
+    case JARVIS_TR:   return export_jarvis_tr(cfg, amap, status, img_counter);
+    case COCO:        return export_coco(cfg, amap, status, img_counter);
+    case YOLO_POSE:   return export_yolo(cfg, amap, true, status, img_counter);
+    case YOLO_DETECT: return export_yolo(cfg, amap, false, status, img_counter);
+    case DEEPLABCUT:  return export_deeplabcut(cfg, amap, status, img_counter);
     default:
         if (status) *status = "Error: Unknown export format";
         return false;

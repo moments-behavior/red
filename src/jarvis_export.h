@@ -961,6 +961,10 @@ inline bool export_jarvis_dataset(const ExportConfig &config_in,
     for (int f : val_frames)
         frame_to_mode[f] = "val";
 
+    // Use external counter for progress bar if provided, else internal
+    std::atomic<int> *counter = images_saved_counter
+        ? images_saved_counter : &stats.total_images_saved;
+
     std::mutex status_mutex;
     std::vector<std::thread> threads;
     for (const auto &cam : config.camera_names) {
@@ -969,10 +973,12 @@ inline bool export_jarvis_dataset(const ExportConfig &config_in,
         threads.emplace_back(extract_jpegs_for_camera, cam, trial_name,
                              video_path, config.output_folder, train_frames,
                              val_frames, frame_to_mode, status, &status_mutex,
-                             &stats.total_images_saved, config.jpeg_quality);
+                             counter, config.jpeg_quality);
     }
     for (auto &t : threads)
         t.join();
+    if (images_saved_counter)
+        stats.total_images_saved.store(images_saved_counter->load());
 
     if (status && status->find("Error") != std::string::npos)
         return false;

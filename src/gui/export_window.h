@@ -233,7 +233,6 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
                     ecfg.seed               = state.seed;
                     ecfg.jpeg_quality       = state.jpeg_quality;
                     ecfg.node_names         = skeleton.node_names;
-                    ecfg.images_saved_counter = &state.images_saved;
                     for (const auto &e : skeleton.edges)
                         ecfg.edges.push_back({e.x, e.y});
 
@@ -253,7 +252,8 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
                             // No other thread touches this string.
                             std::string thread_status;
                             ExportFormats::export_dataset(
-                                ecfg.format, ecfg, amap_copy, &thread_status);
+                                ecfg.format, ecfg, amap_copy, &thread_status,
+                                &state.images_saved);
                             // Copy final status into the shared handoff string,
                             // then signal completion. The release fence ensures
                             // the string write is visible before the flag.
