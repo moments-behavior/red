@@ -111,6 +111,58 @@ std::vector<uint8_t> VTAsyncDecoder::annexb_to_avcc(const uint8_t *data, size_t 
 
 bool VTAsyncDecoder::make_fmt_desc_h264(const uint8_t *extra, int extra_size,
                                         CMVideoFormatDescriptionRef *out) {
+    if (!extra || extra_size < 4) return false;
+
+    // Detect Annex B format (start code 00 00 00 01 or 00 00 01).
+    // Containers with non-standard codec tags (e.g. 0x1B instead of avc1)
+    // may provide extradata in Annex B rather than AVCC format.
+    bool is_annexb = (extra[0] == 0x00 && extra[1] == 0x00 &&
+                      (extra[2] == 0x01 ||
+                       (extra[2] == 0x00 && extra_size > 3 && extra[3] == 0x01)));
+
+    if (is_annexb) {
+        // Parse Annex B: find SPS (NAL type 7) and PPS (NAL type 8)
+        const uint8_t *sps = nullptr, *pps = nullptr;
+        size_t sps_len = 0, pps_len = 0;
+
+        for (size_t i = 0; i + 2 < (size_t)extra_size;) {
+            // Find next start code
+            bool sc4 = (i + 3 < (size_t)extra_size &&
+                        extra[i]==0 && extra[i+1]==0 && extra[i+2]==0 && extra[i+3]==1);
+            bool sc3 = (!sc4 && extra[i]==0 && extra[i+1]==0 && extra[i+2]==1);
+            if (!sc4 && !sc3) { i++; continue; }
+
+            size_t nal_start = i + (sc4 ? 4 : 3);
+            // Find end of this NAL (next start code or end of data)
+            size_t nal_end = nal_start;
+            while (nal_end + 2 < (size_t)extra_size) {
+                if (extra[nal_end]==0 && extra[nal_end+1]==0 &&
+                    (extra[nal_end+2]==0 || extra[nal_end+2]==1))
+                    break;
+                nal_end++;
+            }
+            if (nal_end + 2 >= (size_t)extra_size)
+                nal_end = (size_t)extra_size;
+
+            if (nal_start < (size_t)extra_size) {
+                uint8_t nal_type = extra[nal_start] & 0x1f;
+                if (nal_type == 7 && !sps) { sps = extra + nal_start; sps_len = nal_end - nal_start; }
+                if (nal_type == 8 && !pps) { pps = extra + nal_start; pps_len = nal_end - nal_start; }
+            }
+            i = nal_end;
+        }
+
+        if (!sps || !pps || sps_len == 0 || pps_len == 0) return false;
+
+        const uint8_t *param_sets[2] = { sps, pps };
+        size_t param_sizes[2]        = { sps_len, pps_len };
+
+        OSStatus err = CMVideoFormatDescriptionCreateFromH264ParameterSets(
+            kCFAllocatorDefault, 2, param_sets, param_sizes, 4, out);
+        return (err == noErr);
+    }
+
+    // --- AVCC extradata path (standard avc1-tagged containers) ---
     // AVCC extradata layout:
     //   [0]     = configurationVersion (1)
     //   [1]     = profile
@@ -123,7 +175,7 @@ bool VTAsyncDecoder::make_fmt_desc_h264(const uint8_t *extra, int extra_size,
     //   [8+spsLength] = numPPS
     //   [9+spsLength..10+spsLength] = ppsLength
     //   ...     = PPS
-    if (!extra || extra_size < 7) return false;
+    if (extra_size < 7) return false;
 
     size_t pos = 5;
     int num_sps = extra[pos++] & 0x1f;
