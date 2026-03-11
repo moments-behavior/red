@@ -149,11 +149,28 @@ inline FrameAnnotation &get_or_create_frame(AnnotationMap &amap, u32 frame,
     return fa;
 }
 
-// Check if any keypoint in the frame is labeled (any camera)
+// Check if the frame has any annotation data (keypoints, masks, or bboxes)
 inline bool frame_has_any_labels(const FrameAnnotation &fa) {
+    for (const auto &cam : fa.cameras) {
+        for (const auto &kp : cam.keypoints)
+            if (kp.labeled) return true;
+        if (cam.has_mask() || cam.has_bbox() || cam.has_obb()) return true;
+    }
+    return false;
+}
+
+// Check if any keypoint in the frame is labeled (any camera)
+inline bool frame_has_any_keypoints(const FrameAnnotation &fa) {
     for (const auto &cam : fa.cameras)
         for (const auto &kp : cam.keypoints)
             if (kp.labeled) return true;
+    return false;
+}
+
+// Check if any camera has a mask on this frame
+inline bool frame_has_any_masks(const FrameAnnotation &fa) {
+    for (const auto &cam : fa.cameras)
+        if (cam.has_mask()) return true;
     return false;
 }
 

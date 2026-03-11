@@ -101,18 +101,20 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
         }
         ImGui::Text("Cameras:      %d", (int)pm.camera_names.size());
 
-        int labeled_count = 0;
-        int mask_count = 0;
+        int kp_count = 0, mask_count = 0, total_count = 0;
         for (const auto &[f, fa] : amap) {
-            if (frame_has_any_labels(fa)) ++labeled_count;
-            for (const auto &cam : fa.cameras)
-                if (cam.has_mask()) { ++mask_count; break; } // count frames with masks
+            bool has_kp = frame_has_any_keypoints(fa);
+            bool has_mask = frame_has_any_masks(fa);
+            if (has_kp) ++kp_count;
+            if (has_mask) ++mask_count;
+            if (has_kp || has_mask) ++total_count;
         }
-        ImGui::Text("Labeled:      %d frames", labeled_count);
-        if (mask_count > 0) {
+        ImGui::Text("Annotated:    %d frames", total_count);
+        if (kp_count > 0)
+            ImGui::Text("  Keypoints:  %d frames", kp_count);
+        if (mask_count > 0)
             ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.3f, 1.0f),
-                "Masks:        %d frames (will be exported as segmentation)", mask_count);
-        }
+                "  Masks:      %d frames", mask_count);
 
         ImGui::SeparatorText("Output");
 
@@ -153,8 +155,8 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
                 dispatch_fmt = ExportFormats::JARVIS_TR;
 
             if (ImGui::Button("Start Export")) {
-                if (state.label_folder.empty() && labeled_count == 0) {
-                    validation_error = "No labeled data found";
+                if (state.label_folder.empty() && total_count == 0) {
+                    validation_error = "No annotations found (keypoints or masks)";
                 } else if (pm.calibration_folder.empty()) {
                     validation_error = "No calibration folder set";
                 } else if (is_jarvis && pm.media_folder.empty()) {
