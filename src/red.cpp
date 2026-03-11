@@ -1352,9 +1352,12 @@ int main(int argc, char **argv) {
                 jarvis_predict_state.predict_requested;
             jarvis_predict_state.predict_requested = false;
 
+            bool jarvis_any_loaded = jarvis_state.loaded;
+#ifdef __APPLE__
+            jarvis_any_loaded = jarvis_any_loaded || jarvis_coreml_state.loaded;
+#endif
             if (jarvis_predict_trigger && !ps.play_video &&
-                (jarvis_state.loaded || jarvis_coreml_state.loaded) &&
-                scene->num_cams > 0) {
+                jarvis_any_loaded && scene->num_cams > 0) {
 #ifdef __APPLE__
                 int mh = ps.play_video ? ps.read_head : select_corr_head;
                 std::vector<int> widths(scene->num_cams), heights(scene->num_cams);

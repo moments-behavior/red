@@ -6,9 +6,7 @@
 #import <CoreVideo/CoreVideo.h>
 #import <Accelerate/Accelerate.h>
 #include "jarvis_coreml.h"
-#include "json.hpp"
 #include <filesystem>
-#include <fstream>
 
 // ── Helpers ──
 
@@ -146,32 +144,21 @@ bool jarvis_coreml_available() {
 }
 
 bool jarvis_coreml_init(JarvisCoreMLState &s, const std::string &model_dir,
-                         const char *model_info_json) {
+                         const JarvisModelConfig &cfg) {
     s.available = jarvis_coreml_available();
     if (!s.available) {
         s.status = "CoreML requires macOS 13+";
         return false;
     }
 
-    // Parse model_info.json
-    if (model_info_json && std::filesystem::exists(model_info_json)) {
-        try {
-            std::ifstream f(model_info_json);
-            nlohmann::json j;
-            f >> j;
-            if (j.contains("center_detect") && j["center_detect"].contains("input_size"))
-                s.center_input_size = j["center_detect"]["input_size"].get<int>();
-            if (j.contains("keypoint_detect")) {
-                auto &kd = j["keypoint_detect"];
-                if (kd.contains("input_size"))
-                    s.keypoint_input_size = kd["input_size"].get<int>();
-                if (kd.contains("num_joints"))
-                    s.num_joints = kd["num_joints"].get<int>();
-            }
-            if (j.contains("project_name"))
-                s.project_name = j["project_name"].get<std::string>();
-        } catch (...) {}
-    }
+    // Release any previously loaded models (prevents pointer-overwrite leak)
+    jarvis_coreml_cleanup(s);
+
+    // Store full config for display, and flat copies for inference hot path
+    s.config = cfg;
+    s.center_input_size = cfg.center_input_size;
+    s.keypoint_input_size = cfg.keypoint_input_size;
+    s.num_joints = cfg.num_joints;
 
     // Load models
     std::string cd_path = model_dir + "/center_detect.mlpackage";

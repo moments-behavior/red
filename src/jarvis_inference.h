@@ -13,6 +13,7 @@
 #include "render.h"
 #include "skeleton.h"
 #include "types.h"
+#include "jarvis_model_config.h"
 #include "json.hpp"
 #include <algorithm>
 #include <chrono>
@@ -29,13 +30,6 @@
 #endif
 
 // ── Types ──
-
-struct JarvisModelConfig {
-    int center_input_size = 320;   // CenterDetect input (square)
-    int keypoint_input_size = 704; // KeypointDetect input (square)
-    int num_joints = 24;
-    std::string project_name;
-};
 
 struct JarvisState {
     bool loaded = false;
@@ -149,32 +143,13 @@ inline HeatmapPeak heatmap_argmax(const float *heatmap, int h, int w) {
 
 inline bool jarvis_init(JarvisState &s, const char *center_onnx,
                          const char *keypoint_onnx,
-                         const char *model_info_json = nullptr) {
+                         const JarvisModelConfig &cfg = {}) {
 #ifdef RED_HAS_ONNXRUNTIME
     s.center_session.reset();
     s.keypoint_session.reset();
     s.loaded = false;
     s.available = true;
-
-    // Load model_info.json if provided
-    if (model_info_json && std::filesystem::exists(model_info_json)) {
-        try {
-            std::ifstream f(model_info_json);
-            nlohmann::json j;
-            f >> j;
-            if (j.contains("center_detect") && j["center_detect"].contains("input_size"))
-                s.config.center_input_size = j["center_detect"]["input_size"].get<int>();
-            if (j.contains("keypoint_detect")) {
-                auto &kd = j["keypoint_detect"];
-                if (kd.contains("input_size"))
-                    s.config.keypoint_input_size = kd["input_size"].get<int>();
-                if (kd.contains("num_joints"))
-                    s.config.num_joints = kd["num_joints"].get<int>();
-            }
-            if (j.contains("project_name"))
-                s.config.project_name = j["project_name"].get<std::string>();
-        } catch (...) {}
-    }
+    s.config = cfg;
 
     try {
         if (!s.env)
@@ -203,7 +178,7 @@ inline bool jarvis_init(JarvisState &s, const char *center_onnx,
         return false;
     }
 #else
-    (void)center_onnx; (void)keypoint_onnx; (void)model_info_json;
+    (void)center_onnx; (void)keypoint_onnx; (void)cfg;
     s.available = false;
     s.status = "ONNX Runtime not available";
     return false;

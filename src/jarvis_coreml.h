@@ -16,6 +16,8 @@
 #include <chrono>
 #include <CoreVideo/CoreVideo.h>
 
+#include "jarvis_model_config.h"
+
 // Forward declarations to avoid heavy includes
 struct SkeletonContext;
 
@@ -28,11 +30,13 @@ struct JarvisCoreMLState {
     void *center_model = nullptr;
     void *keypoint_model = nullptr;
 
-    // Model config
+    // Full model config (shared struct with ONNX backend)
+    JarvisModelConfig config;
+
+    // Flat copies for hot-path inference access (avoid indirection)
     int center_input_size = 320;
     int keypoint_input_size = 704;
     int num_joints = 24;
-    std::string project_name;
 
     // Timing (per jarvis_coreml_predict_frame call)
     float last_center_ms = 0;
@@ -42,8 +46,9 @@ struct JarvisCoreMLState {
 
 // Initialize: load .mlpackage (compiles to .mlmodelc on first use, cached after).
 // model_dir: directory containing center_detect.mlpackage/ and keypoint_detect.mlpackage/
+// Pass pre-parsed config to avoid redundant JSON I/O.
 bool jarvis_coreml_init(JarvisCoreMLState &s, const std::string &model_dir,
-                         const char *model_info_json = nullptr);
+                         const JarvisModelConfig &cfg);
 
 // Check if CoreML is available on this system
 bool jarvis_coreml_available();

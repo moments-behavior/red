@@ -97,8 +97,6 @@ if(APPLE)
         "-framework CoreML"
         "-framework Accelerate"
         "-framework CoreVideo"
-        "-framework CoreML"
-        "-framework Accelerate"
         "-framework Cocoa"
         ${FFMPEG_LIBRARIES}
         ${TURBOJPEG_LIBRARIES}
@@ -584,6 +582,30 @@ if(APPLE)
             "${ONNXRUNTIME_DIR}/lib/libonnxruntime.dylib"
         )
         set_target_properties(bench_jarvis PROPERTIES
+            CXX_STANDARD 17
+            CXX_STANDARD_REQUIRED ON
+        )
+    endif()
+
+    # CoreML vs ONNX accuracy comparison benchmark
+    if(HAS_ONNXRUNTIME)
+        add_executable(bench_coreml_accuracy tests/bench_coreml_accuracy.mm)
+        target_include_directories(bench_coreml_accuracy PRIVATE
+            src
+            ${DIR_FILEBROWSER}
+            "${ONNXRUNTIME_DIR}/include"
+            ${HOMEBREW_PREFIX}/include
+            ${HOMEBREW_PREFIX}/include/eigen3
+        )
+        target_compile_definitions(bench_coreml_accuracy PRIVATE RED_HAS_ONNXRUNTIME)
+        target_link_libraries(bench_coreml_accuracy PRIVATE
+            "${ONNXRUNTIME_DIR}/lib/libonnxruntime.dylib"
+            "-framework CoreML"
+            "-framework CoreVideo"
+            "-framework Accelerate"
+            "-framework Foundation"
+        )
+        set_target_properties(bench_coreml_accuracy PROPERTIES
             CXX_STANDARD 17
             CXX_STANDARD_REQUIRED ON
         )

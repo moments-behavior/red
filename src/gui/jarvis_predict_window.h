@@ -1,8 +1,8 @@
 #pragma once
 // jarvis_predict_window.h — JARVIS Model Selector + Prediction panel
 //
-// Loads JARVIS CenterDetect + KeypointDetect ONNX models and provides
-// a UI for running 2D pose predictions on the current frame.
+// Loads JARVIS CenterDetect + KeypointDetect models (CoreML on macOS,
+// ONNX Runtime elsewhere) and provides a UI for running 2D pose predictions.
 // Model files can be in <project>/models/onnx/ or loaded manually.
 // If only .pth checkpoints exist, offers a "Convert to ONNX" button.
 
@@ -15,35 +15,58 @@
 #include "gui/panel.h"
 #include <ImGuiFileDialog.h>
 #include <misc/cpp/imgui_stdlib.h>
+#include <atomic>
 #include <filesystem>
+#include <memory>
 #include <string>
 #include <thread>
+
+// Thread-safe conversion job (shared between UI thread and worker)
+struct ConvertJob {
+    std::atomic<bool> running{false};
+    std::atomic<bool> finished{false};
+    bool success = false;        // only read after finished==true
+    std::string message;         // only read after finished==true
+    bool force_rescan = false;   // only read after finished==true
+};
 
 struct JarvisPredictState {
     bool show = false;
     std::string models_folder;  // path to JARVIS project's models/ directory
-    std::string config_path;    // path to JARVIS project's config.yaml
     float confidence_threshold = 0.1f;
 
-    // Internal: resolved ONNX paths (found during "Load Model")
-    std::string center_onnx_path;
-    std::string keypoint_onnx_path;
-    std::string model_info_path;
-
     // Set by "Predict Current Frame" button; consumed by main loop
-    // (RGB extraction requires platform-specific pixel buffer access)
     bool predict_requested = false;
 
-    // Conversion state
-    bool converting = false;
-    std::string convert_status;
+    // Conversion state (thread-safe via shared_ptr)
+    std::shared_ptr<ConvertJob> convert_job;
+    std::string convert_status;  // UI-side copy, updated from job each frame
 
     // Filesystem detection cache (avoid scanning every frame)
     std::string cached_models_folder;
     bool cached_has_onnx = false;
     bool cached_has_pth = false;
+    bool cached_has_coreml = false;
     std::string cached_center_path, cached_keypoint_path, cached_info_path;
+
+    // Relative model path shown in Model Info
+    std::string model_dir_display;
 };
+
+// Get the active model config from whichever backend is loaded
+inline const JarvisModelConfig &jarvis_active_config(
+    const JarvisState &jarvis
+#ifdef __APPLE__
+    , const JarvisCoreMLState &coreml
+#endif
+) {
+    static const JarvisModelConfig empty;
+#ifdef __APPLE__
+    if (coreml.loaded) return coreml.config;
+#endif
+    if (jarvis.loaded) return jarvis.config;
+    return empty;
+}
 
 inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarvis,
 #ifdef __APPLE__
@@ -52,7 +75,7 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
                                      AppContext &ctx) {
     drawPanel("JARVIS Predict", state.show,
         [&]() {
-        // Availability check (same pattern as SAM)
+        // Availability check
         if (!jarvis.available) {
             ImGui::TextColored(ImVec4(1, 0.5f, 0, 1),
                                "ONNX Runtime not available");
@@ -73,23 +96,26 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
             auto &m = pm.jarvis_models[pm.active_jarvis_model];
             std::string base = pm.project_path + "/" + m.relative_path;
             std::string mi = base + "/model_info.json";
-            std::string mi_c = std::filesystem::exists(mi) ? mi : "";
+            auto cfg = parse_jarvis_model_info(
+                std::filesystem::exists(mi) ? mi.c_str() : nullptr);
+            state.model_dir_display = m.relative_path;
 #ifdef __APPLE__
-            // Prefer CoreML (.mlpackage) for GPU/ANE acceleration
             std::string cd_ml = base + "/center_detect.mlpackage";
             std::string kd_ml = base + "/keypoint_detect.mlpackage";
             if (std::filesystem::exists(cd_ml) && std::filesystem::exists(kd_ml)) {
-                jarvis_coreml_init(jarvis_coreml, base,
-                                    mi_c.empty() ? nullptr : mi_c.c_str());
+                jarvis_cleanup(jarvis);
+                jarvis_coreml_init(jarvis_coreml, base, cfg);
             } else
 #endif
             {
-                // Fallback: ONNX Runtime
                 std::string cd = base + "/center_detect.onnx";
                 std::string kd = base + "/keypoint_detect.onnx";
-                if (std::filesystem::exists(cd) && std::filesystem::exists(kd))
-                    jarvis_init(jarvis, cd.c_str(), kd.c_str(),
-                                mi_c.empty() ? nullptr : mi_c.c_str());
+                if (std::filesystem::exists(cd) && std::filesystem::exists(kd)) {
+#ifdef __APPLE__
+                    jarvis_coreml_cleanup(jarvis_coreml);
+#endif
+                    jarvis_init(jarvis, cd.c_str(), kd.c_str(), cfg);
+                }
             }
         }
 
@@ -107,11 +133,26 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
                         pm.active_jarvis_model = i;
                         auto &m = pm.jarvis_models[i];
                         std::string base = pm.project_path + "/" + m.relative_path;
-                        std::string cd = base + "/center_detect.onnx";
-                        std::string kd = base + "/keypoint_detect.onnx";
                         std::string mi = base + "/model_info.json";
-                        jarvis_init(jarvis, cd.c_str(), kd.c_str(),
-                                    std::filesystem::exists(mi) ? mi.c_str() : nullptr);
+                        auto cfg = parse_jarvis_model_info(
+                            std::filesystem::exists(mi) ? mi.c_str() : nullptr);
+                        state.model_dir_display = m.relative_path;
+#ifdef __APPLE__
+                        std::string cd_ml = base + "/center_detect.mlpackage";
+                        std::string kd_ml = base + "/keypoint_detect.mlpackage";
+                        if (std::filesystem::exists(cd_ml) && std::filesystem::exists(kd_ml)) {
+                            jarvis_cleanup(jarvis);
+                            jarvis_coreml_init(jarvis_coreml, base, cfg);
+                        } else
+#endif
+                        {
+                            std::string cd = base + "/center_detect.onnx";
+                            std::string kd = base + "/keypoint_detect.onnx";
+#ifdef __APPLE__
+                            jarvis_coreml_cleanup(jarvis_coreml);
+#endif
+                            jarvis_init(jarvis, cd.c_str(), kd.c_str(), cfg);
+                        }
                     }
                     if (selected) ImGui::SetItemDefaultFocus();
                 }
@@ -143,47 +184,34 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
                 "JarvisBrowseModels", "Select Models Folder", nullptr, cfg);
         }
 
-        ImGui::Text("config.yaml");
-        ImGui::SetNextItemWidth(-60);
-        ImGui::InputText("##jarvis_config", &state.config_path);
-        ImGui::SameLine();
-        if (ImGui::Button("...##config")) {
-            IGFD::FileDialogConfig cfg;
-            cfg.countSelectionMax = 1;
-            cfg.flags = ImGuiFileDialogFlags_Modal;
-            if (!state.config_path.empty()) {
-                auto parent = std::filesystem::path(state.config_path).parent_path();
-                if (std::filesystem::is_directory(parent))
-                    cfg.path = parent.string();
-            }
-            ImGuiFileDialog::Instance()->OpenDialog(
-                "JarvisBrowseConfig", "Select config.yaml", ".yaml,.yml", cfg);
-        }
-
         ImGui::Separator();
 
-        // --- Resolve ONNX paths (cached — only rescan when folder changes) ---
+        // --- Resolve model paths (cached — only rescan when folder changes) ---
         namespace fs = std::filesystem;
 
-        // Rescan filesystem only when models_folder changes or after conversion
+        // Poll conversion job for completion (thread-safe)
+        if (state.convert_job && state.convert_job->finished.load()) {
+            state.convert_status = state.convert_job->message;
+            if (state.convert_job->force_rescan)
+                state.cached_models_folder.clear();
+            state.convert_job.reset();
+        }
+
+        // Rescan filesystem only when models_folder changes
         if (state.models_folder != state.cached_models_folder) {
             state.cached_models_folder = state.models_folder;
             state.cached_has_onnx = false;
             state.cached_has_pth = false;
+            state.cached_has_coreml = false;
             state.cached_center_path.clear();
             state.cached_keypoint_path.clear();
             state.cached_info_path.clear();
 
-            bool has_onnx_subdir = false, has_onnx_direct = false, has_pth = false;
+            bool has_onnx_subdir = false, has_onnx_direct = false;
+            bool has_pth = false, has_coreml = false;
             std::string center_path, keypoint_path, info_path;
 
             if (!state.models_folder.empty() && fs::is_directory(state.models_folder)) {
-            // Search order for ONNX files:
-            // 1. models/onnx/  (our export convention)
-            // 2. models/ directly
-            // Then check for .pth files in JARVIS structure:
-            // 3. models/CenterDetect/Run_*/  and  models/KeypointDetect/Run_*/
-
             auto find_onnx_in = [&](const fs::path &dir) {
                 fs::path c = dir / "center_detect.onnx";
                 fs::path k = dir / "keypoint_detect.onnx";
@@ -201,8 +229,21 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
             if (!has_onnx_subdir)
                 has_onnx_direct = find_onnx_in(fs::path(state.models_folder));
 
-            // Check for .pth files in JARVIS structure (CenterDetect/Run_*/, KeypointDetect/Run_*/)
-            if (!has_onnx_subdir && !has_onnx_direct) {
+            auto check_coreml = [&](const fs::path &dir) -> bool {
+                if (fs::exists(dir / "center_detect.mlpackage") &&
+                    fs::exists(dir / "keypoint_detect.mlpackage")) {
+                    if (info_path.empty()) {
+                        fs::path mi = dir / "model_info.json";
+                        if (fs::exists(mi)) info_path = mi.string();
+                    }
+                    return true;
+                }
+                return false;
+            };
+            has_coreml = check_coreml(fs::path(state.models_folder) / "onnx") ||
+                         check_coreml(fs::path(state.models_folder));
+
+            if (!has_onnx_subdir && !has_onnx_direct && !has_coreml) {
                 auto find_latest_pth = [](const fs::path &module_dir) -> std::string {
                     if (!fs::is_directory(module_dir)) return {};
                     std::vector<fs::path> runs;
@@ -211,7 +252,6 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
                             runs.push_back(e.path());
                     if (runs.empty()) return {};
                     std::sort(runs.begin(), runs.end());
-                    // Find *_final.pth in latest run
                     for (auto &e : fs::directory_iterator(runs.back()))
                         if (e.path().extension() == ".pth" &&
                             e.path().filename().string().find("final") != std::string::npos)
@@ -222,61 +262,109 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
                 std::string kd_pth = find_latest_pth(fs::path(state.models_folder) / "KeypointDetect");
                 has_pth = !cd_pth.empty() && !kd_pth.empty();
             }
-            // Cache results
             state.cached_has_onnx = (has_onnx_subdir || has_onnx_direct);
+            state.cached_has_coreml = has_coreml;
             state.cached_has_pth = has_pth;
             state.cached_center_path = center_path;
             state.cached_keypoint_path = keypoint_path;
             state.cached_info_path = info_path;
-            } // end rescan block
+            }
         }
 
         // Use cached detection results
         bool has_pth = state.cached_has_pth;
+        bool has_coreml = state.cached_has_coreml;
         std::string center_path = state.cached_center_path;
         std::string keypoint_path = state.cached_keypoint_path;
         std::string info_path = state.cached_info_path;
         bool can_load = !center_path.empty() && !keypoint_path.empty();
+        bool can_load_any = can_load || has_coreml;
 
         // Show file detection status
         if (!state.models_folder.empty()) {
-            if (can_load) {
-                std::string loc = state.cached_has_onnx ? "found" : "models/";
+            if (can_load && has_coreml) {
                 ImGui::TextColored(ImVec4(0.5f, 1, 0.5f, 1),
-                    "Found ONNX files in %s", loc.c_str());
+                    "Found ONNX + CoreML models");
+            } else if (has_coreml) {
+                ImGui::TextColored(ImVec4(0.5f, 1, 0.5f, 1),
+                    "Found CoreML models (.mlpackage)");
+            } else if (can_load) {
+                ImGui::TextColored(ImVec4(0.5f, 1, 0.5f, 1),
+                    "Found ONNX models");
             } else if (has_pth) {
                 ImGui::TextColored(ImVec4(1, 0.8f, 0, 1),
-                    "Found .pth checkpoints (no ONNX files)");
+                    "Found .pth checkpoints (no ONNX/CoreML files)");
             } else if (fs::is_directory(state.models_folder)) {
                 ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1),
-                    "No ONNX or .pth files found");
+                    "No ONNX, CoreML, or .pth files found");
             }
         }
 
-        // Load Model button
-        if (!can_load) ImGui::BeginDisabled();
-        if (ImGui::Button("Load Model")) {
-            state.center_onnx_path = center_path;
-            state.keypoint_onnx_path = keypoint_path;
-            state.model_info_path = info_path;
-            jarvis_init(jarvis, center_path.c_str(), keypoint_path.c_str(),
-                        info_path.empty() ? nullptr : info_path.c_str());
+        // Import to Project button
+        if (!can_load_any) ImGui::BeginDisabled();
+        if (ImGui::Button("Import to Project")) {
+            // Determine source directory
+            std::string src_dir;
+            if (!center_path.empty()) {
+                src_dir = fs::path(center_path).parent_path().string();
+            } else {
+                fs::path onnx_sub = fs::path(state.models_folder) / "onnx";
+                if (fs::exists(onnx_sub / "center_detect.mlpackage"))
+                    src_dir = onnx_sub.string();
+                else
+                    src_dir = state.models_folder;
+            }
 
-            // Import into project: copy ONNX files into project folder
-            if (jarvis.loaded && !pm.project_path.empty()) {
-                std::string src_dir = fs::path(center_path).parent_path().string();
-                // Read model name from model_info.json or derive from folder
-                std::string model_name = jarvis.config.project_name;
-                if (model_name.empty())
-                    model_name = fs::path(src_dir).filename().string();
-                if (model_name.empty()) model_name = "jarvis_model";
+            // Parse config once
+            auto cfg = parse_jarvis_model_info(
+                info_path.empty() ? nullptr : info_path.c_str());
 
+            // Determine model name
+            std::string model_name = cfg.project_name;
+            if (model_name.empty())
+                model_name = fs::path(src_dir).filename().string();
+            if (model_name.empty()) model_name = "jarvis_model";
+
+            // Load model — prefer CoreML on macOS
+            bool loaded_any = false;
+            int nj = 0, ci_sz = 0, ki_sz = 0;
+#ifdef __APPLE__
+            {
+                fs::path cd_ml = fs::path(src_dir) / "center_detect.mlpackage";
+                fs::path kd_ml = fs::path(src_dir) / "keypoint_detect.mlpackage";
+                if (fs::exists(cd_ml) && fs::exists(kd_ml)) {
+                    jarvis_cleanup(jarvis);
+                    jarvis_coreml_init(jarvis_coreml, src_dir, cfg);
+                    if (jarvis_coreml.loaded) {
+                        loaded_any = true;
+                        nj = jarvis_coreml.num_joints;
+                        ci_sz = jarvis_coreml.center_input_size;
+                        ki_sz = jarvis_coreml.keypoint_input_size;
+                    }
+                }
+            }
+            if (!loaded_any)
+#endif
+            if (can_load) {
+#ifdef __APPLE__
+                jarvis_coreml_cleanup(jarvis_coreml);
+#endif
+                jarvis_init(jarvis, center_path.c_str(), keypoint_path.c_str(), cfg);
+                if (jarvis.loaded) {
+                    loaded_any = true;
+                    nj = jarvis.config.num_joints;
+                    ci_sz = jarvis.config.center_input_size;
+                    ki_sz = jarvis.config.keypoint_input_size;
+                }
+            }
+
+            // Copy model files into project folder
+            if (loaded_any && !pm.project_path.empty()) {
                 std::string rel = "jarvis_models/" + model_name;
                 fs::path dest = fs::path(pm.project_path) / rel;
                 std::error_code ec;
                 fs::create_directories(dest, ec);
 
-                // Copy .onnx, .onnx.data, model_info.json
                 for (auto &entry : fs::directory_iterator(src_dir)) {
                     auto fname = entry.path().filename().string();
                     if (fname.find(".onnx") != std::string::npos ||
@@ -284,15 +372,21 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
                         fs::copy_file(entry.path(), dest / fname,
                                       fs::copy_options::overwrite_existing, ec);
                     }
+                    if (entry.is_directory() && fname.find(".mlpackage") != std::string::npos) {
+                        fs::path ml_dest = dest / fname;
+                        fs::remove_all(ml_dest, ec);
+                        fs::copy(entry.path(), ml_dest,
+                                 fs::copy_options::recursive, ec);
+                    }
                 }
 
-                // Add to project (avoid duplicates)
+                // Register in project (avoid duplicates)
                 ProjectManager::JarvisModelEntry me;
                 me.name = model_name;
                 me.relative_path = rel;
-                me.num_joints = jarvis.config.num_joints;
-                me.center_input_size = jarvis.config.center_input_size;
-                me.keypoint_input_size = jarvis.config.keypoint_input_size;
+                me.num_joints = nj;
+                me.center_input_size = ci_sz;
+                me.keypoint_input_size = ki_sz;
 
                 bool dup = false;
                 for (int i = 0; i < (int)pm.jarvis_models.size(); ++i) {
@@ -307,68 +401,97 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
                     pm.jarvis_models.push_back(me);
                     pm.active_jarvis_model = (int)pm.jarvis_models.size() - 1;
                 }
+                state.model_dir_display = rel;
 
-                // Save .redproj
                 fs::path redproj = fs::path(pm.project_path) /
                                    (pm.project_name + ".redproj");
                 save_project_manager_json(pm, redproj);
+
+                // Clear import form and stale status
+                state.models_folder.clear();
+                state.cached_models_folder.clear();
+                state.convert_status.clear();
             }
         }
-        if (!can_load) ImGui::EndDisabled();
+        if (!can_load_any) ImGui::EndDisabled();
 
         ImGui::SameLine();
-        if (jarvis.loaded) {
-            ImGui::TextColored(ImVec4(0, 1, 0, 1), "Loaded");
-        } else if (!jarvis.status.empty()) {
-            ImGui::TextColored(ImVec4(1, 1, 0, 1), "%s", jarvis.status.c_str());
+        {
+            bool show_loaded = jarvis.loaded;
+#ifdef __APPLE__
+            show_loaded = show_loaded || jarvis_coreml.loaded;
+#endif
+            if (show_loaded) {
+                ImGui::TextColored(ImVec4(0, 1, 0, 1), "Loaded");
+            } else if (!jarvis.status.empty()) {
+                ImGui::TextColored(ImVec4(1, 0.3f, 0.3f, 1), "%s", jarvis.status.c_str());
+            }
+#ifdef __APPLE__
+            else if (!jarvis_coreml.status.empty()) {
+                ImGui::TextColored(ImVec4(1, 0.3f, 0.3f, 1), "%s", jarvis_coreml.status.c_str());
+            }
+#endif
         }
 
-        // Convert to ONNX button (only if .pth exists but no ONNX)
-        if (has_pth && !can_load && !jarvis.loaded) {
-            ImGui::Separator();
-            if (!state.converting) {
-                ImGui::TextWrapped("ONNX files not found. You can convert .pth "
-                                   "checkpoints to ONNX using the JARVIS export script.");
-                if (ImGui::Button("Convert to ONNX")) {
-                    state.converting = true;
-                    state.convert_status = "Converting...";
+        // Convert to ONNX button (only if .pth exists and no model loaded)
+        {
+            bool show_convert = has_pth && !can_load;
+#ifdef __APPLE__
+            show_convert = show_convert && !jarvis.loaded && !jarvis_coreml.loaded;
+#else
+            show_convert = show_convert && !jarvis.loaded;
+#endif
+            bool converting = state.convert_job && state.convert_job->running.load();
+            if (show_convert) {
+                ImGui::Separator();
+                if (!converting) {
+                    ImGui::TextWrapped("ONNX files not found. You can convert .pth "
+                                       "checkpoints to ONNX using the JARVIS export script.");
+                    if (ImGui::Button("Convert to ONNX")) {
+                        fs::path project_path = fs::path(state.models_folder).parent_path();
+                        fs::path onnx_out = fs::path(state.models_folder) / "onnx";
+                        std::string cmd =
+                            "conda run -n jarvis python -m jarvis.utils.onnx_export \"" +
+                            project_path.string() + "\" --output_dir \"" +
+                            onnx_out.string() + "\" 2>&1";
 
-                    // Derive project path: models_folder should be <project>/models
-                    fs::path project_path = fs::path(state.models_folder).parent_path();
-                    fs::path onnx_out = fs::path(state.models_folder) / "onnx";
-                    std::string cmd =
-                        "conda run -n jarvis python -m jarvis.utils.onnx_export \"" +
-                        project_path.string() + "\" --output_dir \"" +
-                        onnx_out.string() + "\" 2>&1";
+                        auto job = std::make_shared<ConvertJob>();
+                        job->running.store(true);
+                        state.convert_job = job;
+                        state.convert_status = "Converting...";
 
-                    // Run in detached thread to avoid blocking UI
-                    std::string cmd_copy = cmd;
-                    std::thread([cmd_copy, &state]() {
-                        FILE *pipe = popen(cmd_copy.c_str(), "r");
-                        if (!pipe) {
-                            state.convert_status = "Error: failed to run conversion command";
-                            state.converting = false;
-                            return;
-                        }
-                        char buf[256];
-                        std::string output;
-                        while (fgets(buf, sizeof(buf), pipe))
-                            output += buf;
-                        int ret = pclose(pipe);
-                        if (ret == 0) {
-                            state.convert_status = "Conversion complete. Click Load Model.";
-                            state.cached_models_folder.clear(); // force rescan
-                        } else {
-                            state.convert_status = "Conversion failed (exit " +
-                                std::to_string(ret) + "): " + output.substr(0, 200);
-                        }
-                        state.converting = false;
-                    }).detach();
+                        std::thread([job, cmd]() {
+                            FILE *pipe = popen(cmd.c_str(), "r");
+                            if (!pipe) {
+                                job->message = "Error: failed to run conversion command";
+                                job->success = false;
+                                job->running.store(false);
+                                job->finished.store(true);
+                                return;
+                            }
+                            char buf[256];
+                            std::string output;
+                            while (fgets(buf, sizeof(buf), pipe))
+                                output += buf;
+                            int ret = pclose(pipe);
+                            if (ret == 0) {
+                                job->message = "Conversion complete. Click Import to Project.";
+                                job->success = true;
+                                job->force_rescan = true;
+                            } else {
+                                job->message = "Conversion failed (exit " +
+                                    std::to_string(ret) + "): " + output.substr(0, 200);
+                                job->success = false;
+                            }
+                            job->running.store(false);
+                            job->finished.store(true);
+                        }).detach();
+                    }
+                } else {
+                    ImGui::BeginDisabled();
+                    ImGui::Button("Converting...");
+                    ImGui::EndDisabled();
                 }
-            } else {
-                ImGui::BeginDisabled();
-                ImGui::Button("Converting...");
-                ImGui::EndDisabled();
             }
             if (!state.convert_status.empty()) {
                 bool is_error = state.convert_status.find("Error") != std::string::npos ||
@@ -380,18 +503,42 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
         }
 
         // --- Model info (shown after loading) ---
-        if (jarvis.loaded) {
-            ImGui::Separator();
-            ImGui::SeparatorText("Model Info");
-            if (!jarvis.config.project_name.empty())
-                ImGui::Text("Project:  %s", jarvis.config.project_name.c_str());
-            ImGui::Text("Joints:   %d", jarvis.config.num_joints);
-            ImGui::Text("Center input:   %d x %d",
-                        jarvis.config.center_input_size,
-                        jarvis.config.center_input_size);
-            ImGui::Text("Keypoint input: %d x %d",
-                        jarvis.config.keypoint_input_size,
-                        jarvis.config.keypoint_input_size);
+        {
+            bool onnx_active = jarvis.loaded;
+            bool coreml_active = false;
+#ifdef __APPLE__
+            coreml_active = jarvis_coreml.loaded;
+#endif
+            if (onnx_active || coreml_active) {
+                const auto &cfg = jarvis_active_config(jarvis
+#ifdef __APPLE__
+                    , jarvis_coreml
+#endif
+                );
+
+                ImGui::Separator();
+                ImGui::SeparatorText("Model Info");
+                if (!cfg.project_name.empty())
+                    ImGui::Text("Project:        %s", cfg.project_name.c_str());
+
+                if (coreml_active)
+                    ImGui::TextColored(ImVec4(0.5f, 1, 0.5f, 1), "Backend:        CoreML (GPU/ANE)");
+                else
+                    ImGui::Text("Backend:        ONNX Runtime (CPU)");
+
+                ImGui::Text("Joints:         %d", cfg.num_joints);
+
+                if (!cfg.architecture.empty())
+                    ImGui::Text("Architecture:   %s", cfg.architecture.c_str());
+                ImGui::Text("Center input:   %d x %d", cfg.center_input_size, cfg.center_input_size);
+                ImGui::Text("Keypoint input: %d x %d", cfg.keypoint_input_size, cfg.keypoint_input_size);
+                if (!cfg.precision.empty())
+                    ImGui::Text("Precision:      %s", cfg.precision.c_str());
+                if (cfg.imagenet_norm)
+                    ImGui::Text("Normalization:  ImageNet (baked)");
+                if (!state.model_dir_display.empty())
+                    ImGui::Text("Model files:    %s", state.model_dir_display.c_str());
+            }
         }
 
         // --- Prediction section ---
@@ -422,8 +569,6 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
 #endif
         if (!can_predict) ImGui::BeginDisabled();
         if (ImGui::Button("Predict Current Frame")) {
-            // Set flag — main loop handles RGB extraction + prediction
-            // (pixel buffer access is platform-specific, same as hotkey 6)
             state.predict_requested = true;
         }
         if (!can_predict) ImGui::EndDisabled();
@@ -433,7 +578,6 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
         },
         // always_fn: file dialog handlers (run every frame)
         [&]() {
-            // Models folder directory picker
             if (ImGuiFileDialog::Instance()->Display(
                     "JarvisBrowseModels", ImGuiWindowFlags_NoCollapse,
                     ImVec2(680, 440))) {
@@ -443,16 +587,6 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
                 }
                 ImGuiFileDialog::Instance()->Close();
             }
-            // Config file picker
-            if (ImGuiFileDialog::Instance()->Display(
-                    "JarvisBrowseConfig", ImGuiWindowFlags_NoCollapse,
-                    ImVec2(680, 440))) {
-                if (ImGuiFileDialog::Instance()->IsOk()) {
-                    state.config_path =
-                        ImGuiFileDialog::Instance()->GetFilePathName();
-                }
-                ImGuiFileDialog::Instance()->Close();
-            }
         },
-        ImVec2(420, 520));
+        ImVec2(480, 600));
 }
