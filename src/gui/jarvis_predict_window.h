@@ -34,11 +34,16 @@ struct JarvisPredictState {
     // Conversion state
     bool converting = false;
     std::string convert_status;
+
+    // Filesystem detection cache (avoid scanning every frame)
+    std::string cached_models_folder;
+    bool cached_has_onnx = false;
+    bool cached_has_pth = false;
+    std::string cached_center_path, cached_keypoint_path, cached_info_path;
 };
 
 inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarvis,
                                      AppContext &ctx) {
-    (void)ctx; // AppContext available for future use (e.g. auto-detect project paths)
     drawPanel("JARVIS Predict", state.show,
         [&]() {
         // Availability check (same pattern as SAM)
@@ -50,8 +55,21 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
             return;
         }
 
-        // --- Project Models (previously imported) ---
+        // --- Auto-load project model if not yet loaded ---
         auto &pm = ctx.pm;
+        if (!jarvis.loaded && pm.active_jarvis_model >= 0 &&
+            pm.active_jarvis_model < (int)pm.jarvis_models.size()) {
+            auto &m = pm.jarvis_models[pm.active_jarvis_model];
+            std::string base = pm.project_path + "/" + m.relative_path;
+            std::string cd = base + "/center_detect.onnx";
+            std::string kd = base + "/keypoint_detect.onnx";
+            std::string mi = base + "/model_info.json";
+            if (std::filesystem::exists(cd) && std::filesystem::exists(kd))
+                jarvis_init(jarvis, cd.c_str(), kd.c_str(),
+                            std::filesystem::exists(mi) ? mi.c_str() : nullptr);
+        }
+
+        // --- Project Models (previously imported) ---
         if (!pm.jarvis_models.empty()) {
             ImGui::SeparatorText("Project Models");
             const char *preview = (pm.active_jarvis_model >= 0 &&
@@ -75,7 +93,8 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
                 }
                 ImGui::EndCombo();
             }
-            if (pm.active_jarvis_model >= 0) {
+            if (pm.active_jarvis_model >= 0 &&
+                pm.active_jarvis_model < (int)pm.jarvis_models.size()) {
                 auto &m = pm.jarvis_models[pm.active_jarvis_model];
                 ImGui::SameLine();
                 ImGui::TextDisabled("(%d joints, %dx%d)", m.num_joints,
@@ -119,16 +138,22 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
 
         ImGui::Separator();
 
-        // --- Resolve ONNX paths and show Load / Convert buttons ---
+        // --- Resolve ONNX paths (cached — only rescan when folder changes) ---
         namespace fs = std::filesystem;
 
-        // Detect what files are available
-        bool has_onnx_subdir = false;
-        bool has_onnx_direct = false;
-        bool has_pth = false;
-        std::string center_path, keypoint_path, info_path;
+        // Rescan filesystem only when models_folder changes or after conversion
+        if (state.models_folder != state.cached_models_folder) {
+            state.cached_models_folder = state.models_folder;
+            state.cached_has_onnx = false;
+            state.cached_has_pth = false;
+            state.cached_center_path.clear();
+            state.cached_keypoint_path.clear();
+            state.cached_info_path.clear();
 
-        if (!state.models_folder.empty() && fs::is_directory(state.models_folder)) {
+            bool has_onnx_subdir = false, has_onnx_direct = false, has_pth = false;
+            std::string center_path, keypoint_path, info_path;
+
+            if (!state.models_folder.empty() && fs::is_directory(state.models_folder)) {
             // Search order for ONNX files:
             // 1. models/onnx/  (our export convention)
             // 2. models/ directly
@@ -173,14 +198,26 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
                 std::string kd_pth = find_latest_pth(fs::path(state.models_folder) / "KeypointDetect");
                 has_pth = !cd_pth.empty() && !kd_pth.empty();
             }
+            // Cache results
+            state.cached_has_onnx = (has_onnx_subdir || has_onnx_direct);
+            state.cached_has_pth = has_pth;
+            state.cached_center_path = center_path;
+            state.cached_keypoint_path = keypoint_path;
+            state.cached_info_path = info_path;
+            } // end rescan block
         }
 
+        // Use cached detection results
+        bool has_pth = state.cached_has_pth;
+        std::string center_path = state.cached_center_path;
+        std::string keypoint_path = state.cached_keypoint_path;
+        std::string info_path = state.cached_info_path;
         bool can_load = !center_path.empty() && !keypoint_path.empty();
 
         // Show file detection status
         if (!state.models_folder.empty()) {
             if (can_load) {
-                std::string loc = has_onnx_subdir ? "onnx/" : "models/";
+                std::string loc = state.cached_has_onnx ? "found" : "models/";
                 ImGui::TextColored(ImVec4(0.5f, 1, 0.5f, 1),
                     "Found ONNX files in %s", loc.c_str());
             } else if (has_pth) {
@@ -296,6 +333,7 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
                         int ret = pclose(pipe);
                         if (ret == 0) {
                             state.convert_status = "Conversion complete. Click Load Model.";
+                            state.cached_models_folder.clear(); // force rescan
                         } else {
                             state.convert_status = "Conversion failed (exit " +
                                 std::to_string(ret) + "): " + output.substr(0, 200);

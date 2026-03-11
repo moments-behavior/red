@@ -318,33 +318,6 @@ int main(int argc, char **argv) {
         }
     }
 
-    // Auto-detect JARVIS model paths
-    {
-        std::string exe = window->exe_dir;
-        std::vector<std::string> search = {
-            exe + "/../models/jarvis_mouseJan30", // build tree
-        };
-        // Also search all models/jarvis_* directories
-        for (const auto &base : {exe + "/../models", exe + "/models"}) {
-            if (std::filesystem::is_directory(base)) {
-                for (const auto &entry : std::filesystem::directory_iterator(base)) {
-                    if (entry.is_directory() &&
-                        entry.path().filename().string().find("jarvis") != std::string::npos)
-                        search.push_back(entry.path().string());
-                }
-            }
-        }
-        for (const auto &dir : search) {
-            std::string cd = dir + "/center_detect.onnx";
-            std::string kd = dir + "/keypoint_detect.onnx";
-            std::string mi = dir + "/model_info.json";
-            if (std::filesystem::exists(cd) && std::filesystem::exists(kd)) {
-                jarvis_init(jarvis_state, cd.c_str(), kd.c_str(),
-                            std::filesystem::exists(mi) ? mi.c_str() : nullptr);
-                break;
-            }
-        }
-    }
     annot_state.video_folder = user_settings.default_media_root_path.empty()
                                    ? media_root_dir
                                    : user_settings.default_media_root_path;
@@ -401,21 +374,6 @@ int main(int argc, char **argv) {
 #endif
     };
 
-    // Auto-load active JARVIS model from project after loading
-    auto load_project_jarvis_model = [&]() {
-        if (pm.active_jarvis_model >= 0 &&
-            pm.active_jarvis_model < (int)pm.jarvis_models.size()) {
-            auto &m = pm.jarvis_models[pm.active_jarvis_model];
-            std::string base = pm.project_path + "/" + m.relative_path;
-            std::string cd = base + "/center_detect.onnx";
-            std::string kd = base + "/keypoint_detect.onnx";
-            std::string mi = base + "/model_info.json";
-            if (std::filesystem::exists(cd) && std::filesystem::exists(kd))
-                jarvis_init(jarvis_state, cd.c_str(), kd.c_str(),
-                            std::filesystem::exists(mi) ? mi.c_str() : nullptr);
-        }
-    };
-
     // Callbacks for static console-output functions in this file
     auto print_metadata = [&]() {
         print_video_metadata(demuxers, pm.camera_names, dc_context->seek_interval);
@@ -437,7 +395,6 @@ int main(int argc, char **argv) {
                 pm = loaded;
                 if (setup_project(pm, skeleton, skeleton_map, &err)) {
                     on_project_loaded(ctx, print_metadata, print_summary);
-                    load_project_jarvis_model();
                 } else
                     popups.pushError(err);
             }
@@ -491,7 +448,6 @@ int main(int argc, char **argv) {
         if (!save_project_manager_json(pm_ref, redproj_path, &err))
             return false;
         on_project_loaded(ctx, print_metadata, print_summary);
-        load_project_jarvis_model();
         return true;
     };
 
@@ -1380,7 +1336,7 @@ int main(int argc, char **argv) {
             }
 
 
-            // Hotkey 5: Run JARVIS prediction on current frame (all cameras)
+            // Hotkey 6: Run JARVIS prediction on current frame (all cameras)
             bool jarvis_predict_trigger =
                 (ImGui::IsKeyPressed(ImGuiKey_6, false) && !io.WantTextInput) ||
                 jarvis_predict_state.predict_requested;
@@ -1420,7 +1376,8 @@ int main(int argc, char **argv) {
 
                 jarvis_predict_frame(jarvis_state, annotations,
                     (u32)current_frame_num, rgb_bufs, widths, heights,
-                    skeleton, pm.camera_params, scene);
+                    skeleton, pm.camera_params, scene,
+                    jarvis_predict_state.confidence_threshold);
                 printf("[JARVIS] %s\n", jarvis_state.status.c_str());
 #endif
             }
