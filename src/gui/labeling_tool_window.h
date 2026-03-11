@@ -194,172 +194,290 @@ inline void DrawLabelingToolWindow(
             labeled_frames.push_back({(int)fnum, complete});
         }
 
-        // === Labeled Frames grid ===
-        ImGui::Text("Labeled Frames (%zu)", labeled_frames.size());
+        // === Collect SAM mask frames ===
+        struct MaskFrameInfo { int frame; };
+        std::vector<MaskFrameInfo> mask_frames;
+        for (const auto &[fnum, fa] : annotations) {
+            if (frame_has_any_masks(fa))
+                mask_frames.push_back({(int)fnum});
+        }
+
+        // === Collect bounding box frames ===
+        struct BBoxFrameInfo { int frame; bool has_bbox; bool has_obb; };
+        std::vector<BBoxFrameInfo> bbox_frames;
+        for (const auto &[fnum, fa] : annotations) {
+            bool any_bbox = false, any_obb = false;
+            for (const auto &cam : fa.cameras) {
+                if (cam.has_bbox()) any_bbox = true;
+                if (cam.has_obb())  any_obb  = true;
+            }
+            if (any_bbox || any_obb)
+                bbox_frames.push_back({(int)fnum, any_bbox, any_obb});
+        }
+
+        // === Shared grid rendering constants ===
+        const ImVec2 cell_size(16, 16);
+        const float gap = ImGui::GetStyle().ItemSpacing.y;
+        const float avail_w = ImGui::GetContentRegionAvail().x;
+        const ImU32 white = IM_COL32(255, 255, 255, 255);
+
+        // Helper: render a clickable grid cell with custom drawing.
+        // draw_fn(ImDrawList*, ImVec2 min, ImVec2 max) draws the cell interior.
+        // tooltip is shown on hover. Returns true if clicked.
+        auto grid_cell = [&](int idx, int frame_num, const char *tooltip_text,
+                             auto draw_fn) -> bool {
+            bool clicked = false;
+            bool is_current = (frame_num == current_frame_num);
+
+            ImGui::PushID(idx);
+
+            // White border for current frame (drawn before button so it's behind)
+            if (is_current) {
+                ImVec2 pos = ImGui::GetCursorScreenPos();
+                ImGui::GetWindowDrawList()->AddRect(
+                    ImVec2(pos.x - 1, pos.y - 1),
+                    ImVec2(pos.x + cell_size.x + 1, pos.y + cell_size.y + 1),
+                    white, 0.0f, 0, 2.0f);
+            }
+
+            // Invisible button for click + hover detection
+            if (ImGui::InvisibleButton("##cell", cell_size)) {
+                ps.play_video = false;
+                seek_all_cameras(scene, frame_num,
+                                 dc_context->video_fps, ps, true);
+                clicked = true;
+            }
+
+            // Draw custom shape into the button rect
+            ImVec2 rmin = ImGui::GetItemRectMin();
+            ImVec2 rmax = ImGui::GetItemRectMax();
+            draw_fn(ImGui::GetWindowDrawList(), rmin, rmax);
+
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("%s", tooltip_text);
+
+            ImGui::PopID();
+            return clicked;
+        };
+
+        // Helper: wrap to next row or stay on same line
+        auto grid_wrap = [&](size_t i, size_t count) {
+            if (i + 1 < count) {
+                float next_x = ImGui::GetItemRectMax().x + gap + cell_size.x;
+                if (next_x < ImGui::GetWindowPos().x + avail_w)
+                    ImGui::SameLine(0, gap);
+            }
+        };
+
+        // ─── Section 1: Keypoint Labels ───
+        ImGui::Text("Keypoint Labels (%zu)", labeled_frames.size());
 
         if (!labeled_frames.empty()) {
-            const ImVec4 teal(0.2f, 0.7f, 0.7f, 1.0f);
-            const ImVec4 green(0.2f, 0.8f, 0.3f, 1.0f);
-            const ImU32 teal_u32 = IM_COL32(51, 179, 179, 255);
+            const ImU32 teal_u32  = IM_COL32(51, 179, 179, 255);
             const ImU32 green_u32 = IM_COL32(51, 204, 77, 255);
-            const ImVec2 cell_size(16, 16);
-            const float gap = ImGui::GetStyle().ItemSpacing.y;
-            float avail_w = ImGui::GetContentRegionAvail().x;
 
             for (size_t i = 0; i < labeled_frames.size(); ++i) {
                 auto &lf = labeled_frames[i];
-                bool is_current = (lf.frame == current_frame_num);
+                ImU32 fill = lf.complete ? green_u32 : teal_u32;
+                char tip[64];
+                snprintf(tip, sizeof(tip), "Frame %d", lf.frame);
 
-                ImGui::PushID((int)i);
-                ImGuiColorEditFlags flags =
-                    ImGuiColorEditFlags_NoAlpha |
-                    ImGuiColorEditFlags_NoPicker |
-                    ImGuiColorEditFlags_NoTooltip |
-                    ImGuiColorEditFlags_NoDragDrop;
-
-                ImVec4 color = lf.complete ? green : teal;
-
-                if (is_current) {
-                    ImVec2 pos = ImGui::GetCursorScreenPos();
-                    ImGui::GetWindowDrawList()->AddRect(
-                        ImVec2(pos.x - 1, pos.y - 1),
-                        ImVec2(pos.x + cell_size.x + 1, pos.y + cell_size.y + 1),
-                        IM_COL32(255, 255, 255, 255), 0.0f, 0, 2.0f);
-                }
-
-                if (ImGui::ColorButton("##cell", color, flags, cell_size)) {
-                    ps.play_video = false;
-                    seek_all_cameras(scene, lf.frame,
-                                     dc_context->video_fps, ps, true);
-                }
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Frame %d", lf.frame);
-
-                ImGui::PopID();
-
-                if (i + 1 < labeled_frames.size()) {
-                    float next_x = ImGui::GetItemRectMax().x + gap + cell_size.x;
-                    if (next_x < ImGui::GetWindowPos().x + avail_w)
-                        ImGui::SameLine(0, gap);
-                }
+                grid_cell((int)i, lf.frame, tip,
+                    [fill](ImDrawList *dl, ImVec2 mn, ImVec2 mx) {
+                        dl->AddRectFilled(mn, mx, fill);
+                    });
+                grid_wrap(i, labeled_frames.size());
             }
+        }
 
-            // === Timeline minimap (ImPlot -- scroll zoom, drag pan, box select) ===
+        // ─── Section 2: SAM Labels ───
+        if (!mask_frames.empty()) {
             ImGui::Spacing();
-            int total_frames = dc_context->estimated_num_frames;
-            if (total_frames > 0) {
-                // Reserve space for rotated "Timeline" label on the left
-                float label_font = ImGui::GetFontSize();
-                float label_margin = label_font + 6.0f;
-                float timeline_w = ImGui::GetContentRegionAvail().x - label_margin;
-                float timeline_h = 60.0f;
+            ImGui::Text("SAM Labels (%zu)", mask_frames.size());
 
-                // Draw rotated "Timeline" label on the left
-                {
-                    ImVec2 label_pos = ImGui::GetCursorScreenPos();
-                    float text_w = ImGui::CalcTextSize("Timeline").x;
-                    ImVec2 tp(label_pos.x + (label_margin - label_font) * 0.5f,
-                              label_pos.y + (timeline_h + text_w) * 0.5f);
-                    ImPlot::AddTextVertical(ImGui::GetWindowDrawList(), tp,
-                        ImGui::GetColorU32(ImGuiCol_Text), "Timeline");
-                    ImGui::Dummy(ImVec2(label_margin, timeline_h));
-                    ImGui::SameLine();
-                }
+            const ImU32 orange_u32 = IM_COL32(230, 140, 30, 255);
 
-                // Split labeled frames into teal/green arrays
-                std::vector<double> teal_x, green_x;
-                for (auto &lf : labeled_frames) {
-                    if (lf.complete)
-                        green_x.push_back((double)lf.frame);
-                    else
-                        teal_x.push_back((double)lf.frame);
-                }
+            for (size_t i = 0; i < mask_frames.size(); ++i) {
+                auto &mf = mask_frames[i];
+                char tip[64];
+                snprintf(tip, sizeof(tip), "Frame %d", mf.frame);
 
-                // Double-click resets to full range: override ImPlot default
-                // by forcing limits when double-click detected on hovered plot
-                static bool reset_pending = false;
-                if (reset_pending) {
-                    ImPlot::SetNextAxesLimits(0, total_frames, 0, 1);
-                    reset_pending = false;
-                }
-
-                ImPlot::PushStyleVar(ImPlotStyleVar_PlotPadding, ImVec2(4, 2));
-                ImPlotFlags plot_flags = ImPlotFlags_NoLegend | ImPlotFlags_NoTitle |
-                                         ImPlotFlags_NoMouseText;
-                if (ImPlot::BeginPlot("##timeline", ImVec2(timeline_w, timeline_h), plot_flags)) {
-                    ImPlotAxisFlags x_flags = ImPlotAxisFlags_NoLabel;
-                    ImPlotAxisFlags y_flags = ImPlotAxisFlags_NoLabel |
-                                              ImPlotAxisFlags_NoTickLabels |
-                                              ImPlotAxisFlags_NoTickMarks |
-                                              ImPlotAxisFlags_NoGridLines |
-                                              ImPlotAxisFlags_Lock;
-                    ImPlot::SetupAxes("frame number", nullptr, x_flags, y_flags);
-                    ImPlot::SetupAxisLimits(ImAxis_X1, 0, total_frames, ImPlotCond_Once);
-                    ImPlot::SetupAxisLimits(ImAxis_Y1, 0, 1, ImPlotCond_Always);
-                    ImPlot::SetupAxisZoomConstraints(ImAxis_X1, 50, total_frames);
-
-                    // Current frame indicator
-                    double cf = (double)current_frame_num;
-                    ImPlot::SetNextLineStyle(ImVec4(1, 1, 1, 0.4f), 1.0f);
-                    ImPlot::PlotInfLines("##current", &cf, 1);
-
-                    // Teal tick marks (partially labeled)
-                    if (!teal_x.empty()) {
-                        ImPlot::SetNextLineStyle(teal, 2.0f);
-                        ImPlot::PlotInfLines("##teal", teal_x.data(), (int)teal_x.size());
-                    }
-
-                    // Green tick marks (fully labeled + triangulated)
-                    if (!green_x.empty()) {
-                        ImPlot::SetNextLineStyle(green, 2.0f);
-                        ImPlot::PlotInfLines("##green", green_x.data(), (int)green_x.size());
-                    }
-
-                    // Double-click to reset to full video range
-                    if (ImPlot::IsPlotHovered() && ImGui::IsMouseDoubleClicked(0))
-                        reset_pending = true;
-
-                    // Click on a tick mark to seek
-                    if (ImPlot::IsPlotHovered() && ImGui::IsMouseClicked(0)) {
-                        ImPlotPoint mp = ImPlot::GetPlotMousePos();
-                        ImPlotRect lims = ImPlot::GetPlotLimits();
-                        double px_per_frame = timeline_w / (lims.X.Max - lims.X.Min);
-                        double tolerance = 5.0 / px_per_frame;
-                        int nearest = -1;
-                        double nearest_dist = tolerance + 1;
-                        for (auto &lf : labeled_frames) {
-                            double d = fabs((double)lf.frame - mp.x);
-                            if (d < nearest_dist) {
-                                nearest_dist = d;
-                                nearest = lf.frame;
-                            }
-                        }
-                        if (nearest >= 0 && nearest_dist <= tolerance) {
-                            ps.play_video = false;
-                            seek_all_cameras(scene, nearest,
-                                             dc_context->video_fps, ps, true);
-                        }
-                    }
-
-                    // Tooltip for nearest tick
-                    if (ImPlot::IsPlotHovered()) {
-                        ImPlotPoint mp = ImPlot::GetPlotMousePos();
-                        ImPlotRect lims = ImPlot::GetPlotLimits();
-                        double px_per_frame = timeline_w / (lims.X.Max - lims.X.Min);
-                        double tolerance = 5.0 / px_per_frame;
-                        for (auto &lf : labeled_frames) {
-                            if (fabs((double)lf.frame - mp.x) <= tolerance) {
-                                ImGui::SetTooltip("Frame %d", lf.frame);
-                                break;
-                            }
-                        }
-                    }
-
-                    ImPlot::EndPlot();
-                }
-                ImPlot::PopStyleVar();
-
+                grid_cell((int)(10000 + i), mf.frame, tip,
+                    [orange_u32](ImDrawList *dl, ImVec2 mn, ImVec2 mx) {
+                        float cx = (mn.x + mx.x) * 0.5f;
+                        float cy = (mn.y + mx.y) * 0.5f;
+                        float r  = (mx.x - mn.x) * 0.5f - 1.0f;
+                        dl->AddCircleFilled(ImVec2(cx, cy), r, orange_u32, 16);
+                    });
+                grid_wrap(i, mask_frames.size());
             }
+        }
+
+        // ─── Section 3: Bounding Box Labels ───
+        if (!bbox_frames.empty()) {
+            ImGui::Spacing();
+            ImGui::Text("Bounding Box Labels (%zu)", bbox_frames.size());
+
+            const ImU32 purple_u32  = IM_COL32(160, 90, 220, 255);
+            const ImU32 lilac_u32   = IM_COL32(200, 150, 255, 255);
+
+            for (size_t i = 0; i < bbox_frames.size(); ++i) {
+                auto &bf = bbox_frames[i];
+                char tip[96];
+                if (bf.has_bbox && bf.has_obb)
+                    snprintf(tip, sizeof(tip), "Frame %d (BBox+OBB)", bf.frame);
+                else if (bf.has_obb)
+                    snprintf(tip, sizeof(tip), "Frame %d (OBB)", bf.frame);
+                else
+                    snprintf(tip, sizeof(tip), "Frame %d (BBox)", bf.frame);
+
+                bool has_bb = bf.has_bbox, has_ob = bf.has_obb;
+                grid_cell((int)(20000 + i), bf.frame, tip,
+                    [purple_u32, lilac_u32, has_bb, has_ob](ImDrawList *dl, ImVec2 mn, ImVec2 mx) {
+                        // BBox: purple square outline (inset 1px for clarity)
+                        if (has_bb) {
+                            dl->AddRect(
+                                ImVec2(mn.x + 1, mn.y + 1),
+                                ImVec2(mx.x - 1, mx.y - 1),
+                                purple_u32, 0.0f, 0, 1.5f);
+                        }
+                        // OBB: lighter purple diamond outline
+                        if (has_ob) {
+                            float cx = (mn.x + mx.x) * 0.5f;
+                            float cy = (mn.y + mx.y) * 0.5f;
+                            float hx = (mx.x - mn.x) * 0.5f - 1.5f;
+                            float hy = (mx.y - mn.y) * 0.5f - 1.5f;
+                            ImVec2 pts[4] = {
+                                ImVec2(cx, cy - hy),   // top
+                                ImVec2(cx + hx, cy),   // right
+                                ImVec2(cx, cy + hy),   // bottom
+                                ImVec2(cx - hx, cy),   // left
+                            };
+                            dl->AddPolyline(pts, 4, lilac_u32, ImDrawFlags_Closed, 1.5f);
+                        }
+                    });
+                grid_wrap(i, bbox_frames.size());
+            }
+        }
+
+        // === Timeline minimap (ImPlot -- scroll zoom, drag pan, box select) ===
+        // Shows keypoint labels only (teal=partial, green=complete+triangulated)
+        ImGui::Spacing();
+        int total_frames = dc_context->estimated_num_frames;
+        if (total_frames > 0 && !labeled_frames.empty()) {
+            const ImVec4 teal(0.2f, 0.7f, 0.7f, 1.0f);
+            const ImVec4 green(0.2f, 0.8f, 0.3f, 1.0f);
+
+            // Reserve space for rotated "Timeline" label on the left
+            float label_font = ImGui::GetFontSize();
+            float label_margin = label_font + 6.0f;
+            float timeline_w = ImGui::GetContentRegionAvail().x - label_margin;
+            float timeline_h = 60.0f;
+
+            // Draw rotated "Timeline" label on the left
+            {
+                ImVec2 label_pos = ImGui::GetCursorScreenPos();
+                float text_w = ImGui::CalcTextSize("Timeline").x;
+                ImVec2 tp(label_pos.x + (label_margin - label_font) * 0.5f,
+                          label_pos.y + (timeline_h + text_w) * 0.5f);
+                ImPlot::AddTextVertical(ImGui::GetWindowDrawList(), tp,
+                    ImGui::GetColorU32(ImGuiCol_Text), "Timeline");
+                ImGui::Dummy(ImVec2(label_margin, timeline_h));
+                ImGui::SameLine();
+            }
+
+            // Split labeled frames into teal/green arrays
+            std::vector<double> teal_x, green_x;
+            for (auto &lf : labeled_frames) {
+                if (lf.complete)
+                    green_x.push_back((double)lf.frame);
+                else
+                    teal_x.push_back((double)lf.frame);
+            }
+
+            // Double-click resets to full range: override ImPlot default
+            // by forcing limits when double-click detected on hovered plot
+            static bool reset_pending = false;
+            if (reset_pending) {
+                ImPlot::SetNextAxesLimits(0, total_frames, 0, 1);
+                reset_pending = false;
+            }
+
+            ImPlot::PushStyleVar(ImPlotStyleVar_PlotPadding, ImVec2(4, 2));
+            ImPlotFlags plot_flags = ImPlotFlags_NoLegend | ImPlotFlags_NoTitle |
+                                     ImPlotFlags_NoMouseText;
+            if (ImPlot::BeginPlot("##timeline", ImVec2(timeline_w, timeline_h), plot_flags)) {
+                ImPlotAxisFlags x_flags = ImPlotAxisFlags_NoLabel;
+                ImPlotAxisFlags y_flags = ImPlotAxisFlags_NoLabel |
+                                          ImPlotAxisFlags_NoTickLabels |
+                                          ImPlotAxisFlags_NoTickMarks |
+                                          ImPlotAxisFlags_NoGridLines |
+                                          ImPlotAxisFlags_Lock;
+                ImPlot::SetupAxes("frame number", nullptr, x_flags, y_flags);
+                ImPlot::SetupAxisLimits(ImAxis_X1, 0, total_frames, ImPlotCond_Once);
+                ImPlot::SetupAxisLimits(ImAxis_Y1, 0, 1, ImPlotCond_Always);
+                ImPlot::SetupAxisZoomConstraints(ImAxis_X1, 50, total_frames);
+
+                // Current frame indicator
+                double cf = (double)current_frame_num;
+                ImPlot::SetNextLineStyle(ImVec4(1, 1, 1, 0.4f), 1.0f);
+                ImPlot::PlotInfLines("##current", &cf, 1);
+
+                // Teal tick marks (partially labeled)
+                if (!teal_x.empty()) {
+                    ImPlot::SetNextLineStyle(teal, 2.0f);
+                    ImPlot::PlotInfLines("##teal", teal_x.data(), (int)teal_x.size());
+                }
+
+                // Green tick marks (fully labeled + triangulated)
+                if (!green_x.empty()) {
+                    ImPlot::SetNextLineStyle(green, 2.0f);
+                    ImPlot::PlotInfLines("##green", green_x.data(), (int)green_x.size());
+                }
+
+                // Double-click to reset to full video range
+                if (ImPlot::IsPlotHovered() && ImGui::IsMouseDoubleClicked(0))
+                    reset_pending = true;
+
+                // Click on a tick mark to seek
+                if (ImPlot::IsPlotHovered() && ImGui::IsMouseClicked(0)) {
+                    ImPlotPoint mp = ImPlot::GetPlotMousePos();
+                    ImPlotRect lims = ImPlot::GetPlotLimits();
+                    double px_per_frame = timeline_w / (lims.X.Max - lims.X.Min);
+                    double tolerance = 5.0 / px_per_frame;
+                    int nearest = -1;
+                    double nearest_dist = tolerance + 1;
+                    for (auto &lf : labeled_frames) {
+                        double d = fabs((double)lf.frame - mp.x);
+                        if (d < nearest_dist) {
+                            nearest_dist = d;
+                            nearest = lf.frame;
+                        }
+                    }
+                    if (nearest >= 0 && nearest_dist <= tolerance) {
+                        ps.play_video = false;
+                        seek_all_cameras(scene, nearest,
+                                         dc_context->video_fps, ps, true);
+                    }
+                }
+
+                // Tooltip for nearest tick
+                if (ImPlot::IsPlotHovered()) {
+                    ImPlotPoint mp = ImPlot::GetPlotMousePos();
+                    ImPlotRect lims = ImPlot::GetPlotLimits();
+                    double px_per_frame = timeline_w / (lims.X.Max - lims.X.Min);
+                    double tolerance = 5.0 / px_per_frame;
+                    for (auto &lf : labeled_frames) {
+                        if (fabs((double)lf.frame - mp.x) <= tolerance) {
+                            ImGui::SetTooltip("Frame %d", lf.frame);
+                            break;
+                        }
+                    }
+                }
+
+                ImPlot::EndPlot();
+            }
+            ImPlot::PopStyleVar();
         }
 
     }
