@@ -679,7 +679,7 @@ int main(int argc, char **argv) {
                     ImU32 text_col;
                     auto ann_it = annotations.find((u32)frame_num);
                     if (ann_it != annotations.end() &&
-                        frame_has_any_labels(ann_it->second)) {
+                        frame_has_any_keypoints(ann_it->second)) {
                         bool complete = frame_is_complete(ann_it->second);
                         if (complete && skeleton.has_skeleton && scene->num_cams > 1) {
                             for (int k = 0; k < skeleton.num_nodes; ++k)

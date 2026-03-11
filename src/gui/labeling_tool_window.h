@@ -33,14 +33,14 @@ inline void DrawLabelingToolWindow(
         auto next_labeled_it = annotations.end();
         for (auto it = annotations.upper_bound(current_frame_num);
              it != annotations.end(); ++it) {
-            if (frame_has_any_labels(it->second)) {
+            if (frame_has_any_keypoints(it->second)) {
                 next_labeled_it = it; break;
             }
         }
         if (next_labeled_it == annotations.end()) {
             for (auto it = annotations.begin();
                  it != annotations.upper_bound(current_frame_num); ++it) {
-                if (frame_has_any_labels(it->second)) {
+                if (frame_has_any_keypoints(it->second)) {
                     next_labeled_it = it; break;
                 }
             }
@@ -49,7 +49,7 @@ inline void DrawLabelingToolWindow(
         auto lb = annotations.lower_bound(current_frame_num);
         if (lb != annotations.begin()) {
             for (auto it = std::prev(lb);;) {
-                if (frame_has_any_labels(it->second)) {
+                if (frame_has_any_keypoints(it->second)) {
                     prev_labeled_it = it; break;
                 }
                 if (it == annotations.begin()) break;
@@ -60,7 +60,7 @@ inline void DrawLabelingToolWindow(
         if (prev_labeled_it == annotations.end() && !annotations.empty()) {
             for (auto it = std::prev(annotations.end());;) {
                 if (it->first <= (u32)current_frame_num) break;
-                if (frame_has_any_labels(it->second)) {
+                if (frame_has_any_keypoints(it->second)) {
                     prev_labeled_it = it; break;
                 }
                 if (it == annotations.begin()) break;
@@ -176,7 +176,7 @@ inline void DrawLabelingToolWindow(
         struct LabeledFrameInfo { int frame; bool complete; };
         std::vector<LabeledFrameInfo> labeled_frames;
         for (const auto &[fnum, fa] : annotations) {
-            if (!frame_has_any_labels(fa))
+            if (!frame_has_any_keypoints(fa))
                 continue;
             bool complete = true;
             if (skeleton.has_skeleton && scene->num_cams > 1) {

@@ -87,11 +87,19 @@ inline void split_train_val(const std::vector<u32> &frames, float train_ratio,
     std::sort(val.begin(), val.end());
 }
 
-// ── Get labeled frames from AnnotationMap ──
+// ── Get annotated frames from AnnotationMap (any annotation type) ──
 inline std::vector<u32> get_labeled_frames(const AnnotationMap &amap) {
     std::vector<u32> frames;
     for (const auto &[f, fa] : amap)
         if (frame_has_any_labels(fa)) frames.push_back(f);
+    return frames;
+}
+
+// ── Get frames with keypoints only (for keypoint-only exporters) ──
+inline std::vector<u32> get_keypoint_frames(const AnnotationMap &amap) {
+    std::vector<u32> frames;
+    for (const auto &[f, fa] : amap)
+        if (frame_has_any_keypoints(fa)) frames.push_back(f);
     return frames;
 }
 
@@ -132,7 +140,7 @@ inline nlohmann::json build_coco_json(
             if (cam.keypoints[k].labeled) ++num_visible;
 
         // Skip frames with no keypoints AND no masks
-        bool has_mask = cam.has_mask();
+        bool has_mask = cam.has_mask() && !cam.extras->mask_polygons.empty();
         if (num_visible == 0 && !has_mask) { img_id++; continue; }
 
         // Build flat keypoints array [x,y,v, x,y,v, ...]
@@ -211,10 +219,8 @@ inline nlohmann::json build_coco_json(
         ann["bbox"] = {bx, by, bw, bh};
         ann["area"] = area;
         ann["iscrowd"] = 0;
-        if (num_visible > 0) {
-            ann["keypoints"] = kp_flat;
-            ann["num_keypoints"] = num_visible;
-        }
+        ann["keypoints"] = kp_flat;
+        ann["num_keypoints"] = num_visible;
         annotations.push_back(ann);
 
         img_id++;
@@ -302,7 +308,7 @@ inline bool export_coco(const ExportConfig &cfg, const AnnotationMap &amap,
 inline bool export_yolo(const ExportConfig &cfg, const AnnotationMap &amap,
                         bool include_keypoints, std::string *status) {
     namespace fs = std::filesystem;
-    auto labeled = get_labeled_frames(amap);
+    auto labeled = get_keypoint_frames(amap);
     if (labeled.empty()) {
         if (status) *status = "Error: No labeled frames found.";
         return false;
@@ -428,7 +434,7 @@ inline bool export_yolo(const ExportConfig &cfg, const AnnotationMap &amap,
 inline bool export_deeplabcut(const ExportConfig &cfg, const AnnotationMap &amap,
                               std::string *status) {
     namespace fs = std::filesystem;
-    auto labeled = get_labeled_frames(amap);
+    auto labeled = get_keypoint_frames(amap);
     if (labeled.empty()) {
         if (status) *status = "Error: No labeled frames found.";
         return false;
