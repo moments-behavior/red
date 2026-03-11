@@ -50,8 +50,41 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
             return;
         }
 
-        // --- JARVIS Project section ---
-        ImGui::SeparatorText("JARVIS Project");
+        // --- Project Models (previously imported) ---
+        auto &pm = ctx.pm;
+        if (!pm.jarvis_models.empty()) {
+            ImGui::SeparatorText("Project Models");
+            const char *preview = (pm.active_jarvis_model >= 0 &&
+                                   pm.active_jarvis_model < (int)pm.jarvis_models.size())
+                ? pm.jarvis_models[pm.active_jarvis_model].name.c_str()
+                : "(none)";
+            if (ImGui::BeginCombo("##jarvis_model_combo", preview)) {
+                for (int i = 0; i < (int)pm.jarvis_models.size(); ++i) {
+                    bool selected = (i == pm.active_jarvis_model);
+                    if (ImGui::Selectable(pm.jarvis_models[i].name.c_str(), selected)) {
+                        pm.active_jarvis_model = i;
+                        auto &m = pm.jarvis_models[i];
+                        std::string base = pm.project_path + "/" + m.relative_path;
+                        std::string cd = base + "/center_detect.onnx";
+                        std::string kd = base + "/keypoint_detect.onnx";
+                        std::string mi = base + "/model_info.json";
+                        jarvis_init(jarvis, cd.c_str(), kd.c_str(),
+                                    std::filesystem::exists(mi) ? mi.c_str() : nullptr);
+                    }
+                    if (selected) ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndCombo();
+            }
+            if (pm.active_jarvis_model >= 0) {
+                auto &m = pm.jarvis_models[pm.active_jarvis_model];
+                ImGui::SameLine();
+                ImGui::TextDisabled("(%d joints, %dx%d)", m.num_joints,
+                                    m.keypoint_input_size, m.keypoint_input_size);
+            }
+        }
+
+        // --- Import New Model ---
+        ImGui::SeparatorText("Import Model");
 
         ImGui::Text("Models Folder");
         ImGui::SetNextItemWidth(-60);
@@ -167,6 +200,58 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
             state.model_info_path = info_path;
             jarvis_init(jarvis, center_path.c_str(), keypoint_path.c_str(),
                         info_path.empty() ? nullptr : info_path.c_str());
+
+            // Import into project: copy ONNX files into project folder
+            if (jarvis.loaded && !pm.project_path.empty()) {
+                std::string src_dir = fs::path(center_path).parent_path().string();
+                // Read model name from model_info.json or derive from folder
+                std::string model_name = jarvis.config.project_name;
+                if (model_name.empty())
+                    model_name = fs::path(src_dir).filename().string();
+                if (model_name.empty()) model_name = "jarvis_model";
+
+                std::string rel = "jarvis_models/" + model_name;
+                fs::path dest = fs::path(pm.project_path) / rel;
+                std::error_code ec;
+                fs::create_directories(dest, ec);
+
+                // Copy .onnx, .onnx.data, model_info.json
+                for (auto &entry : fs::directory_iterator(src_dir)) {
+                    auto fname = entry.path().filename().string();
+                    if (fname.find(".onnx") != std::string::npos ||
+                        fname == "model_info.json") {
+                        fs::copy_file(entry.path(), dest / fname,
+                                      fs::copy_options::overwrite_existing, ec);
+                    }
+                }
+
+                // Add to project (avoid duplicates)
+                ProjectManager::JarvisModelEntry me;
+                me.name = model_name;
+                me.relative_path = rel;
+                me.num_joints = jarvis.config.num_joints;
+                me.center_input_size = jarvis.config.center_input_size;
+                me.keypoint_input_size = jarvis.config.keypoint_input_size;
+
+                bool dup = false;
+                for (int i = 0; i < (int)pm.jarvis_models.size(); ++i) {
+                    if (pm.jarvis_models[i].name == model_name) {
+                        pm.jarvis_models[i] = me;
+                        pm.active_jarvis_model = i;
+                        dup = true;
+                        break;
+                    }
+                }
+                if (!dup) {
+                    pm.jarvis_models.push_back(me);
+                    pm.active_jarvis_model = (int)pm.jarvis_models.size() - 1;
+                }
+
+                // Save .redproj
+                fs::path redproj = fs::path(pm.project_path) /
+                                   (pm.project_name + ".redproj");
+                save_project_manager_json(pm, redproj);
+            }
         }
         if (!can_load) ImGui::EndDisabled();
 

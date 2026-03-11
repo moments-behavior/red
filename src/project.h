@@ -48,7 +48,31 @@ struct ProjectManager {
     std::string skeleton_name;
     std::string media_folder;
     AnnotationConfig annotation_config; // annotation capabilities
+
+    // JARVIS models imported into this project
+    struct JarvisModelEntry {
+        std::string name;            // display name
+        std::string relative_path;   // e.g., "jarvis_models/mouseJan30"
+        int num_joints = 0;
+        int center_input_size = 0;
+        int keypoint_input_size = 0;
+    };
+    std::vector<JarvisModelEntry> jarvis_models;
+    int active_jarvis_model = -1;  // index into jarvis_models, -1 = none
 };
+
+inline void to_json(nlohmann::json &j, const ProjectManager::JarvisModelEntry &m) {
+    j = {{"name", m.name}, {"relative_path", m.relative_path},
+         {"num_joints", m.num_joints}, {"center_input_size", m.center_input_size},
+         {"keypoint_input_size", m.keypoint_input_size}};
+}
+inline void from_json(const nlohmann::json &j, ProjectManager::JarvisModelEntry &m) {
+    m.name = j.value("name", std::string{});
+    m.relative_path = j.value("relative_path", std::string{});
+    m.num_joints = j.value("num_joints", 0);
+    m.center_input_size = j.value("center_input_size", 0);
+    m.keypoint_input_size = j.value("keypoint_input_size", 0);
+}
 
 inline void to_json(nlohmann::json &j, const ProjectManager &p) {
     j = nlohmann::json{{"project_root_path", p.project_root_path},
@@ -62,7 +86,9 @@ inline void to_json(nlohmann::json &j, const ProjectManager &p) {
                        {"camera_names", p.camera_names},
                        {"skeleton_name", p.skeleton_name},
                        {"media_folder", p.media_folder},
-                       {"annotation_config", p.annotation_config}};
+                       {"annotation_config", p.annotation_config},
+                       {"jarvis_models", p.jarvis_models},
+                       {"active_jarvis_model", p.active_jarvis_model}};
 }
 
 inline void from_json(const nlohmann::json &j, ProjectManager &p) {
@@ -79,6 +105,9 @@ inline void from_json(const nlohmann::json &j, ProjectManager &p) {
     p.media_folder = j.value("media_folder", std::string{});
     if (j.contains("annotation_config"))
         p.annotation_config = j["annotation_config"].get<AnnotationConfig>();
+    if (j.contains("jarvis_models"))
+        p.jarvis_models = j["jarvis_models"].get<std::vector<ProjectManager::JarvisModelEntry>>();
+    p.active_jarvis_model = j.value("active_jarvis_model", -1);
 }
 
 inline bool save_project_manager_json(const ProjectManager &p,

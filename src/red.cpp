@@ -401,6 +401,21 @@ int main(int argc, char **argv) {
 #endif
     };
 
+    // Auto-load active JARVIS model from project after loading
+    auto load_project_jarvis_model = [&]() {
+        if (pm.active_jarvis_model >= 0 &&
+            pm.active_jarvis_model < (int)pm.jarvis_models.size()) {
+            auto &m = pm.jarvis_models[pm.active_jarvis_model];
+            std::string base = pm.project_path + "/" + m.relative_path;
+            std::string cd = base + "/center_detect.onnx";
+            std::string kd = base + "/keypoint_detect.onnx";
+            std::string mi = base + "/model_info.json";
+            if (std::filesystem::exists(cd) && std::filesystem::exists(kd))
+                jarvis_init(jarvis_state, cd.c_str(), kd.c_str(),
+                            std::filesystem::exists(mi) ? mi.c_str() : nullptr);
+        }
+    };
+
     // Callbacks for static console-output functions in this file
     auto print_metadata = [&]() {
         print_video_metadata(demuxers, pm.camera_names, dc_context->seek_interval);
@@ -420,9 +435,10 @@ int main(int argc, char **argv) {
                 popups.pushError(err);
             } else {
                 pm = loaded;
-                if (setup_project(pm, skeleton, skeleton_map, &err))
+                if (setup_project(pm, skeleton, skeleton_map, &err)) {
                     on_project_loaded(ctx, print_metadata, print_summary);
-                else
+                    load_project_jarvis_model();
+                } else
                     popups.pushError(err);
             }
         }
@@ -475,6 +491,7 @@ int main(int argc, char **argv) {
         if (!save_project_manager_json(pm_ref, redproj_path, &err))
             return false;
         on_project_loaded(ctx, print_metadata, print_summary);
+        load_project_jarvis_model();
         return true;
     };
 
