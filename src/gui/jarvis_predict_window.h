@@ -9,6 +9,9 @@
 #include "imgui.h"
 #include "app_context.h"
 #include "jarvis_inference.h"
+#ifdef __APPLE__
+#include "jarvis_coreml.h"
+#endif
 #include "gui/panel.h"
 #include <ImGuiFileDialog.h>
 #include <misc/cpp/imgui_stdlib.h>
@@ -43,6 +46,9 @@ struct JarvisPredictState {
 };
 
 inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarvis,
+#ifdef __APPLE__
+                                     JarvisCoreMLState &jarvis_coreml,
+#endif
                                      AppContext &ctx) {
     drawPanel("JARVIS Predict", state.show,
         [&]() {
@@ -57,16 +63,34 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
 
         // --- Auto-load project model if not yet loaded ---
         auto &pm = ctx.pm;
-        if (!jarvis.loaded && pm.active_jarvis_model >= 0 &&
+#ifdef __APPLE__
+        bool any_loaded = jarvis.loaded || jarvis_coreml.loaded;
+#else
+        bool any_loaded = jarvis.loaded;
+#endif
+        if (!any_loaded && pm.active_jarvis_model >= 0 &&
             pm.active_jarvis_model < (int)pm.jarvis_models.size()) {
             auto &m = pm.jarvis_models[pm.active_jarvis_model];
             std::string base = pm.project_path + "/" + m.relative_path;
-            std::string cd = base + "/center_detect.onnx";
-            std::string kd = base + "/keypoint_detect.onnx";
             std::string mi = base + "/model_info.json";
-            if (std::filesystem::exists(cd) && std::filesystem::exists(kd))
-                jarvis_init(jarvis, cd.c_str(), kd.c_str(),
-                            std::filesystem::exists(mi) ? mi.c_str() : nullptr);
+            std::string mi_c = std::filesystem::exists(mi) ? mi : "";
+#ifdef __APPLE__
+            // Prefer CoreML (.mlpackage) for GPU/ANE acceleration
+            std::string cd_ml = base + "/center_detect.mlpackage";
+            std::string kd_ml = base + "/keypoint_detect.mlpackage";
+            if (std::filesystem::exists(cd_ml) && std::filesystem::exists(kd_ml)) {
+                jarvis_coreml_init(jarvis_coreml, base,
+                                    mi_c.empty() ? nullptr : mi_c.c_str());
+            } else
+#endif
+            {
+                // Fallback: ONNX Runtime
+                std::string cd = base + "/center_detect.onnx";
+                std::string kd = base + "/keypoint_detect.onnx";
+                if (std::filesystem::exists(cd) && std::filesystem::exists(kd))
+                    jarvis_init(jarvis, cd.c_str(), kd.c_str(),
+                                mi_c.empty() ? nullptr : mi_c.c_str());
+            }
         }
 
         // --- Project Models (previously imported) ---
@@ -377,20 +401,32 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
         ImGui::SliderFloat("Confidence Threshold", &state.confidence_threshold,
                            0.0f, 1.0f, "%.2f");
 
+        // Show timing from whichever backend ran last
+#ifdef __APPLE__
+        if (jarvis_coreml.loaded && jarvis_coreml.last_total_ms > 0) {
+            ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
+                "CoreML: Center %.1f ms + Keypoint %.1f ms = %.1f ms",
+                jarvis_coreml.last_center_ms, jarvis_coreml.last_keypoint_ms,
+                jarvis_coreml.last_total_ms);
+        } else
+#endif
         if (jarvis.loaded && jarvis.last_total_ms > 0) {
-            ImGui::Text("Center: %.1f ms  Keypoint: %.1f ms  "
-                        "Triangulate: %.1f ms  Total: %.1f ms",
+            ImGui::Text("ONNX: Center %.1f ms + Keypoint %.1f ms = %.1f ms",
                         jarvis.last_center_ms, jarvis.last_keypoint_ms,
-                        jarvis.last_triangulate_ms, jarvis.last_total_ms);
+                        jarvis.last_total_ms);
         }
 
-        if (!jarvis.loaded) ImGui::BeginDisabled();
+        bool can_predict = jarvis.loaded;
+#ifdef __APPLE__
+        can_predict = can_predict || jarvis_coreml.loaded;
+#endif
+        if (!can_predict) ImGui::BeginDisabled();
         if (ImGui::Button("Predict Current Frame")) {
             // Set flag — main loop handles RGB extraction + prediction
             // (pixel buffer access is platform-specific, same as hotkey 6)
             state.predict_requested = true;
         }
-        if (!jarvis.loaded) ImGui::EndDisabled();
+        if (!can_predict) ImGui::EndDisabled();
 
         ImGui::SameLine();
         ImGui::TextDisabled("Press 6 to predict (hotkey)");

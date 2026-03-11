@@ -505,7 +505,11 @@ int main(int argc, char **argv) {
                 [&]() { DrawSamToolWindow(sam_tool_state, sam_state, ctx); },
                 nullptr});
     panels.add({"JARVIS Predict",
-                [&]() { DrawJarvisPredictWindow(jarvis_predict_state, jarvis_state, ctx); },
+                [&]() { DrawJarvisPredictWindow(jarvis_predict_state, jarvis_state,
+#ifdef __APPLE__
+                                                 jarvis_coreml_state,
+#endif
+                                                 ctx); },
                 nullptr});
 
     main_loop_running = true;
