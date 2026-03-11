@@ -389,13 +389,16 @@ inline void DrawLabelingToolWindow(
             }
         }
 
-        // === Timeline minimap (ImPlot -- scroll zoom, drag pan, box select) ===
-        // Shows keypoint labels only (teal=partial, green=complete+triangulated)
+        // === Timeline minimap (ImPlot — all annotation types) ===
         ImGui::Spacing();
         int total_frames = dc_context->estimated_num_frames;
-        if (total_frames > 0 && !labeled_frames.empty()) {
+        bool has_any_annotations = !labeled_frames.empty() || !mask_frames.empty() || !bbox_frames.empty();
+        if (total_frames > 0 && has_any_annotations) {
             const ImVec4 teal(0.2f, 0.7f, 0.7f, 1.0f);
             const ImVec4 green(0.2f, 0.8f, 0.3f, 1.0f);
+            const ImVec4 orange(0.9f, 0.55f, 0.12f, 1.0f);
+            const ImVec4 purple(0.63f, 0.35f, 0.86f, 1.0f);
+            const ImVec4 lilac(0.78f, 0.59f, 1.0f, 1.0f);
 
             // Reserve space for rotated "Timeline" label on the left
             float label_font = ImGui::GetFontSize();
@@ -415,17 +418,29 @@ inline void DrawLabelingToolWindow(
                 ImGui::SameLine();
             }
 
-            // Split labeled frames into teal/green arrays
-            std::vector<double> teal_x, green_x;
+            // Build tick arrays for each annotation type
+            std::vector<double> teal_x, green_x, orange_x, purple_x, lilac_x;
             for (auto &lf : labeled_frames) {
-                if (lf.complete)
-                    green_x.push_back((double)lf.frame);
-                else
-                    teal_x.push_back((double)lf.frame);
+                if (lf.complete) green_x.push_back((double)lf.frame);
+                else teal_x.push_back((double)lf.frame);
+            }
+            for (auto &mf : mask_frames)
+                orange_x.push_back((double)mf.frame);
+            for (auto &bf : bbox_frames) {
+                if (bf.has_bbox) purple_x.push_back((double)bf.frame);
+                if (bf.has_obb) lilac_x.push_back((double)bf.frame);
             }
 
-            // Double-click resets to full range: override ImPlot default
-            // by forcing limits when double-click detected on hovered plot
+            // Collect all annotated frames for click-to-seek
+            std::vector<int> all_annotated_frames;
+            for (auto &lf : labeled_frames) all_annotated_frames.push_back(lf.frame);
+            for (auto &mf : mask_frames) all_annotated_frames.push_back(mf.frame);
+            for (auto &bf : bbox_frames) all_annotated_frames.push_back(bf.frame);
+            std::sort(all_annotated_frames.begin(), all_annotated_frames.end());
+            all_annotated_frames.erase(
+                std::unique(all_annotated_frames.begin(), all_annotated_frames.end()),
+                all_annotated_frames.end());
+
             static bool reset_pending = false;
             if (reset_pending) {
                 ImPlot::SetNextAxesLimits(0, total_frames, 0, 1);
@@ -452,23 +467,39 @@ inline void DrawLabelingToolWindow(
                 ImPlot::SetNextLineStyle(ImVec4(1, 1, 1, 0.4f), 1.0f);
                 ImPlot::PlotInfLines("##current", &cf, 1);
 
-                // Teal tick marks (partially labeled)
+                // Keypoint ticks (teal=partial, green=complete)
                 if (!teal_x.empty()) {
                     ImPlot::SetNextLineStyle(teal, 2.0f);
                     ImPlot::PlotInfLines("##teal", teal_x.data(), (int)teal_x.size());
                 }
-
-                // Green tick marks (fully labeled + triangulated)
                 if (!green_x.empty()) {
                     ImPlot::SetNextLineStyle(green, 2.0f);
                     ImPlot::PlotInfLines("##green", green_x.data(), (int)green_x.size());
+                }
+
+                // SAM mask ticks (orange)
+                if (!orange_x.empty()) {
+                    ImPlot::SetNextLineStyle(orange, 2.0f);
+                    ImPlot::PlotInfLines("##sam", orange_x.data(), (int)orange_x.size());
+                }
+
+                // BBox ticks (purple)
+                if (!purple_x.empty()) {
+                    ImPlot::SetNextLineStyle(purple, 2.0f);
+                    ImPlot::PlotInfLines("##bbox", purple_x.data(), (int)purple_x.size());
+                }
+
+                // OBB ticks (lilac)
+                if (!lilac_x.empty()) {
+                    ImPlot::SetNextLineStyle(lilac, 2.0f);
+                    ImPlot::PlotInfLines("##obb", lilac_x.data(), (int)lilac_x.size());
                 }
 
                 // Double-click to reset to full video range
                 if (ImPlot::IsPlotHovered() && ImGui::IsMouseDoubleClicked(0))
                     reset_pending = true;
 
-                // Click on a tick mark to seek
+                // Click on any tick mark to seek
                 if (ImPlot::IsPlotHovered() && ImGui::IsMouseClicked(0)) {
                     ImPlotPoint mp = ImPlot::GetPlotMousePos();
                     ImPlotRect lims = ImPlot::GetPlotLimits();
@@ -476,12 +507,9 @@ inline void DrawLabelingToolWindow(
                     double tolerance = 5.0 / px_per_frame;
                     int nearest = -1;
                     double nearest_dist = tolerance + 1;
-                    for (auto &lf : labeled_frames) {
-                        double d = fabs((double)lf.frame - mp.x);
-                        if (d < nearest_dist) {
-                            nearest_dist = d;
-                            nearest = lf.frame;
-                        }
+                    for (int f : all_annotated_frames) {
+                        double d = fabs((double)f - mp.x);
+                        if (d < nearest_dist) { nearest_dist = d; nearest = f; }
                     }
                     if (nearest >= 0 && nearest_dist <= tolerance) {
                         ps.play_video = false;
@@ -496,9 +524,9 @@ inline void DrawLabelingToolWindow(
                     ImPlotRect lims = ImPlot::GetPlotLimits();
                     double px_per_frame = timeline_w / (lims.X.Max - lims.X.Min);
                     double tolerance = 5.0 / px_per_frame;
-                    for (auto &lf : labeled_frames) {
-                        if (fabs((double)lf.frame - mp.x) <= tolerance) {
-                            ImGui::SetTooltip("Frame %d", lf.frame);
+                    for (int f : all_annotated_frames) {
+                        if (fabs((double)f - mp.x) <= tolerance) {
+                            ImGui::SetTooltip("Frame %d", f);
                             break;
                         }
                     }
