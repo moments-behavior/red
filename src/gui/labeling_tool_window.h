@@ -12,6 +12,7 @@
 struct LabelingToolState {
     std::time_t last_saved = static_cast<std::time_t>(-1);
     bool save_requested = false;
+    bool timeline_reset_pending = false;
 };
 
 inline void DrawLabelingToolWindow(
@@ -184,7 +185,11 @@ inline void DrawLabelingToolWindow(
         ImGui::EndDisabled();
 
         if (state.last_saved != static_cast<std::time_t>(-1)) {
-            ImGui::TextDisabled("Last saved: %s", ctime(&state.last_saved));
+            char time_buf[32];
+            struct tm tm_buf;
+            localtime_r(&state.last_saved, &tm_buf);
+            strftime(time_buf, sizeof(time_buf), "%H:%M:%S", &tm_buf);
+            ImGui::TextDisabled("Last saved: %s", time_buf);
         }
 
         ImGui::Separator();
@@ -232,11 +237,23 @@ inline void DrawLabelingToolWindow(
                 bbox_frames.push_back({(int)fnum, any_bbox, any_obb});
         }
 
-        // === Shared grid rendering constants ===
+        // === Shared constants (grid + timeline) ===
         const ImVec2 cell_size(16, 16);
         const float gap = ImGui::GetStyle().ItemSpacing.y;
         const float avail_w = ImGui::GetContentRegionAvail().x;
         const ImU32 white = IM_COL32(255, 255, 255, 255);
+
+        // Annotation type colors (shared between grid cells and timeline ticks)
+        const ImVec4 color_teal(0.2f, 0.7f, 0.7f, 1.0f);
+        const ImVec4 color_green(0.2f, 0.8f, 0.3f, 1.0f);
+        const ImVec4 color_orange(0.9f, 0.55f, 0.12f, 1.0f);
+        const ImVec4 color_purple(0.63f, 0.35f, 0.86f, 1.0f);
+        const ImVec4 color_lilac(0.78f, 0.59f, 1.0f, 1.0f);
+
+        // Grid cell PushID offsets (max ~10k frames per section before collision)
+        constexpr int kKpIdOffset   = 0;
+        constexpr int kSamIdOffset  = 10000;
+        constexpr int kBBoxIdOffset = 20000;
 
         // Helper: render a clickable grid cell with custom drawing.
         // draw_fn(ImDrawList*, ImVec2 min, ImVec2 max) draws the cell interior.
@@ -290,8 +307,8 @@ inline void DrawLabelingToolWindow(
         ImGui::Text("Keypoint Labels (%zu)", labeled_frames.size());
 
         if (!labeled_frames.empty()) {
-            const ImU32 teal_u32  = IM_COL32(51, 179, 179, 255);
-            const ImU32 green_u32 = IM_COL32(51, 204, 77, 255);
+            ImU32 teal_u32  = ImGui::ColorConvertFloat4ToU32(color_teal);
+            ImU32 green_u32 = ImGui::ColorConvertFloat4ToU32(color_green);
 
             for (size_t i = 0; i < labeled_frames.size(); ++i) {
                 auto &lf = labeled_frames[i];
@@ -299,7 +316,7 @@ inline void DrawLabelingToolWindow(
                 char tip[64];
                 snprintf(tip, sizeof(tip), "Frame %d", lf.frame);
 
-                grid_cell((int)i, lf.frame, tip,
+                grid_cell(kKpIdOffset + (int)i, lf.frame, tip,
                     [fill](ImDrawList *dl, ImVec2 mn, ImVec2 mx) {
                         dl->AddRectFilled(mn, mx, fill);
                     });
@@ -317,14 +334,14 @@ inline void DrawLabelingToolWindow(
             ImGui::SameLine();
             jump_buttons(mask_pn, "sam");
 
-            const ImU32 orange_u32 = IM_COL32(230, 140, 30, 255);
+            ImU32 orange_u32 = ImGui::ColorConvertFloat4ToU32(color_orange);
 
             for (size_t i = 0; i < mask_frames.size(); ++i) {
                 auto &mf = mask_frames[i];
                 char tip[64];
                 snprintf(tip, sizeof(tip), "Frame %d", mf.frame);
 
-                grid_cell((int)(10000 + i), mf.frame, tip,
+                grid_cell(kSamIdOffset + (int)i, mf.frame, tip,
                     [orange_u32](ImDrawList *dl, ImVec2 mn, ImVec2 mx) {
                         float cx = (mn.x + mx.x) * 0.5f;
                         float cy = (mn.y + mx.y) * 0.5f;
@@ -347,8 +364,8 @@ inline void DrawLabelingToolWindow(
             ImGui::SameLine();
             jump_buttons(bbox_pn, "bbox");
 
-            const ImU32 purple_u32  = IM_COL32(160, 90, 220, 255);
-            const ImU32 lilac_u32   = IM_COL32(200, 150, 255, 255);
+            ImU32 purple_u32  = ImGui::ColorConvertFloat4ToU32(color_purple);
+            ImU32 lilac_u32   = ImGui::ColorConvertFloat4ToU32(color_lilac);
 
             for (size_t i = 0; i < bbox_frames.size(); ++i) {
                 auto &bf = bbox_frames[i];
@@ -361,7 +378,7 @@ inline void DrawLabelingToolWindow(
                     snprintf(tip, sizeof(tip), "Frame %d (BBox)", bf.frame);
 
                 bool has_bb = bf.has_bbox, has_ob = bf.has_obb;
-                grid_cell((int)(20000 + i), bf.frame, tip,
+                grid_cell(kBBoxIdOffset + (int)i, bf.frame, tip,
                     [purple_u32, lilac_u32, has_bb, has_ob](ImDrawList *dl, ImVec2 mn, ImVec2 mx) {
                         // BBox: purple square outline (inset 1px for clarity)
                         if (has_bb) {
@@ -394,11 +411,6 @@ inline void DrawLabelingToolWindow(
         int total_frames = dc_context->estimated_num_frames;
         bool has_any_annotations = !labeled_frames.empty() || !mask_frames.empty() || !bbox_frames.empty();
         if (total_frames > 0 && has_any_annotations) {
-            const ImVec4 teal(0.2f, 0.7f, 0.7f, 1.0f);
-            const ImVec4 green(0.2f, 0.8f, 0.3f, 1.0f);
-            const ImVec4 orange(0.9f, 0.55f, 0.12f, 1.0f);
-            const ImVec4 purple(0.63f, 0.35f, 0.86f, 1.0f);
-            const ImVec4 lilac(0.78f, 0.59f, 1.0f, 1.0f);
 
             // Reserve space for rotated "Timeline" label on the left
             float label_font = ImGui::GetFontSize();
@@ -441,10 +453,9 @@ inline void DrawLabelingToolWindow(
                 std::unique(all_annotated_frames.begin(), all_annotated_frames.end()),
                 all_annotated_frames.end());
 
-            static bool reset_pending = false;
-            if (reset_pending) {
+            if (state.timeline_reset_pending) {
                 ImPlot::SetNextAxesLimits(0, total_frames, 0, 1);
-                reset_pending = false;
+                state.timeline_reset_pending = false;
             }
 
             ImPlot::PushStyleVar(ImPlotStyleVar_PlotPadding, ImVec2(4, 2));
@@ -469,38 +480,38 @@ inline void DrawLabelingToolWindow(
 
                 // Keypoint ticks (teal=partial, green=complete)
                 if (!teal_x.empty()) {
-                    ImPlot::SetNextLineStyle(teal, 2.0f);
+                    ImPlot::SetNextLineStyle(color_teal, 2.0f);
                     ImPlot::PlotInfLines("##teal", teal_x.data(), (int)teal_x.size());
                 }
                 if (!green_x.empty()) {
-                    ImPlot::SetNextLineStyle(green, 2.0f);
+                    ImPlot::SetNextLineStyle(color_green, 2.0f);
                     ImPlot::PlotInfLines("##green", green_x.data(), (int)green_x.size());
                 }
 
                 // SAM mask ticks (orange)
                 if (!orange_x.empty()) {
-                    ImPlot::SetNextLineStyle(orange, 2.0f);
+                    ImPlot::SetNextLineStyle(color_orange, 2.0f);
                     ImPlot::PlotInfLines("##sam", orange_x.data(), (int)orange_x.size());
                 }
 
                 // BBox ticks (purple)
                 if (!purple_x.empty()) {
-                    ImPlot::SetNextLineStyle(purple, 2.0f);
+                    ImPlot::SetNextLineStyle(color_purple, 2.0f);
                     ImPlot::PlotInfLines("##bbox", purple_x.data(), (int)purple_x.size());
                 }
 
                 // OBB ticks (lilac)
                 if (!lilac_x.empty()) {
-                    ImPlot::SetNextLineStyle(lilac, 2.0f);
+                    ImPlot::SetNextLineStyle(color_lilac, 2.0f);
                     ImPlot::PlotInfLines("##obb", lilac_x.data(), (int)lilac_x.size());
                 }
 
                 // Double-click to reset to full video range
                 if (ImPlot::IsPlotHovered() && ImGui::IsMouseDoubleClicked(0))
-                    reset_pending = true;
+                    state.timeline_reset_pending = true;
 
-                // Click on any tick mark to seek
-                if (ImPlot::IsPlotHovered() && ImGui::IsMouseClicked(0)) {
+                // Click to seek + tooltip (combined to avoid duplicate computation)
+                if (ImPlot::IsPlotHovered()) {
                     ImPlotPoint mp = ImPlot::GetPlotMousePos();
                     ImPlotRect lims = ImPlot::GetPlotLimits();
                     double px_per_frame = timeline_w / (lims.X.Max - lims.X.Min);
@@ -512,22 +523,11 @@ inline void DrawLabelingToolWindow(
                         if (d < nearest_dist) { nearest_dist = d; nearest = f; }
                     }
                     if (nearest >= 0 && nearest_dist <= tolerance) {
-                        ps.play_video = false;
-                        seek_all_cameras(scene, nearest,
-                                         dc_context->video_fps, ps, true);
-                    }
-                }
-
-                // Tooltip for nearest tick
-                if (ImPlot::IsPlotHovered()) {
-                    ImPlotPoint mp = ImPlot::GetPlotMousePos();
-                    ImPlotRect lims = ImPlot::GetPlotLimits();
-                    double px_per_frame = timeline_w / (lims.X.Max - lims.X.Min);
-                    double tolerance = 5.0 / px_per_frame;
-                    for (int f : all_annotated_frames) {
-                        if (fabs((double)f - mp.x) <= tolerance) {
-                            ImGui::SetTooltip("Frame %d", f);
-                            break;
+                        ImGui::SetTooltip("Frame %d", nearest);
+                        if (ImGui::IsMouseClicked(0)) {
+                            ps.play_video = false;
+                            seek_all_cameras(scene, nearest,
+                                             dc_context->video_fps, ps, true);
                         }
                     }
                 }
