@@ -18,7 +18,8 @@
 
 struct ExportWindowState {
     bool show = false;
-    int format_idx = 0; // index into ExportFormats::Format enum
+    int format_idx = 0; // 0=JARVIS, 1=COCO, 2=DLC, 3=YOLO Pose, 4=YOLO Detect
+    bool include_video_index = false; // JARVIS: include video_index.json
     std::string output_dir;
     float margin = 50.0f;
     float train_ratio = 0.9f;
@@ -44,11 +45,28 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
         // Format selector
         ImGui::SeparatorText("Format");
         static const char *format_labels[] = {
-            "JARVIS", "JARVIS (with video index)", "COCO Keypoints",
+            "JARVIS", "COCO Keypoints",
             "DeepLabCut", "YOLO Pose", "YOLO Detection"
         };
         ImGui::Combo("Export Format", &state.format_idx, format_labels,
                      IM_ARRAYSIZE(format_labels));
+
+        // Map UI index to ExportFormats::Format enum
+        static const ExportFormats::Format format_map[] = {
+            ExportFormats::JARVIS,
+            ExportFormats::COCO,
+            ExportFormats::DEEPLABCUT,
+            ExportFormats::YOLO_POSE,
+            ExportFormats::YOLO_DETECT,
+        };
+        auto fmt = format_map[state.format_idx];
+        bool is_jarvis = (fmt == ExportFormats::JARVIS);
+
+        // JARVIS-specific: video index checkbox
+        if (is_jarvis) {
+            ImGui::Checkbox("Include video index (for semi-supervised training)",
+                            &state.include_video_index);
+        }
 
         ImGui::SeparatorText("Project Info");
 
@@ -77,18 +95,24 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
         ImGui::Text("Calibration:  %s",
                     pm.calibration_folder.empty() ? "(none)" : pm.calibration_folder.c_str());
 
-        auto fmt = static_cast<ExportFormats::Format>(state.format_idx);
-        bool needs_video = (fmt == ExportFormats::JARVIS || fmt == ExportFormats::JARVIS_TR);
-        if (needs_video) {
+        if (is_jarvis) {
             ImGui::Text("Video Folder: %s",
                         pm.media_folder.empty() ? "(none)" : pm.media_folder.c_str());
         }
         ImGui::Text("Cameras:      %d", (int)pm.camera_names.size());
 
         int labeled_count = 0;
-        for (const auto &[f, fa] : amap)
+        int mask_count = 0;
+        for (const auto &[f, fa] : amap) {
             if (frame_has_any_labels(fa)) ++labeled_count;
+            for (const auto &cam : fa.cameras)
+                if (cam.has_mask()) { ++mask_count; break; } // count frames with masks
+        }
         ImGui::Text("Labeled:      %d frames", labeled_count);
+        if (mask_count > 0) {
+            ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.3f, 1.0f),
+                "Masks:        %d frames (will be exported as segmentation)", mask_count);
+        }
 
         ImGui::SeparatorText("Output");
 
@@ -110,12 +134,11 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
         ImGui::InputInt("Random Seed", &state.seed);
 
         // Format-specific options
-        if (fmt == ExportFormats::JARVIS || fmt == ExportFormats::JARVIS_TR ||
-            fmt == ExportFormats::COCO || fmt == ExportFormats::YOLO_POSE ||
-            fmt == ExportFormats::YOLO_DETECT) {
+        if (is_jarvis || fmt == ExportFormats::COCO ||
+            fmt == ExportFormats::YOLO_POSE || fmt == ExportFormats::YOLO_DETECT) {
             ImGui::SliderFloat("Bbox Margin (px)", &state.margin, 0.0f, 200.0f);
         }
-        if (needs_video) {
+        if (is_jarvis) {
             ImGui::SliderInt("JPEG Quality", &state.jpeg_quality, 10, 100);
         }
 
@@ -124,14 +147,18 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
         // Export button
         if (!state.in_progress) {
             std::string validation_error;
+            // Resolve actual dispatch format (JARVIS vs JARVIS_TR based on checkbox)
+            auto dispatch_fmt = fmt;
+            if (is_jarvis && state.include_video_index)
+                dispatch_fmt = ExportFormats::JARVIS_TR;
+
             if (ImGui::Button("Start Export")) {
                 if (state.label_folder.empty() && labeled_count == 0) {
                     validation_error = "No labeled data found";
                 } else if (pm.calibration_folder.empty()) {
                     validation_error = "No calibration folder set";
-                } else if (needs_video && pm.media_folder.empty()) {
-                    validation_error = "No media folder set (required for " +
-                                       std::string(format_labels[state.format_idx]) + ")";
+                } else if (is_jarvis && pm.media_folder.empty()) {
+                    validation_error = "No media folder set (required for JARVIS)";
                 } else if (state.output_dir.empty()) {
                     validation_error = "Output directory not set";
                 } else if (pm.camera_names.empty()) {
@@ -141,7 +168,7 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
                     state.status = "Starting export...";
 
                     ExportFormats::ExportConfig ecfg;
-                    ecfg.format             = fmt;
+                    ecfg.format             = dispatch_fmt;
                     ecfg.label_folder       = state.label_folder;
                     ecfg.calibration_folder = pm.calibration_folder;
                     ecfg.media_folder       = pm.media_folder;
