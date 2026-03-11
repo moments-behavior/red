@@ -8,6 +8,7 @@
 #include "gui/bbox_tool.h"
 #include "gui/obb_tool.h"
 #include "gui/sam_tool.h"
+#include "gui/jarvis_predict_window.h"
 #include "gui/settings_window.h"
 #include "IconsForkAwesome.h"
 #include <ImGuiFileDialog.h>
@@ -22,6 +23,7 @@ inline void DrawMainMenuBar(AppContext &ctx,
                             BBoxToolState &bbox_state,
                             OBBToolState &obb_state,
                             SamToolState &sam_tool_state,
+                            JarvisPredictState &jarvis_predict_state,
                             bool &show_help_window) {
     auto &pm = ctx.pm;
     auto &ps = ctx.ps;
@@ -132,6 +134,9 @@ inline void DrawMainMenuBar(AppContext &ctx,
         }
         if (ImGui::MenuItem("SAM Assist")) {
             sam_tool_state.show = true;
+        }
+        if (ImGui::MenuItem("JARVIS Predict")) {
+            jarvis_predict_state.show = true;
         }
         ImGui::EndMenu();
     }

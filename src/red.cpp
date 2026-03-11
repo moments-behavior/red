@@ -584,7 +584,7 @@ int main(int argc, char **argv) {
         DrawMainMenuBar(ctx, calib_state, annot_state, settings_state,
                         jarvis_export_state, jarvis_import_state,
                         export_state, bbox_state, obb_state, sam_tool_state,
-                        show_help_window);
+                        jarvis_predict_state, show_help_window);
 
         // --- Update playback time ---
         auto now = std::chrono::steady_clock::now();
