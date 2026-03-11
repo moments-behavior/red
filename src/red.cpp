@@ -13,6 +13,9 @@
 #include "gui/obb_tool.h"
 #include "gui/sam_tool.h"
 #include "jarvis_inference.h"
+#ifdef __APPLE__
+#include "jarvis_coreml.h"
+#endif
 #include "gui/jarvis_predict_window.h"
 #include "gui/annotation_dialog.h"
 #include "gui/calibration_tool_window.h"
@@ -297,6 +300,9 @@ int main(int argc, char **argv) {
     SamToolState sam_tool_state;
     SamState sam_state;
     JarvisState jarvis_state;
+#ifdef __APPLE__
+    JarvisCoreMLState jarvis_coreml_state;
+#endif
 
     // Default SAM model paths: look relative to exe (../models/mobilesam/)
     // and in the source tree. User can override in SAM Assist panel.
@@ -1343,42 +1349,60 @@ int main(int argc, char **argv) {
             jarvis_predict_state.predict_requested = false;
 
             if (jarvis_predict_trigger && !ps.play_video &&
-                jarvis_state.loaded && scene->num_cams > 0) {
+                (jarvis_state.loaded || jarvis_coreml_state.loaded) &&
+                scene->num_cams > 0) {
 #ifdef __APPLE__
                 int mh = ps.play_video ? ps.read_head : select_corr_head;
-                std::vector<const uint8_t *> rgb_bufs(scene->num_cams, nullptr);
-                std::vector<std::vector<uint8_t>> rgb_storage(scene->num_cams);
                 std::vector<int> widths(scene->num_cams), heights(scene->num_cams);
-
                 for (int c = 0; c < (int)scene->num_cams; ++c) {
-                    int w = (int)scene->image_width[c];
-                    int h = (int)scene->image_height[c];
-                    widths[c] = w;
-                    heights[c] = h;
-                    CVPixelBufferRef pb = scene->display_buffer[c][mh].pixel_buffer;
-                    if (!pb) continue;
-                    rgb_storage[c].resize(w * h * 3);
-                    CVPixelBufferLockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
-                    const uint8_t *bgra = (const uint8_t *)CVPixelBufferGetBaseAddress(pb);
-                    int stride = (int)CVPixelBufferGetBytesPerRow(pb);
-                    for (int y = 0; y < h; y++) {
-                        const uint8_t *src = bgra + y * stride;
-                        uint8_t *dst = rgb_storage[c].data() + y * w * 3;
-                        for (int x = 0; x < w; x++) {
-                            dst[x*3+0] = src[x*4+2];
-                            dst[x*3+1] = src[x*4+1];
-                            dst[x*3+2] = src[x*4+0];
-                        }
-                    }
-                    CVPixelBufferUnlockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
-                    rgb_bufs[c] = rgb_storage[c].data();
+                    widths[c] = (int)scene->image_width[c];
+                    heights[c] = (int)scene->image_height[c];
                 }
 
-                jarvis_predict_frame(jarvis_state, annotations,
-                    (u32)current_frame_num, rgb_bufs, widths, heights,
-                    skeleton, pm.camera_params, scene,
-                    jarvis_predict_state.confidence_threshold);
-                printf("[JARVIS] %s\n", jarvis_state.status.c_str());
+                // Prefer CoreML (GPU/ANE) over ONNX Runtime (CPU)
+                if (jarvis_coreml_state.loaded) {
+                    std::vector<CVPixelBufferRef> pbs(scene->num_cams, nullptr);
+                    for (int c = 0; c < (int)scene->num_cams; ++c)
+                        pbs[c] = scene->display_buffer[c][mh].pixel_buffer;
+
+                    jarvis_coreml_predict_frame(jarvis_coreml_state, annotations,
+                        (u32)current_frame_num, pbs, widths, heights,
+                        skeleton, (int)scene->num_cams,
+                        jarvis_predict_state.confidence_threshold);
+                    // Triangulate (reprojection is in gui_keypoints.h, only in this TU)
+                    reprojection(annotations.at(current_frame_num),
+                                 &skeleton, pm.camera_params, scene);
+                    printf("[JARVIS CoreML] %s\n", jarvis_coreml_state.status.c_str());
+                } else if (jarvis_state.loaded) {
+                    // Fallback: ONNX Runtime (CPU) with BGRA→RGB conversion
+                    std::vector<const uint8_t *> rgb_bufs(scene->num_cams, nullptr);
+                    std::vector<std::vector<uint8_t>> rgb_storage(scene->num_cams);
+                    for (int c = 0; c < (int)scene->num_cams; ++c) {
+                        int w = widths[c], h = heights[c];
+                        CVPixelBufferRef pb = scene->display_buffer[c][mh].pixel_buffer;
+                        if (!pb) continue;
+                        rgb_storage[c].resize(w * h * 3);
+                        CVPixelBufferLockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
+                        const uint8_t *bgra = (const uint8_t *)CVPixelBufferGetBaseAddress(pb);
+                        int stride = (int)CVPixelBufferGetBytesPerRow(pb);
+                        for (int y = 0; y < h; y++) {
+                            const uint8_t *src = bgra + y * stride;
+                            uint8_t *dst = rgb_storage[c].data() + y * w * 3;
+                            for (int x = 0; x < w; x++) {
+                                dst[x*3+0] = src[x*4+2];
+                                dst[x*3+1] = src[x*4+1];
+                                dst[x*3+2] = src[x*4+0];
+                            }
+                        }
+                        CVPixelBufferUnlockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
+                        rgb_bufs[c] = rgb_storage[c].data();
+                    }
+                    jarvis_predict_frame(jarvis_state, annotations,
+                        (u32)current_frame_num, rgb_bufs, widths, heights,
+                        skeleton, pm.camera_params, scene,
+                        jarvis_predict_state.confidence_threshold);
+                    printf("[JARVIS ONNX] %s\n", jarvis_state.status.c_str());
+                }
 #endif
             }
 

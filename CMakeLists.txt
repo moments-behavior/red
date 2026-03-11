@@ -94,7 +94,11 @@ if(APPLE)
         "-framework VideoToolbox"
         "-framework CoreMedia"
         "-framework CoreFoundation"
+        "-framework CoreML"
+        "-framework Accelerate"
         "-framework CoreVideo"
+        "-framework CoreML"
+        "-framework Accelerate"
         "-framework Cocoa"
         ${FFMPEG_LIBRARIES}
         ${TURBOJPEG_LIBRARIES}
@@ -160,6 +164,8 @@ if(APPLE)
         "-framework CoreMedia"
         "-framework CoreFoundation"
         "-framework CoreVideo"
+        "-framework CoreML"
+        "-framework Accelerate"
         "-framework Cocoa"
         ${FFMPEG_LIBRARIES}
         ${TURBOJPEG_LIBRARIES}
@@ -216,6 +222,8 @@ if(APPLE)
         "-framework CoreMedia"
         "-framework CoreFoundation"
         "-framework CoreVideo"
+        "-framework CoreML"
+        "-framework Accelerate"
         "-framework Cocoa"
         ${FFMPEG_LIBRARIES}
         ${TURBOJPEG_LIBRARIES}
@@ -264,6 +272,8 @@ if(APPLE)
         "-framework CoreMedia"
         "-framework CoreFoundation"
         "-framework CoreVideo"
+        "-framework CoreML"
+        "-framework Accelerate"
         "-framework Cocoa"
         ${FFMPEG_LIBRARIES}
         ${TURBOJPEG_LIBRARIES}
@@ -312,6 +322,8 @@ if(APPLE)
         "-framework CoreMedia"
         "-framework CoreFoundation"
         "-framework CoreVideo"
+        "-framework CoreML"
+        "-framework Accelerate"
         "-framework Cocoa"
         ${FFMPEG_LIBRARIES}
         ${TURBOJPEG_LIBRARIES}
@@ -556,6 +568,26 @@ if(APPLE)
         CXX_STANDARD 17
         CXX_STANDARD_REQUIRED ON
     )
+
+    # JARVIS inference pipeline benchmark (ONNX Runtime only, no GUI deps)
+    if(HAS_ONNXRUNTIME)
+        add_executable(bench_jarvis tests/bench_jarvis.cpp)
+        target_include_directories(bench_jarvis PRIVATE
+            src
+            ${DIR_FILEBROWSER}
+            "${ONNXRUNTIME_DIR}/include"
+            ${HOMEBREW_PREFIX}/include
+            ${HOMEBREW_PREFIX}/include/eigen3
+        )
+        target_compile_definitions(bench_jarvis PRIVATE RED_HAS_ONNXRUNTIME)
+        target_link_libraries(bench_jarvis PRIVATE
+            "${ONNXRUNTIME_DIR}/lib/libonnxruntime.dylib"
+        )
+        set_target_properties(bench_jarvis PROPERTIES
+            CXX_STANDARD 17
+            CXX_STANDARD_REQUIRED ON
+        )
+    endif()
 
 else()
     # Linux build with NVIDIA CUDA support
