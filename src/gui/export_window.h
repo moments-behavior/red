@@ -35,6 +35,10 @@ struct ExportWindowState {
     std::atomic<bool> in_progress{false};
     std::string status; // only written by main thread
 
+    // Progress counters (written by export thread via atomic, read by main thread)
+    std::atomic<int> images_saved{0};
+    int images_total = 0; // set before thread launch, read-only during export
+
     // Thread → main thread communication for final status.
     // The thread writes to finished_status, then sets finished flag.
     // Main thread polls finished flag; when set, copies finished_status
@@ -209,6 +213,9 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
                         // If save fails, proceed anyway — the old labels are still on disk
                     }
 
+                    // Compute total expected images for progress bar
+                    state.images_saved.store(0, std::memory_order_relaxed);
+                    state.images_total = total_count * (int)pm.camera_names.size();
                     state.in_progress.store(true, std::memory_order_relaxed);
                     state.status = "Exporting...";
 
@@ -226,6 +233,7 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
                     ecfg.seed               = state.seed;
                     ecfg.jpeg_quality       = state.jpeg_quality;
                     ecfg.node_names         = skeleton.node_names;
+                    ecfg.images_saved_counter = &state.images_saved;
                     for (const auto &e : skeleton.edges)
                         ecfg.edges.push_back({e.x, e.y});
 
@@ -261,6 +269,15 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
             ImGui::BeginDisabled();
             ImGui::Button("Exporting...");
             ImGui::EndDisabled();
+
+            // Progress bar
+            if (state.images_total > 0) {
+                int saved = state.images_saved.load(std::memory_order_relaxed);
+                float progress = (float)saved / (float)state.images_total;
+                char overlay[64];
+                snprintf(overlay, sizeof(overlay), "%d / %d images", saved, state.images_total);
+                ImGui::ProgressBar(progress, ImVec2(-1, 0), overlay);
+            }
         }
 
         // Status display

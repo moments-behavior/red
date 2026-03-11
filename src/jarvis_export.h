@@ -851,7 +851,8 @@ inline nlohmann::json generate_annotation_json_from_amap(
 // ---------------------------------------------------------------------------
 inline bool export_jarvis_dataset(const ExportConfig &config_in,
                                   const AnnotationMap &amap,
-                                  std::string *status) {
+                                  std::string *status,
+                                  std::atomic<int> *images_saved_counter = nullptr) {
     namespace fs = std::filesystem;
     auto t_start = std::chrono::steady_clock::now();
 

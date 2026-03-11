@@ -70,6 +70,9 @@ struct ExportConfig {
     float train_ratio = 0.9f;
     int seed = 42;
     int jpeg_quality = 95;
+
+    // Progress counter (optional, atomic — safe for cross-thread read)
+    std::atomic<int> *images_saved_counter = nullptr;
 };
 
 // ── Train/val split helper ──
@@ -112,7 +115,8 @@ inline bool extract_images(const ExportConfig &cfg,
                            const std::vector<u32> &train,
                            const std::vector<u32> &val,
                            const std::string &trial_name,
-                           std::string *status) {
+                           std::string *status,
+                           std::atomic<int> *images_saved_counter = nullptr) {
     if (cfg.media_folder.empty()) return true; // no video → skip silently
 
     // Build frame→mode map
@@ -121,7 +125,8 @@ inline bool extract_images(const ExportConfig &cfg,
     for (u32 f : train) { frame_to_mode[(int)f] = "train"; train_int.push_back((int)f); }
     for (u32 f : val)   { frame_to_mode[(int)f] = "val";   val_int.push_back((int)f); }
 
-    std::atomic<int> images_saved{0};
+    std::atomic<int> local_counter{0};
+    std::atomic<int> *counter = images_saved_counter ? images_saved_counter : &local_counter;
     std::mutex status_mutex;
     std::vector<std::thread> threads;
 
@@ -132,7 +137,7 @@ inline bool extract_images(const ExportConfig &cfg,
             JarvisExport::extract_jpegs_for_camera,
             cam, trial_name, video_path, cfg.output_folder,
             train_int, val_int, frame_to_mode,
-            status, &status_mutex, &images_saved, cfg.jpeg_quality);
+            status, &status_mutex, counter, cfg.jpeg_quality);
     }
     for (auto &t : threads) t.join();
 
@@ -334,7 +339,7 @@ inline bool export_coco(const ExportConfig &cfg, const AnnotationMap &amap,
     // Extract images from video (if media_folder available)
     if (!cfg.media_folder.empty()) {
         if (status) *status = "Extracting images...";
-        if (!extract_images(cfg, train, val, "", status))
+        if (!extract_images(cfg, train, val, "", status, cfg.images_saved_counter))
             return false;
     }
 
@@ -470,7 +475,7 @@ inline bool export_yolo(const ExportConfig &cfg, const AnnotationMap &amap,
         // We need to use output_folder + "/images" as the extraction root
         ExportConfig img_cfg = cfg;
         img_cfg.output_folder = cfg.output_folder + "/images";
-        if (!extract_images(img_cfg, train, val, "", status))
+        if (!extract_images(img_cfg, train, val, "", status, cfg.images_saved_counter))
             return false;
     }
 
@@ -587,7 +592,8 @@ inline bool export_deeplabcut(const ExportConfig &cfg, const AnnotationMap &amap
         for (u32 f : labeled) frame_ints.push_back((int)f);
         std::map<int, std::string> frame_to_mode;
         for (int f : frame_ints) frame_to_mode[f] = "labeled-data";
-        std::atomic<int> saved{0};
+        std::atomic<int> local_saved{0};
+        std::atomic<int> *counter = cfg.images_saved_counter ? cfg.images_saved_counter : &local_saved;
         std::mutex smtx;
         std::vector<int> empty_int;
         std::vector<std::thread> threads;
@@ -599,7 +605,7 @@ inline bool export_deeplabcut(const ExportConfig &cfg, const AnnotationMap &amap
                 JarvisExport::extract_jpegs_for_camera,
                 cam, "", vid, cfg.output_folder,
                 frame_ints, empty_int, frame_to_mode,
-                status, &smtx, &saved, cfg.jpeg_quality);
+                status, &smtx, counter, cfg.jpeg_quality);
         }
         for (auto &t : threads) t.join();
     }
@@ -629,7 +635,7 @@ inline bool export_jarvis(const ExportConfig &cfg, const AnnotationMap &amap,
     jcfg.train_ratio        = cfg.train_ratio;
     jcfg.seed               = cfg.seed;
     jcfg.jpeg_quality       = cfg.jpeg_quality;
-    return JarvisExport::export_jarvis_dataset(jcfg, amap, status);
+    return JarvisExport::export_jarvis_dataset(jcfg, amap, status, cfg.images_saved_counter);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
