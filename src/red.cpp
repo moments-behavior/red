@@ -12,6 +12,7 @@
 #include "gui/bbox_tool.h"
 #include "gui/obb_tool.h"
 #include "gui/sam_tool.h"
+#include "jarvis_inference.h"
 #include "gui/annotation_dialog.h"
 #include "gui/calibration_tool_window.h"
 #include "gui/labeling_tool_window.h"
@@ -293,6 +294,7 @@ int main(int argc, char **argv) {
     OBBToolState obb_state;
     SamToolState sam_tool_state;
     SamState sam_state;
+    JarvisState jarvis_state;
 
     // Default SAM model paths: look relative to exe (../models/mobilesam/)
     // and in the source tree. User can override in SAM Assist panel.
@@ -309,6 +311,34 @@ int main(int argc, char **argv) {
             if (std::filesystem::exists(enc) && std::filesystem::exists(dec)) {
                 sam_tool_state.encoder_path = std::filesystem::canonical(enc).string();
                 sam_tool_state.decoder_path = std::filesystem::canonical(dec).string();
+                break;
+            }
+        }
+    }
+
+    // Auto-detect JARVIS model paths
+    {
+        std::string exe = window->exe_dir;
+        std::vector<std::string> search = {
+            exe + "/../models/jarvis_mouseJan30", // build tree
+        };
+        // Also search all models/jarvis_* directories
+        for (const auto &base : {exe + "/../models", exe + "/models"}) {
+            if (std::filesystem::is_directory(base)) {
+                for (const auto &entry : std::filesystem::directory_iterator(base)) {
+                    if (entry.is_directory() &&
+                        entry.path().filename().string().find("jarvis") != std::string::npos)
+                        search.push_back(entry.path().string());
+                }
+            }
+        }
+        for (const auto &dir : search) {
+            std::string cd = dir + "/center_detect.onnx";
+            std::string kd = dir + "/keypoint_detect.onnx";
+            std::string mi = dir + "/model_info.json";
+            if (std::filesystem::exists(cd) && std::filesystem::exists(kd)) {
+                jarvis_init(jarvis_state, cd.c_str(), kd.c_str(),
+                            std::filesystem::exists(mi) ? mi.c_str() : nullptr);
                 break;
             }
         }
@@ -1327,6 +1357,47 @@ int main(int argc, char **argv) {
                 }
             }
 
+
+            // Hotkey 5: Run JARVIS prediction on current frame (all cameras)
+            if (ImGui::IsKeyPressed(ImGuiKey_5, false) &&
+                !io.WantTextInput && !ps.play_video &&
+                jarvis_state.loaded && scene->num_cams > 0) {
+#ifdef __APPLE__
+                int mh = ps.play_video ? ps.read_head : select_corr_head;
+                std::vector<const uint8_t *> rgb_bufs(scene->num_cams, nullptr);
+                std::vector<std::vector<uint8_t>> rgb_storage(scene->num_cams);
+                std::vector<int> widths(scene->num_cams), heights(scene->num_cams);
+
+                for (int c = 0; c < (int)scene->num_cams; ++c) {
+                    int w = (int)scene->image_width[c];
+                    int h = (int)scene->image_height[c];
+                    widths[c] = w;
+                    heights[c] = h;
+                    CVPixelBufferRef pb = scene->display_buffer[c][mh].pixel_buffer;
+                    if (!pb) continue;
+                    rgb_storage[c].resize(w * h * 3);
+                    CVPixelBufferLockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
+                    const uint8_t *bgra = (const uint8_t *)CVPixelBufferGetBaseAddress(pb);
+                    int stride = (int)CVPixelBufferGetBytesPerRow(pb);
+                    for (int y = 0; y < h; y++) {
+                        const uint8_t *src = bgra + y * stride;
+                        uint8_t *dst = rgb_storage[c].data() + y * w * 3;
+                        for (int x = 0; x < w; x++) {
+                            dst[x*3+0] = src[x*4+2];
+                            dst[x*3+1] = src[x*4+1];
+                            dst[x*3+2] = src[x*4+0];
+                        }
+                    }
+                    CVPixelBufferUnlockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
+                    rgb_bufs[c] = rgb_storage[c].data();
+                }
+
+                jarvis_predict_frame(jarvis_state, annotations,
+                    (u32)current_frame_num, rgb_bufs, widths, heights,
+                    skeleton, pm.camera_params, scene);
+                printf("[JARVIS] %s\n", jarvis_state.status.c_str());
+#endif
+            }
 
             if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow, false) &&
                 !io.WantTextInput) {
