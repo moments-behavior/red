@@ -528,7 +528,8 @@ inline bool export_deeplabcut(const ExportConfig &cfg, const AnnotationMap &amap
 // ═══════════════════════════════════════════════════════════════════════════
 // JARVIS export — delegates to existing jarvis_export.h
 // ═══════════════════════════════════════════════════════════════════════════
-inline bool export_jarvis(const ExportConfig &cfg, std::string *status) {
+inline bool export_jarvis(const ExportConfig &cfg, const AnnotationMap &amap,
+                          std::string *status) {
     JarvisExport::ExportConfig jcfg;
     jcfg.label_folder       = cfg.label_folder;
     jcfg.calibration_folder = cfg.calibration_folder;
@@ -543,15 +544,16 @@ inline bool export_jarvis(const ExportConfig &cfg, std::string *status) {
     jcfg.train_ratio        = cfg.train_ratio;
     jcfg.seed               = cfg.seed;
     jcfg.jpeg_quality       = cfg.jpeg_quality;
-    return JarvisExport::export_jarvis_dataset(jcfg, status);
+    return JarvisExport::export_jarvis_dataset(jcfg, amap, status);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
 // JARVIS-TR export — JARVIS + video_index.json for unlabeled frames
 // ═══════════════════════════════════════════════════════════════════════════
-inline bool export_jarvis_tr(const ExportConfig &cfg, std::string *status) {
+inline bool export_jarvis_tr(const ExportConfig &cfg, const AnnotationMap &amap,
+                             std::string *status) {
     // First do standard JARVIS export
-    if (!export_jarvis(cfg, status)) return false;
+    if (!export_jarvis(cfg, amap, status)) return false;
 
     // Then write video_index.json pointing to source videos
     namespace fs = std::filesystem;
@@ -591,8 +593,8 @@ inline bool export_dataset(Format fmt, const ExportConfig &cfg,
     fs::create_directories(cfg.output_folder);
 
     switch (fmt) {
-    case JARVIS:      return export_jarvis(cfg, status);
-    case JARVIS_TR:   return export_jarvis_tr(cfg, status);
+    case JARVIS:      return export_jarvis(cfg, amap, status);
+    case JARVIS_TR:   return export_jarvis_tr(cfg, amap, status);
     case COCO:        return export_coco(cfg, amap, status);
     case YOLO_POSE:   return export_yolo(cfg, amap, true, status);
     case YOLO_DETECT: return export_yolo(cfg, amap, false, status);

@@ -24,6 +24,10 @@
 #include <thread>
 #include <vector>
 
+// Forward-declare AnnotationMap types (defined in annotation.h).
+// Full include not needed — only used by the AnnotationMap-based overload.
+#include "annotation.h"
+
 namespace JarvisExport {
 
 // ---------------------------------------------------------------------------
@@ -667,7 +671,338 @@ inline void extract_jpegs_for_camera(
 }
 
 // ---------------------------------------------------------------------------
-// Main export function
+// Annotation JSON generation from AnnotationMap (replaces CSV-based version)
+// ---------------------------------------------------------------------------
+inline nlohmann::json generate_annotation_json_from_amap(
+    const std::string &trial_name,
+    const std::vector<int> &frame_list,
+    const AnnotationMap &amap,
+    const ExportConfig &config,
+    const std::map<std::string, int> &image_width,
+    const std::map<std::string, int> &image_height,
+    int *out_complete = nullptr,
+    int *out_incomplete = nullptr) {
+
+    nlohmann::json annotations_arr = nlohmann::json::array();
+    nlohmann::json images_arr = nlohmann::json::array();
+    std::map<int, std::vector<int>> set_of_frames; // frame_num -> [image_ids]
+
+    int annotation_id = 0;
+    int image_id = 0;
+    int n_complete = 0, n_incomplete = 0;
+
+    // Outer loop = cameras, inner loop = frames (matches JARVIS Python iteration order)
+    for (int cam_idx = 0; cam_idx < (int)config.camera_names.size(); ++cam_idx) {
+        const auto &cam_name = config.camera_names[cam_idx];
+        int img_h = image_height.at(cam_name);
+        int img_w = image_width.at(cam_name);
+
+        for (int frame_num : frame_list) {
+            std::string file_name = trial_name + "/" + cam_name + "/Frame_" +
+                                    std::to_string(frame_num) + ".jpg";
+
+            nlohmann::json image_entry;
+            image_entry["coco_url"] = "";
+            image_entry["date_captured"] = "";
+            image_entry["file_name"] = file_name;
+            image_entry["flickr_url"] = "";
+            image_entry["height"] = img_h;
+            image_entry["id"] = image_id;
+            image_entry["width"] = img_w;
+
+            // Check if all 2D keypoints are valid for this camera on this frame
+            bool has_valid_2d = false;
+            auto it = amap.find((u32)frame_num);
+            if (it != amap.end() && cam_idx < (int)it->second.cameras.size()) {
+                const auto &cam = it->second.cameras[cam_idx];
+                bool any_unlabeled = false;
+                for (int k = 0; k < config.num_keypoints && k < (int)cam.keypoints.size(); ++k) {
+                    if (!cam.keypoints[k].labeled) { any_unlabeled = true; break; }
+                }
+                if (!any_unlabeled && !cam.keypoints.empty())
+                    has_valid_2d = true;
+            }
+
+            nlohmann::json annotation_entry;
+            if (has_valid_2d) {
+                const auto &cam = it->second.cameras[cam_idx];
+
+                // Compute bbox from 2D keypoints + margin (Y-flipped to image coords)
+                double x_min = 1e9, x_max = -1e9, y_min = 1e9, y_max = -1e9;
+                for (int k = 0; k < config.num_keypoints && k < (int)cam.keypoints.size(); ++k) {
+                    double x = cam.keypoints[k].x;
+                    double y = img_h - cam.keypoints[k].y; // ImPlot → image coords
+                    x_min = std::min(x_min, x); x_max = std::max(x_max, x);
+                    y_min = std::min(y_min, y); y_max = std::max(y_max, y);
+                }
+
+                x_min = std::max(x_min - config.margin_pixel, 0.0);
+                x_max = std::min(x_max + config.margin_pixel, (double)img_w);
+                y_min = std::max(y_min - config.margin_pixel, 0.0);
+                y_max = std::min(y_max + config.margin_pixel, (double)img_h);
+
+                double x_size = x_max - x_min;
+                double y_size = y_max - y_min;
+
+                // Flat keypoints: [x0,y0,1, x1,y1,1, ...] — int-cast, visibility=1
+                nlohmann::json keypoints_flat = nlohmann::json::array();
+                for (int k = 0; k < config.num_keypoints && k < (int)cam.keypoints.size(); ++k) {
+                    keypoints_flat.push_back(static_cast<int>(cam.keypoints[k].x));
+                    keypoints_flat.push_back(static_cast<int>(img_h - cam.keypoints[k].y));
+                    keypoints_flat.push_back(1);
+                }
+
+                // Segmentation from mask polygons (if available)
+                nlohmann::json seg = nlohmann::json::array();
+                if (cam.has_mask()) {
+                    for (const auto &poly : cam.extras->mask_polygons) {
+                        nlohmann::json flat = nlohmann::json::array();
+                        for (const auto &pt : poly) {
+                            flat.push_back(pt.x);
+                            flat.push_back(img_h - pt.y); // ImPlot → image coords
+                        }
+                        seg.push_back(flat);
+                    }
+                }
+
+                annotation_entry["bbox"] = {x_min, y_min, x_size, y_size};
+                annotation_entry["category_id"] = 1; // JARVIS convention
+                annotation_entry["id"] = annotation_id;
+                annotation_entry["image_id"] = image_id;
+                annotation_entry["iscrowd"] = 0;
+                annotation_entry["keypoints"] = keypoints_flat;
+                annotation_entry["num_keypoints"] = config.num_keypoints;
+                annotation_entry["segmentation"] = seg;
+            }
+
+            // Track framesets
+            set_of_frames[frame_num].push_back(image_id);
+
+            // Append annotation only if valid
+            if (has_valid_2d) {
+                annotations_arr.push_back(annotation_entry);
+                annotation_id++;
+                n_complete++;
+            } else {
+                n_incomplete++;
+            }
+
+            images_arr.push_back(image_entry);
+            image_id++;
+        }
+    }
+
+    if (out_complete) *out_complete = n_complete;
+    if (out_incomplete) *out_incomplete = n_incomplete;
+
+    // Build skeleton array for JSON (JARVIS format: keypointA/keypointB strings)
+    nlohmann::json skeleton_arr = nlohmann::json::array();
+    for (size_t i = 0; i < config.edges.size(); i++) {
+        nlohmann::json joint;
+        joint["keypointA"] = config.node_names[config.edges[i].first];
+        joint["keypointB"] = config.node_names[config.edges[i].second];
+        joint["length"] = 0.0;
+        joint["name"] = "Joint " + std::to_string(i + 1);
+        skeleton_arr.push_back(joint);
+    }
+
+    // Categories
+    nlohmann::json categories = nlohmann::json::array();
+    {
+        nlohmann::json cat;
+        cat["id"] = 0;
+        cat["name"] = config.skeleton_name;
+        cat["num_keypoints"] = config.num_keypoints;
+        cat["supercategory"] = "None";
+        categories.push_back(cat);
+    }
+
+    // Calibrations
+    nlohmann::json calib_dict;
+    for (const auto &cam : config.camera_names) {
+        calib_dict[cam] = "calib_params/" + trial_name + "/" + cam + ".yaml";
+    }
+
+    // Framesets
+    nlohmann::json framesets;
+    for (const auto &[frame_num, img_ids] : set_of_frames) {
+        std::string key = trial_name + "/Frame_" + std::to_string(frame_num);
+        nlohmann::json entry;
+        entry["datasetName"] = trial_name;
+        entry["frames"] = img_ids;
+        framesets[key] = entry;
+    }
+
+    // Root JSON
+    nlohmann::json root;
+    root["keypoint_names"] = config.node_names;
+    root["skeleton"] = skeleton_arr;
+    root["categories"] = categories;
+    root["annotations"] = annotations_arr;
+    root["images"] = images_arr;
+    root["calibrations"] = {{trial_name, calib_dict}};
+    root["framesets"] = framesets;
+
+    return root;
+}
+
+// ---------------------------------------------------------------------------
+// Main export function (AnnotationMap-based)
+// ---------------------------------------------------------------------------
+inline bool export_jarvis_dataset(const ExportConfig &config_in,
+                                  const AnnotationMap &amap,
+                                  std::string *status) {
+    namespace fs = std::filesystem;
+    auto t_start = std::chrono::steady_clock::now();
+
+    // Create timestamped subfolder inside output directory
+    ExportConfig config = config_in;
+    {
+        time_t now = time(0);
+        struct tm tstruct = *localtime(&now);
+        char buf[64];
+        strftime(buf, sizeof(buf), "%Y_%m_%d_%H_%M_%S", &tstruct);
+        config.output_folder = config_in.output_folder + "/" + buf;
+    }
+
+    ExportStats stats;
+    stats.output_folder = config.output_folder;
+    stats.num_cameras = static_cast<int>(config.camera_names.size());
+
+    // 1. Get valid frames from AnnotationMap (all 3D keypoints triangulated)
+    std::vector<int> valid_frames;
+    for (const auto &[fid, fa] : amap) {
+        if (frame_is_fully_triangulated(fa, config.num_keypoints))
+            valid_frames.push_back((int)fid);
+    }
+    std::sort(valid_frames.begin(), valid_frames.end());
+
+    if (valid_frames.empty()) {
+        if (status)
+            *status = "Error: No fully-triangulated frames found";
+        return false;
+    }
+
+    // 2. Train/val split
+    std::vector<int> train_frames, val_frames;
+    split_frames(valid_frames, config.train_ratio, config.seed, train_frames,
+                 val_frames);
+
+    stats.train_frames = static_cast<int>(train_frames.size());
+    stats.val_frames = static_cast<int>(val_frames.size());
+
+    // 3. Read image dimensions from calibration files
+    std::map<std::string, int> image_width, image_height;
+    for (const auto &cam : config.camera_names) {
+        std::string calib_path =
+            config.calibration_folder + "/" + cam + ".yaml";
+        try {
+            opencv_yaml::YamlFile yaml = opencv_yaml::read(calib_path);
+            image_width[cam] = yaml.getInt("image_width");
+            image_height[cam] = yaml.getInt("image_height");
+        } catch (const std::exception &e) {
+            if (status)
+                *status = "Error: Cannot open calibration: " + calib_path;
+            return false;
+        }
+    }
+
+    // Extract trial_name from label_folder (last directory component)
+    std::string trial_name = fs::path(config.label_folder).filename().string();
+    if (trial_name.empty()) trial_name = "export";
+
+    // 4. Generate train annotation JSON from AnnotationMap
+    int train_complete = 0, train_incomplete = 0;
+    auto train_json = generate_annotation_json_from_amap(
+        trial_name, train_frames, amap, config, image_width,
+        image_height, &train_complete, &train_incomplete);
+
+    // 5. Generate val annotation JSON from AnnotationMap
+    int val_complete = 0, val_incomplete = 0;
+    auto val_json = generate_annotation_json_from_amap(
+        trial_name, val_frames, amap, config, image_width,
+        image_height, &val_complete, &val_incomplete);
+
+    stats.complete_annotations = train_complete + val_complete;
+    stats.incomplete_annotations = train_incomplete + val_incomplete;
+
+    // 6. Write annotation JSONs
+    fs::create_directories(config.output_folder + "/annotations");
+
+    {
+        std::ofstream f(config.output_folder + "/annotations/instances_train.json");
+        if (!f.is_open()) {
+            if (status)
+                *status = "Error: Cannot write instances_train.json";
+            return false;
+        }
+        f << train_json.dump(4);
+    }
+    {
+        std::ofstream f(config.output_folder + "/annotations/instances_val.json");
+        if (!f.is_open()) {
+            if (status)
+                *status = "Error: Cannot write instances_val.json";
+            return false;
+        }
+        f << val_json.dump(4);
+    }
+
+    // 7. Write calibration YAMLs
+    if (!write_calibration_yamls(config, trial_name, image_width, image_height,
+                                 status))
+        return false;
+
+    // 8. Extract JPEG frames — one thread per camera
+    std::map<int, std::string> frame_to_mode;
+    for (int f : train_frames)
+        frame_to_mode[f] = "train";
+    for (int f : val_frames)
+        frame_to_mode[f] = "val";
+
+    std::mutex status_mutex;
+    std::vector<std::thread> threads;
+    for (const auto &cam : config.camera_names) {
+        std::string video_path =
+            config.media_folder + "/" + cam + ".mp4";
+        threads.emplace_back(extract_jpegs_for_camera, cam, trial_name,
+                             video_path, config.output_folder, train_frames,
+                             val_frames, frame_to_mode, status, &status_mutex,
+                             &stats.total_images_saved, config.jpeg_quality);
+    }
+    for (auto &t : threads)
+        t.join();
+
+    if (status && status->find("Error") != std::string::npos)
+        return false;
+
+    auto t_end = std::chrono::steady_clock::now();
+    stats.elapsed_seconds = std::chrono::duration<double>(t_end - t_start).count();
+
+    int total_frames = stats.train_frames + stats.val_frames;
+    std::cout << "\n=== JARVIS Export Complete ===" << std::endl;
+    std::cout << "Output:      " << stats.output_folder << std::endl;
+    std::cout << "Frames:      " << stats.train_frames << " train, "
+              << stats.val_frames << " val (" << total_frames << " total)" << std::endl;
+    std::cout << "Images:      " << stats.total_images_saved.load() << " saved ("
+              << stats.num_cameras << " cameras x " << total_frames << " frames)" << std::endl;
+    std::cout << "Annotations: " << stats.complete_annotations << " complete, "
+              << stats.incomplete_annotations << " incomplete" << std::endl;
+    std::cout << "Duration:    " << std::fixed << std::setprecision(1)
+              << stats.elapsed_seconds << "s" << std::endl;
+    std::cout << std::endl;
+
+    if (status)
+        *status = "Export completed successfully! Train: " +
+                  std::to_string(train_frames.size()) +
+                  ", Val: " + std::to_string(val_frames.size()) +
+                  " frames x " + std::to_string(config.camera_names.size()) +
+                  " cameras";
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Main export function (legacy CSV-based — kept for backward compatibility)
 // ---------------------------------------------------------------------------
 inline bool export_jarvis_dataset(const ExportConfig &config_in,
                                   std::string *status) {
