@@ -96,39 +96,49 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
         std::string center_path, keypoint_path, info_path;
 
         if (!state.models_folder.empty() && fs::is_directory(state.models_folder)) {
-            // Check models/onnx/ first
-            fs::path onnx_dir = fs::path(state.models_folder) / "onnx";
-            if (fs::is_directory(onnx_dir)) {
-                fs::path c = onnx_dir / "center_detect.onnx";
-                fs::path k = onnx_dir / "keypoint_detect.onnx";
+            // Search order for ONNX files:
+            // 1. models/onnx/  (our export convention)
+            // 2. models/ directly
+            // Then check for .pth files in JARVIS structure:
+            // 3. models/CenterDetect/Run_*/  and  models/KeypointDetect/Run_*/
+
+            auto find_onnx_in = [&](const fs::path &dir) {
+                fs::path c = dir / "center_detect.onnx";
+                fs::path k = dir / "keypoint_detect.onnx";
                 if (fs::exists(c) && fs::exists(k)) {
-                    has_onnx_subdir = true;
                     center_path = c.string();
                     keypoint_path = k.string();
-                    fs::path mi = onnx_dir / "model_info.json";
+                    fs::path mi = dir / "model_info.json";
                     if (fs::exists(mi)) info_path = mi.string();
+                    return true;
                 }
-            }
-            // Check models/ directly
-            if (!has_onnx_subdir) {
-                fs::path c = fs::path(state.models_folder) / "center_detect.onnx";
-                fs::path k = fs::path(state.models_folder) / "keypoint_detect.onnx";
-                if (fs::exists(c) && fs::exists(k)) {
-                    has_onnx_direct = true;
-                    center_path = c.string();
-                    keypoint_path = k.string();
-                    fs::path mi = fs::path(state.models_folder) / "model_info.json";
-                    if (fs::exists(mi)) info_path = mi.string();
-                }
-            }
-            // Check for .pth files (conversion candidate)
+                return false;
+            };
+
+            has_onnx_subdir = find_onnx_in(fs::path(state.models_folder) / "onnx");
+            if (!has_onnx_subdir)
+                has_onnx_direct = find_onnx_in(fs::path(state.models_folder));
+
+            // Check for .pth files in JARVIS structure (CenterDetect/Run_*/, KeypointDetect/Run_*/)
             if (!has_onnx_subdir && !has_onnx_direct) {
-                for (auto &entry : fs::directory_iterator(state.models_folder)) {
-                    if (entry.path().extension() == ".pth") {
-                        has_pth = true;
-                        break;
-                    }
-                }
+                auto find_latest_pth = [](const fs::path &module_dir) -> std::string {
+                    if (!fs::is_directory(module_dir)) return {};
+                    std::vector<fs::path> runs;
+                    for (auto &e : fs::directory_iterator(module_dir))
+                        if (e.is_directory() && e.path().filename().string().find("Run_") == 0)
+                            runs.push_back(e.path());
+                    if (runs.empty()) return {};
+                    std::sort(runs.begin(), runs.end());
+                    // Find *_final.pth in latest run
+                    for (auto &e : fs::directory_iterator(runs.back()))
+                        if (e.path().extension() == ".pth" &&
+                            e.path().filename().string().find("final") != std::string::npos)
+                            return e.path().string();
+                    return {};
+                };
+                std::string cd_pth = find_latest_pth(fs::path(state.models_folder) / "CenterDetect");
+                std::string kd_pth = find_latest_pth(fs::path(state.models_folder) / "KeypointDetect");
+                has_pth = !cd_pth.empty() && !kd_pth.empty();
             }
         }
 
@@ -254,13 +264,13 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
         if (!jarvis.loaded) ImGui::BeginDisabled();
         if (ImGui::Button("Predict Current Frame")) {
             // Set flag — main loop handles RGB extraction + prediction
-            // (pixel buffer access is platform-specific, same as hotkey 5)
+            // (pixel buffer access is platform-specific, same as hotkey 6)
             state.predict_requested = true;
         }
         if (!jarvis.loaded) ImGui::EndDisabled();
 
         ImGui::SameLine();
-        ImGui::TextDisabled("Press 5 to predict (hotkey)");
+        ImGui::TextDisabled("Press 6 to predict (hotkey)");
         },
         // always_fn: file dialog handlers (run every frame)
         [&]() {

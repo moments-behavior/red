@@ -1365,7 +1365,7 @@ int main(int argc, char **argv) {
 
             // Hotkey 5: Run JARVIS prediction on current frame (all cameras)
             bool jarvis_predict_trigger =
-                (ImGui::IsKeyPressed(ImGuiKey_5, false) && !io.WantTextInput) ||
+                (ImGui::IsKeyPressed(ImGuiKey_6, false) && !io.WantTextInput) ||
                 jarvis_predict_state.predict_requested;
             jarvis_predict_state.predict_requested = false;
 
