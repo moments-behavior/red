@@ -183,6 +183,14 @@ inline bool frame_is_complete(const FrameAnnotation &fa) {
     return true;
 }
 
+// Check if all 3D keypoints are triangulated
+inline bool frame_is_fully_triangulated(const FrameAnnotation &fa, int num_nodes) {
+    for (int k = 0; k < num_nodes; ++k)
+        if (k >= (int)fa.kp3d.size() || !fa.kp3d[k].triangulated)
+            return false;
+    return true;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // JSON persistence for extended annotations (bbox, OBB, mask)
 //

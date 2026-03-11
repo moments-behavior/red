@@ -200,19 +200,10 @@ inline void DrawLabelingToolWindow(
         for (const auto &[fnum, fa] : annotations) {
             if (!frame_has_any_keypoints(fa))
                 continue;
-            bool complete = true;
-            if (skeleton.has_skeleton && scene->num_cams > 1) {
-                for (int cam = 0; cam < scene->num_cams && cam < (int)fa.cameras.size(); ++cam)
-                    for (int k = 0; k < skeleton.num_nodes; ++k)
-                        if (k >= (int)fa.cameras[cam].keypoints.size() ||
-                            !fa.cameras[cam].keypoints[k].labeled) { complete = false; goto done; }
-                for (int k = 0; k < skeleton.num_nodes; ++k)
-                    if (k >= (int)fa.kp3d.size() ||
-                        !fa.kp3d[k].triangulated) { complete = false; goto done; }
-            } else {
-                complete = false;
-            }
-            done:
+            bool complete = (skeleton.has_skeleton && scene->num_cams > 1)
+                ? frame_is_complete(fa) &&
+                  frame_is_fully_triangulated(fa, skeleton.num_nodes)
+                : false;
             labeled_frames.push_back({(int)fnum, complete});
         }
 

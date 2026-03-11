@@ -3,6 +3,11 @@
 //
 // Replaces jarvis_export_window.h. Same layout pattern but with a format
 // dropdown at top. Format-specific options appear/disappear based on selection.
+//
+// Thread safety: export runs on a detached thread. The thread writes to its own
+// local std::string (thread_status), never to state.status directly. When the
+// thread finishes, the final status is copied to state.status via atomic flag.
+// state.in_progress is std::atomic<bool> for safe cross-thread signaling.
 
 #include "imgui.h"
 #include "annotation.h"
@@ -12,7 +17,9 @@
 #include "gui/panel.h"
 #include <ImGuiFileDialog.h>
 #include <misc/cpp/imgui_stdlib.h>
+#include <atomic>
 #include <filesystem>
+#include <memory>
 #include <string>
 #include <thread>
 
@@ -25,8 +32,16 @@ struct ExportWindowState {
     float train_ratio = 0.9f;
     int seed = 42;
     int jpeg_quality = 95;
-    bool in_progress = false;
-    std::string status;
+    std::atomic<bool> in_progress{false};
+    std::string status; // only written by main thread
+
+    // Thread → main thread communication for final status.
+    // The thread writes to finished_status, then sets finished flag.
+    // Main thread polls finished flag; when set, copies finished_status
+    // into status and clears finished. This avoids any concurrent access
+    // to std::string — the handoff is sequenced by the atomic.
+    std::shared_ptr<std::string> finished_status; // heap-allocated, owned by thread+main
+    std::atomic<bool> finished{false};
 
     // Cached label folder detection
     std::string label_folder;
@@ -38,6 +53,16 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
                               AnnotationMap &amap) {
     const auto &pm = ctx.pm;
     const auto &skeleton = ctx.skeleton;
+
+    // Poll for thread completion (runs every frame, even when window is hidden)
+    if (state.finished.load(std::memory_order_acquire)) {
+        // Thread is done and has released finished_status — safe to read
+        if (state.finished_status)
+            state.status = *state.finished_status;
+        state.finished_status.reset();
+        state.in_progress.store(false, std::memory_order_relaxed);
+        state.finished.store(false, std::memory_order_relaxed);
+    }
 
     drawPanel("Export Tool", state.show,
         [&]() {
@@ -147,7 +172,7 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
         ImGui::Separator();
 
         // Export button
-        if (!state.in_progress) {
+        if (!state.in_progress.load(std::memory_order_relaxed)) {
             std::string validation_error;
             // Resolve actual dispatch format (JARVIS vs JARVIS_TR based on checkbox)
             auto dispatch_fmt = fmt;
@@ -166,8 +191,28 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
                 } else if (pm.camera_names.empty()) {
                     validation_error = "No cameras loaded";
                 } else {
-                    state.in_progress = true;
-                    state.status = "Starting export...";
+                    // Auto-save annotations before export so CSVs on disk are current.
+                    // JARVIS reads from disk; other formats use AnnotationMap directly
+                    // but saving is still good practice to avoid data loss.
+                    if (!pm.keypoints_root_folder.empty() && !amap.empty()) {
+                        std::string save_err;
+                        std::string saved = AnnotationCSV::save_all(
+                            pm.keypoints_root_folder, skeleton.name,
+                            amap, ctx.scene ? (int)ctx.scene->num_cams : 0,
+                            skeleton.num_nodes, pm.camera_names, &save_err);
+                        if (!saved.empty()) {
+                            // Update label folder to the freshly saved one
+                            state.label_folder = saved;
+                            state.label_display =
+                                std::filesystem::path(saved).filename().string();
+                            // Invalidate cache so next open re-detects
+                            state.label_cache_key.clear();
+                        }
+                        // If save fails, proceed anyway — the old labels are still on disk
+                    }
+
+                    state.in_progress.store(true, std::memory_order_relaxed);
+                    state.status = "Exporting...";
 
                     ExportFormats::ExportConfig ecfg;
                     ecfg.format             = dispatch_fmt;
@@ -189,11 +234,25 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
                     // Copy the annotation map for thread safety
                     AnnotationMap amap_copy = amap;
 
+                    // Allocate shared_ptr for thread → main status handoff.
+                    // The thread writes the final status into this string,
+                    // then sets the atomic finished flag. The main thread
+                    // reads it on the next frame and copies to state.status.
+                    auto result_status = std::make_shared<std::string>();
+                    state.finished_status = result_status;
+
                     std::thread(
-                        [ecfg, amap_copy, &state]() {
+                        [ecfg, amap_copy, result_status, &state]() {
+                            // Thread-local string for export_dataset to write into.
+                            // No other thread touches this string.
+                            std::string thread_status;
                             ExportFormats::export_dataset(
-                                ecfg.format, ecfg, amap_copy, &state.status);
-                            state.in_progress = false;
+                                ecfg.format, ecfg, amap_copy, &thread_status);
+                            // Copy final status into the shared handoff string,
+                            // then signal completion. The release fence ensures
+                            // the string write is visible before the flag.
+                            *result_status = std::move(thread_status);
+                            state.finished.store(true, std::memory_order_release);
                         })
                         .detach();
                 }
@@ -210,7 +269,8 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
         if (!state.status.empty()) {
             if (state.status.find("Error") != std::string::npos)
                 ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", state.status.c_str());
-            else if (state.status.find("complete") != std::string::npos)
+            else if (state.status.find("complete") != std::string::npos ||
+                     state.status.find("Complete") != std::string::npos)
                 ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "%s", state.status.c_str());
             else
                 ImGui::Text("%s", state.status.c_str());
