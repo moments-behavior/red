@@ -29,48 +29,65 @@ inline void DrawLabelingToolWindow(
     state.save_requested = false;
 
     if (ImGui::Begin("Labeling Tool")) {
-        // Find prev/next labeled frames (used by Prev/Next buttons)
-        auto next_labeled_it = annotations.end();
-        for (auto it = annotations.upper_bound(current_frame_num);
-             it != annotations.end(); ++it) {
-            if (frame_has_any_keypoints(it->second)) {
-                next_labeled_it = it; break;
-            }
-        }
-        if (next_labeled_it == annotations.end()) {
-            for (auto it = annotations.begin();
-                 it != annotations.upper_bound(current_frame_num); ++it) {
-                if (frame_has_any_keypoints(it->second)) {
-                    next_labeled_it = it; break;
+        // Helper: find prev/next frame matching a predicate (with wraparound)
+        struct PrevNext { int prev = -1; int next = -1; };
+        auto find_prev_next = [&](auto predicate) -> PrevNext {
+            PrevNext pn;
+            // Next: search forward from current, wrap to beginning
+            for (auto it = annotations.upper_bound(current_frame_num);
+                 it != annotations.end(); ++it)
+                if (predicate(it->second)) { pn.next = (int)it->first; break; }
+            if (pn.next < 0)
+                for (auto it = annotations.begin();
+                     it != annotations.upper_bound(current_frame_num); ++it)
+                    if (predicate(it->second)) { pn.next = (int)it->first; break; }
+            // Prev: search backward from current, wrap to end
+            auto lb = annotations.lower_bound(current_frame_num);
+            if (lb != annotations.begin())
+                for (auto it = std::prev(lb);;) {
+                    if (predicate(it->second)) { pn.prev = (int)it->first; break; }
+                    if (it == annotations.begin()) break;
+                    --it;
                 }
-            }
-        }
-        auto prev_labeled_it = annotations.end();
-        auto lb = annotations.lower_bound(current_frame_num);
-        if (lb != annotations.begin()) {
-            for (auto it = std::prev(lb);;) {
-                if (frame_has_any_keypoints(it->second)) {
-                    prev_labeled_it = it; break;
+            if (pn.prev < 0 && !annotations.empty())
+                for (auto it = std::prev(annotations.end());;) {
+                    if (it->first <= (u32)current_frame_num) break;
+                    if (predicate(it->second)) { pn.prev = (int)it->first; break; }
+                    if (it == annotations.begin()) break;
+                    --it;
                 }
-                if (it == annotations.begin()) break;
-                --it;
+            return pn;
+        };
+
+        // Helper: render Prev [Jump] Next buttons. id_suffix for unique widget IDs.
+        auto jump_buttons = [&](PrevNext pn, const char *id_suffix) {
+            ImGui::BeginDisabled(pn.prev < 0);
+            char prev_id[32]; snprintf(prev_id, sizeof(prev_id), ICON_FK_CHEVRON_LEFT " Prev##%s", id_suffix);
+            if (ImGui::SmallButton(prev_id)) {
+                ps.play_video = false;
+                seek_all_cameras(scene, pn.prev, dc_context->video_fps, ps, true);
             }
-        }
-        // Wrap around: search backward from end of map
-        if (prev_labeled_it == annotations.end() && !annotations.empty()) {
-            for (auto it = std::prev(annotations.end());;) {
-                if (it->first <= (u32)current_frame_num) break;
-                if (frame_has_any_keypoints(it->second)) {
-                    prev_labeled_it = it; break;
-                }
-                if (it == annotations.begin()) break;
-                --it;
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+            ImGui::TextDisabled("Jump");
+            ImGui::SameLine();
+            ImGui::BeginDisabled(pn.next < 0);
+            char next_id[32]; snprintf(next_id, sizeof(next_id), "Next " ICON_FK_CHEVRON_RIGHT "##%s", id_suffix);
+            if (ImGui::SmallButton(next_id)) {
+                ps.play_video = false;
+                seek_all_cameras(scene, pn.next, dc_context->video_fps, ps, true);
             }
-        }
-        bool has_next = (next_labeled_it != annotations.end());
-        bool has_prev = (prev_labeled_it != annotations.end());
-        int next_frame = has_next ? (int)next_labeled_it->first : -1;
-        int prev_frame = has_prev ? (int)prev_labeled_it->first : -1;
+            ImGui::EndDisabled();
+        };
+
+        // Find prev/next for keypoints
+        auto kp_pn = find_prev_next([](const FrameAnnotation &fa) {
+            return frame_has_any_keypoints(fa);
+        });
+        bool has_next = kp_pn.next >= 0;
+        bool has_prev = kp_pn.prev >= 0;
+        int next_frame = kp_pn.next;
+        int prev_frame = kp_pn.prev;
 
         // === Top row: Save, Triangulate, Prev/Next label ===
         if (ImGui::Button(ICON_FK_FLOPPY_O " Save")) {
@@ -293,7 +310,12 @@ inline void DrawLabelingToolWindow(
         // ─── Section 2: SAM Labels ───
         if (!mask_frames.empty()) {
             ImGui::Spacing();
+            auto mask_pn = find_prev_next([](const FrameAnnotation &fa) {
+                return frame_has_any_masks(fa);
+            });
             ImGui::Text("SAM Labels (%zu)", mask_frames.size());
+            ImGui::SameLine();
+            jump_buttons(mask_pn, "sam");
 
             const ImU32 orange_u32 = IM_COL32(230, 140, 30, 255);
 
@@ -316,7 +338,14 @@ inline void DrawLabelingToolWindow(
         // ─── Section 3: Bounding Box Labels ───
         if (!bbox_frames.empty()) {
             ImGui::Spacing();
+            auto bbox_pn = find_prev_next([](const FrameAnnotation &fa) {
+                for (const auto &cam : fa.cameras)
+                    if (cam.has_bbox() || cam.has_obb()) return true;
+                return false;
+            });
             ImGui::Text("Bounding Box Labels (%zu)", bbox_frames.size());
+            ImGui::SameLine();
+            jump_buttons(bbox_pn, "bbox");
 
             const ImU32 purple_u32  = IM_COL32(160, 90, 220, 255);
             const ImU32 lilac_u32   = IM_COL32(200, 150, 255, 255);
