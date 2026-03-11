@@ -103,6 +103,44 @@ inline std::vector<u32> get_keypoint_frames(const AnnotationMap &amap) {
     return frames;
 }
 
+// ── Shared image extraction for all exporters ──
+// Extracts JPEG frames from video files, one thread per camera.
+// Creates <output>/{train,val}/<cam>/Frame_<N>.jpg for each frame.
+// Uses JarvisExport::extract_jpegs_for_camera (already thread-safe).
+// trial_name: subfolder between split and camera (empty string = none).
+inline bool extract_images(const ExportConfig &cfg,
+                           const std::vector<u32> &train,
+                           const std::vector<u32> &val,
+                           const std::string &trial_name,
+                           std::string *status) {
+    if (cfg.media_folder.empty()) return true; // no video → skip silently
+
+    // Build frame→mode map
+    std::map<int, std::string> frame_to_mode;
+    std::vector<int> train_int, val_int;
+    for (u32 f : train) { frame_to_mode[(int)f] = "train"; train_int.push_back((int)f); }
+    for (u32 f : val)   { frame_to_mode[(int)f] = "val";   val_int.push_back((int)f); }
+
+    std::atomic<int> images_saved{0};
+    std::mutex status_mutex;
+    std::vector<std::thread> threads;
+
+    for (const auto &cam : cfg.camera_names) {
+        std::string video_path = cfg.media_folder + "/" + cam + ".mp4";
+        if (!std::filesystem::exists(video_path)) continue;
+        threads.emplace_back(
+            JarvisExport::extract_jpegs_for_camera,
+            cam, trial_name, video_path, cfg.output_folder,
+            train_int, val_int, frame_to_mode,
+            status, &status_mutex, &images_saved, cfg.jpeg_quality);
+    }
+    for (auto &t : threads) t.join();
+
+    if (status && status->find("Error") != std::string::npos)
+        return false;
+    return true;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // COCO Keypoints export
 // ═══════════════════════════════════════════════════════════════════════════
@@ -293,6 +331,13 @@ inline bool export_coco(const ExportConfig &cfg, const AnnotationMap &amap,
         }
     }
 
+    // Extract images from video (if media_folder available)
+    if (!cfg.media_folder.empty()) {
+        if (status) *status = "Extracting images...";
+        if (!extract_images(cfg, train, val, "", status))
+            return false;
+    }
+
     if (status)
         *status = "COCO export complete: " + std::to_string(train.size()) +
                   " train, " + std::to_string(val.size()) + " val frames";
@@ -418,6 +463,17 @@ inline bool export_yolo(const ExportConfig &cfg, const AnnotationMap &amap,
         }
     }
 
+    // Extract images from video (if media_folder available)
+    if (!cfg.media_folder.empty()) {
+        if (status) *status = "Extracting images...";
+        // YOLO images go to images/{train,val}/<cam>/Frame_N.jpg
+        // We need to use output_folder + "/images" as the extraction root
+        ExportConfig img_cfg = cfg;
+        img_cfg.output_folder = cfg.output_folder + "/images";
+        if (!extract_images(img_cfg, train, val, "", status))
+            return false;
+    }
+
     std::string fmt = include_keypoints ? "YOLO Pose" : "YOLO Detection";
     if (status)
         *status = fmt + " export complete: " + std::to_string(train.size()) +
@@ -491,7 +547,7 @@ inline bool export_deeplabcut(const ExportConfig &cfg, const AnnotationMap &amap
             if (ci >= (int)fa.cameras.size()) continue;
             const auto &c2d = fa.cameras[ci];
 
-            f << "labeled-data/" << cam << "/Frame_" << frame << ".png";
+            f << "labeled-data/" << cam << "/Frame_" << frame << ".jpg";
             for (size_t k = 0; k < c2d.keypoints.size(); ++k) {
                 if (c2d.keypoints[k].labeled) {
                     double x = c2d.keypoints[k].x;
@@ -517,6 +573,35 @@ inline bool export_deeplabcut(const ExportConfig &cfg, const AnnotationMap &amap
         for (const auto &[a, b] : cfg.edges)
             f << "- [" << cfg.node_names[a] << ", " << cfg.node_names[b] << "]\n";
         f << "numframes2pick: " << labeled.size() << "\n";
+    }
+
+    // Extract images from video (if media_folder available)
+    // DLC puts all images in labeled-data/<cam>/Frame_N.jpg (no train/val split)
+    if (!cfg.media_folder.empty()) {
+        if (status) *status = "Extracting images...";
+        // Use extract_images with all frames as "train" and empty trial_name.
+        // Output root = <export>/labeled-data → images at labeled-data/train/<cam>/
+        // Then rename train/ → ./ to get labeled-data/<cam>/
+        // Simpler: just use the JARVIS helper directly with mode="labeled-data"
+        std::vector<int> frame_ints;
+        for (u32 f : labeled) frame_ints.push_back((int)f);
+        std::map<int, std::string> frame_to_mode;
+        for (int f : frame_ints) frame_to_mode[f] = "labeled-data";
+        std::atomic<int> saved{0};
+        std::mutex smtx;
+        std::vector<int> empty_int;
+        std::vector<std::thread> threads;
+        for (const auto &cam : cfg.camera_names) {
+            std::string vid = cfg.media_folder + "/" + cam + ".mp4";
+            if (!std::filesystem::exists(vid)) continue;
+            // path: <output>/labeled-data/<cam>/Frame_N.jpg (trial="" so no extra subdir)
+            threads.emplace_back(
+                JarvisExport::extract_jpegs_for_camera,
+                cam, "", vid, cfg.output_folder,
+                frame_ints, empty_int, frame_to_mode,
+                status, &smtx, &saved, cfg.jpeg_quality);
+        }
+        for (auto &t : threads) t.join();
     }
 
     if (status)

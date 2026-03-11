@@ -120,10 +120,8 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
         ImGui::Text("Calibration:  %s",
                     pm.calibration_folder.empty() ? "(none)" : pm.calibration_folder.c_str());
 
-        if (is_jarvis) {
-            ImGui::Text("Video Folder: %s",
-                        pm.media_folder.empty() ? "(none)" : pm.media_folder.c_str());
-        }
+        ImGui::Text("Video Folder: %s",
+                    pm.media_folder.empty() ? "(none — images will not be extracted)" : pm.media_folder.c_str());
         ImGui::Text("Cameras:      %d", (int)pm.camera_names.size());
 
         int kp_count = 0, mask_count = 0, total_count = 0;
@@ -165,7 +163,7 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
             fmt == ExportFormats::YOLO_POSE || fmt == ExportFormats::YOLO_DETECT) {
             ImGui::SliderFloat("Bbox Margin (px)", &state.margin, 0.0f, 200.0f);
         }
-        if (is_jarvis) {
+        if (!pm.media_folder.empty()) {
             ImGui::SliderInt("JPEG Quality", &state.jpeg_quality, 10, 100);
         }
 
