@@ -13,6 +13,7 @@
 #include "gui/obb_tool.h"
 #include "gui/sam_tool.h"
 #include "jarvis_inference.h"
+#include "gui/jarvis_predict_window.h"
 #include "gui/annotation_dialog.h"
 #include "gui/calibration_tool_window.h"
 #include "gui/labeling_tool_window.h"
@@ -263,6 +264,7 @@ int main(int argc, char **argv) {
     JarvisExportState jarvis_export_state;
     // JARVIS Import Tool state
     JarvisImportState jarvis_import_state;
+    JarvisPredictState jarvis_predict_state;
     jarvis_export_state.margin = user_settings.jarvis_margin;
     jarvis_export_state.train_ratio = user_settings.jarvis_train_ratio;
     jarvis_export_state.seed = user_settings.jarvis_seed;
@@ -522,6 +524,9 @@ int main(int argc, char **argv) {
                 nullptr});
     panels.add({"SAM Assist",
                 [&]() { DrawSamToolWindow(sam_tool_state, sam_state, ctx); },
+                nullptr});
+    panels.add({"JARVIS Predict",
+                [&]() { DrawJarvisPredictWindow(jarvis_predict_state, jarvis_state, ctx); },
                 nullptr});
 
     main_loop_running = true;
@@ -1359,8 +1364,12 @@ int main(int argc, char **argv) {
 
 
             // Hotkey 5: Run JARVIS prediction on current frame (all cameras)
-            if (ImGui::IsKeyPressed(ImGuiKey_5, false) &&
-                !io.WantTextInput && !ps.play_video &&
+            bool jarvis_predict_trigger =
+                (ImGui::IsKeyPressed(ImGuiKey_5, false) && !io.WantTextInput) ||
+                jarvis_predict_state.predict_requested;
+            jarvis_predict_state.predict_requested = false;
+
+            if (jarvis_predict_trigger && !ps.play_video &&
                 jarvis_state.loaded && scene->num_cams > 0) {
 #ifdef __APPLE__
                 int mh = ps.play_video ? ps.read_head : select_corr_head;
