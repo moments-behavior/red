@@ -288,10 +288,14 @@ inline void close_project(AppContext &ctx) {
 inline void on_project_loaded(AppContext &ctx,
                               std::function<void()> print_metadata_fn = nullptr,
                               std::function<void(const std::string &)> print_summary_fn = nullptr) {
-    // Unload any existing media before loading new project
-    unload_media(ctx.ps, ctx.pm, ctx.demuxers, ctx.dc_context,
-                 ctx.scene, ctx.decoder_threads,
-                 ctx.is_view_focused, ctx.window_was_decoding);
+    // Note: close_project() should be called BEFORE this function for
+    // project switching. It handles unload_media + annotations.clear.
+    // For the startup path (no prior project), unload_media is a no-op.
+    if (ctx.ps.video_loaded) {
+        unload_media(ctx.ps, ctx.pm, ctx.demuxers, ctx.dc_context,
+                     ctx.scene, ctx.decoder_threads,
+                     ctx.is_view_focused, ctx.window_was_decoding);
+    }
     ctx.annotations.clear();
 
     switch_ini_to_project(ctx);
