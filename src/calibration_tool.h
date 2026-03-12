@@ -233,6 +233,11 @@ struct CalibProject {
     std::string laser_output_folder;     // laser YAML output
     std::string tele_output_folder;      // telecentric DLT output
 
+    // Last DLT calibration result (persisted for reopening)
+    int dlt_method = -1;                  // -1 = not run, 0/1/2 = Linear/k1/k1k2
+    double dlt_mean_rmse = 0;
+    std::vector<double> dlt_per_camera_rmse;
+
     // Mode helpers
     bool has_aruco() const { return !config_file.empty(); }
     bool has_laser_input() const { return !calibration_folder.empty() && !media_folder.empty(); }
@@ -262,7 +267,10 @@ inline void to_json(nlohmann::json &j, const CalibProject &p) {
                        {"image_experimental_folder", p.image_experimental_folder},
                        {"video_experimental_folder", p.video_experimental_folder},
                        {"laser_output_folder", p.laser_output_folder},
-                       {"tele_output_folder", p.tele_output_folder}};
+                       {"tele_output_folder", p.tele_output_folder},
+                       {"dlt_method", p.dlt_method},
+                       {"dlt_mean_rmse", p.dlt_mean_rmse},
+                       {"dlt_per_camera_rmse", p.dlt_per_camera_rmse}};
 }
 
 inline void from_json(const nlohmann::json &j, CalibProject &p) {
@@ -287,6 +295,9 @@ inline void from_json(const nlohmann::json &j, CalibProject &p) {
         p.image_output_folder = j.value("output_folder", std::string{});
     p.laser_output_folder = j.value("laser_output_folder", std::string{});
     p.tele_output_folder = j.value("tele_output_folder", std::string{});
+    p.dlt_method = j.value("dlt_method", -1);
+    p.dlt_mean_rmse = j.value("dlt_mean_rmse", 0.0);
+    p.dlt_per_camera_rmse = j.value("dlt_per_camera_rmse", std::vector<double>{});
 }
 
 inline bool save_project(const CalibProject &p,

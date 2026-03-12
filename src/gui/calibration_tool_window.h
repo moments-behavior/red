@@ -8,6 +8,7 @@
 #include "calib_viewer_window.h"
 #include "laser_calibration.h"
 #include "telecentric_dlt.h"
+#include "tele_viewer_window.h"
 #include "aruco_metal.h"
 #include "laser_metal.h"
 #include <ImGuiFileDialog.h>
@@ -135,9 +136,12 @@ struct CalibrationToolState {
     // Laser visualization
     LaserVizState laser_viz;
 
-    // 3D calibration viewer
+    // 3D calibration viewer (perspective)
     CalibViewerState calib_viewer;
     CalibrationPipeline::CalibrationResult loaded_result; // for loading from disk
+
+    // 3D telecentric viewer
+    TeleViewerState tele_viewer;
 };
 
 struct CalibrationToolCallbacks {
@@ -1207,6 +1211,23 @@ inline void DrawCalibrationToolWindow(
                             // Add to run history for comparison
                             state.tele_run_history.push_back(
                                 state.tele_dlt_result);
+                            // Persist result metadata in project
+                            state.project.dlt_method =
+                                static_cast<int>(state.tele_dlt_result.method);
+                            state.project.dlt_mean_rmse =
+                                state.tele_dlt_result.mean_rmse;
+                            state.project.dlt_per_camera_rmse.clear();
+                            for (const auto &cam : state.tele_dlt_result.cameras) {
+                                double rmse = (cam.rmse_ba > 0) ? cam.rmse_ba : cam.rmse_init;
+                                state.project.dlt_per_camera_rmse.push_back(rmse);
+                            }
+                            // Auto-save project
+                            std::string proj_file =
+                                state.project.project_path + "/" +
+                                state.project.project_name + ".redproj";
+                            std::string save_err;
+                            CalibrationTool::save_project(
+                                state.project, proj_file, &save_err);
                         } else {
                             state.tele_dlt_status =
                                 "Error: " + state.tele_dlt_result.error;
@@ -1369,6 +1390,113 @@ inline void DrawCalibrationToolWindow(
                             }
                             ImGui::TreePop();
                         }
+                    }
+                }
+
+                // ── Action Buttons ──
+                if (state.tele_dlt_done && state.tele_dlt_result.success) {
+                    ImGui::Spacing();
+
+                    // "Use This Calibration" — create annotation project
+                    if (ImGui::Button("Use This Calibration...##tele")) {
+                        ImGui::OpenPopup("##tele_use_calib");
+                    }
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Create an Annotation Project using this calibration");
+
+                    // 3D Viewer button
+                    ImGui::SameLine();
+                    if (ImGui::Button("3D Viewer##tele")) {
+                        state.tele_viewer.show = true;
+                        state.tele_viewer.dlt_result = &state.tele_dlt_result;
+                        // Load 3D landmarks if not already loaded
+                        if (state.tele_viewer.landmarks_3d.empty()) {
+                            state.tele_viewer.landmarks_3d =
+                                TelecentricDLT::parse_3d_landmarks(
+                                    state.project.landmarks_3d_file);
+                        }
+                    }
+
+                    // "Use This Calibration" popup
+                    if (ImGui::BeginPopup("##tele_use_calib")) {
+                        ImGui::Text("Create Annotation Project");
+                        ImGui::Separator();
+
+                        static std::string annot_name;
+                        static std::string annot_root;
+                        if (annot_name.empty())
+                            annot_name = state.project.project_name + "_annot";
+                        if (annot_root.empty())
+                            annot_root = state.project.project_root_path;
+
+                        ImGui::Text("Project Name:");
+                        ImGui::SetNextItemWidth(300);
+                        ImGui::InputText("##annot_name", &annot_name);
+
+                        ImGui::Text("Project Root:");
+                        ImGui::SetNextItemWidth(300);
+                        ImGui::InputText("##annot_root", &annot_root);
+
+                        ImGui::Text("Calibration: %s",
+                            state.tele_dlt_result.output_folder.c_str());
+                        ImGui::Text("Videos: %s",
+                            state.project.media_folder.c_str());
+                        ImGui::Text("Cameras: %d",
+                            (int)state.project.camera_names.size());
+
+                        ImGui::Spacing();
+                        bool ok = !annot_name.empty() && !annot_root.empty();
+                        ImGui::BeginDisabled(!ok);
+                        if (ImGui::Button("Create##annot_go")) {
+                            // Pre-fill ProjectManager for annotation
+                            pm.project_name = annot_name;
+                            pm.project_root_path = annot_root;
+                            pm.project_path =
+                                (std::filesystem::path(annot_root) /
+                                 annot_name).string();
+                            pm.media_folder = state.project.media_folder;
+                            pm.calibration_folder =
+                                state.tele_dlt_result.output_folder;
+                            pm.telecentric = true;
+                            pm.camera_names.clear();
+                            for (const auto &cn : state.project.camera_names)
+                                pm.camera_names.push_back("Cam" + cn);
+
+                            // Create + save via deferred (needs main thread)
+                            cb.deferred->enqueue([&pm, &ctx]() {
+                                std::string err;
+                                if (!ensure_dir_exists(pm.project_path, &err)) {
+                                    ctx.toasts.pushError("Error: " + err);
+                                    return;
+                                }
+                                auto &skel = ctx.skeleton;
+                                auto &skel_map = ctx.skeleton_map;
+                                if (!setup_project(pm, skel, skel_map, &err)) {
+                                    ctx.toasts.pushError("Error: " + err);
+                                    return;
+                                }
+                                std::filesystem::path redproj =
+                                    std::filesystem::path(pm.project_path) /
+                                    (pm.project_name + ".redproj");
+                                if (!save_project_manager_json(pm, redproj, &err)) {
+                                    ctx.toasts.pushError("Error: " + err);
+                                    return;
+                                }
+                                ctx.toasts.pushSuccess(
+                                    "Annotation project created: " +
+                                    pm.project_path);
+                            });
+
+                            annot_name.clear();
+                            annot_root.clear();
+                            ImGui::CloseCurrentPopup();
+                        }
+                        ImGui::EndDisabled();
+                        ImGui::SameLine();
+                        if (ImGui::Button("Cancel##annot")) {
+                            ImGui::CloseCurrentPopup();
+                        }
+                        ImGui::EndPopup();
                     }
                 }
 
@@ -2719,12 +2847,14 @@ inline void DrawCalibrationToolWindow(
         ImGui::End();
     }
 
-    // Draw 3D viewer as a separate window (if active)
+    // Draw 3D viewers as separate windows (if active)
     DrawCalibViewerWindow(state.calib_viewer);
+    DrawTeleViewerWindow(state.tele_viewer);
 
     // Reset state when calibration tool window is closed
     if (!state.show) {
         state.calib_viewer.show = false;
+        state.tele_viewer.show = false;
         state.project_loaded = false;
         state.show_create_dialog = true;
         state.config_loaded = false;
