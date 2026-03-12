@@ -19,7 +19,8 @@ std::map<std::string, SkeletonPrimitive> skeleton_get_all() {
         {"Rat20", Rat20},
         {"Rat24", Rat24},
         {"Rat20Target", Rat20Target},
-        {"Rat24Target", Rat24Target}};
+        {"Rat24Target", Rat24Target},
+        {"Fly50", Fly50}};
     return skeleton_all;
 }
 
@@ -276,6 +277,38 @@ void skeleton_initialize(std::string name, SkeletonContext *skeleton,
                            {3, 10},  {10, 11}, {11, 12}, {12, 13}, {4, 14},
                            {14, 15}, {15, 16}, {16, 17}, {4, 18},  {18, 19},
                            {19, 20}, {20, 21}};
+        break;
+
+    case Fly50:
+        skeleton->name = name;
+        skeleton->num_nodes = 50;
+        skeleton->num_edges = 44;
+        skeleton->node_names = {
+            "Antenna_Base", "EyeL",       "EyeR",       "Scutellum",
+            "Abd_A4",       "Abd_tip",    "WingL_base", "WingL_V12",
+            "WingL_V13",    "T1L_ThxCx",  "T1L_Tro",    "T1L_FeTi",
+            "T1L_TiTa",     "T1L_TaT1",   "T1L_TaT3",   "T1L_TaTip",
+            "T2L_Tro",      "T2L_FeTi",   "T2L_TiTa",   "T2L_TaT1",
+            "T2L_TaT3",     "T2L_TaTip",  "T3L_Tro",    "T3L_FeTi",
+            "T3L_TiTa",     "T3L_TaT1",   "T3L_TaT3",   "T3L_TaTip",
+            "WingR_base",   "WingR_V12",  "WingR_V13",  "T1R_ThxCx",
+            "T1R_Tro",      "T1R_FeTi",   "T1R_TiTa",   "T1R_TaT1",
+            "T1R_TaT3",     "T1R_TaTip",  "T2R_Tro",    "T2R_FeTi",
+            "T2R_TiTa",     "T2R_TaT1",   "T2R_TaT3",   "T2R_TaTip",
+            "T3R_Tro",      "T3R_FeTi",   "T3R_TiTa",   "T3R_TaT1",
+            "T3R_TaT3",     "T3R_TaTip"};
+        for (int i = 0; i < skeleton->num_nodes; i++)
+            skeleton->node_colors.push_back(
+                (ImVec4)ImColor::HSV(i / (float)skeleton->num_nodes, 1.0f, 1.0f));
+        skeleton->edges = {
+            {0, 1},   {0, 2},   {1, 3},   {2, 3},   {3, 4},   {4, 5},
+            {6, 7},   {7, 8},   {8, 6},   {9, 10},  {10, 11}, {11, 12},
+            {12, 13}, {13, 14}, {14, 15}, {16, 17}, {17, 18}, {18, 19},
+            {19, 20}, {20, 21}, {22, 23}, {23, 24}, {24, 25}, {25, 26},
+            {26, 27}, {28, 29}, {29, 30}, {30, 28}, {31, 32}, {32, 33},
+            {33, 34}, {34, 35}, {35, 36}, {36, 37}, {38, 39}, {39, 40},
+            {40, 41}, {41, 42}, {42, 43}, {44, 45}, {45, 46}, {46, 47},
+            {47, 48}, {48, 49}};
         break;
     }
 }

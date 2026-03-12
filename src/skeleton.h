@@ -55,6 +55,7 @@ enum SkeletonPrimitive {
     Rat24,
     Rat20Target,
     Rat24Target,
+    Fly50,
     SP_LOAD
 };
 
