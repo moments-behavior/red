@@ -142,6 +142,15 @@ struct CalibrationToolState {
 
     // 3D telecentric viewer
     TeleViewerState tele_viewer;
+
+    // "Use This Calibration" popup state
+    std::string annot_popup_name;
+    std::string annot_popup_root;
+    std::string annot_popup_video_folder;
+    std::string annot_popup_skel_file;
+    std::string annot_popup_skel_name;
+    int annot_popup_skel_idx = 0;
+    bool annot_popup_skel_is_file = false;
 };
 
 struct CalibrationToolCallbacks {
@@ -284,43 +293,54 @@ inline void DrawCalibrationToolWindow(
                     state.show_create_dialog = false;
                     state.show = true;
 
-                    // Auto-load telecentric videos on project open (direct, like laser)
+                    // Auto-load telecentric videos on project open (deferred)
                     if (state.project.is_telecentric() &&
                         !state.project.media_folder.empty() &&
                         !state.project.camera_names.empty()) {
-                        if (ps.video_loaded)
-                            cb.unload_media();
-                        pm.media_folder = state.project.media_folder;
-                        pm.camera_names.clear();
-                        for (const auto &cn : state.project.camera_names)
-                            pm.camera_names.push_back("Cam" + cn);
-                        cb.load_videos();
-                        cb.print_metadata();
-                        state.tele_videos_loaded = true;
+                        cb.deferred->enqueue([&state, &pm, &ps, &cb,
+                                              &imgs_names, &ctx, dc_context, scene
+#ifdef __APPLE__
+                                              , &mac_last_uploaded_frame
+#endif
+                        ]() {
+                            try {
+                                if (ps.video_loaded)
+                                    cb.unload_media();
+                                imgs_names.clear();
+#ifdef __APPLE__
+                                for (size_t ci = 0;
+                                     ci < mac_last_uploaded_frame.size(); ci++)
+                                    mac_last_uploaded_frame[ci] = -1;
+#endif
+                                pm.media_folder = state.project.media_folder;
+                                pm.camera_names.clear();
+                                for (const auto &cn : state.project.camera_names)
+                                    pm.camera_names.push_back("Cam" + cn);
+                                cb.load_videos();
+                                cb.print_metadata();
+                                state.tele_videos_loaded = true;
 
-                        // Auto-setup labeling skeleton + import existing labels
-                        int n_landmarks = CalibrationTool::count_landmarks_3d(
-                            state.project.landmarks_3d_file);
-                        if (n_landmarks > 0) {
-                            setup_landmark_skeleton(ctx.skeleton, n_landmarks,
-                                                     pm, state.project.project_path);
-
-                            // Import existing DLT labels if available
-                            std::string labels_dir =
-                                state.project.effective_labels_folder();
-                            int imported = TelecentricDLT::import_dlt_labels(
-                                ctx.annotations, 0, n_landmarks,
-                                (int)scene->num_cams, pm.camera_names,
-                                labels_dir);
-
-                            if (imported > 0) {
-                                state.status =
-                                    "Loaded " + std::to_string(imported) +
-                                    " labels across " +
-                                    std::to_string(scene->num_cams) +
-                                    " cameras";
+                                // Setup skeleton + import labels
+                                int n_lm = CalibrationTool::count_landmarks_3d(
+                                    state.project.landmarks_3d_file);
+                                if (n_lm > 0) {
+                                    setup_landmark_skeleton(ctx.skeleton, n_lm,
+                                        pm, state.project.project_path);
+                                    std::string labels_dir =
+                                        state.project.effective_labels_folder();
+                                    int imported = TelecentricDLT::import_dlt_labels(
+                                        ctx.annotations, 0, n_lm,
+                                        (int)scene->num_cams, pm.camera_names,
+                                        labels_dir);
+                                    if (imported > 0)
+                                        state.status = "Loaded " +
+                                            std::to_string(imported) +
+                                            " labels. Labeling active.";
+                                }
+                            } catch (const std::exception &e) {
+                                state.status = std::string("Error: ") + e.what();
                             }
-                        }
+                        });
                     }
 
                     // Restore DLT results from persisted metadata
@@ -1519,61 +1539,132 @@ inline void DrawCalibrationToolWindow(
                         ImGui::Text("Create Annotation Project");
                         ImGui::Separator();
 
-                        static std::string annot_name;
-                        static std::string annot_root;
-                        if (annot_name.empty())
-                            annot_name = state.project.project_name + "_annot";
-                        if (annot_root.empty())
-                            annot_root = state.project.project_root_path;
+                        if (state.annot_popup_name.empty())
+                            state.annot_popup_name = state.project.project_name + "_annot";
+                        if (state.annot_popup_root.empty())
+                            state.annot_popup_root = state.project.project_root_path;
 
+                        // Project name + root
                         ImGui::Text("Project Name:");
-                        ImGui::SetNextItemWidth(300);
-                        ImGui::InputText("##annot_name", &annot_name);
+                        ImGui::SetNextItemWidth(400);
+                        ImGui::InputText("##annot_name", &state.annot_popup_name);
 
                         ImGui::Text("Project Root:");
-                        ImGui::SetNextItemWidth(300);
-                        ImGui::InputText("##annot_root", &annot_root);
+                        ImGui::SetNextItemWidth(400);
+                        ImGui::InputText("##annot_root", &state.annot_popup_root);
 
-                        ImGui::Text("Calibration: %s",
-                            state.tele_dlt_result.output_folder.c_str());
-                        ImGui::Text("Videos: %s",
-                            state.project.media_folder.c_str());
-                        ImGui::Text("Cameras: %d",
-                            (int)state.project.camera_names.size());
+                        // Video folder (user picks — may differ from calib videos)
+                        ImGui::Text("Video Folder:");
+                        ImGui::SetNextItemWidth(400);
+                        ImGui::InputText("##annot_vidfolder", &state.annot_popup_video_folder);
+                        ImGui::SameLine();
+                        if (ImGui::Button("Browse##annot_vid")) {
+                            IGFD::FileDialogConfig cfg;
+                            cfg.path = state.annot_popup_video_folder.empty()
+                                ? state.project.media_folder
+                                : state.annot_popup_video_folder;
+                            cfg.flags = ImGuiFileDialogFlags_Modal;
+                            ImGuiFileDialog::Instance()->OpenDialog(
+                                "ChooseAnnotVidFromCalib",
+                                "Choose Video Folder", nullptr, cfg);
+                        }
+
+                        // Skeleton selection
+                        ImGui::Text("Skeleton:");
+                        {
+                            std::vector<const char *> skel_labels;
+                            for (auto &kv : ctx.skeleton_map)
+                                skel_labels.push_back(kv.first.c_str());
+                            if (state.annot_popup_skel_idx >= (int)skel_labels.size())
+                                state.annot_popup_skel_idx = 0;
+
+                            int skel_mode = state.annot_popup_skel_is_file ? 0 : 1;
+                            if (state.annot_popup_skel_is_file) {
+                                ImGui::SetNextItemWidth(300);
+                                ImGui::InputText("##annot_skelfile",
+                                    &state.annot_popup_skel_file);
+                                ImGui::SameLine();
+                                if (ImGui::Button("Browse##annot_skel")) {
+                                    IGFD::FileDialogConfig cfg;
+                                    cfg.path = ctx.skeleton_dir;
+                                    cfg.flags = ImGuiFileDialogFlags_Modal;
+                                    ImGuiFileDialog::Instance()->OpenDialog(
+                                        "ChooseAnnotSkelFromCalib",
+                                        "Choose Skeleton", ".json", cfg);
+                                }
+                            } else {
+                                ImGui::SetNextItemWidth(300);
+                                if (!skel_labels.empty())
+                                    ImGui::Combo("##annot_skel_preset",
+                                        &state.annot_popup_skel_idx,
+                                        skel_labels.data(),
+                                        (int)skel_labels.size());
+                                state.annot_popup_skel_name =
+                                    skel_labels.empty() ? std::string{}
+                                    : std::string(skel_labels[state.annot_popup_skel_idx]);
+                            }
+                            ImGui::SameLine();
+                            ImGui::SetNextItemWidth(80);
+                            if (ImGui::Combo("##annot_skel_mode", &skel_mode,
+                                             "File\0Preset\0"))
+                                state.annot_popup_skel_is_file = (skel_mode == 0);
+                        }
 
                         ImGui::Spacing();
-                        bool ok = !annot_name.empty() && !annot_root.empty();
+                        ImGui::TextDisabled("Calibration: %s",
+                            state.tele_dlt_result.output_folder.c_str());
+                        ImGui::TextDisabled("Camera model: Telecentric");
+
+                        ImGui::Spacing();
+                        bool ok = !state.annot_popup_name.empty() &&
+                                  !state.annot_popup_root.empty() &&
+                                  !state.annot_popup_video_folder.empty() &&
+                                  (state.annot_popup_skel_is_file
+                                       ? !state.annot_popup_skel_file.empty()
+                                       : !state.annot_popup_skel_name.empty());
                         ImGui::BeginDisabled(!ok);
                         if (ImGui::Button("Create##annot_go")) {
-                            // Pre-fill ProjectManager for annotation
-                            pm.project_name = annot_name;
-                            pm.project_root_path = annot_root;
+                            pm.project_name = state.annot_popup_name;
+                            pm.project_root_path = state.annot_popup_root;
                             pm.project_path =
-                                (std::filesystem::path(annot_root) /
-                                 annot_name).string();
-                            pm.media_folder = state.project.media_folder;
+                                (std::filesystem::path(state.annot_popup_root) /
+                                 state.annot_popup_name).string();
+                            pm.media_folder = state.annot_popup_video_folder;
                             pm.calibration_folder =
                                 state.tele_dlt_result.output_folder;
                             pm.telecentric = true;
+                            pm.load_skeleton_from_json =
+                                state.annot_popup_skel_is_file;
+                            pm.skeleton_file = state.annot_popup_skel_file;
+                            pm.skeleton_name = state.annot_popup_skel_name;
+                            // Discover cameras from video folder
                             pm.camera_names.clear();
-                            for (const auto &cn : state.project.camera_names)
-                                pm.camera_names.push_back("Cam" + cn);
+                            namespace fs = std::filesystem;
+                            if (fs::is_directory(pm.media_folder)) {
+                                for (const auto &e : fs::directory_iterator(pm.media_folder)) {
+                                    if (!e.is_regular_file()) continue;
+                                    auto ext = e.path().extension().string();
+                                    if (ext == ".mp4" || ext == ".MP4")
+                                        pm.camera_names.push_back(
+                                            e.path().stem().string());
+                                }
+                                std::sort(pm.camera_names.begin(),
+                                          pm.camera_names.end());
+                            }
 
-                            // Create + save via deferred (needs main thread)
                             cb.deferred->enqueue([&pm, &ctx]() {
                                 std::string err;
                                 if (!ensure_dir_exists(pm.project_path, &err)) {
                                     ctx.toasts.pushError("Error: " + err);
                                     return;
                                 }
-                                auto &skel = ctx.skeleton;
-                                auto &skel_map = ctx.skeleton_map;
-                                if (!setup_project(pm, skel, skel_map, &err)) {
+                                if (!setup_project(pm, ctx.skeleton,
+                                                    ctx.skeleton_map, &err)) {
                                     ctx.toasts.pushError("Error: " + err);
                                     return;
                                 }
-                                std::filesystem::path redproj =
-                                    std::filesystem::path(pm.project_path) /
+                                fs::path redproj =
+                                    fs::path(pm.project_path) /
                                     (pm.project_name + ".redproj");
                                 if (!save_project_manager_json(pm, redproj, &err)) {
                                     ctx.toasts.pushError("Error: " + err);
@@ -1584,16 +1675,40 @@ inline void DrawCalibrationToolWindow(
                                     pm.project_path);
                             });
 
-                            annot_name.clear();
-                            annot_root.clear();
+                            state.annot_popup_name.clear();
+                            state.annot_popup_root.clear();
+                            state.annot_popup_video_folder.clear();
                             ImGui::CloseCurrentPopup();
                         }
                         ImGui::EndDisabled();
                         ImGui::SameLine();
                         if (ImGui::Button("Cancel##annot")) {
+                            state.annot_popup_name.clear();
+                            state.annot_popup_root.clear();
+                            state.annot_popup_video_folder.clear();
                             ImGui::CloseCurrentPopup();
                         }
                         ImGui::EndPopup();
+                    }
+
+                    // File dialog handlers for the popup
+                    if (ImGuiFileDialog::Instance()->Display(
+                            "ChooseAnnotVidFromCalib",
+                            ImGuiWindowFlags_NoCollapse,
+                            ImVec2(680, 440))) {
+                        if (ImGuiFileDialog::Instance()->IsOk())
+                            state.annot_popup_video_folder =
+                                ImGuiFileDialog::Instance()->GetCurrentPath();
+                        ImGuiFileDialog::Instance()->Close();
+                    }
+                    if (ImGuiFileDialog::Instance()->Display(
+                            "ChooseAnnotSkelFromCalib",
+                            ImGuiWindowFlags_NoCollapse,
+                            ImVec2(680, 440))) {
+                        if (ImGuiFileDialog::Instance()->IsOk())
+                            state.annot_popup_skel_file =
+                                ImGuiFileDialog::Instance()->GetFilePathName();
+                        ImGuiFileDialog::Instance()->Close();
                     }
                 }
 
