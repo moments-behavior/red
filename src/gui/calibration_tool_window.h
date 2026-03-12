@@ -1493,7 +1493,7 @@ inline void DrawCalibrationToolWindow(
 
                     // "Use This Calibration" — create annotation project
                     if (ImGui::Button("Use This Calibration...##tele")) {
-                        ImGui::OpenPopup("##tele_use_calib");
+                        ImGui::OpenPopup("Use This Calibration##tele_use_calib");
                     }
                     if (ImGui::IsItemHovered())
                         ImGui::SetTooltip("Create an Annotation Project using this calibration");
