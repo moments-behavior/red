@@ -998,12 +998,18 @@ inline void DrawCalibrationToolWindow(
                                         cb.print_metadata();
                                         state.tele_videos_loaded = true;
 
+                                        // Setup skeleton + import labels, but
+                                        // do NOT enable labeling panels yet
+                                        // (dock crash if panels appear before
+                                        // layout is established). User clicks
+                                        // "Start Labeling" to show panels.
                                         int n_lm = CalibrationTool::count_landmarks_3d(
                                             state.project.landmarks_3d_file);
                                         if (n_lm > 0) {
                                             setup_landmark_skeleton(
                                                 ctx.skeleton, n_lm, pm,
                                                 state.project.project_path);
+                                            pm.plot_keypoints_flag = false; // defer panel show
                                             std::string labels_dir =
                                                 state.project.effective_labels_folder();
                                             int imported = TelecentricDLT::import_dlt_labels(
@@ -1013,7 +1019,9 @@ inline void DrawCalibrationToolWindow(
                                             if (imported > 0)
                                                 state.status = "Loaded " +
                                                     std::to_string(imported) +
-                                                    " labels. Labeling active.";
+                                                    " labels. Click 'Start Labeling' to view.";
+                                            else
+                                                state.status = "Videos loaded. Click 'Start Labeling' to annotate.";
                                         }
                                     } catch (const std::exception &e) {
                                         state.status = std::string("Error: ") + e.what();
