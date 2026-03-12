@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-static std::vector<std::string> discover_mp4_cameras(const std::string &folder) {
+inline std::vector<std::string> discover_mp4_cameras(const std::string &folder) {
     namespace fs = std::filesystem;
     std::vector<std::string> cameras;
     if (folder.empty() || !fs::is_directory(folder))

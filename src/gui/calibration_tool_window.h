@@ -9,6 +9,7 @@
 #include "laser_calibration.h"
 #include "telecentric_dlt.h"
 #include "tele_viewer_window.h"
+#include "annotation_dialog.h"
 #include "aruco_metal.h"
 #include "laser_metal.h"
 #include <ImGuiFileDialog.h>
@@ -972,41 +973,50 @@ inline void DrawCalibrationToolWindow(
                                 state.laser_total_frames = dc_context->estimated_num_frames;
                             }
 
-                            // Auto-load videos for telecentric (direct, like laser)
+                            // Auto-load videos for telecentric (fully deferred)
                             if (state.project.is_telecentric()) {
-                                if (ps.video_loaded)
-                                    cb.unload_media();
-                                pm.media_folder = state.project.media_folder;
-                                pm.camera_names.clear();
-                                for (const auto &cn : state.project.camera_names)
-                                    pm.camera_names.push_back("Cam" + cn);
-                                cb.load_videos();
-                                cb.print_metadata();
-                                state.tele_videos_loaded = true;
+                                cb.deferred->enqueue([&state, &pm, &ps, &cb,
+                                                      &imgs_names, &ctx, dc_context, scene
+#ifdef __APPLE__
+                                                      , &mac_last_uploaded_frame
+#endif
+                                ]() {
+                                    try {
+                                        if (ps.video_loaded)
+                                            cb.unload_media();
+                                        imgs_names.clear();
+#ifdef __APPLE__
+                                        for (size_t ci = 0;
+                                             ci < mac_last_uploaded_frame.size(); ci++)
+                                            mac_last_uploaded_frame[ci] = -1;
+#endif
+                                        pm.media_folder = state.project.media_folder;
+                                        pm.camera_names.clear();
+                                        for (const auto &cn : state.project.camera_names)
+                                            pm.camera_names.push_back("Cam" + cn);
+                                        cb.load_videos();
+                                        cb.print_metadata();
+                                        state.tele_videos_loaded = true;
 
-                                // Setup skeleton + import labels (deferred to avoid dock crash)
-                                cb.deferred->enqueue([&state, &pm, &ctx, scene]() {
-                                    int n_lm = CalibrationTool::count_landmarks_3d(
-                                        state.project.landmarks_3d_file);
-                                    if (n_lm > 0) {
-                                        setup_landmark_skeleton(
-                                            ctx.skeleton, n_lm, pm,
-                                            state.project.project_path);
-
-                                        // Import provided labels if available
-                                        std::string labels_dir =
-                                            state.project.effective_labels_folder();
-                                        if (!labels_dir.empty()) {
+                                        int n_lm = CalibrationTool::count_landmarks_3d(
+                                            state.project.landmarks_3d_file);
+                                        if (n_lm > 0) {
+                                            setup_landmark_skeleton(
+                                                ctx.skeleton, n_lm, pm,
+                                                state.project.project_path);
+                                            std::string labels_dir =
+                                                state.project.effective_labels_folder();
                                             int imported = TelecentricDLT::import_dlt_labels(
                                                 ctx.annotations, 0, n_lm,
                                                 (int)scene->num_cams,
                                                 pm.camera_names, labels_dir);
-                                            if (imported > 0) {
-                                                state.status =
-                                                    "Loaded " + std::to_string(imported) +
+                                            if (imported > 0)
+                                                state.status = "Loaded " +
+                                                    std::to_string(imported) +
                                                     " labels. Labeling active.";
-                                            }
                                         }
+                                    } catch (const std::exception &e) {
+                                        state.status = std::string("Error: ") + e.what();
                                     }
                                 });
                             }
@@ -1534,8 +1544,9 @@ inline void DrawCalibrationToolWindow(
                         }
                     }
 
-                    // "Use This Calibration" popup
-                    if (ImGui::BeginPopup("##tele_use_calib")) {
+                    // "Use This Calibration" popup (modal so file dialogs don't close it)
+                    if (ImGui::BeginPopupModal("Use This Calibration##tele_use_calib",
+                            nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
                         ImGui::Text("Create Annotation Project");
                         ImGui::Separator();
 
@@ -1638,19 +1649,8 @@ inline void DrawCalibrationToolWindow(
                             pm.skeleton_file = state.annot_popup_skel_file;
                             pm.skeleton_name = state.annot_popup_skel_name;
                             // Discover cameras from video folder
-                            pm.camera_names.clear();
-                            namespace fs = std::filesystem;
-                            if (fs::is_directory(pm.media_folder)) {
-                                for (const auto &e : fs::directory_iterator(pm.media_folder)) {
-                                    if (!e.is_regular_file()) continue;
-                                    auto ext = e.path().extension().string();
-                                    if (ext == ".mp4" || ext == ".MP4")
-                                        pm.camera_names.push_back(
-                                            e.path().stem().string());
-                                }
-                                std::sort(pm.camera_names.begin(),
-                                          pm.camera_names.end());
-                            }
+                            pm.camera_names = discover_mp4_cameras(
+                                pm.media_folder);
 
                             cb.deferred->enqueue([&pm, &ctx]() {
                                 std::string err;
@@ -1663,8 +1663,8 @@ inline void DrawCalibrationToolWindow(
                                     ctx.toasts.pushError("Error: " + err);
                                     return;
                                 }
-                                fs::path redproj =
-                                    fs::path(pm.project_path) /
+                                std::filesystem::path redproj =
+                                    std::filesystem::path(pm.project_path) /
                                     (pm.project_name + ".redproj");
                                 if (!save_project_manager_json(pm, redproj, &err)) {
                                     ctx.toasts.pushError("Error: " + err);
@@ -3082,6 +3082,13 @@ inline void DrawCalibrationToolWindow(
         state.tele_dlt_done = false;
         state.tele_dlt_status.clear();
         state.tele_run_history.clear();
+        state.annot_popup_name.clear();
+        state.annot_popup_root.clear();
+        state.annot_popup_video_folder.clear();
+        state.annot_popup_skel_file.clear();
+        state.annot_popup_skel_name.clear();
+        state.annot_popup_skel_idx = 0;
+        state.annot_popup_skel_is_file = false;
         state.project.camera_names.clear();
         state.laser_ready = false;
         state.laser_done = false;
