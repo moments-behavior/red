@@ -225,10 +225,16 @@ load_videos(std::map<std::string, std::string> &selected_files,
             try {
                 FFmpegDemuxer *demuxer =
                     new FFmpegDemuxer(media_filename.c_str(), m);
-                demuxers.push_back(demuxer);
-                loaded_cam_names.push_back(cam_string);
-                window_need_decoding[cam_string].store(true);
-                window_was_decoding[cam_string] = true;
+                if (demuxer->GetPixelFormat() == AV_PIX_FMT_NONE) {
+                    std::cerr << "[load_videos] Skipping camera '" << cam_string
+                              << "': broken header (no pixel format)" << std::endl;
+                    delete demuxer;
+                } else {
+                    demuxers.push_back(demuxer);
+                    loaded_cam_names.push_back(cam_string);
+                    window_need_decoding[cam_string].store(true);
+                    window_was_decoding[cam_string] = true;
+                }
             } catch (const std::exception &e) {
                 std::cerr << "[load_videos] Skipping camera '" << cam_string
                           << "': " << e.what() << std::endl;
@@ -250,10 +256,16 @@ load_videos(std::map<std::string, std::string> &selected_files,
             try {
                 FFmpegDemuxer *demuxer =
                     new FFmpegDemuxer(elem.second.c_str(), m);
-                demuxers.push_back(demuxer);
-                loaded_cam_names.push_back(cam_string);
-                window_need_decoding[cam_string].store(true);
-                window_was_decoding[cam_string] = true;
+                if (demuxer->GetPixelFormat() == AV_PIX_FMT_NONE) {
+                    std::cerr << "[load_videos] Skipping camera '" << cam_string
+                              << "': broken header (no pixel format)" << std::endl;
+                    delete demuxer;
+                } else {
+                    demuxers.push_back(demuxer);
+                    loaded_cam_names.push_back(cam_string);
+                    window_need_decoding[cam_string].store(true);
+                    window_was_decoding[cam_string] = true;
+                }
             } catch (const std::exception &e) {
                 std::cerr << "[load_videos] Skipping camera '" << cam_string
                           << "' (" << elem.second << "): " << e.what()

@@ -299,12 +299,21 @@ inline void on_project_loaded(AppContext &ctx,
     ctx.annotations.clear();
 
     switch_ini_to_project(ctx);
+    int expected_cameras = (int)ctx.pm.camera_names.size();
     std::map<std::string, std::string> empty_selected_files;
     load_videos(empty_selected_files, ctx.ps, ctx.pm,
                 ctx.window_was_decoding, ctx.demuxers, ctx.dc_context,
                 ctx.scene, ctx.label_buffer_size, ctx.decoder_threads,
                 ctx.is_view_focused);
     if (print_metadata_fn) print_metadata_fn();
+    int loaded_cameras = (int)ctx.pm.camera_names.size();
+    if (loaded_cameras < expected_cameras) {
+        int skipped = expected_cameras - loaded_cameras;
+        ctx.toasts.push(
+            std::to_string(skipped) + " camera(s) skipped (broken video headers). "
+            "Create a new project without those videos.",
+            Toast::Warning, 10.0f);
+    }
     std::string label_err;
     std::string most_recent_folder;
     if (!AnnotationCSV::find_most_recent_labels(ctx.pm.keypoints_root_folder,
