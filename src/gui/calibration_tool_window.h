@@ -262,8 +262,9 @@ inline void DrawCalibrationToolWindow(
                     // Auto-load telecentric videos on project open (direct, like laser)
                     if (state.project.is_telecentric() &&
                         !state.project.media_folder.empty() &&
-                        !state.project.camera_names.empty() &&
-                        !ps.video_loaded) {
+                        !state.project.camera_names.empty()) {
+                        if (ps.video_loaded)
+                            cb.unload_media();
                         pm.media_folder = state.project.media_folder;
                         pm.camera_names.clear();
                         for (const auto &cn : state.project.camera_names)
