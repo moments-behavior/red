@@ -13,6 +13,7 @@
 #include "deferred_queue.h"
 #include "global.h"
 #include "gui.h"
+#include "gui/gui_save_load.h"
 #include "gui/calibration_tool_window.h"
 #include "gui/popup_stack.h"
 #include "gui/toast.h"
