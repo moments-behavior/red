@@ -273,6 +273,31 @@ inline void DrawCalibrationToolWindow(
                         state.tele_videos_loaded = true;
                     }
 
+                    // Restore DLT results from persisted metadata
+                    if (state.project.is_telecentric() &&
+                        state.project.dlt_method >= 0 &&
+                        !state.project.tele_output_folder.empty()) {
+                        state.tele_dlt_done = true;
+                        auto &r = state.tele_dlt_result;
+                        r.success = true;
+                        r.method = static_cast<TelecentricDLT::Method>(
+                            state.project.dlt_method);
+                        r.mean_rmse = state.project.dlt_mean_rmse;
+                        r.output_folder = state.project.tele_output_folder;
+                        r.cameras.resize(state.project.camera_names.size());
+                        for (int i = 0; i < (int)state.project.camera_names.size(); i++) {
+                            r.cameras[i].serial = state.project.camera_names[i];
+                            if (i < (int)state.project.dlt_per_camera_rmse.size()) {
+                                r.cameras[i].rmse_ba = state.project.dlt_per_camera_rmse[i];
+                                r.cameras[i].rmse_init = state.project.dlt_per_camera_rmse[i];
+                            }
+                        }
+                        state.tele_dlt_status =
+                            std::string(TelecentricDLT::method_name(r.method)) +
+                            " loaded. Mean RMSE: " +
+                            std::to_string(r.mean_rmse).substr(0, 6) + " px";
+                    }
+
                     // Status message
                     if (state.project.is_telecentric()) {
                         state.status =
