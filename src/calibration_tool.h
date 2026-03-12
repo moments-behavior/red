@@ -200,6 +200,8 @@ default_output_folder(const std::string &config_path) {
 
 // ── Calibration Project (.redproj) ──────────────────────────────────────────
 
+enum class CameraModel { Projective = 0, Telecentric = 1 };
+
 struct CalibProject {
     std::string project_name;      // e.g. "MyCalibration"
     std::string project_path;      // folder containing .redproj
@@ -215,6 +217,13 @@ struct CalibProject {
     std::string calibration_folder; // folder with CamXXXX.yaml (input)
     std::vector<std::string> camera_names; // validated camera serials
 
+    // Camera model
+    CameraModel camera_model = CameraModel::Projective;
+
+    // Telecentric calibration (DLT with known 3D landmarks)
+    std::string landmark_labels_folder; // folder with Cam<serial>.csv 2D labels
+    std::string landmarks_3d_file;      // CSV with 3D landmark coordinates
+
     // Output
     std::string output_folder;           // legacy (migrated to image/video on save)
     std::string image_output_folder;     // aruco image YAML output
@@ -226,6 +235,11 @@ struct CalibProject {
     // Mode helpers
     bool has_aruco() const { return !config_file.empty(); }
     bool has_laser_input() const { return !calibration_folder.empty() && !media_folder.empty(); }
+    bool is_telecentric() const { return camera_model == CameraModel::Telecentric; }
+    bool has_telecentric_input() const {
+        return is_telecentric() && !media_folder.empty() &&
+               !landmark_labels_folder.empty() && !landmarks_3d_file.empty();
+    }
 };
 
 inline void to_json(nlohmann::json &j, const CalibProject &p) {
@@ -239,6 +253,9 @@ inline void to_json(nlohmann::json &j, const CalibProject &p) {
                        {"media_folder", p.media_folder},
                        {"calibration_folder", p.calibration_folder},
                        {"camera_names", p.camera_names},
+                       {"camera_model", static_cast<int>(p.camera_model)},
+                       {"landmark_labels_folder", p.landmark_labels_folder},
+                       {"landmarks_3d_file", p.landmarks_3d_file},
                        {"image_output_folder", p.image_output_folder},
                        {"video_output_folder", p.video_output_folder},
                        {"image_experimental_folder", p.image_experimental_folder},
@@ -256,6 +273,9 @@ inline void from_json(const nlohmann::json &j, CalibProject &p) {
     p.media_folder = j.value("media_folder", std::string{});
     p.calibration_folder = j.value("calibration_folder", std::string{});
     p.camera_names = j.value("camera_names", std::vector<std::string>{});
+    p.camera_model = static_cast<CameraModel>(j.value("camera_model", 0));
+    p.landmark_labels_folder = j.value("landmark_labels_folder", std::string{});
+    p.landmarks_3d_file = j.value("landmarks_3d_file", std::string{});
     p.image_output_folder = j.value("image_output_folder", std::string{});
     p.video_output_folder = j.value("video_output_folder", std::string{});
     p.image_experimental_folder = j.value("image_experimental_folder", std::string{});
@@ -338,6 +358,70 @@ derive_camera_names_from_yaml(const std::string &yaml_folder) {
     }
     std::sort(names.begin(), names.end());
     return names;
+}
+
+// Derive camera serial numbers from video filenames in a folder.
+// Looks for Cam*.{mp4,avi,mov,mkv} and returns the serial part sorted.
+inline std::vector<std::string>
+derive_camera_names_from_videos(const std::string &video_folder) {
+    namespace fs = std::filesystem;
+    std::vector<std::string> names;
+    if (video_folder.empty() || !fs::is_directory(video_folder))
+        return names;
+    const std::vector<std::string> exts = {".mp4", ".avi", ".mov", ".mkv"};
+    for (const auto &entry : fs::directory_iterator(video_folder)) {
+        if (!entry.is_regular_file()) continue;
+        std::string ext = entry.path().extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(),
+                       [](unsigned char c) { return std::tolower(c); });
+        if (std::find(exts.begin(), exts.end(), ext) == exts.end()) continue;
+        std::string stem = entry.path().stem().string();
+        if (stem.size() > 3 && stem.substr(0, 3) == "Cam") {
+            names.push_back(stem.substr(3));
+        }
+    }
+    std::sort(names.begin(), names.end());
+    names.erase(std::unique(names.begin(), names.end()), names.end());
+    return names;
+}
+
+// Count non-empty data lines in a CSV file (skips first line as header).
+inline int count_csv_data_lines(const std::string &filepath) {
+    namespace fs = std::filesystem;
+    if (filepath.empty() || !fs::is_regular_file(filepath))
+        return 0;
+    std::ifstream f(filepath);
+    std::string line;
+    int count = 0;
+    bool first = true;
+    while (std::getline(f, line)) {
+        if (first) { first = false; continue; }
+        if (!line.empty()) count++;
+    }
+    return count;
+}
+
+// Validate which cameras have matching Cam<serial>.csv files in a labels folder.
+// Returns a map: serial -> number of data lines (landmarks) in that CSV.
+inline std::map<std::string, int>
+validate_telecentric_labels(const std::string &labels_folder,
+                            const std::vector<std::string> &camera_names) {
+    namespace fs = std::filesystem;
+    std::map<std::string, int> result;
+    if (labels_folder.empty() || !fs::is_directory(labels_folder))
+        return result;
+    for (const auto &serial : camera_names) {
+        std::string csv_path =
+            (fs::path(labels_folder) / ("Cam" + serial + ".csv")).string();
+        int n = count_csv_data_lines(csv_path);
+        if (n > 0) result[serial] = n;
+    }
+    return result;
+}
+
+// Count number of 3D landmark points in a CSV file (rows after header).
+inline int count_landmarks_3d(const std::string &filepath) {
+    return count_csv_data_lines(filepath);
 }
 
 } // namespace CalibrationTool
