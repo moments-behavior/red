@@ -2,7 +2,8 @@
 #include "app_context.h"
 #include <imgui.h>
 
-inline void DrawKeypointsWindow(AppContext &ctx, int current_frame_num) {
+inline void DrawKeypointsWindow(AppContext &ctx) {
+    int current_frame_num = ctx.current_frame_num;
     auto &pm = ctx.pm;
     auto *scene = ctx.scene;
     auto &skeleton = ctx.skeleton;

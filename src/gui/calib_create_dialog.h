@@ -1,0 +1,633 @@
+#pragma once
+#include "calib_tool_state.h"
+#include "app_context.h"
+#include "imgui.h"
+#include <ImGuiFileDialog.h>
+#include <misc/cpp/imgui_stdlib.h>
+#include <filesystem>
+#include <string>
+
+// Draw the Phase 1 creation dialog when no project is loaded.
+// Called only when state.show_create_dialog && !state.project_loaded.
+inline void DrawCalibCreateDialog(CalibrationToolState &state, AppContext &ctx,
+                                   const CalibrationToolCallbacks &cb) {
+    auto &pm = ctx.pm;
+    auto &ps = ctx.ps;
+    auto *dc_context = ctx.dc_context;
+    const auto &user_settings = ctx.user_settings;
+    const auto &red_data_dir = ctx.red_data_dir;
+
+        ImGui::SetNextWindowSize(ImVec2(720, 440), ImGuiCond_FirstUseEver);
+        ImGuiWindowFlags cw_flags = ImGuiWindowFlags_NoCollapse;
+        if (ImGui::Begin("Create Calibration Project", &state.show, cw_flags)) {
+
+            // Error banner
+            if (!state.status.empty() &&
+                state.status.find("Error") != std::string::npos) {
+                ImGui::PushStyleColor(ImGuiCol_Text,
+                                      ImVec4(1.0f, 0.45f, 0.45f, 1.0f));
+                ImGui::TextUnformatted(state.status.c_str());
+                ImGui::PopStyleColor();
+                ImGui::Separator();
+            }
+
+            if (ImGui::BeginTable(
+                    "calibCreateForm", 3,
+                    ImGuiTableFlags_SizingStretchProp |
+                        ImGuiTableFlags_PadOuterX |
+                        ImGuiTableFlags_RowBg |
+                        ImGuiTableFlags_BordersInnerV)) {
+                ImGui::TableSetupColumn("Label",
+                                        ImGuiTableColumnFlags_WidthFixed,
+                                        180.0f);
+                ImGui::TableSetupColumn("Field",
+                                        ImGuiTableColumnFlags_WidthStretch,
+                                        1.0f);
+                ImGui::TableSetupColumn("Action",
+                                        ImGuiTableColumnFlags_WidthFixed,
+                                        110.0f);
+
+                auto LabelCell = [](const char *t) {
+                    ImGui::TableSetColumnIndex(0);
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::TextUnformatted(t);
+                };
+
+                // ---- Project Name ----
+                ImGui::TableNextRow();
+                LabelCell("Project Name");
+                ImGui::TableSetColumnIndex(1);
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                ImGui::InputText("##calib_projname",
+                                 &state.project.project_name);
+                ImGui::TableSetColumnIndex(2);
+                ImGui::Dummy(ImVec2(1, 1));
+
+                // ---- Project Root Path ----
+                ImGui::TableNextRow();
+                LabelCell("Project Root Path");
+                ImGui::TableSetColumnIndex(1);
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                ImGui::InputText("##calib_rootpath",
+                                 &state.project.project_root_path);
+                ImGui::TableSetColumnIndex(2);
+                if (ImGui::Button("Browse##calib_root")) {
+                    IGFD::FileDialogConfig cfg;
+                    cfg.countSelectionMax = 1;
+                    cfg.path = state.project.project_root_path;
+                    cfg.fileName = state.project.project_name;
+                    cfg.flags = ImGuiFileDialogFlags_Modal;
+                    ImGuiFileDialog::Instance()->OpenDialog(
+                        "ChooseCalibRootDir",
+                        "Choose Project Root Directory", nullptr, cfg);
+                }
+
+                // ---- Full Path (computed, read-only) ----
+                {
+                    std::filesystem::path p =
+                        std::filesystem::path(
+                            state.project.project_root_path) /
+                        state.project.project_name;
+                    state.project.project_path = p.string();
+                }
+                ImGui::TableNextRow();
+                LabelCell("Full Path");
+                ImGui::TableSetColumnIndex(1);
+                ImGui::BeginDisabled();
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                ImGui::InputText("##calib_fullpath",
+                                 &state.project.project_path);
+                ImGui::EndDisabled();
+                ImGui::TableSetColumnIndex(2);
+                ImGui::Dummy(ImVec2(1, 1));
+
+                // ---- Camera Model ----
+                ImGui::TableNextRow();
+                LabelCell("Camera Model");
+                ImGui::TableSetColumnIndex(1);
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                {
+                    const char *model_items[] = {"Projective", "Telecentric"};
+                    int model_idx = static_cast<int>(state.project.camera_model);
+                    if (ImGui::Combo("##calib_camera_model", &model_idx,
+                                     model_items, IM_ARRAYSIZE(model_items))) {
+                        auto new_model = static_cast<CalibrationTool::CameraModel>(model_idx);
+                        if (new_model != state.project.camera_model) {
+                            state.project.camera_model = new_model;
+                            // Clear the other mode's fields
+                            if (new_model == CalibrationTool::CameraModel::Telecentric) {
+                                state.project.config_file.clear();
+                                state.project.aruco_video_folder.clear();
+                                state.project.calibration_folder.clear();
+                                state.project.camera_names.clear();
+                            } else {
+                                state.project.landmark_labels_folder.clear();
+                                state.project.landmarks_3d_file.clear();
+                                state.project.media_folder.clear();
+                                state.project.camera_names.clear();
+                            }
+                        }
+                    }
+                }
+                ImGui::TableSetColumnIndex(2);
+                ImGui::Dummy(ImVec2(1, 1));
+
+                if (!state.project.is_telecentric()) {
+                // ---- Projective mode fields ----
+
+                // ---- Config File (optional -- empty for laser-only) ----
+                ImGui::TableNextRow();
+                LabelCell("Config File (optional)");
+                ImGui::TableSetColumnIndex(1);
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                ImGui::InputText("##calib_configfile",
+                                 &state.project.config_file);
+                ImGui::TableSetColumnIndex(2);
+                if (ImGui::Button("Browse##calib_cfg")) {
+                    IGFD::FileDialogConfig cfg;
+                    cfg.countSelectionMax = 1;
+                    cfg.flags = ImGuiFileDialogFlags_Modal;
+                    if (!state.project.config_file.empty()) {
+                        cfg.path =
+                            std::filesystem::path(
+                                state.project.config_file)
+                                .parent_path()
+                                .string();
+                    } else if (!user_settings.default_media_root_path
+                                    .empty()) {
+                        cfg.path =
+                            user_settings.default_media_root_path;
+                    }
+                    ImGuiFileDialog::Instance()->OpenDialog(
+                        "ChooseCalibConfigCreate",
+                        "Choose config.json", ".json", cfg);
+                }
+
+                // ---- Aruco Videos (optional) ----
+                ImGui::TableNextRow();
+                LabelCell("Aruco Videos");
+                ImGui::TableSetColumnIndex(1);
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                ImGui::InputText("##calib_arucovids",
+                                 &state.project.aruco_video_folder);
+                ImGui::TableSetColumnIndex(2);
+                if (ImGui::Button("Browse##calib_arucovid")) {
+                    IGFD::FileDialogConfig cfg;
+                    cfg.countSelectionMax = 1;
+                    if (!state.project.aruco_video_folder.empty())
+                        cfg.path = state.project.aruco_video_folder;
+                    else if (!user_settings.default_media_root_path.empty())
+                        cfg.path = user_settings.default_media_root_path;
+                    else
+                        cfg.path = red_data_dir;
+                    cfg.flags = ImGuiFileDialogFlags_Modal;
+                    ImGuiFileDialog::Instance()->OpenDialog(
+                        "ChooseCalibArucoVideoFolder",
+                        "Select Aruco Videos Folder", nullptr, cfg);
+                }
+
+                // ---- Initialize Calibration YAMLs (optional) ----
+                ImGui::TableNextRow();
+                LabelCell("Initialize Calibration YAMLs");
+                ImGui::TableSetColumnIndex(1);
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                ImGui::InputText("##calib_yamlfolder",
+                                 &state.project.calibration_folder);
+                ImGui::TableSetColumnIndex(2);
+                if (ImGui::Button("Browse##calib_yaml")) {
+                    IGFD::FileDialogConfig cfg;
+                    cfg.countSelectionMax = 1;
+                    if (!state.project.calibration_folder.empty())
+                        cfg.path = state.project.calibration_folder;
+                    else if (!user_settings.default_media_root_path.empty())
+                        cfg.path = user_settings.default_media_root_path;
+                    else
+                        cfg.path = red_data_dir;
+                    cfg.flags = ImGuiFileDialogFlags_Modal;
+                    ImGuiFileDialog::Instance()->OpenDialog(
+                        "ChooseCalibYAMLFolder",
+                        "Select Calibration YAMLs Folder", nullptr, cfg);
+                }
+
+                // ---- Laser Videos (optional) ----
+                ImGui::TableNextRow();
+                LabelCell("Laser Videos");
+                ImGui::TableSetColumnIndex(1);
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                ImGui::InputText("##calib_vidfolder",
+                                 &state.project.media_folder);
+                ImGui::TableSetColumnIndex(2);
+                if (ImGui::Button("Browse##calib_vid")) {
+                    IGFD::FileDialogConfig cfg;
+                    cfg.countSelectionMax = 1;
+                    if (!state.project.media_folder.empty())
+                        cfg.path = state.project.media_folder;
+                    else if (!user_settings.default_media_root_path.empty())
+                        cfg.path = user_settings.default_media_root_path;
+                    else
+                        cfg.path = red_data_dir;
+                    cfg.flags = ImGuiFileDialogFlags_Modal;
+                    ImGuiFileDialog::Instance()->OpenDialog(
+                        "ChooseCalibVideoFolder",
+                        "Select Laser Videos Folder", nullptr, cfg);
+                }
+
+                } else {
+                // ---- Telecentric mode fields ----
+
+                // ---- Calibration Videos ----
+                ImGui::TableNextRow();
+                LabelCell("Calibration Videos");
+                ImGui::TableSetColumnIndex(1);
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                ImGui::InputText("##tele_vidfolder",
+                                 &state.project.media_folder);
+                ImGui::TableSetColumnIndex(2);
+                if (ImGui::Button("Browse##tele_vid")) {
+                    IGFD::FileDialogConfig cfg;
+                    cfg.countSelectionMax = 1;
+                    if (!state.project.media_folder.empty())
+                        cfg.path = state.project.media_folder;
+                    else if (!user_settings.default_media_root_path.empty())
+                        cfg.path = user_settings.default_media_root_path;
+                    else
+                        cfg.path = red_data_dir;
+                    cfg.flags = ImGuiFileDialogFlags_Modal;
+                    ImGuiFileDialog::Instance()->OpenDialog(
+                        "ChooseTeleVideoFolder",
+                        "Select Calibration Videos Folder", nullptr, cfg);
+                }
+
+                // ---- 2D Landmark Labels ----
+                ImGui::TableNextRow();
+                LabelCell("2D Landmark Labels (optional)");
+                ImGui::TableSetColumnIndex(1);
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                ImGui::InputText("##tele_labelfolder",
+                                 &state.project.landmark_labels_folder);
+                ImGui::TableSetColumnIndex(2);
+                if (ImGui::Button("Browse##tele_label")) {
+                    IGFD::FileDialogConfig cfg;
+                    cfg.countSelectionMax = 1;
+                    if (!state.project.landmark_labels_folder.empty())
+                        cfg.path = state.project.landmark_labels_folder;
+                    else if (!user_settings.default_media_root_path.empty())
+                        cfg.path = user_settings.default_media_root_path;
+                    else
+                        cfg.path = red_data_dir;
+                    cfg.flags = ImGuiFileDialogFlags_Modal;
+                    ImGuiFileDialog::Instance()->OpenDialog(
+                        "ChooseTeleLabelFolder",
+                        "Select 2D Landmark Labels Folder", nullptr, cfg);
+                }
+
+                // ---- 3D Landmarks File ----
+                ImGui::TableNextRow();
+                LabelCell("3D Landmarks File (.csv)");
+                ImGui::TableSetColumnIndex(1);
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                ImGui::InputText("##tele_3dfile",
+                                 &state.project.landmarks_3d_file);
+                ImGui::TableSetColumnIndex(2);
+                if (ImGui::Button("Browse##tele_3d")) {
+                    IGFD::FileDialogConfig cfg;
+                    cfg.countSelectionMax = 1;
+                    cfg.flags = ImGuiFileDialogFlags_Modal;
+                    if (!state.project.landmarks_3d_file.empty()) {
+                        cfg.path =
+                            std::filesystem::path(
+                                state.project.landmarks_3d_file)
+                                .parent_path()
+                                .string();
+                    } else if (!user_settings.default_media_root_path.empty()) {
+                        cfg.path = user_settings.default_media_root_path;
+                    }
+                    ImGuiFileDialog::Instance()->OpenDialog(
+                        "ChooseTele3DFile",
+                        "Choose 3D Landmarks CSV", ".csv", cfg);
+                }
+
+                } // end telecentric fields
+
+                ImGui::EndTable();
+            }
+
+            // Handle file dialogs for Aruco Videos, YAML and Laser Video folder browsing
+            if (ImGuiFileDialog::Instance()->Display(
+                    "ChooseCalibArucoVideoFolder", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
+                if (ImGuiFileDialog::Instance()->IsOk())
+                    state.project.aruco_video_folder =
+                        ImGuiFileDialog::Instance()->GetCurrentPath();
+                ImGuiFileDialog::Instance()->Close();
+            }
+            if (ImGuiFileDialog::Instance()->Display(
+                    "ChooseCalibYAMLFolder", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
+                if (ImGuiFileDialog::Instance()->IsOk())
+                    state.project.calibration_folder =
+                        ImGuiFileDialog::Instance()->GetCurrentPath();
+                ImGuiFileDialog::Instance()->Close();
+            }
+            if (ImGuiFileDialog::Instance()->Display(
+                    "ChooseCalibVideoFolder", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
+                if (ImGuiFileDialog::Instance()->IsOk())
+                    state.project.media_folder =
+                        ImGuiFileDialog::Instance()->GetCurrentPath();
+                ImGuiFileDialog::Instance()->Close();
+            }
+            // Telecentric file dialog handlers
+            if (ImGuiFileDialog::Instance()->Display(
+                    "ChooseTeleVideoFolder", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
+                if (ImGuiFileDialog::Instance()->IsOk())
+                    state.project.media_folder =
+                        ImGuiFileDialog::Instance()->GetCurrentPath();
+                ImGuiFileDialog::Instance()->Close();
+            }
+            if (ImGuiFileDialog::Instance()->Display(
+                    "ChooseTeleLabelFolder", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
+                if (ImGuiFileDialog::Instance()->IsOk())
+                    state.project.landmark_labels_folder =
+                        ImGuiFileDialog::Instance()->GetCurrentPath();
+                ImGuiFileDialog::Instance()->Close();
+            }
+            if (ImGuiFileDialog::Instance()->Display(
+                    "ChooseTele3DFile", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
+                if (ImGuiFileDialog::Instance()->IsOk())
+                    state.project.landmarks_3d_file =
+                        ImGuiFileDialog::Instance()->GetFilePathName();
+                ImGuiFileDialog::Instance()->Close();
+            }
+
+            // Validate and show matched cameras
+            if (!state.project.is_telecentric()) {
+                // Projective validation
+                if (!state.project.media_folder.empty() &&
+                    !state.project.calibration_folder.empty()) {
+                    auto matched = LaserCalibration::validate_cameras(
+                        state.project.media_folder,
+                        state.project.calibration_folder);
+                    state.project.camera_names = matched;
+
+                    if (matched.empty()) {
+                        ImGui::TextColored(
+                            ImVec4(1.0f, 0.3f, 0.3f, 1.0f),
+                            "No cameras matched between videos and YAML files");
+                    } else {
+                        std::string cam_list;
+                        for (int i = 0; i < (int)matched.size(); i++) {
+                            if (i > 0) cam_list += ", ";
+                            cam_list += "Cam" + matched[i];
+                        }
+                        ImGui::Text("Matched cameras (%d): %s",
+                                    (int)matched.size(), cam_list.c_str());
+                    }
+                } else if (!state.project.calibration_folder.empty() &&
+                           state.project.media_folder.empty()) {
+                    state.project.camera_names =
+                        CalibrationTool::derive_camera_names_from_yaml(
+                            state.project.calibration_folder);
+                    if (!state.project.camera_names.empty()) {
+                        std::string cam_list;
+                        for (int i = 0; i < (int)state.project.camera_names.size(); i++) {
+                            if (i > 0) cam_list += ", ";
+                            cam_list += "Cam" + state.project.camera_names[i];
+                        }
+                        ImGui::Text("YAML cameras (%d): %s",
+                                    (int)state.project.camera_names.size(),
+                                    cam_list.c_str());
+                    }
+                }
+            } else {
+                // Telecentric validation (cached -- only rescan on path change)
+                static std::string tc_cached_media;
+                static std::string tc_cached_labels;
+                static std::string tc_cached_3d;
+                static std::vector<std::string> tc_cached_cams;
+                static std::map<std::string, int> tc_cached_label_counts;
+                static int tc_cached_label_found = 0;
+                static bool tc_cached_3d_ok = false;
+
+                // Rescan videos when media_folder changes
+                if (tc_cached_media != state.project.media_folder) {
+                    tc_cached_media = state.project.media_folder;
+                    state.project.camera_names =
+                        CalibrationTool::derive_camera_names_from_videos(
+                            state.project.media_folder);
+                    tc_cached_cams = state.project.camera_names;
+                    // Invalidate dependent caches
+                    tc_cached_labels.clear();
+                    tc_cached_label_counts.clear();
+                    tc_cached_label_found = 0;
+                }
+                if (!state.project.camera_names.empty()) {
+                    std::string cam_list;
+                    for (int i = 0; i < (int)state.project.camera_names.size(); i++) {
+                        if (i > 0) cam_list += ", ";
+                        cam_list += "Cam" + state.project.camera_names[i];
+                    }
+                    ImGui::Text("Video cameras (%d): %s",
+                                (int)state.project.camera_names.size(),
+                                cam_list.c_str());
+                } else if (!state.project.media_folder.empty()) {
+                    ImGui::TextColored(
+                        ImVec4(1.0f, 0.3f, 0.3f, 1.0f),
+                        "No Cam*.mp4 videos found in folder");
+                }
+
+                // Rescan labels when labels folder or cameras change
+                if (!state.project.landmark_labels_folder.empty() &&
+                    !state.project.camera_names.empty()) {
+                    if (tc_cached_labels != state.project.landmark_labels_folder ||
+                        tc_cached_cams != state.project.camera_names) {
+                        tc_cached_labels = state.project.landmark_labels_folder;
+                        tc_cached_cams = state.project.camera_names;
+                        tc_cached_label_counts =
+                            CalibrationTool::validate_telecentric_labels(
+                                tc_cached_labels, tc_cached_cams);
+                        tc_cached_label_found = (int)tc_cached_label_counts.size();
+                    }
+                    int total = (int)state.project.camera_names.size();
+                    if (tc_cached_label_found == total) {
+                        ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f),
+                            "Labels found for all %d cameras", total);
+                    } else {
+                        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f),
+                            "Labels found for %d / %d cameras",
+                            tc_cached_label_found, total);
+                    }
+                }
+
+                // Check 3D file when path changes
+                if (!state.project.landmarks_3d_file.empty()) {
+                    if (tc_cached_3d != state.project.landmarks_3d_file) {
+                        tc_cached_3d = state.project.landmarks_3d_file;
+                        tc_cached_3d_ok =
+                            std::filesystem::is_regular_file(tc_cached_3d);
+                    }
+                    if (tc_cached_3d_ok) {
+                        ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f),
+                            "3D landmarks file: OK");
+                    } else {
+                        ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f),
+                            "3D landmarks file: not found");
+                    }
+                }
+            }
+
+            ImGui::Separator();
+
+            // Validation: name + root required, AND at least one calibration source
+            bool create_ok = false;
+            if (!state.project.is_telecentric()) {
+                create_ok =
+                    !state.project.project_name.empty() &&
+                    !state.project.project_root_path.empty() &&
+                    (!state.project.config_file.empty() ||
+                     !state.project.calibration_folder.empty() ||
+                     !state.project.aruco_video_folder.empty());
+            } else {
+                // Telecentric: labels folder is optional (can label in-app)
+                create_ok =
+                    !state.project.project_name.empty() &&
+                    !state.project.project_root_path.empty() &&
+                    !state.project.media_folder.empty() &&
+                    !state.project.landmarks_3d_file.empty() &&
+                    !state.project.camera_names.empty();
+            }
+
+            // Right-align "Create Project" button
+            float avail = ImGui::GetContentRegionAvail().x;
+            const char *create_label = "Create Project##calib_create";
+            float cw = ImGui::CalcTextSize(create_label).x +
+                       ImGui::GetStyle().FramePadding.x * 2.0f;
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() +
+                                 (avail - cw));
+
+            ImGui::BeginDisabled(!create_ok);
+            if (ImGui::Button(create_label)) {
+                std::string err;
+
+                // Parse config.json if provided (aruco path)
+                if (!state.project.config_file.empty()) {
+                    state.config_path = state.project.config_file;
+                    if (CalibrationTool::parse_config(
+                            state.config_path, state.config, err)) {
+                        state.config_loaded = true;
+                        state.images_loaded = false;
+                        state.img_done = false;
+                        state.vid_done = false;
+                        state.project.img_path = state.config.img_path;
+                    } else {
+                        state.config_loaded = false;
+                        state.status = "Error parsing config: " + err;
+                    }
+                }
+
+                // Derive camera names for laser-only path (no config)
+                if (state.project.config_file.empty() &&
+                    !state.project.calibration_folder.empty() &&
+                    state.project.camera_names.empty()) {
+                    state.project.camera_names =
+                        CalibrationTool::derive_camera_names_from_yaml(
+                            state.project.calibration_folder);
+                }
+
+                // Set laser output folder if laser inputs present
+                if (!state.project.calibration_folder.empty())
+                    state.project.laser_output_folder =
+                        state.project.project_path + "/laser_calibration";
+
+                // Only proceed if no parse error
+                if (state.status.find("Error") == std::string::npos) {
+                    // Create project folder
+                    if (!ensure_dir_exists(state.project.project_path,
+                                           &err)) {
+                        state.status = "Error: " + err;
+                    } else {
+                        // Copy default layout before switching ini
+                        cb.copy_default_layout(
+                            state.project.project_path);
+
+                        // Save .redproj
+                        std::string proj_file =
+                            state.project.project_path + "/" +
+                            state.project.project_name + ".redproj";
+                        if (!CalibrationTool::save_project(
+                                state.project, proj_file, &err)) {
+                            state.status =
+                                "Error saving project: " + err;
+                        } else {
+                            // Switch layout ini
+                            cb.switch_ini(state.project.project_path);
+
+                            state.project_loaded = true;
+                            state.dock_pending = true;
+                            state.show_create_dialog = false;
+
+                            // For pure laser projects (no aruco), auto-load videos.
+                            // For aruco+laser, defer to "Load Laser Videos" button.
+                            if (state.project.has_laser_input() &&
+                                !state.project.has_aruco()) {
+                                state.laser_config.media_folder =
+                                    state.project.media_folder;
+                                state.laser_config.calibration_folder =
+                                    state.project.calibration_folder;
+                                state.laser_config.camera_names =
+                                    state.project.camera_names;
+                                state.laser_config.output_folder =
+                                    state.project.laser_output_folder;
+                                state.laser_ready = true;
+
+                                // Load videos
+                                if (!ps.video_loaded) {
+                                    pm.media_folder = state.project.media_folder;
+                                    pm.camera_names.clear();
+                                    for (const auto &cn : state.project.camera_names)
+                                        pm.camera_names.push_back("Cam" + cn);
+                                    cb.load_videos();
+                                    cb.print_metadata();
+                                }
+                                state.laser_total_frames = dc_context->estimated_num_frames;
+                            }
+
+                            // Auto-load videos for telecentric (direct, like laser).
+                            // Do NOT setup skeleton or labels here -- dock layout
+                            // isn't ready yet. User clicks "Start Labeling" or
+                            // "Load Videos" which handles skeleton + label import.
+                            if (state.project.is_telecentric() &&
+                                !ps.video_loaded) {
+                                pm.media_folder = state.project.media_folder;
+                                pm.camera_names.clear();
+                                for (const auto &cn : state.project.camera_names)
+                                    pm.camera_names.push_back("Cam" + cn);
+                                cb.load_videos();
+                                cb.print_metadata();
+                                state.tele_videos_loaded = true;
+                                // Schedule label import after dock layout stabilizes
+                                state.tele_deferred_label_frames = 3;
+                            }
+
+                            // Status
+                            if (state.project.is_telecentric()) {
+                                state.status =
+                                    "Project created. Loading videos...";
+                            } else if (state.config_loaded) {
+                                state.status =
+                                    "Project created. Config: " +
+                                    std::to_string(
+                                        state.config.cam_ordered.size()) +
+                                    " cameras";
+                            } else {
+                                state.status =
+                                    "Project created: " +
+                                    std::to_string(
+                                        state.project.camera_names.size()) +
+                                    " cameras (laser refinement)";
+                            }
+                        }
+                    }
+                }
+            }
+            ImGui::EndDisabled();
+        }
+        ImGui::End();
+}

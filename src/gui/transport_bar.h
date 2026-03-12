@@ -12,8 +12,8 @@ struct TransportBarState {
     int edit_buf = 0;
 };
 
-inline void DrawTransportBar(TransportBarState &state, AppContext &ctx,
-                              int &current_frame_num) {
+inline void DrawTransportBar(TransportBarState &state, AppContext &ctx) {
+    int &current_frame_num = ctx.current_frame_num;
     if (!ctx.ps.video_loaded) return;
 
     ImGuiViewport *vp = ImGui::GetMainViewport();

@@ -61,6 +61,7 @@ struct AppContext {
     std::unordered_map<std::string, bool> &window_was_decoding;
     bool &input_is_imgs;
     int &label_buffer_size;
+    int &current_frame_num;
 
     // Display
     DisplayState &display;
@@ -209,6 +210,72 @@ inline void switch_ini_to_project(AppContext &ctx) {
                 node->LastFrameAlive = g->FrameCount;
         }
     }
+}
+
+// Close project: auto-save, unload media, reset all project state.
+inline void close_project(AppContext &ctx) {
+    // 1. Auto-save annotations if project is loaded
+    if (!ctx.pm.keypoints_root_folder.empty() && !ctx.annotations.empty()) {
+        std::string save_err;
+        AnnotationCSV::save_all(ctx.pm.keypoints_root_folder,
+            ctx.skeleton.name, ctx.annotations,
+            ctx.scene->num_cams, ctx.skeleton.num_nodes,
+            ctx.pm.camera_names, &save_err);
+    }
+
+    // 2. Save ImGui ini
+    ImGui::SaveIniSettingsToDisk(ImGui::GetIO().IniFilename);
+
+    // 3. Unload media (stops threads, frees GPU)
+    unload_media(ctx.ps, ctx.pm, ctx.demuxers, ctx.dc_context,
+                 ctx.scene, ctx.decoder_threads, ctx.is_view_focused,
+                 ctx.window_was_decoding);
+
+    // 4. Clear annotations
+    ctx.annotations.clear();
+
+    // 5. Reset skeleton
+    ctx.skeleton.num_nodes = 0;
+    ctx.skeleton.num_edges = 0;
+    ctx.skeleton.name.clear();
+    ctx.skeleton.has_skeleton = false;
+    ctx.skeleton.node_colors.clear();
+    ctx.skeleton.edges.clear();
+    ctx.skeleton.node_names.clear();
+
+    // 6. Reset ProjectManager (preserve nothing)
+    ctx.pm.project_path.clear();
+    ctx.pm.project_name.clear();
+    ctx.pm.project_root_path.clear();
+    ctx.pm.calibration_folder.clear();
+    ctx.pm.keypoints_root_folder.clear();
+    ctx.pm.camera_params.clear();
+    ctx.pm.camera_names.clear();
+    ctx.pm.media_folder.clear();
+    ctx.pm.skeleton_name.clear();
+    ctx.pm.skeleton_file.clear();
+    ctx.pm.load_skeleton_from_json = false;
+    ctx.pm.plot_keypoints_flag = false;
+    ctx.pm.show_project_window = false;
+    ctx.pm.telecentric = false;
+    ctx.pm.annotation_config = AnnotationConfig{};
+    ctx.pm.jarvis_models.clear();
+    ctx.pm.active_jarvis_model = -1;
+
+    // 7. Reset frame state
+    ctx.current_frame_num = 0;
+
+    // 8. Clear media state
+    ctx.imgs_names.clear();
+    ctx.input_is_imgs = false;
+
+    // 9. Reset mac state
+#ifdef __APPLE__
+    for (auto &v : ctx.mac_last_uploaded_frame) v = -1;
+#endif
+
+    // 10. Clear deferred queue
+    ctx.deferred.flush();
 }
 
 // Post-project-load sequence: switch ini, load videos, load labels.

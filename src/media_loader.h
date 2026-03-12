@@ -74,6 +74,24 @@ unload_media(PlaybackState &ps, ProjectManager &pm,
     scene->image_height = nullptr;
     free(scene->seek_context);
     scene->seek_context = nullptr;
+
+#ifndef __APPLE__
+    // Free Linux GPU resources (PBOs, CUDA mappings, GL textures)
+    if (scene->pbo_cuda) {
+        for (u32 j = 0; j < scene->num_cams; j++) {
+            unmap_cuda_resource(&scene->pbo_cuda[j].cuda_resource);
+            cudaGraphicsUnregisterResource(scene->pbo_cuda[j].cuda_resource);
+            glDeleteBuffers(1, &scene->pbo_cuda[j].pbo);
+        }
+    }
+    if (scene->image_texture) {
+        for (u32 j = 0; j < scene->num_cams; j++)
+            glDeleteTextures(1, &scene->image_texture[j]);
+        free(scene->image_texture);
+        scene->image_texture = nullptr;
+    }
+#endif
+
     free(scene->pbo_cuda);
     scene->pbo_cuda = nullptr;
 #ifdef __APPLE__

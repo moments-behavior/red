@@ -1,0 +1,192 @@
+#pragma once
+#include "imgui.h"
+#include "calibration_tool.h"
+#include "calibration_pipeline.h"
+#include "laser_calibration.h"
+#include "telecentric_dlt.h"
+#include "calib_viewer_window.h"
+#include "tele_viewer_window.h"
+#include "laser_metal.h"
+#include "skeleton.h"
+#include "project.h"
+#include <atomic>
+#include <filesystem>
+#include <functional>
+#include <future>
+#include <map>
+#include <memory>
+#include <string>
+#include <thread>
+#include <vector>
+
+// Forward declarations
+struct AppContext;
+struct DeferredQueue;
+
+// Async detection visualization state (laser spot overlay)
+struct LaserVizState {
+    // Double-buffered: "ready" results for display, "pending" being computed
+    struct CamResult {
+        int num_blobs = 0;
+        int total_mask_pixels = 0;
+        std::vector<uint8_t> rgba;       // w*h*4 RGBA mask
+        int frame_num = -1;              // frame this result corresponds to
+        bool uploaded = false;           // has this been uploaded to GPU?
+    };
+    std::vector<CamResult> ready;        // display these
+    std::vector<CamResult> pending;      // being computed in background
+    std::atomic<bool> computing{false};  // background work in flight
+    std::thread worker;
+
+#ifdef __APPLE__
+    // Metal context for GPU-accelerated viz (macOS only)
+    LaserMetalHandle metal_ctx = nullptr;
+#endif
+
+    // Params that triggered the current computation
+    int last_green_th = -1, last_green_dom = -1;
+    int last_min_blob = -1, last_max_blob = -1;
+
+    ~LaserVizState() {
+        if (worker.joinable()) worker.join();
+#ifdef __APPLE__
+        if (metal_ctx) laser_metal_destroy(metal_ctx);
+#endif
+    }
+};
+
+struct CalibrationToolState {
+    // Core project state
+    bool show = false;
+    CalibrationTool::CalibProject project;
+    bool project_loaded = false;
+    bool dock_pending = false;
+    bool show_create_dialog = true;
+    std::string config_path;
+    CalibrationTool::CalibConfig config;
+    bool config_loaded = false;
+    bool images_loaded = false;
+    std::string status;
+
+    // Aruco image pipeline async
+    bool img_running = false;
+    bool img_done = false;
+    CalibrationPipeline::CalibrationResult img_result;
+    std::future<CalibrationPipeline::CalibrationResult> img_future;
+
+    // Aruco video pipeline async
+    bool vid_running = false;
+    bool vid_done = false;
+    CalibrationPipeline::CalibrationResult vid_result;
+    std::future<CalibrationPipeline::CalibrationResult> vid_future;
+
+    // Aruco video state
+    bool aruco_videos_loaded = false;
+    int aruco_start_frame = 0;
+    int aruco_stop_frame = 0;      // 0 = all
+    int aruco_frame_step = 10;     // 30fps -> 3fps effective
+    int aruco_total_frames = 0;
+    int aruco_video_count = 0;     // cached number of matched videos
+
+    // Experimental image pipeline async
+    bool exp_img_running = false;
+    bool exp_img_done = false;
+    CalibrationPipeline::CalibrationResult exp_img_result;
+    std::future<CalibrationPipeline::CalibrationResult> exp_img_future;
+
+    // Experimental video pipeline async
+    bool exp_vid_running = false;
+    bool exp_vid_done = false;
+    CalibrationPipeline::CalibrationResult exp_vid_result;
+    std::future<CalibrationPipeline::CalibrationResult> exp_vid_future;
+
+    // Helper: is any aruco pipeline running?
+    bool aruco_running() const {
+        return img_running || vid_running || exp_img_running || exp_vid_running;
+    }
+
+    // Telecentric
+    bool tele_videos_loaded = false;
+    bool tele_dlt_running = false;
+    bool tele_dlt_done = false;
+    std::string tele_dlt_status;
+    TelecentricDLT::DLTResult tele_dlt_result;
+    std::future<TelecentricDLT::DLTResult> tele_dlt_future;
+    // DLT options (UI state)
+    bool tele_flip_y = true;
+    bool tele_square_pixels = false;
+    bool tele_zero_skew = false;
+    bool tele_do_ba = true;
+    int tele_method = 0; // 0=Linear DLT, 1=DLT+k1, 2=DLT+k1k2
+    // History of calibration runs for comparison
+    std::vector<TelecentricDLT::DLTResult> tele_run_history;
+    // Deferred label import (waits N frames for dock layout to stabilize)
+    int tele_deferred_label_frames = 0;
+
+    // Laser refinement
+    bool laser_ready = false;
+    LaserCalibration::LaserConfig laser_config;
+    int laser_total_frames = 0;
+    bool laser_running = false;
+    bool laser_done = false;
+    std::string laser_status;
+    LaserCalibration::LaserResult laser_result;
+    std::shared_ptr<LaserCalibration::DetectionProgress> laser_progress =
+        std::make_shared<LaserCalibration::DetectionProgress>();
+    std::future<LaserCalibration::LaserResult> laser_future;
+    bool laser_show_detection = false;
+    bool laser_focus_window = false;
+
+    // Laser visualization
+    LaserVizState laser_viz;
+
+    // 3D calibration viewer (perspective)
+    CalibViewerState calib_viewer;
+    CalibrationPipeline::CalibrationResult loaded_result; // for loading from disk
+
+    // 3D telecentric viewer
+    TeleViewerState tele_viewer;
+
+};
+
+struct CalibrationToolCallbacks {
+    // Load calibration images into camera windows
+    std::function<void(std::map<std::string, std::string> &files)> load_images;
+    // Load laser videos into camera windows
+    std::function<void()> load_videos;
+    // Unload all media (on close/reset)
+    std::function<void()> unload_media;
+    // Copy default layout ini to project folder (if not already present)
+    std::function<void(const std::string &project_path)> copy_default_layout;
+    // Switch imgui_layout.ini to project folder
+    std::function<void(const std::string &project_path)> switch_ini;
+    // Print video metadata to console
+    std::function<void()> print_metadata;
+    // Deferred queue for scheduling main-thread work from callbacks
+    DeferredQueue *deferred = nullptr;
+};
+
+// Helper: set up a labeling skeleton with one keypoint per landmark.
+// Used when opening a telecentric project, loading videos, or starting labeling.
+inline void setup_landmark_skeleton(SkeletonContext &skel, int n_landmarks,
+                                     ProjectManager &pm,
+                                     const std::string &project_path) {
+    skel.name = "Target";
+    skel.num_nodes = n_landmarks;
+    skel.num_edges = 0;
+    skel.has_skeleton = true;
+    skel.node_colors.clear();
+    skel.edges.clear();
+    skel.node_names.clear();
+    for (int i = 0; i < n_landmarks; i++) {
+        skel.node_names.push_back("Pt" + std::to_string(i));
+        skel.node_colors.push_back(
+            (ImVec4)ImColor::HSV(i / (float)n_landmarks, 0.8f, 0.8f));
+    }
+    pm.keypoints_root_folder =
+        (std::filesystem::path(project_path) / "labeled_data").string();
+    std::error_code ec;
+    std::filesystem::create_directories(pm.keypoints_root_folder, ec);
+    pm.camera_params.clear();
+    pm.plot_keypoints_flag = true;
+}

@@ -26,6 +26,7 @@
 #include "gui/main_menu_bar.h"
 #include "gui/panel_registry.h"
 #include "gui/transport_bar.h"
+#include "gui/frame_buffer_window.h"
 #include "gui/popup_stack.h"
 #include "gui/toast.h"
 #include "imgui_impl_glfw.h"
@@ -259,8 +260,8 @@ int main(int argc, char **argv) {
                                    .seek_interval = 250,  // overwritten by auto-detect in media_loader
                                    .video_fps = 60.0f};
 
-    // gui states, todo: bundle this later
-    LabelingToolState labeling_state;
+    // gui states — bundled into WindowStates (gui/window_states.h)
+    WindowStates win;
     bool save_requested = false;
     int current_frame_num = 0;
     std::vector<std::string> imgs_names;
@@ -281,42 +282,25 @@ int main(int argc, char **argv) {
     ImPlotStyle &style = ImPlot::GetStyle();
     ImVec4 *colors = style.Colors;
 
+    // Initialize window states from user settings
+    win.jarvis_export.margin = user_settings.jarvis_margin;
+    win.jarvis_export.train_ratio = user_settings.jarvis_train_ratio;
+    win.jarvis_export.seed = user_settings.jarvis_seed;
+    win.jarvis_export.jpeg_quality = user_settings.jarvis_jpeg_quality;
 
-    // JARVIS Export Tool state
-    JarvisExportState jarvis_export_state;
-    // JARVIS Import Tool state
-    JarvisImportState jarvis_import_state;
-    JarvisPredictState jarvis_predict_state;
-    jarvis_export_state.margin = user_settings.jarvis_margin;
-    jarvis_export_state.train_ratio = user_settings.jarvis_train_ratio;
-    jarvis_export_state.seed = user_settings.jarvis_seed;
-    jarvis_export_state.jpeg_quality = user_settings.jarvis_jpeg_quality;
-
-    // Calibration Tool state (extracted to gui/calibration_tool_window.h)
-    CalibrationToolState calib_state;
-    calib_state.project.project_root_path =
+    win.calibration.project.project_root_path =
         user_settings.default_project_root_path.empty()
             ? red_data_dir
             : user_settings.default_project_root_path;
     if (!user_settings.default_media_root_path.empty())
-        calib_state.project.config_file = user_settings.default_media_root_path;
+        win.calibration.project.config_file = user_settings.default_media_root_path;
 
-    // Annotation dialog state
-    AnnotationDialogState annot_state;
+    win.export_win.margin = user_settings.jarvis_margin;
+    win.export_win.train_ratio = user_settings.jarvis_train_ratio;
+    win.export_win.seed = user_settings.jarvis_seed;
+    win.export_win.jpeg_quality = user_settings.jarvis_jpeg_quality;
 
-    // Settings window state
-    SettingsState settings_state;
-    TransportBarState transport_state;
-
-    // New annotation tools state
-    ExportWindowState export_state;
-    export_state.margin = user_settings.jarvis_margin;
-    export_state.train_ratio = user_settings.jarvis_train_ratio;
-    export_state.seed = user_settings.jarvis_seed;
-    export_state.jpeg_quality = user_settings.jarvis_jpeg_quality;
-    BBoxToolState bbox_state;
-    OBBToolState obb_state;
-    SamToolState sam_tool_state;
+    // Inference engine states (not window states — kept separate)
     SamState sam_state;
     JarvisState jarvis_state;
 #ifdef __APPLE__
@@ -336,21 +320,20 @@ int main(int argc, char **argv) {
             std::string enc = dir + "/mobile_sam_encoder.onnx";
             std::string dec = dir + "/mobile_sam_decoder.onnx";
             if (std::filesystem::exists(enc) && std::filesystem::exists(dec)) {
-                sam_tool_state.encoder_path = std::filesystem::canonical(enc).string();
-                sam_tool_state.decoder_path = std::filesystem::canonical(dec).string();
+                win.sam_tool.encoder_path = std::filesystem::canonical(enc).string();
+                win.sam_tool.decoder_path = std::filesystem::canonical(dec).string();
                 break;
             }
         }
     }
 
-    annot_state.video_folder = user_settings.default_media_root_path.empty()
-                                   ? media_root_dir
-                                   : user_settings.default_media_root_path;
+    win.annotation.video_folder = user_settings.default_media_root_path.empty()
+                                     ? media_root_dir
+                                     : user_settings.default_media_root_path;
 
     colors[ImPlotCol_Crosshairs] = ImVec4(0.3f, 0.10f, 0.64f, 1.00f);
 
     int label_buffer_size = user_settings.default_buffer_size;
-    bool show_help_window = false;
     std::vector<bool> is_view_focused;
     bool input_is_imgs = false;
     PopupStack popups;
@@ -392,7 +375,7 @@ int main(int argc, char **argv) {
         user_settings, red_data_dir, skeleton_dir,
         imgs_names, demuxers, decoder_threads,
         is_view_focused, window_was_decoding,
-        input_is_imgs, label_buffer_size,
+        input_is_imgs, label_buffer_size, current_frame_num,
         display, window, save_requested, project_ini_path, main_loop_running
 #ifdef __APPLE__
         , mac_last_uploaded_frame
@@ -472,6 +455,7 @@ int main(int argc, char **argv) {
             std::filesystem::path(pm_ref.project_path) / (pm_ref.project_name + ".redproj");
         if (!save_project_manager_json(pm_ref, redproj_path, &err))
             return false;
+        close_project(ctx);
         on_project_loaded(ctx, print_metadata, print_summary);
         return true;
     };
@@ -481,15 +465,14 @@ int main(int argc, char **argv) {
     panels.add({"Create Project",
                 [&]() { DrawProjectWindow(ctx); }, nullptr});
     panels.add({"Annotation Dialog",
-                [&]() { DrawAnnotationDialog(annot_state, ctx, annot_create_cb); },
+                [&]() { DrawAnnotationDialog(win.annotation, ctx, annot_create_cb); },
                 nullptr});
     panels.add({"Keypoints",
-                [&]() { DrawKeypointsWindow(ctx, current_frame_num); },
+                [&]() { DrawKeypointsWindow(ctx); },
                 [&]() { return pm.plot_keypoints_flag; }});
     panels.add({"Labeling Tool",
                 [&]() {
-                    DrawLabelingToolWindow(labeling_state, ctx,
-                                           current_frame_num, keypoints_find);
+                    DrawLabelingToolWindow(win.labeling, ctx);
                     if (keypoints_find &&
                         ImGui::IsKeyPressed(ImGuiKey_T, false) &&
                         !ImGui::GetIO().WantTextInput) {
@@ -503,33 +486,33 @@ int main(int argc, char **argv) {
                     }
                 },
                 [&]() { return pm.plot_keypoints_flag; }});
-    panels.add({"Help", [&]() { DrawHelpWindow(show_help_window); }, nullptr});
+    panels.add({"Help", [&]() { DrawHelpWindow(win.show_help); }, nullptr});
     panels.add({"JARVIS Export",
-                [&]() { DrawJarvisExportWindow(jarvis_export_state, ctx); },
+                [&]() { DrawJarvisExportWindow(win.jarvis_export, ctx); },
                 nullptr});
     panels.add({"JARVIS Import",
-                [&]() { DrawJarvisImportWindow(jarvis_import_state, ctx); },
+                [&]() { DrawJarvisImportWindow(win.jarvis_import, ctx); },
                 nullptr});
     panels.add({"Calibration Tool",
-                [&]() { DrawCalibrationToolWindow(calib_state, ctx, calib_cb); },
+                [&]() { DrawCalibrationToolWindow(win.calibration, ctx, calib_cb); },
                 nullptr});
     panels.add({"Settings",
-                [&]() { DrawSettingsWindow(settings_state, ctx); },
+                [&]() { DrawSettingsWindow(win.settings, ctx); },
                 nullptr});
     panels.add({"Export Tool",
-                [&]() { DrawExportWindow(export_state, ctx, annotations); },
+                [&]() { DrawExportWindow(win.export_win, ctx, annotations); },
                 nullptr});
     panels.add({"Bbox Tool",
-                [&]() { DrawBBoxToolWindow(bbox_state, ctx); },
+                [&]() { DrawBBoxToolWindow(win.bbox, ctx); },
                 nullptr});
     panels.add({"OBB Tool",
-                [&]() { DrawOBBToolWindow(obb_state, ctx); },
+                [&]() { DrawOBBToolWindow(win.obb, ctx); },
                 nullptr});
     panels.add({"SAM Assist",
-                [&]() { DrawSamToolWindow(sam_tool_state, sam_state, ctx); },
+                [&]() { DrawSamToolWindow(win.sam_tool, sam_state, ctx); },
                 nullptr});
     panels.add({"JARVIS Predict",
-                [&]() { DrawJarvisPredictWindow(jarvis_predict_state, jarvis_state,
+                [&]() { DrawJarvisPredictWindow(win.jarvis_predict, jarvis_state,
 #ifdef __APPLE__
                                                  jarvis_coreml_state,
 #endif
@@ -603,10 +586,7 @@ int main(int argc, char **argv) {
         deferred.flush();
 
         // App-level main menu bar (always visible)
-        DrawMainMenuBar(ctx, calib_state, annot_state, settings_state,
-                        jarvis_export_state, jarvis_import_state,
-                        export_state, bbox_state, obb_state, sam_tool_state,
-                        jarvis_predict_state, show_help_window);
+        DrawMainMenuBar(ctx, win);
 
         // --- Update playback time ---
         auto now = std::chrono::steady_clock::now();
@@ -634,7 +614,7 @@ int main(int argc, char **argv) {
         }
 
         // Transport bar — horizontal controls below menu bar (only when video loaded)
-        DrawTransportBar(transport_state, ctx, current_frame_num);
+        DrawTransportBar(win.transport, ctx);
 
         ImGui::DockSpaceOverViewport(0x00000001);
 
@@ -642,8 +622,8 @@ int main(int argc, char **argv) {
         panels.drawAll();
 
         // Handle main menu file dialogs
-        HandleMainMenuDialogs(ctx, calib_state, annot_state,
-                              media_root_dir, print_metadata, print_summary);
+        HandleMainMenuDialogs(ctx, win, media_root_dir,
+                              print_metadata, print_summary);
 
         static int select_corr_head = 0;
         if (ps.video_loaded && (!ps.play_video)) {
@@ -682,104 +662,7 @@ int main(int argc, char **argv) {
                     .frame_number;
         }
 
-        // Frame Buffer window — always visible when video is loaded,
-        // grayed out when playing to avoid disruptive tab appearing/disappearing.
-        if (ps.video_loaded) {
-            ImGui::SetNextWindowSize(ImVec2(500, 90), ImGuiCond_FirstUseEver);
-            if (ImGui::Begin("Frame Buffer")) {
-                if (ps.play_video) {
-                    ImGui::BeginDisabled();
-                    ImGui::TextDisabled("Playing...");
-                    ImGui::EndDisabled();
-                } else {
-                    int visible_idx = find_visible_cam();
-
-                    // Horizontal scrollable row of frames with vertical text
-                    float scale = 1.15f;
-                    float font_size = ImGui::GetFontSize() * scale;
-                    float item_w = font_size + 2.0f;
-                    float item_h = ImGui::GetContentRegionAvail().y;
-                    if (item_h < 40.0f) item_h = 40.0f;
-
-                    ImGui::SetWindowFontScale(scale);
-                    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(1.0f, 0.0f));
-                    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(2.0f, 2.0f));
-                    ImGui::BeginChild("##hscroll", ImVec2(0, 0), false,
-                                      ImGuiWindowFlags_HorizontalScrollbar |
-                                      ImGuiWindowFlags_NoScrollWithMouse |
-                                      ImGuiWindowFlags_NoScrollbar);
-                    ImDrawList *dl = ImGui::GetWindowDrawList();
-
-                    for (u32 i = 0; i < scene->size_of_buffer; i++) {
-                        int buf_idx =
-                            (i + ps.read_head) % scene->size_of_buffer;
-                        int frame_num =
-                            scene->display_buffer[visible_idx][buf_idx].frame_number;
-
-                        char label[32];
-                        if (input_is_imgs)
-                            snprintf(label, sizeof(label), "%d:%s",
-                                     frame_num, imgs_names[i].c_str());
-                        else
-                            snprintf(label, sizeof(label), "%d", frame_num);
-
-                        bool is_selected = (ps.pause_selected == (int)i);
-
-                        if (i > 0) ImGui::SameLine();
-
-                        ImGui::PushID((int)i);
-                        ImVec2 pos = ImGui::GetCursorScreenPos();
-                        if (ImGui::Selectable("##fbuf", is_selected, 0,
-                                              ImVec2(item_w, item_h))) {
-                            if (!is_selected) {
-                                ps.pause_selected = (int)i;
-                            }
-                        }
-
-                        // Draw vertical text over the selectable
-                        // Color code: green = fully labeled + triangulated,
-                        // teal = partially labeled, default = unlabeled
-                        const char *text = label;
-                        float cx = pos.x + item_w * 0.5f;
-                        ImU32 text_col;
-                        auto ann_it = annotations.find((u32)frame_num);
-                        if (ann_it != annotations.end() &&
-                            frame_has_any_keypoints(ann_it->second)) {
-                            bool complete = frame_is_complete(ann_it->second);
-                            if (complete && skeleton.has_skeleton && scene->num_cams > 1) {
-                                for (int k = 0; k < skeleton.num_nodes; ++k)
-                                    if (!ann_it->second.kp3d[k].triangulated)
-                                        complete = false;
-                            }
-                            text_col = complete
-                                ? IM_COL32(51, 204, 77, 255)   // green
-                                : IM_COL32(51, 179, 179, 255); // teal
-                        } else {
-                            text_col = is_selected
-                                ? ImGui::GetColorU32(ImGuiCol_Text)
-                                : ImGui::GetColorU32(ImGuiCol_TextDisabled);
-                        }
-                        // Draw rotated text (90 deg CCW) — read bottom-to-top like a book spine
-                        float str_w = ImGui::CalcTextSize(text).x;
-                        ImVec2 text_pos(pos.x + (item_w - font_size) * 0.5f,
-                                       pos.y + (item_h + str_w) * 0.5f);
-                        ImPlot::AddTextVertical(dl, text_pos, text_col, text);
-                        ImGui::PopID();
-                    }
-
-                    // Mouse wheel → horizontal scroll
-                    if (ImGui::IsWindowHovered()) {
-                        float wheel = ImGui::GetIO().MouseWheel;
-                        if (wheel != 0.0f)
-                            ImGui::SetScrollX(ImGui::GetScrollX() - wheel * item_w * 3.0f);
-                    }
-                    ImGui::EndChild();
-                    ImGui::PopStyleVar(2);  // WindowPadding, ItemSpacing
-                    ImGui::SetWindowFontScale(1.0f);
-                }
-            }
-            ImGui::End();
-        }
+        DrawFrameBufferWindow(ctx, select_corr_head);
 
         // Render a video frame
         if (ps.video_loaded) {
@@ -787,9 +670,9 @@ int main(int argc, char **argv) {
             // --- Laser detection viz: dispatch once before camera loop ---
             // This must run before per-camera iteration so that hidden cameras
             // (not in a visible ImGui window) still get processed.
-            if (calib_state.laser_show_detection && calib_state.laser_ready) {
-                auto &lv = calib_state.laser_viz;
-                auto &lc = calib_state.laser_config;
+            if (win.calibration.laser_show_detection && win.calibration.laser_ready) {
+                auto &lv = win.calibration.laser_viz;
+                auto &lc = win.calibration.laser_config;
                 int mac_head_dispatch = ps.play_video ? ps.read_head : select_corr_head;
                 int fn0 = scene->display_buffer[0][mac_head_dispatch].frame_number;
 
@@ -950,7 +833,7 @@ int main(int argc, char **argv) {
 
                 if (ps.play_video) {
                     window_need_decoding[win_name].store(
-                        is_visible || (calib_state.laser_show_detection && calib_state.laser_ready));
+                        is_visible || (win.calibration.laser_show_detection && win.calibration.laser_ready));
                 };
 
                 if (is_visible) {
@@ -970,9 +853,9 @@ int main(int argc, char **argv) {
                         uint32_t h = scene->image_height[j];
                         bool did_upload = false;
 
-                        if (calib_state.laser_show_detection && calib_state.laser_ready) {
+                        if (win.calibration.laser_show_detection && win.calibration.laser_ready) {
                             // Upload ready result for this camera if available
-                            auto &lv = calib_state.laser_viz;
+                            auto &lv = win.calibration.laser_viz;
                             if (j < (int)lv.ready.size() &&
                                 !lv.ready[j].rgba.empty() &&
                                 !lv.ready[j].uploaded) {
@@ -1084,9 +967,9 @@ int main(int argc, char **argv) {
                     // is actually held to preserve normal scroll-to-zoom.
                     bool sam_override_zoom = false;
                     int saved_zoom_mod = 0;
-                    if (sam_tool_state.enabled &&
-                        sam_tool_state.has_pending_mask &&
-                        !sam_tool_state.multi_mask.masks.empty() &&
+                    if (win.sam_tool.enabled &&
+                        win.sam_tool.has_pending_mask &&
+                        !win.sam_tool.multi_mask.masks.empty() &&
                         ImGui::GetIO().KeyShift) {
                         auto &imap = ImPlot::GetInputMap();
                         saved_zoom_mod = imap.ZoomMod;
@@ -1183,9 +1066,9 @@ int main(int argc, char **argv) {
                                     if (ImGui::IsKeyPressed(ImGuiKey_Backspace,
                                                             false) &&
                                         !io.WantTextInput &&
-                                        !(sam_tool_state.enabled &&
-                                          (!sam_tool_state.fg_points.empty() ||
-                                           !sam_tool_state.bg_points.empty()))) {
+                                        !(win.sam_tool.enabled &&
+                                          (!win.sam_tool.fg_points.empty() ||
+                                           !win.sam_tool.bg_points.empty()))) {
                                         annotations.erase(current_frame_num);
                                         keypoints_find = false;
                                     }
@@ -1211,23 +1094,23 @@ int main(int argc, char **argv) {
                             int nc = (int)scene->num_cams;
 
                             // Bbox tool
-                            if (bbox_state.enabled) {
-                                bbox_handle_input(bbox_state, annotations,
+                            if (win.bbox.enabled) {
+                                bbox_handle_input(win.bbox, annotations,
                                                   frame, j, nn, nc, iw, ih);
                             }
                             if (display.show_bboxes) {
-                                bbox_draw_overlays(bbox_state, annotations,
+                                bbox_draw_overlays(win.bbox, annotations,
                                                    frame, j, iw, ih);
                             }
 
                             // OBB tool
-                            if (obb_state.enabled) {
-                                obb_handle_input(obb_state, bbox_state,
+                            if (win.obb.enabled) {
+                                obb_handle_input(win.obb, win.bbox,
                                                  annotations, frame, j,
                                                  nn, nc, iw, ih);
                             }
                             if (display.show_bboxes) {
-                                obb_draw_overlays(obb_state, bbox_state,
+                                obb_draw_overlays(win.obb, win.bbox,
                                                   annotations, frame, j, iw, ih);
                             }
 
@@ -1237,7 +1120,7 @@ int main(int argc, char **argv) {
                             }
 
                             // SAM assist
-                            if (sam_tool_state.enabled) {
+                            if (win.sam_tool.enabled) {
                                 const uint8_t *sam_rgb = nullptr;
 #ifdef __APPLE__
                                 // Extract RGB from CVPixelBuffer on click
@@ -1262,12 +1145,12 @@ int main(int argc, char **argv) {
                                         sam_rgb = sam_rgb_buf.data();
                                 }
 #endif
-                                sam_handle_input(sam_tool_state, sam_state,
+                                sam_handle_input(win.sam_tool, sam_state,
                                                  annotations, frame, j,
                                                  nn, nc, iw, ih, sam_rgb);
                             }
                             if (display.show_masks)
-                                sam_draw_overlay(sam_tool_state, j, iw, ih);
+                                sam_draw_overlay(win.sam_tool, j, iw, ih);
                         }
 
                         // Plot context menu: press 1 key while hovering
@@ -1322,8 +1205,8 @@ int main(int argc, char **argv) {
             // Hotkey 6: Run JARVIS prediction on current frame (all cameras)
             bool jarvis_predict_trigger =
                 (ImGui::IsKeyPressed(ImGuiKey_6, false) && !io.WantTextInput) ||
-                jarvis_predict_state.predict_requested;
-            jarvis_predict_state.predict_requested = false;
+                win.jarvis_predict.predict_requested;
+            win.jarvis_predict.predict_requested = false;
 
             bool jarvis_any_loaded = jarvis_state.loaded;
 #ifdef __APPLE__
@@ -1348,7 +1231,7 @@ int main(int argc, char **argv) {
                     jarvis_coreml_predict_frame(jarvis_coreml_state, annotations,
                         (u32)current_frame_num, pbs, widths, heights,
                         skeleton, (int)scene->num_cams,
-                        jarvis_predict_state.confidence_threshold);
+                        win.jarvis_predict.confidence_threshold);
                     // Triangulate (reprojection is in gui_keypoints.h, only in this TU)
                     reprojection(annotations.at(current_frame_num),
                                  &skeleton, pm.camera_params, scene);
@@ -1366,7 +1249,7 @@ int main(int argc, char **argv) {
                     jarvis_predict_frame(jarvis_state, annotations,
                         (u32)current_frame_num, rgb_bufs, widths, heights,
                         skeleton, pm.camera_params, scene,
-                        jarvis_predict_state.confidence_threshold);
+                        win.jarvis_predict.confidence_threshold);
                     printf("[JARVIS ONNX] %s\n", jarvis_state.status.c_str());
                 }
 #endif
@@ -1389,7 +1272,7 @@ int main(int argc, char **argv) {
 
         // H-key help toggle
         if (ImGui::IsKeyPressed(ImGuiKey_H, false) && !io.WantTextInput) {
-            show_help_window = !show_help_window;
+            win.show_help = !win.show_help;
         }
 
         drawToasts(toasts);

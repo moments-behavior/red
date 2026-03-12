@@ -1,19 +1,18 @@
 #pragma once
 #include "app_context.h"
-#include "gui/calibration_tool_window.h"
-#include "gui/annotation_dialog.h"
+#include "gui/window_states.h"
 #include <ImGuiFileDialog.h>
 #include <filesystem>
 
 // Handle all main-menu-originated file dialogs. Called once per frame.
-// Extra state refs that aren't in AppContext are passed explicitly.
 inline void HandleMainMenuDialogs(
     AppContext &ctx,
-    CalibrationToolState &calib_state,
-    AnnotationDialogState &annot_state,
+    WindowStates &win,
     const std::string &media_root_dir,
     std::function<void()> print_metadata_fn,
     std::function<void(const std::string &)> print_summary_fn) {
+    auto &calib_state = win.calibration;
+    auto &annot_state = win.annotation;
     auto &pm = ctx.pm;
     auto &user_settings = ctx.user_settings;
     auto &popups = ctx.popups;
@@ -175,9 +174,10 @@ inline void HandleMainMenuDialogs(
                     popups.pushError(err);
                 } else {
                     pm = loaded;
-                    if (setup_project(pm, skeleton, skeleton_map, &err))
+                    if (setup_project(pm, skeleton, skeleton_map, &err)) {
+                        close_project(ctx);
                         on_project_loaded(ctx, print_metadata_fn, print_summary_fn);
-                    else
+                    } else
                         popups.pushError(err);
                 }
             }
@@ -217,9 +217,10 @@ inline void HandleMainMenuDialogs(
                 popups.pushError(err);
             } else {
                 pm = loaded;
-                if (setup_project(pm, skeleton, skeleton_map, &err))
+                if (setup_project(pm, skeleton, skeleton_map, &err)) {
+                    close_project(ctx);
                     on_project_loaded(ctx, print_metadata_fn, print_summary_fn);
-                else
+                } else
                     popups.pushError(err);
             }
         }

@@ -1,30 +1,21 @@
 #pragma once
 #include "app_context.h"
-#include "gui/annotation_dialog.h"
-#include "gui/calibration_tool_window.h"
-#include "gui/jarvis_export_window.h"
-#include "gui/jarvis_import_window.h"
-#include "gui/export_window.h"
-#include "gui/bbox_tool.h"
-#include "gui/obb_tool.h"
-#include "gui/sam_tool.h"
-#include "gui/jarvis_predict_window.h"
-#include "gui/settings_window.h"
+#include "gui/window_states.h"
 #include "IconsForkAwesome.h"
 #include <ImGuiFileDialog.h>
 
-inline void DrawMainMenuBar(AppContext &ctx,
-                            CalibrationToolState &calib_state,
-                            AnnotationDialogState &annot_state,
-                            SettingsState &settings_state,
-                            JarvisExportState &jarvis_export_state,
-                            JarvisImportState &jarvis_import_state,
-                            ExportWindowState &export_state,
-                            BBoxToolState &bbox_state,
-                            OBBToolState &obb_state,
-                            SamToolState &sam_tool_state,
-                            JarvisPredictState &jarvis_predict_state,
-                            bool &show_help_window) {
+inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
+    auto &calib_state      = win.calibration;
+    auto &annot_state      = win.annotation;
+    auto &settings_state   = win.settings;
+    auto &jarvis_export_state = win.jarvis_export;
+    auto &jarvis_import_state = win.jarvis_import;
+    auto &export_state     = win.export_win;
+    auto &bbox_state       = win.bbox;
+    auto &obb_state        = win.obb;
+    auto &sam_tool_state   = win.sam_tool;
+    auto &jarvis_predict_state = win.jarvis_predict;
+    auto &show_help_window = win.show_help;
     auto &pm = ctx.pm;
     auto &ps = ctx.ps;
     auto &user_settings = ctx.user_settings;

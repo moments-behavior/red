@@ -16,8 +16,9 @@ struct LabelingToolState {
 };
 
 inline void DrawLabelingToolWindow(
-    LabelingToolState &state, AppContext &ctx,
-    int current_frame_num, bool keypoints_find) {
+    LabelingToolState &state, AppContext &ctx) {
+    int current_frame_num = ctx.current_frame_num;
+    bool keypoints_find = ctx.annotations.find(ctx.current_frame_num) != ctx.annotations.end();
     auto &pm = ctx.pm;
     auto *scene = ctx.scene;
     auto *dc_context = ctx.dc_context;
