@@ -26,7 +26,6 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
     // --- Text menus (moved from Navigator) ---
 
     if (ImGui::BeginMenu("File")) {
-        ImGui::BeginDisabled(ps.video_loaded);
         if (ImGui::MenuItem("Open Video(s)")) {
             IGFD::FileDialogConfig config;
             config.countSelectionMax = 0;
@@ -44,13 +43,11 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
                 "ChooseImages", "Choose Images",
                 ".jpg,.tiff,.jpeg,.png", config);
         }
-        ImGui::EndDisabled();
         ImGui::BeginDisabled(!ps.video_loaded);
         if (ImGui::MenuItem("Create Project")) {
             pm.show_project_window = true;
         }
         ImGui::EndDisabled();
-        ImGui::BeginDisabled(ps.video_loaded);
         if (ImGui::MenuItem("Load Project")) {
             IGFD::FileDialogConfig config;
             config.countSelectionMax = 1;
@@ -60,12 +57,10 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
                 "ChooseProject", "Choose Project File", ".redproj",
                 config);
         }
-        ImGui::EndDisabled();
         ImGui::EndMenu();
     }
 
     if (ImGui::BeginMenu("Annotate")) {
-        ImGui::BeginDisabled(ps.video_loaded);
         if (ImGui::MenuItem("Create Annotation Project")) {
             annot_state.show = true;
             annot_state.discovered_cameras.clear();
@@ -81,7 +76,6 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
                 "LoadAnnotProject", "Load Annotation Project",
                 "Red Project{.redproj}", cfg);
         }
-        ImGui::EndDisabled();
         ImGui::EndMenu();
     }
 
@@ -155,7 +149,6 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
     ImGui::EndDisabled();
 
     // Open Project
-    ImGui::BeginDisabled(ps.video_loaded);
     if (ImGui::MenuItem(ICON_FK_FOLDER_OPEN "##toolbar_open")) {
         IGFD::FileDialogConfig config;
         config.countSelectionMax = 1;
@@ -167,7 +160,6 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
     }
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
         ImGui::SetTooltip("Open Project");
-    ImGui::EndDisabled();
 
     // Save Labels
     ImGui::BeginDisabled(!pm.plot_keypoints_flag);
