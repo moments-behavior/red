@@ -20,7 +20,7 @@ struct CameraParams {
     bool telecentric = false;
 };
 
-bool camera_load_params_from_yaml(const std::string &calibration_file,
+inline bool camera_load_params_from_yaml(const std::string &calibration_file,
                                   CameraParams &camera_params,
                                   std::string &error_message) {
     error_message.clear();
@@ -75,7 +75,7 @@ bool camera_load_params_from_yaml(const std::string &calibration_file,
 // Load telecentric camera parameters from DLT coefficient CSV + optional distortion CSV.
 // The DLT CSV has 11 values (one per line): P(0,0)..P(0,3), P(1,0)..P(1,3), 0, 0, 0.
 // The distortion CSV (optional) has header "k1,k2,sx,sy,skew" then one data row.
-bool camera_load_params_from_dlt_csv(const std::string &dlt_csv_path,
+inline bool camera_load_params_from_dlt_csv(const std::string &dlt_csv_path,
                                       CameraParams &camera_params,
                                       std::string &error_message) {
     error_message.clear();

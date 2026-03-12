@@ -12,7 +12,7 @@ struct SettingsState {
 inline void DrawSettingsWindow(SettingsState &state, AppContext &ctx) {
     auto &s = ctx.user_settings;
 
-    drawPanel("Settings", state.show,
+    DrawPanel("Settings", state.show,
         [&]() {
         bool display_changed = false;
         bool playback_changed = false;

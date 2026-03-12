@@ -53,7 +53,7 @@ inline void DrawAnnotationDialog(AnnotationDialogState &state,
         ctx.user_settings.default_media_root_path.empty()
             ? ctx.red_data_dir
             : ctx.user_settings.default_media_root_path;
-    drawPanel("Create Annotation Project", state.show,
+    DrawPanel("Create Annotation Project", state.show,
         [&]() {
         // error banner
         if (!state.status.empty()) {

@@ -221,7 +221,7 @@ inline void bbox_handle_input(BBoxToolState &state, AnnotationMap &amap,
 
 // Settings panel for the bbox tool
 inline void DrawBBoxToolWindow(BBoxToolState &state, AppContext &ctx) {
-    drawPanel("Bbox Tool", state.show,
+    DrawPanel("Bbox Tool", state.show,
         [&]() {
         ImGui::Checkbox("Enable Bbox Drawing", &state.enabled);
         ImGui::Checkbox("Show IDs", &state.show_ids);

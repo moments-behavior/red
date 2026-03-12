@@ -2,7 +2,7 @@
 #include "gui/panel.h"
 
 inline void DrawHelpWindow(bool &show) {
-    drawPanel("Help Menu", show, []() {
+    DrawPanel("Help Menu", show, []() {
         ImGui::SeparatorText("General");
         ImGui::Text("<h>: toggle this help menu");
         ImGui::Text("<Space>: toggle play and pause");

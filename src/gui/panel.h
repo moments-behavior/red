@@ -5,7 +5,7 @@
 // Wraps ImGui Begin/End boilerplate for standard panels.
 // content_fn is called only when the window is visible.
 // always_fn (optional) is called every frame regardless (e.g. file dialog handlers).
-inline void drawPanel(const char *name, bool &open,
+inline void DrawPanel(const char *name, bool &open,
                       std::function<void()> content_fn,
                       std::function<void()> always_fn = nullptr,
                       ImVec2 default_size = ImVec2(500, 400),

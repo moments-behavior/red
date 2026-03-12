@@ -24,7 +24,7 @@ inline void DrawJarvisImportWindow(JarvisImportState &state, AppContext &ctx) {
     auto &scene = ctx.scene;
     auto &annotations = ctx.annotations;
 
-    drawPanel("JARVIS Import Tool", state.show,
+    DrawPanel("JARVIS Import Tool", state.show,
         [&]() {
         ImGui::SeparatorText("Import JARVIS Predictions");
 

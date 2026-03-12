@@ -73,7 +73,7 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
                                      JarvisCoreMLState &jarvis_coreml,
 #endif
                                      AppContext &ctx) {
-    drawPanel("JARVIS Predict", state.show,
+    DrawPanel("JARVIS Predict", state.show,
         [&]() {
         // Availability check
         if (!jarvis.available) {

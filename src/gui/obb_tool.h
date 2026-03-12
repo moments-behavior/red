@@ -290,7 +290,7 @@ inline void obb_handle_input(OBBToolState &state, BBoxToolState &bbox_state,
 
 // Settings panel for the OBB tool
 inline void DrawOBBToolWindow(OBBToolState &state, AppContext &ctx) {
-    drawPanel("OBB Tool", state.show,
+    DrawPanel("OBB Tool", state.show,
         [&]() {
         ImGui::Checkbox("Enable OBB Drawing", &state.enabled);
 

@@ -68,7 +68,7 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
         state.finished.store(false, std::memory_order_relaxed);
     }
 
-    drawPanel("Export Tool", state.show,
+    DrawPanel("Export Tool", state.show,
         [&]() {
 
         // Format selector

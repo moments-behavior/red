@@ -29,7 +29,7 @@ struct JarvisExportState {
 inline void DrawJarvisExportWindow(JarvisExportState &state, AppContext &ctx) {
     const auto &pm = ctx.pm;
     const auto &skeleton = ctx.skeleton;
-    drawPanel("JARVIS Export Tool", state.show,
+    DrawPanel("JARVIS Export Tool", state.show,
         [&]() {
         ImGui::SeparatorText("Export Configuration");
 

@@ -265,7 +265,7 @@ inline void sam_handle_input(SamToolState &state, SamState &sam,
 // SAM tool settings panel
 inline void DrawSamToolWindow(SamToolState &state, SamState &sam,
                                AppContext &ctx) {
-    drawPanel("SAM Assist", state.show,
+    DrawPanel("SAM Assist", state.show,
         [&]() {
         // Availability status
         if (!sam.available) {

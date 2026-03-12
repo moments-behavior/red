@@ -8,7 +8,7 @@
 #include <sstream>
 #include <vector>
 
-static void gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
+inline void gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
                                int view_idx, int num_cams) {
     if (view_idx >= (int)fa.cameras.size()) return;
     auto &cam = fa.cameras[view_idx];
@@ -91,7 +91,7 @@ static void gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
     }
 }
 
-bool is_in_camera_fov(const Eigen::Vector3d &point_world,
+inline bool is_in_camera_fov(const Eigen::Vector3d &point_world,
                       const Eigen::Vector3d &rvec,
                       const Eigen::Vector3d &tvec,
                       const Eigen::Matrix3d &K, int image_width,
@@ -105,7 +105,7 @@ bool is_in_camera_fov(const Eigen::Vector3d &point_world,
     return false;
 }
 
-static void reprojection(FrameAnnotation &fa, SkeletonContext *skeleton,
+inline void reprojection(FrameAnnotation &fa, SkeletonContext *skeleton,
                          const std::vector<CameraParams> &camera_params,
                          RenderScene *scene) {
 
