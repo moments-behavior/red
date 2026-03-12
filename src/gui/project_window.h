@@ -142,13 +142,29 @@ inline void DrawProjectWindow(AppContext &ctx) {
                     : (labels_s.empty() ? std::string()
                                         : std::string(labels_s[skeleton_idx]));
 
-            // ---- Calibration Folder ----
+            // ---- Camera Model ----
             if (pm.camera_names.size() > 1) {
+                ImGui::TableNextRow();
+                LabelCell("Camera Model");
+                ImGui::TableSetColumnIndex(1);
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                int cam_model = pm.telecentric ? 1 : 0;
+                if (ImGui::Combo("##cam_model", &cam_model,
+                                 "Projective (pinhole)\0Telecentric (affine DLT)\0")) {
+                    pm.telecentric = (cam_model == 1);
+                }
+                ImGui::TableSetColumnIndex(2);
+                ImGui::Dummy(ImVec2(1, 1));
+
+                // ---- Calibration Folder ----
                 ImGui::TableNextRow();
                 LabelCell("Calibration Folder");
                 ImGui::TableSetColumnIndex(1);
                 ImGui::SetNextItemWidth(-FLT_MIN);
                 ImGui::InputText("##calibfolder", &pm.calibration_folder);
+                if (pm.telecentric) {
+                    ImGui::TextDisabled("Expects Cam*_dlt.csv files");
+                }
                 ImGui::TableSetColumnIndex(2);
                 if (ImGui::Button("Browse##loadprojectcalibration")) {
                     IGFD::FileDialogConfig cfg;

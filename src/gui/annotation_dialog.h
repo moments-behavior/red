@@ -243,16 +243,33 @@ inline void DrawAnnotationDialog(AnnotationDialogState &state,
                     : (annot_skel_labels.empty() ? std::string()
                                                  : std::string(annot_skel_labels[annot_skeleton_idx]));
 
-            // ---- Calibration Folder (only if multiple cameras selected) ----
+            // ---- Camera Model + Calibration (only if multiple cameras) ----
             {
                 int n_sel = 0;
                 for (auto b : state.camera_selected) if (b) n_sel++;
                 if (n_sel > 1) {
+                // Camera Model selector
+                ImGui::TableNextRow();
+                LabelCell("Camera Model");
+                ImGui::TableSetColumnIndex(1);
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                int annot_cam_model = pm.telecentric ? 1 : 0;
+                if (ImGui::Combo("##annot_cam_model", &annot_cam_model,
+                                 "Projective (pinhole)\0Telecentric (affine DLT)\0")) {
+                    pm.telecentric = (annot_cam_model == 1);
+                }
+                ImGui::TableSetColumnIndex(2);
+                ImGui::Dummy(ImVec2(1, 1));
+
+                // Calibration Folder
                 ImGui::TableNextRow();
                 LabelCell("Calibration Folder");
                 ImGui::TableSetColumnIndex(1);
                 ImGui::SetNextItemWidth(-FLT_MIN);
                 ImGui::InputText("##annot_calibfolder", &pm.calibration_folder);
+                if (pm.telecentric) {
+                    ImGui::TextDisabled("Expects Cam*_dlt.csv files");
+                }
                 ImGui::TableSetColumnIndex(2);
                 if (ImGui::Button("Browse##annot_calib")) {
                     IGFD::FileDialogConfig cfg;
