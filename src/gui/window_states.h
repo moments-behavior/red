@@ -1,6 +1,6 @@
 #pragma once
 #include "gui/labeling_tool_window.h"
-#include "gui/calibration_tool_window.h"
+#include "gui/calib_tool_state.h"
 #include "gui/annotation_dialog.h"
 #include "gui/settings_window.h"
 #include "gui/transport_bar.h"

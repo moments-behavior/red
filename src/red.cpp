@@ -447,6 +447,10 @@ int main(int argc, char **argv) {
     // Annotation create callback (shared by annotation dialog panel)
     AnnotationCreateCallback annot_create_cb =
         [&](ProjectManager &pm_ref, std::string &err) -> bool {
+        // Save new project config before closing old project
+        ProjectManager new_pm = pm_ref;
+        close_project(ctx);
+        pm_ref = new_pm;
         if (!ensure_dir_exists(pm_ref.project_path, &err))
             return false;
         if (!setup_project(pm_ref, skeleton, skeleton_map, &err))
@@ -455,7 +459,6 @@ int main(int argc, char **argv) {
             std::filesystem::path(pm_ref.project_path) / (pm_ref.project_name + ".redproj");
         if (!save_project_manager_json(pm_ref, redproj_path, &err))
             return false;
-        close_project(ctx);
         on_project_loaded(ctx, print_metadata, print_summary);
         return true;
     };

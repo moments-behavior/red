@@ -173,9 +173,9 @@ inline void HandleMainMenuDialogs(
                 if (!load_project_manager_json(&loaded, cfg_path, &err)) {
                     popups.pushError(err);
                 } else {
+                    close_project(ctx);
                     pm = loaded;
                     if (setup_project(pm, skeleton, skeleton_map, &err)) {
-                        close_project(ctx);
                         on_project_loaded(ctx, print_metadata_fn, print_summary_fn);
                     } else
                         popups.pushError(err);
@@ -216,9 +216,9 @@ inline void HandleMainMenuDialogs(
             if (!load_project_manager_json(&loaded, cfg_path, &err)) {
                 popups.pushError(err);
             } else {
+                close_project(ctx);
                 pm = loaded;
                 if (setup_project(pm, skeleton, skeleton_map, &err)) {
-                    close_project(ctx);
                     on_project_loaded(ctx, print_metadata_fn, print_summary_fn);
                 } else
                     popups.pushError(err);
