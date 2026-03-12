@@ -451,6 +451,12 @@ int main(int argc, char **argv) {
         ProjectManager new_pm = pm_ref;
         close_project(ctx);
         win.reset();
+        // Nuke inference engines (different project may use different models)
+        sam_state = SamState{};
+        jarvis_state = JarvisState{};
+#ifdef __APPLE__
+        jarvis_coreml_state = JarvisCoreMLState{};
+#endif
         pm_ref = new_pm;
         if (!ensure_dir_exists(pm_ref.project_path, &err))
             return false;
@@ -627,7 +633,14 @@ int main(int argc, char **argv) {
 
         // Handle main menu file dialogs
         HandleMainMenuDialogs(ctx, win, media_root_dir,
-                              print_metadata, print_summary);
+                              print_metadata, print_summary,
+                              [&]() {
+                                  sam_state = SamState{};
+                                  jarvis_state = JarvisState{};
+#ifdef __APPLE__
+                                  jarvis_coreml_state = JarvisCoreMLState{};
+#endif
+                              });
 
         static int select_corr_head = 0;
         if (ps.video_loaded && (!ps.play_video)) {

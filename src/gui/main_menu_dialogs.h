@@ -10,7 +10,8 @@ inline void HandleMainMenuDialogs(
     WindowStates &win,
     const std::string &media_root_dir,
     std::function<void()> print_metadata_fn,
-    std::function<void(const std::string &)> print_summary_fn) {
+    std::function<void(const std::string &)> print_summary_fn,
+    std::function<void()> nuke_inference_fn = nullptr) {
     auto &calib_state = win.calibration;
     auto &annot_state = win.annotation;
     auto &pm = ctx.pm;
@@ -175,6 +176,7 @@ inline void HandleMainMenuDialogs(
                 } else {
                     close_project(ctx);
                     win.reset();
+                    if (nuke_inference_fn) nuke_inference_fn();
                     pm = loaded;
                     if (setup_project(pm, skeleton, skeleton_map, &err)) {
                         on_project_loaded(ctx, print_metadata_fn, print_summary_fn);
@@ -219,6 +221,7 @@ inline void HandleMainMenuDialogs(
             } else {
                 close_project(ctx);
                 win.reset();
+                if (nuke_inference_fn) nuke_inference_fn();
                 pm = loaded;
                 if (setup_project(pm, skeleton, skeleton_map, &err)) {
                     on_project_loaded(ctx, print_metadata_fn, print_summary_fn);

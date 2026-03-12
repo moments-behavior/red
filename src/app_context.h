@@ -262,7 +262,10 @@ inline void close_project(AppContext &ctx) {
     ctx.pm.jarvis_models.clear();
     ctx.pm.active_jarvis_model = -1;
 
-    // 7. Reset frame state
+    // 7. Reset display state (project-specific: different videos need different settings)
+    ctx.display = DisplayState{};
+
+    // 8. Reset frame state
     ctx.current_frame_num = 0;
 
     // 8. Clear media state
