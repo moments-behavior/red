@@ -973,60 +973,19 @@ inline void DrawCalibrationToolWindow(
                                 state.laser_total_frames = dc_context->estimated_num_frames;
                             }
 
-                            // Auto-load videos for telecentric (fully deferred)
-                            if (state.project.is_telecentric()) {
-                                cb.deferred->enqueue([&state, &pm, &ps, &cb,
-                                                      &imgs_names, &ctx, dc_context, scene
-#ifdef __APPLE__
-                                                      , &mac_last_uploaded_frame
-#endif
-                                ]() {
-                                    try {
-                                        if (ps.video_loaded)
-                                            cb.unload_media();
-                                        imgs_names.clear();
-#ifdef __APPLE__
-                                        for (size_t ci = 0;
-                                             ci < mac_last_uploaded_frame.size(); ci++)
-                                            mac_last_uploaded_frame[ci] = -1;
-#endif
-                                        pm.media_folder = state.project.media_folder;
-                                        pm.camera_names.clear();
-                                        for (const auto &cn : state.project.camera_names)
-                                            pm.camera_names.push_back("Cam" + cn);
-                                        cb.load_videos();
-                                        cb.print_metadata();
-                                        state.tele_videos_loaded = true;
-
-                                        // Setup skeleton + import labels, but
-                                        // do NOT enable labeling panels yet
-                                        // (dock crash if panels appear before
-                                        // layout is established). User clicks
-                                        // "Start Labeling" to show panels.
-                                        int n_lm = CalibrationTool::count_landmarks_3d(
-                                            state.project.landmarks_3d_file);
-                                        if (n_lm > 0) {
-                                            setup_landmark_skeleton(
-                                                ctx.skeleton, n_lm, pm,
-                                                state.project.project_path);
-                                            pm.plot_keypoints_flag = false; // defer panel show
-                                            std::string labels_dir =
-                                                state.project.effective_labels_folder();
-                                            int imported = TelecentricDLT::import_dlt_labels(
-                                                ctx.annotations, 0, n_lm,
-                                                (int)scene->num_cams,
-                                                pm.camera_names, labels_dir);
-                                            if (imported > 0)
-                                                state.status = "Loaded " +
-                                                    std::to_string(imported) +
-                                                    " labels. Click 'Start Labeling' to view.";
-                                            else
-                                                state.status = "Videos loaded. Click 'Start Labeling' to annotate.";
-                                        }
-                                    } catch (const std::exception &e) {
-                                        state.status = std::string("Error: ") + e.what();
-                                    }
-                                });
+                            // Auto-load videos for telecentric (direct, like laser).
+                            // Do NOT setup skeleton or labels here — dock layout
+                            // isn't ready yet. User clicks "Start Labeling" or
+                            // "Load Videos" which handles skeleton + label import.
+                            if (state.project.is_telecentric() &&
+                                !ps.video_loaded) {
+                                pm.media_folder = state.project.media_folder;
+                                pm.camera_names.clear();
+                                for (const auto &cn : state.project.camera_names)
+                                    pm.camera_names.push_back("Cam" + cn);
+                                cb.load_videos();
+                                cb.print_metadata();
+                                state.tele_videos_loaded = true;
                             }
 
                             // Status
