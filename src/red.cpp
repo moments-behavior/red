@@ -644,107 +644,118 @@ int main(int argc, char **argv) {
                 }
             }
 
-            ImGui::SetNextWindowSize(ImVec2(500, 90), ImGuiCond_FirstUseEver);
-            if (ImGui::Begin("Frame Buffer")) {
-                // Horizontal scrollable row of frames with vertical text
-                float scale = 1.15f;
-                float font_size = ImGui::GetFontSize() * scale;
-                float item_w = font_size + 2.0f;
-                float item_h = ImGui::GetContentRegionAvail().y;
-                if (item_h < 40.0f) item_h = 40.0f;
-
-                ImGui::SetWindowFontScale(scale);
-                ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(1.0f, 0.0f));
-                ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(2.0f, 2.0f));
-                ImGui::BeginChild("##hscroll", ImVec2(0, 0), false,
-                                  ImGuiWindowFlags_HorizontalScrollbar |
-                                  ImGuiWindowFlags_NoScrollWithMouse |
-                                  ImGuiWindowFlags_NoScrollbar);
-                ImDrawList *dl = ImGui::GetWindowDrawList();
-
-                for (u32 i = 0; i < scene->size_of_buffer; i++) {
-                    int buf_idx =
-                        (i + ps.read_head) % scene->size_of_buffer;
-                    int frame_num =
-                        scene->display_buffer[visible_idx][buf_idx].frame_number;
-
-                    char label[32];
-                    if (input_is_imgs)
-                        snprintf(label, sizeof(label), "%d:%s",
-                                 frame_num, imgs_names[i].c_str());
-                    else
-                        snprintf(label, sizeof(label), "%d", frame_num);
-
-                    bool is_selected = (ps.pause_selected == (int)i);
-
-                    if (i > 0) ImGui::SameLine();
-
-                    ImGui::PushID((int)i);
-                    ImVec2 pos = ImGui::GetCursorScreenPos();
-                    if (ImGui::Selectable("##fbuf", is_selected, 0,
-                                          ImVec2(item_w, item_h))) {
-                        if (!is_selected) {
-                            ps.pause_selected = (int)i;
-                            selection_changed = true;
-                        }
-                    }
-
-                    // Draw vertical text over the selectable
-                    // Color code: green = fully labeled + triangulated,
-                    // teal = partially labeled, default = unlabeled
-                    const char *text = label;
-                    float cx = pos.x + item_w * 0.5f;
-                    ImU32 text_col;
-                    auto ann_it = annotations.find((u32)frame_num);
-                    if (ann_it != annotations.end() &&
-                        frame_has_any_keypoints(ann_it->second)) {
-                        bool complete = frame_is_complete(ann_it->second);
-                        if (complete && skeleton.has_skeleton && scene->num_cams > 1) {
-                            for (int k = 0; k < skeleton.num_nodes; ++k)
-                                if (!ann_it->second.kp3d[k].triangulated)
-                                    complete = false;
-                        }
-                        text_col = complete
-                            ? IM_COL32(51, 204, 77, 255)   // green
-                            : IM_COL32(51, 179, 179, 255); // teal
-                    } else {
-                        text_col = is_selected
-                            ? ImGui::GetColorU32(ImGuiCol_Text)
-                            : ImGui::GetColorU32(ImGuiCol_TextDisabled);
-                    }
-                    // Draw rotated text (90 deg CCW) — read bottom-to-top like a book spine
-                    // AddTextVertical draws from pos going upward (decreasing y)
-                    float str_w = ImGui::CalcTextSize(text).x;
-                    // Center horizontally: text renders rightward from pos.x by font_size
-                    // Center vertically: text goes upward from pos.y by str_w
-                    ImVec2 text_pos(pos.x + (item_w - font_size) * 0.5f,
-                                   pos.y + (item_h + str_w) * 0.5f);
-                    ImPlot::AddTextVertical(dl, text_pos, text_col, text);
-                    ImGui::PopID();
-
-                    // Auto-scroll to selection
-                    if (selection_changed && ps.pause_selected == (int)i)
-                        ImGui::SetScrollHereX(0.5f);
-                }
-
-                // Mouse wheel → horizontal scroll
-                if (ImGui::IsWindowHovered()) {
-                    float wheel = ImGui::GetIO().MouseWheel;
-                    if (wheel != 0.0f)
-                        ImGui::SetScrollX(ImGui::GetScrollX() - wheel * item_w * 3.0f);
-                }
-                ImGui::EndChild();
-                ImGui::PopStyleVar(2);  // WindowPadding, ItemSpacing
-                ImGui::SetWindowFontScale(1.0f);
-            }
-            ImGui::End();
-
             select_corr_head =
                 (ps.pause_selected + ps.read_head) % scene->size_of_buffer;
             current_frame_num =
                 scene->display_buffer[visible_idx][select_corr_head]
                     .frame_number;
+        }
 
+        // Frame Buffer window — always visible when video is loaded,
+        // grayed out when playing to avoid disruptive tab appearing/disappearing.
+        if (ps.video_loaded) {
+            ImGui::SetNextWindowSize(ImVec2(500, 90), ImGuiCond_FirstUseEver);
+            if (ImGui::Begin("Frame Buffer")) {
+                if (ps.play_video) {
+                    ImGui::BeginDisabled();
+                    ImGui::TextDisabled("Playing...");
+                    ImGui::EndDisabled();
+                } else {
+                    int visible_idx = 0;
+                    if (!ps.pause_seeked) {
+                        for (int i = 0; i < scene->num_cams; i++) {
+                            if (window_was_decoding[pm.camera_names[i]]) {
+                                visible_idx = i;
+                                break;
+                            }
+                        }
+                    }
+
+                    // Horizontal scrollable row of frames with vertical text
+                    float scale = 1.15f;
+                    float font_size = ImGui::GetFontSize() * scale;
+                    float item_w = font_size + 2.0f;
+                    float item_h = ImGui::GetContentRegionAvail().y;
+                    if (item_h < 40.0f) item_h = 40.0f;
+
+                    ImGui::SetWindowFontScale(scale);
+                    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(1.0f, 0.0f));
+                    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(2.0f, 2.0f));
+                    ImGui::BeginChild("##hscroll", ImVec2(0, 0), false,
+                                      ImGuiWindowFlags_HorizontalScrollbar |
+                                      ImGuiWindowFlags_NoScrollWithMouse |
+                                      ImGuiWindowFlags_NoScrollbar);
+                    ImDrawList *dl = ImGui::GetWindowDrawList();
+
+                    for (u32 i = 0; i < scene->size_of_buffer; i++) {
+                        int buf_idx =
+                            (i + ps.read_head) % scene->size_of_buffer;
+                        int frame_num =
+                            scene->display_buffer[visible_idx][buf_idx].frame_number;
+
+                        char label[32];
+                        if (input_is_imgs)
+                            snprintf(label, sizeof(label), "%d:%s",
+                                     frame_num, imgs_names[i].c_str());
+                        else
+                            snprintf(label, sizeof(label), "%d", frame_num);
+
+                        bool is_selected = (ps.pause_selected == (int)i);
+
+                        if (i > 0) ImGui::SameLine();
+
+                        ImGui::PushID((int)i);
+                        ImVec2 pos = ImGui::GetCursorScreenPos();
+                        if (ImGui::Selectable("##fbuf", is_selected, 0,
+                                              ImVec2(item_w, item_h))) {
+                            if (!is_selected) {
+                                ps.pause_selected = (int)i;
+                            }
+                        }
+
+                        // Draw vertical text over the selectable
+                        // Color code: green = fully labeled + triangulated,
+                        // teal = partially labeled, default = unlabeled
+                        const char *text = label;
+                        float cx = pos.x + item_w * 0.5f;
+                        ImU32 text_col;
+                        auto ann_it = annotations.find((u32)frame_num);
+                        if (ann_it != annotations.end() &&
+                            frame_has_any_keypoints(ann_it->second)) {
+                            bool complete = frame_is_complete(ann_it->second);
+                            if (complete && skeleton.has_skeleton && scene->num_cams > 1) {
+                                for (int k = 0; k < skeleton.num_nodes; ++k)
+                                    if (!ann_it->second.kp3d[k].triangulated)
+                                        complete = false;
+                            }
+                            text_col = complete
+                                ? IM_COL32(51, 204, 77, 255)   // green
+                                : IM_COL32(51, 179, 179, 255); // teal
+                        } else {
+                            text_col = is_selected
+                                ? ImGui::GetColorU32(ImGuiCol_Text)
+                                : ImGui::GetColorU32(ImGuiCol_TextDisabled);
+                        }
+                        // Draw rotated text (90 deg CCW) — read bottom-to-top like a book spine
+                        float str_w = ImGui::CalcTextSize(text).x;
+                        ImVec2 text_pos(pos.x + (item_w - font_size) * 0.5f,
+                                       pos.y + (item_h + str_w) * 0.5f);
+                        ImPlot::AddTextVertical(dl, text_pos, text_col, text);
+                        ImGui::PopID();
+                    }
+
+                    // Mouse wheel → horizontal scroll
+                    if (ImGui::IsWindowHovered()) {
+                        float wheel = ImGui::GetIO().MouseWheel;
+                        if (wheel != 0.0f)
+                            ImGui::SetScrollX(ImGui::GetScrollX() - wheel * item_w * 3.0f);
+                    }
+                    ImGui::EndChild();
+                    ImGui::PopStyleVar(2);  // WindowPadding, ItemSpacing
+                    ImGui::SetWindowFontScale(1.0f);
+                }
+            }
+            ImGui::End();
         }
 
         // Render a video frame
