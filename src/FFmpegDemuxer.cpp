@@ -52,7 +52,7 @@ uint32_t FFmpegDemuxer::GetNumFrames() const { return nb_frames; }
 
 double FFmpegDemuxer::GetDuration() const { return fduration; }
 
-double FFmpegDemuxer::GetFramerate() const { return framerate; }
+double FFmpegDemuxer::GetFramerate() const { return avg_framerate; }
 
 double FFmpegDemuxer::GetAvgFramerate() const { return avg_framerate; }
 
