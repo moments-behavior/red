@@ -260,7 +260,7 @@ inline void DrawCalibrationToolWindow(
                         !state.project.media_folder.empty() &&
                         !state.project.camera_names.empty()) {
                         cb.deferred->enqueue([&state, &pm, &ps, &cb,
-                                              &imgs_names, &ctx, dc_context
+                                              &imgs_names, dc_context
 #ifdef __APPLE__
                                               , &mac_last_uploaded_frame
 #endif
@@ -281,45 +281,10 @@ inline void DrawCalibrationToolWindow(
                                 cb.load_videos();
                                 cb.print_metadata();
                                 state.tele_videos_loaded = true;
-
-                                // Auto-start labeling if no labels folder yet
-                                if (state.project.landmark_labels_folder.empty()) {
-                                    int n_landmarks = CalibrationTool::count_landmarks_3d(
-                                        state.project.landmarks_3d_file);
-                                    if (n_landmarks > 0) {
-                                        auto &skeleton = ctx.skeleton;
-                                        skeleton.name = "Target";
-                                        skeleton.num_nodes = n_landmarks;
-                                        skeleton.num_edges = 0;
-                                        skeleton.has_skeleton = true;
-                                        skeleton.node_colors.clear();
-                                        skeleton.edges.clear();
-                                        skeleton.node_names.clear();
-                                        for (int i = 0; i < n_landmarks; i++) {
-                                            skeleton.node_names.push_back(
-                                                "Pt" + std::to_string(i));
-                                            skeleton.node_colors.push_back(
-                                                (ImVec4)ImColor::HSV(
-                                                    i / (float)n_landmarks,
-                                                    0.8f, 0.8f));
-                                        }
-                                        pm.keypoints_root_folder =
-                                            (std::filesystem::path(
-                                                 state.project.project_path) /
-                                             "labeled_data").string();
-                                        std::error_code ec;
-                                        std::filesystem::create_directories(
-                                            pm.keypoints_root_folder, ec);
-                                        pm.plot_keypoints_flag = true;
-                                        pm.camera_params.clear();
-                                    }
-                                }
-
                                 state.status =
                                     "Loaded " +
                                     std::to_string(state.project.camera_names.size()) +
-                                    " cameras" +
-                                    (pm.plot_keypoints_flag ? ". Labeling ready." : ".");
+                                    " cameras. Click 'Start Labeling' to annotate.";
                             } catch (const std::exception &e) {
                                 state.status =
                                     std::string("Error: ") + e.what();
@@ -928,10 +893,10 @@ inline void DrawCalibrationToolWindow(
                                 state.laser_total_frames = dc_context->estimated_num_frames;
                             }
 
-                            // Auto-load videos + start labeling for telecentric
+                            // Auto-load videos for telecentric
                             if (state.project.is_telecentric()) {
                                 cb.deferred->enqueue([&state, &pm, &ps, &cb,
-                                                      &imgs_names, &ctx, dc_context
+                                                      &imgs_names, dc_context
 #ifdef __APPLE__
                                                       , &mac_last_uploaded_frame
 #endif
@@ -952,42 +917,10 @@ inline void DrawCalibrationToolWindow(
                                         cb.load_videos();
                                         cb.print_metadata();
                                         state.tele_videos_loaded = true;
-
-                                        // Auto-start labeling if 3D landmarks available
-                                        int n_landmarks = CalibrationTool::count_landmarks_3d(
-                                            state.project.landmarks_3d_file);
-                                        if (n_landmarks > 0) {
-                                            auto &skeleton = ctx.skeleton;
-                                            skeleton.name = "Target";
-                                            skeleton.num_nodes = n_landmarks;
-                                            skeleton.num_edges = 0;
-                                            skeleton.has_skeleton = true;
-                                            skeleton.node_colors.clear();
-                                            skeleton.edges.clear();
-                                            skeleton.node_names.clear();
-                                            for (int i = 0; i < n_landmarks; i++) {
-                                                skeleton.node_names.push_back(
-                                                    "Pt" + std::to_string(i));
-                                                skeleton.node_colors.push_back(
-                                                    (ImVec4)ImColor::HSV(
-                                                        i / (float)n_landmarks,
-                                                        0.8f, 0.8f));
-                                            }
-                                            pm.keypoints_root_folder =
-                                                (std::filesystem::path(
-                                                     state.project.project_path) /
-                                                 "labeled_data").string();
-                                            std::error_code ec;
-                                            std::filesystem::create_directories(
-                                                pm.keypoints_root_folder, ec);
-                                            pm.plot_keypoints_flag = true;
-                                            pm.camera_params.clear();
-                                        }
-
                                         state.status =
                                             "Loaded " +
                                             std::to_string(state.project.camera_names.size()) +
-                                            " cameras. Labeling ready.";
+                                            " cameras. Click 'Start Labeling' to annotate.";
                                     } catch (const std::exception &e) {
                                         state.status =
                                             std::string("Error: ") + e.what();
