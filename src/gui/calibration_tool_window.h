@@ -119,6 +119,8 @@ struct CalibrationToolState {
     int tele_method = 0; // 0=Linear DLT, 1=DLT+k1, 2=DLT+k1k2
     // History of calibration runs for comparison
     std::vector<TelecentricDLT::DLTResult> tele_run_history;
+    // Deferred label import (waits N frames for dock layout to stabilize)
+    int tele_deferred_label_frames = 0;
 
     // Laser refinement
     bool laser_ready = false;
@@ -294,54 +296,22 @@ inline void DrawCalibrationToolWindow(
                     state.show_create_dialog = false;
                     state.show = true;
 
-                    // Auto-load telecentric videos on project open (deferred)
+                    // Auto-load telecentric videos on project open (direct, like laser)
+                    // Label import is deferred by a few frames to avoid dock crash.
                     if (state.project.is_telecentric() &&
                         !state.project.media_folder.empty() &&
                         !state.project.camera_names.empty()) {
-                        cb.deferred->enqueue([&state, &pm, &ps, &cb,
-                                              &imgs_names, &ctx, dc_context, scene
-#ifdef __APPLE__
-                                              , &mac_last_uploaded_frame
-#endif
-                        ]() {
-                            try {
-                                if (ps.video_loaded)
-                                    cb.unload_media();
-                                imgs_names.clear();
-#ifdef __APPLE__
-                                for (size_t ci = 0;
-                                     ci < mac_last_uploaded_frame.size(); ci++)
-                                    mac_last_uploaded_frame[ci] = -1;
-#endif
-                                pm.media_folder = state.project.media_folder;
-                                pm.camera_names.clear();
-                                for (const auto &cn : state.project.camera_names)
-                                    pm.camera_names.push_back("Cam" + cn);
-                                cb.load_videos();
-                                cb.print_metadata();
-                                state.tele_videos_loaded = true;
-
-                                // Setup skeleton + import labels
-                                int n_lm = CalibrationTool::count_landmarks_3d(
-                                    state.project.landmarks_3d_file);
-                                if (n_lm > 0) {
-                                    setup_landmark_skeleton(ctx.skeleton, n_lm,
-                                        pm, state.project.project_path);
-                                    std::string labels_dir =
-                                        state.project.effective_labels_folder();
-                                    int imported = TelecentricDLT::import_dlt_labels(
-                                        ctx.annotations, 0, n_lm,
-                                        (int)scene->num_cams, pm.camera_names,
-                                        labels_dir);
-                                    if (imported > 0)
-                                        state.status = "Loaded " +
-                                            std::to_string(imported) +
-                                            " labels. Labeling active.";
-                                }
-                            } catch (const std::exception &e) {
-                                state.status = std::string("Error: ") + e.what();
-                            }
-                        });
+                        if (ps.video_loaded)
+                            cb.unload_media();
+                        pm.media_folder = state.project.media_folder;
+                        pm.camera_names.clear();
+                        for (const auto &cn : state.project.camera_names)
+                            pm.camera_names.push_back("Cam" + cn);
+                        cb.load_videos();
+                        cb.print_metadata();
+                        state.tele_videos_loaded = true;
+                        // Schedule label import after dock layout stabilizes
+                        state.tele_deferred_label_frames = 3;
                     }
 
                     // Restore DLT results from persisted metadata
@@ -986,6 +956,8 @@ inline void DrawCalibrationToolWindow(
                                 cb.load_videos();
                                 cb.print_metadata();
                                 state.tele_videos_loaded = true;
+                                // Schedule label import after dock layout stabilizes
+                                state.tele_deferred_label_frames = 3;
                             }
 
                             // Status
@@ -1023,6 +995,30 @@ inline void DrawCalibrationToolWindow(
             state.laser_focus_window = false;
         }
         if (ImGui::Begin("Calibration Tool", &state.show)) {
+
+            // Deferred label import: wait a few frames for dock layout
+            if (state.tele_deferred_label_frames > 0) {
+                state.tele_deferred_label_frames--;
+                if (state.tele_deferred_label_frames == 0 &&
+                    state.tele_videos_loaded) {
+                    int n_lm = CalibrationTool::count_landmarks_3d(
+                        state.project.landmarks_3d_file);
+                    if (n_lm > 0) {
+                        setup_landmark_skeleton(ctx.skeleton, n_lm, pm,
+                                                 state.project.project_path);
+                        std::string labels_dir =
+                            state.project.effective_labels_folder();
+                        int imported = TelecentricDLT::import_dlt_labels(
+                            ctx.annotations, 0, n_lm,
+                            (int)scene->num_cams, pm.camera_names,
+                            labels_dir);
+                        if (imported > 0)
+                            state.status = "Loaded " +
+                                std::to_string(imported) +
+                                " labels. Labeling active.";
+                    }
+                }
+            }
 
             // ── Section 1: Project Info ──
             if (ImGui::CollapsingHeader("Project", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -3049,6 +3045,7 @@ inline void DrawCalibrationToolWindow(
         state.tele_dlt_done = false;
         state.tele_dlt_status.clear();
         state.tele_run_history.clear();
+        state.tele_deferred_label_frames = 0;
         state.annot_popup_name.clear();
         state.annot_popup_root.clear();
         state.annot_popup_video_folder.clear();
