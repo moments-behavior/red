@@ -141,7 +141,13 @@ inline void HandleMainMenuDialogs(
             }
 
             if (is_calib_project) {
+                // Nuke old project state before loading calibration project
+                close_project(ctx);
+                win.reset();
+                if (nuke_inference_fn) nuke_inference_fn();
+
                 // Route to Calibration Tool loader
+                auto &calib_state = win.calibration;
                 CalibrationTool::CalibProject loaded;
                 std::string err;
                 if (CalibrationTool::load_project(&loaded, cfg_path.string(), &err)) {

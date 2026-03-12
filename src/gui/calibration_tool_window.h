@@ -54,6 +54,9 @@ inline void DrawCalibrationToolWindow(
             std::string selected =
                 ImGuiFileDialog::Instance()->GetFilePathName();
             if (!selected.empty()) {
+                // Clean up any existing project state
+                close_project(ctx);
+
                 CalibrationTool::CalibProject loaded;
                 std::string err;
                 if (CalibrationTool::load_project(
