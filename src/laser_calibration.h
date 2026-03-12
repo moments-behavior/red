@@ -161,7 +161,9 @@ struct DetectionProgress {
 
 // Get estimated frame count from a video file.
 inline int get_video_frame_count(const std::string &path) {
-    AVFormatContext *ctx = nullptr;
+    AVFormatContext *ctx = avformat_alloc_context();
+    if (!ctx) return 0;
+    ctx->max_analyze_duration = 5 * AV_TIME_BASE;
     if (avformat_open_input(&ctx, path.c_str(), nullptr, nullptr) < 0)
         return 0;
     if (avformat_find_stream_info(ctx, nullptr) < 0) {

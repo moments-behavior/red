@@ -562,8 +562,17 @@ FFmpegDemuxer::CreateFormatContext(const char *szFilePath,
         }
     }
 
-    AVFormatContext *ctx = nullptr;
-    // av_register_all();
+    AVFormatContext *ctx = avformat_alloc_context();
+    if (!ctx) {
+        cerr << "Can't allocate AVFormatContext\n";
+        return nullptr;
+    }
+
+    // Some high-framerate MP4s have broken headers that cause
+    // analyzeduration to default to 0, preventing stream probing.
+    // Ensure FFmpeg always analyzes at least 5 seconds of data.
+    ctx->max_analyze_duration = 5 * AV_TIME_BASE;
+
     auto err = avformat_open_input(&ctx, szFilePath, nullptr, &options);
     if (err < 0 || nullptr == ctx) {
         cerr << "Can't open " << szFilePath << ": " << AvErrorToString(err)

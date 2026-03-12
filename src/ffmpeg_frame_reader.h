@@ -32,6 +32,10 @@ class FrameReader {
     bool open(const std::string &path) {
         close();
 
+        fmt_ctx_ = avformat_alloc_context();
+        if (!fmt_ctx_) return false;
+        fmt_ctx_->max_analyze_duration = 5 * AV_TIME_BASE;
+
         if (avformat_open_input(&fmt_ctx_, path.c_str(), nullptr, nullptr) < 0)
             return false;
         if (avformat_find_stream_info(fmt_ctx_, nullptr) < 0) {
