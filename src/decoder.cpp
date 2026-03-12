@@ -65,6 +65,7 @@ void decoder_process(DecoderContext *dc_context, FFmpegDemuxer *demuxer,
                      std::string cam_name, PictureBuffer *display_buffer,
                      int size_of_buffer, SeekInfo *seek_info,
                      bool use_cpu_buffer) {
+  try {
     CUdeviceptr pTmpImage = 0;
     ck(cuInit(0));
     CUcontext cuContext = NULL;
@@ -105,6 +106,16 @@ void decoder_process(DecoderContext *dc_context, FFmpegDemuxer *demuxer,
             for (int i = 0; i < size_of_buffer; i++) {
                 display_buffer[i].available_to_write = true;
             }
+
+            if (!seek_success_flag) {
+                std::cerr << "[decoder " << cam_name
+                          << "] Seek failed for frame "
+                          << seek_info->seek_frame << "; skipping\n";
+                seek_info->use_seek = false;
+                seek_info->seek_done = true;
+                continue;
+            }
+
             nFrameReturned = dec.Decode(NULL, 0, CUVID_PKT_DISCONTINUITY);
 
             for (int i = 0; i < nFrameReturned; i++) {
@@ -237,6 +248,14 @@ void decoder_process(DecoderContext *dc_context, FFmpegDemuxer *demuxer,
             }
         }
     } while (!(dc_context->stop_flag));
+
+  } catch (const std::exception &e) {
+    std::cerr << "[decoder " << cam_name << "] Fatal error: " << e.what()
+              << std::endl;
+  } catch (...) {
+    std::cerr << "[decoder " << cam_name << "] Unknown fatal error"
+              << std::endl;
+  }
 }
 
 #else // __APPLE__
@@ -261,6 +280,7 @@ void decoder_process(DecoderContext *dc_context, FFmpegDemuxer *demuxer,
                      std::string cam_name, PictureBuffer *display_buffer,
                      int size_of_buffer, SeekInfo *seek_info,
                      bool /*use_cpu_buffer*/) {
+  try {
     // Run on performance cores
     pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
 
@@ -336,12 +356,21 @@ void decoder_process(DecoderContext *dc_context, FFmpegDemuxer *demuxer,
             uint64_t key_frame_num = demuxer->FindClosestKeyFrameFNI(
                 seek_info->seek_frame, dc_context->seek_interval);
             SeekContext sc(key_frame_num);
-            demuxer->Seek(sc, pVideo, nVideoBytes, pktinfo);
+            bool seek_ok = demuxer->Seek(sc, pVideo, nVideoBytes, pktinfo);
 
             // 3. Release all pixel buffers in display slots
             for (int i = 0; i < size_of_buffer; i++) {
                 mac_release_pixbuf_slot(display_buffer[i]);
                 display_buffer[i].available_to_write = true;
+            }
+
+            if (!seek_ok) {
+                std::cerr << "[decoder " << cam_name
+                          << "] Seek failed for frame "
+                          << seek_info->seek_frame << "; skipping\n";
+                seek_info->use_seek  = false;
+                seek_info->seek_done = true;
+                continue;
             }
 
             // 4. Recreate VT session (seek invalidates existing decode state)
@@ -432,6 +461,14 @@ void decoder_process(DecoderContext *dc_context, FFmpegDemuxer *demuxer,
     vt_dec.flush();
     for (int i = 0; i < size_of_buffer; i++)
         mac_release_pixbuf_slot(display_buffer[i]);
+
+  } catch (const std::exception &e) {
+    std::cerr << "[decoder " << cam_name << "] Fatal error: " << e.what()
+              << std::endl;
+  } catch (...) {
+    std::cerr << "[decoder " << cam_name << "] Unknown fatal error"
+              << std::endl;
+  }
 }
 
 #endif // __APPLE__

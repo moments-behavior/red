@@ -212,41 +212,65 @@ load_videos(std::map<std::string, std::string> &selected_files,
             RenderScene *scene, int label_buffer_size,
             std::vector<std::thread> &decoder_threads,
             std::vector<bool> &is_view_focused) {
+    // Track which camera names successfully loaded (in order) so that
+    // camera_names stays in sync with demuxers after skipping failures.
+    std::vector<std::string> loaded_cam_names;
+
     if (selected_files.empty()) {
         for (const auto &cam_string : pm.camera_names) {
-            window_need_decoding[cam_string].store(true);
-            window_was_decoding[cam_string] = true;
             std::map<std::string, std::string> m;
             std::string media_filename =
                 (std::filesystem::path(pm.media_folder) / (cam_string + ".mp4"))
                     .string();
-            FFmpegDemuxer *demuxer =
-                new FFmpegDemuxer(media_filename.c_str(), m);
-            demuxers.push_back(demuxer);
+            try {
+                FFmpegDemuxer *demuxer =
+                    new FFmpegDemuxer(media_filename.c_str(), m);
+                demuxers.push_back(demuxer);
+                loaded_cam_names.push_back(cam_string);
+                window_need_decoding[cam_string].store(true);
+                window_was_decoding[cam_string] = true;
+            } catch (const std::exception &e) {
+                std::cerr << "[load_videos] Skipping camera '" << cam_string
+                          << "': " << e.what() << std::endl;
+            }
         }
-        std::map<std::string, std::string> m;
-        std::string media_filename = (std::filesystem::path(pm.media_folder) /
-                                      (pm.camera_names[0] + ".mp4"))
-                                         .string();
-        FFmpegDemuxer dummy_dmuxer(media_filename.c_str(), m);
-        dc_context->seek_interval = (int)dummy_dmuxer.FindKeyFrameInterval();
-        dc_context->video_fps = dummy_dmuxer.GetFramerate();
+        // Use the first successfully loaded demuxer for seek_interval/fps
+        if (!demuxers.empty()) {
+            dc_context->seek_interval =
+                (int)demuxers[0]->FindKeyFrameInterval();
+            dc_context->video_fps = demuxers[0]->GetFramerate();
+        }
+        pm.camera_names = loaded_cam_names;
     } else {
         for (const auto &elem : selected_files) {
             std::size_t cam_string_mp4_position = elem.first.find("mp4");
             std::string cam_string =
                 elem.first.substr(0, cam_string_mp4_position - 1);
-            pm.camera_names.push_back(cam_string);
-            window_need_decoding[cam_string].store(true);
-            window_was_decoding[cam_string] = true;
             std::map<std::string, std::string> m;
-            FFmpegDemuxer *demuxer = new FFmpegDemuxer(elem.second.c_str(), m);
-            demuxers.push_back(demuxer);
+            try {
+                FFmpegDemuxer *demuxer =
+                    new FFmpegDemuxer(elem.second.c_str(), m);
+                demuxers.push_back(demuxer);
+                loaded_cam_names.push_back(cam_string);
+                window_need_decoding[cam_string].store(true);
+                window_was_decoding[cam_string] = true;
+            } catch (const std::exception &e) {
+                std::cerr << "[load_videos] Skipping camera '" << cam_string
+                          << "' (" << elem.second << "): " << e.what()
+                          << std::endl;
+            }
         }
-        std::map<std::string, std::string> m;
-        FFmpegDemuxer dummy_dmuxer(selected_files.begin()->second.c_str(), m);
-        dc_context->seek_interval = (int)dummy_dmuxer.FindKeyFrameInterval();
-        dc_context->video_fps = dummy_dmuxer.GetFramerate();
+        if (!demuxers.empty()) {
+            dc_context->seek_interval =
+                (int)demuxers[0]->FindKeyFrameInterval();
+            dc_context->video_fps = demuxers[0]->GetFramerate();
+        }
+        pm.camera_names = loaded_cam_names;
+    }
+
+    if (demuxers.empty()) {
+        std::cerr << "[load_videos] No cameras could be loaded" << std::endl;
+        return;
     }
 
     scene->num_cams = demuxers.size();

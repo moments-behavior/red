@@ -279,8 +279,8 @@ int64_t FFmpegDemuxer::FindKeyFrameInterval() {
                 eof = true;
                 break;
             } else {
-                LOG(FATAL) << "Error: av_read_frame failed with "
-                           << AVERROR(ret);
+                cerr << "Error: av_read_frame failed with "
+                     << AvErrorToString(ret) << endl;
             }
             break;
         }
@@ -299,7 +299,7 @@ int64_t FFmpegDemuxer::FindKeyFrameInterval() {
             break;
         }
     }
-    return cnt - 1;
+    return (cnt > 0) ? cnt - 1 : 1;
 }
 
 // int64_t FFmpegDemuxer::FindKeyFrameInterval() {
@@ -403,7 +403,8 @@ bool FFmpegDemuxer::Seek(SeekContext &seekCtx, uint8_t *&pVideo,
                   << std::endl;
     }
 
-    // Seek for single frame;
+    // Seek for single frame; returns false on error instead of throwing.
+    bool seek_error = false;
     auto seek_frame = [&](SeekContext const &seek_ctx, int flags) {
         bool seek_backward = false;
         int64_t timestamp = 0;
@@ -425,12 +426,14 @@ bool FFmpegDemuxer::Seek(SeekContext &seekCtx, uint8_t *&pVideo,
                                               : flags);
             break;
         default:
-            throw runtime_error("Invalid seek mode");
+            cerr << "Invalid seek criteria" << endl;
+            seek_error = true;
+            return;
         }
 
         if (ret < 0) {
-            throw runtime_error("Error seeking for frame: " +
-                                AvErrorToString(ret));
+            cerr << "Error seeking for frame: " << AvErrorToString(ret) << endl;
+            seek_error = true;
         }
     };
 
@@ -446,8 +449,8 @@ bool FFmpegDemuxer::Seek(SeekContext &seekCtx, uint8_t *&pVideo,
             target_ts = TsFromTime(seek_ctx.seek_frame);
             break;
         default:
-            throw runtime_error("Invalid seek criteria");
-            break;
+            cerr << "Invalid seek criteria" << endl;
+            return 0;  // treat as done to stop the loop
         }
 
         if (pkt_data.dts == target_ts) {
@@ -466,6 +469,7 @@ bool FFmpegDemuxer::Seek(SeekContext &seekCtx, uint8_t *&pVideo,
         // Repetititive seek until seek condition is satisfied;
         SeekContext tmp_ctx(seek_ctx.seek_frame);
         seek_frame(tmp_ctx, AVSEEK_FLAG_ANY);
+        if (seek_error) return;
 
         int condition = 0;
         do {
@@ -478,6 +482,7 @@ bool FFmpegDemuxer::Seek(SeekContext &seekCtx, uint8_t *&pVideo,
             if (condition > 0) {
                 tmp_ctx.seek_frame--;
                 seek_frame(tmp_ctx, AVSEEK_FLAG_ANY);
+                if (seek_error) return;
             }
             // Need to read more frames until we reach requested number;
             else if (condition < 0) {
@@ -493,6 +498,7 @@ bool FFmpegDemuxer::Seek(SeekContext &seekCtx, uint8_t *&pVideo,
     auto seek_for_prev_key_frame = [&](PacketData &pkt_data,
                                        SeekContext &seek_ctx) {
         seek_frame(seek_ctx, AVSEEK_FLAG_BACKWARD);
+        if (seek_error) return;
 
         Demux(pVideo, rVideoBytes, pkt_data, ppSEI, pSEIBytes);
         seek_ctx.out_frame_pts = pkt_data.pts;
@@ -507,11 +513,11 @@ bool FFmpegDemuxer::Seek(SeekContext &seekCtx, uint8_t *&pVideo,
         seek_for_prev_key_frame(pktData, seekCtx);
         break;
     default:
-        throw runtime_error("Unsupported seek mode");
-        break;
+        cerr << "Unsupported seek mode" << endl;
+        return false;
     }
 
-    return true;
+    return !seek_error;
 }
 
 int FFmpegDemuxer::ReadPacket(void *opaque, uint8_t *pBuf, int nBuf) {
