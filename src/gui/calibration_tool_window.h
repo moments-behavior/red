@@ -2372,6 +2372,7 @@ inline void DrawCalibrationToolWindow(
         state.status.clear();
         state.aruco_videos_loaded = false;
         state.tele_videos_loaded = false;
+        state.project.camera_names.clear();
         state.laser_ready = false;
         state.laser_done = false;
         state.laser_status.clear();

@@ -532,7 +532,7 @@ FFmpegDemuxer::~FFmpegDemuxer() {
         av_bsf_free(&bsfc_annexb);
     }
 
-    if (bsfc_annexb) {
+    if (bsfc_sei) {
         av_bsf_free(&bsfc_sei);
     }
 
