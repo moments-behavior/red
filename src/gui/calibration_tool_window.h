@@ -1045,6 +1045,96 @@ inline void DrawCalibrationToolWindow(
                     }
                 }
 
+                // ── Start Labeling button ──
+                if (state.tele_videos_loaded && cached_3d_count > 0) {
+                    ImGui::Spacing();
+                    auto &skeleton = ctx.skeleton;
+                    bool labeling_active = skeleton.has_skeleton &&
+                                           skeleton.num_nodes == cached_3d_count &&
+                                           pm.plot_keypoints_flag;
+                    if (!labeling_active) {
+                        if (ImGui::Button("Start Labeling##tele_label")) {
+                            // Create skeleton with one keypoint per landmark
+                            skeleton.name = "Target";
+                            skeleton.num_nodes = cached_3d_count;
+                            skeleton.num_edges = 0;
+                            skeleton.has_skeleton = true;
+                            skeleton.node_colors.clear();
+                            skeleton.edges.clear();
+                            skeleton.node_names.clear();
+                            for (int i = 0; i < cached_3d_count; i++) {
+                                skeleton.node_names.push_back(
+                                    "Pt" + std::to_string(i));
+                                skeleton.node_colors.push_back(
+                                    (ImVec4)ImColor::HSV(
+                                        i / (float)cached_3d_count,
+                                        0.8f, 0.8f));
+                            }
+                            // Set up annotation directory
+                            pm.keypoints_root_folder =
+                                (std::filesystem::path(
+                                     state.project.project_path) /
+                                 "labeled_data").string();
+                            std::error_code ec;
+                            std::filesystem::create_directories(
+                                pm.keypoints_root_folder, ec);
+                            pm.plot_keypoints_flag = true;
+                            // Ensure camera_params is empty (no triangulation)
+                            pm.camera_params.clear();
+                            state.status = "Labeling enabled (" +
+                                std::to_string(cached_3d_count) +
+                                " landmarks). Use Labeling Tool to annotate.";
+                        }
+                        ImGui::SameLine();
+                        ImGui::TextDisabled(
+                            "Set up %d-point skeleton for labeling",
+                            cached_3d_count);
+                    } else {
+                        ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f),
+                            "Labeling active (%d landmarks)", cached_3d_count);
+
+                        // Export Labels for DLT
+                        ImGui::SameLine();
+                        if (ImGui::Button("Export Labels for DLT##tele")) {
+                            std::string export_folder =
+                                state.project.project_path + "/red_data";
+                            int frame_num = ps.to_display_frame_number;
+                            // Use pm.camera_names (has "Cam" prefix)
+                            auto export_result =
+                                TelecentricDLT::export_labels_for_dlt(
+                                    ctx.annotations, frame_num,
+                                    skeleton.num_nodes,
+                                    (int)scene->num_cams,
+                                    pm.camera_names,
+                                    export_folder,
+                                    skeleton.name);
+
+                            if (export_result.success) {
+                                state.project.landmark_labels_folder =
+                                    export_folder;
+                                char msg[256];
+                                snprintf(msg, sizeof(msg),
+                                    "Exported %d labels across %d cameras "
+                                    "to %s",
+                                    export_result.total_labeled,
+                                    export_result.num_cameras,
+                                    export_folder.c_str());
+                                ctx.toasts.pushSuccess(msg);
+                                state.status = msg;
+                            } else {
+                                ctx.toasts.pushError(
+                                    "Export failed: " +
+                                    export_result.error);
+                            }
+                        }
+                        if (ImGui::IsItemHovered()) {
+                            ImGui::SetTooltip(
+                                "Export labels from current frame as "
+                                "DLT-format Cam*.csv files");
+                        }
+                    }
+                }
+
                 ImGui::Spacing();
                 ImGui::Separator();
 

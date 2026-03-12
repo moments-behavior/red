@@ -124,12 +124,19 @@ inline void DrawLabelingToolWindow(
                     (ImVec4)ImColor::HSV(0.8, 0.9f, 0.5f));
             }
 
-            ImGui::BeginDisabled(!keypoints_find);
+            bool can_triangulate = keypoints_find &&
+                                   !pm.camera_params.empty();
+            ImGui::BeginDisabled(!can_triangulate);
             if (ImGui::Button("Triangulate")) {
                 reprojection(annotations.at(current_frame_num),
                              &skeleton, pm.camera_params, scene);
             }
             ImGui::EndDisabled();
+            if (!can_triangulate && keypoints_find &&
+                pm.camera_params.empty()) {
+                ImGui::SameLine();
+                ImGui::TextDisabled("(no calibration)");
+            }
 
             if (apply_color) {
                 ImGui::PopStyleColor(3);

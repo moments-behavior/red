@@ -781,6 +781,86 @@ inline CrossValidationResult cross_validate_camera(
     return cv;
 }
 
+// ── Label Export ─────────────────────────────────────────────────────────────
+
+// Export annotation keypoints as DLT-format 2D label CSVs.
+// Reads keypoints from a single frame (frame_num) across all cameras.
+// Each keypoint index becomes a landmark index in the output.
+// Output: one Cam<serial>.csv per camera with format: "Target\nidx,0,x,y\n..."
+// Unlabeled keypoints are written with sentinel value 1e7.
+struct ExportLabelsResult {
+    bool success = false;
+    std::string error;
+    std::string output_folder;
+    int num_cameras = 0;
+    int num_landmarks = 0;
+    int total_labeled = 0;
+};
+
+template <typename AnnotationMap>
+inline ExportLabelsResult export_labels_for_dlt(
+    const AnnotationMap &annotations,
+    int frame_num,
+    int num_nodes,
+    int num_cameras,
+    const std::vector<std::string> &camera_names,
+    const std::string &output_folder,
+    const std::string &skeleton_name = "Target") {
+
+    ExportLabelsResult result;
+    namespace fs = std::filesystem;
+
+    std::error_code ec;
+    fs::create_directories(output_folder, ec);
+    if (ec) {
+        result.error = "Cannot create folder: " + output_folder;
+        return result;
+    }
+
+    if (annotations.find(frame_num) == annotations.end()) {
+        result.error = "Frame " + std::to_string(frame_num) +
+                       " has no annotations";
+        return result;
+    }
+
+    const auto &fa = annotations.at(frame_num);
+    result.num_cameras = num_cameras;
+    result.num_landmarks = num_nodes;
+    result.output_folder = output_folder;
+
+    for (int c = 0; c < num_cameras; c++) {
+        std::string cam_name = (c < (int)camera_names.size())
+                                   ? camera_names[c]
+                                   : "camera" + std::to_string(c);
+        std::string path = output_folder + "/" + cam_name + ".csv";
+        std::ofstream f(path);
+        if (!f.is_open()) {
+            result.error = "Cannot write: " + path;
+            return result;
+        }
+        f << skeleton_name << "\n";
+
+        if (c < (int)fa.cameras.size()) {
+            for (int n = 0; n < num_nodes; n++) {
+                if (n < (int)fa.cameras[c].keypoints.size() &&
+                    fa.cameras[c].keypoints[n].labeled) {
+                    f << n << ",0," << fa.cameras[c].keypoints[n].x << ","
+                      << fa.cameras[c].keypoints[n].y << "\n";
+                    result.total_labeled++;
+                } else {
+                    f << n << ",0,1e+07,1e+07\n";
+                }
+            }
+        } else {
+            for (int n = 0; n < num_nodes; n++)
+                f << n << ",0,1e+07,1e+07\n";
+        }
+    }
+
+    result.success = true;
+    return result;
+}
+
 // ── Output ──────────────────────────────────────────────────────────────────
 
 // Save 11-element DLT coefficients per camera (matching MATLAB format)

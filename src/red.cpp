@@ -474,8 +474,13 @@ int main(int argc, char **argv) {
                     if (keypoints_find &&
                         ImGui::IsKeyPressed(ImGuiKey_T, false) &&
                         !ImGui::GetIO().WantTextInput) {
-                        reprojection(annotations.at(current_frame_num),
-                                     &skeleton, pm.camera_params, scene);
+                        if (!pm.camera_params.empty()) {
+                            reprojection(annotations.at(current_frame_num),
+                                         &skeleton, pm.camera_params, scene);
+                        } else {
+                            toasts.push("No triangulation in calibration mode",
+                                        Toast::Warning, 3.0f);
+                        }
                     }
                 },
                 [&]() { return pm.plot_keypoints_flag; }});
