@@ -231,6 +231,7 @@ struct CalibProject {
     std::string image_experimental_folder; // experimental image YAML output
     std::string video_experimental_folder; // experimental video YAML output
     std::string laser_output_folder;     // laser YAML output
+    std::string tele_output_folder;      // telecentric DLT output
 
     // Mode helpers
     bool has_aruco() const { return !config_file.empty(); }
@@ -260,7 +261,8 @@ inline void to_json(nlohmann::json &j, const CalibProject &p) {
                        {"video_output_folder", p.video_output_folder},
                        {"image_experimental_folder", p.image_experimental_folder},
                        {"video_experimental_folder", p.video_experimental_folder},
-                       {"laser_output_folder", p.laser_output_folder}};
+                       {"laser_output_folder", p.laser_output_folder},
+                       {"tele_output_folder", p.tele_output_folder}};
 }
 
 inline void from_json(const nlohmann::json &j, CalibProject &p) {
@@ -284,6 +286,7 @@ inline void from_json(const nlohmann::json &j, CalibProject &p) {
     if (p.image_output_folder.empty() && j.contains("output_folder"))
         p.image_output_folder = j.value("output_folder", std::string{});
     p.laser_output_folder = j.value("laser_output_folder", std::string{});
+    p.tele_output_folder = j.value("tele_output_folder", std::string{});
 }
 
 inline bool save_project(const CalibProject &p,

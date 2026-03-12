@@ -7,6 +7,7 @@
 #include "calibration_pipeline.h"
 #include "calib_viewer_window.h"
 #include "laser_calibration.h"
+#include "telecentric_dlt.h"
 #include "aruco_metal.h"
 #include "laser_metal.h"
 #include <ImGuiFileDialog.h>
@@ -103,6 +104,19 @@ struct CalibrationToolState {
 
     // Telecentric
     bool tele_videos_loaded = false;
+    bool tele_dlt_running = false;
+    bool tele_dlt_done = false;
+    std::string tele_dlt_status;
+    TelecentricDLT::DLTResult tele_dlt_result;
+    std::future<TelecentricDLT::DLTResult> tele_dlt_future;
+    // DLT options (UI state)
+    bool tele_flip_y = true;
+    bool tele_square_pixels = false;
+    bool tele_zero_skew = false;
+    bool tele_do_ba = true;
+    int tele_method = 0; // 0=Linear DLT, 1=DLT+k1, 2=DLT+k1k2
+    // History of calibration runs for comparison
+    std::vector<TelecentricDLT::DLTResult> tele_run_history;
 
     // Laser refinement
     bool laser_ready = false;
@@ -1032,17 +1046,208 @@ inline void DrawCalibrationToolWindow(
                 }
 
                 ImGui::Spacing();
+                ImGui::Separator();
 
-                // Placeholder button for Phase 2
-                ImGui::BeginDisabled(true);
-                ImGui::Button("Run DLT Calibration");
-                ImGui::EndDisabled();
+                // ── DLT Options ──
+                ImGui::Text("Calibration Method:");
+                const char *method_items[] = {
+                    "Linear DLT (affine only)",
+                    "DLT + k1 (radial distortion)",
+                    "DLT + k1,k2 (radial distortion)"
+                };
+                ImGui::Combo("##tele_method", &state.tele_method,
+                             method_items, 3);
+
+                ImGui::Spacing();
+                ImGui::Text("Options:");
+                ImGui::Checkbox("Flip Y coordinates##tele", &state.tele_flip_y);
                 ImGui::SameLine();
-                ImGui::TextDisabled("(Phase 2)");
+                ImGui::TextDisabled("(MATLAB convention)");
+                ImGui::Checkbox("Square pixels##tele", &state.tele_square_pixels);
+                ImGui::Checkbox("Zero skew##tele", &state.tele_zero_skew);
+                if (state.tele_method == 0) {
+                    ImGui::Checkbox("Bundle adjustment##tele", &state.tele_do_ba);
+                } else {
+                    ImGui::TextDisabled("Bundle adjustment: always on (estimates distortion)");
+                }
 
                 ImGui::Spacing();
 
-                // Status
+                // ── Poll async DLT future ──
+                if (state.tele_dlt_running && state.tele_dlt_future.valid()) {
+                    auto fut_status = state.tele_dlt_future.wait_for(
+                        std::chrono::milliseconds(0));
+                    if (fut_status == std::future_status::ready) {
+                        state.tele_dlt_result = state.tele_dlt_future.get();
+                        state.tele_dlt_running = false;
+                        state.tele_dlt_done = true;
+                        if (state.tele_dlt_result.success) {
+                            char buf[256];
+                            snprintf(buf, sizeof(buf),
+                                     "%s complete. Mean RMSE: %.4f px",
+                                     TelecentricDLT::method_name(
+                                         state.tele_dlt_result.method),
+                                     state.tele_dlt_result.mean_rmse);
+                            state.tele_dlt_status = buf;
+                            state.project.tele_output_folder =
+                                state.tele_dlt_result.output_folder;
+                            // Add to run history for comparison
+                            state.tele_run_history.push_back(
+                                state.tele_dlt_result);
+                        } else {
+                            state.tele_dlt_status =
+                                "Error: " + state.tele_dlt_result.error;
+                        }
+                    }
+                }
+
+                // ── Run DLT Calibration button ──
+                {
+                    bool can_run = !state.tele_dlt_running &&
+                                   !state.project.camera_names.empty() &&
+                                   state.project.has_telecentric_input();
+                    ImGui::BeginDisabled(!can_run);
+                    if (ImGui::Button("Run DLT Calibration")) {
+                        state.tele_dlt_running = true;
+                        state.tele_dlt_done = false;
+                        state.tele_dlt_status = "Starting DLT calibration...";
+
+                        TelecentricDLT::DLTConfig dlt_cfg;
+                        dlt_cfg.camera_names = state.project.camera_names;
+                        dlt_cfg.landmark_labels_folder =
+                            state.project.landmark_labels_folder;
+                        dlt_cfg.landmarks_3d_file =
+                            state.project.landmarks_3d_file;
+                        const char *method_suffix[] = {
+                            "dlt_linear", "dlt_k1", "dlt_k1k2"};
+                        dlt_cfg.output_folder =
+                            state.project.project_path + "/" +
+                            method_suffix[state.tele_method];
+                        dlt_cfg.flip_y = state.tele_flip_y;
+                        dlt_cfg.square_pixels = state.tele_square_pixels;
+                        dlt_cfg.zero_skew = state.tele_zero_skew;
+                        dlt_cfg.do_ba = state.tele_do_ba;
+                        dlt_cfg.method = static_cast<TelecentricDLT::Method>(
+                            state.tele_method);
+
+                        // Get image dimensions from loaded video
+                        if (scene->num_cams > 0) {
+                            dlt_cfg.image_width = scene->image_width[0];
+                            dlt_cfg.image_height = scene->image_height[0];
+                        }
+
+                        state.tele_dlt_future = std::async(
+                            std::launch::async,
+                            [dlt_cfg,
+                             status_ptr = &state.tele_dlt_status]() {
+                                return TelecentricDLT::run_dlt_calibration(
+                                    dlt_cfg, status_ptr);
+                            });
+                    }
+                    ImGui::EndDisabled();
+
+                    if (state.tele_dlt_running) {
+                        ImGui::SameLine();
+                        ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f),
+                                           "Running...");
+                    }
+                }
+
+                // ── DLT Status ──
+                if (!state.tele_dlt_status.empty()) {
+                    ImGui::TextWrapped("Status: %s",
+                                       state.tele_dlt_status.c_str());
+                }
+
+                // ── DLT Results (latest run) ──
+                if (state.tele_dlt_done && state.tele_dlt_result.success) {
+                    ImGui::Spacing();
+                    ImGui::Separator();
+                    ImGui::Text("Latest: %s",
+                        TelecentricDLT::method_name(
+                            state.tele_dlt_result.method));
+
+                    bool has_dist = (state.tele_dlt_result.method !=
+                                     TelecentricDLT::Method::LinearDLT);
+                    int ncols = has_dist ? 6 : 4;
+                    if (ImGui::BeginTable("##dlt_results", ncols,
+                            ImGuiTableFlags_Borders |
+                            ImGuiTableFlags_RowBg)) {
+                        ImGui::TableSetupColumn("Camera");
+                        ImGui::TableSetupColumn("Points");
+                        ImGui::TableSetupColumn("RMSE (init)");
+                        ImGui::TableSetupColumn("RMSE (final)");
+                        if (has_dist) {
+                            ImGui::TableSetupColumn("k1");
+                            ImGui::TableSetupColumn("k2");
+                        }
+                        ImGui::TableHeadersRow();
+
+                        for (const auto &cam :
+                             state.tele_dlt_result.cameras) {
+                            ImGui::TableNextRow();
+                            ImGui::TableNextColumn();
+                            ImGui::Text("Cam%s", cam.serial.c_str());
+                            ImGui::TableNextColumn();
+                            ImGui::Text("%d", cam.num_points);
+                            ImGui::TableNextColumn();
+                            ImGui::Text("%.4f", cam.rmse_init);
+                            ImGui::TableNextColumn();
+                            if (cam.rmse_ba > 0)
+                                ImGui::Text("%.4f", cam.rmse_ba);
+                            else
+                                ImGui::TextDisabled("--");
+                            if (has_dist) {
+                                ImGui::TableNextColumn();
+                                ImGui::Text("%.2e", cam.k1);
+                                ImGui::TableNextColumn();
+                                ImGui::Text("%.2e", cam.k2);
+                            }
+                        }
+                        ImGui::EndTable();
+                    }
+
+                    ImGui::Text("Mean RMSE: %.4f px",
+                                state.tele_dlt_result.mean_rmse);
+                    ImGui::Text("Output: %s",
+                                state.tele_dlt_result.output_folder.c_str());
+                }
+
+                // ── Run Comparison Table ──
+                if (state.tele_run_history.size() > 1) {
+                    ImGui::Spacing();
+                    ImGui::Separator();
+                    ImGui::Text("Run Comparison:");
+                    if (ImGui::BeginTable("##dlt_comparison",
+                            3, ImGuiTableFlags_Borders |
+                            ImGuiTableFlags_RowBg)) {
+                        ImGui::TableSetupColumn("Method");
+                        ImGui::TableSetupColumn("Mean RMSE");
+                        ImGui::TableSetupColumn("Output");
+                        ImGui::TableHeadersRow();
+
+                        for (const auto &run :
+                             state.tele_run_history) {
+                            ImGui::TableNextRow();
+                            ImGui::TableNextColumn();
+                            ImGui::Text("%s",
+                                TelecentricDLT::method_name(run.method));
+                            ImGui::TableNextColumn();
+                            ImGui::Text("%.4f px", run.mean_rmse);
+                            ImGui::TableNextColumn();
+                            ImGui::TextWrapped("%s",
+                                run.output_folder.c_str());
+                        }
+                        ImGui::EndTable();
+                    }
+                    if (ImGui::Button("Clear History##tele")) {
+                        state.tele_run_history.clear();
+                    }
+                }
+
+                ImGui::Spacing();
+
+                // General status
                 if (!state.status.empty()) {
                     ImGui::TextWrapped("Status: %s", state.status.c_str());
                 }
@@ -2372,6 +2577,10 @@ inline void DrawCalibrationToolWindow(
         state.status.clear();
         state.aruco_videos_loaded = false;
         state.tele_videos_loaded = false;
+        state.tele_dlt_running = false;
+        state.tele_dlt_done = false;
+        state.tele_dlt_status.clear();
+        state.tele_run_history.clear();
         state.project.camera_names.clear();
         state.laser_ready = false;
         state.laser_done = false;
