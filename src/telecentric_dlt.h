@@ -5,6 +5,7 @@
 
 #include <Eigen/Dense>
 #include <Eigen/SVD>
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -65,12 +66,20 @@ struct PerCameraResult {
     Eigen::Vector2d dist_center = Eigen::Vector2d::Zero(); // principal point in pixels
 };
 
+struct CrossValidationResult {
+    double loo_rmse = 0;
+    std::vector<double> point_errors;
+    std::vector<int> point_indices;
+    std::vector<int> outlier_indices;
+};
+
 struct DLTResult {
     bool success = false;
     std::string error;
     std::vector<PerCameraResult> cameras;
     double mean_rmse = 0;
     std::string output_folder;
+    std::vector<CrossValidationResult> cv_results;
     Method method = Method::LinearDLT;
 };
 
@@ -721,6 +730,57 @@ inline void refine_ba_distortion(
     }
 }
 
+// ── Cross-Validation ────────────────────────────────────────────────────────
+
+// Leave-one-out cross-validation for a single camera's linear DLT fit.
+// Returns LOO RMSE and flags outlier points (error > 3x median).
+inline CrossValidationResult cross_validate_camera(
+    const std::vector<Eigen::Vector3d> &pts3d,
+    const std::vector<Eigen::Vector2d> &pts2d,
+    const std::vector<int> &valid_idx) {
+    CrossValidationResult cv;
+    int N = (int)valid_idx.size();
+    if (N < 5) return cv; // need at least 5 for LOO with 4+ remaining
+
+    cv.point_indices = valid_idx;
+    cv.point_errors.resize(N);
+
+    double sse = 0;
+    for (int i = 0; i < N; i++) {
+        // Build leave-one-out index set
+        std::vector<int> loo_idx;
+        loo_idx.reserve(N - 1);
+        for (int j = 0; j < N; j++) {
+            if (j != i) loo_idx.push_back(valid_idx[j]);
+        }
+
+        // Refit without point i
+        auto res = fit_telecentric_dlt(pts3d, pts2d, loo_idx);
+
+        // Predict held-out point
+        int idx = valid_idx[i];
+        Eigen::Vector2d proj = res.A * pts3d[idx] + res.t;
+        double err = (proj - pts2d[idx]).norm();
+        cv.point_errors[i] = err;
+        sse += err * err;
+    }
+
+    cv.loo_rmse = std::sqrt(sse / N);
+
+    // Flag outliers: error > 3x median
+    std::vector<double> sorted_errors = cv.point_errors;
+    std::sort(sorted_errors.begin(), sorted_errors.end());
+    double median = sorted_errors[N / 2];
+    double threshold = 3.0 * median;
+    for (int i = 0; i < N; i++) {
+        if (cv.point_errors[i] > threshold) {
+            cv.outlier_indices.push_back(valid_idx[i]);
+        }
+    }
+
+    return cv;
+}
+
 // ── Output ──────────────────────────────────────────────────────────────────
 
 // Save 11-element DLT coefficients per camera (matching MATLAB format)
@@ -820,6 +880,14 @@ inline DLTResult run_dlt_calibration(const DLTConfig &config,
                    " (" + std::to_string(m + 1) + "/" + std::to_string(M) + ")...");
         result.cameras[m] = fit_telecentric_dlt(pts3d, pts2d_all[m], valid_idx_all[m]);
         result.cameras[m].serial = config.camera_names[m];
+    }
+
+    // Cross-validation (LOO)
+    set_status("Running cross-validation...");
+    result.cv_results.resize(M);
+    for (int m = 0; m < M; m++) {
+        result.cv_results[m] = cross_validate_camera(
+            pts3d, pts2d_all[m], valid_idx_all[m]);
     }
 
     // Step 2: K2 constraints

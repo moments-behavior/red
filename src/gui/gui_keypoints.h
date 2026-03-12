@@ -109,6 +109,8 @@ static void reprojection(FrameAnnotation &fa, SkeletonContext *skeleton,
                          std::vector<CameraParams> camera_params,
                          RenderScene *scene) {
 
+    bool telecentric = !camera_params.empty() && camera_params[0].telecentric;
+
     for (u32 node = 0; node < skeleton->num_nodes; node++) {
 
         u32 num_views_labeled{0};
@@ -133,9 +135,17 @@ static void reprojection(FrameAnnotation &fa, SkeletonContext *skeleton,
                         fa.cameras[view_idx].keypoints[node].x,
                         (double)scene->image_height[view_idx] -
                             fa.cameras[view_idx].keypoints[node].y);
-                    Eigen::Vector2d pt_undist = red_math::undistortPoint(
-                        pt, camera_params[view_idx].k,
-                        camera_params[view_idx].dist_coeffs);
+
+                    Eigen::Vector2d pt_undist;
+                    if (telecentric) {
+                        pt_undist = red_math::undistortPointTelecentric(
+                            pt, camera_params[view_idx].k,
+                            camera_params[view_idx].dist_coeffs);
+                    } else {
+                        pt_undist = red_math::undistortPoint(
+                            pt, camera_params[view_idx].k,
+                            camera_params[view_idx].dist_coeffs);
+                    }
 
                     undist_pts.push_back(pt_undist);
                     proj_mats.push_back(
@@ -154,14 +164,12 @@ static void reprojection(FrameAnnotation &fa, SkeletonContext *skeleton,
             for (u32 view_idx = 0; view_idx < scene->num_cams; view_idx++) {
                 if (view_idx >= (u32)fa.cameras.size()) continue;
                 if (node >= (u32)fa.cameras[view_idx].keypoints.size()) continue;
-                if (is_in_camera_fov(pt3d, camera_params[view_idx].rvec,
-                                     camera_params[view_idx].tvec,
-                                     camera_params[view_idx].k,
-                                     scene->image_width[view_idx],
-                                     scene->image_height[view_idx])) {
-                    auto reproj = red_math::projectPoint(
-                        pt3d, camera_params[view_idx].rvec,
-                        camera_params[view_idx].tvec,
+
+                if (telecentric) {
+                    // Telecentric reprojection
+                    auto reproj = red_math::projectPointTelecentric(
+                        pt3d,
+                        camera_params[view_idx].projection_mat,
                         camera_params[view_idx].k,
                         camera_params[view_idx].dist_coeffs);
                     double x = reproj(0);
@@ -169,10 +177,31 @@ static void reprojection(FrameAnnotation &fa, SkeletonContext *skeleton,
                                reproj(1);
                     if (x > 0 && x < scene->image_width[view_idx] && y > 0 &&
                         y < scene->image_height[view_idx]) {
-                        // calculate per keypoint error
                         fa.cameras[view_idx].keypoints[node].x = x;
                         fa.cameras[view_idx].keypoints[node].y = y;
                         fa.cameras[view_idx].keypoints[node].labeled = true;
+                    }
+                } else {
+                    // Perspective reprojection
+                    if (is_in_camera_fov(pt3d, camera_params[view_idx].rvec,
+                                         camera_params[view_idx].tvec,
+                                         camera_params[view_idx].k,
+                                         scene->image_width[view_idx],
+                                         scene->image_height[view_idx])) {
+                        auto reproj = red_math::projectPoint(
+                            pt3d, camera_params[view_idx].rvec,
+                            camera_params[view_idx].tvec,
+                            camera_params[view_idx].k,
+                            camera_params[view_idx].dist_coeffs);
+                        double x = reproj(0);
+                        double y = double(scene->image_height[view_idx]) -
+                                   reproj(1);
+                        if (x > 0 && x < scene->image_width[view_idx] &&
+                            y > 0 && y < scene->image_height[view_idx]) {
+                            fa.cameras[view_idx].keypoints[node].x = x;
+                            fa.cameras[view_idx].keypoints[node].y = y;
+                            fa.cameras[view_idx].keypoints[node].labeled = true;
+                        }
                     }
                 }
             }

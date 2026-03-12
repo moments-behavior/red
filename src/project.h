@@ -47,6 +47,7 @@ struct ProjectManager {
     std::vector<std::string> camera_names;
     std::string skeleton_name;
     std::string media_folder;
+    bool telecentric = false; // true if using telecentric DLT calibration
     AnnotationConfig annotation_config; // annotation capabilities
 
     // JARVIS models imported into this project
@@ -86,6 +87,7 @@ inline void to_json(nlohmann::json &j, const ProjectManager &p) {
                        {"camera_names", p.camera_names},
                        {"skeleton_name", p.skeleton_name},
                        {"media_folder", p.media_folder},
+                       {"telecentric", p.telecentric},
                        {"annotation_config", p.annotation_config},
                        {"jarvis_models", p.jarvis_models},
                        {"active_jarvis_model", p.active_jarvis_model}};
@@ -103,6 +105,7 @@ inline void from_json(const nlohmann::json &j, ProjectManager &p) {
     p.camera_names = j.value("camera_names", std::vector<std::string>{});
     p.skeleton_name = j.value("skeleton_name", std::string{});
     p.media_folder = j.value("media_folder", std::string{});
+    p.telecentric = j.value("telecentric", false);
     if (j.contains("annotation_config"))
         p.annotation_config = j["annotation_config"].get<AnnotationConfig>();
     if (j.contains("jarvis_models"))
@@ -179,20 +182,33 @@ inline bool setup_project(ProjectManager &pm, SkeletonContext &skeleton,
         return false;
 
     pm.camera_params.clear();
-    if (pm.camera_names.size() > 1) {
+    if (pm.camera_names.size() > 1 && !pm.calibration_folder.empty()) {
+        namespace fs = std::filesystem;
         for (const std::string &cam_name : pm.camera_names) {
-            std::filesystem::path cam_path =
-                std::filesystem::path(pm.calibration_folder) /
-                (cam_name + ".yaml");
-
             CameraParams cam;
             std::string cam_err;
-            if (!camera_load_params_from_yaml(cam_path.string(), cam,
-                                              cam_err)) {
+            bool loaded = false;
+
+            if (pm.telecentric) {
+                // Telecentric: load DLT CSV
+                fs::path dlt_path =
+                    fs::path(pm.calibration_folder) /
+                    (cam_name + "_dlt.csv");
+                loaded = camera_load_params_from_dlt_csv(
+                    dlt_path.string(), cam, cam_err);
+            } else {
+                // Perspective: load YAML
+                fs::path yaml_path =
+                    fs::path(pm.calibration_folder) /
+                    (cam_name + ".yaml");
+                loaded = camera_load_params_from_yaml(
+                    yaml_path.string(), cam, cam_err);
+            }
+
+            if (!loaded) {
                 pm.camera_params.clear();
                 if (err) {
-                    *err =
-                        "Failed to load camera params: " + cam_path.string() +
+                    *err = "Failed to load camera params: " + cam_name +
                         (cam_err.empty() ? "" : (" (" + cam_err + ")"));
                 }
                 return false;

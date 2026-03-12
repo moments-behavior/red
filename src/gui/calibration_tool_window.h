@@ -1211,6 +1211,52 @@ inline void DrawCalibrationToolWindow(
                                 state.tele_dlt_result.mean_rmse);
                     ImGui::Text("Output: %s",
                                 state.tele_dlt_result.output_folder.c_str());
+
+                    // Cross-validation results
+                    if (!state.tele_dlt_result.cv_results.empty()) {
+                        ImGui::Spacing();
+                        if (ImGui::TreeNode("Cross-Validation (LOO)")) {
+                            if (ImGui::BeginTable("##cv_results", 4,
+                                    ImGuiTableFlags_Borders |
+                                    ImGuiTableFlags_RowBg)) {
+                                ImGui::TableSetupColumn("Camera");
+                                ImGui::TableSetupColumn("LOO RMSE");
+                                ImGui::TableSetupColumn("Outliers");
+                                ImGui::TableSetupColumn("Flagged Points");
+                                ImGui::TableHeadersRow();
+
+                                for (int m = 0; m < (int)state.tele_dlt_result.cv_results.size(); m++) {
+                                    const auto &cv = state.tele_dlt_result.cv_results[m];
+                                    ImGui::TableNextRow();
+                                    ImGui::TableNextColumn();
+                                    if (m < (int)state.tele_dlt_result.cameras.size())
+                                        ImGui::Text("Cam%s", state.tele_dlt_result.cameras[m].serial.c_str());
+                                    ImGui::TableNextColumn();
+                                    ImGui::Text("%.4f", cv.loo_rmse);
+                                    ImGui::TableNextColumn();
+                                    if (!cv.outlier_indices.empty())
+                                        ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f),
+                                            "%d", (int)cv.outlier_indices.size());
+                                    else
+                                        ImGui::Text("0");
+                                    ImGui::TableNextColumn();
+                                    if (!cv.outlier_indices.empty()) {
+                                        std::string pts;
+                                        for (int idx : cv.outlier_indices) {
+                                            if (!pts.empty()) pts += ", ";
+                                            pts += std::to_string(idx);
+                                        }
+                                        ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f),
+                                            "%s", pts.c_str());
+                                    } else {
+                                        ImGui::TextDisabled("--");
+                                    }
+                                }
+                                ImGui::EndTable();
+                            }
+                            ImGui::TreePop();
+                        }
+                    }
                 }
 
                 // ── Run Comparison Table ──

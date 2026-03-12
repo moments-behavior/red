@@ -69,6 +69,49 @@ undistortPoint(const Eigen::Vector2d &pt, const Eigen::Matrix3d &K,
     return Eigen::Vector2d(x * fx + cx, y * fy + cy);
 }
 
+// ---- Telecentric undistortion ----
+// For telecentric cameras with radial distortion (k1, k2).
+// K stores telecentric intrinsics: K = [sx skew tx; 0 sy ty; 0 0 1]
+// dist_coeffs: [k1, k2, 0, 0, 0] (only first two used)
+// Distortion model: x_d = x_n * (1 + k1*r2 + k2*r4) where r2 = x_n^2 + y_n^2
+// Given distorted pixel, returns undistorted pixel.
+inline Eigen::Vector2d
+undistortPointTelecentric(const Eigen::Vector2d &pt, const Eigen::Matrix3d &K,
+                          const Eigen::Matrix<double, 5, 1> &dist) {
+    double k1 = dist(0), k2 = dist(1);
+
+    // No distortion — early out
+    if (std::abs(k1) < 1e-15 && std::abs(k2) < 1e-15)
+        return pt;
+
+    // Unpack K2 and translation
+    double sx = K(0, 0), skew = K(0, 1), tx = K(0, 2);
+    double sy = K(1, 1), ty = K(1, 2);
+
+    // Pixel → normalized distorted coords: K2^{-1} * (pt - t)
+    // K2 = [sx skew; 0 sy], K2^{-1} = [1/sx -skew/(sx*sy); 0 1/sy]
+    double xd = (pt(0) - tx) / sx - skew / (sx * sy) * (pt(1) - ty);
+    double yd = (pt(1) - ty) / sy;
+
+    // Iterative undistortion: find (xn, yn) such that
+    //   xd = xn * (1 + k1*r2 + k2*r4)
+    //   yd = yn * (1 + k1*r2 + k2*r4)
+    double xn = xd, yn = yd;
+    for (int i = 0; i < 15; i++) {
+        double r2 = xn * xn + yn * yn;
+        double r4 = r2 * r2;
+        double d = 1.0 + k1 * r2 + k2 * r4;
+        if (std::abs(d) < 1e-15) break;
+        xn = xd / d;
+        yn = yd / d;
+    }
+
+    // Normalized undistorted → pixel: K2 * (xn, yn) + t
+    double u = sx * xn + skew * yn + tx;
+    double v = sy * yn + ty;
+    return Eigen::Vector2d(u, v);
+}
+
 // ---- triangulatePoints (DLT) ----
 // pts2d: vector of 2D points (one per view, in pixel coords after undistortion)
 // Ps: corresponding 3x4 projection matrices
@@ -136,6 +179,42 @@ projectPointNoDist(const Eigen::Vector3d &pt3d, const Eigen::Vector3d &rvec,
                    const Eigen::Vector3d &tvec, const Eigen::Matrix3d &K) {
     Eigen::Matrix<double, 5, 1> zero_dist = Eigen::Matrix<double, 5, 1>::Zero();
     return projectPoints({pt3d}, rvec, tvec, K, zero_dist)[0];
+}
+
+// ---- Telecentric projection ----
+// Project a 3D point using telecentric affine model (with optional radial distortion).
+// P is 3x4 affine: [A t; 0 0 0 1]. K stores [sx skew tx; 0 sy ty; 0 0 1].
+// dist_coeffs: [k1, k2, 0, 0, 0]
+inline Eigen::Vector2d
+projectPointTelecentric(const Eigen::Vector3d &pt3d,
+                        const Eigen::Matrix<double, 3, 4> &P,
+                        const Eigen::Matrix3d &K,
+                        const Eigen::Matrix<double, 5, 1> &dist) {
+    double k1 = dist(0), k2 = dist(1);
+
+    // Affine projection (no distortion): u = P(0,:)*[X;1], v = P(1,:)*[X;1]
+    Eigen::Vector4d Xh(pt3d.x(), pt3d.y(), pt3d.z(), 1.0);
+    double u_lin = P.row(0).dot(Xh);
+    double v_lin = P.row(1).dot(Xh);
+
+    if (std::abs(k1) < 1e-15 && std::abs(k2) < 1e-15)
+        return Eigen::Vector2d(u_lin, v_lin);
+
+    // Apply distortion: pixel → normalized → distort → pixel
+    double sx = K(0, 0), skew = K(0, 1), tx = K(0, 2);
+    double sy = K(1, 1), ty = K(1, 2);
+
+    // Undistorted normalized coords
+    double xn = (u_lin - tx) / sx - skew / (sx * sy) * (v_lin - ty);
+    double yn = (v_lin - ty) / sy;
+
+    double r2 = xn * xn + yn * yn;
+    double r4 = r2 * r2;
+    double d = 1.0 + k1 * r2 + k2 * r4;
+    double xd = xn * d;
+    double yd = yn * d;
+
+    return Eigen::Vector2d(sx * xd + skew * yd + tx, sy * yd + ty);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
