@@ -66,8 +66,25 @@ struct WindowStates {
         calibration.laser_status.clear();
         calibration.laser_show_detection = false;
         calibration.status.clear();
+        // Clear stale result data (can be large)
+        calibration.img_result = {};
+        calibration.vid_result = {};
+        calibration.exp_img_result = {};
+        calibration.exp_vid_result = {};
+        calibration.tele_dlt_result = {};
+        calibration.laser_result = {};
+        calibration.loaded_result = {};
+        // Null raw pointers to prevent dangling references
         calibration.tele_viewer.show = false;
+        calibration.tele_viewer.dlt_result = nullptr;
+        calibration.tele_viewer.landmarks_3d.clear();
         calibration.calib_viewer.show = false;
+        calibration.calib_viewer.result = nullptr;
+        // Clear stale project/config data
+        calibration.project = {};
+        calibration.config = {};
+        calibration.config_path.clear();
+        calibration.laser_config = {};
         annotation.show = false;
         annotation.video_folder.clear();
         annotation.discovered_cameras.clear();
