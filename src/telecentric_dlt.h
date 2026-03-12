@@ -15,6 +15,8 @@
 
 namespace TelecentricDLT {
 
+constexpr double DLT_UNLABELED = 1e7;
+
 // ── Calibration Method ──────────────────────────────────────────────────────
 
 enum class Method {
@@ -64,6 +66,9 @@ struct PerCameraResult {
     // Radial distortion (relative to normalized coords centered on principal point)
     double k1 = 0, k2 = 0;
     Eigen::Vector2d dist_center = Eigen::Vector2d::Zero(); // principal point in pixels
+
+    // Return the best available RMSE (post-BA if available, otherwise initial).
+    double final_rmse() const { return (rmse_ba > 0) ? rmse_ba : rmse_init; }
 };
 
 struct CrossValidationResult {
@@ -106,7 +111,7 @@ inline std::vector<Eigen::Vector3d> parse_3d_landmarks(const std::string &path) 
 }
 
 // Parse 2D labels CSV: header "Target", rows of frame_id,kp_id,x,y
-// Returns vector indexed by landmark_id (frame_id). Sentinel 1e7 = unlabeled.
+// Returns vector indexed by landmark_id (frame_id). Sentinel DLT_UNLABELED = unlabeled.
 inline std::vector<Eigen::Vector2d> parse_2d_labels(
     const std::string &path, int image_height, bool flip_y) {
     std::vector<Eigen::Vector2d> pts;
@@ -126,9 +131,9 @@ inline std::vector<Eigen::Vector2d> parse_2d_labels(
         std::getline(ss, tok, ','); y = std::stod(tok);
         // Ensure vector is large enough
         if (frame_id >= (int)pts.size())
-            pts.resize(frame_id + 1, Eigen::Vector2d(1e7, 1e7));
-        if (x > 9e6 || y > 9e6) {
-            pts[frame_id] = Eigen::Vector2d(1e7, 1e7); // sentinel
+            pts.resize(frame_id + 1, Eigen::Vector2d(DLT_UNLABELED, DLT_UNLABELED));
+        if (x > DLT_UNLABELED * 0.9 || y > DLT_UNLABELED * 0.9) {
+            pts[frame_id] = Eigen::Vector2d(DLT_UNLABELED, DLT_UNLABELED); // sentinel
         } else {
             if (flip_y) y = image_height - y;
             pts[frame_id] = Eigen::Vector2d(x, y);
@@ -348,200 +353,28 @@ inline void constrain_k2(PerCameraResult &res, bool square_pixels, bool zero_ske
 
 // ── Bundle Adjustment ───────────────────────────────────────────────────────
 
-// Manual Gauss-Newton bundle adjustment across all cameras.
+// Unified Levenberg-Marquardt bundle adjustment across all cameras.
 // Parameters per camera: rotation vector (3) + translation (2) + K2 params (1-3)
-inline void refine_ba(std::vector<PerCameraResult> &cameras,
-                       const std::vector<Eigen::Vector3d> &pts3d,
-                       const std::vector<std::vector<Eigen::Vector2d>> &pts2d_all,
-                       const std::vector<std::vector<int>> &valid_idx_all,
-                       bool square_pixels, bool zero_skew) {
-    int M = (int)cameras.size();
-    int nK = 3; // default: sx, k, sy
-    if (square_pixels && zero_skew) nK = 1;      // s
-    else if (square_pixels || zero_skew) nK = 2;  // (s,k) or (sx,sy)
-
-    int params_per_cam = 3 + 2 + nK; // rot(3) + t(2) + K2
-    int total_params = M * params_per_cam;
-
-    // Count total residuals
-    int total_res = 0;
-    for (int m = 0; m < M; m++)
-        total_res += 2 * (int)valid_idx_all[m].size();
-
-    if (total_res <= total_params) return; // underdetermined
-
-    // Pack initial parameters
-    Eigen::VectorXd x(total_params);
-    for (int m = 0; m < M; m++) {
-        int off = m * params_per_cam;
-        // Rotation vector from R
-        Eigen::AngleAxisd aa(cameras[m].R);
-        Eigen::Vector3d rv = aa.axis() * aa.angle();
-        x.segment<3>(off) = rv;
-        // Translation
-        x.segment<2>(off + 3) = cameras[m].t;
-        // K2 params
-        if (square_pixels && zero_skew) {
-            x(off + 5) = (cameras[m].sx + cameras[m].sy) / 2.0;
-        } else if (square_pixels) {
-            double s = (cameras[m].sx + cameras[m].sy) / 2.0;
-            x(off + 5) = s;
-            x(off + 6) = cameras[m].skew;
-        } else if (zero_skew) {
-            x(off + 5) = cameras[m].sx;
-            x(off + 6) = cameras[m].sy;
-        } else {
-            x(off + 5) = cameras[m].sx;
-            x(off + 6) = cameras[m].skew;
-            x(off + 7) = cameras[m].sy;
-        }
-    }
-
-    // Lambda to unpack K2 from parameter vector segment
-    auto unpack_K2 = [&](const Eigen::VectorXd &p, int off) -> Eigen::Matrix2d {
-        Eigen::Matrix2d K2;
-        if (square_pixels && zero_skew) {
-            double s = p(off);
-            K2 << s, 0, 0, s;
-        } else if (square_pixels) {
-            double s = p(off);
-            double k = p(off + 1);
-            K2 << s, k, 0, s;
-        } else if (zero_skew) {
-            K2 << p(off), 0, 0, p(off + 1);
-        } else {
-            K2 << p(off), p(off + 1), 0, p(off + 2);
-        }
-        return K2;
-    };
-
-    // Lambda to compute residuals
-    auto compute_residuals = [&](const Eigen::VectorXd &params) -> Eigen::VectorXd {
-        Eigen::VectorXd r(total_res);
-        int ri = 0;
-        for (int m = 0; m < M; m++) {
-            int off = m * params_per_cam;
-            Eigen::Vector3d rv = params.segment<3>(off);
-            double angle = rv.norm();
-            Eigen::Matrix3d Rm = (angle > 1e-12)
-                ? Eigen::AngleAxisd(angle, rv / angle).toRotationMatrix()
-                : Eigen::Matrix3d::Identity();
-            Eigen::Vector2d tm = params.segment<2>(off + 3);
-            Eigen::Matrix2d K2 = unpack_K2(params, off + 5);
-
-            Eigen::Matrix<double, 2, 3> B;
-            B.row(0) = Rm.col(0).transpose();
-            B.row(1) = Rm.col(1).transpose();
-            Eigen::Matrix<double, 2, 3> Am = K2 * B;
-
-            for (int idx : valid_idx_all[m]) {
-                Eigen::Vector2d proj = Am * pts3d[idx] + tm;
-                r(ri++) = proj.x() - pts2d_all[m][idx].x();
-                r(ri++) = proj.y() - pts2d_all[m][idx].y();
-            }
-        }
-        return r;
-    };
-
-    // Gauss-Newton iterations
-    const int max_iter = 50;
-    const double lambda_init = 1e-3;
-    double lambda = lambda_init;
-
-    Eigen::VectorXd r = compute_residuals(x);
-    double cost = r.squaredNorm();
-
-    for (int iter = 0; iter < max_iter; iter++) {
-        // Compute Jacobian by finite differences
-        const double eps = 1e-7;
-        Eigen::MatrixXd J(total_res, total_params);
-        for (int j = 0; j < total_params; j++) {
-            Eigen::VectorXd x_plus = x;
-            x_plus(j) += eps;
-            Eigen::VectorXd r_plus = compute_residuals(x_plus);
-            J.col(j) = (r_plus - r) / eps;
-        }
-
-        // Levenberg-Marquardt step: (J^T J + lambda * diag(J^T J)) * dx = -J^T r
-        Eigen::MatrixXd JtJ = J.transpose() * J;
-        Eigen::VectorXd Jtr = J.transpose() * r;
-        Eigen::VectorXd diag = JtJ.diagonal();
-        for (int j = 0; j < total_params; j++)
-            diag(j) = std::max(diag(j), 1e-6);
-
-        JtJ.diagonal() += lambda * diag;
-        Eigen::VectorXd dx = JtJ.ldlt().solve(-Jtr);
-
-        Eigen::VectorXd x_new = x + dx;
-        Eigen::VectorXd r_new = compute_residuals(x_new);
-        double cost_new = r_new.squaredNorm();
-
-        if (cost_new < cost) {
-            x = x_new;
-            r = r_new;
-            double improvement = (cost - cost_new) / cost;
-            cost = cost_new;
-            lambda *= 0.5;
-            lambda = std::max(lambda, 1e-8);
-            if (improvement < 1e-8) break; // converged
-        } else {
-            lambda *= 5.0;
-            if (lambda > 1e8) break;
-        }
-    }
-
-    // Unpack optimized parameters back into camera results
-    for (int m = 0; m < M; m++) {
-        int off = m * params_per_cam;
-        Eigen::Vector3d rv = x.segment<3>(off);
-        double angle = rv.norm();
-        cameras[m].R = (angle > 1e-12)
-            ? Eigen::AngleAxisd(angle, rv / angle).toRotationMatrix()
-            : Eigen::Matrix3d::Identity();
-        cameras[m].t = x.segment<2>(off + 3);
-        Eigen::Matrix2d K2 = unpack_K2(x, off + 5);
-        cameras[m].sx = K2(0, 0);
-        cameras[m].skew = K2(0, 1);
-        cameras[m].sy = K2(1, 1);
-
-        Eigen::Matrix<double, 2, 3> B;
-        B.row(0) = cameras[m].R.col(0).transpose();
-        B.row(1) = cameras[m].R.col(1).transpose();
-        cameras[m].A = K2 * B;
-        cameras[m].P.block<2, 3>(0, 0) = cameras[m].A;
-        cameras[m].P.block<2, 1>(0, 3) = cameras[m].t;
-        cameras[m].P.row(2) << 0, 0, 0, 1;
-
-        // Compute post-BA RMSE
-        double sse = 0;
-        int N = (int)valid_idx_all[m].size();
-        for (int idx : valid_idx_all[m]) {
-            Eigen::Vector2d proj = cameras[m].A * pts3d[idx] + cameras[m].t;
-            sse += (proj - pts2d_all[m][idx]).squaredNorm();
-        }
-        cameras[m].rmse_ba = std::sqrt(sse / N);
-    }
-}
-
-// ── Bundle Adjustment with Radial Distortion ────────────────────────────────
-
-// Distortion model (telecentric):
+//   + optional radial distortion coefficients (n_dist_coeffs: 0, 1, or 2).
+//
+// Distortion model (telecentric, when n_dist_coeffs > 0):
 //   1. Orthographic: x_n = R(0,:)*X, y_n = R(1,:)*X  (normalized coords)
 //   2. Distort:      r2 = x_n^2 + y_n^2
 //                    x_d = x_n * (1 + k1*r2 + k2*r4)
 //                    y_d = y_n * (1 + k1*r2 + k2*r4)
 //   3. Pixel:        u = sx*x_d + skew*y_d + tx
 //                    v = sy*y_d + ty
+// When n_dist_coeffs == 0, the distortion factor is 1.0 (pure affine).
 // The 3x4 output P uses the *undistorted* projection (for DLT triangulation),
 // and distortion coefficients are saved separately.
-// At triangulation time: undistort observed 2D → then use P.
+// At triangulation time: undistort observed 2D -> then use P.
 
-inline void refine_ba_distortion(
+inline void refine_ba(
     std::vector<PerCameraResult> &cameras,
     const std::vector<Eigen::Vector3d> &pts3d,
     const std::vector<std::vector<Eigen::Vector2d>> &pts2d_all,
     const std::vector<std::vector<int>> &valid_idx_all,
-    bool square_pixels, bool zero_skew, int n_dist_coeffs) {
+    bool square_pixels, bool zero_skew, int n_dist_coeffs = 0) {
 
     int M = (int)cameras.size();
     int nK = 3; // sx, k, sy
@@ -818,7 +651,7 @@ inline int import_dlt_labels(
             fa.cameras[c].keypoints.resize(num_nodes);
 
         for (int n = 0; n < num_nodes && n < (int)pts.size(); n++) {
-            if (pts[n].x() < 9e6 && pts[n].y() < 9e6) {
+            if (pts[n].x() < DLT_UNLABELED * 0.9 && pts[n].y() < DLT_UNLABELED * 0.9) {
                 fa.cameras[c].keypoints[n].x = pts[n].x();
                 fa.cameras[c].keypoints[n].y = pts[n].y();
                 fa.cameras[c].keypoints[n].labeled = true;
@@ -993,7 +826,7 @@ inline DLTResult run_dlt_calibration(const DLTConfig &config,
         // Build valid indices (where both 2D and 3D are available)
         int N = std::min((int)pts3d.size(), (int)pts2d_all[m].size());
         for (int i = 0; i < N; i++) {
-            if (pts2d_all[m][i].x() < 9e6 && pts2d_all[m][i].y() < 9e6) {
+            if (pts2d_all[m][i].x() < DLT_UNLABELED * 0.9 && pts2d_all[m][i].y() < DLT_UNLABELED * 0.9) {
                 valid_idx_all[m].push_back(i);
             }
         }
@@ -1037,15 +870,15 @@ inline DLTResult run_dlt_calibration(const DLTConfig &config,
         if (config.do_ba) {
             set_status("Running bundle adjustment (" + std::to_string(M) + " cameras)...");
             refine_ba(result.cameras, pts3d, pts2d_all, valid_idx_all,
-                      config.square_pixels, config.zero_skew);
+                      config.square_pixels, config.zero_skew, 0);
         }
     } else {
         // Distortion methods always use BA (that's where distortion is estimated)
         int n_dist = (config.method == Method::DLT_k1) ? 1 : 2;
         set_status("Running BA with " + std::to_string(n_dist) +
                    " distortion coeff(s) (" + std::to_string(M) + " cameras)...");
-        refine_ba_distortion(result.cameras, pts3d, pts2d_all, valid_idx_all,
-                             config.square_pixels, config.zero_skew, n_dist);
+        refine_ba(result.cameras, pts3d, pts2d_all, valid_idx_all,
+                  config.square_pixels, config.zero_skew, n_dist);
     }
 
     result.method = config.method;
@@ -1053,8 +886,7 @@ inline DLTResult run_dlt_calibration(const DLTConfig &config,
     // Compute mean RMSE
     double sum_rmse = 0;
     for (const auto &cam : result.cameras) {
-        bool has_ba = (config.do_ba || config.method != Method::LinearDLT);
-        sum_rmse += (has_ba && cam.rmse_ba > 0) ? cam.rmse_ba : cam.rmse_init;
+        sum_rmse += cam.final_rmse();
     }
     result.mean_rmse = sum_rmse / M;
 

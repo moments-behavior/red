@@ -132,8 +132,7 @@ inline void DrawLabelingToolWindow(
                              &skeleton, pm.camera_params, scene);
             }
             ImGui::EndDisabled();
-            if (!can_triangulate && keypoints_find &&
-                pm.camera_params.empty()) {
+            if (keypoints_find && pm.camera_params.empty()) {
                 ImGui::SameLine();
                 ImGui::TextDisabled("(no calibration)");
             }

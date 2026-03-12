@@ -55,6 +55,7 @@ undistortPoint(const Eigen::Vector2d &pt, const Eigen::Matrix3d &K,
     // Iterative undistortion (10 iterations)
     double x = x0, y = y0;
     for (int i = 0; i < 10; i++) {
+        double x_prev = x, y_prev = y;
         double r2 = x * x + y * y;
         double r4 = r2 * r2;
         double r6 = r4 * r2;
@@ -63,6 +64,7 @@ undistortPoint(const Eigen::Vector2d &pt, const Eigen::Matrix3d &K,
         double dy = p1 * (r2 + 2.0 * y * y) + 2.0 * p2 * x * y;
         x = (x0 - dx) / radial;
         y = (y0 - dy) / radial;
+        if (std::abs(x - x_prev) + std::abs(y - y_prev) < 1e-14) break;
     }
 
     // Re-project to pixel coords using K
@@ -98,12 +100,14 @@ undistortPointTelecentric(const Eigen::Vector2d &pt, const Eigen::Matrix3d &K,
     //   yd = yn * (1 + k1*r2 + k2*r4)
     double xn = xd, yn = yd;
     for (int i = 0; i < 15; i++) {
+        double xn_prev = xn, yn_prev = yn;
         double r2 = xn * xn + yn * yn;
         double r4 = r2 * r2;
         double d = 1.0 + k1 * r2 + k2 * r4;
         if (std::abs(d) < 1e-15) break;
         xn = xd / d;
         yn = yd / d;
+        if (std::abs(xn - xn_prev) + std::abs(yn - yn_prev) < 1e-14) break;
     }
 
     // Normalized undistorted → pixel: K2 * (xn, yn) + t

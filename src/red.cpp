@@ -478,7 +478,7 @@ int main(int argc, char **argv) {
                             reprojection(annotations.at(current_frame_num),
                                          &skeleton, pm.camera_params, scene);
                         } else {
-                            toasts.push("No triangulation in calibration mode",
+                            toasts.push("No calibration loaded",
                                         Toast::Warning, 3.0f);
                         }
                     }

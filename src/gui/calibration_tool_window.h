@@ -161,6 +161,31 @@ struct CalibrationToolCallbacks {
     DeferredQueue *deferred = nullptr;
 };
 
+// Helper: set up a labeling skeleton with one keypoint per landmark.
+// Used when opening a telecentric project, loading videos, or starting labeling.
+inline void setup_landmark_skeleton(SkeletonContext &skel, int n_landmarks,
+                                     ProjectManager &pm,
+                                     const std::string &project_path) {
+    skel.name = "Target";
+    skel.num_nodes = n_landmarks;
+    skel.num_edges = 0;
+    skel.has_skeleton = true;
+    skel.node_colors.clear();
+    skel.edges.clear();
+    skel.node_names.clear();
+    for (int i = 0; i < n_landmarks; i++) {
+        skel.node_names.push_back("Pt" + std::to_string(i));
+        skel.node_colors.push_back(
+            (ImVec4)ImColor::HSV(i / (float)n_landmarks, 0.8f, 0.8f));
+    }
+    pm.keypoints_root_folder =
+        (std::filesystem::path(project_path) / "labeled_data").string();
+    std::error_code ec;
+    std::filesystem::create_directories(pm.keypoints_root_folder, ec);
+    pm.camera_params.clear();
+    pm.plot_keypoints_flag = true;
+}
+
 inline void DrawCalibrationToolWindow(
     CalibrationToolState &state, AppContext &ctx,
     const CalibrationToolCallbacks &cb) {
@@ -277,30 +302,8 @@ inline void DrawCalibrationToolWindow(
                         int n_landmarks = CalibrationTool::count_landmarks_3d(
                             state.project.landmarks_3d_file);
                         if (n_landmarks > 0) {
-                            auto &skel = ctx.skeleton;
-                            skel.name = "Target";
-                            skel.num_nodes = n_landmarks;
-                            skel.num_edges = 0;
-                            skel.has_skeleton = true;
-                            skel.node_colors.clear();
-                            skel.edges.clear();
-                            skel.node_names.clear();
-                            for (int i = 0; i < n_landmarks; i++) {
-                                skel.node_names.push_back(
-                                    "Pt" + std::to_string(i));
-                                skel.node_colors.push_back(
-                                    (ImVec4)ImColor::HSV(
-                                        i / (float)n_landmarks,
-                                        0.8f, 0.8f));
-                            }
-                            pm.keypoints_root_folder =
-                                (std::filesystem::path(
-                                     state.project.project_path) /
-                                 "labeled_data").string();
-                            std::error_code ec;
-                            std::filesystem::create_directories(
-                                pm.keypoints_root_folder, ec);
-                            pm.camera_params.clear();
+                            setup_landmark_skeleton(ctx.skeleton, n_landmarks,
+                                                     pm, state.project.project_path);
 
                             // Import existing DLT labels if available
                             std::string labels_dir =
@@ -311,8 +314,6 @@ inline void DrawCalibrationToolWindow(
                                 ctx.annotations, 0, n_landmarks,
                                 (int)scene->num_cams, pm.camera_names,
                                 labels_dir);
-
-                            pm.plot_keypoints_flag = true;
 
                             if (imported > 0) {
                                 state.status =
@@ -1116,30 +1117,8 @@ inline void DrawCalibrationToolWindow(
                                 int n_lm = CalibrationTool::count_landmarks_3d(
                                     state.project.landmarks_3d_file);
                                 if (n_lm > 0) {
-                                    auto &skel = ctx.skeleton;
-                                    skel.name = "Target";
-                                    skel.num_nodes = n_lm;
-                                    skel.num_edges = 0;
-                                    skel.has_skeleton = true;
-                                    skel.node_colors.clear();
-                                    skel.edges.clear();
-                                    skel.node_names.clear();
-                                    for (int i = 0; i < n_lm; i++) {
-                                        skel.node_names.push_back(
-                                            "Pt" + std::to_string(i));
-                                        skel.node_colors.push_back(
-                                            (ImVec4)ImColor::HSV(
-                                                i / (float)n_lm,
-                                                0.8f, 0.8f));
-                                    }
-                                    pm.keypoints_root_folder =
-                                        (std::filesystem::path(
-                                             state.project.project_path) /
-                                         "labeled_data").string();
-                                    std::error_code ec2;
-                                    std::filesystem::create_directories(
-                                        pm.keypoints_root_folder, ec2);
-                                    pm.camera_params.clear();
+                                    setup_landmark_skeleton(ctx.skeleton, n_lm,
+                                                             pm, state.project.project_path);
 
                                     std::string labels_dir =
                                         state.project.landmark_labels_folder.empty()
@@ -1150,7 +1129,6 @@ inline void DrawCalibrationToolWindow(
                                         (int)scene->num_cams, pm.camera_names,
                                         labels_dir);
 
-                                    pm.plot_keypoints_flag = true;
                                     state.status =
                                         "Loaded " + std::to_string(
                                             state.project.camera_names.size()) +
@@ -1203,33 +1181,8 @@ inline void DrawCalibrationToolWindow(
                                            pm.plot_keypoints_flag;
                     if (!labeling_active) {
                         if (ImGui::Button("Start Labeling##tele_label")) {
-                            // Create skeleton with one keypoint per landmark
-                            skeleton.name = "Target";
-                            skeleton.num_nodes = cached_3d_count;
-                            skeleton.num_edges = 0;
-                            skeleton.has_skeleton = true;
-                            skeleton.node_colors.clear();
-                            skeleton.edges.clear();
-                            skeleton.node_names.clear();
-                            for (int i = 0; i < cached_3d_count; i++) {
-                                skeleton.node_names.push_back(
-                                    "Pt" + std::to_string(i));
-                                skeleton.node_colors.push_back(
-                                    (ImVec4)ImColor::HSV(
-                                        i / (float)cached_3d_count,
-                                        0.8f, 0.8f));
-                            }
-                            // Set up annotation directory
-                            pm.keypoints_root_folder =
-                                (std::filesystem::path(
-                                     state.project.project_path) /
-                                 "labeled_data").string();
-                            std::error_code ec;
-                            std::filesystem::create_directories(
-                                pm.keypoints_root_folder, ec);
-                            pm.plot_keypoints_flag = true;
-                            // Ensure camera_params is empty (no triangulation)
-                            pm.camera_params.clear();
+                            setup_landmark_skeleton(skeleton, cached_3d_count,
+                                                     pm, state.project.project_path);
                             state.status = "Labeling enabled (" +
                                 std::to_string(cached_3d_count) +
                                 " landmarks). Use Labeling Tool to annotate.";
@@ -1340,8 +1293,7 @@ inline void DrawCalibrationToolWindow(
                                 state.tele_dlt_result.mean_rmse;
                             state.project.dlt_per_camera_rmse.clear();
                             for (const auto &cam : state.tele_dlt_result.cameras) {
-                                double rmse = (cam.rmse_ba > 0) ? cam.rmse_ba : cam.rmse_init;
-                                state.project.dlt_per_camera_rmse.push_back(rmse);
+                                state.project.dlt_per_camera_rmse.push_back(cam.final_rmse());
                             }
                             // Auto-save project
                             std::string proj_file =

@@ -242,9 +242,14 @@ struct CalibProject {
     bool has_aruco() const { return !config_file.empty(); }
     bool has_laser_input() const { return !calibration_folder.empty() && !media_folder.empty(); }
     bool is_telecentric() const { return camera_model == CameraModel::Telecentric; }
+    std::string effective_labels_folder() const {
+        if (!landmark_labels_folder.empty()) return landmark_labels_folder;
+        return project_path.empty() ? std::string{} : (project_path + "/red_data");
+    }
+
     bool has_telecentric_input() const {
         return is_telecentric() && !media_folder.empty() &&
-               !landmark_labels_folder.empty() && !landmarks_3d_file.empty();
+               !effective_labels_folder().empty() && !landmarks_3d_file.empty();
     }
 };
 

@@ -66,10 +66,9 @@ inline void DrawTeleViewerWindow(TeleViewerState &state) {
             if (ImGui::Selectable("All Cameras", state.selected_camera < 0))
                 state.selected_camera = -1;
             for (int c = 0; c < nc; c++) {
-                double rmse = (res.cameras[c].rmse_ba > 0) ? res.cameras[c].rmse_ba : res.cameras[c].rmse_init;
                 char label[128];
                 snprintf(label, sizeof(label), "%s (%.3f px, %d pts)",
-                    res.cameras[c].serial.c_str(), rmse, res.cameras[c].num_points);
+                    res.cameras[c].serial.c_str(), res.cameras[c].final_rmse(), res.cameras[c].num_points);
                 if (ImGui::Selectable(label, state.selected_camera == c))
                     state.selected_camera = c;
             }
@@ -82,7 +81,7 @@ inline void DrawTeleViewerWindow(TeleViewerState &state) {
         double rmse_display = res.mean_rmse;
         if (state.selected_camera >= 0 && state.selected_camera < nc) {
             const auto &cam = res.cameras[state.selected_camera];
-            rmse_display = (cam.rmse_ba > 0) ? cam.rmse_ba : cam.rmse_init;
+            rmse_display = cam.final_rmse();
             ImGui::Text("%s: RMSE=%.3f px | sx=%.2f sy=%.2f | %d pts | %s",
                 cam.serial.c_str(), rmse_display, cam.sx, cam.sy,
                 cam.num_points, TelecentricDLT::method_name(res.method));
@@ -110,7 +109,7 @@ inline void DrawTeleViewerWindow(TeleViewerState &state) {
     // Find RMSE range for error coloring
     double rmse_min = 1e9, rmse_max = 0;
     for (int c = 0; c < nc; c++) {
-        double rmse = (res.cameras[c].rmse_ba > 0) ? res.cameras[c].rmse_ba : res.cameras[c].rmse_init;
+        double rmse = res.cameras[c].final_rmse();
         rmse_min = std::min(rmse_min, rmse);
         rmse_max = std::max(rmse_max, rmse);
     }
@@ -147,6 +146,7 @@ inline void DrawTeleViewerWindow(TeleViewerState &state) {
                 // Anchor: pseudo-inverse solution A^+ * (p0 - t) where p0 = [0;0]
                 // A^+ = A^T * (A * A^T)^{-1}
                 Eigen::Matrix2d AAt = cam.A * cam.A.transpose();
+                if (std::abs(AAt.determinant()) < 1e-20) continue; // skip degenerate camera
                 Eigen::Matrix<double, 3, 2> Aplus = cam.A.transpose() * AAt.inverse();
                 Eigen::Vector3d X0 = Aplus * (-cam.t);
 
@@ -157,7 +157,7 @@ inline void DrawTeleViewerWindow(TeleViewerState &state) {
                     col = IM_COL32(100, 100, 100, 60);
                     lw = 1.0f;
                 } else if (state.color_by_error) {
-                    double rmse = (cam.rmse_ba > 0) ? cam.rmse_ba : cam.rmse_init;
+                    double rmse = cam.final_rmse();
                     float t = (float)((rmse - rmse_min) / (rmse_max - rmse_min));
                     t = std::clamp(t, 0.0f, 1.0f);
                     // green (low error) -> red (high error)
@@ -337,7 +337,7 @@ inline void DrawTeleViewerWindow(TeleViewerState &state) {
     if (state.hovered_camera >= 0 && state.hovered_camera < nc) {
         int c = state.hovered_camera;
         const auto &cam = res.cameras[c];
-        double rmse = (cam.rmse_ba > 0) ? cam.rmse_ba : cam.rmse_init;
+        double rmse = cam.final_rmse();
 
         ImGui::BeginTooltip();
         ImGui::TextUnformatted(("Camera: " + cam.serial).c_str());
