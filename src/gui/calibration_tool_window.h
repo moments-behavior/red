@@ -564,7 +564,7 @@ inline void DrawCalibrationToolWindow(
 
                 // ── 2D Landmark Labels ──
                 ImGui::TableNextRow();
-                LabelCell("2D Landmark Labels");
+                LabelCell("2D Landmark Labels (optional)");
                 ImGui::TableSetColumnIndex(1);
                 ImGui::SetNextItemWidth(-FLT_MIN);
                 ImGui::InputText("##tele_labelfolder",
