@@ -307,9 +307,7 @@ inline void DrawCalibrationToolWindow(
 
                             // Import existing DLT labels if available
                             std::string labels_dir =
-                                state.project.landmark_labels_folder.empty()
-                                    ? (state.project.project_path + "/red_data")
-                                    : state.project.landmark_labels_folder;
+                                state.project.effective_labels_folder();
                             int imported = TelecentricDLT::import_dlt_labels(
                                 ctx.annotations, 0, n_landmarks,
                                 (int)scene->num_cams, pm.camera_names,
@@ -955,8 +953,9 @@ inline void DrawCalibrationToolWindow(
                             }
 
                             // Auto-load videos for telecentric (direct, like laser)
-                            if (state.project.is_telecentric() &&
-                                !ps.video_loaded) {
+                            if (state.project.is_telecentric()) {
+                                if (ps.video_loaded)
+                                    cb.unload_media();
                                 pm.media_folder = state.project.media_folder;
                                 pm.camera_names.clear();
                                 for (const auto &cn : state.project.camera_names)
@@ -964,12 +963,38 @@ inline void DrawCalibrationToolWindow(
                                 cb.load_videos();
                                 cb.print_metadata();
                                 state.tele_videos_loaded = true;
+
+                                // Setup skeleton + import labels (deferred to avoid dock crash)
+                                cb.deferred->enqueue([&state, &pm, &ctx, scene]() {
+                                    int n_lm = CalibrationTool::count_landmarks_3d(
+                                        state.project.landmarks_3d_file);
+                                    if (n_lm > 0) {
+                                        setup_landmark_skeleton(
+                                            ctx.skeleton, n_lm, pm,
+                                            state.project.project_path);
+
+                                        // Import provided labels if available
+                                        std::string labels_dir =
+                                            state.project.effective_labels_folder();
+                                        if (!labels_dir.empty()) {
+                                            int imported = TelecentricDLT::import_dlt_labels(
+                                                ctx.annotations, 0, n_lm,
+                                                (int)scene->num_cams,
+                                                pm.camera_names, labels_dir);
+                                            if (imported > 0) {
+                                                state.status =
+                                                    "Loaded " + std::to_string(imported) +
+                                                    " labels. Labeling active.";
+                                            }
+                                        }
+                                    }
+                                });
                             }
 
                             // Status
                             if (state.project.is_telecentric()) {
                                 state.status =
-                                    "Project created: loading videos...";
+                                    "Project created. Loading videos...";
                             } else if (state.config_loaded) {
                                 state.status =
                                     "Project created. Config: " +
@@ -1121,9 +1146,7 @@ inline void DrawCalibrationToolWindow(
                                                              pm, state.project.project_path);
 
                                     std::string labels_dir =
-                                        state.project.landmark_labels_folder.empty()
-                                            ? (state.project.project_path + "/red_data")
-                                            : state.project.landmark_labels_folder;
+                                        state.project.effective_labels_folder();
                                     int imported = TelecentricDLT::import_dlt_labels(
                                         ctx.annotations, 0, n_lm,
                                         (int)scene->num_cams, pm.camera_names,
