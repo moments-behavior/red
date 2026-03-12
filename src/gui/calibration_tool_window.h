@@ -255,12 +255,81 @@ inline void DrawCalibrationToolWindow(
                     state.show_create_dialog = false;
                     state.show = true;
 
+                    // Auto-load telecentric videos on project open
+                    if (state.project.is_telecentric() &&
+                        !state.project.media_folder.empty() &&
+                        !state.project.camera_names.empty()) {
+                        cb.deferred->enqueue([&state, &pm, &ps, &cb,
+                                              &imgs_names, &ctx, dc_context
+#ifdef __APPLE__
+                                              , &mac_last_uploaded_frame
+#endif
+                        ]() {
+                            try {
+                                if (ps.video_loaded)
+                                    cb.unload_media();
+                                imgs_names.clear();
+#ifdef __APPLE__
+                                for (size_t ci = 0;
+                                     ci < mac_last_uploaded_frame.size(); ci++)
+                                    mac_last_uploaded_frame[ci] = -1;
+#endif
+                                pm.media_folder = state.project.media_folder;
+                                pm.camera_names.clear();
+                                for (const auto &cn : state.project.camera_names)
+                                    pm.camera_names.push_back("Cam" + cn);
+                                cb.load_videos();
+                                cb.print_metadata();
+                                state.tele_videos_loaded = true;
+
+                                // Auto-start labeling if no labels folder yet
+                                if (state.project.landmark_labels_folder.empty()) {
+                                    int n_landmarks = CalibrationTool::count_landmarks_3d(
+                                        state.project.landmarks_3d_file);
+                                    if (n_landmarks > 0) {
+                                        auto &skeleton = ctx.skeleton;
+                                        skeleton.name = "Target";
+                                        skeleton.num_nodes = n_landmarks;
+                                        skeleton.num_edges = 0;
+                                        skeleton.has_skeleton = true;
+                                        skeleton.node_colors.clear();
+                                        skeleton.edges.clear();
+                                        skeleton.node_names.clear();
+                                        for (int i = 0; i < n_landmarks; i++) {
+                                            skeleton.node_names.push_back(
+                                                "Pt" + std::to_string(i));
+                                            skeleton.node_colors.push_back(
+                                                (ImVec4)ImColor::HSV(
+                                                    i / (float)n_landmarks,
+                                                    0.8f, 0.8f));
+                                        }
+                                        pm.keypoints_root_folder =
+                                            (std::filesystem::path(
+                                                 state.project.project_path) /
+                                             "labeled_data").string();
+                                        std::error_code ec;
+                                        std::filesystem::create_directories(
+                                            pm.keypoints_root_folder, ec);
+                                        pm.plot_keypoints_flag = true;
+                                        pm.camera_params.clear();
+                                    }
+                                }
+
+                                state.status =
+                                    "Loaded " +
+                                    std::to_string(state.project.camera_names.size()) +
+                                    " cameras" +
+                                    (pm.plot_keypoints_flag ? ". Labeling ready." : ".");
+                            } catch (const std::exception &e) {
+                                state.status =
+                                    std::string("Error: ") + e.what();
+                            }
+                        });
+                    }
+
                     // Status message
                     if (state.project.is_telecentric()) {
-                        state.status =
-                            "Project loaded: " +
-                            std::to_string(state.project.camera_names.size()) +
-                            " cameras (telecentric)";
+                        state.status = "Loading telecentric videos...";
                     } else if (state.project.has_aruco() && state.config_loaded) {
                         state.status =
                             "Project loaded: " +
@@ -755,11 +824,11 @@ inline void DrawCalibrationToolWindow(
                      !state.project.calibration_folder.empty() ||
                      !state.project.aruco_video_folder.empty());
             } else {
+                // Telecentric: labels folder is optional (can label in-app)
                 create_ok =
                     !state.project.project_name.empty() &&
                     !state.project.project_root_path.empty() &&
                     !state.project.media_folder.empty() &&
-                    !state.project.landmark_labels_folder.empty() &&
                     !state.project.landmarks_3d_file.empty() &&
                     !state.project.camera_names.empty();
             }
@@ -859,13 +928,77 @@ inline void DrawCalibrationToolWindow(
                                 state.laser_total_frames = dc_context->estimated_num_frames;
                             }
 
+                            // Auto-load videos + start labeling for telecentric
+                            if (state.project.is_telecentric()) {
+                                cb.deferred->enqueue([&state, &pm, &ps, &cb,
+                                                      &imgs_names, &ctx, dc_context
+#ifdef __APPLE__
+                                                      , &mac_last_uploaded_frame
+#endif
+                                ]() {
+                                    try {
+                                        if (ps.video_loaded)
+                                            cb.unload_media();
+                                        imgs_names.clear();
+#ifdef __APPLE__
+                                        for (size_t ci = 0;
+                                             ci < mac_last_uploaded_frame.size(); ci++)
+                                            mac_last_uploaded_frame[ci] = -1;
+#endif
+                                        pm.media_folder = state.project.media_folder;
+                                        pm.camera_names.clear();
+                                        for (const auto &cn : state.project.camera_names)
+                                            pm.camera_names.push_back("Cam" + cn);
+                                        cb.load_videos();
+                                        cb.print_metadata();
+                                        state.tele_videos_loaded = true;
+
+                                        // Auto-start labeling if 3D landmarks available
+                                        int n_landmarks = CalibrationTool::count_landmarks_3d(
+                                            state.project.landmarks_3d_file);
+                                        if (n_landmarks > 0) {
+                                            auto &skeleton = ctx.skeleton;
+                                            skeleton.name = "Target";
+                                            skeleton.num_nodes = n_landmarks;
+                                            skeleton.num_edges = 0;
+                                            skeleton.has_skeleton = true;
+                                            skeleton.node_colors.clear();
+                                            skeleton.edges.clear();
+                                            skeleton.node_names.clear();
+                                            for (int i = 0; i < n_landmarks; i++) {
+                                                skeleton.node_names.push_back(
+                                                    "Pt" + std::to_string(i));
+                                                skeleton.node_colors.push_back(
+                                                    (ImVec4)ImColor::HSV(
+                                                        i / (float)n_landmarks,
+                                                        0.8f, 0.8f));
+                                            }
+                                            pm.keypoints_root_folder =
+                                                (std::filesystem::path(
+                                                     state.project.project_path) /
+                                                 "labeled_data").string();
+                                            std::error_code ec;
+                                            std::filesystem::create_directories(
+                                                pm.keypoints_root_folder, ec);
+                                            pm.plot_keypoints_flag = true;
+                                            pm.camera_params.clear();
+                                        }
+
+                                        state.status =
+                                            "Loaded " +
+                                            std::to_string(state.project.camera_names.size()) +
+                                            " cameras. Labeling ready.";
+                                    } catch (const std::exception &e) {
+                                        state.status =
+                                            std::string("Error: ") + e.what();
+                                    }
+                                });
+                            }
+
                             // Status
                             if (state.project.is_telecentric()) {
                                 state.status =
-                                    "Project created: " +
-                                    std::to_string(
-                                        state.project.camera_names.size()) +
-                                    " cameras (telecentric)";
+                                    "Project created: loading videos...";
                             } else if (state.config_loaded) {
                                 state.status =
                                     "Project created. Config: " +
