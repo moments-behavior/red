@@ -255,46 +255,26 @@ inline void DrawCalibrationToolWindow(
                     state.show_create_dialog = false;
                     state.show = true;
 
-                    // Auto-load telecentric videos on project open
+                    // Auto-load telecentric videos on project open (direct, like laser)
                     if (state.project.is_telecentric() &&
                         !state.project.media_folder.empty() &&
-                        !state.project.camera_names.empty()) {
-                        cb.deferred->enqueue([&state, &pm, &ps, &cb,
-                                              &imgs_names, dc_context
-#ifdef __APPLE__
-                                              , &mac_last_uploaded_frame
-#endif
-                        ]() {
-                            try {
-                                if (ps.video_loaded)
-                                    cb.unload_media();
-                                imgs_names.clear();
-#ifdef __APPLE__
-                                for (size_t ci = 0;
-                                     ci < mac_last_uploaded_frame.size(); ci++)
-                                    mac_last_uploaded_frame[ci] = -1;
-#endif
-                                pm.media_folder = state.project.media_folder;
-                                pm.camera_names.clear();
-                                for (const auto &cn : state.project.camera_names)
-                                    pm.camera_names.push_back("Cam" + cn);
-                                cb.load_videos();
-                                cb.print_metadata();
-                                state.tele_videos_loaded = true;
-                                state.status =
-                                    "Loaded " +
-                                    std::to_string(state.project.camera_names.size()) +
-                                    " cameras. Click 'Start Labeling' to annotate.";
-                            } catch (const std::exception &e) {
-                                state.status =
-                                    std::string("Error: ") + e.what();
-                            }
-                        });
+                        !state.project.camera_names.empty() &&
+                        !ps.video_loaded) {
+                        pm.media_folder = state.project.media_folder;
+                        pm.camera_names.clear();
+                        for (const auto &cn : state.project.camera_names)
+                            pm.camera_names.push_back("Cam" + cn);
+                        cb.load_videos();
+                        cb.print_metadata();
+                        state.tele_videos_loaded = true;
                     }
 
                     // Status message
                     if (state.project.is_telecentric()) {
-                        state.status = "Loading telecentric videos...";
+                        state.status =
+                            "Loaded " +
+                            std::to_string(state.project.camera_names.size()) +
+                            " cameras. Click 'Start Labeling' to annotate.";
                     } else if (state.project.has_aruco() && state.config_loaded) {
                         state.status =
                             "Project loaded: " +
@@ -893,39 +873,16 @@ inline void DrawCalibrationToolWindow(
                                 state.laser_total_frames = dc_context->estimated_num_frames;
                             }
 
-                            // Auto-load videos for telecentric
-                            if (state.project.is_telecentric()) {
-                                cb.deferred->enqueue([&state, &pm, &ps, &cb,
-                                                      &imgs_names, dc_context
-#ifdef __APPLE__
-                                                      , &mac_last_uploaded_frame
-#endif
-                                ]() {
-                                    try {
-                                        if (ps.video_loaded)
-                                            cb.unload_media();
-                                        imgs_names.clear();
-#ifdef __APPLE__
-                                        for (size_t ci = 0;
-                                             ci < mac_last_uploaded_frame.size(); ci++)
-                                            mac_last_uploaded_frame[ci] = -1;
-#endif
-                                        pm.media_folder = state.project.media_folder;
-                                        pm.camera_names.clear();
-                                        for (const auto &cn : state.project.camera_names)
-                                            pm.camera_names.push_back("Cam" + cn);
-                                        cb.load_videos();
-                                        cb.print_metadata();
-                                        state.tele_videos_loaded = true;
-                                        state.status =
-                                            "Loaded " +
-                                            std::to_string(state.project.camera_names.size()) +
-                                            " cameras. Click 'Start Labeling' to annotate.";
-                                    } catch (const std::exception &e) {
-                                        state.status =
-                                            std::string("Error: ") + e.what();
-                                    }
-                                });
+                            // Auto-load videos for telecentric (direct, like laser)
+                            if (state.project.is_telecentric() &&
+                                !ps.video_loaded) {
+                                pm.media_folder = state.project.media_folder;
+                                pm.camera_names.clear();
+                                for (const auto &cn : state.project.camera_names)
+                                    pm.camera_names.push_back("Cam" + cn);
+                                cb.load_videos();
+                                cb.print_metadata();
+                                state.tele_videos_loaded = true;
                             }
 
                             // Status
