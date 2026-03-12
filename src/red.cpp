@@ -450,6 +450,7 @@ int main(int argc, char **argv) {
         // Save new project config before closing old project
         ProjectManager new_pm = pm_ref;
         close_project(ctx);
+        win.reset();
         pm_ref = new_pm;
         if (!ensure_dir_exists(pm_ref.project_path, &err))
             return false;

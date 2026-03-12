@@ -174,6 +174,7 @@ inline void HandleMainMenuDialogs(
                     popups.pushError(err);
                 } else {
                     close_project(ctx);
+                    win.reset();
                     pm = loaded;
                     if (setup_project(pm, skeleton, skeleton_map, &err)) {
                         on_project_loaded(ctx, print_metadata_fn, print_summary_fn);
@@ -217,6 +218,7 @@ inline void HandleMainMenuDialogs(
                 popups.pushError(err);
             } else {
                 close_project(ctx);
+                win.reset();
                 pm = loaded;
                 if (setup_project(pm, skeleton, skeleton_map, &err)) {
                     on_project_loaded(ctx, print_metadata_fn, print_summary_fn);
