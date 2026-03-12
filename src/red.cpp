@@ -70,6 +70,26 @@
 #endif
 #include "keypoints_table.h"
 
+#ifdef __APPLE__
+// Extract RGB pixel data from a BGRA CVPixelBuffer.
+inline void extract_rgb_from_cvpixelbuf(CVPixelBufferRef pb, std::vector<uint8_t> &rgb, int w, int h) {
+    CVPixelBufferLockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
+    const uint8_t *base = (const uint8_t *)CVPixelBufferGetBaseAddress(pb);
+    size_t stride = CVPixelBufferGetBytesPerRow(pb);
+    rgb.resize(w * h * 3);
+    for (int y = 0; y < h; y++) {
+        const uint8_t *src = base + y * stride;
+        uint8_t *dst = rgb.data() + y * w * 3;
+        for (int x = 0; x < w; x++) {
+            dst[x * 3 + 0] = src[x * 4 + 2]; // R
+            dst[x * 3 + 1] = src[x * 4 + 1]; // G
+            dst[x * 3 + 2] = src[x * 4 + 0]; // B
+        }
+    }
+    CVPixelBufferUnlockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
+}
+#endif
+
 static void print_video_metadata(const std::vector<FFmpegDemuxer *> &demuxers,
                                  const std::vector<std::string> &camera_names,
                                  int seek_interval) {
@@ -243,7 +263,6 @@ int main(int argc, char **argv) {
     LabelingToolState labeling_state;
     bool save_requested = false;
     int current_frame_num = 0;
-    int previous_frame_num = -1;
     std::vector<std::string> imgs_names;
 
     // for labeling
@@ -517,6 +536,21 @@ int main(int argc, char **argv) {
                                                  ctx); },
                 nullptr});
 
+    // Helper: find the first visible camera index (for frame-buffer display).
+    auto find_visible_cam = [&]() -> int {
+        if (ps.pause_seeked) return 0;
+        for (int i = 0; i < scene->num_cams; i++)
+            if (window_was_decoding[pm.camera_names[i]]) return i;
+        return 0;
+    };
+
+    // Helper: seek by a signed multiplier of the seek interval.
+    auto seek_relative = [&](int multiplier) {
+        int target = std::clamp(current_frame_num + multiplier * dc_context->seek_interval,
+                                0, dc_context->total_num_frame);
+        seek_all_cameras(scene, target, dc_context->video_fps, ps, false);
+    };
+
     main_loop_running = true;
     while (!glfwWindowShouldClose(window->render_target)) {
         // Poll and handle events (inputs, window resize, etc.)
@@ -613,15 +647,7 @@ int main(int argc, char **argv) {
 
         static int select_corr_head = 0;
         if (ps.video_loaded && (!ps.play_video)) {
-            int visible_idx = 0;
-            if (!ps.pause_seeked) {
-                for (int i = 0; i < scene->num_cams; i++) {
-                    if (window_was_decoding[pm.camera_names[i]]) {
-                        visible_idx = i;
-                        break;
-                    }
-                }
-            }
+            int visible_idx = find_visible_cam();
 
             // Frame buffer keyboard navigation — global so it works
             // even when the "Frames in the buffer" tab is hidden.
@@ -666,15 +692,7 @@ int main(int argc, char **argv) {
                     ImGui::TextDisabled("Playing...");
                     ImGui::EndDisabled();
                 } else {
-                    int visible_idx = 0;
-                    if (!ps.pause_seeked) {
-                        for (int i = 0; i < scene->num_cams; i++) {
-                            if (window_was_decoding[pm.camera_names[i]]) {
-                                visible_idx = i;
-                                break;
-                            }
-                        }
-                    }
+                    int visible_idx = find_visible_cam();
 
                     // Horizontal scrollable row of frames with vertical text
                     float scale = 1.15f;
@@ -994,33 +1012,8 @@ int main(int argc, char **argv) {
                     }
 #else
                     if (ps.play_video) {
-                        // if the current frame is ready, upload for
-                        // display, otherwise wait for the frame to get
-                        // ready while
-                        // (scene->display_buffer[j][ps.read_head]
-                        //            .frame_number !=
-                        //        ps.to_display_frame_number) {
-                        //     std::cout
-                        //         << win_name << " , read head: " <<
-                        //         ps.read_head
-                        //         << ", frame_number: "
-                        //         << scene->display_buffer[j][ps.read_head]
-                        //                .frame_number
-                        //         << ", to_display_frame_number: "
-                        //         << ps.to_display_frame_number <<
-                        //         std::endl;
-                        //     std::this_thread::sleep_for(
-                        //         std::chrono::milliseconds(1));
-                        // }
-
                         current_frame_num = ps.to_display_frame_number;
                         if (scene->use_cpu_buffer) {
-                            // upload_texture(&scene->image_texture[j],
-                            // scene->display_buffer[j][read_head].frame,
-                            // scene->image_width[j],
-                            // scene->image_height[j]);
-                            // // 2x slower than pbo copy frame to cuda
-                            // buffer
                             ck(cudaMemcpy(
                                 scene->pbo_cuda[j].cuda_buffer,
                                 scene->display_buffer[j][ps.read_head].frame,
@@ -1037,10 +1030,6 @@ int main(int argc, char **argv) {
                         }
                     } else {
                         if (scene->use_cpu_buffer) {
-                            // upload_texture(&scene->image_texture[j],
-                            // scene->display_buffer[j][select_corr_head].frame,
-                            // scene->image_width[j],
-                            // scene->image_height[j]);
                             ck(cudaMemcpy(
                                 scene->pbo_cuda[j].cuda_buffer,
                                 scene->display_buffer[j][select_corr_head]
@@ -1048,22 +1037,6 @@ int main(int argc, char **argv) {
                                 scene->image_width[j] * scene->image_height[j] *
                                     4,
                                 cudaMemcpyHostToDevice));
-
-                            // // brighten in-place on GPU using npp
-                            // NppiSize roi = {
-                            //     static_cast<int>(scene->image_width[j]),
-                            //     static_cast<int>(scene->image_height[j])};
-                            // Npp8u *d_img =
-                            //     (Npp8u *)scene->pbo_cuda[j].cuda_buffer;
-                            // int step = scene->image_width[j] *
-                            //            4; // RGBA = 4 bytes per pixel
-
-                            // Npp8u addC[3] = {(Npp8u)brightness,
-                            //                  (Npp8u)brightness,
-                            //                  (Npp8u)brightness};
-
-                            // nppiAddC_8u_AC4IRSfs(addC, d_img, step, roi,
-                            //                      0); // in-place RGBA
 
                             apply_contrast_brightness_rgba(
                                 scene->pbo_cuda[j].cuda_buffer,
@@ -1097,9 +1070,6 @@ int main(int argc, char **argv) {
                         ImVec2(0, 0));
                     ImVec2 avail_size = ImGui::GetContentRegionAvail();
 
-                    // ImGui::Image((void*)(intptr_t)image_texture[j],
-                    // avail_size);
-                    //
                     if (pm.plot_keypoints_flag) {
                         keypoints_find = (annotations.find(current_frame_num) !=
                                           annotations.end());
@@ -1283,20 +1253,7 @@ int main(int argc, char **argv) {
                                         int mh = ps.play_video ? ps.read_head : select_corr_head;
                                         CVPixelBufferRef pb = scene->display_buffer[j][mh].pixel_buffer;
                                         if (pb) {
-                                            sam_rgb_buf.resize(iw * ih * 3);
-                                            CVPixelBufferLockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
-                                            const uint8_t *bgra = (const uint8_t *)CVPixelBufferGetBaseAddress(pb);
-                                            int stride = (int)CVPixelBufferGetBytesPerRow(pb);
-                                            for (int y = 0; y < ih; y++) {
-                                                const uint8_t *src = bgra + y * stride;
-                                                uint8_t *dst = sam_rgb_buf.data() + y * iw * 3;
-                                                for (int x = 0; x < iw; x++) {
-                                                    dst[x*3+0] = src[x*4+2]; // R from BGRA
-                                                    dst[x*3+1] = src[x*4+1]; // G
-                                                    dst[x*3+2] = src[x*4+0]; // B
-                                                }
-                                            }
-                                            CVPixelBufferUnlockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
+                                            extract_rgb_from_cvpixelbuf(pb, sam_rgb_buf, iw, ih);
                                             sam_rgb_frame = (int)frame;
                                             sam_rgb_cam = j;
                                         }
@@ -1401,23 +1358,9 @@ int main(int argc, char **argv) {
                     std::vector<const uint8_t *> rgb_bufs(scene->num_cams, nullptr);
                     std::vector<std::vector<uint8_t>> rgb_storage(scene->num_cams);
                     for (int c = 0; c < (int)scene->num_cams; ++c) {
-                        int w = widths[c], h = heights[c];
                         CVPixelBufferRef pb = scene->display_buffer[c][mh].pixel_buffer;
                         if (!pb) continue;
-                        rgb_storage[c].resize(w * h * 3);
-                        CVPixelBufferLockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
-                        const uint8_t *bgra = (const uint8_t *)CVPixelBufferGetBaseAddress(pb);
-                        int stride = (int)CVPixelBufferGetBytesPerRow(pb);
-                        for (int y = 0; y < h; y++) {
-                            const uint8_t *src = bgra + y * stride;
-                            uint8_t *dst = rgb_storage[c].data() + y * w * 3;
-                            for (int x = 0; x < w; x++) {
-                                dst[x*3+0] = src[x*4+2];
-                                dst[x*3+1] = src[x*4+1];
-                                dst[x*3+2] = src[x*4+0];
-                            }
-                        }
-                        CVPixelBufferUnlockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
+                        extract_rgb_from_cvpixelbuf(pb, rgb_storage[c], widths[c], heights[c]);
                         rgb_bufs[c] = rgb_storage[c].data();
                     }
                     jarvis_predict_frame(jarvis_state, annotations,
@@ -1431,34 +1374,12 @@ int main(int argc, char **argv) {
 
             if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow, false) &&
                 !io.WantTextInput) {
-                if (ImGui::GetIO().KeyShift) {
-                    int clamped_frame = std::max(
-                        0, current_frame_num - 10 * dc_context->seek_interval);
-                    seek_all_cameras(scene, clamped_frame,
-                                     dc_context->video_fps, ps, false);
-                } else {
-                    int clamped_frame = std::max(
-                        0, current_frame_num - dc_context->seek_interval);
-                    seek_all_cameras(scene, clamped_frame,
-                                     dc_context->video_fps, ps, false);
-                }
+                seek_relative(ImGui::GetIO().KeyShift ? -10 : -1);
             }
 
             if (ImGui::IsKeyPressed(ImGuiKey_RightArrow, false) &&
                 !io.WantTextInput) {
-                if (ImGui::GetIO().KeyShift) {
-                    int clamped_frame = std::min(
-                        dc_context->total_num_frame,
-                        current_frame_num + 10 * dc_context->seek_interval);
-                    seek_all_cameras(scene, clamped_frame,
-                                     dc_context->video_fps, ps, false);
-                } else {
-                    int clamped_frame =
-                        std::min(dc_context->total_num_frame,
-                                 current_frame_num + dc_context->seek_interval);
-                    seek_all_cameras(scene, clamped_frame,
-                                     dc_context->video_fps, ps, false);
-                }
+                seek_relative(ImGui::GetIO().KeyShift ? 10 : 1);
             }
 
             for (const auto &[name, flag] : window_need_decoding) {

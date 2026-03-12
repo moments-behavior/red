@@ -13,7 +13,7 @@
 #include "deferred_queue.h"
 #include "global.h"
 #include "gui.h"
-#include "gui/gui_save_load.h"
+#include "annotation_csv.h"
 #include "gui/calibration_tool_window.h"
 #include "gui/popup_stack.h"
 #include "gui/toast.h"
@@ -60,12 +60,12 @@ static int g_fail = 0;
 
 
 // ---------------------------------------------------------------------------
-// current_date_time
+// current_timestamp (AnnotationCSV)
 // Format: YYYY_MM_DD_HH_MM_SS  (19 chars, underscores at 4,7,10,13,16)
 // ---------------------------------------------------------------------------
 
 static void test_current_date_time() {
-    std::string dt = current_date_time();
+    std::string dt = AnnotationCSV::current_timestamp();
 
     EXPECT_TRUE(dt.length() == 19);
 

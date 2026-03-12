@@ -218,6 +218,12 @@ inline void switch_ini_to_project(AppContext &ctx) {
 inline void on_project_loaded(AppContext &ctx,
                               std::function<void()> print_metadata_fn = nullptr,
                               std::function<void(const std::string &)> print_summary_fn = nullptr) {
+    // Unload any existing media before loading new project
+    unload_media(ctx.ps, ctx.pm, ctx.demuxers, ctx.dc_context,
+                 ctx.scene, ctx.decoder_threads,
+                 ctx.is_view_focused, ctx.window_was_decoding);
+    ctx.annotations.clear();
+
     switch_ini_to_project(ctx);
     std::map<std::string, std::string> empty_selected_files;
     load_videos(empty_selected_files, ctx.ps, ctx.pm,
@@ -251,9 +257,6 @@ inline void on_project_loaded(AppContext &ctx,
                                       ctx.pm.camera_names, label_err)) {
             ctx.popups.pushError(label_err);
             ctx.annotations.clear();
-        } else {
-            // Load extended annotations (bbox, obb, mask) on top
-            load_annotations_json(ctx.annotations, most_recent_folder);
         }
     }
     if (print_summary_fn) print_summary_fn(most_recent_folder);

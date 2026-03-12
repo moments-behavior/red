@@ -28,9 +28,9 @@ static void gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
                 pt_size = 6.0f;
             }
             int id = skeleton->num_nodes * view_idx + node;
-            static bool drag_point_clicked;
-            static bool drag_point_hovered;
-            static bool drag_point_modified;
+            bool drag_point_clicked;
+            bool drag_point_hovered;
+            bool drag_point_modified;
             drag_point_modified = ImPlot::DragPoint(
                 id, &cam.keypoints[node].x,
                 &cam.keypoints[node].y, node_color,
@@ -106,7 +106,7 @@ bool is_in_camera_fov(const Eigen::Vector3d &point_world,
 }
 
 static void reprojection(FrameAnnotation &fa, SkeletonContext *skeleton,
-                         std::vector<CameraParams> camera_params,
+                         const std::vector<CameraParams> &camera_params,
                          RenderScene *scene) {
 
     bool telecentric = !camera_params.empty() && camera_params[0].telecentric;

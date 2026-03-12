@@ -226,7 +226,12 @@ inline bool setup_project(ProjectManager &pm, SkeletonContext &skeleton,
     skeleton.node_names.clear();
 
     if (pm.load_skeleton_from_json) {
-        load_skeleton_json(pm.skeleton_file, &skeleton);
+        try {
+            load_skeleton_json(pm.skeleton_file, &skeleton);
+        } catch (const std::exception &e) {
+            if (err) *err = "Error loading skeleton: " + std::string(e.what());
+            return false;
+        }
     } else {
         auto it = skeleton_map.find(pm.skeleton_name);
         if (it == skeleton_map.end()) {

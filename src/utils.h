@@ -1,5 +1,4 @@
-#ifndef RED_UTILS
-#define RED_UTILS
+#pragma once
 #include "render.h"
 #include "skeleton.h"
 #include <chrono>
@@ -46,4 +45,3 @@ std::string dir_difference(const std::filesystem::path &a,
 bool ensure_dir_exists(std::string path_string, std::string *err);
 bool ends_with_ci(std::string_view s, std::string_view suffix);
 std::string get_home_directory();
-#endif

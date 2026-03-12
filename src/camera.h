@@ -20,28 +20,6 @@ struct CameraParams {
     bool telecentric = false;
 };
 
-void camera_print_parameters(CameraParams *cvp) {
-    Eigen::IOFormat fmt(Eigen::StreamPrecision, 0, ", ", ",\n", "[", "]", "[", "]");
-    std::cout << "k = " << std::endl
-              << cvp->k.format(fmt) << std::endl
-              << std::endl;
-    std::cout << "dist_coeffs  = " << std::endl
-              << cvp->dist_coeffs.transpose().format(fmt) << std::endl
-              << std::endl;
-    std::cout << "r = " << std::endl
-              << cvp->r.format(fmt) << std::endl
-              << std::endl;
-    std::cout << "tvec = " << std::endl
-              << cvp->tvec.transpose().format(fmt) << std::endl
-              << std::endl;
-    std::cout << "rvec = " << std::endl
-              << cvp->rvec.transpose().format(fmt) << std::endl
-              << std::endl;
-    std::cout << "projection_mat = " << std::endl
-              << cvp->projection_mat.format(fmt) << std::endl
-              << std::endl;
-}
-
 bool camera_load_params_from_yaml(const std::string &calibration_file,
                                   CameraParams &camera_params,
                                   std::string &error_message) {
@@ -92,61 +70,6 @@ bool camera_load_params_from_yaml(const std::string &calibration_file,
     camera_params.projection_mat = red_math::projectionFromKRt(
         camera_params.k, camera_params.r, camera_params.tvec);
     return true;
-}
-
-CameraParams camera_load_params_from_csv(std::string csv_filename,
-                                         int cam_idx) {
-    std::cout << csv_filename << std::endl;
-    CameraParams cvp;
-
-    std::ifstream fin;
-    fin.open(csv_filename);
-    if (fin.fail())
-        throw csv_filename;
-
-    std::string line;
-    std::string delimeter = ",";
-    size_t pos = 0;
-    std::string token;
-
-    // read csv file with cam parameters and tokenize line for this camera
-    int lineNum = 0;
-    std::vector<float> csvCamValues;
-
-    while (!fin.eof()) {
-        fin >> line;
-
-        while ((pos = line.find(delimeter)) != std::string::npos) {
-            token = line.substr(0, pos);
-            if (lineNum == cam_idx) {
-                csvCamValues.push_back(stof(token));
-            }
-            line.erase(0, pos + delimeter.length());
-        }
-        lineNum++;
-    }
-
-    // k: 9 values (row-major 3x3)
-    for (int i = 0; i < 3; i++)
-        for (int j = 0; j < 3; j++)
-            cvp.k(i, j) = csvCamValues[i * 3 + j];
-
-    // r: 9 values (row-major 3x3)
-    for (int i = 0; i < 3; i++)
-        for (int j = 0; j < 3; j++)
-            cvp.r(i, j) = csvCamValues[9 + i * 3 + j];
-
-    // tvec: 3 values
-    cvp.tvec = Eigen::Vector3d(csvCamValues[18], csvCamValues[19], csvCamValues[20]);
-
-    // dist_coeffs: 4 values (pad 5th with 0)
-    cvp.dist_coeffs = Eigen::Matrix<double, 5, 1>::Zero();
-    for (int i = 0; i < 4; i++)
-        cvp.dist_coeffs(i) = csvCamValues[21 + i];
-
-    cvp.rvec = red_math::rotationMatrixToVector(cvp.r);
-    cvp.projection_mat = red_math::projectionFromKRt(cvp.k, cvp.r, cvp.tvec);
-    return cvp;
 }
 
 // Load telecentric camera parameters from DLT coefficient CSV + optional distortion CSV.

@@ -202,6 +202,27 @@ inline void DrawCalibrationToolWindow(
 #ifdef __APPLE__
     auto &mac_last_uploaded_frame = ctx.mac_last_uploaded_frame;
 #endif
+
+    // Helper: enqueue a deferred close-media action that clears a loaded flag
+    // and writes a message to the specified status string.
+    auto close_media_deferred = [&](bool &loaded_flag, std::string &status_out,
+                                    const char *msg) {
+        cb.deferred->enqueue([&loaded_flag, &status_out, &cb, &imgs_names, msg
+#ifdef __APPLE__
+            , &mac_last_uploaded_frame
+#endif
+        ]() {
+            cb.unload_media();
+            imgs_names.clear();
+#ifdef __APPLE__
+            for (size_t ci = 0; ci < mac_last_uploaded_frame.size(); ci++)
+                mac_last_uploaded_frame[ci] = -1;
+#endif
+            loaded_flag = false;
+            status_out = msg;
+        });
+    };
+
     // Always process file dialogs (even when window is hidden)
 
     // Calibration: Browse for root directory (creation dialog)
@@ -1160,22 +1181,7 @@ inline void DrawCalibrationToolWindow(
                                        "Videos loaded");
                     ImGui::SameLine();
                     if (ImGui::Button("Close Videos##tele_close")) {
-                        cb.deferred->enqueue([&state, &ps, &cb,
-                                              &imgs_names
-#ifdef __APPLE__
-                                              , &mac_last_uploaded_frame
-#endif
-                        ]() {
-                            cb.unload_media();
-                            imgs_names.clear();
-#ifdef __APPLE__
-                            for (size_t ci = 0;
-                                 ci < mac_last_uploaded_frame.size(); ci++)
-                                mac_last_uploaded_frame[ci] = -1;
-#endif
-                            state.tele_videos_loaded = false;
-                            state.status = "Videos closed";
-                        });
+                        close_media_deferred(state.tele_videos_loaded, state.status, "Videos closed");
                     }
                 }
 
@@ -1602,22 +1608,7 @@ inline void DrawCalibrationToolWindow(
                                        "Images loaded");
                     ImGui::SameLine();
                     if (ImGui::Button("Close Images##aruco_close_img")) {
-                        cb.deferred->enqueue([&state, &ps, &cb,
-                                              &imgs_names
-#ifdef __APPLE__
-                                              , &mac_last_uploaded_frame
-#endif
-                        ]() {
-                            cb.unload_media();
-                            imgs_names.clear();
-#ifdef __APPLE__
-                            for (size_t ci = 0;
-                                 ci < mac_last_uploaded_frame.size(); ci++)
-                                mac_last_uploaded_frame[ci] = -1;
-#endif
-                            state.images_loaded = false;
-                            state.status = "Images closed";
-                        });
+                        close_media_deferred(state.images_loaded, state.status, "Images closed");
                     }
                 }
 
@@ -1904,22 +1895,7 @@ inline void DrawCalibrationToolWindow(
                                        "Videos loaded");
                     ImGui::SameLine();
                     if (ImGui::Button("Close Videos##aruco_close")) {
-                        cb.deferred->enqueue([&state, &ps, &cb,
-                                              &imgs_names
-#ifdef __APPLE__
-                                              , &mac_last_uploaded_frame
-#endif
-                        ]() {
-                            cb.unload_media();
-                            imgs_names.clear();
-#ifdef __APPLE__
-                            for (size_t ci = 0;
-                                 ci < mac_last_uploaded_frame.size(); ci++)
-                                mac_last_uploaded_frame[ci] = -1;
-#endif
-                            state.aruco_videos_loaded = false;
-                            state.status = "Videos closed";
-                        });
+                        close_media_deferred(state.aruco_videos_loaded, state.status, "Videos closed");
                     }
                 }
 
@@ -2463,22 +2439,7 @@ inline void DrawCalibrationToolWindow(
                                            "Videos loaded");
                         ImGui::SameLine();
                         if (ImGui::Button("Close Videos##laser_close")) {
-                            cb.deferred->enqueue([&state, &ps, &cb,
-                                                  &imgs_names
-#ifdef __APPLE__
-                                                  , &mac_last_uploaded_frame
-#endif
-                            ]() {
-                                cb.unload_media();
-                                imgs_names.clear();
-#ifdef __APPLE__
-                                for (size_t ci = 0;
-                                     ci < mac_last_uploaded_frame.size(); ci++)
-                                    mac_last_uploaded_frame[ci] = -1;
-#endif
-                                state.laser_ready = false;
-                                state.laser_status = "Videos closed";
-                            });
+                            close_media_deferred(state.laser_ready, state.laser_status, "Videos closed");
                         }
                     }
                     ImGui::EndDisabled();
@@ -2855,6 +2816,11 @@ inline void DrawCalibrationToolWindow(
         state.vid_done = false;
         state.exp_img_done = false;
         state.exp_vid_done = false;
+        state.img_running = false;
+        state.vid_running = false;
+        state.exp_img_running = false;
+        state.exp_vid_running = false;
+        state.laser_running = false;
         state.status.clear();
         state.aruco_videos_loaded = false;
         state.tele_videos_loaded = false;

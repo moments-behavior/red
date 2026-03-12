@@ -1,5 +1,4 @@
-#ifndef RED_SKELETON
-#define RED_SKELETON
+#pragma once
 #include "imgui.h"
 #include "json.hpp"
 #include "render.h"
@@ -78,4 +77,3 @@ bool has_any_labels(const KeyPoints *keypoints, const SkeletonContext &skeleton,
 
 void copy_keypoints(KeyPoints *dst, const KeyPoints *src,
                     const RenderScene *scene, const SkeletonContext *skeleton);
-#endif
