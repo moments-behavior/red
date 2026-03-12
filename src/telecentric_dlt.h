@@ -781,6 +781,59 @@ inline CrossValidationResult cross_validate_camera(
     return cv;
 }
 
+// ── Label Import (DLT CSV → AnnotationMap) ──────────────────────────────────
+
+// Import DLT-format 2D label CSVs into an AnnotationMap at a given frame.
+// Reads Cam<name>.csv files from the labels folder and populates keypoints.
+// Returns the number of total labeled points imported.
+template <typename AnnotationMap>
+inline int import_dlt_labels(
+    AnnotationMap &annotations,
+    int frame_num,
+    int num_nodes,
+    int num_cameras,
+    const std::vector<std::string> &camera_names,
+    const std::string &labels_folder) {
+
+    namespace fs = std::filesystem;
+    if (labels_folder.empty() || !fs::is_directory(labels_folder))
+        return 0;
+
+    int total = 0;
+    auto &fa = annotations[frame_num];
+    // Ensure cameras array is large enough
+    if ((int)fa.cameras.size() < num_cameras)
+        fa.cameras.resize(num_cameras);
+
+    for (int c = 0; c < num_cameras; c++) {
+        std::string cam_name = (c < (int)camera_names.size())
+                                   ? camera_names[c]
+                                   : "camera" + std::to_string(c);
+        std::string path = labels_folder + "/" + cam_name + ".csv";
+
+        auto pts = parse_2d_labels(path, 0, false); // no flip — raw coords
+
+        // Ensure keypoints array is large enough
+        if ((int)fa.cameras[c].keypoints.size() < num_nodes)
+            fa.cameras[c].keypoints.resize(num_nodes);
+
+        for (int n = 0; n < num_nodes && n < (int)pts.size(); n++) {
+            if (pts[n].x() < 9e6 && pts[n].y() < 9e6) {
+                fa.cameras[c].keypoints[n].x = pts[n].x();
+                fa.cameras[c].keypoints[n].y = pts[n].y();
+                fa.cameras[c].keypoints[n].labeled = true;
+                total++;
+            }
+        }
+    }
+
+    // Initialize 3D keypoints array
+    if ((int)fa.kp3d.size() < num_nodes)
+        fa.kp3d.resize(num_nodes);
+
+    return total;
+}
+
 // ── Label Export ─────────────────────────────────────────────────────────────
 
 // Export annotation keypoints as DLT-format 2D label CSVs.

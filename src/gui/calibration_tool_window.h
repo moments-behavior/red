@@ -271,6 +271,56 @@ inline void DrawCalibrationToolWindow(
                         cb.load_videos();
                         cb.print_metadata();
                         state.tele_videos_loaded = true;
+
+                        // Auto-setup labeling skeleton + import existing labels
+                        int n_landmarks = CalibrationTool::count_landmarks_3d(
+                            state.project.landmarks_3d_file);
+                        if (n_landmarks > 0) {
+                            auto &skel = ctx.skeleton;
+                            skel.name = "Target";
+                            skel.num_nodes = n_landmarks;
+                            skel.num_edges = 0;
+                            skel.has_skeleton = true;
+                            skel.node_colors.clear();
+                            skel.edges.clear();
+                            skel.node_names.clear();
+                            for (int i = 0; i < n_landmarks; i++) {
+                                skel.node_names.push_back(
+                                    "Pt" + std::to_string(i));
+                                skel.node_colors.push_back(
+                                    (ImVec4)ImColor::HSV(
+                                        i / (float)n_landmarks,
+                                        0.8f, 0.8f));
+                            }
+                            pm.keypoints_root_folder =
+                                (std::filesystem::path(
+                                     state.project.project_path) /
+                                 "labeled_data").string();
+                            std::error_code ec;
+                            std::filesystem::create_directories(
+                                pm.keypoints_root_folder, ec);
+                            pm.camera_params.clear();
+
+                            // Import existing DLT labels if available
+                            std::string labels_dir =
+                                state.project.landmark_labels_folder.empty()
+                                    ? (state.project.project_path + "/red_data")
+                                    : state.project.landmark_labels_folder;
+                            int imported = TelecentricDLT::import_dlt_labels(
+                                ctx.annotations, 0, n_landmarks,
+                                (int)scene->num_cams, pm.camera_names,
+                                labels_dir);
+
+                            pm.plot_keypoints_flag = true;
+
+                            if (imported > 0) {
+                                state.status =
+                                    "Loaded " + std::to_string(imported) +
+                                    " labels across " +
+                                    std::to_string(scene->num_cams) +
+                                    " cameras";
+                            }
+                        }
                     }
 
                     // Restore DLT results from persisted metadata
