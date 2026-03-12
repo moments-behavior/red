@@ -9,7 +9,6 @@
 #include "laser_calibration.h"
 #include "telecentric_dlt.h"
 #include "tele_viewer_window.h"
-#include "annotation_dialog.h"
 #include "aruco_metal.h"
 #include "laser_metal.h"
 #include <ImGuiFileDialog.h>
@@ -146,14 +145,6 @@ struct CalibrationToolState {
     // 3D telecentric viewer
     TeleViewerState tele_viewer;
 
-    // "Use This Calibration" popup state
-    std::string annot_popup_name;
-    std::string annot_popup_root;
-    std::string annot_popup_video_folder;
-    std::string annot_popup_skel_file;
-    std::string annot_popup_skel_name;
-    int annot_popup_skel_idx = 0;
-    bool annot_popup_skel_is_file = false;
 };
 
 struct CalibrationToolCallbacks {
@@ -1487,15 +1478,7 @@ inline void DrawCalibrationToolWindow(
                 if (state.tele_dlt_done && state.tele_dlt_result.success) {
                     ImGui::Spacing();
 
-                    // "Use This Calibration" — create annotation project
-                    if (ImGui::Button("Use This Calibration...##tele")) {
-                        ImGui::OpenPopup("Use This Calibration##tele_use_calib");
-                    }
-                    if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("Create an Annotation Project using this calibration");
-
                     // 3D Viewer button
-                    ImGui::SameLine();
                     if (ImGui::Button("3D Viewer##tele")) {
                         state.tele_viewer.show = true;
                         state.tele_viewer.dlt_result = &state.tele_dlt_result;
@@ -1507,172 +1490,6 @@ inline void DrawCalibrationToolWindow(
                         }
                     }
 
-                    // "Use This Calibration" popup (modal so file dialogs don't close it)
-                    if (ImGui::BeginPopupModal("Use This Calibration##tele_use_calib",
-                            nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-                        ImGui::Text("Create Annotation Project");
-                        ImGui::Separator();
-
-                        if (state.annot_popup_name.empty())
-                            state.annot_popup_name = state.project.project_name + "_annot";
-                        if (state.annot_popup_root.empty())
-                            state.annot_popup_root = state.project.project_root_path;
-
-                        // Project name + root
-                        ImGui::Text("Project Name:");
-                        ImGui::SetNextItemWidth(400);
-                        ImGui::InputText("##annot_name", &state.annot_popup_name);
-
-                        ImGui::Text("Project Root:");
-                        ImGui::SetNextItemWidth(400);
-                        ImGui::InputText("##annot_root", &state.annot_popup_root);
-
-                        // Video folder (user picks — may differ from calib videos)
-                        ImGui::Text("Video Folder:");
-                        ImGui::SetNextItemWidth(400);
-                        ImGui::InputText("##annot_vidfolder", &state.annot_popup_video_folder);
-                        ImGui::SameLine();
-                        if (ImGui::Button("Browse##annot_vid")) {
-                            IGFD::FileDialogConfig cfg;
-                            cfg.path = state.annot_popup_video_folder.empty()
-                                ? state.project.media_folder
-                                : state.annot_popup_video_folder;
-                            cfg.flags = ImGuiFileDialogFlags_Modal;
-                            ImGuiFileDialog::Instance()->OpenDialog(
-                                "ChooseAnnotVidFromCalib",
-                                "Choose Video Folder", nullptr, cfg);
-                        }
-
-                        // Skeleton selection
-                        ImGui::Text("Skeleton:");
-                        {
-                            std::vector<const char *> skel_labels;
-                            for (auto &kv : ctx.skeleton_map)
-                                skel_labels.push_back(kv.first.c_str());
-                            if (state.annot_popup_skel_idx >= (int)skel_labels.size())
-                                state.annot_popup_skel_idx = 0;
-
-                            int skel_mode = state.annot_popup_skel_is_file ? 0 : 1;
-                            if (state.annot_popup_skel_is_file) {
-                                ImGui::SetNextItemWidth(300);
-                                ImGui::InputText("##annot_skelfile",
-                                    &state.annot_popup_skel_file);
-                                ImGui::SameLine();
-                                if (ImGui::Button("Browse##annot_skel")) {
-                                    IGFD::FileDialogConfig cfg;
-                                    cfg.path = ctx.skeleton_dir;
-                                    cfg.flags = ImGuiFileDialogFlags_Modal;
-                                    ImGuiFileDialog::Instance()->OpenDialog(
-                                        "ChooseAnnotSkelFromCalib",
-                                        "Choose Skeleton", ".json", cfg);
-                                }
-                            } else {
-                                ImGui::SetNextItemWidth(300);
-                                if (!skel_labels.empty())
-                                    ImGui::Combo("##annot_skel_preset",
-                                        &state.annot_popup_skel_idx,
-                                        skel_labels.data(),
-                                        (int)skel_labels.size());
-                                state.annot_popup_skel_name =
-                                    skel_labels.empty() ? std::string{}
-                                    : std::string(skel_labels[state.annot_popup_skel_idx]);
-                            }
-                            ImGui::SameLine();
-                            ImGui::SetNextItemWidth(80);
-                            if (ImGui::Combo("##annot_skel_mode", &skel_mode,
-                                             "File\0Preset\0"))
-                                state.annot_popup_skel_is_file = (skel_mode == 0);
-                        }
-
-                        ImGui::Spacing();
-                        ImGui::TextDisabled("Calibration: %s",
-                            state.tele_dlt_result.output_folder.c_str());
-                        ImGui::TextDisabled("Camera model: Telecentric");
-
-                        ImGui::Spacing();
-                        bool ok = !state.annot_popup_name.empty() &&
-                                  !state.annot_popup_root.empty() &&
-                                  !state.annot_popup_video_folder.empty() &&
-                                  (state.annot_popup_skel_is_file
-                                       ? !state.annot_popup_skel_file.empty()
-                                       : !state.annot_popup_skel_name.empty());
-                        ImGui::BeginDisabled(!ok);
-                        if (ImGui::Button("Create##annot_go")) {
-                            pm.project_name = state.annot_popup_name;
-                            pm.project_root_path = state.annot_popup_root;
-                            pm.project_path =
-                                (std::filesystem::path(state.annot_popup_root) /
-                                 state.annot_popup_name).string();
-                            pm.media_folder = state.annot_popup_video_folder;
-                            pm.calibration_folder =
-                                state.tele_dlt_result.output_folder;
-                            pm.telecentric = true;
-                            pm.load_skeleton_from_json =
-                                state.annot_popup_skel_is_file;
-                            pm.skeleton_file = state.annot_popup_skel_file;
-                            pm.skeleton_name = state.annot_popup_skel_name;
-                            // Discover cameras from video folder
-                            pm.camera_names = discover_mp4_cameras(
-                                pm.media_folder);
-
-                            cb.deferred->enqueue([&pm, &ctx]() {
-                                std::string err;
-                                if (!ensure_dir_exists(pm.project_path, &err)) {
-                                    ctx.toasts.pushError("Error: " + err);
-                                    return;
-                                }
-                                if (!setup_project(pm, ctx.skeleton,
-                                                    ctx.skeleton_map, &err)) {
-                                    ctx.toasts.pushError("Error: " + err);
-                                    return;
-                                }
-                                std::filesystem::path redproj =
-                                    std::filesystem::path(pm.project_path) /
-                                    (pm.project_name + ".redproj");
-                                if (!save_project_manager_json(pm, redproj, &err)) {
-                                    ctx.toasts.pushError("Error: " + err);
-                                    return;
-                                }
-                                ctx.toasts.pushSuccess(
-                                    "Annotation project created: " +
-                                    pm.project_path);
-                            });
-
-                            state.annot_popup_name.clear();
-                            state.annot_popup_root.clear();
-                            state.annot_popup_video_folder.clear();
-                            ImGui::CloseCurrentPopup();
-                        }
-                        ImGui::EndDisabled();
-                        ImGui::SameLine();
-                        if (ImGui::Button("Cancel##annot")) {
-                            state.annot_popup_name.clear();
-                            state.annot_popup_root.clear();
-                            state.annot_popup_video_folder.clear();
-                            ImGui::CloseCurrentPopup();
-                        }
-                        ImGui::EndPopup();
-                    }
-
-                    // File dialog handlers for the popup
-                    if (ImGuiFileDialog::Instance()->Display(
-                            "ChooseAnnotVidFromCalib",
-                            ImGuiWindowFlags_NoCollapse,
-                            ImVec2(680, 440))) {
-                        if (ImGuiFileDialog::Instance()->IsOk())
-                            state.annot_popup_video_folder =
-                                ImGuiFileDialog::Instance()->GetCurrentPath();
-                        ImGuiFileDialog::Instance()->Close();
-                    }
-                    if (ImGuiFileDialog::Instance()->Display(
-                            "ChooseAnnotSkelFromCalib",
-                            ImGuiWindowFlags_NoCollapse,
-                            ImVec2(680, 440))) {
-                        if (ImGuiFileDialog::Instance()->IsOk())
-                            state.annot_popup_skel_file =
-                                ImGuiFileDialog::Instance()->GetFilePathName();
-                        ImGuiFileDialog::Instance()->Close();
-                    }
                 }
 
                 // ── Run Comparison Table ──
@@ -3046,13 +2863,6 @@ inline void DrawCalibrationToolWindow(
         state.tele_dlt_status.clear();
         state.tele_run_history.clear();
         state.tele_deferred_label_frames = 0;
-        state.annot_popup_name.clear();
-        state.annot_popup_root.clear();
-        state.annot_popup_video_folder.clear();
-        state.annot_popup_skel_file.clear();
-        state.annot_popup_skel_name.clear();
-        state.annot_popup_skel_idx = 0;
-        state.annot_popup_skel_is_file = false;
         state.project.camera_names.clear();
         state.laser_ready = false;
         state.laser_done = false;
