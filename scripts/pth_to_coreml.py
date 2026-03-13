@@ -76,11 +76,27 @@ def read_jarvis_config(jarvis_project):
         "project_name": "",
     }
 
-    cfg_path = os.path.join(jarvis_project, "config.yaml")
-    if not os.path.exists(cfg_path):
-        print(f"  WARNING: config.yaml not found at {cfg_path}")
+    # Search for config.yaml in multiple locations:
+    # 1. jarvis_project/config.yaml (direct)
+    # 2. jarvis_project/../config.yaml (models subdir → parent)
+    # 3. jarvis_project/../../config.yaml (models/Run_xxx → grandparent)
+    candidates = [
+        os.path.join(jarvis_project, "config.yaml"),
+        os.path.join(jarvis_project, "..", "config.yaml"),
+        os.path.join(jarvis_project, "..", "..", "config.yaml"),
+    ]
+    cfg_path = None
+    for c in candidates:
+        if os.path.exists(c):
+            cfg_path = os.path.realpath(c)
+            break
+    if cfg_path is None:
+        print(f"  WARNING: config.yaml not found. Searched:")
+        for c in candidates:
+            print(f"    {c}")
         print(f"  Using defaults: {config}")
         return config
+    print(f"  Found config: {cfg_path}")
 
     try:
         import yaml
@@ -99,6 +115,7 @@ def read_jarvis_config(jarvis_project):
         # Model size from either section
         config["model_size"] = cd_cfg.get("MODEL_SIZE", kd_cfg.get("MODEL_SIZE", "medium"))
 
+        config["_has_config"] = True
         print(f"  Config: {config['num_joints']} joints, "
               f"center={config['center_input_size']}, "
               f"keypoint={config['keypoint_input_size']}, "
@@ -369,10 +386,14 @@ def main():
 
     metadata["center_detect"]["mlpackage_file"] = "center_detect.mlpackage"
     metadata["center_detect"]["mlpackage_size_mb"] = round(cd_mb, 1)
-    metadata["center_detect"]["input_size"] = config["center_input_size"]
+    # Preserve existing input_size if no config was found (it may have been
+    # set correctly from an earlier conversion or manual configuration)
+    if "input_size" not in metadata["center_detect"] or config.get("_has_config"):
+        metadata["center_detect"]["input_size"] = config["center_input_size"]
     metadata["keypoint_detect"]["mlpackage_file"] = "keypoint_detect.mlpackage"
     metadata["keypoint_detect"]["mlpackage_size_mb"] = round(kd_mb, 1)
-    metadata["keypoint_detect"]["input_size"] = config["keypoint_input_size"]
+    if "input_size" not in metadata["keypoint_detect"] or config.get("_has_config"):
+        metadata["keypoint_detect"]["input_size"] = config["keypoint_input_size"]
     metadata["keypoint_detect"]["num_joints"] = num_joints
     metadata["model_size"] = config["model_size"]
     if config["project_name"]:
