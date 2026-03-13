@@ -300,10 +300,6 @@ bool jarvis_coreml_predict_frame(
             float ds_y = (float)cam_heights[c] / sz;
 
             HMPeak center = heatmap_argmax(cd_hm, 0, cd_hm_h, cd_hm_w);
-            // Debug: print raw heatmap peak info
-            printf("[CenterDetect cam%d] raw_peak=%.4f conf=%.4f pos=(%.1f,%.1f) hm=%dx%d\n",
-                   c, center.confidence * 255.0f, center.confidence,
-                   center.x, center.y, cd_hm_w, cd_hm_h);
             center.x *= ds_x;
             center.y *= ds_y;
             auto tc1 = std::chrono::steady_clock::now();
