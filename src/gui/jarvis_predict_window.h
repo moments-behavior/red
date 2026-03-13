@@ -193,10 +193,68 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
         // Poll conversion job for completion (thread-safe)
         if (state.convert_job && state.convert_job->finished.load()) {
             state.convert_status = state.convert_job->message;
-            // On success, redirect models_folder to the output directory
-            // so the rescan finds the newly converted .mlpackage files
+            // On success, auto-import the model into the project
             if (state.convert_job->success && !state.convert_job->output_path.empty()) {
-                state.models_folder = state.convert_job->output_path;
+                std::string out_dir = state.convert_job->output_path;
+                fs::path mi_path = fs::path(out_dir) / "model_info.json";
+                auto cfg = parse_jarvis_model_info(
+                    fs::exists(mi_path) ? mi_path.c_str() : nullptr);
+
+                // Load the CoreML model directly
+#ifdef __APPLE__
+                fs::path cd_ml = fs::path(out_dir) / "center_detect.mlpackage";
+                fs::path kd_ml = fs::path(out_dir) / "keypoint_detect.mlpackage";
+                if (fs::exists(cd_ml) && fs::exists(kd_ml)) {
+                    jarvis_cleanup(jarvis);
+                    jarvis_coreml_init(jarvis_coreml, out_dir, cfg);
+                    if (jarvis_coreml.loaded) {
+                        // Register in project
+                        std::string model_name = cfg.project_name;
+                        if (model_name.empty())
+                            model_name = fs::path(out_dir).filename().string();
+                        if (model_name.empty()) model_name = "jarvis_model";
+
+                        std::string rel = fs::relative(
+                            fs::path(out_dir), fs::path(pm.project_path)).string();
+
+                        ProjectManager::JarvisModelEntry me;
+                        me.name = model_name;
+                        me.relative_path = rel;
+                        me.num_joints = jarvis_coreml.num_joints;
+                        me.center_input_size = jarvis_coreml.center_input_size;
+                        me.keypoint_input_size = jarvis_coreml.keypoint_input_size;
+
+                        bool dup = false;
+                        for (int i = 0; i < (int)pm.jarvis_models.size(); ++i) {
+                            if (pm.jarvis_models[i].name == model_name) {
+                                pm.jarvis_models[i] = me;
+                                pm.active_jarvis_model = i;
+                                dup = true;
+                                break;
+                            }
+                        }
+                        if (!dup) {
+                            pm.jarvis_models.push_back(me);
+                            pm.active_jarvis_model = (int)pm.jarvis_models.size() - 1;
+                        }
+                        state.model_dir_display = rel;
+
+                        fs::path redproj = fs::path(pm.project_path) /
+                                           (pm.project_name + ".redproj");
+                        save_project_manager_json(pm, redproj);
+
+                        state.convert_status = "CoreML model loaded (" +
+                            std::to_string(me.num_joints) + " joints, " +
+                            std::to_string(me.keypoint_input_size) + "px keypoint)";
+                        state.models_folder.clear();
+                        state.cached_models_folder.clear();
+                    }
+                }
+#endif
+                if (!state.models_folder.empty()) {
+                    // Fallback: redirect to output for manual import
+                    state.models_folder = out_dir;
+                }
             }
             if (state.convert_job->force_rescan)
                 state.cached_models_folder.clear();
