@@ -28,6 +28,7 @@ struct ConvertJob {
     bool success = false;        // only read after finished==true
     std::string message;         // only read after finished==true
     bool force_rescan = false;   // only read after finished==true
+    std::string output_path;     // where converted files landed (for auto-redirect)
 };
 
 struct JarvisPredictState {
@@ -192,6 +193,11 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
         // Poll conversion job for completion (thread-safe)
         if (state.convert_job && state.convert_job->finished.load()) {
             state.convert_status = state.convert_job->message;
+            // On success, redirect models_folder to the output directory
+            // so the rescan finds the newly converted .mlpackage files
+            if (state.convert_job->success && !state.convert_job->output_path.empty()) {
+                state.models_folder = state.convert_job->output_path;
+            }
             if (state.convert_job->force_rescan)
                 state.cached_models_folder.clear();
             state.convert_job.reset();
@@ -258,9 +264,18 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
                             return e.path().string();
                     return {};
                 };
+                // Check <folder>/CenterDetect/ (direct) then <folder>/models/CenterDetect/ (JARVIS project)
                 std::string cd_pth = find_latest_pth(fs::path(state.models_folder) / "CenterDetect");
                 std::string kd_pth = find_latest_pth(fs::path(state.models_folder) / "KeypointDetect");
+                if (cd_pth.empty() || kd_pth.empty()) {
+                    cd_pth = find_latest_pth(fs::path(state.models_folder) / "models" / "CenterDetect");
+                    kd_pth = find_latest_pth(fs::path(state.models_folder) / "models" / "KeypointDetect");
+                }
                 has_pth = !cd_pth.empty() && !kd_pth.empty();
+                // Also detect JARVIS project by config.yaml presence
+                if (!has_pth && fs::exists(fs::path(state.models_folder) / "config.yaml") &&
+                    fs::is_directory(fs::path(state.models_folder) / "models"))
+                    has_pth = true;
             }
             state.cached_has_onnx = (has_onnx_subdir || has_onnx_direct);
             state.cached_has_coreml = has_coreml;
@@ -549,6 +564,7 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
 
                             auto job = std::make_shared<ConvertJob>();
                             job->running.store(true);
+                            job->output_path = output_dir;
                             state.convert_job = job;
                             state.convert_status = "Converting to CoreML...";
 
