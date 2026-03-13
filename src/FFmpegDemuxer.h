@@ -186,6 +186,8 @@ class FFmpegDemuxer {
 
     double GetFramerate() const;
 
+    void SeekToStart();
+
     double GetAvgFramerate() const;
 
     bool IsVFR() const;

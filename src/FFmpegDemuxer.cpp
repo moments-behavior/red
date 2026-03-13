@@ -54,6 +54,10 @@ double FFmpegDemuxer::GetDuration() const { return fduration; }
 
 double FFmpegDemuxer::GetFramerate() const { return avg_framerate; }
 
+void FFmpegDemuxer::SeekToStart() {
+    av_seek_frame(fmtc, videoStream, 0, AVSEEK_FLAG_BACKWARD);
+}
+
 double FFmpegDemuxer::GetAvgFramerate() const { return avg_framerate; }
 
 double FFmpegDemuxer::GetTimebase() const { return timebase; }

@@ -244,6 +244,8 @@ load_videos(std::map<std::string, std::string> &selected_files,
         if (!demuxers.empty()) {
             dc_context->seek_interval =
                 (int)demuxers[0]->FindKeyFrameInterval();
+            // FindKeyFrameInterval consumes packets from demuxer 0; seek back
+            demuxers[0]->SeekToStart();
             dc_context->video_fps = demuxers[0]->GetFramerate();
         }
         pm.camera_names = loaded_cam_names;
