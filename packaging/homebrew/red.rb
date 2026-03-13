@@ -40,6 +40,9 @@ class Red < Formula
   depends_on "cmake"      => :build
   depends_on "pkg-config" => :build
 
+  # macOS 12+ required (Metal compute shaders + VideoToolbox async decode)
+  depends_on macos: :monterey
+
   # Runtime dependencies (Homebrew handles installation automatically)
   depends_on "ceres-solver"
   depends_on "eigen"
@@ -47,9 +50,6 @@ class Red < Formula
   depends_on "glfw"
   depends_on "jpeg-turbo"
   depends_on "opencv" # needed for cv::calibrateCamera on Linux; unused on macOS
-
-  # macOS 12+ required (Metal compute shaders + VideoToolbox async decode)
-  depends_on macos: :monterey
 
   def install
     # For HEAD installs the repo is cloned without --recursive.
