@@ -530,14 +530,14 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
                         if (script.empty()) {
                             state.convert_status = "Error: pth_to_coreml.py not found";
                         } else {
-                            // jarvis_project is the parent of models_folder
-                            // (models_folder points to <project>/models/)
-                            fs::path jarvis_project = fs::path(state.models_folder).parent_path();
+                            // jarvis_project IS models_folder (it contains
+                            // CenterDetect/ and KeypointDetect/ subdirs)
+                            std::string jarvis_project = state.models_folder;
                             std::string output_dir = state.models_folder;
 
                             std::string cmd =
                                 "conda run -n coreml python \"" + script +
-                                "\" --jarvis_project \"" + jarvis_project.string() +
+                                "\" --jarvis_project \"" + jarvis_project +
                                 "\" --output_dir \"" + output_dir + "\" 2>&1";
 
                             auto job = std::make_shared<ConvertJob>();
