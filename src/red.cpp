@@ -835,6 +835,8 @@ int main(int argc, char **argv) {
                     // seek if visibility has changed
                     seek_all_cameras(scene, current_frame_num,
                                      dc_context->video_fps, ps, true);
+                    // Recompute buffer index after seek reset read_head/pause_selected
+                    select_corr_head = (ps.pause_selected + ps.read_head) % scene->size_of_buffer;
                 }
 
                 if (!window_was_decoding[win_name] && is_visible &&
@@ -846,6 +848,8 @@ int main(int argc, char **argv) {
                     for (auto &[key, value] : window_need_decoding) {
                         value.store(true);
                     }
+                    // Recompute buffer index after seek reset read_head/pause_selected
+                    select_corr_head = (ps.pause_selected + ps.read_head) % scene->size_of_buffer;
                 }
 
                 if (ps.play_video) {
