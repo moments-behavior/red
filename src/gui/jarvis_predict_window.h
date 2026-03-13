@@ -69,6 +69,87 @@ inline const JarvisModelConfig &jarvis_active_config(
     return empty;
 }
 
+// Result of loading a model from a directory (CoreML preferred, ONNX fallback)
+struct JarvisLoadResult {
+    bool loaded = false;
+    int num_joints = 0;
+    int center_input_size = 0;
+    int keypoint_input_size = 0;
+    JarvisModelConfig config;
+};
+
+// Load JARVIS model from a directory: try CoreML first, fall back to ONNX.
+inline JarvisLoadResult jarvis_load_from_dir(
+    const std::string &base_dir,
+    JarvisState &jarvis
+#ifdef __APPLE__
+    , JarvisCoreMLState &jarvis_coreml
+#endif
+) {
+    namespace fs = std::filesystem;
+    JarvisLoadResult r;
+    fs::path mi = fs::path(base_dir) / "model_info.json";
+    r.config = parse_jarvis_model_info(fs::exists(mi) ? mi.c_str() : nullptr);
+
+#ifdef __APPLE__
+    if (fs::exists(fs::path(base_dir) / "center_detect.mlpackage") &&
+        fs::exists(fs::path(base_dir) / "keypoint_detect.mlpackage")) {
+        jarvis_cleanup(jarvis);
+        jarvis_coreml_init(jarvis_coreml, base_dir, r.config);
+        if (jarvis_coreml.loaded) {
+            r = {true, jarvis_coreml.num_joints, jarvis_coreml.center_input_size,
+                 jarvis_coreml.keypoint_input_size, r.config};
+            return r;
+        }
+    }
+#endif
+    std::string cd = base_dir + "/center_detect.onnx";
+    std::string kd = base_dir + "/keypoint_detect.onnx";
+    if (fs::exists(cd) && fs::exists(kd)) {
+#ifdef __APPLE__
+        jarvis_coreml_cleanup(jarvis_coreml);
+#endif
+        jarvis_init(jarvis, cd.c_str(), kd.c_str(), r.config);
+        if (jarvis.loaded) {
+            r = {true, jarvis.config.num_joints, jarvis.config.center_input_size,
+                 jarvis.config.keypoint_input_size, r.config};
+        }
+    }
+    return r;
+}
+
+// Register a model in the project (dedup by name) and save .redproj.
+inline void jarvis_register_model(
+    ProjectManager &pm,
+    const std::string &model_name,
+    const std::string &relative_path,
+    int nj, int ci_sz, int ki_sz)
+{
+    ProjectManager::JarvisModelEntry me;
+    me.name = model_name;
+    me.relative_path = relative_path;
+    me.num_joints = nj;
+    me.center_input_size = ci_sz;
+    me.keypoint_input_size = ki_sz;
+
+    bool dup = false;
+    for (int i = 0; i < (int)pm.jarvis_models.size(); ++i) {
+        if (pm.jarvis_models[i].name == model_name) {
+            pm.jarvis_models[i] = me;
+            pm.active_jarvis_model = i;
+            dup = true;
+            break;
+        }
+    }
+    if (!dup) {
+        pm.jarvis_models.push_back(me);
+        pm.active_jarvis_model = (int)pm.jarvis_models.size() - 1;
+    }
+    std::filesystem::path redproj = std::filesystem::path(pm.project_path) /
+                                     (pm.project_name + ".redproj");
+    save_project_manager_json(pm, redproj);
+}
+
 inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarvis,
 #ifdef __APPLE__
                                      JarvisCoreMLState &jarvis_coreml,
@@ -96,28 +177,12 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
             pm.active_jarvis_model < (int)pm.jarvis_models.size()) {
             auto &m = pm.jarvis_models[pm.active_jarvis_model];
             std::string base = pm.project_path + "/" + m.relative_path;
-            std::string mi = base + "/model_info.json";
-            auto cfg = parse_jarvis_model_info(
-                std::filesystem::exists(mi) ? mi.c_str() : nullptr);
+            jarvis_load_from_dir(base, jarvis
+#ifdef __APPLE__
+                , jarvis_coreml
+#endif
+            );
             state.model_dir_display = m.relative_path;
-#ifdef __APPLE__
-            std::string cd_ml = base + "/center_detect.mlpackage";
-            std::string kd_ml = base + "/keypoint_detect.mlpackage";
-            if (std::filesystem::exists(cd_ml) && std::filesystem::exists(kd_ml)) {
-                jarvis_cleanup(jarvis);
-                jarvis_coreml_init(jarvis_coreml, base, cfg);
-            } else
-#endif
-            {
-                std::string cd = base + "/center_detect.onnx";
-                std::string kd = base + "/keypoint_detect.onnx";
-                if (std::filesystem::exists(cd) && std::filesystem::exists(kd)) {
-#ifdef __APPLE__
-                    jarvis_coreml_cleanup(jarvis_coreml);
-#endif
-                    jarvis_init(jarvis, cd.c_str(), kd.c_str(), cfg);
-                }
-            }
         }
 
         // --- Project Models (previously imported) ---
@@ -134,26 +199,12 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
                         pm.active_jarvis_model = i;
                         auto &m = pm.jarvis_models[i];
                         std::string base = pm.project_path + "/" + m.relative_path;
-                        std::string mi = base + "/model_info.json";
-                        auto cfg = parse_jarvis_model_info(
-                            std::filesystem::exists(mi) ? mi.c_str() : nullptr);
+                        jarvis_load_from_dir(base, jarvis
+#ifdef __APPLE__
+                            , jarvis_coreml
+#endif
+                        );
                         state.model_dir_display = m.relative_path;
-#ifdef __APPLE__
-                        std::string cd_ml = base + "/center_detect.mlpackage";
-                        std::string kd_ml = base + "/keypoint_detect.mlpackage";
-                        if (std::filesystem::exists(cd_ml) && std::filesystem::exists(kd_ml)) {
-                            jarvis_cleanup(jarvis);
-                            jarvis_coreml_init(jarvis_coreml, base, cfg);
-                        } else
-#endif
-                        {
-                            std::string cd = base + "/center_detect.onnx";
-                            std::string kd = base + "/keypoint_detect.onnx";
-#ifdef __APPLE__
-                            jarvis_coreml_cleanup(jarvis_coreml);
-#endif
-                            jarvis_init(jarvis, cd.c_str(), kd.c_str(), cfg);
-                        }
                     }
                     if (selected) ImGui::SetItemDefaultFocus();
                 }
@@ -196,64 +247,27 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
             // On success, auto-import the model into the project
             if (state.convert_job->success && !state.convert_job->output_path.empty()) {
                 std::string out_dir = state.convert_job->output_path;
-                fs::path mi_path = fs::path(out_dir) / "model_info.json";
-                auto cfg = parse_jarvis_model_info(
-                    fs::exists(mi_path) ? mi_path.c_str() : nullptr);
-
-                // Load the CoreML model directly
+                auto lr = jarvis_load_from_dir(out_dir, jarvis
 #ifdef __APPLE__
-                fs::path cd_ml = fs::path(out_dir) / "center_detect.mlpackage";
-                fs::path kd_ml = fs::path(out_dir) / "keypoint_detect.mlpackage";
-                if (fs::exists(cd_ml) && fs::exists(kd_ml)) {
-                    jarvis_cleanup(jarvis);
-                    jarvis_coreml_init(jarvis_coreml, out_dir, cfg);
-                    if (jarvis_coreml.loaded) {
-                        // Register in project
-                        std::string model_name = cfg.project_name;
-                        if (model_name.empty())
-                            model_name = fs::path(out_dir).filename().string();
-                        if (model_name.empty()) model_name = "jarvis_model";
-
-                        std::string rel = fs::relative(
-                            fs::path(out_dir), fs::path(pm.project_path)).string();
-
-                        ProjectManager::JarvisModelEntry me;
-                        me.name = model_name;
-                        me.relative_path = rel;
-                        me.num_joints = jarvis_coreml.num_joints;
-                        me.center_input_size = jarvis_coreml.center_input_size;
-                        me.keypoint_input_size = jarvis_coreml.keypoint_input_size;
-
-                        bool dup = false;
-                        for (int i = 0; i < (int)pm.jarvis_models.size(); ++i) {
-                            if (pm.jarvis_models[i].name == model_name) {
-                                pm.jarvis_models[i] = me;
-                                pm.active_jarvis_model = i;
-                                dup = true;
-                                break;
-                            }
-                        }
-                        if (!dup) {
-                            pm.jarvis_models.push_back(me);
-                            pm.active_jarvis_model = (int)pm.jarvis_models.size() - 1;
-                        }
-                        state.model_dir_display = rel;
-
-                        fs::path redproj = fs::path(pm.project_path) /
-                                           (pm.project_name + ".redproj");
-                        save_project_manager_json(pm, redproj);
-
-                        state.convert_status = "CoreML model loaded (" +
-                            std::to_string(me.num_joints) + " joints, " +
-                            std::to_string(me.keypoint_input_size) + "px keypoint)";
-                        state.models_folder.clear();
-                        state.cached_models_folder.clear();
-                    }
-                }
+                    , jarvis_coreml
 #endif
-                if (!state.models_folder.empty()) {
-                    // Fallback: redirect to output for manual import
-                    state.models_folder = out_dir;
+                );
+                if (lr.loaded && !pm.project_path.empty()) {
+                    std::string model_name = lr.config.project_name;
+                    if (model_name.empty())
+                        model_name = fs::path(out_dir).filename().string();
+                    if (model_name.empty()) model_name = "jarvis_model";
+
+                    std::string rel = fs::relative(
+                        fs::path(out_dir), fs::path(pm.project_path)).string();
+                    jarvis_register_model(pm, model_name, rel,
+                        lr.num_joints, lr.center_input_size, lr.keypoint_input_size);
+                    state.model_dir_display = rel;
+                    state.convert_status = "Model loaded (" +
+                        std::to_string(lr.num_joints) + " joints, " +
+                        std::to_string(lr.keypoint_input_size) + "px keypoint)";
+                    state.models_folder.clear();
+                    state.cached_models_folder.clear();
                 }
             }
             if (state.convert_job->force_rescan)
@@ -388,56 +402,27 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
                     src_dir = state.models_folder;
             }
 
-            // Parse config once
-            auto cfg = parse_jarvis_model_info(
-                info_path.empty() ? nullptr : info_path.c_str());
+            // Load model (CoreML preferred, ONNX fallback)
+            auto lr = jarvis_load_from_dir(src_dir, jarvis
+#ifdef __APPLE__
+                , jarvis_coreml
+#endif
+            );
 
             // Determine model name
-            std::string model_name = cfg.project_name;
+            std::string model_name = lr.config.project_name;
             if (model_name.empty())
                 model_name = fs::path(src_dir).filename().string();
             if (model_name.empty()) model_name = "jarvis_model";
 
-            // Load model — prefer CoreML on macOS
-            bool loaded_any = false;
-            int nj = 0, ci_sz = 0, ki_sz = 0;
-#ifdef __APPLE__
-            {
-                fs::path cd_ml = fs::path(src_dir) / "center_detect.mlpackage";
-                fs::path kd_ml = fs::path(src_dir) / "keypoint_detect.mlpackage";
-                if (fs::exists(cd_ml) && fs::exists(kd_ml)) {
-                    jarvis_cleanup(jarvis);
-                    jarvis_coreml_init(jarvis_coreml, src_dir, cfg);
-                    if (jarvis_coreml.loaded) {
-                        loaded_any = true;
-                        nj = jarvis_coreml.num_joints;
-                        ci_sz = jarvis_coreml.center_input_size;
-                        ki_sz = jarvis_coreml.keypoint_input_size;
-                    }
-                }
-            }
-            if (!loaded_any)
-#endif
-            if (can_load) {
-#ifdef __APPLE__
-                jarvis_coreml_cleanup(jarvis_coreml);
-#endif
-                jarvis_init(jarvis, center_path.c_str(), keypoint_path.c_str(), cfg);
-                if (jarvis.loaded) {
-                    loaded_any = true;
-                    nj = jarvis.config.num_joints;
-                    ci_sz = jarvis.config.center_input_size;
-                    ki_sz = jarvis.config.keypoint_input_size;
-                }
-            }
-
-            // Copy model files into project folder
-            if (loaded_any && !pm.project_path.empty()) {
+            // Copy model files into project folder and register
+            if (lr.loaded && !pm.project_path.empty()) {
                 std::string rel = "jarvis_models/" + model_name;
                 fs::path dest = fs::path(pm.project_path) / rel;
                 std::error_code ec;
                 fs::create_directories(dest, ec);
 
+                try {
                 for (auto &entry : fs::directory_iterator(src_dir)) {
                     auto fname = entry.path().filename().string();
                     if (fname.find(".onnx") != std::string::npos ||
@@ -452,35 +437,11 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
                                  fs::copy_options::recursive, ec);
                     }
                 }
+                } catch (...) {}  // tolerate directory iteration errors
 
-                // Register in project (avoid duplicates)
-                ProjectManager::JarvisModelEntry me;
-                me.name = model_name;
-                me.relative_path = rel;
-                me.num_joints = nj;
-                me.center_input_size = ci_sz;
-                me.keypoint_input_size = ki_sz;
-
-                bool dup = false;
-                for (int i = 0; i < (int)pm.jarvis_models.size(); ++i) {
-                    if (pm.jarvis_models[i].name == model_name) {
-                        pm.jarvis_models[i] = me;
-                        pm.active_jarvis_model = i;
-                        dup = true;
-                        break;
-                    }
-                }
-                if (!dup) {
-                    pm.jarvis_models.push_back(me);
-                    pm.active_jarvis_model = (int)pm.jarvis_models.size() - 1;
-                }
+                jarvis_register_model(pm, model_name, rel,
+                    lr.num_joints, lr.center_input_size, lr.keypoint_input_size);
                 state.model_dir_display = rel;
-
-                fs::path redproj = fs::path(pm.project_path) /
-                                   (pm.project_name + ".redproj");
-                save_project_manager_json(pm, redproj);
-
-                // Clear import form and stale status
                 state.models_folder.clear();
                 state.cached_models_folder.clear();
                 state.convert_status.clear();
@@ -530,6 +491,7 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
 
                         auto job = std::make_shared<ConvertJob>();
                         job->running.store(true);
+                        job->output_path = onnx_out.string();
                         state.convert_job = job;
                         state.convert_status = "Converting...";
 
