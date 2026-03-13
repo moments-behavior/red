@@ -58,7 +58,14 @@ double FFmpegDemuxer::GetAvgFramerate() const { return avg_framerate; }
 
 double FFmpegDemuxer::GetTimebase() const { return timebase; }
 
-bool FFmpegDemuxer::IsVFR() const { return framerate != avg_framerate; }
+// r_frame_rate can be 2x avg_frame_rate for H.264 (field-level timing).
+// Only flag as VFR if the ratio is not close to 1:1 or 2:1.
+bool FFmpegDemuxer::IsVFR() const {
+    if (avg_framerate <= 0) return false;
+    double ratio = framerate / avg_framerate;
+    // Accept 1:1 or 2:1 (H.264 doubling) as CFR
+    return std::abs(ratio - 1.0) > 0.01 && std::abs(ratio - 2.0) > 0.01;
+}
 
 uint32_t FFmpegDemuxer::GetVideoStreamIndex() const { return videoStream; }
 
