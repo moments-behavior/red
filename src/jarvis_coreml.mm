@@ -41,10 +41,35 @@ static MLModel *load_mlpackage(const std::string &path, std::string &err) {
 }
 
 // Create a resized CVPixelBuffer using vImage (Accelerate, NEON-optimized)
-static CVPixelBufferRef resize_pixelbuf(CVPixelBufferRef src, int dst_w, int dst_h) {
+// Letterbox-resize: fit src into dst_w x dst_h preserving aspect ratio,
+// padding with black. Returns the scale and offset used so the caller
+// can map heatmap coordinates back to the original image.
+struct LetterboxInfo {
+    float scale;    // src pixels per dst pixel (uniform)
+    float offset_x; // padding offset in dst pixels
+    float offset_y;
+};
+
+static CVPixelBufferRef resize_pixelbuf(CVPixelBufferRef src, int dst_w, int dst_h,
+                                         LetterboxInfo *lb = nullptr) {
     int src_w = (int)CVPixelBufferGetWidth(src);
     int src_h = (int)CVPixelBufferGetHeight(src);
     size_t src_stride = CVPixelBufferGetBytesPerRow(src);
+
+    // Compute letterbox: scale to fit, then pad
+    float scale_x = (float)dst_w / src_w;
+    float scale_y = (float)dst_h / src_h;
+    float scale = std::min(scale_x, scale_y);
+    int new_w = (int)(src_w * scale);
+    int new_h = (int)(src_h * scale);
+    int pad_x = (dst_w - new_w) / 2;
+    int pad_y = (dst_h - new_h) / 2;
+
+    if (lb) {
+        lb->scale = 1.0f / scale;
+        lb->offset_x = (float)pad_x;
+        lb->offset_y = (float)pad_y;
+    }
 
     CVPixelBufferLockBaseAddress(src, kCVPixelBufferLock_ReadOnly);
     uint8_t *src_data = (uint8_t *)CVPixelBufferGetBaseAddress(src);
@@ -52,17 +77,21 @@ static CVPixelBufferRef resize_pixelbuf(CVPixelBufferRef src, int dst_w, int dst
     vImage_Buffer src_buf = {src_data, (vImagePixelCount)src_h,
                              (vImagePixelCount)src_w, src_stride};
 
+    // Create destination buffer (black-filled)
     CVPixelBufferRef dst = NULL;
     CVPixelBufferCreate(kCFAllocatorDefault, dst_w, dst_h,
                         kCVPixelFormatType_32BGRA, NULL, &dst);
     CVPixelBufferLockBaseAddress(dst, 0);
-
     uint8_t *dst_data = (uint8_t *)CVPixelBufferGetBaseAddress(dst);
     size_t dst_stride = CVPixelBufferGetBytesPerRow(dst);
-    vImage_Buffer dst_buf = {dst_data, (vImagePixelCount)dst_h,
-                             (vImagePixelCount)dst_w, dst_stride};
+    // Zero-fill (black padding)
+    memset(dst_data, 0, dst_stride * dst_h);
 
-    vImageScale_ARGB8888(&src_buf, &dst_buf, NULL, kvImageNoFlags); // bilinear — fast, sufficient for NN input
+    // Scale source into the letterboxed region
+    uint8_t *region_start = dst_data + pad_y * dst_stride + pad_x * 4;
+    vImage_Buffer scaled_buf = {region_start, (vImagePixelCount)new_h,
+                                (vImagePixelCount)new_w, dst_stride};
+    vImageScale_ARGB8888(&src_buf, &scaled_buf, NULL, kvImageNoFlags);
 
     CVPixelBufferUnlockBaseAddress(dst, 0);
     CVPixelBufferUnlockBaseAddress(src, kCVPixelBufferLock_ReadOnly);
@@ -235,7 +264,8 @@ bool jarvis_coreml_predict_frame(
             // --- CenterDetect ---
             auto tc0 = std::chrono::steady_clock::now();
             int sz = s.center_input_size;
-            CVPixelBufferRef resized = resize_pixelbuf(pixel_buffers[c], sz, sz);
+            LetterboxInfo lb;
+            CVPixelBufferRef resized = resize_pixelbuf(pixel_buffers[c], sz, sz, &lb);
             if (!resized) continue;
 
             NSError *error = nil;
@@ -252,12 +282,13 @@ bool jarvis_coreml_predict_frame(
 
             int cd_hm_h = [cd_hm.shape[2] intValue];
             int cd_hm_w = [cd_hm.shape[3] intValue];
-            float ds_x = (float)cam_widths[c] / sz;
-            float ds_y = (float)cam_heights[c] / sz;
+            // Map heatmap coords back through letterbox: remove padding, then un-scale
+            float hm_scale_x = (float)sz / cd_hm_w;
+            float hm_scale_y = (float)sz / cd_hm_h;
 
             HMPeak center = heatmap_argmax(cd_hm, 0, cd_hm_h, cd_hm_w);
-            center.x *= ds_x;
-            center.y *= ds_y;
+            center.x = (center.x * hm_scale_x - lb.offset_x) * lb.scale;
+            center.y = (center.y * hm_scale_y - lb.offset_y) * lb.scale;
             auto tc1 = std::chrono::steady_clock::now();
             center_ms_total += std::chrono::duration<float, std::milli>(tc1 - tc0).count();
 
