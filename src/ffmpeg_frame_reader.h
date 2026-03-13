@@ -29,7 +29,7 @@ class FrameReader {
     FrameReader(const FrameReader &) = delete;
     FrameReader &operator=(const FrameReader &) = delete;
 
-    bool open(const std::string &path) {
+    bool open(const std::string &path, bool use_hw_accel = true) {
         close();
 
         fmt_ctx_ = avformat_alloc_context();
@@ -65,8 +65,8 @@ class FrameReader {
         codec_ctx_ = avcodec_alloc_context3(codec);
         avcodec_parameters_to_context(codec_ctx_, par);
 
-        // Try VideoToolbox hardware acceleration
-        if (init_hw_decoder(codec))
+        // Try VideoToolbox hardware acceleration (skip if not requested)
+        if (use_hw_accel && init_hw_decoder(codec))
             hw_enabled_ = true;
 
         if (avcodec_open2(codec_ctx_, codec, nullptr) < 0) {

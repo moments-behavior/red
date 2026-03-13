@@ -47,6 +47,8 @@
 #include "calibration_pipeline.h"
 #include "app_context.h"
 #include "deferred_queue.h"
+#include "ffmpeg_frame_reader.h"
+#include <future>
 #include "user_settings.h"
 #include "jarvis_export.h"
 #include "laser_calibration.h"
@@ -445,8 +447,19 @@ int main(int argc, char **argv) {
     // Annotation create callback (shared by annotation dialog panel)
     AnnotationCreateCallback annot_create_cb =
         [&](ProjectManager &pm_ref, std::string &err) -> bool {
-        // Save new project config before closing old project
+        // Validate new project BEFORE closing old project — if setup fails
+        // we want to keep the old project intact and show the error.
         ProjectManager new_pm = pm_ref;
+        if (!ensure_dir_exists(new_pm.project_path, &err))
+            return false;
+        if (!setup_project(new_pm, skeleton, skeleton_map, &err))
+            return false;
+        std::filesystem::path redproj_path =
+            std::filesystem::path(new_pm.project_path) / (new_pm.project_name + ".redproj");
+        if (!save_project_manager_json(new_pm, redproj_path, &err))
+            return false;
+
+        // Validation passed — now safe to close old project
         close_project(ctx);
         win.reset();
         // Nuke inference engines (different project may use different models)
@@ -456,14 +469,6 @@ int main(int argc, char **argv) {
         jarvis_coreml_state = JarvisCoreMLState{};
 #endif
         pm_ref = new_pm;
-        if (!ensure_dir_exists(pm_ref.project_path, &err))
-            return false;
-        if (!setup_project(pm_ref, skeleton, skeleton_map, &err))
-            return false;
-        std::filesystem::path redproj_path =
-            std::filesystem::path(pm_ref.project_path) / (pm_ref.project_name + ".redproj");
-        if (!save_project_manager_json(pm_ref, redproj_path, &err))
-            return false;
         on_project_loaded(ctx, print_metadata, print_summary);
         return true;
     };
@@ -1272,6 +1277,231 @@ int main(int argc, char **argv) {
                     printf("[JARVIS ONNX] %s\n", jarvis_state.status.c_str());
                 }
 #endif
+            }
+
+            // --- Batch prediction ---
+            // Uses FFmpeg FrameReaders for sequential decode (avoids costly
+            // per-frame seeks through the display pipeline). Each reader
+            // decodes forward from the previous frame, so step=4 only
+            // decodes 4 frames per camera instead of seeking from keyframe.
+            {
+                auto &bp = win.jarvis_predict;
+                if (bp.batch_requested && !bp.batch_running) {
+                    bp.batch_requested = false;
+                    bp.batch_running = true;
+                    bp.batch_current = bp.batch_start;
+                    bp.batch_completed = 0;
+                    bp.batch_skipped = 0;
+                    bp.batch_total = (bp.batch_end - bp.batch_start) / bp.batch_step + 1;
+                    bp.batch_status = "Running...";
+                    ps.play_video = false;
+                    printf("[Batch] Starting: frames %d-%d step %d (%d frames, %d cameras)\n",
+                           bp.batch_start, bp.batch_end, bp.batch_step, bp.batch_total,
+                           (int)scene->num_cams);
+
+                    auto batch_t0 = std::chrono::steady_clock::now();
+                    int num_cams = (int)pm.camera_names.size();
+                    float decode_ms_total = 0, predict_ms_total = 0, triang_ms_total = 0;
+                    const char *mode_name = bp.batch_use_display
+                        ? "display pipeline (VT + CVPixelBuffer)"
+                        : "FrameReader (SW + RGB)";
+                    printf("[Batch] Mode: %s\n", mode_name);
+
+                    // --- Helper lambda: skip manual frames ---
+                    auto has_manual_labels = [&](u32 frame) -> bool {
+                        if (!annotations.count(frame)) return false;
+                        const auto &fa = annotations.at(frame);
+                        for (const auto &cam : fa.cameras)
+                            for (const auto &kp : cam.keypoints)
+                                if (kp.labeled && kp.source == LabelSource::Manual)
+                                    return true;
+                        return false;
+                    };
+
+                    // --- Helper lambda: log progress ---
+                    auto log_progress = [&]() {
+                        auto now = std::chrono::steady_clock::now();
+                        float elapsed = std::chrono::duration<float, std::milli>(now - batch_t0).count();
+                        printf("[Batch] %d/%d done (decode %.0f, predict %.0f, triang %.0f ms, "
+                               "elapsed %.1fs, %.0f ms/frame)\n",
+                               bp.batch_completed, bp.batch_total,
+                               decode_ms_total, predict_ms_total, triang_ms_total,
+                               elapsed / 1000.0f, elapsed / std::max(1, bp.batch_completed));
+                        fflush(stdout);
+                    };
+
+                    if (bp.batch_use_display) {
+                        // === Display pipeline mode ===
+                        // Seek once, wait for buffer to fill, predict from buffer slots.
+                        // Buffer holds 64 consecutive frames; with step=4 we get 16
+                        // predictions per seek instead of 1. Uses CVPixelBuffer zero-copy.
+#ifdef __APPLE__
+                        int buf_size = (int)scene->size_of_buffer;
+                        std::vector<int> w_b(scene->num_cams), h_b(scene->num_cams);
+                        for (int c = 0; c < (int)scene->num_cams; ++c) {
+                            w_b[c] = (int)scene->image_width[c];
+                            h_b[c] = (int)scene->image_height[c];
+                        }
+
+                        int f = bp.batch_start;
+                        while (f <= bp.batch_end) {
+                            // Seek to this chunk's start frame
+                            auto ts0 = std::chrono::steady_clock::now();
+                            seek_all_cameras(scene, f, dc_context->video_fps, ps, false);
+                            current_frame_num = f;
+
+                            // Force ALL camera decoders to fill the buffer
+                            // (normally only visible cameras decode past the seek frame)
+                            for (auto &[key, value] : window_need_decoding) {
+                                value.store(true);
+                            }
+
+                            // Wait for buffer to fill on ALL cameras.
+                            int frames_in_chunk = std::min(buf_size, bp.batch_end - f + 1);
+                            int last_slot = frames_in_chunk - 1;
+                            int wait_ms = 0;
+                            auto all_cams_filled = [&](int slot) -> bool {
+                                for (int c = 0; c < (int)scene->num_cams; c++)
+                                    if (scene->display_buffer[c][slot].available_to_write ||
+                                        !scene->display_buffer[c][slot].pixel_buffer)
+                                        return false;
+                                return true;
+                            };
+                            while (!all_cams_filled(last_slot)) {
+                                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                                wait_ms += 5;
+                                if (wait_ms > 15000) break; // safety timeout 15s
+                            }
+                            auto ts1 = std::chrono::steady_clock::now();
+                            decode_ms_total += std::chrono::duration<float, std::milli>(ts1 - ts0).count();
+                            printf("[Batch] Seek+fill to frame %d: %.0f ms (waited %d ms for %d slots)\n",
+                                   f, std::chrono::duration<float, std::milli>(ts1 - ts0).count(),
+                                   wait_ms, frames_in_chunk);
+
+                            // Predict from buffer slots at step intervals
+                            for (int slot = 0; slot < frames_in_chunk && f + slot <= bp.batch_end;
+                                 slot += bp.batch_step) {
+                                u32 frame = (u32)(f + slot);
+                                if (has_manual_labels(frame)) { bp.batch_skipped++; continue; }
+
+                                // Verify the slot has valid data
+                                if (scene->display_buffer[0][slot].available_to_write) continue;
+
+                                auto tp0 = std::chrono::steady_clock::now();
+                                if (jarvis_coreml_state.loaded) {
+                                    std::vector<CVPixelBufferRef> pbs(scene->num_cams, nullptr);
+                                    for (int c = 0; c < (int)scene->num_cams; ++c)
+                                        pbs[c] = scene->display_buffer[c][slot].pixel_buffer;
+                                    jarvis_coreml_predict_frame(jarvis_coreml_state,
+                                        annotations, frame, pbs, w_b, h_b,
+                                        skeleton, (int)scene->num_cams, bp.confidence_threshold);
+                                }
+                                auto tp1 = std::chrono::steady_clock::now();
+                                predict_ms_total += std::chrono::duration<float, std::milli>(tp1 - tp0).count();
+
+                                auto tt0 = std::chrono::steady_clock::now();
+                                if (!pm.camera_params.empty() && annotations.count(frame))
+                                    reprojection(annotations.at(frame), &skeleton, pm.camera_params, scene);
+                                auto tt1 = std::chrono::steady_clock::now();
+                                triang_ms_total += std::chrono::duration<float, std::milli>(tt1 - tt0).count();
+
+                                bp.batch_completed++;
+                                current_frame_num = (int)frame;
+                                if (bp.batch_completed % 10 == 0 || frame >= (u32)bp.batch_end)
+                                    log_progress();
+                            }
+
+                            // Advance to next chunk
+                            f += buf_size;
+                        }
+                        ps.pause_seeked = true;
+#endif
+
+                    } else {
+                        // === FrameReader mode ===
+                        // SW decode + parallel cameras + RGB CoreML path.
+                        // Faster sequential decode but slower inference.
+                        std::vector<ffmpeg_reader::FrameReader> readers(num_cams);
+                        std::vector<int> widths(num_cams), heights(num_cams);
+                        bool readers_ok = true;
+                        for (int c = 0; c < num_cams; c++) {
+                            std::string path = (std::filesystem::path(pm.media_folder) /
+                                (pm.camera_names[c] + ".mp4")).string();
+                            if (!readers[c].open(path, false)) {
+                                printf("[Batch] Failed to open: %s\n", path.c_str());
+                                readers_ok = false; break;
+                            }
+                            widths[c] = readers[c].width();
+                            heights[c] = readers[c].height();
+                        }
+
+                        if (readers_ok) {
+                            printf("[Batch] Readers open (%dx%d). Seeking to frame %d...\n",
+                                   widths[0], heights[0], bp.batch_start);
+                            fflush(stdout);
+                            for (int f = bp.batch_start; f <= bp.batch_end; f += bp.batch_step) {
+                                u32 frame = (u32)f;
+                                if (has_manual_labels(frame)) { bp.batch_skipped++; continue; }
+
+                                auto td0 = std::chrono::steady_clock::now();
+                                std::vector<const uint8_t *> rgb_ptrs(num_cams, nullptr);
+                                std::vector<std::future<const uint8_t *>> futures(num_cams);
+                                for (int c = 0; c < num_cams; c++)
+                                    futures[c] = std::async(std::launch::async,
+                                        [&readers, c, f]() { return readers[c].readFrame(f); });
+                                for (int c = 0; c < num_cams; c++)
+                                    rgb_ptrs[c] = futures[c].get();
+                                auto td1 = std::chrono::steady_clock::now();
+                                decode_ms_total += std::chrono::duration<float, std::milli>(td1 - td0).count();
+
+#ifdef __APPLE__
+                                auto tp0 = std::chrono::steady_clock::now();
+                                if (jarvis_coreml_state.loaded) {
+                                    jarvis_coreml_predict_frame_rgb(jarvis_coreml_state,
+                                        annotations, frame, rgb_ptrs, widths, heights,
+                                        skeleton, num_cams, bp.confidence_threshold);
+                                } else if (jarvis_state.loaded) {
+                                    jarvis_predict_frame(jarvis_state, annotations,
+                                        frame, rgb_ptrs, widths, heights,
+                                        skeleton, pm.camera_params, scene,
+                                        bp.confidence_threshold);
+                                }
+                                auto tp1 = std::chrono::steady_clock::now();
+                                predict_ms_total += std::chrono::duration<float, std::milli>(tp1 - tp0).count();
+
+                                auto tt0 = std::chrono::steady_clock::now();
+                                if (!pm.camera_params.empty() && annotations.count(frame))
+                                    reprojection(annotations.at(frame), &skeleton, pm.camera_params, scene);
+                                auto tt1 = std::chrono::steady_clock::now();
+                                triang_ms_total += std::chrono::duration<float, std::milli>(tt1 - tt0).count();
+#endif
+                                bp.batch_completed++;
+                                if (bp.batch_completed % 10 == 0 || f + bp.batch_step > bp.batch_end)
+                                    log_progress();
+                            }
+                        }
+
+                        // Seek display to last predicted frame
+                        if (bp.batch_completed > 0) {
+                            seek_all_cameras(scene, bp.batch_end, dc_context->video_fps, ps, false);
+                            current_frame_num = bp.batch_end;
+                            ps.pause_seeked = true;
+                        }
+                    }
+
+                    auto batch_t1 = std::chrono::steady_clock::now();
+                    float total_ms = std::chrono::duration<float, std::milli>(batch_t1 - batch_t0).count();
+                    bp.batch_running = false;
+                    bp.batch_status = "Complete: " +
+                        std::to_string(bp.batch_completed) + " frames in " +
+                        std::to_string((int)(total_ms / 1000.0f)) + "s (" +
+                        std::to_string((int)(total_ms / std::max(1, bp.batch_completed))) +
+                        " ms/frame)";
+                    if (bp.batch_skipped > 0)
+                        bp.batch_status += " (" + std::to_string(bp.batch_skipped) +
+                            " skipped)";
+                    printf("[Batch] %s\n", bp.batch_status.c_str());
+                }
             }
 
             if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow, false) &&

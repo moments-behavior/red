@@ -20,6 +20,7 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <functional>
 
 // Thread-safe conversion job (shared between UI thread and worker)
 struct ConvertJob {
@@ -38,6 +39,19 @@ struct JarvisPredictState {
 
     // Set by "Predict Current Frame" button; consumed by main loop
     bool predict_requested = false;
+
+    // Batch prediction state (processed one frame per render iteration)
+    bool batch_running = false;
+    bool batch_requested = false;   // set by UI, consumed by main loop
+    bool batch_use_display = false; // true = seek_all_cameras + CVPixelBuffer (benchmark)
+    int batch_start = 0;
+    int batch_end = 0;
+    int batch_step = 4;
+    int batch_current = 0;         // next frame to predict
+    int batch_completed = 0;       // frames predicted so far
+    int batch_total = 0;           // total frames to predict
+    int batch_skipped = 0;         // frames skipped (already had manual labels)
+    std::string batch_status;
 
     // Conversion state (thread-safe via shared_ptr)
     std::shared_ptr<ConvertJob> convert_job;
@@ -698,6 +712,64 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
 
         ImGui::SameLine();
         ImGui::TextDisabled("Press 6 to predict (hotkey)");
+
+        // --- Batch Prediction ---
+        ImGui::Separator();
+        ImGui::SeparatorText("Batch Predict");
+
+        if (state.batch_running) {
+            // Progress display
+            float progress = state.batch_total > 0
+                ? (float)state.batch_completed / state.batch_total : 0.0f;
+            char overlay[64];
+            snprintf(overlay, sizeof(overlay), "%d / %d frames",
+                     state.batch_completed, state.batch_total);
+            ImGui::ProgressBar(progress, ImVec2(-FLT_MIN, 0), overlay);
+            if (state.batch_skipped > 0)
+                ImGui::TextDisabled("(%d skipped — already have manual labels)",
+                                    state.batch_skipped);
+            if (ImGui::Button("Cancel Batch")) {
+                state.batch_running = false;
+                state.batch_status = "Cancelled at frame " +
+                    std::to_string(state.batch_current);
+            }
+        } else {
+            ImGui::SetNextItemWidth(120);
+            ImGui::InputInt("Start Frame", &state.batch_start);
+            ImGui::SetNextItemWidth(120);
+            ImGui::InputInt("End Frame", &state.batch_end);
+            ImGui::SetNextItemWidth(120);
+            ImGui::InputInt("Step", &state.batch_step);
+            if (state.batch_step < 1) state.batch_step = 1;
+
+            // Show count preview
+            if (state.batch_end > state.batch_start && state.batch_step > 0) {
+                int n = (state.batch_end - state.batch_start) / state.batch_step + 1;
+                ImGui::TextDisabled("%d frames to predict", n);
+            }
+
+            ImGui::Checkbox("Use display pipeline (VT hardware)",
+                           &state.batch_use_display);
+            if (state.batch_use_display)
+                ImGui::TextDisabled("Slower seek, faster inference (CVPixelBuffer)");
+            else
+                ImGui::TextDisabled("Faster decode, slower inference (SW + RGB)");
+
+            bool can_batch = can_predict &&
+                state.batch_end > state.batch_start && state.batch_step > 0;
+            if (!can_batch) ImGui::BeginDisabled();
+            if (ImGui::Button("Start Batch Predict")) {
+                state.batch_requested = true;
+            }
+            if (!can_batch) ImGui::EndDisabled();
+        }
+
+        if (!state.batch_status.empty()) {
+            bool is_done = state.batch_status.find("Complete") != std::string::npos;
+            ImGui::TextColored(
+                is_done ? ImVec4(0.5f, 1, 0.5f, 1) : ImVec4(1, 0.8f, 0, 1),
+                "%s", state.batch_status.c_str());
+        }
         },
         // always_fn: file dialog handlers (run every frame)
         [&]() {

@@ -65,6 +65,18 @@ bool jarvis_coreml_predict_frame(
     int num_cameras,
     float confidence_threshold = 0.1f);
 
+// Run prediction from RGB24 buffers (batch path — avoids CVPixelBuffer overhead).
+// rgb_buffers: pointer to RGB24 data (width * height * 3), one per camera.
+bool jarvis_coreml_predict_frame_rgb(
+    JarvisCoreMLState &s,
+    AnnotationMap &amap, u32 frame_num,
+    const std::vector<const uint8_t *> &rgb_buffers,
+    const std::vector<int> &cam_widths,
+    const std::vector<int> &cam_heights,
+    const SkeletonContext &skeleton,
+    int num_cameras,
+    float confidence_threshold = 0.1f);
+
 void jarvis_coreml_cleanup(JarvisCoreMLState &s);
 
 #endif // __APPLE__

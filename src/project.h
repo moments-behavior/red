@@ -184,6 +184,34 @@ inline bool setup_project(ProjectManager &pm, SkeletonContext &skeleton,
     pm.camera_params.clear();
     if (pm.camera_names.size() > 1 && !pm.calibration_folder.empty()) {
         namespace fs = std::filesystem;
+
+        // Auto-detect timestamped subfolder: if the calibration folder
+        // doesn't contain YAML/CSV files directly but has a single
+        // timestamped subdirectory (YYYY_MM_DD_*), use that instead.
+        std::string calib_dir = pm.calibration_folder;
+        {
+            bool has_calib_files = false;
+            std::string newest_subdir;
+            for (const auto &entry : fs::directory_iterator(calib_dir)) {
+                if (entry.is_regular_file()) {
+                    auto ext = entry.path().extension().string();
+                    if (ext == ".yaml" || ext == ".csv")
+                        has_calib_files = true;
+                } else if (entry.is_directory()) {
+                    auto name = entry.path().filename().string();
+                    // Match YYYY_MM_DD pattern (calibration output folders)
+                    if (name.size() >= 10 && name[4] == '_' && name[7] == '_') {
+                        if (name > newest_subdir)
+                            newest_subdir = name;
+                    }
+                }
+            }
+            if (!has_calib_files && !newest_subdir.empty()) {
+                calib_dir = (fs::path(calib_dir) / newest_subdir).string();
+                pm.calibration_folder = calib_dir;
+            }
+        }
+
         for (const std::string &cam_name : pm.camera_names) {
             CameraParams cam;
             std::string cam_err;
@@ -192,14 +220,14 @@ inline bool setup_project(ProjectManager &pm, SkeletonContext &skeleton,
             if (pm.telecentric) {
                 // Telecentric: load DLT CSV
                 fs::path dlt_path =
-                    fs::path(pm.calibration_folder) /
+                    fs::path(calib_dir) /
                     (cam_name + "_dlt.csv");
                 loaded = camera_load_params_from_dlt_csv(
                     dlt_path.string(), cam, cam_err);
             } else {
                 // Perspective: load YAML
                 fs::path yaml_path =
-                    fs::path(pm.calibration_folder) /
+                    fs::path(calib_dir) /
                     (cam_name + ".yaml");
                 loaded = camera_load_params_from_yaml(
                     yaml_path.string(), cam, cam_err);
