@@ -209,22 +209,17 @@ def convert_to_coreml(model, input_size, output_path, model_name):
 
     print(f"  Converting {model_name} to CoreML...")
 
-    # Wrap model with ImageNet normalization so it's part of the computation
-    # graph. This avoids CoreML ImageType per-channel scale/bias shape issues.
-    # The model receives [0,1] float input from CoreML (scale=1/255) and the
-    # NormalizedModel layer applies (x - mean) / std before the backbone.
-    wrapped = NormalizedModel(model)
-    wrapped.eval()
-
-    # Trace the wrapped model
+    # Trace the model directly (no normalization wrapper).
+    # The EfficientTrack backbone handles [0,1] input via internal batch norm.
+    # Testing confirmed: predictions are BETTER without ImageNet normalization
+    # baked in, matching the original convert_onnx_to_coreml.py behavior.
     t0 = time.time()
     dummy_input = torch.randn(1, 3, input_size, input_size)
     with torch.no_grad():
-        traced = torch.jit.trace(wrapped, dummy_input)
+        traced = torch.jit.trace(model, dummy_input)
     print(f"  Traced in {time.time() - t0:.2f}s")
 
     # Convert with ImageType input (BGR, scale to [0,1]).
-    # ImageNet normalization is baked into the model via NormalizedModel wrapper.
     t0 = time.time()
     image_input = ct.ImageType(
         name="image",
@@ -283,6 +278,8 @@ def main():
                         help="Output directory for .mlpackage files and model_info.json")
     parser.add_argument("--jarvis_root", default=os.path.expanduser("~/src/JARVIS-HybridNet"),
                         help="Path to JARVIS-HybridNet source (default: ~/src/JARVIS-HybridNet)")
+    parser.add_argument("--keypoint_input_size", type=int, default=0,
+                        help="Override keypoint detect input size (0 = use config.yaml value)")
     args = parser.parse_args()
 
     # Add JARVIS to path
@@ -334,6 +331,11 @@ def main():
 
     # Read config
     config = read_jarvis_config(args.jarvis_project)
+
+    # Override keypoint input size if specified
+    if args.keypoint_input_size > 0:
+        print(f"  Overriding keypoint_input_size: {config['keypoint_input_size']} -> {args.keypoint_input_size}")
+        config["keypoint_input_size"] = args.keypoint_input_size
 
     # Create output directory
     os.makedirs(args.output_dir, exist_ok=True)
