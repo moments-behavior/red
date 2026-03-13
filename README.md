@@ -47,13 +47,13 @@ Developed at the [Johnson Lab](https://www.janelia.org/lab/johnson-lab), HHMI Ja
 
 ```bash
 brew tap JohnsonLabJanelia/red
-brew install --HEAD red
+brew install --HEAD JohnsonLabJanelia/red/red
 ```
 
 ### Launch
 
 ```bash
-red
+red /path/to/project.redproj
 ```
 
 ### Create Your First Project
@@ -66,16 +66,62 @@ red
 
 ## Installation
 
-### macOS (Homebrew)
+### macOS (Homebrew) -- Recommended
 
-The fastest path on macOS with Apple Silicon or Intel:
+Requires macOS 12 (Monterey) or later on Apple Silicon (M1/M2/M3/M4/M5).
+
+**Step 1: Install Homebrew** (skip if already installed)
 
 ```bash
-brew tap JohnsonLabJanelia/red
-brew install --HEAD red
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 ```
 
-This installs all dependencies and builds from the latest source.
+**Step 2: Add the RED tap**
+
+```bash
+# Public repo:
+brew tap JohnsonLabJanelia/red
+
+# Private repo (requires GitHub SSH key):
+brew tap JohnsonLabJanelia/red git@github.com:JohnsonLabJanelia/homebrew-red.git
+```
+
+**Step 3: Install RED**
+
+```bash
+brew install --HEAD JohnsonLabJanelia/red/red
+```
+
+This installs all dependencies (Eigen, FFmpeg, GLFW, Ceres Solver, etc.) and builds from the latest source. Typical install time: 3-5 minutes.
+
+**Step 4: Launch**
+
+```bash
+red                                    # prints usage
+red /path/to/my_project.redproj        # open a project
+```
+
+On first launch, macOS Gatekeeper may show a security warning. If so:
+
+```bash
+xattr -dr com.apple.quarantine "$(brew --prefix)/bin/red"
+```
+
+**Updating to the latest version:**
+
+```bash
+brew uninstall red
+brew install --HEAD JohnsonLabJanelia/red/red
+```
+
+### What Gets Installed
+
+| File | Location | Purpose |
+|------|----------|---------|
+| `red` binary | `/opt/homebrew/bin/red` | Main application |
+| Font files (4) | `/opt/homebrew/share/red/fonts/` | UI fonts (Roboto, FontAwesome) |
+| `default_imgui_layout.ini` | `/opt/homebrew/share/red/` | Default window layout |
+| `pth_to_coreml.py` | `/opt/homebrew/share/red/scripts/` | PyTorch to CoreML model converter |
 
 ### macOS (Build from Source)
 
@@ -130,7 +176,7 @@ cmake --build release -j$(nproc)
 
 | Component | macOS                                  | Linux                                   |
 |-----------|----------------------------------------|-----------------------------------------|
-| GPU       | Apple Silicon (M1/M2/M3/M4) or AMD     | NVIDIA with NVDEC (GTX 1060+)          |
+| GPU       | Apple Silicon (M1/M2/M3/M4/M5)        | NVIDIA with NVDEC (GTX 1060+)          |
 | RAM       | 16 GB recommended                      | 16 GB recommended                       |
 | Storage   | SSD recommended for video playback      | SSD recommended for video playback      |
 | Display   | 1920x1080 minimum                      | 1920x1080 minimum                       |
