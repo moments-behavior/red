@@ -120,6 +120,25 @@ def infer_output_channels_from_weights(weights_path):
     return None
 
 
+class NormalizedModel(nn.Module):
+    """Wraps a model with ImageNet normalization as the first step.
+
+    JARVIS training applies: (pixel/255 - mean) / std
+    CoreML ImageType gives us: pixel/255 (i.e., [0,1] float)
+    This wrapper applies: (x - mean) / std on the [0,1] input.
+    """
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
+        # ImageNet mean/std (RGB order — CoreML handles BGR→RGB via color_layout)
+        self.register_buffer('mean', torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1))
+        self.register_buffer('std', torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1))
+
+    def forward(self, x):
+        x = (x - self.mean) / self.std
+        return self.model(x)
+
+
 def build_model(mode, weights_path, config):
     """Build EfficientTrackBackbone and load weights.
 
@@ -190,17 +209,22 @@ def convert_to_coreml(model, input_size, output_path, model_name):
 
     print(f"  Converting {model_name} to CoreML...")
 
-    # Trace
+    # Wrap model with ImageNet normalization so it's part of the computation
+    # graph. This avoids CoreML ImageType per-channel scale/bias shape issues.
+    # The model receives [0,1] float input from CoreML (scale=1/255) and the
+    # NormalizedModel layer applies (x - mean) / std before the backbone.
+    wrapped = NormalizedModel(model)
+    wrapped.eval()
+
+    # Trace the wrapped model
     t0 = time.time()
     dummy_input = torch.randn(1, 3, input_size, input_size)
     with torch.no_grad():
-        traced = torch.jit.trace(model, dummy_input)
+        traced = torch.jit.trace(wrapped, dummy_input)
     print(f"  Traced in {time.time() - t0:.2f}s")
 
     # Convert with ImageType input (BGR, scale to [0,1]).
-    # ImageNet normalization (mean subtraction + std division) must be handled
-    # in the C++ inference code since CoreML's per-channel scale/bias has
-    # shape compatibility issues with some model architectures.
+    # ImageNet normalization is baked into the model via NormalizedModel wrapper.
     t0 = time.time()
     image_input = ct.ImageType(
         name="image",
