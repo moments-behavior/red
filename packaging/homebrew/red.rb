@@ -75,6 +75,7 @@ class Red < Formula
     # the executable or in standard system locations).
     (share/"red/fonts").install Dir["fonts/*"]
     (share/"red").install "default_imgui_layout.ini"
+    (share/"red/scripts").install "scripts/pth_to_coreml.py"
   end
 
   def caveats
