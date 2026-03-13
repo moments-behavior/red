@@ -536,7 +536,7 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
                             std::string output_dir = state.models_folder;
 
                             std::string cmd =
-                                "conda run -n jarvis python \"" + script +
+                                "conda run -n coreml python \"" + script +
                                 "\" --jarvis_project \"" + jarvis_project.string() +
                                 "\" --output_dir \"" + output_dir + "\" 2>&1";
 
