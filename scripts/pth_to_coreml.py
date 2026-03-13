@@ -236,36 +236,23 @@ def convert_to_coreml(model, input_size, output_path, model_name):
         traced = torch.jit.trace(model, dummy_input)
     print(f"  Traced in {time.time() - t0:.2f}s")
 
-    # Convert with ImageType input (BGR, scale to [0,1]).
+    # Convert with TensorType input (accepts MLMultiArray for manual preprocessing).
+    # The C++ inference code handles BGRA→RGB conversion and ImageNet normalization
+    # before feeding the tensor to CoreML.
     t0 = time.time()
-    image_input = ct.ImageType(
+    tensor_input = ct.TensorType(
         name="image",
         shape=(1, 3, input_size, input_size),
-        color_layout=ct.colorlayout.BGR,
-        scale=1.0 / 255.0,
-        bias=[0.0, 0.0, 0.0],
     )
 
-    try:
-        coreml_model = ct.convert(
-            traced,
-            inputs=[image_input],
-            convert_to="mlprogram",
-            minimum_deployment_target=ct.target.macOS13,
-            compute_precision=ct.precision.FLOAT16,
-        )
-        input_mode = "ImageType (BGR, scale=1/255)"
-    except Exception as e:
-        print(f"  ImageType failed: {e}")
-        print(f"  Falling back to TensorType...")
-        coreml_model = ct.convert(
-            traced,
-            inputs=[ct.TensorType(name="image", shape=(1, 3, input_size, input_size))],
-            convert_to="mlprogram",
-            minimum_deployment_target=ct.target.macOS13,
-            compute_precision=ct.precision.FLOAT16,
-        )
-        input_mode = "TensorType (raw float tensor)"
+    coreml_model = ct.convert(
+        traced,
+        inputs=[tensor_input],
+        convert_to="mlprogram",
+        minimum_deployment_target=ct.target.macOS13,
+        compute_precision=ct.precision.FLOAT16,
+    )
+    input_mode = "TensorType (normalized float tensor)"
 
     convert_time = time.time() - t0
     print(f"  Converted in {convert_time:.2f}s ({input_mode})")
