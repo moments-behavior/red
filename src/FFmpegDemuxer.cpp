@@ -306,6 +306,10 @@ int64_t FFmpegDemuxer::FindKeyFrameInterval() {
             break;
         }
     }
+    // Seek demuxer back to start — FindKeyFrameInterval consumed packets
+    // that camera 0's decoder thread will need.
+    av_seek_frame(fmtc, videoStream, 0, AVSEEK_FLAG_BACKWARD);
+
     return (cnt > 0) ? cnt - 1 : 1;
 }
 
