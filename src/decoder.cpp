@@ -409,24 +409,17 @@ void decoder_process(DecoderContext *dc_context, FFmpegDemuxer *demuxer,
 
                 vt_dec.submit_blocking(pVideo, nVideoBytes, pktinfo.pts, pktinfo.dts,
                                        timebase, (pktinfo.flags & AV_PKT_FLAG_KEY) != 0);
+                CVPixelBufferRef pb = vt_dec.drain_one();
+                if (!pb) continue;
 
-                // Track position by submitted packets, not decoded output.
-                // VT can silently drop frames; tying curr_frame to drain_one
-                // would cause curr_frame to fall behind the stream position.
                 if (curr_frame < seek_info->seek_frame) {
-                    CVPixelBufferRef pb = vt_dec.drain_one();
-                    if (pb) CFRelease(pb);
+                    CFRelease(pb);
                     curr_frame++;
                 } else {
-                    // Flush VT to ensure target frame is decoded
-                    vt_dec.flush();
-                    CVPixelBufferRef pb = vt_dec.drain_one();
-                    if (pb) {
-                        display_buffer[0].pixel_buffer       = pb;
-                        display_buffer[0].frame_number       = (int)seek_info->seek_frame;
-                        display_buffer[0].available_to_write = false;
-                        dc_context->decoding_flag            = true;
-                    }
+                    display_buffer[0].pixel_buffer       = pb;
+                    display_buffer[0].frame_number       = (int)seek_info->seek_frame;
+                    display_buffer[0].available_to_write = false;
+                    dc_context->decoding_flag            = true;
                     curr_frame++;
                     seek_done = true;
                 }
