@@ -36,20 +36,17 @@ class Red < Formula
   # ---------------------------------------------------------------------------
   head "https://github.com/JohnsonLabJanelia/red.git", branch: "rob_ui_overhaul"
 
-  # Build dependencies (not needed at runtime)
   depends_on "cmake"      => :build
   depends_on "pkg-config" => :build
 
-  # macOS 12+ required (Metal compute shaders + VideoToolbox async decode)
-  depends_on macos: :monterey
-
-  # Runtime dependencies (Homebrew handles installation automatically)
   depends_on "ceres-solver"
   depends_on "eigen"
   depends_on "ffmpeg"
   depends_on "glfw"
   depends_on "jpeg-turbo"
   depends_on "opencv" # needed for cv::calibrateCamera on Linux; unused on macOS
+
+  depends_on macos: :monterey
 
   def install
     # For HEAD installs the repo is cloned without --recursive.
