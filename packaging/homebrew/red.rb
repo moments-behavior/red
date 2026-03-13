@@ -44,8 +44,6 @@ class Red < Formula
   depends_on "ffmpeg"
   depends_on "glfw"
   depends_on "jpeg-turbo"
-  depends_on "opencv" # needed for cv::calibrateCamera on Linux; unused on macOS
-
   depends_on macos: :monterey
 
   def install
