@@ -197,25 +197,17 @@ def convert_to_coreml(model, input_size, output_path, model_name):
         traced = torch.jit.trace(model, dummy_input)
     print(f"  Traced in {time.time() - t0:.2f}s")
 
-    # Convert with ImageType input (BGR, ImageNet normalization baked in).
-    # JARVIS expects: normalized = (pixel/255 - mean) / std
-    # CoreML applies: output = input * scale + bias (per-channel)
-    # So: scale = 1/(255*std), bias = -mean/std
-    # ImageNet: mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225] (RGB)
-    # BGR order for CoreML: [B, G, R]
-    mean_rgb = [0.485, 0.456, 0.406]
-    std_rgb = [0.229, 0.224, 0.225]
-    # BGR: reverse
-    scale_bgr = [1.0 / (255.0 * std_rgb[2-i]) for i in range(3)]
-    bias_bgr = [-mean_rgb[2-i] / std_rgb[2-i] for i in range(3)]
-
+    # Convert with ImageType input (BGR, scale to [0,1]).
+    # ImageNet normalization (mean subtraction + std division) must be handled
+    # in the C++ inference code since CoreML's per-channel scale/bias has
+    # shape compatibility issues with some model architectures.
     t0 = time.time()
     image_input = ct.ImageType(
         name="image",
         shape=(1, 3, input_size, input_size),
         color_layout=ct.colorlayout.BGR,
-        scale=scale_bgr,
-        bias=bias_bgr,
+        scale=1.0 / 255.0,
+        bias=[0.0, 0.0, 0.0],
     )
 
     try:
