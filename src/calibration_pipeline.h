@@ -1697,6 +1697,10 @@ inline bool global_registration(
     double src_var = 0.0;
     for (int i = 0; i < n; i++)
         src_var += S.row(i).squaredNorm();
+    if (src_var < 1e-12) {
+        if (status) *status = "Error: 3D point variance too small for alignment";
+        return false;
+    }
     double scale_reg = svd.singularValues().sum() / src_var;
 
     // 6. Translation: t = dst_mean - s * R * src_mean

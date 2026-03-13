@@ -212,8 +212,6 @@ static void print_project_summary(const ProjectManager &pm,
     std::cout << std::endl;
 }
 
-// discover_mp4_cameras moved to gui/annotation_dialog.h
-
 int main(int argc, char **argv) {
     gx_context *window = (gx_context *)malloc(sizeof(gx_context));
     *window =

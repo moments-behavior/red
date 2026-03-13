@@ -27,4 +27,8 @@ red_exporter_env/
 .venv/
 venv/
 env/
-ENV/models/
+ENV/
+
+# Model files (large binaries, not tracked)
+models/
+.DS_Store

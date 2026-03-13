@@ -106,10 +106,12 @@ extractIntrinsicsFromHomographies(
     double v0 = (B12 * B13 - B11 * B23) / d;
     double lambda = B33 - (B13 * B13 + v0 * (B12 * B13 - B11 * B23)) / B11;
 
+    if (std::abs(lambda) < 1e-15) return false;
     if (lambda / B11 < 0 || lambda / d < 0) return false;
 
     double alpha = std::sqrt(std::abs(lambda / B11));
     double beta = std::sqrt(std::abs(lambda * B11 / d));
+    if (std::abs(beta) < 1e-15) return false;
     double gamma = -B12 * alpha * alpha * beta / lambda;
     double u0 = gamma * v0 / beta - B13 * alpha * alpha / lambda;
 

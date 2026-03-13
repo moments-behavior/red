@@ -34,7 +34,7 @@ class Red < Formula
   # Use while a stable release is not yet tagged, or for development:
   #   brew install --HEAD JohnsonLabJanelia/red/red
   # ---------------------------------------------------------------------------
-  head "https://github.com/JohnsonLabJanelia/red.git", branch: "rob_dev_no_opencv"
+  head "https://github.com/JohnsonLabJanelia/red.git", branch: "rob_ui_overhaul"
 
   # Build dependencies (not needed at runtime)
   depends_on "cmake"      => :build
@@ -46,7 +46,7 @@ class Red < Formula
   depends_on "ffmpeg"
   depends_on "glfw"
   depends_on "jpeg-turbo"
-  depends_on "opencv"
+  depends_on "opencv" # needed for cv::calibrateCamera on Linux; unused on macOS
 
   # macOS 12+ required (Metal compute shaders + VideoToolbox async decode)
   depends_on macos: :monterey

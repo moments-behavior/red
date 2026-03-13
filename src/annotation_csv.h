@@ -266,7 +266,7 @@ inline bool load_3d_csv(const std::string &path, AnnotationMap &amap,
 }
 
 // Load v2 2D CSV for a single camera into an AnnotationMap.
-// Writes to amap[frame].instances[0].cameras[cam_idx].
+// Writes to amap[frame].cameras[cam_idx].
 inline bool load_2d_csv(const std::string &path, AnnotationMap &amap,
                          int cam_idx, int num_nodes, int num_cameras,
                          std::string &error) {

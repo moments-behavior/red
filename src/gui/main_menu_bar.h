@@ -23,7 +23,7 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
     if (!ImGui::BeginMainMenuBar())
         return;
 
-    // --- Text menus (moved from Navigator) ---
+    // --- Text menus ---
 
     if (ImGui::BeginMenu("File")) {
         if (ImGui::MenuItem("Open Video(s)")) {

@@ -252,6 +252,7 @@ inline PerCameraResult fit_telecentric_dlt(
     // Orthographic decomposition: A = K2 * R(1:2,:)
     res.sx = res.A.row(0).norm();
     res.sy = res.A.row(1).norm();
+    if (res.sx < 1e-12 || res.sy < 1e-12) return res;  // degenerate
 
     Eigen::Matrix<double, 2, 3> Anorm;
     Anorm.row(0) = res.A.row(0) / res.sx;

@@ -1,5 +1,5 @@
-// annotation_v1.h — TEMPORARY bridge for old KeyPoints* ↔ new AnnotationMap.
-// DELETE this file in Phase C.
+// annotation_v1.h — Legacy bridge for old KeyPoints* ↔ new AnnotationMap.
+// Used only by test_annotation.cpp for migration test coverage.
 //
 // These functions let old code (that still uses KeyPoints*) interoperate with
 // the new AnnotationMap during the transition. The old Camera2D / InstanceAnnotation
