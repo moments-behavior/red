@@ -512,7 +512,9 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
                 ImGui::Separator();
                 if (!converting) {
                     ImGui::TextWrapped("CoreML models not found. Convert .pth "
-                                       "checkpoints to CoreML for GPU/ANE acceleration.");
+                                       "checkpoints to CoreML for GPU/ANE acceleration. "
+                                       "Point Models Folder to the JARVIS project directory "
+                                       "(with config.yaml) for best results.");
                     if (ImGui::Button("Convert to CoreML")) {
                         // Find the script: try dev build path, then Homebrew
                         std::string exe_dir = ctx.window->exe_dir;
