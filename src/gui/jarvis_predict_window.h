@@ -502,6 +502,86 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
             }
         }
 
+        // Convert to CoreML button (macOS only — .pth exists, no .mlpackage)
+#ifdef __APPLE__
+        {
+            bool show_coreml_convert = has_pth && !has_coreml &&
+                !jarvis.loaded && !jarvis_coreml.loaded;
+            bool converting = state.convert_job && state.convert_job->running.load();
+            if (show_coreml_convert) {
+                ImGui::Separator();
+                if (!converting) {
+                    ImGui::TextWrapped("CoreML models not found. Convert .pth "
+                                       "checkpoints to CoreML for GPU/ANE acceleration.");
+                    if (ImGui::Button("Convert to CoreML")) {
+                        // Find the script: try dev build path, then Homebrew
+                        std::string exe_dir = ctx.window->exe_dir;
+                        std::string script;
+                        for (auto &candidate : {
+                            exe_dir + "/../scripts/pth_to_coreml.py",
+                            exe_dir + "/../share/red/scripts/pth_to_coreml.py",
+                        }) {
+                            if (fs::exists(candidate)) {
+                                script = fs::canonical(candidate).string();
+                                break;
+                            }
+                        }
+
+                        if (script.empty()) {
+                            state.convert_status = "Error: pth_to_coreml.py not found";
+                        } else {
+                            // jarvis_project is the parent of models_folder
+                            // (models_folder points to <project>/models/)
+                            fs::path jarvis_project = fs::path(state.models_folder).parent_path();
+                            std::string output_dir = state.models_folder;
+
+                            std::string cmd =
+                                "conda run -n jarvis python \"" + script +
+                                "\" --jarvis_project \"" + jarvis_project.string() +
+                                "\" --output_dir \"" + output_dir + "\" 2>&1";
+
+                            auto job = std::make_shared<ConvertJob>();
+                            job->running.store(true);
+                            state.convert_job = job;
+                            state.convert_status = "Converting to CoreML...";
+
+                            std::thread([job, cmd]() {
+                                FILE *pipe = popen(cmd.c_str(), "r");
+                                if (!pipe) {
+                                    job->message = "Error: failed to run conversion command";
+                                    job->success = false;
+                                    job->running.store(false);
+                                    job->finished.store(true);
+                                    return;
+                                }
+                                char buf[256];
+                                std::string output;
+                                while (fgets(buf, sizeof(buf), pipe))
+                                    output += buf;
+                                int ret = pclose(pipe);
+                                if (ret == 0) {
+                                    job->message = "CoreML conversion complete. Click Import to Project.";
+                                    job->success = true;
+                                    job->force_rescan = true;
+                                } else {
+                                    job->message = "CoreML conversion failed (exit " +
+                                        std::to_string(ret) + "): " + output.substr(0, 200);
+                                    job->success = false;
+                                }
+                                job->running.store(false);
+                                job->finished.store(true);
+                            }).detach();
+                        }
+                    }
+                } else {
+                    ImGui::BeginDisabled();
+                    ImGui::Button("Converting...");
+                    ImGui::EndDisabled();
+                }
+            }
+        }
+#endif
+
         // --- Model info (shown after loading) ---
         {
             bool onnx_active = jarvis.loaded;
