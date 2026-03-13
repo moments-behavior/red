@@ -41,6 +41,44 @@ static MLModel *load_mlpackage(const std::string &path, std::string &err) {
 }
 
 // Create a resized CVPixelBuffer using vImage (Accelerate, NEON-optimized)
+// Convert a BGRA CVPixelBuffer to an ImageNet-normalized CHW float MLMultiArray.
+// JARVIS training normalizes: (pixel/255 - mean) / std with ImageNet values.
+// CoreML's ImageType only does scale=1/255 (no normalization), so we do it manually.
+static MLMultiArray *pixelbuf_to_normalized_array(CVPixelBufferRef pb, int w, int h) {
+    // ImageNet RGB mean/std
+    static const float mean[3] = {0.485f, 0.456f, 0.406f}; // R, G, B
+    static const float inv_std[3] = {1.0f/0.229f, 1.0f/0.224f, 1.0f/0.225f};
+
+    NSArray *shape = @[@1, @3, @(h), @(w)];
+    NSError *err = nil;
+    MLMultiArray *arr = [[MLMultiArray alloc] initWithShape:shape
+                                                  dataType:MLMultiArrayDataTypeFloat32
+                                                     error:&err];
+    if (!arr) return nil;
+
+    CVPixelBufferLockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
+    uint8_t *src = (uint8_t *)CVPixelBufferGetBaseAddress(pb);
+    size_t stride = CVPixelBufferGetBytesPerRow(pb);
+    float *dst = (float *)arr.dataPointer;
+
+    // BGRA → normalized RGB CHW
+    for (int y = 0; y < h; y++) {
+        uint8_t *row = src + y * stride;
+        for (int x = 0; x < w; x++) {
+            float b = row[x * 4 + 0] / 255.0f;
+            float g = row[x * 4 + 1] / 255.0f;
+            float r = row[x * 4 + 2] / 255.0f;
+            // Channel 0 = R, Channel 1 = G, Channel 2 = B (RGB order for model)
+            dst[0 * h * w + y * w + x] = (r - mean[0]) * inv_std[0];
+            dst[1 * h * w + y * w + x] = (g - mean[1]) * inv_std[1];
+            dst[2 * h * w + y * w + x] = (b - mean[2]) * inv_std[2];
+        }
+    }
+
+    CVPixelBufferUnlockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
+    return arr;
+}
+
 // Resize a CVPixelBuffer to dst_w x dst_h using vImage (squish, matching JARVIS).
 static CVPixelBufferRef resize_pixelbuf(CVPixelBufferRef src, int dst_w, int dst_h) {
     int src_w = (int)CVPixelBufferGetWidth(src);
@@ -239,13 +277,17 @@ bool jarvis_coreml_predict_frame(
             CVPixelBufferRef resized = resize_pixelbuf(pixel_buffers[c], sz, sz);
             if (!resized) continue;
 
+            // Convert to ImageNet-normalized float tensor (matching JARVIS training)
+            MLMultiArray *cd_tensor = pixelbuf_to_normalized_array(resized, sz, sz);
+            CVPixelBufferRelease(resized);
+            if (!cd_tensor) continue;
+
             NSError *error = nil;
             id<MLFeatureProvider> cd_input =
                 [[MLDictionaryFeatureProvider alloc] initWithDictionary:
-                    @{@"image": [MLFeatureValue featureValueWithPixelBuffer:resized]}
+                    @{@"image": [MLFeatureValue featureValueWithMultiArray:cd_tensor]}
                     error:&error];
             id<MLFeatureProvider> cd_output = [cd_model predictionFromFeatures:cd_input error:&error];
-            CVPixelBufferRelease(resized);
             if (!cd_output) continue;
 
             MLMultiArray *cd_hm = find_heatmap(cd_output);
@@ -258,6 +300,10 @@ bool jarvis_coreml_predict_frame(
             float ds_y = (float)cam_heights[c] / sz;
 
             HMPeak center = heatmap_argmax(cd_hm, 0, cd_hm_h, cd_hm_w);
+            // Debug: print raw heatmap peak info
+            printf("[CenterDetect cam%d] raw_peak=%.4f conf=%.4f pos=(%.1f,%.1f) hm=%dx%d\n",
+                   c, center.confidence * 255.0f, center.confidence,
+                   center.x, center.y, cd_hm_w, cd_hm_h);
             center.x *= ds_x;
             center.y *= ds_y;
             auto tc1 = std::chrono::steady_clock::now();
@@ -276,12 +322,16 @@ bool jarvis_coreml_predict_frame(
             CVPixelBufferRef crop = crop_pixelbuf(pixel_buffers[c], cx, cy, bbox_size);
             if (!crop) continue;
 
+            // Normalize crop with ImageNet mean/std (matching JARVIS training)
+            MLMultiArray *kd_tensor = pixelbuf_to_normalized_array(crop, bbox_size, bbox_size);
+            CVPixelBufferRelease(crop);
+            if (!kd_tensor) continue;
+
             id<MLFeatureProvider> kd_input =
                 [[MLDictionaryFeatureProvider alloc] initWithDictionary:
-                    @{@"image": [MLFeatureValue featureValueWithPixelBuffer:crop]}
+                    @{@"image": [MLFeatureValue featureValueWithMultiArray:kd_tensor]}
                     error:&error];
             id<MLFeatureProvider> kd_output = [kd_model predictionFromFeatures:kd_input error:&error];
-            CVPixelBufferRelease(crop);
             if (!kd_output) continue;
 
             MLMultiArray *kd_hm = find_heatmap(kd_output);
