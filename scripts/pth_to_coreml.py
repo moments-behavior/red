@@ -27,9 +27,7 @@ import shutil
 import sys
 import time
 
-import numpy as np
 import torch
-import torch.nn as nn
 
 
 class SimpleConfig:
@@ -137,25 +135,6 @@ def infer_output_channels_from_weights(weights_path):
     return None
 
 
-class NormalizedModel(nn.Module):
-    """Wraps a model with ImageNet normalization as the first step.
-
-    JARVIS training applies: (pixel/255 - mean) / std
-    CoreML ImageType gives us: pixel/255 (i.e., [0,1] float)
-    This wrapper applies: (x - mean) / std on the [0,1] input.
-    """
-    def __init__(self, model):
-        super().__init__()
-        self.model = model
-        # ImageNet mean/std (RGB order — CoreML handles BGR→RGB via color_layout)
-        self.register_buffer('mean', torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1))
-        self.register_buffer('std', torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1))
-
-    def forward(self, x):
-        x = (x - self.mean) / self.std
-        return self.model(x)
-
-
 def build_model(mode, weights_path, config):
     """Build EfficientTrackBackbone and load weights.
 
@@ -201,7 +180,14 @@ def build_model(mode, weights_path, config):
 
     if os.path.exists(weights_path):
         state_dict = torch.load(weights_path, map_location="cpu")
-        model.load_state_dict(state_dict, strict=False)
+        result = model.load_state_dict(state_dict, strict=False)
+        if result.missing_keys or result.unexpected_keys:
+            print(f"  WARNING: {len(result.missing_keys)} missing, "
+                  f"{len(result.unexpected_keys)} unexpected keys")
+            for k in result.missing_keys[:5]:
+                print(f"    missing: {k}")
+            for k in result.unexpected_keys[:5]:
+                print(f"    unexpected: {k}")
         print(f"  Loaded weights: {weights_path}")
     else:
         print(f"  WARNING: weights not found: {weights_path}")
@@ -232,8 +218,12 @@ def convert_to_coreml(model, input_size, output_path, model_name):
     # baked in, matching the original convert_onnx_to_coreml.py behavior.
     t0 = time.time()
     dummy_input = torch.randn(1, 3, input_size, input_size)
-    with torch.no_grad():
-        traced = torch.jit.trace(model, dummy_input)
+    try:
+        with torch.no_grad():
+            traced = torch.jit.trace(model, dummy_input)
+    except Exception as e:
+        print(f"  ERROR: torch.jit.trace failed: {e}")
+        sys.exit(1)
     print(f"  Traced in {time.time() - t0:.2f}s")
 
     # Convert with TensorType input (accepts MLMultiArray for manual preprocessing).
@@ -245,13 +235,17 @@ def convert_to_coreml(model, input_size, output_path, model_name):
         shape=(1, 3, input_size, input_size),
     )
 
-    coreml_model = ct.convert(
-        traced,
-        inputs=[tensor_input],
-        convert_to="mlprogram",
-        minimum_deployment_target=ct.target.macOS13,
-        compute_precision=ct.precision.FLOAT16,
-    )
+    try:
+        coreml_model = ct.convert(
+            traced,
+            inputs=[tensor_input],
+            convert_to="mlprogram",
+            minimum_deployment_target=ct.target.macOS13,
+            compute_precision=ct.precision.FLOAT16,
+        )
+    except Exception as e:
+        print(f"  ERROR: coremltools conversion failed: {e}")
+        sys.exit(1)
     input_mode = "TensorType (normalized float tensor)"
 
     convert_time = time.time() - t0
@@ -392,6 +386,7 @@ def main():
         "input_color_layout": "BGR",
         "input_scale": 1.0 / 255.0,
         "input_bias": [0.0, 0.0, 0.0],
+        "note": "TensorType input — C++ applies ImageNet normalization manually",
     }
 
     with open(meta_path, "w") as f:

@@ -92,8 +92,12 @@ static CVPixelBufferRef resize_pixelbuf(CVPixelBufferRef src, int dst_w, int dst
                              (vImagePixelCount)src_w, src_stride};
 
     CVPixelBufferRef dst = NULL;
-    CVPixelBufferCreate(kCFAllocatorDefault, dst_w, dst_h,
+    CVReturn status = CVPixelBufferCreate(kCFAllocatorDefault, dst_w, dst_h,
                         kCVPixelFormatType_32BGRA, NULL, &dst);
+    if (status != kCVReturnSuccess || !dst) {
+        CVPixelBufferUnlockBaseAddress(src, kCVPixelBufferLock_ReadOnly);
+        return NULL;
+    }
     CVPixelBufferLockBaseAddress(dst, 0);
 
     uint8_t *dst_data = (uint8_t *)CVPixelBufferGetBaseAddress(dst);
@@ -126,8 +130,12 @@ static CVPixelBufferRef crop_pixelbuf(CVPixelBufferRef src,
 
     // Create crop destination
     CVPixelBufferRef dst = NULL;
-    CVPixelBufferCreate(kCFAllocatorDefault, cw, ch,
+    CVReturn cr_status = CVPixelBufferCreate(kCFAllocatorDefault, cw, ch,
                         kCVPixelFormatType_32BGRA, NULL, &dst);
+    if (cr_status != kCVReturnSuccess || !dst) {
+        CVPixelBufferUnlockBaseAddress(src, kCVPixelBufferLock_ReadOnly);
+        return NULL;
+    }
     CVPixelBufferLockBaseAddress(dst, 0);
     uint8_t *dst_data = (uint8_t *)CVPixelBufferGetBaseAddress(dst);
     size_t dst_stride = CVPixelBufferGetBytesPerRow(dst);
@@ -236,7 +244,7 @@ bool jarvis_coreml_predict_frame(
 
     if (!s.loaded) { s.status = "Not loaded"; return false; }
 
-    @autoreleasepool {
+    {
         auto t0 = std::chrono::steady_clock::now();
         int num_cams = (int)pixel_buffers.size();
         int num_joints = s.num_joints;
@@ -265,10 +273,10 @@ bool jarvis_coreml_predict_frame(
         // Per-camera pipeline: CenterDetect → crop → KeypointDetect
         // Processing each camera fully before moving to the next improves
         // cache locality and enables early exit when center confidence is low.
-        auto t1 = std::chrono::steady_clock::now();
         float center_ms_total = 0, kp_ms_total = 0;
 
         for (int c = 0; c < num_cams; ++c) {
+            @autoreleasepool {
             if (!pixel_buffers[c]) continue;
 
             // --- CenterDetect ---
@@ -287,8 +295,10 @@ bool jarvis_coreml_predict_frame(
                 [[MLDictionaryFeatureProvider alloc] initWithDictionary:
                     @{@"image": [MLFeatureValue featureValueWithMultiArray:cd_tensor]}
                     error:&error];
+            if (!cd_input || error) continue;
+            error = nil;
             id<MLFeatureProvider> cd_output = [cd_model predictionFromFeatures:cd_input error:&error];
-            if (!cd_output) continue;
+            if (!cd_output || error) continue;
 
             MLMultiArray *cd_hm = find_heatmap(cd_output);
             if (!cd_hm) continue;
@@ -323,12 +333,15 @@ bool jarvis_coreml_predict_frame(
             CVPixelBufferRelease(crop);
             if (!kd_tensor) continue;
 
+            error = nil;
             id<MLFeatureProvider> kd_input =
                 [[MLDictionaryFeatureProvider alloc] initWithDictionary:
                     @{@"image": [MLFeatureValue featureValueWithMultiArray:kd_tensor]}
                     error:&error];
+            if (!kd_input || error) continue;
+            error = nil;
             id<MLFeatureProvider> kd_output = [kd_model predictionFromFeatures:kd_input error:&error];
-            if (!kd_output) continue;
+            if (!kd_output || error) continue;
 
             MLMultiArray *kd_hm = find_heatmap(kd_output);
             if (!kd_hm) continue;
@@ -351,6 +364,7 @@ bool jarvis_coreml_predict_frame(
             }
             auto tk1 = std::chrono::steady_clock::now();
             kp_ms_total += std::chrono::duration<float, std::milli>(tk1 - tk0).count();
+            } // @autoreleasepool per camera
         }
         s.last_center_ms = center_ms_total;
         s.last_keypoint_ms = kp_ms_total;

@@ -3,8 +3,8 @@
 //
 // Loads JARVIS CenterDetect + KeypointDetect models (CoreML on macOS,
 // ONNX Runtime elsewhere) and provides a UI for running 2D pose predictions.
-// Model files can be in <project>/models/onnx/ or loaded manually.
-// If only .pth checkpoints exist, offers a "Convert to ONNX" button.
+// Model files can be in <project>/jarvis_models/ or loaded manually.
+// If only .pth checkpoints exist, offers Convert to CoreML / ONNX buttons.
 
 #include "imgui.h"
 #include "app_context.h"
@@ -548,7 +548,7 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
                                 output += buf;
                             int ret = pclose(pipe);
                             if (ret == 0) {
-                                job->message = "Conversion complete. Click Import to Project.";
+                                job->message = "ONNX conversion complete.";
                                 job->success = true;
                                 job->force_rescan = true;
                             } else {
@@ -641,7 +641,7 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
                                     output += buf;
                                 int ret = pclose(pipe);
                                 if (ret == 0) {
-                                    job->message = "CoreML conversion complete. Click Import to Project.";
+                                        job->message = "CoreML conversion complete.";
                                     job->success = true;
                                     job->force_rescan = true;
                                 } else {

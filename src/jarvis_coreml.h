@@ -5,7 +5,7 @@
 // directly on CVPixelBuffers from the VideoToolbox decode pipeline.
 // Zero-copy input: CoreML reads IOSurface-backed CVPixelBuffers on GPU/ANE.
 //
-// macOS only. Falls back to ONNX Runtime (jarvis_inference.h) if unavailable.
+// macOS only. Preferred over ONNX Runtime on Apple Silicon (~6-20ms/frame).
 
 #ifdef __APPLE__
 
