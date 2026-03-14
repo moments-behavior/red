@@ -192,6 +192,11 @@ def extract_and_match(image_dir, cameras, viable_pairs, device,
         features[serial] = {"keypoints": kpts, "num_keypoints": len(kpts)}
         print(f"    Cam{serial}: {len(kpts)} keypoints")
 
+    # Cache CPU numpy keypoints (avoid repeated rbd + cpu transfer in matching loop)
+    kpts_numpy = {}
+    for serial in raw_feats:
+        kpts_numpy[serial] = features[serial]["keypoints"]
+
     # Match all viable pairs
     all_matches = {}
     matched_count = 0
@@ -202,8 +207,6 @@ def extract_and_match(image_dir, cameras, viable_pairs, device,
         with torch.no_grad():
             result = matcher({"image0": raw_feats[sa], "image1": raw_feats[sb]})
 
-        feats_a = rbd(raw_feats[sa])
-        feats_b = rbd(raw_feats[sb])
         result = rbd(result)
 
         matches = result["matches"].cpu().numpy()   # (N, 2)
@@ -214,8 +217,8 @@ def extract_and_match(image_dir, cameras, viable_pairs, device,
 
         idx_a = matches[:, 0]
         idx_b = matches[:, 1]
-        pts_a = feats_a["keypoints"].cpu().numpy()[idx_a]  # (N, 2)
-        pts_b = feats_b["keypoints"].cpu().numpy()[idx_b]  # (N, 2)
+        pts_a = kpts_numpy[sa][idx_a]  # (N, 2)
+        pts_b = kpts_numpy[sb][idx_b]  # (N, 2)
 
         all_matches[(sa, sb)] = {
             "pts_a": pts_a,
@@ -296,6 +299,55 @@ def project_point(pt3d, R, t, K, dist):
     return np.array([xpp * fx + cx, ypp * fy + cy])
 
 
+def triangulate_dlt_batch(pts_a_undist, pts_b_undist, P_a, P_b):
+    """Batch DLT triangulation for N point pairs.
+    pts_a_undist, pts_b_undist: (N, 2) undistorted pixel coords
+    P_a, P_b: (3, 4) projection matrices
+    Returns: (N, 3) 3D points
+    """
+    N = len(pts_a_undist)
+    # Build A matrix for each point: (N, 4, 4)
+    A = np.zeros((N, 4, 4))
+    A[:, 0, :] = pts_a_undist[:, 0:1] * P_a[2:3, :] - P_a[0:1, :]
+    A[:, 1, :] = pts_a_undist[:, 1:2] * P_a[2:3, :] - P_a[1:2, :]
+    A[:, 2, :] = pts_b_undist[:, 0:1] * P_b[2:3, :] - P_b[0:1, :]
+    A[:, 3, :] = pts_b_undist[:, 1:2] * P_b[2:3, :] - P_b[1:2, :]
+    # Batched SVD
+    _, _, Vt = np.linalg.svd(A)
+    X = Vt[:, -1, :]  # (N, 4) last right singular vector
+    # Dehomogenize
+    pts3d = X[:, :3] / X[:, 3:4]
+    return pts3d
+
+
+def project_points_batch(pts3d, R, t, K, dist):
+    """Project N 3D points to 2D with distortion. All numpy arrays.
+    pts3d: (N, 3)
+    Returns: (N, 2) pixel coordinates, (N,) boolean mask for valid (in front of camera)
+    """
+    cam = (R @ pts3d.T).T + t  # (N, 3)
+    valid = cam[:, 2] > 0
+
+    # Avoid division by zero
+    z = np.where(valid, cam[:, 2], 1.0)
+    xp = cam[:, 0] / z
+    yp = cam[:, 1] / z
+
+    k1, k2, p1, p2, k3 = dist[0], dist[1], dist[2], dist[3], dist[4]
+    r2 = xp*xp + yp*yp
+    r4 = r2*r2
+    r6 = r4*r2
+    radial = 1.0 + k1*r2 + k2*r4 + k3*r6
+    xpp = xp*radial + 2.0*p1*xp*yp + p2*(r2 + 2.0*xp*xp)
+    ypp = yp*radial + p1*(r2 + 2.0*yp*yp) + 2.0*p2*xp*yp
+
+    fx, fy, cx, cy = K[0,0], K[1,1], K[0,2], K[1,2]
+    px = xpp * fx + cx
+    py = ypp * fy + cy
+
+    return np.stack([px, py], axis=1), valid
+
+
 def triangulate_dlt(pts_undist, proj_matrices):
     """DLT triangulation from N undistorted 2D points and their 3x4 projection matrices.
 
@@ -316,48 +368,42 @@ def triangulate_dlt(pts_undist, proj_matrices):
 
 
 def compute_reproj_errors(pts_a_px, pts_b_px, cam_a, cam_b):
-    """Triangulate each match pair using init_calibration, then compute reprojection error.
+    """Vectorized: triangulate all matches and compute max reprojection error.
 
     This is more robust than epipolar distance, especially for nearly co-located cameras.
     Returns: (N,) array of max reprojection errors (max of error in cam_a and cam_b) in pixels
     """
     N = len(pts_a_px)
-    errors = np.full(N, 1e6)
 
-    # Build projection matrices: P = K @ [R | t]
-    R_a, t_a, K_a, d_a = cam_a["R"], cam_a["t"], cam_a["K"], cam_a["dist"]
-    R_b, t_b, K_b, d_b = cam_b["R"], cam_b["t"], cam_b["K"], cam_b["dist"]
-    Rt_a = np.hstack([R_a, t_a.reshape(3, 1)])
-    Rt_b = np.hstack([R_b, t_b.reshape(3, 1)])
-    P_a = K_a @ Rt_a
-    P_b = K_b @ Rt_b
+    K_a, d_a, R_a, t_a = cam_a["K"], cam_a["dist"], cam_a["R"], cam_a["t"]
+    K_b, d_b, R_b, t_b = cam_b["K"], cam_b["dist"], cam_b["R"], cam_b["t"]
 
-    # Undistort points for triangulation (DLT needs undistorted coords)
-    pts_a_undist_norm = undistort_points(pts_a_px, K_a, d_a)
-    pts_b_undist_norm = undistort_points(pts_b_px, K_b, d_b)
-    # Convert back to undistorted pixel coords for DLT
-    pts_a_undist_px = pts_a_undist_norm * np.array([[K_a[0, 0], K_a[1, 1]]]) + np.array([[K_a[0, 2], K_a[1, 2]]])
-    pts_b_undist_px = pts_b_undist_norm * np.array([[K_b[0, 0], K_b[1, 1]]]) + np.array([[K_b[0, 2], K_b[1, 2]]])
+    # Undistort (already vectorized)
+    pts_a_undist_n = undistort_points(pts_a_px, K_a, d_a)
+    pts_b_undist_n = undistort_points(pts_b_px, K_b, d_b)
 
-    for i in range(N):
-        pt3d = triangulate_dlt(
-            [pts_a_undist_px[i], pts_b_undist_px[i]], [P_a, P_b]
-        )
-        # Check point is in front of both cameras
-        cam_pt_a = R_a @ pt3d + t_a
-        cam_pt_b = R_b @ pt3d + t_b
-        if cam_pt_a[2] <= 0 or cam_pt_b[2] <= 0:
-            continue
+    # Convert to undistorted pixel coords for DLT
+    pts_a_undist = pts_a_undist_n * np.array([[K_a[0,0], K_a[1,1]]]) + np.array([[K_a[0,2], K_a[1,2]]])
+    pts_b_undist = pts_b_undist_n * np.array([[K_b[0,0], K_b[1,1]]]) + np.array([[K_b[0,2], K_b[1,2]]])
 
-        # Reproject with distortion (into original distorted pixel space)
-        proj_a = project_point(pt3d, R_a, t_a, K_a, d_a)
-        proj_b = project_point(pt3d, R_b, t_b, K_b, d_b)
-        if proj_a is None or proj_b is None:
-            continue
+    P_a = K_a @ np.hstack([R_a, t_a.reshape(3,1)])
+    P_b = K_b @ np.hstack([R_b, t_b.reshape(3,1)])
 
-        err_a = np.linalg.norm(proj_a - pts_a_px[i])
-        err_b = np.linalg.norm(proj_b - pts_b_px[i])
-        errors[i] = max(err_a, err_b)
+    # Batch triangulate
+    pts3d = triangulate_dlt_batch(pts_a_undist, pts_b_undist, P_a, P_b)
+
+    # Batch reproject into both cameras
+    proj_a, valid_a = project_points_batch(pts3d, R_a, t_a, K_a, d_a)
+    proj_b, valid_b = project_points_batch(pts3d, R_b, t_b, K_b, d_b)
+
+    # Max reprojection error per point
+    err_a = np.linalg.norm(proj_a - pts_a_px, axis=1)
+    err_b = np.linalg.norm(proj_b - pts_b_px, axis=1)
+    errors = np.maximum(err_a, err_b)
+
+    # Invalid points (behind camera) get max error
+    invalid = ~(valid_a & valid_b)
+    errors[invalid] = 1e6
 
     return errors
 
@@ -642,15 +688,22 @@ def triangulate_and_filter_tracks(cameras, tracks, pair_quality, reproj_thresh=2
 
         stats["triangulated"] += 1
 
-        # Validate against ALL cameras that see this point
+        # Validate against ALL cameras that see this point (batch projection)
+        obs_serials = list(obs.keys())
+        obs_px = np.array([obs[s] for s in obs_serials])  # (M, 2)
+        pt3d_batch = pt3d.reshape(1, 3).repeat(len(obs_serials), axis=0)  # (M, 3)
+
         good_obs = {}
-        for serial, px in obs.items():
+        # Project into each camera (batch per-camera since each has different params)
+        for idx_c, serial in enumerate(obs_serials):
             cam = cameras[serial]
-            proj = project_point(pt3d, cam["R"], cam["t"], cam["K"], cam["dist"])
-            if proj is not None:
-                err = np.linalg.norm(proj - px)
+            proj, valid = project_points_batch(
+                pt3d.reshape(1, 3), cam["R"], cam["t"], cam["K"], cam["dist"]
+            )
+            if valid[0]:
+                err = np.linalg.norm(proj[0] - obs_px[idx_c])
                 if err < reproj_thresh:
-                    good_obs[serial] = px
+                    good_obs[serial] = obs[serial]
 
         if len(good_obs) >= 2:
             stats["kept"] += 1
@@ -691,7 +744,7 @@ def save_match_stats(args, cameras, viable_pairs, all_matches, filtered_matches,
 
     stats = {
         "config": {
-            "image_dir": str(args.image_dir),
+            "image_dir": [str(d) for d in args.image_dir] if isinstance(args.image_dir, list) else [str(args.image_dir)],
             "calib_dir": str(args.calib_dir),
             "max_keypoints": args.max_keypoints,
             "resize": args.resize,

@@ -96,15 +96,15 @@ inline bool is_in_camera_fov(const Eigen::Vector3d &point_world,
                       const Eigen::Vector3d &tvec,
                       const Eigen::Matrix3d &K, int image_width,
                       int image_height) {
-    // Use matrix-based projection (safe for improper rotations, det(R)=-1)
+    // Check point is in front of camera
+    Eigen::Vector3d cam_pt = R * point_world + tvec;
+    if (cam_pt(2) <= 0) return false;
+    // Use matrix-based projection (safe for det(R)=-1)
     Eigen::Matrix<double, 5, 1> zero_dist = Eigen::Matrix<double, 5, 1>::Zero();
     auto pt2d = red_math::projectPointR(point_world, R, tvec, K, zero_dist);
     double x = pt2d(0);
     double y = image_height - pt2d(1);
-    if (x > 0 && x < image_width && y > 0 && y < image_height) {
-        return true;
-    }
-    return false;
+    return (x > 0 && x < image_width && y > 0 && y < image_height);
 }
 
 inline void reprojection(FrameAnnotation &fa, SkeletonContext *skeleton,

@@ -332,15 +332,34 @@ inline FeatureResult run_feature_refinement(const FeatureConfig &config, std::st
         return result;
     }
 
+    // Compute initial reprojection error (before any BA)
+    {
+        double err_sum = 0; int err_count = 0;
+        for (int c = 0; c < nc; c++) {
+            auto it = landmarks.find(config.camera_names[c]);
+            if (it == landmarks.end()) continue;
+            for (const auto &[pid, px] : it->second) {
+                auto pit = points_3d.find(pid);
+                if (pit == points_3d.end()) continue;
+                auto pr = red_math::projectPointR(pit->second, poses[c].R, poses[c].t, poses[c].K, poses[c].dist);
+                err_sum += (pr - px).norm();
+                err_count++;
+            }
+        }
+        result.mean_reproj_before = err_count > 0 ? err_sum / err_count : 0.0;
+        fprintf(stderr, "Feature: initial reproj error: %.3f px (%d observations)\n",
+                result.mean_reproj_before, err_count);
+    }
+
     // 5. Bundle adjustment pass 1
     if (status) *status = "Bundle adjustment pass 1 (" + std::to_string(np) + " points)...";
     int outliers1 = 0;
-    result.mean_reproj_before = bundle_adjust_features(
+    double mean_reproj_pass1 = bundle_adjust_features(
         nc, config.camera_names, landmarks, poses, points_3d,
         config.ba_outlier_th1, config.ba_max_iter, config.lock_intrinsics, config.lock_distortion,
         config.prior_rot_weight, config.prior_trans_weight, outliers1);
     fprintf(stderr, "Feature: BA pass 1 — %.3f px, %d outliers removed, %d points remaining\n",
-            result.mean_reproj_before, outliers1, (int)points_3d.size());
+            mean_reproj_pass1, outliers1, (int)points_3d.size());
 
     // Re-triangulate with updated extrinsics
     std::map<int, Eigen::Vector3d> points_3d_new;

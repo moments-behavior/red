@@ -104,6 +104,15 @@ inline bool parse_config(const std::string &config_path,
             for (int r = 0; r < 3; r++)
                 for (int c = 0; c < 3; c++)
                     config.world_frame_rotation(r, c) = wfr[r][c].get<double>();
+            // Validate: must be a proper rotation (orthogonal, det=+1)
+            double det = config.world_frame_rotation.determinant();
+            Eigen::Matrix3d I = Eigen::Matrix3d::Identity();
+            double orth_err = (config.world_frame_rotation * config.world_frame_rotation.transpose() - I).norm();
+            if (std::abs(det - 1.0) > 0.01 || orth_err > 0.01) {
+                error = "world_frame_rotation must be a proper rotation matrix (det=" +
+                    std::to_string(det) + ", orthogonality error=" + std::to_string(orth_err) + ")";
+                return false;
+            }
         }
     }
 

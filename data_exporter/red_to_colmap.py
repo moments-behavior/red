@@ -175,9 +175,9 @@ def main():
             fx, fy, cx, cy = K[0, 0], K[1, 1], K[0, 2], K[1, 2]
             d = cam["dist"]
             k1, k2, p1, p2 = d[0], d[1], d[2], d[3]
-            # COLMAP half-pixel offset
-            cx_c = cx + 0.5
-            cy_c = cy + 0.5
+            # RED and COLMAP both use pixel-center convention (0,0 = center of top-left pixel)
+            cx_c = cx
+            cy_c = cy
             f.write(f"{cam_id} OPENCV {cam['width']} {cam['height']} "
                     f"{fx} {fy} {cx_c} {cy_c} {k1} {k2} {p1} {p2}\n")
     print(f"  Written {cam_file}")

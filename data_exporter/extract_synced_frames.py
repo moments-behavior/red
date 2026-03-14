@@ -216,7 +216,9 @@ def greedy_select(candidates: list[dict], num_sets: int,
 
 def extract_frame_sets(selected: list[dict], videos: dict[str, Path],
                        output_dir: Path) -> None:
-    """Extract the selected frame from every camera and save as frame sets."""
+    """Extract the selected frame from every camera — parallel per frame."""
+    from concurrent.futures import ThreadPoolExecutor
+
     output_dir.mkdir(parents=True, exist_ok=True)
     total = len(selected)
 
@@ -226,14 +228,17 @@ def extract_frame_sets(selected: list[dict], videos: dict[str, Path],
         set_dir = output_dir / f"set_{set_idx:03d}"
         set_dir.mkdir(parents=True, exist_ok=True)
 
+        # Extract all cameras in parallel for this frame
+        def extract_cam(args):
+            serial, vpath = args
+            out_path = set_dir / f"Cam{serial}.jpg"
+            return extract_single_frame(vpath, frame_num, out_path)
+
+        with ThreadPoolExecutor(max_workers=len(videos)) as executor:
+            list(executor.map(extract_cam, sorted(videos.items())))
+
         print(f"  Set {set_idx:3d}/{total} — frame {frame_num} "
               f"(t={timestamp:.1f}s, score={info['score']:.3f})")
-
-        for serial, vpath in sorted(videos.items()):
-            out_path = set_dir / f"Cam{serial}.jpg"
-            ok = extract_single_frame(vpath, frame_num, out_path)
-            if not ok:
-                print(f"    WARNING: failed to extract frame {frame_num} from Cam{serial}")
 
 
 def choose_device(device_str: str) -> torch.device:

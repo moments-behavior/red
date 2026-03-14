@@ -1804,13 +1804,11 @@ inline bool global_registration(
             pt = W * pt;
     }
 
-    // Report registration error
+    // Report registration error (Procrustes alignment quality, before world_frame_rotation)
     double reg_err = 0.0;
     for (int i = 0; i < n; i++) {
         Eigen::Vector3d transformed =
             scale_reg * R_reg * src_pts[i] + t_reg;
-        if (!config.world_frame_rotation.isIdentity(1e-10))
-            transformed = config.world_frame_rotation * transformed;
         reg_err += (transformed - dst_pts[i]).norm();
     }
     reg_err /= n;
