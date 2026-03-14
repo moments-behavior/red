@@ -22,6 +22,8 @@
 
 #include <ceres/ceres.h>
 #include <ceres/rotation.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 #include <Eigen/Core>
 #include <Eigen/Geometry>
@@ -1478,11 +1480,16 @@ inline bool bundle_adjust(
         options.function_tolerance = 1e-8;
         options.parameter_tolerance = 1e-8;
         options.minimizer_progress_to_stdout = false;
-        options.logging_type = ceres::SILENT; // suppress CHOLMOD warnings
+        options.logging_type = ceres::SILENT;
         options.num_threads = std::max(1, (int)std::thread::hardware_concurrency());
 
+        // Suppress CHOLMOD warnings by temporarily redirecting stderr
+        int saved_stderr2 = dup(STDERR_FILENO);
+        int devnull2 = open("/dev/null", O_WRONLY);
+        if (devnull2 >= 0) { dup2(devnull2, STDERR_FILENO); close(devnull2); }
         ceres::Solver::Summary summary;
         ceres::Solve(options, &problem, &summary);
+        if (saved_stderr2 >= 0) { dup2(saved_stderr2, STDERR_FILENO); close(saved_stderr2); }
 
         printf("BA pass %d: %s  initial_cost=%.2f  final_cost=%.2f  "
                "iterations=%d  time=%.2fs\n",
@@ -2973,7 +2980,22 @@ inline bool bundle_adjust_experimental(
             for(int c=0;c<nc;c++){std::vector<int> fix={6,7,8,9,10,11,12,13,14};
                 problem.SetManifold(cp[c].data(),new ceres::SubsetManifold(15,fix));}
         }
-        // fix_mode==2: everything free
+        // fix_mode==2: everything free — but fix intrinsics for cameras
+        // with too few observations to constrain 15 parameters (6 extrinsic +
+        // 4 intrinsic + 5 distortion). This prevents the Schur complement from
+        // becoming indefinite, avoiding CHOLMOD "not positive definite" warnings.
+        if(bp.fix_mode==2){
+            std::vector<int> obs_per_cam(nc, 0);
+            for(const auto&obs:observations) obs_per_cam[obs.ci]++;
+            for(int c=0;c<nc;c++){
+                if(obs_per_cam[c]<30){
+                    std::vector<int> fix={6,7,8,9,10,11,12,13,14};
+                    problem.SetManifold(cp[c].data(),new ceres::SubsetManifold(15,fix));
+                    fprintf(stderr,"[Experimental]   Camera %s: %d obs < 30, fixing intrinsics in full joint pass\n",
+                            config.cam_ordered[c].c_str(), obs_per_cam[c]);
+                }
+            }
+        }
 
         // Apply ba_config bounds in full joint mode
         if(bp.fix_mode==2&&!config.ba_config.is_null()){
@@ -2988,8 +3010,16 @@ inline bool bundle_adjust_experimental(
         opt.function_tolerance=1e-10; opt.parameter_tolerance=1e-10; opt.gradient_tolerance=1e-12;
         opt.use_inner_iterations=true;
         opt.minimizer_progress_to_stdout=false;
+        opt.logging_type=ceres::SILENT;
         opt.num_threads=std::max(1,(int)std::thread::hardware_concurrency());
+        // Suppress CHOLMOD warnings by temporarily redirecting stderr.
+        // CHOLMOD writes "not positive definite" via SuiteSparse's printf,
+        // which is normal LM behavior (Ceres increases damping and retries).
+        int saved_stderr = dup(STDERR_FILENO);
+        int devnull = open("/dev/null", O_WRONLY);
+        if (devnull >= 0) { dup2(devnull, STDERR_FILENO); close(devnull); }
         ceres::Solver::Summary sum; ceres::Solve(opt,&problem,&sum);
+        if (saved_stderr >= 0) { dup2(saved_stderr, STDERR_FILENO); close(saved_stderr); }
         fprintf(stderr,"[Experimental] Pass %d/%d (mode=%d cauchy=%.0f): %s cost %.2f→%.2f iters=%d time=%.2fs\n",
             pi_pass+1,(int)passes.size(),bp.fix_mode,bp.cauchy_scale,
             sum.IsSolutionUsable()?"OK":"FAIL",sum.initial_cost,sum.final_cost,
