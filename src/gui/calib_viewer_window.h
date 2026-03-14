@@ -26,7 +26,6 @@ struct CalibViewerState {
     bool show_board_poses = false;
     bool show_axes_box = false; // show 3D box, axis labels, grid
     bool color_by_error = true;
-    bool flip_z = false;       // display-only Z reflection
     int hovered_camera = -1;
     int hovered_edge = -1;
     int selected_camera = -1; // -1 = show all cameras
@@ -146,7 +145,6 @@ inline void DrawCalibViewerWindow(CalibViewerState &state) {
             printf("[Flip Z] Saved %d cameras + 3D points to %s\n",
                    (int)r.cameras.size(), r.output_folder.c_str());
         }
-        state.flip_z = !state.flip_z;  // toggle display flag to match
         state.cached_selection = -2;
     }
     ImGui::SameLine();
@@ -204,15 +202,6 @@ inline void DrawCalibViewerWindow(CalibViewerState &state) {
     std::vector<FrustumGeometry> frustums(nc);
     for (int c = 0; c < nc; c++)
         frustums[c] = compute_frustum(res.cameras[c], res.image_width, res.image_height, state.frustum_scale);
-
-    // Apply display-only Z flip if enabled
-    if (state.flip_z) {
-        for (auto &f : frustums) {
-            f.center.z() = -f.center.z();
-            for (auto &corner : f.corners)
-                corner.z() = -corner.z();
-        }
-    }
 
     float scene_extent = 0;
     for (int c = 0; c < nc; c++)
@@ -313,7 +302,6 @@ inline void DrawCalibViewerWindow(CalibViewerState &state) {
         }
 
         // ── 3D points ──
-        float zs = state.flip_z ? -1.0f : 1.0f; // Z sign for display
         if (state.show_points) {
             if (single_cam && !state.selected_cam_point_ids.empty()) {
                 // Show only points visible to the selected camera
@@ -323,7 +311,7 @@ inline void DrawCalibViewerWindow(CalibViewerState &state) {
                     if (it != res.points_3d.end()) {
                         px.push_back((float)it->second.x());
                         py.push_back((float)it->second.y());
-                        pz.push_back((float)it->second.z() * zs);
+                        pz.push_back((float)it->second.z());
                     }
                 }
                 if (!px.empty()) {
@@ -337,7 +325,7 @@ inline void DrawCalibViewerWindow(CalibViewerState &state) {
                 std::vector<float> px, py, pz;
                 px.reserve(res.points_3d.size()); py.reserve(res.points_3d.size()); pz.reserve(res.points_3d.size());
                 for (const auto &[id, pt] : res.points_3d) {
-                    px.push_back((float)pt.x()); py.push_back((float)pt.y()); pz.push_back((float)pt.z() * zs);
+                    px.push_back((float)pt.x()); py.push_back((float)pt.y()); pz.push_back((float)pt.z());
                 }
                 ImPlot3D::PlotScatter("Landmarks", px.data(), py.data(), pz.data(), (int)px.size(),
                     {ImPlot3DProp_MarkerSize, 1.5, ImPlot3DProp_MarkerFillColor, (ImU32)IM_COL32(80,130,255,160)});
