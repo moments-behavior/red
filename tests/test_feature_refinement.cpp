@@ -16,16 +16,20 @@ simplelogger::Logger *logger =
 
 int main(int argc, char *argv[]) {
     if (argc < 3) {
-        printf("Usage: %s <landmarks.json> <calib_folder> [output_folder]\n", argv[0]);
-        printf("\n  landmarks.json: from data_exporter/calibration_refinement.py\n");
-        printf("  calib_folder:   folder with Cam*.yaml files (init_calibration)\n");
-        printf("  output_folder:  where to write refined YAMLs (default: calib_folder/feature_refined)\n");
+        printf("Usage: %s <landmarks.json> <calib_folder> [output_folder] [rot_prior] [trans_prior]\n", argv[0]);
+        printf("\n  landmarks.json:  from data_exporter/calibration_refinement.py\n");
+        printf("  calib_folder:    folder with Cam*.yaml files\n");
+        printf("  output_folder:   where to write refined YAMLs (default: calib_folder/feature_refined)\n");
+        printf("  rot_prior:       rotation prior weight (default: 10.0)\n");
+        printf("  trans_prior:     translation prior weight (default: 100.0)\n");
         return 1;
     }
 
     std::string landmarks_file = argv[1];
     std::string calib_folder = argv[2];
     std::string output_folder = argc > 3 ? argv[3] : "";
+    double rot_prior = argc > 4 ? std::atof(argv[4]) : 10.0;
+    double trans_prior = argc > 5 ? std::atof(argv[5]) : 100.0;
 
     // Discover camera names from YAML files in calib_folder
     namespace fs = std::filesystem;
@@ -62,51 +66,9 @@ int main(int argc, char *argv[]) {
     config.ba_max_iter = 100;
     config.lock_intrinsics = true;
     config.lock_distortion = true;
-
-    // Quick debug: manually check a few landmarks
-    {
-        nlohmann::json j;
-        std::ifstream f(landmarks_file);
-        f >> j;
-        std::map<std::string, std::map<int, Eigen::Vector2d>> landmarks;
-        for (auto &[cam, cam_j] : j.items()) {
-            for (int i = 0; i < (int)cam_j["ids"].size(); i++)
-                landmarks[cam][cam_j["ids"][i].get<int>()] = Eigen::Vector2d(
-                    cam_j["landmarks"][i][0].get<double>(), cam_j["landmarks"][i][1].get<double>());
-        }
-        // Count points with >= 2 cameras
-        std::map<int, std::vector<std::string>> point_cams;
-        for (auto &[cam, pts] : landmarks)
-            for (auto &[pid, _] : pts)
-                point_cams[pid].push_back(cam);
-        int multi = 0;
-        for (auto &[pid, cams] : point_cams)
-            if (cams.size() >= 2) multi++;
-        printf("DEBUG: %d points in landmarks, %d with >= 2 cameras\n",
-               (int)point_cams.size(), multi);
-
-        // Check if cam_ordered matches
-        printf("DEBUG: cam_ordered = [");
-        for (const auto &n : config.camera_names) printf("%s, ", n.c_str());
-        printf("]\n");
-
-        // Try manual triangulation of first multi-view point
-        for (auto &[pid, cams] : point_cams) {
-            if (cams.size() < 2) continue;
-            printf("DEBUG: point %d seen in %d cameras: ", pid, (int)cams.size());
-            for (auto &c : cams) printf("%s ", c.c_str());
-            printf("\n");
-            // Check if these cameras are in cam_ordered
-            for (auto &c : cams) {
-                bool found = false;
-                for (int i = 0; i < (int)config.camera_names.size(); i++) {
-                    if (config.camera_names[i] == c) { found = true; break; }
-                }
-                if (!found) printf("  WARNING: camera %s not in cam_ordered!\n", c.c_str());
-            }
-            break;  // just first point
-        }
-    }
+    config.prior_rot_weight = rot_prior;
+    config.prior_trans_weight = trans_prior;
+    printf("Prior weights: rot=%.1f, trans=%.1f\n", rot_prior, trans_prior);
 
     // Run
     std::string status;
