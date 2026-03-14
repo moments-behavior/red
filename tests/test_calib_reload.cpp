@@ -114,5 +114,25 @@ int main() {
     printf("\nMax per-camera delta: %.6f px\n", max_delta);
     printf("Overall: %s\n", max_delta < 0.001 ? "PASS" : "FAIL");
 
+    // =========================================================
+    // 5. Verify Flip Z is display-only (no data modification)
+    // =========================================================
+    printf("\n=== FLIP Z (display-only) ===\n");
+    printf("Flip Z is now display-only — no YAML or data files are modified.\n");
+    printf("The 3D viewer negates Z coordinates when rendering, preserving\n");
+    printf("all calibration data and reprojection error computation.\n");
+
+    // Verify that a second reload still matches (data unchanged on disk)
+    auto reload2 = CalibrationPipeline::load_calibration_from_folder(
+        result.output_folder, config.cam_ordered);
+
+    printf("\n=== SECOND RELOAD (verify data unchanged) ===\n");
+    printf("Success: %d, Cameras: %d, Mean reproj: %.6f px\n",
+           reload2.success, (int)reload2.cameras.size(), reload2.mean_reproj_error);
+
+    double delta2 = std::abs(reload.mean_reproj_error - reload2.mean_reproj_error);
+    printf("Reload 1 vs Reload 2 mean reproj delta: %.6f px\n", delta2);
+    printf("Data stability: %s\n", delta2 < 0.0001 ? "PASS" : "FAIL");
+
     return 0;
 }

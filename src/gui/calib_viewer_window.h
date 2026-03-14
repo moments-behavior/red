@@ -26,6 +26,7 @@ struct CalibViewerState {
     bool show_board_poses = false;
     bool show_axes_box = false; // show 3D box, axis labels, grid
     bool color_by_error = true;
+    bool flip_z = false;       // display-only Z reflection
     int hovered_camera = -1;
     int hovered_edge = -1;
     int selected_camera = -1; // -1 = show all cameras
@@ -111,50 +112,21 @@ inline void DrawCalibViewerWindow(CalibViewerState &state) {
     ImGui::SameLine(); ImGui::Checkbox("Axes", &state.show_axes_box);
     ImGui::PopStyleColor();
 
-    // Flip Z: reflects all poses and points across Z=0, then re-writes YAMLs
+    // Flip Z: display-only toggle that negates Z when rendering.
+    // Does NOT modify camera poses or YAML files (Z-reflection cannot
+    // be represented as a rotation matrix — det(R*F) = -1 breaks
+    // Rodrigues conversion and reprojection).
     ImGui::SameLine();
-    if (ImGui::Button("Flip Z")) {
-        auto &r = *state.result;
-        Eigen::Matrix3d F = Eigen::Vector3d(1, 1, -1).asDiagonal();
-        // Transform camera poses: R_new = R * F, t unchanged
-        for (auto &cam : r.cameras)
-            cam.R = cam.R * F;
-        // Transform 3D points: negate Z
-        for (auto &[id, pt] : r.points_3d)
-            pt.z() = -pt.z();
-        // Re-write YAML files and 3D points with flipped data
-        if (!r.output_folder.empty()) {
-            std::string err;
-            CalibrationPipeline::write_calibration(
-                r.cameras, r.cam_names, r.output_folder,
-                r.image_width, r.image_height, &err);
-            if (!err.empty())
-                fprintf(stderr, "[Flip Z] YAML write error: %s\n", err.c_str());
-
-            // Also update ba_points.json so reload is consistent
-            namespace fs = std::filesystem;
-            std::string pts_path = r.output_folder +
-                "/summary_data/bundle_adjustment/ba_points.json";
-            if (fs::exists(pts_path) && !r.points_3d.empty()) {
-                try {
-                    nlohmann::json pts_j;
-                    for (const auto &[id, pt] : r.points_3d)
-                        pts_j[std::to_string(id)] = {pt.x(), pt.y(), pt.z()};
-                    std::ofstream pf(pts_path);
-                    pf << pts_j.dump(2);
-                } catch (...) {}
-            }
-            printf("[Flip Z] Re-wrote %d camera YAMLs + 3D points to %s\n",
-                   (int)r.cameras.size(), r.output_folder.c_str());
-        }
-        // Force viewer cache rebuild
-        state.cached_selection = -2;
-    }
+    ImGui::PushStyleColor(ImGuiCol_Button,
+        state.flip_z ? ImVec4(0.2f, 0.5f, 0.8f, 1.0f) : ImGui::GetStyleColorVec4(ImGuiCol_Button));
+    if (ImGui::Button("Flip Z"))
+        state.flip_z = !state.flip_z;
+    ImGui::PopStyleColor();
     ImGui::SameLine();
     ImGui::TextDisabled("(?)");
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Reflect all cameras and points across Z=0.\n"
-                          "Re-writes YAML calibration files immediately.");
+        ImGui::SetTooltip("Toggle Z-axis reflection in the 3D viewer.\n"
+                          "Display only — does not modify calibration files.");
 
     // Camera selector
     {
@@ -205,6 +177,15 @@ inline void DrawCalibViewerWindow(CalibViewerState &state) {
     std::vector<FrustumGeometry> frustums(nc);
     for (int c = 0; c < nc; c++)
         frustums[c] = compute_frustum(res.cameras[c], res.image_width, res.image_height, state.frustum_scale);
+
+    // Apply display-only Z flip if enabled
+    if (state.flip_z) {
+        for (auto &f : frustums) {
+            f.center.z() = -f.center.z();
+            for (auto &corner : f.corners)
+                corner.z() = -corner.z();
+        }
+    }
 
     float scene_extent = 0;
     for (int c = 0; c < nc; c++)
@@ -305,6 +286,7 @@ inline void DrawCalibViewerWindow(CalibViewerState &state) {
         }
 
         // ── 3D points ──
+        float zs = state.flip_z ? -1.0f : 1.0f; // Z sign for display
         if (state.show_points) {
             if (single_cam && !state.selected_cam_point_ids.empty()) {
                 // Show only points visible to the selected camera
@@ -314,7 +296,7 @@ inline void DrawCalibViewerWindow(CalibViewerState &state) {
                     if (it != res.points_3d.end()) {
                         px.push_back((float)it->second.x());
                         py.push_back((float)it->second.y());
-                        pz.push_back((float)it->second.z());
+                        pz.push_back((float)it->second.z() * zs);
                     }
                 }
                 if (!px.empty()) {
@@ -328,7 +310,7 @@ inline void DrawCalibViewerWindow(CalibViewerState &state) {
                 std::vector<float> px, py, pz;
                 px.reserve(res.points_3d.size()); py.reserve(res.points_3d.size()); pz.reserve(res.points_3d.size());
                 for (const auto &[id, pt] : res.points_3d) {
-                    px.push_back((float)pt.x()); py.push_back((float)pt.y()); pz.push_back((float)pt.z());
+                    px.push_back((float)pt.x()); py.push_back((float)pt.y()); pz.push_back((float)pt.z() * zs);
                 }
                 ImPlot3D::PlotScatter("Landmarks", px.data(), py.data(), pz.data(), (int)px.size(),
                     {ImPlot3DProp_MarkerSize, 1.5, ImPlot3DProp_MarkerFillColor, (ImU32)IM_COL32(80,130,255,160)});
