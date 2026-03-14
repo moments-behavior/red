@@ -1790,11 +1790,27 @@ inline bool global_registration(
         pt = scale_reg * R_reg * pt + t_reg;
     }
 
+    // Apply optional post-Procrustes world frame rotation (e.g., MVC convention)
+    if (!config.world_frame_rotation.isIdentity(1e-10)) {
+        Eigen::Matrix3d W = config.world_frame_rotation;
+        fprintf(stderr, "[Experimental] Applying world_frame_rotation from config\n");
+        for (int i = 0; i < (int)poses.size(); i++) {
+            Eigen::Vector3d C = -poses[i].R.transpose() * poses[i].t;
+            C = W * C;  // rotate camera center
+            poses[i].R = poses[i].R * W.transpose();
+            poses[i].t = -poses[i].R * C;
+        }
+        for (auto &[id, pt] : points_3d)
+            pt = W * pt;
+    }
+
     // Report registration error
     double reg_err = 0.0;
     for (int i = 0; i < n; i++) {
         Eigen::Vector3d transformed =
             scale_reg * R_reg * src_pts[i] + t_reg;
+        if (!config.world_frame_rotation.isIdentity(1e-10))
+            transformed = config.world_frame_rotation * transformed;
         reg_err += (transformed - dst_pts[i]).norm();
     }
     reg_err /= n;

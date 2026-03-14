@@ -26,6 +26,7 @@ struct CalibConfig {
     std::string global_registration_video;
     std::vector<std::string> world_coordinate_imgs;
     std::map<std::string, std::vector<std::vector<float>>> gt_pts;
+    Eigen::Matrix3d world_frame_rotation = Eigen::Matrix3d::Identity(); // post-Procrustes rotation
     nlohmann::json ba_config;
 };
 
@@ -90,6 +91,19 @@ inline bool parse_config(const std::string &config_path,
                 pts.push_back(pt.get<std::vector<float>>());
             }
             config.gt_pts[key] = std::move(pts);
+        }
+    }
+
+    // Optional post-Procrustes rotation to match a specific world frame convention.
+    // Specified as a 3x3 row-major array: [[r00,r01,r02],[r10,r11,r12],[r20,r21,r22]]
+    // Applied after Procrustes alignment: R_cam_new = R_cam * world_frame_rotation^T
+    // Example (multiview_calib convention): [[0,1,0],[1,0,0],[0,0,-1]]
+    if (j.contains("world_frame_rotation") && j["world_frame_rotation"].is_array()) {
+        auto &wfr = j["world_frame_rotation"];
+        if (wfr.size() == 3) {
+            for (int r = 0; r < 3; r++)
+                for (int c = 0; c < 3; c++)
+                    config.world_frame_rotation(r, c) = wfr[r][c].get<double>();
         }
     }
 
