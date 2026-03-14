@@ -169,12 +169,30 @@ projectPoints(const std::vector<Eigen::Vector3d> &pts3d,
     return result;
 }
 
-// Convenience: project a single 3D point
+// Convenience: project a single 3D point (rotation vector)
 inline Eigen::Vector2d
 projectPoint(const Eigen::Vector3d &pt3d, const Eigen::Vector3d &rvec,
              const Eigen::Vector3d &tvec, const Eigen::Matrix3d &K,
              const Eigen::Matrix<double, 5, 1> &dist) {
     return projectPoints({pt3d}, rvec, tvec, K, dist)[0];
+}
+
+// Project a single 3D point using rotation matrix directly.
+// Safe for improper rotations (det=-1, e.g., after Z-flip) since it
+// bypasses Rodrigues conversion which requires det=+1.
+inline Eigen::Vector2d
+projectPointR(const Eigen::Vector3d &pt3d, const Eigen::Matrix3d &R,
+              const Eigen::Vector3d &tvec, const Eigen::Matrix3d &K,
+              const Eigen::Matrix<double, 5, 1> &dist) {
+    double fx = K(0,0), fy = K(1,1), cx = K(0,2), cy = K(1,2);
+    double k1 = dist(0), k2 = dist(1), p1 = dist(2), p2 = dist(3), k3 = dist(4);
+    Eigen::Vector3d cam = R * pt3d + tvec;
+    double xp = cam(0) / cam(2), yp = cam(1) / cam(2);
+    double r2 = xp*xp + yp*yp, r4 = r2*r2, r6 = r4*r2;
+    double radial = 1.0 + k1*r2 + k2*r4 + k3*r6;
+    double xpp = xp*radial + 2.0*p1*xp*yp + p2*(r2 + 2.0*xp*xp);
+    double ypp = yp*radial + p1*(r2 + 2.0*yp*yp) + 2.0*p2*xp*yp;
+    return Eigen::Vector2d(xpp*fx + cx, ypp*fy + cy);
 }
 
 // Convenience: project a single 3D point with zero distortion

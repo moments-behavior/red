@@ -2324,13 +2324,16 @@ inline CalibrationResult load_calibration_from_folder(
                 // 3D points from ba_points.json (may not be flipped), so only
                 // recompute if both are available and consistent.
                 if (!result.points_3d.empty() && c < (int)result.cameras.size()) {
-                    auto rv = red_math::rotationMatrixToVector(result.cameras[c].R);
+                    // Use projectPointR (matrix-based) instead of projectPoint
+                    // (Rodrigues-based) to handle improper rotations (det=-1)
+                    // from Z-flip transforms safely.
                     std::vector<double> errs;
                     for (const auto &[pid, px] : lm_it->second) {
                         auto pt_it = result.points_3d.find(pid);
                         if (pt_it == result.points_3d.end()) continue;
-                        double e = (red_math::projectPoint(pt_it->second, rv,
-                            result.cameras[c].t, result.cameras[c].K,
+                        double e = (red_math::projectPointR(pt_it->second,
+                            result.cameras[c].R, result.cameras[c].t,
+                            result.cameras[c].K,
                             result.cameras[c].dist) - px).norm();
                         errs.push_back(e);
                     }

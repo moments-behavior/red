@@ -115,24 +115,68 @@ int main() {
     printf("Overall: %s\n", max_delta < 0.001 ? "PASS" : "FAIL");
 
     // =========================================================
-    // 5. Verify Flip Z is display-only (no data modification)
+    // 5. Simulate Flip Z and verify roundtrip
     // =========================================================
-    printf("\n=== FLIP Z (display-only) ===\n");
-    printf("Flip Z is now display-only — no YAML or data files are modified.\n");
-    printf("The 3D viewer negates Z coordinates when rendering, preserving\n");
-    printf("all calibration data and reprojection error computation.\n");
+    printf("\n=== FLIP Z ROUNDTRIP ===\n");
 
-    // Verify that a second reload still matches (data unchanged on disk)
-    auto reload2 = CalibrationPipeline::load_calibration_from_folder(
-        result.output_folder, config.cam_ordered);
+    // Apply Flip Z to a copy of the result
+    auto flipped = result;
+    Eigen::Matrix3d F = Eigen::Vector3d(1, 1, -1).asDiagonal();
+    for (auto &cam : flipped.cameras)
+        cam.R = cam.R * F;
+    for (auto &[id, pt] : flipped.points_3d)
+        pt.z() = -pt.z();
 
-    printf("\n=== SECOND RELOAD (verify data unchanged) ===\n");
-    printf("Success: %d, Cameras: %d, Mean reproj: %.6f px\n",
-           reload2.success, (int)reload2.cameras.size(), reload2.mean_reproj_error);
+    // Verify det(R) = -1
+    printf("det(R[0]) after flip: %.1f (should be -1)\n",
+           flipped.cameras[0].R.determinant());
 
-    double delta2 = std::abs(reload.mean_reproj_error - reload2.mean_reproj_error);
-    printf("Reload 1 vs Reload 2 mean reproj delta: %.6f px\n", delta2);
-    printf("Data stability: %s\n", delta2 < 0.0001 ? "PASS" : "FAIL");
+    // Save flipped data
+    {
+        std::string werr;
+        CalibrationPipeline::write_calibration(
+            flipped.cameras, flipped.cam_names, flipped.output_folder,
+            flipped.image_width, flipped.image_height, &werr);
+        namespace fs = std::filesystem;
+        std::string pts_path = flipped.output_folder +
+            "/summary_data/bundle_adjustment/ba_points.json";
+        if (fs::exists(pts_path)) {
+            nlohmann::json pts_j;
+            for (const auto &[id, pt] : flipped.points_3d)
+                pts_j[std::to_string(id)] = {pt.x(), pt.y(), pt.z()};
+            std::ofstream pf(pts_path);
+            pf << pts_j.dump(2);
+        }
+        printf("Saved flipped YAMLs + ba_points.json\n");
+    }
+
+    // Reload flipped data
+    auto reload_flip = CalibrationPipeline::load_calibration_from_folder(
+        flipped.output_folder, config.cam_ordered);
+
+    printf("Reload after flip: success=%d, cameras=%d, mean_reproj=%.6f px\n",
+           reload_flip.success, (int)reload_flip.cameras.size(),
+           reload_flip.mean_reproj_error);
+
+    // Compare original vs reload-after-flip
+    printf("\n%-12s %10s %10s %10s\n", "Camera", "Original", "FlipReload", "Delta");
+    double max_flip_delta = 0;
+    for (const auto &a : result.per_camera_metrics) {
+        double b_mean = -1;
+        for (const auto &m : reload_flip.per_camera_metrics)
+            if (m.name == a.name) { b_mean = m.mean_reproj; break; }
+        if (b_mean < 0) continue;
+        double d = std::abs(a.mean_reproj - b_mean);
+        if (d > max_flip_delta) max_flip_delta = d;
+        printf("%-12s %10.6f %10.6f %10.6f %s\n",
+               a.name.c_str(), a.mean_reproj, b_mean, d,
+               d > 0.01 ? "*** MISMATCH" : "OK");
+    }
+    printf("\nMax delta: %.6f px\n", max_flip_delta);
+    printf("mean_reproj: %.6f vs %.6f (delta=%.6f)\n",
+           result.mean_reproj_error, reload_flip.mean_reproj_error,
+           std::abs(result.mean_reproj_error - reload_flip.mean_reproj_error));
+    printf("Flip Z roundtrip: %s\n", max_flip_delta < 0.01 ? "PASS" : "FAIL");
 
     return 0;
 }

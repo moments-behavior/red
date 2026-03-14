@@ -112,21 +112,48 @@ inline void DrawCalibViewerWindow(CalibViewerState &state) {
     ImGui::SameLine(); ImGui::Checkbox("Axes", &state.show_axes_box);
     ImGui::PopStyleColor();
 
-    // Flip Z: display-only toggle that negates Z when rendering.
-    // Does NOT modify camera poses or YAML files (Z-reflection cannot
-    // be represented as a rotation matrix — det(R*F) = -1 breaks
-    // Rodrigues conversion and reprojection).
+    // Flip Z: reflects all poses and points across Z=0.
+    // Saves R*F (det=-1) to YAML. The reload path uses projectPointR()
+    // which handles improper rotations directly (no Rodrigues roundtrip).
     ImGui::SameLine();
-    ImGui::PushStyleColor(ImGuiCol_Button,
-        state.flip_z ? ImVec4(0.2f, 0.5f, 0.8f, 1.0f) : ImGui::GetStyleColorVec4(ImGuiCol_Button));
-    if (ImGui::Button("Flip Z"))
-        state.flip_z = !state.flip_z;
-    ImGui::PopStyleColor();
+    if (ImGui::Button("Flip Z")) {
+        auto &r = *state.result;
+        Eigen::Matrix3d F = Eigen::Vector3d(1, 1, -1).asDiagonal();
+        for (auto &cam : r.cameras)
+            cam.R = cam.R * F;
+        for (auto &[id, pt] : r.points_3d)
+            pt.z() = -pt.z();
+
+        if (!r.output_folder.empty()) {
+            std::string werr;
+            CalibrationPipeline::write_calibration(
+                r.cameras, r.cam_names, r.output_folder,
+                r.image_width, r.image_height, &werr);
+
+            // Also update ba_points.json
+            namespace fs = std::filesystem;
+            std::string pts_path = r.output_folder +
+                "/summary_data/bundle_adjustment/ba_points.json";
+            if (fs::exists(pts_path) && !r.points_3d.empty()) {
+                try {
+                    nlohmann::json pts_j;
+                    for (const auto &[id, pt] : r.points_3d)
+                        pts_j[std::to_string(id)] = {pt.x(), pt.y(), pt.z()};
+                    std::ofstream pf(pts_path);
+                    pf << pts_j.dump(2);
+                } catch (...) {}
+            }
+            printf("[Flip Z] Saved %d cameras + 3D points to %s\n",
+                   (int)r.cameras.size(), r.output_folder.c_str());
+        }
+        state.flip_z = !state.flip_z;  // toggle display flag to match
+        state.cached_selection = -2;
+    }
     ImGui::SameLine();
     ImGui::TextDisabled("(?)");
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Toggle Z-axis reflection in the 3D viewer.\n"
-                          "Display only — does not modify calibration files.");
+        ImGui::SetTooltip("Reflect cameras and points across Z=0.\n"
+                          "Saves to YAML files. Click twice to undo.");
 
     // Camera selector
     {
