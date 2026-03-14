@@ -44,9 +44,6 @@ except ImportError:
     sys.exit(1)
 
 
-FPS = 180.0
-
-
 def find_camera_videos(video_dir: Path) -> dict[str, Path]:
     """Find all CamXXXXXXX.mp4 files and return {serial: path} dict."""
     videos = {}
@@ -57,16 +54,31 @@ def find_camera_videos(video_dir: Path) -> dict[str, Path]:
     return videos
 
 
-def get_video_duration(video_path: Path) -> float:
-    """Get video duration in seconds using ffprobe."""
+def get_video_info(video_path: Path) -> tuple[float, float]:
+    """Get video duration (seconds) and frame rate using ffprobe."""
     cmd = [
-        "ffprobe", "-v", "quiet", "-show_entries", "format=duration",
+        "ffprobe", "-v", "quiet",
+        "-show_entries", "format=duration",
+        "-show_entries", "stream=r_frame_rate",
         "-of", "csv=p=0", str(video_path),
     ]
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         raise RuntimeError(f"ffprobe failed on {video_path}: {result.stderr}")
-    return float(result.stdout.strip())
+    lines = [l.strip() for l in result.stdout.strip().split('\n') if l.strip()]
+    # First line: r_frame_rate (e.g., "180/1"), second line: duration
+    fps = 30.0
+    duration = 0.0
+    for line in lines:
+        if '/' in line:
+            num, den = line.split('/')
+            fps = float(num) / float(den)
+        else:
+            try:
+                duration = float(line)
+            except ValueError:
+                pass
+    return duration, fps
 
 
 def extract_candidate_frames(video_path: Path, output_dir: Path,
@@ -94,12 +106,13 @@ def extract_candidate_frames(video_path: Path, output_dir: Path,
     return frames
 
 
-def extract_single_frame(video_path: Path, frame_num: int, output_path: Path) -> bool:
+def extract_single_frame(video_path: Path, frame_num: int, output_path: Path,
+                         fps: float = 180.0) -> bool:
     """Extract a single frame by number using fast seeking.
 
     Uses -ss before -i for fast seeking, then grabs one frame.
     """
-    timestamp = frame_num / FPS
+    timestamp = frame_num / fps
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     cmd = [
@@ -115,7 +128,7 @@ def extract_single_frame(video_path: Path, frame_num: int, output_path: Path) ->
 
 
 def score_candidates(frame_paths: list[Path], device: torch.device,
-                     sample_interval: float) -> list[dict]:
+                     sample_interval: float, fps: float = 180.0) -> list[dict]:
     """Score each candidate frame for diversity/interest.
 
     Scoring combines:
@@ -161,7 +174,7 @@ def score_candidates(frame_paths: list[Path], device: torch.device,
         results.append({
             "frame_idx": i,
             "timestamp": i * sample_interval,
-            "frame_num": int(round(i * sample_interval * FPS)),
+            "frame_num": int(round(i * sample_interval * fps)),
             "num_features": num_kp,
             "pixel_diff": pixel_diff,
         })
@@ -215,7 +228,7 @@ def greedy_select(candidates: list[dict], num_sets: int,
 
 
 def extract_frame_sets(selected: list[dict], videos: dict[str, Path],
-                       output_dir: Path) -> None:
+                       output_dir: Path, fps: float = 180.0) -> None:
     """Extract the selected frame from every camera — parallel per frame."""
     from concurrent.futures import ThreadPoolExecutor
 
@@ -232,7 +245,7 @@ def extract_frame_sets(selected: list[dict], videos: dict[str, Path],
         def extract_cam(args):
             serial, vpath = args
             out_path = set_dir / f"Cam{serial}.jpg"
-            return extract_single_frame(vpath, frame_num, out_path)
+            return extract_single_frame(vpath, frame_num, out_path, fps)
 
         with ThreadPoolExecutor(max_workers=len(videos)) as executor:
             list(executor.map(extract_cam, sorted(videos.items())))
@@ -292,10 +305,10 @@ def main():
     ref_video = videos[args.ref_camera]
 
     # --- Get video info ---
-    duration = get_video_duration(ref_video)
-    total_frames = int(duration * FPS)
+    duration, fps = get_video_info(ref_video)
+    total_frames = int(duration * fps)
     print(f"Reference video: {ref_video.name}")
-    print(f"  Duration: {duration:.1f}s ({duration/60:.1f} min), ~{total_frames} frames at {FPS} fps")
+    print(f"  Duration: {duration:.1f}s ({duration/60:.1f} min), ~{total_frames} frames at {fps} fps")
 
     # --- Step 1: Extract candidate frames from reference camera ---
     print(f"\n=== Step 1: Extract candidate frames (every {args.sample_interval}s) ===")
@@ -314,7 +327,7 @@ def main():
         print(f"\n=== Step 2: Score frame diversity ===")
         t0 = time.time()
         device = choose_device(args.device)
-        candidates = score_candidates(candidate_frames, device, args.sample_interval)
+        candidates = score_candidates(candidate_frames, device, args.sample_interval, fps)
         elapsed = time.time() - t0
         print(f"  Done in {elapsed:.1f}s")
 
@@ -335,7 +348,7 @@ def main():
     # --- Step 4: Extract synced frame sets from all cameras ---
     print(f"\n=== Step 4: Extract synced frames from {len(videos)} cameras ===")
     t0 = time.time()
-    extract_frame_sets(selected, videos, output_dir)
+    extract_frame_sets(selected, videos, output_dir, fps)
     elapsed = time.time() - t0
     print(f"  Done in {elapsed:.1f}s")
 
@@ -343,7 +356,7 @@ def main():
     metadata = {
         "video_dir": str(video_dir),
         "ref_camera": args.ref_camera,
-        "fps": FPS,
+        "fps": fps,
         "sample_interval": args.sample_interval,
         "min_separation": args.min_separation,
         "num_cameras": len(videos),

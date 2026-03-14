@@ -143,17 +143,7 @@ inline double bundle_adjust_features(
             cp[o.ci].data(), pp[o.pi].data());
     }
 
-    // Pose prior: penalize deviations from initial calibration.
-    // Separate weights for rotation (cameras rotate more easily when bumped)
-    // and translation (rigid mounts don't slide).
-    for (int c = 0; c < nc; c++) {
-        problem.AddResidualBlock(
-            PosePriorCost::Create(cp[c].data(), prior_rot_weight, prior_trans_weight),
-            nullptr,  // no robust loss on prior
-            cp[c].data());
-    }
-
-    // Track which cameras actually have observations and find best anchor
+    // Find anchor camera (most observations) before adding priors
     std::map<int, int> cam_obs_count;
     for (const auto &o : obs) cam_obs_count[o.ci]++;
     int anchor_cam = -1;
@@ -162,6 +152,16 @@ inline double bundle_adjust_features(
         if (count > max_obs) { max_obs = count; anchor_cam = ci; }
     }
     if (anchor_cam < 0) return 0.0;  // no observations at all
+
+    // Pose prior: penalize deviations from initial calibration.
+    // Skip anchor (its extrinsics are fixed, prior would be wasted work).
+    for (int c = 0; c < nc; c++) {
+        if (c == anchor_cam) continue;
+        problem.AddResidualBlock(
+            PosePriorCost::Create(cp[c].data(), prior_rot_weight, prior_trans_weight),
+            nullptr,  // no robust loss on prior
+            cp[c].data());
+    }
 
     // Set manifolds for all active cameras
     for (const auto &[ci, count] : cam_obs_count) {

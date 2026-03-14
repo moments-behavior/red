@@ -103,22 +103,6 @@ def compute_frame_metrics(frame_paths, interval):
     return metrics
 
 
-def identify_scene_changes(metrics):
-    """Find frames where significant scene changes occur (objects appear/disappear/move)."""
-    diffs = np.array([m["diff_from_prev"] for m in metrics])
-
-    # Find peaks in diff_from_prev (moments of change)
-    # These indicate: rat entered/left, robot moved, ball moved, ramp placed
-    mean_diff = np.mean(diffs[1:])  # skip first (always 0)
-    std_diff = np.std(diffs[1:])
-
-    change_frames = []
-    for i, m in enumerate(metrics):
-        if m["diff_from_prev"] > mean_diff + 1.5 * std_diff:
-            change_frames.append(i)
-
-    return change_frames
-
 
 def select_diverse_frames(metrics, frame_paths, num_select, min_separation, device):
     """Select maximally diverse frames using a multi-criteria approach.
@@ -250,20 +234,6 @@ def main():
         elapsed1 = time.time() - t0
         print(f"  Done in {elapsed1:.1f}s")
 
-        # Identify scene changes
-        changes = identify_scene_changes(metrics)
-        print(f"\n  Detected {len(changes)} significant scene changes")
-
-        # Print scene change timeline
-        if changes:
-            print("  Scene changes at:")
-            for c in changes[:20]:
-                m = metrics[c]
-                print(f"    t={m['timestamp']:7.1f}s  diff={m['diff_from_prev']:.4f}  "
-                      f"content={m['content_score']:.4f}")
-            if len(changes) > 20:
-                print(f"    ... and {len(changes) - 20} more")
-
         # Select diverse frames
         print(f"\n=== Pass 3: Select {args.num_frames} diverse frames ===")
         t0 = time.time()
@@ -291,7 +261,7 @@ def main():
         "min_separation": args.min_separation,
         "fps": FPS,
         "num_candidates": len(metrics),
-        "num_scene_changes": len(changes),
+        "num_candidates": len(metrics),
         "frames": [
             {
                 "rank": rank + 1,

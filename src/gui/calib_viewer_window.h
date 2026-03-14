@@ -149,7 +149,9 @@ inline void DrawCalibViewerWindow(CalibViewerState &state) {
                         pts_j[std::to_string(id)] = {pt.x(), pt.y(), pt.z()};
                     std::ofstream pf(pts_path);
                     pf << pts_j.dump(2);
-                } catch (...) {}
+                } catch (const std::exception &e) {
+                    fprintf(stderr, "[Flip Z] Warning: failed to write ba_points.json: %s\n", e.what());
+                }
             }
             printf("[Flip Z] Saved %d cameras + 3D points to %s\n",
                    (int)r.cameras.size(), r.output_folder.c_str());

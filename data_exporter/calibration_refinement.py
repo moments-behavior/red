@@ -41,39 +41,11 @@ except ImportError:
 
 
 # ---------------------------------------------------------------------------
-# YAML parsing (no PyYAML, no cv2)
+# Camera loading (uses shared yaml_utils — reads each file once)
 # ---------------------------------------------------------------------------
 
-def read_yaml_matrix(path, key):
-    """Parse an opencv-matrix entry from a YAML file."""
-    with open(path, "r") as f:
-        content = f.read()
-    pattern = (
-        rf"{key}:\s*!!opencv-matrix\s*"
-        rf"rows:\s*(\d+)\s*cols:\s*(\d+)\s*dt:\s*d\s*data:\s*\[([\s\S]*?)\]"
-    )
-    match = re.search(pattern, content)
-    if not match:
-        return None
-    rows, cols = int(match.group(1)), int(match.group(2))
-    data_str = match.group(3)
-    values = [float(x.strip()) for x in data_str.split(",") if x.strip()]
-    return np.array(values).reshape(rows, cols)
+from yaml_utils import load_camera_yaml
 
-
-def read_yaml_scalar(path, key):
-    """Parse a simple key: value scalar from a YAML file."""
-    with open(path, "r") as f:
-        for line in f:
-            m = re.match(rf"^\s*{key}\s*:\s*(.+)$", line)
-            if m:
-                return m.group(1).strip()
-    return None
-
-
-# ---------------------------------------------------------------------------
-# Camera loading
-# ---------------------------------------------------------------------------
 
 def load_calibration(calib_dir):
     """Load K, dist, R, t from Cam*.yaml files.
@@ -89,26 +61,12 @@ def load_calibration(calib_dir):
             continue
         serial = serial.group(1)
 
-        K = read_yaml_matrix(str(yaml_file), "camera_matrix")
-        dist = read_yaml_matrix(str(yaml_file), "distortion_coefficients")
-        R = read_yaml_matrix(str(yaml_file), "rc_ext")
-        t = read_yaml_matrix(str(yaml_file), "tc_ext")
-
-        if K is None or R is None or t is None:
+        cam = load_camera_yaml(str(yaml_file))
+        if cam is None:
             print(f"  WARNING: skipping {yaml_file.name} — missing calibration data")
             continue
 
-        w = read_yaml_scalar(str(yaml_file), "image_width")
-        h = read_yaml_scalar(str(yaml_file), "image_height")
-
-        cameras[serial] = {
-            "K": K,
-            "dist": dist.flatten()[:5] if dist is not None else np.zeros(5),
-            "R": R,
-            "t": t.flatten()[:3],
-            "image_width": int(w) if w else None,
-            "image_height": int(h) if h else None,
-        }
+        cameras[serial] = cam
     return cameras
 
 

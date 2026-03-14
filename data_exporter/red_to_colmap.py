@@ -23,31 +23,7 @@ from pathlib import Path
 import numpy as np
 
 
-def read_yaml_matrix(path, key):
-    """Parse an opencv-matrix entry from a YAML file."""
-    with open(path, "r") as f:
-        content = f.read()
-    pattern = (
-        rf"{key}:\s*!!opencv-matrix\s*"
-        rf"rows:\s*(\d+)\s*cols:\s*(\d+)\s*dt:\s*d\s*data:\s*\[([\s\S]*?)\]"
-    )
-    match = re.search(pattern, content)
-    if not match:
-        return None
-    rows, cols = int(match.group(1)), int(match.group(2))
-    data_str = match.group(3)
-    values = [float(x.strip()) for x in data_str.split(",") if x.strip()]
-    return np.array(values).reshape(rows, cols)
-
-
-def read_yaml_scalar(path, key):
-    """Parse a simple key: value scalar from a YAML file."""
-    with open(path, "r") as f:
-        for line in f:
-            m = re.match(rf"^\s*{key}\s*:\s*(.+)$", line)
-            if m:
-                return m.group(1).strip()
-    return None
+from yaml_utils import load_camera_yaml, parse_yaml_matrix, parse_yaml_scalar, read_yaml_file
 
 
 def rotation_matrix_to_quaternion(R):
@@ -129,14 +105,8 @@ def main():
             continue
         serial = serial.group(1)
 
-        K = read_yaml_matrix(str(yf), "camera_matrix")
-        dist = read_yaml_matrix(str(yf), "distortion_coefficients")
-        R = read_yaml_matrix(str(yf), "rc_ext")
-        t = read_yaml_matrix(str(yf), "tc_ext")
-        w = read_yaml_scalar(str(yf), "image_width")
-        h = read_yaml_scalar(str(yf), "image_height")
-
-        if K is None or R is None or t is None:
+        cam = load_camera_yaml(str(yf))
+        if cam is None:
             print(f"  WARNING: skipping {yf.name}")
             continue
 
@@ -153,12 +123,12 @@ def main():
 
         cameras.append({
             "serial": serial,
-            "K": K,
-            "dist": dist.flatten()[:5] if dist is not None else np.zeros(5),
-            "R": R,
-            "t": t.flatten()[:3],
-            "width": int(w) if w else 0,
-            "height": int(h) if h else 0,
+            "K": cam["K"],
+            "dist": cam["dist"],
+            "R": cam["R"],
+            "t": cam["t"],
+            "width": cam["image_width"] or 0,
+            "height": cam["image_height"] or 0,
             "image_name": img_name,
         })
 
