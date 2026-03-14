@@ -112,14 +112,23 @@ inline void DrawCalibViewerWindow(CalibViewerState &state) {
     ImGui::PopStyleColor();
 
     // Flip Z: reflects all poses and points across Z=0.
-    // Saves R*F (det=-1) to YAML. The reload path uses projectPointR()
-    // which handles improper rotations directly (no Rodrigues roundtrip).
+    // After flipping, normalizes R to a proper rotation (det=+1)
+    // by negating both R and t. This preserves the projection
+    // (perspective division is invariant to overall sign) while
+    // keeping YAMLs compatible with Rodrigues and external tools.
     ImGui::SameLine();
     if (ImGui::Button("Flip Z")) {
         auto &r = *state.result;
         Eigen::Matrix3d F = Eigen::Vector3d(1, 1, -1).asDiagonal();
-        for (auto &cam : r.cameras)
-            cam.R = cam.R * F;
+        for (auto &cam : r.cameras) {
+            cam.R = cam.R * F;   // det becomes -1
+            // Normalize to proper rotation: negate both R and t
+            // so that (-R)*X + (-t) = -(R*X + t) — same projection
+            if (cam.R.determinant() < 0) {
+                cam.R = -cam.R;  // det becomes +1
+                cam.t = -cam.t;
+            }
+        }
         for (auto &[id, pt] : r.points_3d)
             pt.z() = -pt.z();
 
@@ -151,7 +160,8 @@ inline void DrawCalibViewerWindow(CalibViewerState &state) {
     ImGui::TextDisabled("(?)");
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Reflect cameras and points across Z=0.\n"
-                          "Saves to YAML files. Click twice to undo.");
+                          "Saves proper rotations (det=+1) to YAML.\n"
+                          "Click twice to undo.");
 
     // Camera selector
     {
