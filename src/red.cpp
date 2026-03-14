@@ -47,8 +47,6 @@
 #include "calibration_pipeline.h"
 #include "app_context.h"
 #include "deferred_queue.h"
-#include "ffmpeg_frame_reader.h"
-#include <future>
 #include "user_settings.h"
 #include "jarvis_export.h"
 #include "laser_calibration.h"
@@ -1215,7 +1213,7 @@ int main(int argc, char **argv) {
             }
 
             if (ImGui::IsKeyPressed(ImGuiKey_Space, false) &&
-                !io.WantTextInput) {
+                !io.WantTextInput && !win.jarvis_predict.batch_running) {
                 ps.play_video = !ps.play_video;
                 if (ps.play_video) {
                     ps.pause_seeked = false;
@@ -1364,13 +1362,15 @@ int main(int argc, char **argv) {
                         // loop (no Metal render between them). This avoids
                         // IOSurface lock contention from Metal viewport blits.
 #ifdef __APPLE__
-                        std::vector<int> w_b(scene->num_cams), h_b(scene->num_cams);
-                        for (int c = 0; c < (int)scene->num_cams; ++c) {
+                        int nc_pred = (int)scene->num_cams;
+                        std::vector<int> w_b(nc_pred), h_b(nc_pred);
+                        std::vector<CVPixelBufferRef> pbs(nc_pred, nullptr);
+                        for (int c = 0; c < nc_pred; ++c) {
                             w_b[c] = (int)scene->image_width[c];
                             h_b[c] = (int)scene->image_height[c];
                         }
 #endif
-                        while (bp.batch_current <= bp.batch_end) {
+                        while (bp.batch_current <= bp.batch_end && bp.batch_running) {
                             int slot = bp.batch_current - bp.batch_chunk_start;
                             if (slot >= buf_size) {
                                 // Need a new buffer chunk
@@ -1388,11 +1388,13 @@ int main(int argc, char **argv) {
                             bool has_manual = false;
                             if (annotations.count(frame)) {
                                 const auto &fa = annotations.at(frame);
-                                for (const auto &cam : fa.cameras)
+                                for (const auto &cam : fa.cameras) {
                                     for (const auto &kp : cam.keypoints)
                                         if (kp.labeled && kp.source == LabelSource::Manual) {
                                             has_manual = true; break;
                                         }
+                                    if (has_manual) break;
+                                }
                             }
 
                             if (has_manual) {
@@ -1400,8 +1402,7 @@ int main(int argc, char **argv) {
                             } else {
 #ifdef __APPLE__
                                 auto tp0 = std::chrono::steady_clock::now();
-                                std::vector<CVPixelBufferRef> pbs(scene->num_cams, nullptr);
-                                for (int c = 0; c < (int)scene->num_cams; ++c)
+                                for (int c = 0; c < nc_pred; ++c)
                                     pbs[c] = scene->display_buffer[c][slot].pixel_buffer;
                                 jarvis_coreml_predict_frame(jarvis_coreml_state,
                                     annotations, frame, pbs, w_b, h_b,

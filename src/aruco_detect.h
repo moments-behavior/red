@@ -2,9 +2,11 @@
 // aruco_detect.h — Self-contained ArUco and ChArUco detection using only
 // the standard library and Eigen. Replaces OpenCV's ArUco module entirely.
 //
-// Implements: DICT_4X4_50 dictionary, adaptive thresholding, contour finding,
-// quad detection, perspective sampling, dictionary matching, ChArUco corner
-// interpolation, and gradient-based subpixel corner refinement.
+// Supports 9 dictionaries: DICT_4X4_50/100/250, DICT_5X5_50/100/250,
+// DICT_6X6_50/250, DICT_ARUCO_ORIGINAL.
+// Implements: adaptive thresholding, contour finding, quad detection,
+// perspective sampling, dictionary matching, ChArUco corner interpolation,
+// and gradient-based subpixel corner refinement.
 //
 // All functions are inline (header-only). Namespace: aruco_detect.
 

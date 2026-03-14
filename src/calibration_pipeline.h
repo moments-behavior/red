@@ -1485,8 +1485,10 @@ inline bool bundle_adjust(
 
         // Suppress CHOLMOD warnings by temporarily redirecting stderr
         int saved_stderr2 = dup(STDERR_FILENO);
-        int devnull2 = open("/dev/null", O_WRONLY);
-        if (devnull2 >= 0) { dup2(devnull2, STDERR_FILENO); close(devnull2); }
+        if (saved_stderr2 >= 0) {
+            int devnull2 = open("/dev/null", O_WRONLY);
+            if (devnull2 >= 0) { dup2(devnull2, STDERR_FILENO); close(devnull2); }
+        }
         ceres::Solver::Summary summary;
         ceres::Solve(options, &problem, &summary);
         if (saved_stderr2 >= 0) { dup2(saved_stderr2, STDERR_FILENO); close(saved_stderr2); }
@@ -3016,8 +3018,10 @@ inline bool bundle_adjust_experimental(
         // CHOLMOD writes "not positive definite" via SuiteSparse's printf,
         // which is normal LM behavior (Ceres increases damping and retries).
         int saved_stderr = dup(STDERR_FILENO);
-        int devnull = open("/dev/null", O_WRONLY);
-        if (devnull >= 0) { dup2(devnull, STDERR_FILENO); close(devnull); }
+        if (saved_stderr >= 0) {
+            int devnull = open("/dev/null", O_WRONLY);
+            if (devnull >= 0) { dup2(devnull, STDERR_FILENO); close(devnull); }
+        }
         ceres::Solver::Summary sum; ceres::Solve(opt,&problem,&sum);
         if (saved_stderr >= 0) { dup2(saved_stderr, STDERR_FILENO); close(saved_stderr); }
         fprintf(stderr,"[Experimental] Pass %d/%d (mode=%d cauchy=%.0f): %s cost %.2f→%.2f iters=%d time=%.2fs\n",
@@ -3086,15 +3090,8 @@ inline CalibrationResult run_experimental_pipeline(
         for (const auto &cam : config.cam_ordered)
             if (!skip_set.count(cam)) filtered.push_back(cam);
         config.cam_ordered = filtered;
-        // Also filter spanning tree
-        std::vector<int> new_svo;
-        for (int idx : config.second_view_order)
-            if (idx < (int)config.cam_ordered.size()) new_svo.push_back(idx);
-        // Note: spanning tree indices are relative to the ORIGINAL cam_ordered,
-        // which is now filtered. The pipeline rebuilds the tree from cam_ordered,
-        // so we just need to ensure first_view is still valid.
-        if (config.first_view >= (int)config.cam_ordered.size())
-            config.first_view = 0;
+        // The experimental pipeline uses incremental PnP registration
+        // (not spanning tree), so no need to remap first_view/second_view_order.
         std::string skip_msg;
         for (const auto &s : skipped_cams) skip_msg += (skip_msg.empty() ? "" : ", ") + s;
         result.warning = "Skipped " + std::to_string(skipped_cams.size()) +

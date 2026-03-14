@@ -728,7 +728,7 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
         if (state.batch_running) {
             // Progress display
             float progress = state.batch_total > 0
-                ? (float)state.batch_completed / state.batch_total : 0.0f;
+                ? (float)(state.batch_completed + state.batch_skipped) / state.batch_total : 0.0f;
             char overlay[64];
             snprintf(overlay, sizeof(overlay), "%d / %d (frame %d)",
                      state.batch_completed, state.batch_total, state.batch_current);
@@ -751,13 +751,13 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
             if (state.batch_step < 1) state.batch_step = 1;
 
             // Show count preview
-            if (state.batch_end > state.batch_start && state.batch_step > 0) {
+            if (state.batch_end >= state.batch_start && state.batch_step > 0) {
                 int n = (state.batch_end - state.batch_start) / state.batch_step + 1;
                 ImGui::TextDisabled("%d frames to predict", n);
             }
 
             bool can_batch = can_predict &&
-                state.batch_end > state.batch_start && state.batch_step > 0;
+                state.batch_end >= state.batch_start && state.batch_step > 0;
             if (!can_batch) ImGui::BeginDisabled();
             if (ImGui::Button("Start Batch Predict")) {
                 state.batch_requested = true;
