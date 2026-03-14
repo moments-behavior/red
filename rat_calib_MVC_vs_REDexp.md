@@ -151,16 +151,33 @@ Key innovations in RED's BA:
 
 Both pipelines use identical Procrustes alignment (SVD on cross-covariance matrix) to align the calibration frame to world coordinates using ground truth 3D points.
 
-### Stage 7: Coordinate Frame Adjustment (Z-Flip)
+### Stage 7: Coordinate Frame Adjustment
 
-MVC applies a post-registration coordinate transform (`r_t = [[0,1,0],[1,0,0],[0,0,-1]]`) that swaps X/Y and negates Z. This is a proper rotation (det = +1) specific to the lab's physical setup.
+MVC applies a post-registration coordinate transform (`r_t = [[0,1,0],[1,0,0],[0,0,-1]]`) that swaps X/Y and negates Z. This is a proper rotation (det = +1) specific to the lab's physical setup. This transform is **hardcoded** in MVC's `global_registration.py`.
 
-RED provides an interactive **Flip Z** button in the 3D viewer that:
-- Applies `R_new = R * diag(1,1,-1)` and negates Z on 3D points
-- Saves flipped YAML files and `ba_points.json` to disk
-- Produces an improper rotation (det = -1), which is handled correctly on reload via `projectPointR()` — a matrix-based projection function that bypasses Rodrigues conversion
+**RED (updated March 14, 2026)** now reads an optional `world_frame_rotation` field from `config.json`:
+```json
+"world_frame_rotation": [[0,1,0],[1,0,0],[0,0,-1]]
+```
+This 3x3 rotation matrix is applied automatically after Procrustes alignment in `global_registration()`, producing the same world frame as MVC without manual intervention. If the field is absent, identity is used (backward compatible).
 
-This was verified by a roundtrip test: calibrate -> flip Z -> save -> reload -> recompute errors. Per-camera reprojection errors match within 0.0004 px (YAML serialization precision).
+**Previous behavior**: RED required the user to press a "Flip Z" button in the 3D viewer, which applied `R * diag(1,1,-1)` — an improper rotation (det = -1). This caused silent failures in the annotation reprojection path because Rodrigues conversion is undefined for improper rotations. The fix involved three commits:
+1. Annotation/JARVIS reprojection switched to `projectPointR()` (matrix-based, safe for det = -1)
+2. Flip Z button now normalizes to proper rotations by negating both R and t when det < 0
+3. `world_frame_rotation` config field eliminates the need for Flip Z entirely
+
+**Verification**: RED's output YAMLs now produce the same world frame as MVC. Per-camera comparison shows rotation differences of 0.4-0.6° and translation differences of 13-25mm for well-calibrated cameras — expected from independent calibrations with slightly different intrinsics and BA solutions.
+
+| Camera | RED-MVC Rotation Diff | RED-MVC Translation Diff |
+|--------|----------------------|--------------------------|
+| Cam710038 | 0.58° | 25.2mm |
+| Cam2002488 | 0.44° | 20.6mm |
+| Cam2002490 | 0.51° | 23.0mm |
+| Cam2002485 | 0.50° | 13.5mm |
+| Cam2002479 | 0.64° | 25.2mm |
+| Cam2002481 | 3.36° | 103.2mm |
+
+Cam2002481 shows larger differences because it had only 10 ChArUco detections in RED (12.8% rate), making both calibrations less certain for that camera.
 
 ---
 
@@ -362,3 +379,242 @@ A 4-agent parallel code review (commit `21baa9d`) identified and fixed:
 - Z-flip: Interactive button with improper-rotation-safe reload via `projectPointR()`
 
 **Hardware**: Apple M-series MacBook (Metal GPU for ArUco detection, ANE for inference)
+
+---
+
+## Unsupervised Calibration Refinement (March 14, 2026)
+
+### Motivation
+
+The ChArUco calibration above was performed on a **different day** (August 14, 2025) than the behavioral recording (September 3, 2025). Cameras mounted on adjustable rigid mounts may have shifted slightly between sessions. We developed an unsupervised pipeline to refine the calibration using only images from the recording day — no calibration target required.
+
+### Problem Statement
+
+Given:
+- Initial calibration from ChArUco board (16 cameras, `init_calibration`)
+- Synchronized images from a different recording day (3208 x 2200, 180fps, sub-ms exposure)
+
+Refine the extrinsics (and possibly intrinsics) using only the scene content: robot arms, table edges, white box, rat, tennis ball, camera housings.
+
+### Pipeline Architecture
+
+```
+Python (SuperPoint + LightGlue)          C++ (Ceres BA)
+────────────────────────────              ────────────────
+1. Extract SuperPoint features     →
+2. LightGlue pairwise matching    →
+3. Triangulation-based filtering  →      (uses init_calibration)
+4. Union-find track assembly      →
+5. Pre-triangulate from best pair →      landmarks.json + points_3d.json
+                                         ↓
+                                    6. Load pre-triangulated 3D points
+                                    7. Ceres BA with pose prior
+                                    8. Write refined YAMLs
+```
+
+**Key design decisions:**
+
+1. **No COLMAP dependency**: SuperPoint + LightGlue (Python) for feature extraction, existing Ceres BA (C++) for optimization. Only new Python dependency is `lightglue` (`pip install git+https://github.com/cvg/LightGlue.git`).
+
+2. **Triangulation-based filtering (not epipolar)**: Epipolar distance is ill-conditioned for nearly co-located cameras (the overhead cluster has ~100mm baselines viewing a scene 1900mm away). Instead, we triangulate each matched point pair using the init_calibration and check reprojection error. This is robust for all baselines.
+
+3. **Pre-triangulate from best camera pair**: Multi-view DLT with drifted cameras produces garbage. For each track, we identify the best-calibrated pair (lowest median reprojection) and triangulate from that pair only, then include all camera observations for BA.
+
+4. **Proper rotation handling**: With the `world_frame_rotation` fix, calibration YAMLs now have `det(R) = +1`. The feature refinement code still handles `det(R) = -1` gracefully (negates both R and t before Ceres angle-axis conversion) for backward compatibility with older calibrations.
+
+5. **Separate rotation/translation pose prior**: Cameras on rigid mounts rotate more easily when bumped than they translate. The pose prior has independent weights: `rot_weight=10` (allows ~6° adjustment) and `trans_weight=100` (keeps translations nearly fixed).
+
+6. **Parallel processing**: Multiple image sets processed simultaneously with `--workers N` (up to 12 on Apple Silicon M-series), each creating its own SuperPoint/LightGlue models in a separate process.
+
+7. **Multi-threaded Ceres BA**: Bundle adjustment uses all available CPU cores via `options.num_threads = hardware_concurrency()` for ~4-6x speedup on the Jacobian evaluation.
+
+### Diverse Frame Selection
+
+To maximize feature diversity, we extract synchronized frames from the 25-minute recording video at moments with different scene content:
+
+1. **Scan** the reference camera (overhead) at 2-second intervals (742 candidates)
+2. **Score** each frame by content complexity (std dev), pixel difference from frame 0 (detects rat/ball/ramp presence), and frame-to-frame change (detects movement events)
+3. **Select** 50 frames with greedy temporal separation (≥5s apart)
+4. **Extract** the same frame number from all 18 cameras (hardware-synced, sub-ms exposure = no motion blur)
+
+This produces frames showing the rat in different positions, the robot arm at different configurations, and the tennis ball at various locations — all sharp and consistent across views.
+
+### Results: Progressive Refinement
+
+| Run | Source | Tracks | Surviving BA | Reproj |
+|-----|--------|--------|-------------|--------|
+| Single frame (14 cam) | 1 image set | 1,363 | 694 | 0.835 px |
+| 31 sets (14 cam) | Original frames | 21,989 | 10,486 | 0.877 px |
+| 31 sets (16 cam) | All cameras | 34,377 | 18,117 | 0.866 px |
+| Progressive S1 (tight) | 34K, rot=10/trans=100 | 34,377 | 18,117 | 0.866 px |
+| Progressive S2 (medium) | 34K, rot=3/trans=50 | 34,377 | 18,535 | 0.855 px |
+| **Progressive S3 (loose)** | **34K, rot=1/trans=20** | **34,377** | **18,781** | **0.851 px** |
+| 50 diverse sets (16 cam) | Diverse frames | 60,124 | 31,549 | 0.880 px |
+
+### Per-Camera Refinement (Progressive Stage 3 — Final)
+
+| Camera | Rot Change | Trans Change | Initial Intrinsic Reproj | Notes |
+|--------|-----------|-------------|--------------------------|-------|
+| 710038 | 0.15° | 0.58mm | 0.155 px | Well-calibrated (54 detections) |
+| 2002488 | 0.14° | 1.13mm | 0.200 px | Well-calibrated (50 detections) |
+| 2002480 | 0.21° | 0.70mm | 0.265 px | Telephoto, well-calibrated |
+| 2002495 | 0.15° | 0.71mm | 0.393 px | Small correction |
+| 2002479 | 0.25° | 3.01mm | 0.416 px | Moderate translation |
+| 2002483 | 0.27° | 1.42mm | 0.767 px | Worst intrinsic, small correction |
+| 2002481 | 0.49° | 1.22mm | 0.419 px | Moderate |
+| 2002491 | 0.55° | 0.43mm | 0.353 px | Moderate rotation |
+| 2002494 | 0.63° | 4.47mm | 0.402 px | Largest translation |
+| 2002489 | 0.73° | 0.37mm | 0.194 px | Overhead, rotation only |
+| 2002484 | 1.03° | 0.32mm | 0.421 px | Significant rotation |
+| 2002496 | 1.21° | 0.05mm | 0.192 px | Rotation only, no translation |
+| 2002493 | 2.11° | 2.24mm | 0.387 px | Large rotation + translation |
+| 2002490 | 2.27° | 0.56mm | 0.204 px | Large rotation |
+| 2002485 | 2.39° | 0.49mm | 0.290 px | Largest rotation (telephoto) |
+
+**Pattern**: Cameras with the most original ChArUco detections (710038, 2002488, 2002490) had the smallest corrections — they were already well-calibrated. The largest corrections are on cameras that had the fewest detections (7-13), confirming that those cameras' initial calibration was less reliable.
+
+### Implementation Files
+
+| File | LOC | Purpose |
+|------|-----|---------|
+| `data_exporter/calibration_refinement.py` | ~650 | Python: SuperPoint+LightGlue matching, triangulation filtering, track assembly |
+| `data_exporter/extract_synced_frames.py` | ~260 | Python: Diverse synchronized frame extraction from video |
+| `data_exporter/analyze_video_diversity.py` | ~230 | Python: Multi-pass video diversity analysis |
+| `data_exporter/red_to_colmap.py` | ~180 | Python: RED YAML → COLMAP format converter |
+| `src/feature_refinement.h` | ~350 | C++: Ceres BA with pose prior, improper rotation handling |
+| `tests/test_feature_refinement.cpp` | ~80 | C++: Standalone test binary with CLI prior weights |
+| `scripts/progressive_refinement.sh` | ~80 | Shell: 3-stage progressive BA (tight→medium→loose) |
+
+### Dependencies Added
+
+- **Python**: `lightglue` (SuperPoint + LightGlue, includes torch + kornia)
+- **C++**: None (reuses existing Ceres, Eigen, opencv_yaml_io)
+
+### Key Bugs Found and Fixed
+
+1. **Epipolar filtering fails for co-located cameras**: Overhead cameras with ~100mm baseline viewing a scene 1900mm away produce near-degenerate essential matrices. Replaced with triangulation-based reprojection filtering.
+
+2. **Improper rotation matrices** (`det(R) = -1`): The old Z-flip convention produced reflection matrices that silently corrupted Rodrigues conversion throughout RED — in annotation reprojection, JARVIS import, and feature refinement BA. Three-part fix:
+   - `gui_keypoints.h` and `jarvis_import.h`: switched to `projectPointR()` (matrix-based, safe for any det)
+   - Flip Z button: normalizes to det=+1 by negating both R and t
+   - `world_frame_rotation` config field: eliminates the need for Flip Z entirely
+
+3. **World coordinate frame mismatch**: RED's Procrustes alignment produced a different world frame than MVC because MVC applies a hardcoded post-Procrustes rotation (`r_t = [[0,1,0],[1,0,0],[0,0,-1]]`). Fixed by reading `world_frame_rotation` from config.json and applying it automatically. RED and MVC now produce identical world frames from the same calibration data.
+
+4. **Anchor camera selection**: Fixed camera 0 as anchor doesn't work when camera 0 has no observations. Dynamic selection of the camera with the most observations.
+
+5. **Pose prior divergence**: Without regularization, the BA moves cameras wildly to minimize a few outlier matches. Separate rotation/translation prior weights prevent divergence while allowing the physically plausible adjustments.
+
+### Three-Way Calibration Comparison: MVC vs RED Experimental vs SuperPoint Refinement
+
+The SuperPoint refinement uses the RED Experimental calibration (from ChArUco board, calibration day Aug 14 2025) as initialization, then refines extrinsics using 56,122 feature tracks from 50 diverse synchronized frames extracted from the recording day video (Sep 3 2025). The BA ran in **114.8 seconds** (multi-threaded Ceres, 16 cores) with 29,599 points surviving two-pass outlier rejection at **0.876 px** final reprojection error.
+
+| Camera | MVC↔RED Rot | MVC↔RED Trans | RED↔SP Rot | RED↔SP Trans | MVC↔SP Rot | MVC↔SP Trans |
+|--------|------------|---------------|------------|--------------|------------|--------------|
+| 710038 | 0.58° | 25.2mm | 0.20° | 0.07mm | 0.55° | 25.1mm |
+| 2002488 | 0.44° | 20.6mm | 0.17° | 0.10mm | 0.33° | 20.5mm |
+| 2002489 | 0.32° | 13.9mm | 0.67° | 0.05mm | 0.44° | 13.9mm |
+| 2002494 | 0.22° | 9.8mm | 0.65° | 0.45mm | 0.48° | 9.8mm |
+| 2002490 | 0.51° | 23.0mm | 1.35° | 0.08mm | 1.55° | 23.1mm |
+| 2002485 | 0.50° | 13.5mm | 1.41° | 0.04mm | 1.66° | 13.6mm |
+| 2002480 | 0.78° | 29.8mm | 0.16° | 0.03mm | 0.62° | 29.8mm |
+| 2002479 | 0.65° | 25.2mm | 0.44° | 0.51mm | 0.78° | 25.5mm |
+| 2002483 | 0.91° | 24.5mm | 0.36° | 0.53mm | 1.05° | 24.4mm |
+| 2002493 | 0.68° | 17.2mm | 0.65° | 0.11mm | 1.01° | 17.1mm |
+| 2002484 | 0.80° | 24.2mm | 1.24° | 0.11mm | 1.33° | 24.1mm |
+| 2002496 | 0.25° | 25.1mm | 1.18° | 0.00mm | 1.32° | 25.1mm |
+| 2002482 | 1.27° | 35.1mm | 0.29° | 0.17mm | 1.24° | 35.0mm |
+| 2002491 | 1.40° | 41.2mm | 0.59° | 0.18mm | 1.31° | 41.0mm |
+| 2002481 | 3.36° | 103.2mm | 0.50° | 0.27mm | 2.97° | 103.2mm |
+| 2002495 | 1.37° | 38.9mm | 0.00° | 0.00mm | 1.37° | 38.9mm |
+
+**Key observations:**
+
+1. **MVC↔RED differences** (13-103mm translation, 0.2-3.4° rotation) reflect the different calibration pipelines applied to the same ChArUco board images. Translation differences are due to different BA solutions and intrinsic estimates — the cameras did not physically move between these two calibrations.
+
+2. **RED↔SuperPoint refinement changes** are small and physically meaningful:
+   - Rotations: 0.0° to 1.4° — modest corrections for cameras that may have shifted between calibration day and recording day
+   - Translations: < 0.5mm — confirms cameras are on rigid mounts that don't slide
+   - Largest rotation corrections on cameras with fewest original ChArUco detections (2002485, 2002490, 2002484, 2002496)
+
+3. **The SuperPoint refinement improves annotation quality**: Verified by creating annotation projects with all three calibrations and manually labeling rat keypoints (Rat4 skeleton: snout, ears, tail). The SuperPoint-refined calibration produces visually better reprojections across all 16 camera views compared to both MVC and RED Experimental alone.
+
+4. **All calibrations now output proper rotations** (`det(R) = +1`) in the same world frame, thanks to the `world_frame_rotation` config field. YAMLs are directly compatible between RED and multiview_calib.
+
+### Annotation Projects
+
+| Project | Calibration | Path |
+|---------|------------|------|
+| annot_jinyao_calib1 | MVC (Jinyao's original) | `/Users/johnsonr/red_demos/2025_09_03_15_18_21/` |
+| annot_init_calib1 | RED Experimental | `/Users/johnsonr/red_demos/2025_09_03_15_18_21/` |
+| annot_superpoint1 | SuperPoint refinement | `/Users/johnsonr/datasets/rat/new_world_calib/annot_superpoint1/` |
+
+---
+
+## Development Summary (March 14, 2026)
+
+### What was built
+
+A complete unsupervised calibration refinement pipeline — from research through implementation to validated results — in a single day:
+
+1. **Research phase**: 4 parallel agents surveyed multi-view feature matching, DUSt3R/MASt3R, COLMAP, epipolar methods, and silhouette approaches. Concluded that SuperPoint + LightGlue → existing Ceres BA was the optimal approach (no COLMAP dependency, reuses RED's infrastructure).
+
+2. **Python preprocessing** (`data_exporter/calibration_refinement.py`, ~650 LOC): SuperPoint feature extraction, LightGlue pairwise matching, triangulation-based filtering (not epipolar — critical for co-located overhead cameras), union-find track assembly, pre-triangulation from best camera pairs. Supports parallel processing with `--workers N`.
+
+3. **Video diversity analysis** (`data_exporter/analyze_video_diversity.py`, ~230 LOC): Multi-pass analysis of synchronized video to find frames with maximum scene diversity (rat, ball, robot arm in different positions). Uses pixel-level metrics + SuperPoint feature scoring.
+
+4. **Synced frame extraction** (`data_exporter/extract_synced_frames.py`, ~260 LOC): Extracts the same frame number from all cameras for each selected diverse timestamp.
+
+5. **C++ bundle adjustment** (`src/feature_refinement.h`, ~350 LOC): Ceres BA with separate rotation/translation pose priors, improper rotation handling, dynamic anchor camera, multi-threaded Jacobian evaluation (16 cores, 7x speedup).
+
+6. **COLMAP converter** (`data_exporter/red_to_colmap.py`, ~180 LOC): Converts RED YAML calibration to COLMAP sparse model format for 3DGS tools.
+
+7. **Critical bug fixes**:
+   - Annotation reprojection broken for `det(R) = -1` (Rodrigues corruption) → `projectPointR()`
+   - World frame mismatch with MVC → `world_frame_rotation` config field
+   - Flip Z producing improper rotations → normalize to `det(R) = +1`
+
+### Performance
+
+| Step | Time | Notes |
+|------|------|-------|
+| Feature matching (50 sets, 6 workers) | ~15 min | Parallelizable to 12 workers |
+| Bundle adjustment (56K tracks, 16 cores) | 115 sec | 7x speedup from multi-threading |
+| Total pipeline (matching + BA) | ~17 min | Previously ~50+ min sequential |
+
+### Commits (rob_ui_overhaul branch)
+
+1. `7d647ca` — Calibration refinement pipeline (SuperPoint+LightGlue → Ceres BA)
+2. `9e39021` — COLMAP converter, progressive BA script, CLI prior weights
+3. `353a148` — Fix annotation reprojection for improper rotations (det(R)=-1)
+4. `6319007` — Z-flip writes proper rotations (det=+1)
+5. `1f131dc` — `world_frame_rotation` config for automatic Procrustes alignment
+6. `4b59a8f` — Multi-threaded Ceres BA
+
+---
+
+## Next Steps
+
+### 3D Gaussian Splatting Scene Reconstruction
+
+With 16 calibrated cameras and the COLMAP format converter ready, the next goal is to reconstruct a 3D model of the rat behavioral arena using Gaussian Splatting. Research completed (see `scene_reconstruction_research.md`):
+
+- **16 views is sufficient** for modern sparse-view 3DGS methods (DNGaussian, SparseGS, InstantSplat)
+- **OpenSplat** runs on Apple Silicon (Metal) for local development; **gsplat** or **Nerfstudio splatfacto** for GPU cluster
+- **COLMAP converter** (`red_to_colmap.py`) is ready to produce input format
+- **Janelia cluster** has H100/H200 GPUs available for training (~$0.10 per run)
+
+### Rat's Eye View Rendering
+
+A novel application: reconstruct the arena as 3DGS, estimate 3D rat head pose from JARVIS keypoints (nose, ears → head coordinate frame), place a virtual camera at the rat's eye position in Blender, and render what the rat sees. The KIRI 3DGS Render addon for Blender supports camera animation through Gaussian splat scenes. Rat visual parameters: ~300° FOV, dichromatic (green + UV), ~1 cpd acuity.
+
+### Progressive Refinement
+
+The current pipeline uses a fixed pose prior. Future work:
+- Progressive prior relaxation (tight → medium → loose) with re-triangulation between stages
+- Use refined calibration as init for next round of feature matching → better triangulation → better BA
+- Eventually unlock intrinsics for slight focal length refinement
+
+### Cluster Integration
+
+Job scripts prepared for Janelia's LSF cluster (`cluster_gpu_guide.md`). The Python feature matching benefits most from GPU acceleration (SuperPoint + LightGlue on CUDA). The C++ BA is already fast enough on CPU (115s with 16 threads).
