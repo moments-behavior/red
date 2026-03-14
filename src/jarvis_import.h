@@ -111,8 +111,9 @@ project_to_camera(const std::map<int, Prediction3D> &preds,
         std::vector<Eigen::Vector2d> pts2d;
         pts2d.reserve(pred.positions.size());
         for (const auto &pt3d : pred.positions) {
-            Eigen::Vector2d pt2d = red_math::projectPoint(
-                pt3d, cam.rvec, cam.tvec, cam.k, cam.dist_coeffs);
+            // Use matrix-based projection (safe for det(R)=-1 from Z-flip)
+            Eigen::Vector2d pt2d = red_math::projectPointR(
+                pt3d, cam.r, cam.tvec, cam.k, cam.dist_coeffs);
             pts2d.push_back(pt2d);
         }
         result[fid] = std::move(pts2d);

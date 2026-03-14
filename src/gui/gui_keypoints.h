@@ -92,11 +92,13 @@ inline void gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
 }
 
 inline bool is_in_camera_fov(const Eigen::Vector3d &point_world,
-                      const Eigen::Vector3d &rvec,
+                      const Eigen::Matrix3d &R,
                       const Eigen::Vector3d &tvec,
                       const Eigen::Matrix3d &K, int image_width,
                       int image_height) {
-    auto pt2d = red_math::projectPointNoDist(point_world, rvec, tvec, K);
+    // Use matrix-based projection (safe for improper rotations, det(R)=-1)
+    Eigen::Matrix<double, 5, 1> zero_dist = Eigen::Matrix<double, 5, 1>::Zero();
+    auto pt2d = red_math::projectPointR(point_world, R, tvec, K, zero_dist);
     double x = pt2d(0);
     double y = image_height - pt2d(1);
     if (x > 0 && x < image_width && y > 0 && y < image_height) {
@@ -182,14 +184,14 @@ inline void reprojection(FrameAnnotation &fa, SkeletonContext *skeleton,
                         fa.cameras[view_idx].keypoints[node].labeled = true;
                     }
                 } else {
-                    // Perspective reprojection
-                    if (is_in_camera_fov(pt3d, camera_params[view_idx].rvec,
+                    // Perspective reprojection (matrix-based, safe for det(R)=-1)
+                    if (is_in_camera_fov(pt3d, camera_params[view_idx].r,
                                          camera_params[view_idx].tvec,
                                          camera_params[view_idx].k,
                                          scene->image_width[view_idx],
                                          scene->image_height[view_idx])) {
-                        auto reproj = red_math::projectPoint(
-                            pt3d, camera_params[view_idx].rvec,
+                        auto reproj = red_math::projectPointR(
+                            pt3d, camera_params[view_idx].r,
                             camera_params[view_idx].tvec,
                             camera_params[view_idx].k,
                             camera_params[view_idx].dist_coeffs);
