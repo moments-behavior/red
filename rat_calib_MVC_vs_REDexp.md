@@ -8,12 +8,22 @@ RED's calibration pipeline began as a C++ port of the [multiview_calib](https://
 
 ## Dataset
 
+- **Calibration images**: `/Users/johnsonr/datasets/rat/calibration_images/2025_08_14_09_23_31/`
+- **Config file**: `/Users/johnsonr/datasets/rat/calibration_images/original_calibration_results/config.json`
+- **MVC results**: `/Users/johnsonr/datasets/rat/calibration_images/original_calibration_results/output/`
+- **RED results**: `/Users/johnsonr/red_demos/rat_calib2/aruco_image_experimental/`
 - **Rig**: 17 cameras (14 standard ~2300px focal length, 1 wide 710038 ~1770px, 2 telephoto ~3200px)
+- **Camera serials**: 2002479, 2002480, 2002481, 2002482, 2002483, 2002484, 2002485, 2002488, 2002489, 2002490, 2002491, 2002492, 2002493, 2002494, 2002495, 2002496, 710038
 - **Resolution**: 3208 x 2200 (7 MP)
-- **Images**: 78 per camera (1326 total)
-- **Board**: 5x5 ChArUco, DICT_5X5_100, 80mm squares, 60mm markers (400mm total)
-- **Max corners per frame**: 16 (inner corners of 5x5 board)
-- **Theoretical max observations per camera**: 78 x 16 = 1248
+- **Image format**: JPEG, ~2.4 MB each
+- **Images**: 78 per camera (1326 total, 2.9 GB)
+- **Naming convention**: `{camera_serial}_{frame_number}.jpg` (e.g., `2002479_0.jpg` through `710038_77.jpg`)
+- **Capture date**: 2025-08-14
+- **Board**: 5x5 ChArUco, DICT_5X5_100 (OpenCV dictionary ID 5), 80mm squares, 60mm markers (400mm x 400mm total board)
+- **ArUco markers per board**: 12 (alternating squares in 5x5 checkerboard)
+- **Max ChArUco corners per frame**: 16 (inner corners of 5x5 board)
+- **Theoretical max observations per camera**: 78 x 16 = 1,248
+- **Ground truth**: 2 reference images (frames 76, 77) with 16 manually measured 3D points each on orthogonal planes, used for Procrustes world-frame alignment
 
 ## Overall Results
 
