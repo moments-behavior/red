@@ -306,6 +306,12 @@ A 4-agent parallel code review (commit `21baa9d`) identified and fixed:
 5. **Consider a larger board** (600-800mm) for better detection reliability at distance
 6. **Use RED's Experimental pipeline** — 13% better BA error, 49% better intrinsics, automatic error handling, GPU-accelerated detection
 
+## 3D Visualization
+
+![Rat 16-Camera Calibration](rat_calib_3d.png)
+
+*16 cameras with frustums (colored by camera) and 1,047 triangulated 3D landmarks (blue points). Generated from calibration YAML files using `scripts/plot_calibration_3d.py`. Vector versions available as [SVG](rat_calib_3d.svg) and [PDF](rat_calib_3d.pdf).*
+
 ## Sample Terminal Output (RED Experimental)
 
 ```
