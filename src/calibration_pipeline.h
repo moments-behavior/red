@@ -1478,6 +1478,7 @@ inline bool bundle_adjust(
         options.function_tolerance = 1e-8;
         options.parameter_tolerance = 1e-8;
         options.minimizer_progress_to_stdout = false;
+        options.logging_type = ceres::SILENT; // suppress CHOLMOD warnings
         options.num_threads = std::max(1, (int)std::thread::hardware_concurrency());
 
         ceres::Solver::Summary summary;
