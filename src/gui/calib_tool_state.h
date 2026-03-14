@@ -3,6 +3,7 @@
 #include "calibration_tool.h"
 #include "calibration_pipeline.h"
 #include "laser_calibration.h"
+#include "superpoint_refinement.h"
 #include "telecentric_dlt.h"
 #include "calib_viewer_window.h"
 #include "tele_viewer_window.h"
@@ -156,6 +157,31 @@ struct CalibrationToolState {
 
     // Laser visualization
     LaserVizState laser_viz;
+
+    // SuperPoint refinement
+    bool sp_running = false;
+    bool sp_done = false;
+    std::string sp_status;
+    SuperPointRefinement::SPResult sp_result;
+    std::shared_ptr<SuperPointRefinement::SPProgress> sp_progress =
+        std::make_shared<SuperPointRefinement::SPProgress>();
+    std::future<SuperPointRefinement::SPResult> sp_future;
+    // UI input fields
+    std::string sp_video_folder;
+    std::string sp_ref_camera;
+    int sp_num_sets = 50;
+    float sp_scan_interval = 2.0f;
+    float sp_min_separation = 5.0f;
+    int sp_workers = 12;
+    std::string sp_python_path = "python3";
+    float sp_reproj_thresh = 15.0f;
+    float sp_rot_prior = 10.0f;
+    float sp_trans_prior = 100.0f;
+    int sp_max_keypoints = 4096;
+    bool sp_lock_intrinsics = true;
+    bool sp_lock_distortion = true;
+    float sp_outlier_th1 = 10.0f;
+    float sp_outlier_th2 = 3.0f;
 
     // 3D calibration viewer (perspective)
     CalibViewerState calib_viewer;

@@ -7,6 +7,7 @@
 #include "calib_tele_section.h"
 #include "calib_aruco_section.h"
 #include "calib_laser_section.h"
+#include "calib_superpoint_section.h"
 #include "calib_viewer_window.h"
 #include "tele_viewer_window.h"
 #include <ImGuiFileDialog.h>
@@ -281,6 +282,9 @@ inline void DrawCalibrationToolWindow(
             if (show_laser_section) {
                 DrawCalibLaserSection(state, ctx, cb);
             }
+
+            // SuperPoint refinement section (available after any calibration succeeds)
+            DrawCalibSuperPointSection(state, ctx, cb);
 
             // Status text (general)
             if (!state.status.empty()) {
