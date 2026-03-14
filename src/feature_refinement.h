@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <fstream>
 #include <chrono>
+#include <thread>
 
 namespace FeatureRefinement {
 namespace fs = std::filesystem;
@@ -178,6 +179,7 @@ inline double bundle_adjust_features(
     ceres::Solver::Options options;
     options.linear_solver_type = ceres::SPARSE_SCHUR;
     options.max_num_iterations = max_iter;
+    options.num_threads = std::max(1, (int)std::thread::hardware_concurrency());
     options.minimizer_progress_to_stdout = false;
 
     ceres::Solver::Summary summary;
