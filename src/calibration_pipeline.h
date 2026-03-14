@@ -183,6 +183,7 @@ struct CalibrationResult {
     int image_height = 0;
     bool success = false;
     std::string error;
+    std::string warning;       // non-fatal issues (e.g., skipped cameras)
     std::string output_folder;
     std::vector<PerCameraMetrics> per_camera_metrics;
     std::vector<double> all_reproj_errors;
@@ -265,7 +266,8 @@ detect_and_calibrate_intrinsics(
     std::map<std::string, CameraIntrinsics> &intrinsics,
     std::string *status,
     aruco_detect::GpuThresholdFunc gpu_thresh = nullptr,
-    void *gpu_ctx = nullptr) {
+    void *gpu_ctx = nullptr,
+    std::vector<std::string> *skipped_cameras = nullptr) {
 
     const auto &cs = config.charuco_setup;
     int max_corners = (cs.w - 1) * (cs.h - 1);
@@ -480,17 +482,27 @@ detect_and_calibrate_intrinsics(
                 total_images, phase1_s, total_images / phase1_s);
     }
 
-    // Check detection results
+    // Check detection results — skip failed cameras instead of aborting
+    std::vector<int> valid_cam_indices;
     for (int cam_i = 0; cam_i < num_cameras; cam_i++) {
         if (!detections[cam_i].ok) {
-            if (status) *status = "Error: " + detections[cam_i].error;
-            return false;
+            fprintf(stderr, "[Calibration] Skipping camera %s: %s\n",
+                    config.cam_ordered[cam_i].c_str(), detections[cam_i].error.c_str());
+            if (skipped_cameras)
+                skipped_cameras->push_back(config.cam_ordered[cam_i]);
+        } else {
+            valid_cam_indices.push_back(cam_i);
         }
     }
+    if (valid_cam_indices.size() < 2) {
+        if (status) *status = "Error: fewer than 2 cameras passed detection";
+        return false;
+    }
+    num_cameras = (int)valid_cam_indices.size();
 
     // ── Phase 2: calibrate intrinsics in parallel (Ceres is thread-safe) ──
-    std::vector<CameraIntrinsics> results(num_cameras);
-    std::vector<bool> result_ok(num_cameras, false);
+    std::vector<CameraIntrinsics> results(valid_cam_indices.size());
+    std::vector<bool> result_ok(valid_cam_indices.size(), false);
     std::atomic<int> calib_done{0};
 
     if (status)
@@ -498,9 +510,10 @@ detect_and_calibrate_intrinsics(
 
     {
         std::vector<std::future<void>> calib_futures;
-        for (int cam_i = 0; cam_i < num_cameras; cam_i++) {
-            calib_futures.push_back(std::async(std::launch::async, [&, cam_i]() {
-                auto &det = detections[cam_i];
+        for (int vi = 0; vi < num_cameras; vi++) {
+            int orig_i = valid_cam_indices[vi];
+            calib_futures.push_back(std::async(std::launch::async, [&, vi, orig_i]() {
+                auto &det = detections[orig_i];
 
                 auto calib_result = intrinsic_calib::calibrateCamera(
                     det.all_obj_points, det.all_img_points,
@@ -510,8 +523,8 @@ detect_and_calibrate_intrinsics(
                 det.cam_data.K = calib_result.K;
                 det.cam_data.dist = calib_result.dist;
                 det.cam_data.reproj_error = calib_result.reproj_error;
-                results[cam_i] = std::move(det.cam_data);
-                result_ok[cam_i] = true;
+                results[vi] = std::move(det.cam_data);
+                result_ok[vi] = true;
 
                 int done = ++calib_done;
                 {
@@ -527,15 +540,16 @@ detect_and_calibrate_intrinsics(
             f.get();
     }
 
-    // Collect results
-    for (int i = 0; i < num_cameras; i++) {
-        if (!result_ok[i]) {
+    // Collect results — map through valid_cam_indices to original cam names
+    for (int vi = 0; vi < num_cameras; vi++) {
+        int orig_i = valid_cam_indices[vi];
+        if (!result_ok[vi]) {
             if (status)
                 *status = "Error: calibration failed for camera " +
-                          config.cam_ordered[i];
+                          config.cam_ordered[orig_i];
             return false;
         }
-        intrinsics[config.cam_ordered[i]] = std::move(results[i]);
+        intrinsics[config.cam_ordered[orig_i]] = std::move(results[vi]);
     }
 
     if (status) {
@@ -559,7 +573,8 @@ inline bool detect_and_calibrate_intrinsics_video(
     std::vector<int> *out_frame_numbers,
     std::string *status,
     aruco_detect::GpuThresholdFunc gpu_thresh = nullptr,
-    void *gpu_ctx = nullptr) {
+    void *gpu_ctx = nullptr,
+    std::vector<std::string> *skipped_cameras = nullptr) {
 
     const auto &cs = config.charuco_setup;
 
@@ -821,12 +836,23 @@ inline bool detect_and_calibrate_intrinsics_video(
                   vfr.cam_ordered[cam_i].c_str(),
                   (int)detections[cam_i].cam_data.corners_per_image.size()); }
 
+    // Skip failed cameras instead of aborting
+    std::vector<int> valid_cam_indices;
     for (int cam_i = 0; cam_i < num_cameras; cam_i++) {
         if (!detections[cam_i].ok) {
-            if (status) *status = "Error: " + detections[cam_i].error;
-            return false;
+            fprintf(stderr, "[Calibration] Skipping camera %s: %s\n",
+                    vfr.cam_ordered[cam_i].c_str(), detections[cam_i].error.c_str());
+            if (skipped_cameras)
+                skipped_cameras->push_back(vfr.cam_ordered[cam_i]);
+        } else {
+            valid_cam_indices.push_back(cam_i);
         }
     }
+    if (valid_cam_indices.size() < 2) {
+        if (status) *status = "Error: fewer than 2 cameras passed detection";
+        return false;
+    }
+    num_cameras = (int)valid_cam_indices.size();
 
     // Phase 2: calibrate intrinsics in parallel
     std::vector<CameraIntrinsics> results(num_cameras);
@@ -835,17 +861,18 @@ inline bool detect_and_calibrate_intrinsics_video(
     if (status) *status = "Calibrating intrinsics (0/" + std::to_string(num_cameras) + ")...";
     {
         std::vector<std::future<void>> calib_futures;
-        for (int cam_i = 0; cam_i < num_cameras; cam_i++) {
-            calib_futures.push_back(std::async(std::launch::async, [&, cam_i]() {
-                auto &det = detections[cam_i];
+        for (int vi = 0; vi < num_cameras; vi++) {
+            int orig_i = valid_cam_indices[vi];
+            calib_futures.push_back(std::async(std::launch::async, [&, vi, orig_i]() {
+                auto &det = detections[orig_i];
                 auto calib_result = intrinsic_calib::calibrateCamera(
                     det.all_obj_points, det.all_img_points,
                     det.det_image_width, det.det_image_height, true);
                 det.cam_data.K = calib_result.K;
                 det.cam_data.dist = calib_result.dist;
                 det.cam_data.reproj_error = calib_result.reproj_error;
-                results[cam_i] = std::move(det.cam_data);
-                result_ok[cam_i] = true;
+                results[vi] = std::move(det.cam_data);
+                result_ok[vi] = true;
                 int done = ++calib_done;
                 { std::lock_guard<std::mutex> lock(status_mutex);
                   if (status) *status = "Calibrating intrinsics (" +
@@ -855,12 +882,13 @@ inline bool detect_and_calibrate_intrinsics_video(
         for (auto &f : calib_futures) f.get();
     }
 
-    for (int i = 0; i < num_cameras; i++) {
-        if (!result_ok[i]) {
-            if (status) *status = "Error: calibration failed for camera " + vfr.cam_ordered[i];
+    for (int vi = 0; vi < num_cameras; vi++) {
+        int orig_i = valid_cam_indices[vi];
+        if (!result_ok[vi]) {
+            if (status) *status = "Error: calibration failed for camera " + vfr.cam_ordered[orig_i];
             return false;
         }
-        intrinsics[vfr.cam_ordered[i]] = std::move(results[i]);
+        intrinsics[vfr.cam_ordered[orig_i]] = std::move(results[vi]);
     }
     if (status) {
         std::string msg = "Intrinsics done. Reproj errors:";
@@ -2162,26 +2190,47 @@ inline CalibrationResult load_calibration_from_folder(
     std::string db_path = data_folder + "/calibration_data.json";
     if (!fs::exists(db_path)) { result.error = "No calibration_data.json"; return result; }
 
-    // Load YAML camera files
-    result.cam_names = cam_names;
-    result.cameras.resize(cam_names.size());
+    // Load YAML camera files — skip cameras without YAML files gracefully
+    std::vector<std::string> skipped_cameras;
     for (int i = 0; i < (int)cam_names.size(); i++) {
         std::string yaml_path = data_folder + "/Cam" + cam_names[i] + ".yaml";
-        if (!fs::exists(yaml_path)) { result.error = "Missing " + yaml_path; return result; }
+        if (!fs::exists(yaml_path)) {
+            skipped_cameras.push_back(cam_names[i]);
+            continue;
+        }
         try {
             auto yf = opencv_yaml::read(yaml_path);
-            result.cameras[i].K = yf.getMatrix("camera_matrix");
+            CameraPose pose;
+            pose.K = yf.getMatrix("camera_matrix");
             Eigen::MatrixXd dist_mat = yf.getMatrix("distortion_coefficients");
             for (int j = 0; j < 5 && j < (int)dist_mat.rows(); j++)
-                result.cameras[i].dist(j) = dist_mat(j, 0);
-            result.cameras[i].R = yf.getMatrix("rc_ext");
+                pose.dist(j) = dist_mat(j, 0);
+            pose.R = yf.getMatrix("rc_ext");
             Eigen::MatrixXd t_mat = yf.getMatrix("tc_ext");
-            result.cameras[i].t = Eigen::Vector3d(t_mat(0,0), t_mat(1,0), t_mat(2,0));
+            pose.t = Eigen::Vector3d(t_mat(0,0), t_mat(1,0), t_mat(2,0));
             int iw = yf.getInt("image_width"), ih = yf.getInt("image_height");
-            if (i == 0) { result.image_width = iw; result.image_height = ih; }
+            if (result.cameras.empty()) { result.image_width = iw; result.image_height = ih; }
+            result.cameras.push_back(pose);
+            result.cam_names.push_back(cam_names[i]);
         } catch (const std::exception &e) {
-            result.error = yaml_path + ": " + e.what(); return result;
+            skipped_cameras.push_back(cam_names[i]);
+            fprintf(stderr, "[load_calibration] Skipping %s: %s\n",
+                    cam_names[i].c_str(), e.what());
         }
+    }
+    if (result.cameras.empty()) {
+        result.error = "No camera YAML files found in " + data_folder;
+        return result;
+    }
+    if (!skipped_cameras.empty()) {
+        std::string skip_msg = "Skipped " + std::to_string(skipped_cameras.size()) +
+            " camera(s) (no YAML): ";
+        for (size_t i = 0; i < skipped_cameras.size(); i++) {
+            if (i > 0) skip_msg += ", ";
+            skip_msg += skipped_cameras[i];
+        }
+        result.warning = skip_msg;
+        fprintf(stderr, "[load_calibration] %s\n", skip_msg.c_str());
     }
 
     // Load database JSON
@@ -2257,32 +2306,41 @@ inline CalibrationResult load_calibration_from_folder(
             }
         }
 
-        // Compute per-camera metrics from landmarks + points
-        result.per_camera_metrics.resize(cam_names.size());
-        for (int c = 0; c < (int)cam_names.size(); c++) {
+        // Compute per-camera metrics from landmarks + points.
+        // Use result.cam_names (loaded cameras only, may be fewer than input).
+        int nc = (int)result.cam_names.size();
+        result.per_camera_metrics.resize(nc);
+        for (int c = 0; c < nc; c++) {
             auto &m = result.per_camera_metrics[c];
-            m.name = cam_names[c];
-            auto bp_it = result.db.board_poses.find(cam_names[c]);
+            m.name = result.cam_names[c];
+            auto bp_it = result.db.board_poses.find(result.cam_names[c]);
             if (bp_it != result.db.board_poses.end())
                 m.detection_count = (int)bp_it->second.size();
-            auto lm_it = result.db.landmarks.find(cam_names[c]);
+            auto lm_it = result.db.landmarks.find(result.cam_names[c]);
             if (lm_it != result.db.landmarks.end()) {
                 m.observation_count = (int)lm_it->second.size();
-                auto rv = red_math::rotationMatrixToVector(result.cameras[c].R);
-                std::vector<double> errs;
-                for (const auto &[pid, px] : lm_it->second) {
-                    auto pt_it = result.points_3d.find(pid);
-                    if (pt_it == result.points_3d.end()) continue;
-                    double e = (red_math::projectPoint(pt_it->second, rv,
-                        result.cameras[c].t, result.cameras[c].K, result.cameras[c].dist) - px).norm();
-                    errs.push_back(e);
-                }
-                if (!errs.empty()) {
-                    double s = 0; for (double e : errs) s += e;
-                    m.mean_reproj = s / errs.size();
-                    std::sort(errs.begin(), errs.end());
-                    m.median_reproj = errs[errs.size() / 2];
-                    m.max_reproj = errs.back();
+                // Recompute reprojection error from loaded poses + 3D points.
+                // This uses camera poses from YAML (may have been flipped) and
+                // 3D points from ba_points.json (may not be flipped), so only
+                // recompute if both are available and consistent.
+                if (!result.points_3d.empty() && c < (int)result.cameras.size()) {
+                    auto rv = red_math::rotationMatrixToVector(result.cameras[c].R);
+                    std::vector<double> errs;
+                    for (const auto &[pid, px] : lm_it->second) {
+                        auto pt_it = result.points_3d.find(pid);
+                        if (pt_it == result.points_3d.end()) continue;
+                        double e = (red_math::projectPoint(pt_it->second, rv,
+                            result.cameras[c].t, result.cameras[c].K,
+                            result.cameras[c].dist) - px).norm();
+                        errs.push_back(e);
+                    }
+                    if (!errs.empty()) {
+                        double s = 0; for (double e : errs) s += e;
+                        m.mean_reproj = s / errs.size();
+                        std::sort(errs.begin(), errs.end());
+                        m.median_reproj = errs[errs.size() / 2];
+                        m.max_reproj = errs.back();
+                    }
                 }
             }
         }
@@ -2972,9 +3030,10 @@ inline bool bundle_adjust_experimental(
 }
 
 inline CalibrationResult run_experimental_pipeline(
-    const CalibrationTool::CalibConfig &config, const std::string &base_folder,
+    const CalibrationTool::CalibConfig &config_in, const std::string &base_folder,
     std::string *status, const VideoFrameRange *vfr=nullptr,
     aruco_detect::GpuThresholdFunc gpu_thresh=nullptr, void *gpu_ctx=nullptr) {
+    CalibrationTool::CalibConfig config = config_in; // mutable copy (cameras may be removed)
     CalibrationResult result; result.cam_names=config.cam_ordered;
     auto now=std::chrono::system_clock::now();auto t=std::chrono::system_clock::to_time_t(now);
     std::tm ts;localtime_r(&t,&ts);char tb[64];std::strftime(tb,sizeof(tb),"%Y_%m_%d_%H_%M_%S",&ts);
@@ -2983,8 +3042,33 @@ inline CalibrationResult run_experimental_pipeline(
     fprintf(stderr,"\n[Experimental] === Starting experimental pipeline ===\n");
     if(status)*status="Step 1: Detecting + calibrating intrinsics...";
     std::map<std::string,CameraIntrinsics> intrinsics;std::vector<int> video_frame_numbers;
-    if(vfr){if(!detect_and_calibrate_intrinsics_video(config,*vfr,intrinsics,&video_frame_numbers,status,gpu_thresh,gpu_ctx)){result.error=status?*status:"failed";return result;}}
-    else{if(!detect_and_calibrate_intrinsics(config,intrinsics,status,gpu_thresh,gpu_ctx)){result.error=status?*status:"failed";return result;}}
+    std::vector<std::string> skipped_cams;
+    if(vfr){if(!detect_and_calibrate_intrinsics_video(config,*vfr,intrinsics,&video_frame_numbers,status,gpu_thresh,gpu_ctx,&skipped_cams)){result.error=status?*status:"failed";return result;}}
+    else{if(!detect_and_calibrate_intrinsics(config,intrinsics,status,gpu_thresh,gpu_ctx,&skipped_cams)){result.error=status?*status:"failed";return result;}}
+    // Remove skipped cameras from cam_ordered for subsequent pipeline steps
+    if (!skipped_cams.empty()) {
+        std::set<std::string> skip_set(skipped_cams.begin(), skipped_cams.end());
+        std::vector<std::string> filtered;
+        for (const auto &cam : config.cam_ordered)
+            if (!skip_set.count(cam)) filtered.push_back(cam);
+        config.cam_ordered = filtered;
+        // Also filter spanning tree
+        std::vector<int> new_svo;
+        for (int idx : config.second_view_order)
+            if (idx < (int)config.cam_ordered.size()) new_svo.push_back(idx);
+        // Note: spanning tree indices are relative to the ORIGINAL cam_ordered,
+        // which is now filtered. The pipeline rebuilds the tree from cam_ordered,
+        // so we just need to ensure first_view is still valid.
+        if (config.first_view >= (int)config.cam_ordered.size())
+            config.first_view = 0;
+        std::string skip_msg;
+        for (const auto &s : skipped_cams) skip_msg += (skip_msg.empty() ? "" : ", ") + s;
+        result.warning = "Skipped " + std::to_string(skipped_cams.size()) +
+            " camera(s): " + skip_msg;
+        result.cam_names = config.cam_ordered; // Update to filtered list
+        fprintf(stderr, "[Experimental] %s\n", result.warning.c_str());
+    }
+    if (intrinsics.empty()) { result.error = "No cameras passed detection"; return result; }
     result.image_width=intrinsics.begin()->second.image_width;result.image_height=intrinsics.begin()->second.image_height;
     int nc=(int)config.cam_ordered.size();result.per_camera_metrics.resize(nc);
     for(int i=0;i<nc;i++){auto&m=result.per_camera_metrics[i];m.name=config.cam_ordered[i];

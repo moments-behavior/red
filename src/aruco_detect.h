@@ -29,29 +29,20 @@
 namespace aruco_detect {
 
 // ─────────────────────────────────────────────────────────────────────────────
-// DICT_4X4_50 bit patterns
+// ArUco dictionary bit patterns (auto-generated from OpenCV)
 // ─────────────────────────────────────────────────────────────────────────────
-// 50 markers, each 16-bit pattern encoding a 4x4 grid row-major MSB-first.
-// Bit 15 = top-left cell, bit 0 = bottom-right cell.
-
-static constexpr uint16_t DICT_4X4_50[50] = {
-    0xb532, 0x0f9a, 0x332d, 0x9946, 0x549e, 0x79cd, 0x9e2e, 0xc4f2,
-    0xfeda, 0xcf56, 0xf991, 0x11a7, 0x0eb7, 0x2a0f, 0x24b1, 0x263e,
-    0x4665, 0x6600, 0x6c5e, 0x76af, 0x868b, 0xb02b, 0xccd5, 0xdd82,
-    0xfe47, 0x9471, 0xace4, 0xa554, 0x2123, 0x346f, 0x4415, 0x57b2,
-    0x9ecf, 0xf0cb, 0x08ae, 0x0929, 0x1875, 0x04ff, 0x0df6, 0x1c5a,
-    0x1718, 0x2a28, 0x328c, 0x38b2, 0x24e8, 0x2eeb, 0x2d3f, 0x4b64,
-    0x502e, 0x5013,
-};
+// All patterns stored as uint64_t, row-major MSB-first.
+// For NxN grid: bit (N*N-1) = top-left cell, bit 0 = bottom-right cell.
+#include "aruco_dict_data.h"
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Data structures
 // ─────────────────────────────────────────────────────────────────────────────
 
 struct ArUcoDictionary {
-    const uint16_t *patterns;  // bit patterns array
+    const uint64_t *patterns;  // bit patterns array (uint64_t holds 4x4..7x7)
     int num_markers;
-    int marker_bits;           // side length of data grid (4 for DICT_4X4)
+    int marker_bits;           // side length of data grid (4, 5, or 6)
     int max_correction_bits;   // max Hamming distance for match
 
     bool valid() const { return patterns != nullptr && num_markers > 0; }
@@ -98,11 +89,18 @@ using GpuThresholdFunc = void (*)(
 // ─────────────────────────────────────────────────────────────────────────────
 
 inline ArUcoDictionary getDictionary(int id) {
-    if (id == 0) {
-        return {DICT_4X4_50, 50, 4, 1};
+    switch (id) {
+    case  0: return {DICT_4X4_50,   50, 4, DICT_4X4_50_MAX_CORRECTION};
+    case  1: return {DICT_4X4_100, 100, 4, DICT_4X4_100_MAX_CORRECTION};
+    case  2: return {DICT_4X4_250, 250, 4, DICT_4X4_250_MAX_CORRECTION};
+    case  4: return {DICT_5X5_50,   50, 5, DICT_5X5_50_MAX_CORRECTION};
+    case  5: return {DICT_5X5_100, 100, 5, DICT_5X5_100_MAX_CORRECTION};
+    case  6: return {DICT_5X5_250, 250, 5, DICT_5X5_250_MAX_CORRECTION};
+    case  8: return {DICT_6X6_50,   50, 6, DICT_6X6_50_MAX_CORRECTION};
+    case 10: return {DICT_6X6_250, 250, 6, DICT_6X6_250_MAX_CORRECTION};
+    case 16: return {DICT_ARUCO_ORIGINAL, 1024, 5, DICT_ARUCO_ORIGINAL_MAX_CORRECTION};
+    default: return {nullptr, 0, 0, 0};
     }
-    // Unsupported dictionary
-    return {nullptr, 0, 0, 0};
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -531,43 +529,35 @@ inline float sampleBilinear(const uint8_t *gray, int w, int h, float fx,
            v01 * (1 - dx) * dy + v11 * dx * dy;
 }
 
-// --- Rotate a 4x4 bit pattern 90 degrees clockwise ---
-// Input/output: 16-bit patterns where bit (4*row + col) maps to cell
-// (row, col), with bit 15 = (0,0) and bit 0 = (3,3).
-inline uint16_t rotateBits90CW(uint16_t bits, int side) {
-    uint16_t result = 0;
+// --- Rotate an NxN bit pattern 90 degrees clockwise ---
+// Bit (N*N-1) = top-left cell, bit 0 = bottom-right cell.
+inline uint64_t rotateBits90CW(uint64_t bits, int side) {
+    uint64_t result = 0;
     for (int r = 0; r < side; r++) {
         for (int c = 0; c < side; c++) {
-            // Source bit at (r, c) goes to (c, side-1-r) after 90 CW rotation
             int src_bit = (side * side - 1) - (r * side + c);
             int dst_r = c;
             int dst_c = side - 1 - r;
             int dst_bit = (side * side - 1) - (dst_r * side + dst_c);
-            if (bits & (1 << src_bit))
-                result |= (1 << dst_bit);
+            if (bits & (1ULL << src_bit))
+                result |= (1ULL << dst_bit);
         }
     }
     return result;
 }
 
-// --- Hamming distance between two 16-bit patterns ---
-inline int hammingDistance16(uint16_t a, uint16_t b) {
-    uint16_t x = a ^ b;
-    int count = 0;
-    while (x) {
-        count += (x & 1);
-        x >>= 1;
-    }
-    return count;
+// --- Hamming distance between two bit patterns ---
+inline int hammingDistance(uint64_t a, uint64_t b) {
+    return __builtin_popcountll(a ^ b);
 }
 
 // --- Warp quad candidate and read marker bits ---
 // Returns true if the border check passes.
-// bits_out: the inner marker_bits x marker_bits pattern as a uint16_t.
+// bits_out: the inner marker_bits x marker_bits pattern as a uint64_t.
 // The border is the outer ring of cells in the (marker_bits+2) grid.
 inline bool readMarkerBits(const uint8_t *gray, int w, int h,
                            const std::array<Eigen::Vector2f, 4> &quad_corners,
-                           int marker_bits, uint16_t &bits_out) {
+                           int marker_bits, uint64_t &bits_out) {
     int grid_size = marker_bits + 2; // Include 1-cell border on each side
 
     // Map quad corners (image) to canonical grid corners.
@@ -652,7 +642,7 @@ inline bool readMarkerBits(const uint8_t *gray, int w, int h,
             float val = cell_values[(r + 1) * grid_size + (c + 1)];
             int bit_idx = (marker_bits * marker_bits - 1) - (r * marker_bits + c);
             if (val > threshold)
-                bits_out |= (1 << bit_idx);
+                bits_out |= (1ULL << bit_idx);
         }
     }
 
@@ -919,7 +909,7 @@ detectMarkers(const uint8_t *gray, int w, int h, const ArUcoDictionary &dict,
         }
 
         // (e) Read marker bits
-        uint16_t bits = 0;
+        uint64_t bits = 0;
         if (!detail::readMarkerBits(gray, w, h, quad, dict.marker_bits, bits))
             continue;
 
@@ -928,10 +918,10 @@ detectMarkers(const uint8_t *gray, int w, int h, const ArUcoDictionary &dict,
         int best_rotation = 0;
         int best_hamming = dict.marker_bits * dict.marker_bits + 1;
 
-        uint16_t rotated = bits;
+        uint64_t rotated = bits;
         for (int rot = 0; rot < 4; rot++) {
             for (int mid = 0; mid < dict.num_markers; mid++) {
-                int hd = detail::hammingDistance16(rotated, dict.patterns[mid]);
+                int hd = detail::hammingDistance(rotated, dict.patterns[mid]);
                 if (hd <= dict.max_correction_bits && hd < best_hamming) {
                     best_hamming = hd;
                     best_id = mid;

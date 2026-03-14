@@ -157,6 +157,7 @@ inline void HandleMainMenuDialogs(
                         if (CalibrationTool::parse_config(
                                 calib_state.config_path, calib_state.config, err)) {
                             calib_state.config_loaded = true;
+                            calib_state.init_camera_enabled();
                             calib_state.images_loaded = false;
                             calib_state.img_done = false;
                             calib_state.vid_done = false;

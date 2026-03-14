@@ -142,16 +142,16 @@ StepTimers detectMarkersGranular(
         if (signed_area < 0) std::swap(quad[1], quad[3]);
 
         // Read bits
-        uint16_t bits = 0;
+        uint64_t bits = 0;
         if (!aruco_detect::detail::readMarkerBits(gray, w, h, quad, dict.marker_bits, bits))
             continue;
 
         // Dictionary matching
         int best_id = -1, best_hamming = dict.marker_bits * dict.marker_bits + 1;
-        uint16_t rotated = bits;
+        uint64_t rotated = bits;
         for (int rot = 0; rot < 4; rot++) {
             for (int mid = 0; mid < dict.num_markers; mid++) {
-                int hd = aruco_detect::detail::hammingDistance16(rotated, dict.patterns[mid]);
+                int hd = aruco_detect::detail::hammingDistance(rotated, dict.patterns[mid]);
                 if (hd <= dict.max_correction_bits && hd < best_hamming) {
                     best_hamming = hd;
                     best_id = mid;

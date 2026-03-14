@@ -521,6 +521,79 @@ if(APPLE)
         CXX_STANDARD_REQUIRED ON
     )
 
+    # Calibration reload roundtrip test (rat dataset)
+    add_executable(test_calib_reload
+        tests/test_calib_reload.cpp
+        src/aruco_metal.mm
+        src/FFmpegDemuxer.cpp
+        src/vt_async_decoder.mm
+    )
+    target_include_directories(test_calib_reload PRIVATE
+        src
+        lib/nvcodec
+        ${HOMEBREW_PREFIX}/include
+        ${HOMEBREW_PREFIX}/include/eigen3
+        ${FFMPEG_INCLUDE_DIRS}
+        ${TURBOJPEG_INCLUDE_DIRS}
+    )
+    target_link_directories(test_calib_reload PRIVATE
+        ${FFMPEG_LIBRARY_DIRS} ${TURBOJPEG_LIBRARY_DIRS})
+    target_link_libraries(test_calib_reload PRIVATE
+        Eigen3::Eigen
+        Ceres::ceres
+        ${FFMPEG_LIBRARIES}
+        ${TURBOJPEG_LIBRARIES}
+        "-framework Metal"
+        "-framework Foundation"
+        "-framework CoreGraphics"
+        "-framework CoreVideo"
+        "-framework CoreMedia"
+        "-framework VideoToolbox"
+        "-framework IOKit"
+        pthread
+    )
+    set_source_files_properties(
+        src/aruco_metal.mm
+        src/vt_async_decoder.mm
+        PROPERTIES COMPILE_FLAGS "-fobjc-arc"
+    )
+    set_target_properties(test_calib_reload PROPERTIES
+        CXX_STANDARD 17
+        CXX_STANDARD_REQUIRED ON
+    )
+
+    # DICT_5X5 detection test (rat calibration board)
+    add_executable(test_dict5x5
+        tests/test_dict5x5.cpp
+        src/aruco_metal.mm
+    )
+    target_include_directories(test_dict5x5 PRIVATE
+        src lib
+        ${HOMEBREW_PREFIX}/include
+        ${HOMEBREW_PREFIX}/include/eigen3
+        ${TURBOJPEG_INCLUDE_DIRS}
+    )
+    target_link_directories(test_dict5x5 PRIVATE ${TURBOJPEG_LIBRARY_DIRS})
+    target_link_libraries(test_dict5x5 PRIVATE
+        Eigen3::Eigen
+        Ceres::ceres
+        ${TURBOJPEG_LIBRARIES}
+        "-framework Metal"
+        "-framework Foundation"
+        "-framework CoreGraphics"
+        "-framework IOKit"
+        "-framework CoreVideo"
+        pthread
+    )
+    set_source_files_properties(
+        src/aruco_metal.mm
+        PROPERTIES COMPILE_FLAGS "-fobjc-arc"
+    )
+    set_target_properties(test_dict5x5 PROPERTIES
+        CXX_STANDARD 17
+        CXX_STANDARD_REQUIRED ON
+    )
+
     # Contour finding drill-down benchmark
     add_executable(test_contour_drill
         tests/test_contour_drill.cpp

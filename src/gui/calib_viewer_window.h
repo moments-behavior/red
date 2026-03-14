@@ -17,7 +17,7 @@
 
 struct CalibViewerState {
     bool show = false;
-    const CalibrationPipeline::CalibrationResult *result = nullptr;
+    CalibrationPipeline::CalibrationResult *result = nullptr;
     float frustum_scale = 100.0f;
     bool show_points = true;
     bool show_frustums = true;
@@ -110,6 +110,51 @@ inline void DrawCalibViewerWindow(CalibViewerState &state) {
     ImGui::SameLine(); ImGui::Checkbox("Boards", &state.show_board_poses);
     ImGui::SameLine(); ImGui::Checkbox("Axes", &state.show_axes_box);
     ImGui::PopStyleColor();
+
+    // Flip Z: reflects all poses and points across Z=0, then re-writes YAMLs
+    ImGui::SameLine();
+    if (ImGui::Button("Flip Z")) {
+        auto &r = *state.result;
+        Eigen::Matrix3d F = Eigen::Vector3d(1, 1, -1).asDiagonal();
+        // Transform camera poses: R_new = R * F, t unchanged
+        for (auto &cam : r.cameras)
+            cam.R = cam.R * F;
+        // Transform 3D points: negate Z
+        for (auto &[id, pt] : r.points_3d)
+            pt.z() = -pt.z();
+        // Re-write YAML files and 3D points with flipped data
+        if (!r.output_folder.empty()) {
+            std::string err;
+            CalibrationPipeline::write_calibration(
+                r.cameras, r.cam_names, r.output_folder,
+                r.image_width, r.image_height, &err);
+            if (!err.empty())
+                fprintf(stderr, "[Flip Z] YAML write error: %s\n", err.c_str());
+
+            // Also update ba_points.json so reload is consistent
+            namespace fs = std::filesystem;
+            std::string pts_path = r.output_folder +
+                "/summary_data/bundle_adjustment/ba_points.json";
+            if (fs::exists(pts_path) && !r.points_3d.empty()) {
+                try {
+                    nlohmann::json pts_j;
+                    for (const auto &[id, pt] : r.points_3d)
+                        pts_j[std::to_string(id)] = {pt.x(), pt.y(), pt.z()};
+                    std::ofstream pf(pts_path);
+                    pf << pts_j.dump(2);
+                } catch (...) {}
+            }
+            printf("[Flip Z] Re-wrote %d camera YAMLs + 3D points to %s\n",
+                   (int)r.cameras.size(), r.output_folder.c_str());
+        }
+        // Force viewer cache rebuild
+        state.cached_selection = -2;
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("(?)");
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Reflect all cameras and points across Z=0.\n"
+                          "Re-writes YAML calibration files immediately.");
 
     // Camera selector
     {

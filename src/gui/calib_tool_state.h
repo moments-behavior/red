@@ -68,6 +68,23 @@ struct CalibrationToolState {
     bool images_loaded = false;
     std::string status;
 
+    // Per-camera enable/disable (populated from config.cam_ordered)
+    std::vector<bool> camera_enabled;
+
+    // Initialize camera_enabled from config (call after config is loaded)
+    void init_camera_enabled() {
+        camera_enabled.assign(config.cam_ordered.size(), true);
+    }
+
+    // Build filtered cam_ordered containing only enabled cameras
+    std::vector<std::string> enabled_cameras() const {
+        std::vector<std::string> result;
+        for (size_t i = 0; i < config.cam_ordered.size(); i++)
+            if (i < camera_enabled.size() && camera_enabled[i])
+                result.push_back(config.cam_ordered[i]);
+        return result;
+    }
+
     // Aruco image pipeline async
     bool img_running = false;
     bool img_done = false;

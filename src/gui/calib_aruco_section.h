@@ -42,8 +42,54 @@ inline void DrawCalibArucoSection(CalibrationToolState &state, AppContext &ctx,
 
     if (ImGui::CollapsingHeader("Aruco Calibration", ImGuiTreeNodeFlags_DefaultOpen)) {
             ImGui::Indent();
-            ImGui::Text("Cameras:      %d",
-                        (int)state.config.cam_ordered.size());
+
+            // Camera enable/disable checkboxes
+            {
+                int n_cams = (int)state.config.cam_ordered.size();
+                int n_enabled = 0;
+                for (int i = 0; i < n_cams; i++)
+                    if (i < (int)state.camera_enabled.size() && state.camera_enabled[i])
+                        n_enabled++;
+                ImGui::Text("Cameras:      %d / %d enabled", n_enabled, n_cams);
+
+                if (n_cams > 0 && ImGui::TreeNode("Camera Selection")) {
+                    // Select All / None buttons
+                    if (ImGui::SmallButton("All")) {
+                        for (size_t i = 0; i < state.camera_enabled.size(); i++)
+                            state.camera_enabled[i] = true;
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::SmallButton("None")) {
+                        for (size_t i = 0; i < state.camera_enabled.size(); i++)
+                            state.camera_enabled[i] = false;
+                    }
+
+                    // 2-column checkbox grid
+                    int n_rows = (n_cams + 1) / 2;
+                    if (ImGui::BeginTable("##calib_cam_grid", 2)) {
+                        for (int row = 0; row < n_rows; row++) {
+                            ImGui::TableNextRow();
+                            for (int col = 0; col < 2; col++) {
+                                int idx = row + col * n_rows;
+                                ImGui::TableSetColumnIndex(col);
+                                if (idx < n_cams && idx < (int)state.camera_enabled.size()) {
+                                    bool enabled = state.camera_enabled[idx];
+                                    if (ImGui::Checkbox(
+                                        ("##calib_cam_" + std::to_string(idx)).c_str(),
+                                        &enabled))
+                                        state.camera_enabled[idx] = enabled;
+                                    ImGui::SameLine(0.0f, 2.0f);
+                                    ImGui::TextUnformatted(
+                                        state.config.cam_ordered[idx].c_str());
+                                }
+                            }
+                        }
+                        ImGui::EndTable();
+                    }
+                    ImGui::TreePop();
+                }
+            }
+
             ImGui::Text("Board:        %d x %d  (%.1f mm squares)",
                         state.config.charuco_setup.w,
                         state.config.charuco_setup.h,
@@ -151,9 +197,12 @@ inline void DrawCalibArucoSection(CalibrationToolState &state, AppContext &ctx,
                     std::string base =
                         state.project.project_path +
                         "/aruco_image_calibration";
+                    {
+                    auto filtered_config = state.config;
+                    filtered_config.cam_ordered = state.enabled_cameras();
                     state.img_future = std::async(
                         std::launch::async,
-                        [config = state.config, base,
+                        [config = filtered_config, base,
                          status_ptr = &state.status]() {
 #ifdef __APPLE__
                             auto am = aruco_metal_create();
@@ -169,6 +218,7 @@ inline void DrawCalibArucoSection(CalibrationToolState &state, AppContext &ctx,
                                 config, base, status_ptr);
 #endif
                         });
+                    }
                 }
                 ImGui::EndDisabled();
                 if (state.img_running) {
@@ -205,8 +255,24 @@ inline void DrawCalibArucoSection(CalibrationToolState &state, AppContext &ctx,
                                 state.exp_img_result = state.loaded_result;
                                 state.exp_img_done = true; // enables Quality Dashboard
                                 state.calib_viewer.result = &state.exp_img_result;
-                                state.status = "Loaded calibration: " +
+                                std::string msg = "Loaded calibration (" +
+                                    std::to_string((int)state.loaded_result.cameras.size()) +
+                                    " cameras): " +
                                     std::to_string(state.exp_img_result.mean_reproj_error).substr(0,5) + " px";
+                                if (!state.loaded_result.warning.empty()) {
+                                    msg += " | " + state.loaded_result.warning;
+                                    // Auto-uncheck cameras that weren't in the loaded result
+                                    for (size_t i = 0; i < state.config.cam_ordered.size(); i++) {
+                                        bool found = false;
+                                        for (const auto &name : state.loaded_result.cam_names)
+                                            if (name == state.config.cam_ordered[i]) { found = true; break; }
+                                        if (!found && i < state.camera_enabled.size())
+                                            state.camera_enabled[i] = false;
+                                    }
+                                    ctx.toasts.push(state.loaded_result.warning,
+                                                    Toast::Warning, 8.0f);
+                                }
+                                state.status = msg;
                             } else {
                                 state.status = "Error: " + state.loaded_result.error;
                             }
@@ -241,11 +307,27 @@ inline void DrawCalibArucoSection(CalibrationToolState &state, AppContext &ctx,
                             std::string se;
                             CalibrationTool::save_project(
                                 state.project, pf, &se);
-                            state.status =
+                            std::string msg =
                                 "Experimental image calibration complete! Reproj: " +
                                 std::to_string(
                                     state.exp_img_result.mean_reproj_error)
                                     .substr(0, 5) + " px";
+                            // Show warning about skipped cameras and uncheck them
+                            if (!state.exp_img_result.warning.empty()) {
+                                msg += " | " + state.exp_img_result.warning;
+                                // Uncheck skipped cameras in the Camera Selection UI
+                                for (size_t i = 0; i < state.config.cam_ordered.size(); i++) {
+                                    // Check if this camera is NOT in the result's cam_names
+                                    bool found = false;
+                                    for (const auto &name : state.exp_img_result.cam_names)
+                                        if (name == state.config.cam_ordered[i]) { found = true; break; }
+                                    if (!found && i < state.camera_enabled.size())
+                                        state.camera_enabled[i] = false;
+                                }
+                                ctx.toasts.push(state.exp_img_result.warning,
+                                                Toast::Warning, 8.0f);
+                            }
+                            state.status = msg;
                             // Auto-open 3D viewer
                             state.calib_viewer.result = &state.exp_img_result;
                             state.calib_viewer.show = true;
@@ -267,9 +349,12 @@ inline void DrawCalibArucoSection(CalibrationToolState &state, AppContext &ctx,
                     std::string base =
                         state.project.project_path +
                         "/aruco_image_experimental";
+                    {
+                    auto filtered_config = state.config;
+                    filtered_config.cam_ordered = state.enabled_cameras();
                     state.exp_img_future = std::async(
                         std::launch::async,
-                        [config = state.config, base,
+                        [config = filtered_config, base,
                          status_ptr = &state.status]() {
 #ifdef __APPLE__
                             auto am = aruco_metal_create();
@@ -285,6 +370,7 @@ inline void DrawCalibArucoSection(CalibrationToolState &state, AppContext &ctx,
                                 config, base, status_ptr);
 #endif
                         });
+                    }
                 }
                 ImGui::EndDisabled();
                 if (state.exp_img_running) {
@@ -464,16 +550,19 @@ inline void DrawCalibArucoSection(CalibrationToolState &state, AppContext &ctx,
                         state.project.project_path +
                         "/aruco_video_calibration";
 
+                    auto enabled = state.enabled_cameras();
                     CalibrationPipeline::VideoFrameRange vfr;
                     vfr.video_folder = state.project.aruco_video_folder;
-                    vfr.cam_ordered = state.config.cam_ordered;
+                    vfr.cam_ordered = enabled;
                     vfr.start_frame = state.aruco_start_frame;
                     vfr.stop_frame = state.aruco_stop_frame;
                     vfr.frame_step = state.aruco_frame_step;
 
+                    auto filtered_config = state.config;
+                    filtered_config.cam_ordered = enabled;
                     state.vid_future = std::async(
                         std::launch::async,
-                        [config = state.config, base,
+                        [config = filtered_config, base,
                          status_ptr = &state.status, vfr]() {
 #ifdef __APPLE__
                             auto am = aruco_metal_create();
@@ -551,16 +640,19 @@ inline void DrawCalibArucoSection(CalibrationToolState &state, AppContext &ctx,
                         state.project.project_path +
                         "/aruco_video_experimental";
 
+                    auto exp_enabled = state.enabled_cameras();
                     CalibrationPipeline::VideoFrameRange exp_vfr;
                     exp_vfr.video_folder = state.project.aruco_video_folder;
-                    exp_vfr.cam_ordered = state.config.cam_ordered;
+                    exp_vfr.cam_ordered = exp_enabled;
                     exp_vfr.start_frame = state.aruco_start_frame;
                     exp_vfr.stop_frame = state.aruco_stop_frame;
                     exp_vfr.frame_step = state.aruco_frame_step;
 
+                    auto exp_filtered_config = state.config;
+                    exp_filtered_config.cam_ordered = exp_enabled;
                     state.exp_vid_future = std::async(
                         std::launch::async,
-                        [config = state.config, base,
+                        [config = exp_filtered_config, base,
                          status_ptr = &state.status, exp_vfr]() {
 #ifdef __APPLE__
                             auto am = aruco_metal_create();

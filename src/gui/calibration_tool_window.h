@@ -72,6 +72,7 @@ inline void DrawCalibrationToolWindow(
                         if (CalibrationTool::parse_config(
                                 state.config_path, state.config, err)) {
                             state.config_loaded = true;
+                            state.init_camera_enabled();
                             state.images_loaded = false;
                             state.img_done = false;
                             state.vid_done = false;
