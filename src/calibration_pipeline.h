@@ -2061,7 +2061,8 @@ inline bool write_intermediate_output(
 // ─────────────────────────────────────────────────────────────────────────────
 
 inline void write_calibration_database(const CalibrationDatabase &db,
-    const std::string &output_folder) {
+    const std::string &output_folder,
+    const std::vector<PerCameraMetrics> *metrics = nullptr) {
     nlohmann::json j;
     j["version"] = 1;
 
@@ -2126,6 +2127,16 @@ inline void write_calibration_database(const CalibrationDatabase &db,
     j["timing"] = {{"detection_sec", db.detection_time_sec},
                     {"ba_sec", db.ba_time_sec},
                     {"total_sec", db.total_time_sec}};
+
+    // Per-camera metrics (intrinsic reproj, detection count)
+    if (metrics && !metrics->empty()) {
+        nlohmann::json mcam_j;
+        for (const auto &m : *metrics) {
+            mcam_j[m.name] = {{"intrinsic_reproj", m.intrinsic_reproj},
+                              {"detection_count", m.detection_count}};
+        }
+        j["per_camera_metrics"] = mcam_j;
+    }
 
     std::ofstream f(output_folder + "/calibration_data.json");
     if (f.is_open()) f << j.dump(2);
@@ -2316,6 +2327,11 @@ inline CalibrationResult load_calibration_from_folder(
             }
         }
 
+        // Load saved per-camera metrics (intrinsic reproj, etc.) if available
+        nlohmann::json saved_metrics;
+        if (j.contains("per_camera_metrics"))
+            saved_metrics = j["per_camera_metrics"];
+
         // Compute per-camera metrics from landmarks + points.
         // Use result.cam_names (loaded cameras only, may be fewer than input).
         int nc = (int)result.cam_names.size();
@@ -2326,6 +2342,9 @@ inline CalibrationResult load_calibration_from_folder(
             auto bp_it = result.db.board_poses.find(result.cam_names[c]);
             if (bp_it != result.db.board_poses.end())
                 m.detection_count = (int)bp_it->second.size();
+            // Load intrinsic reproj from saved data (not recomputable from YAMLs)
+            if (saved_metrics.contains(m.name))
+                m.intrinsic_reproj = saved_metrics[m.name].value("intrinsic_reproj", 0.0);
             auto lm_it = result.db.landmarks.find(result.cam_names[c]);
             if (lm_it != result.db.landmarks.end()) {
                 m.observation_count = (int)lm_it->second.size();
@@ -3207,7 +3226,7 @@ inline CalibrationResult run_experimental_pipeline(
             m.median_reproj=ce[ce.size()/2];m.max_reproj=ce.back();double v=0;for(double e:ce)v+=(e-m.mean_reproj)*(e-m.mean_reproj);m.std_reproj=std::sqrt(v/ce.size());}}
     result.mean_reproj_error=(to>0)?(te/to):0;result.output_folder=outf;result.cameras=std::move(poses);result.points_3d=std::move(points_3d);result.success=true;
     // Write calibration database for 3D viewer inspection
-    write_calibration_database(result.db, outf);
+    write_calibration_database(result.db, outf, &result.per_camera_metrics);
     fprintf(stderr,"[Experimental] === Done: %.3f px (%d obs, %d cameras, %d board poses, %d residuals) ===\n\n",
         result.mean_reproj_error,to,nc,(int)result.db.board_poses.size(),(int)result.db.residuals.size());
     if(status)*status="Experimental done! "+std::to_string(result.mean_reproj_error).substr(0,5)+" px ("+std::to_string(to)+" obs, "+std::to_string(result.ba_rounds)+" BA rounds, "+std::to_string(result.outliers_removed)+" outliers)";
