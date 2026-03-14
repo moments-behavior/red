@@ -249,6 +249,54 @@ RED includes several safeguards not present in MVC:
 
 5. **CHOLMOD warning suppression**: The sparse Cholesky factorization in Ceres sometimes encounters non-positive-definite matrices (normal LM behavior when probing the trust region boundary). These warnings are suppressed via stderr redirection during the solve, keeping terminal output clean.
 
+## Iterative Improvements During This Comparison
+
+The process of calibrating this rat dataset with RED exposed several issues that led to immediate improvements in the pipeline. These changes were developed, tested, and committed during March 13-14, 2026.
+
+### Multi-Dictionary ArUco Support
+
+The rat board uses **DICT_5X5_100** (5x5 inner grid, OpenCV dictionary ID 5), but RED's ArUco detector originally only supported **DICT_4X4_50**. This meant zero markers were detected on any image — the board simply wasn't recognized.
+
+**Fix** (commit `b9cc68e`): Widened the bit type from `uint16_t` to `uint64_t` throughout `aruco_detect.h` (supports 4x4 through 7x7 grids), added 9 dictionary lookup tables extracted from OpenCV (`aruco_dict_data.h`), and updated `getDictionary()` to support IDs 0-2, 4-6, 8, 10, 16. Verified with a dedicated test (`test_dict5x5.cpp`) that found 7-12 markers per image on the rat dataset.
+
+### Z-Flip for Coordinate Frame Alignment
+
+After calibration, the 3D viewer showed cameras and points in a mirrored/inverted configuration. The multiview_calib pipeline applies a post-registration coordinate transform (`r_t = [[0,1,0],[1,0,0],[0,0,-1]]`) that RED did not replicate.
+
+**Initial attempt** (commit `7ac2e28`): Made Flip Z display-only. This didn't persist across sessions.
+
+**Second attempt** (commit `d0bc47a`): Saved `R_new = R * diag(1,1,-1)` to YAML files. This produced improper rotation matrices (`det(R) = -1`) which broke Rodrigues conversion on reload, causing astronomical reprojection errors.
+
+**Final fix** (commits `d0bc47a`, `3ad72bb`): Added `projectPointR()` to `red_math.h` — a matrix-based projection function that bypasses Rodrigues conversion, making it safe for improper rotations. The Flip Z button now saves both YAML files and `ba_points.json` with consistent data. A roundtrip test (`test_calib_reload.cpp`) confirms per-camera errors match within 0.0004 px after flip + reload.
+
+### CHOLMOD Warning Analysis and Suppression
+
+The Ceres bundle adjustment produced hundreds of "CHOLMOD warning: Matrix not positive definite" messages during passes 4-7 (when intrinsics and 3D points are jointly optimized). Investigation revealed:
+
+- **Root cause**: Cameras with very few observations (7-10 frames, 90-120 2D points) have 15 free parameters (6 extrinsic + 4 intrinsic + 5 distortion) during full joint optimization. This makes the Hessian ill-conditioned for the sparse Cholesky factorization.
+- **Ceres handles this correctly**: The Levenberg-Marquardt strategy increases damping and retries. Cost decreases normally despite the warnings.
+- **Mitigation** (commit `6112bcf`): Cameras with < 30 observations keep intrinsics fixed during full joint BA passes. This directly addresses the rank deficiency.
+- **Suppression** (commit `6112bcf`): CHOLMOD writes warnings directly to stderr via SuiteSparse's printf handler, bypassing `ceres::SILENT`. Fixed by redirecting stderr to `/dev/null` during `ceres::Solve()`, with safe guard against `dup()` failure.
+
+### Calibration Data Persistence
+
+Several fields were lost on reload because they were computed during the pipeline but not saved to disk:
+
+- **Intrinsic reproj error** (commit `d2d00fc`): The per-camera intrinsic RMS (from `calibrateCamera`, before BA) was showing as 0.00 in the 3D viewer after reload. Fixed by saving `per_camera_metrics` (including `intrinsic_reproj` and `detection_count`) to `calibration_data.json` and reading them back on load.
+
+- **Reprojection error recomputation** (commit `d0bc47a`): On reload, per-camera BA reprojection errors are recomputed from the saved camera poses + 3D points + 2D observations using `projectPointR()`. A roundtrip test confirms the recomputed errors match the original pipeline values within 0.0004 px (YAML serialization precision).
+
+### Code Quality Audit
+
+A 4-agent parallel code review (commit `21baa9d`) identified and fixed:
+- Dead spanning tree filtering code that was computed but never applied
+- `dup()` failure safety (prevented potential permanent stderr loss)
+- Dead `#include <future>` and `#include "ffmpeg_frame_reader.h"` from the removed FrameReader batch mode
+- Dead `jarvis_coreml_predict_frame_rgb` function and helpers (-255 LOC, commit `0d2e951`)
+- Progress bar not counting skipped frames
+- Cancel button unresponsive during batch PREDICT phase
+- Per-frame heap allocation of pixel buffer vector
+
 ## Recommendations for Future Calibrations
 
 1. **Capture more images** (150+ per camera) to ensure all cameras have 20+ detections
