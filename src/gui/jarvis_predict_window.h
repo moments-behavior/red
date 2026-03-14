@@ -40,18 +40,26 @@ struct JarvisPredictState {
     // Set by "Predict Current Frame" button; consumed by main loop
     bool predict_requested = false;
 
-    // Batch prediction state (processed one frame per render iteration)
+    // Batch prediction — non-blocking state machine (one frame per render iteration)
+    enum class BatchPhase {
+        IDLE, SEEK, WAIT_BUFFER, PREDICT, FINISHING
+    };
     bool batch_running = false;
-    bool batch_requested = false;   // set by UI, consumed by main loop
-    bool batch_use_display = false; // true = seek_all_cameras + CVPixelBuffer (benchmark)
+    bool batch_requested = false;
     int batch_start = 0;
     int batch_end = 0;
     int batch_step = 4;
     int batch_current = 0;         // next frame to predict
-    int batch_completed = 0;       // frames predicted so far
-    int batch_total = 0;           // total frames to predict
-    int batch_skipped = 0;         // frames skipped (already had manual labels)
+    int batch_completed = 0;
+    int batch_total = 0;
+    int batch_skipped = 0;
     std::string batch_status;
+    BatchPhase batch_phase = BatchPhase::IDLE;
+    int batch_chunk_start = 0;     // first frame of current buffer chunk
+    int batch_chunk_last_slot = 0; // last slot to wait for in current chunk
+    int batch_wait_frames = 0;     // timeout counter for buffer fill
+    std::chrono::steady_clock::time_point batch_t0;
+    float batch_predict_ms = 0;
 
     // Conversion state (thread-safe via shared_ptr)
     std::shared_ptr<ConvertJob> convert_job;
@@ -722,8 +730,8 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
             float progress = state.batch_total > 0
                 ? (float)state.batch_completed / state.batch_total : 0.0f;
             char overlay[64];
-            snprintf(overlay, sizeof(overlay), "%d / %d frames",
-                     state.batch_completed, state.batch_total);
+            snprintf(overlay, sizeof(overlay), "%d / %d (frame %d)",
+                     state.batch_completed, state.batch_total, state.batch_current);
             ImGui::ProgressBar(progress, ImVec2(-FLT_MIN, 0), overlay);
             if (state.batch_skipped > 0)
                 ImGui::TextDisabled("(%d skipped — already have manual labels)",
@@ -747,13 +755,6 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
                 int n = (state.batch_end - state.batch_start) / state.batch_step + 1;
                 ImGui::TextDisabled("%d frames to predict", n);
             }
-
-            ImGui::Checkbox("Use display pipeline (VT hardware)",
-                           &state.batch_use_display);
-            if (state.batch_use_display)
-                ImGui::TextDisabled("Slower seek, faster inference (CVPixelBuffer)");
-            else
-                ImGui::TextDisabled("Faster decode, slower inference (SW + RGB)");
 
             bool can_batch = can_predict &&
                 state.batch_end > state.batch_start && state.batch_step > 0;
