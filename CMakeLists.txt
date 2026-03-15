@@ -562,6 +562,47 @@ if(APPLE)
         CXX_STANDARD_REQUIRED ON
     )
 
+    # SuperPoint unified pipeline test
+    add_executable(test_superpoint_pipeline
+        tests/test_superpoint_pipeline.cpp
+        src/aruco_metal.mm
+        src/FFmpegDemuxer.cpp
+        src/vt_async_decoder.mm
+    )
+    target_include_directories(test_superpoint_pipeline PRIVATE
+        src
+        lib/nvcodec
+        ${HOMEBREW_PREFIX}/include
+        ${HOMEBREW_PREFIX}/include/eigen3
+        ${FFMPEG_INCLUDE_DIRS}
+        ${TURBOJPEG_INCLUDE_DIRS}
+    )
+    target_link_directories(test_superpoint_pipeline PRIVATE
+        ${FFMPEG_LIBRARY_DIRS} ${TURBOJPEG_LIBRARY_DIRS})
+    target_link_libraries(test_superpoint_pipeline PRIVATE
+        Eigen3::Eigen
+        Ceres::ceres
+        ${FFMPEG_LIBRARIES}
+        ${TURBOJPEG_LIBRARIES}
+        "-framework Metal"
+        "-framework Foundation"
+        "-framework CoreGraphics"
+        "-framework CoreVideo"
+        "-framework CoreMedia"
+        "-framework VideoToolbox"
+        "-framework IOKit"
+        pthread
+    )
+    set_source_files_properties(
+        src/aruco_metal.mm
+        src/vt_async_decoder.mm
+        PROPERTIES COMPILE_FLAGS "-fobjc-arc"
+    )
+    set_target_properties(test_superpoint_pipeline PROPERTIES
+        CXX_STANDARD 17
+        CXX_STANDARD_REQUIRED ON
+    )
+
     # Feature-based calibration refinement test
     add_executable(test_feature_refinement
         tests/test_feature_refinement.cpp
