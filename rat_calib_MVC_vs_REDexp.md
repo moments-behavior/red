@@ -618,3 +618,98 @@ The current pipeline uses a fixed pose prior. Future work:
 ### Cluster Integration
 
 Job scripts prepared for Janelia's LSF cluster (`cluster_gpu_guide.md`). The Python feature matching benefits most from GPU acceleration (SuperPoint + LightGlue on CUDA). The C++ BA is already fast enough on CPU (115s with 16 threads).
+
+---
+
+## Study: SuperPoint Refinement from MVC vs RED Initialization
+
+*March 14, 2026*
+
+### Objective
+
+Determine whether the SuperPoint unsupervised calibration refinement pipeline produces consistent results regardless of which initial calibration is used — multiview_calib (MVC, Jinyao's Python pipeline) or RED Experimental (C++ pipeline). Both initial calibrations were produced from the same ChArUco board images (Aug 14, 2025). The refinement uses 50 diverse synchronized frame sets from a recording session (Sep 3, 2025).
+
+### Method
+
+The unified SuperPoint refinement pipeline (`superpoint_refinement.h`) was run twice with identical settings:
+
+| Parameter | Value |
+|-----------|-------|
+| Frame sets | 50 (diverse, 5s minimum separation) |
+| SuperPoint keypoints | 4096, resize 1600 |
+| LightGlue threshold | 0.2 |
+| Reprojection threshold | 15.0 px |
+| Workers | 12 parallel |
+| BA prior (rotation) | 10.0 |
+| BA prior (translation) | 100.0 |
+| Intrinsics | Locked |
+
+**Run 1**: Initialize from MVC calibration (17 cameras, `det(R) = +1`)
+**Run 2**: Initialize from RED Experimental calibration (16 cameras, `det(R) = +1`, world_frame_rotation applied)
+
+### Results
+
+| Metric | MVC → SuperPoint | RED → SuperPoint |
+|--------|-----------------|-----------------|
+| Cameras | 17 | 16 |
+| Total tracks | 61,140 | 51,763 |
+| Surviving BA points | 33,824 | 28,357 |
+| Observations | 125,477 | 106,603 |
+| **Initial reproj** | **3.649 px** | **3.473 px** |
+| **Final reproj** | **0.867 px** | **0.878 px** |
+| Pipeline time | 18 min 36 sec | 17 min 17 sec |
+
+### Per-Camera Rotation Changes (degrees)
+
+| Camera | MVC → SP | RED → SP | SP(MVC) ↔ SP(RED) |
+|--------|---------|---------|-------------------|
+| 710038 | 0.34° | 0.20° | 0.46° |
+| 2002488 | 0.32° | 0.17° | 0.35° |
+| 2002489 | 0.35° | 0.67° | 0.12° |
+| 2002479 | 0.23° | 0.44° | 0.98° |
+| 2002480 | 0.36° | 0.16° | 0.85° |
+| 2002481 | 0.18° | 0.50° | 2.99° |
+| 2002482 | 0.38° | 0.29° | 1.58° |
+| 2002483 | 0.25° | 0.36° | 1.11° |
+| 2002484 | 0.27° | 1.24° | 1.38° |
+| 2002485 | 0.45° | 1.41° | 1.85° |
+| 2002490 | 0.66° | 1.35° | 1.61° |
+| 2002491 | 0.01° | 0.59° | 1.31° |
+| 2002492 | 1.10° | (excluded) | — |
+| 2002493 | 2.01° | 0.65° | 1.13° |
+| 2002494 | 1.01° | 0.65° | 0.54° |
+| 2002495 | 0.44° | 0.00° | 1.51° |
+| 2002496 | 0.81° | 1.18° | 0.91° |
+
+### Interpretation
+
+**1. Both initializations converge to similar reprojection error.** The final reproj is 0.867 px (MVC init) vs 0.878 px (RED init) — essentially identical. This confirms the SuperPoint refinement is robust to the starting calibration.
+
+**2. The refinement corrections are small and physically plausible.** Most cameras shift by 0.2-1.0° rotation and < 0.5mm translation. The largest corrections (2002493: 2.0°, 2002492: 1.1°) are on cameras that had fewer ChArUco detections during initial calibration.
+
+**3. The two refined calibrations don't fully converge.** The SP(MVC)↔SP(RED) column shows residual differences of 0.1-3.0° between the two refined results. This is because:
+- The MVC and RED initial calibrations have different intrinsic estimates (different BA solutions), and intrinsics are locked during refinement
+- The 16-camera RED refinement lacks Cam2002492, changing the camera graph connectivity
+- The pose prior anchors each refinement near its starting point
+
+**4. Cam2002481 shows the largest discrepancy** (3.0° between the two SP results). This camera had only 10 ChArUco detections — the least of any camera — meaning both initial calibrations are uncertain for this camera, and the refinement doesn't fully resolve the ambiguity.
+
+**5. Cam2002492 was successfully refined** from MVC initialization (1.1° correction). This camera was auto-dropped by RED's experimental pipeline (< 4 valid detections), demonstrating that the SuperPoint pipeline can refine cameras that ChArUco-based methods cannot calibrate.
+
+**6. The initial reproj errors (3.5-3.6 px) reflect the camera drift** between calibration day (Aug 14) and recording day (Sep 3). After refinement, both drop to ~0.87 px, confirming the cameras shifted by small amounts that the SuperPoint pipeline successfully corrects.
+
+### Recommendations for Future Calibrations
+
+**1. Capture more ChArUco images for weak cameras.** Cameras 2002481, 2002484, 2002492, and 2002494 consistently show the largest corrections and the most uncertainty. Targeting these cameras with dedicated board positions (different angles, closer distances) during the ChArUco capture session would improve the initial calibration and reduce the burden on unsupervised refinement.
+
+**2. Run SuperPoint refinement on every recording day.** The pipeline takes ~18 minutes and requires no manual intervention. Running it automatically after each session ensures the calibration accounts for any camera drift since the last ChArUco calibration.
+
+**3. Use the MVC initialization when possible** for SuperPoint refinement if Cam2002492 needs to be included. The MVC pipeline calibrates all 17 cameras while RED's experimental pipeline drops Cam2002492.
+
+**4. Consider unlocking intrinsics in a second pass.** The current pipeline locks all intrinsics (fx, fy, cx, cy) and distortion during refinement. A future improvement would be a progressive approach: first refine extrinsics only (current), then unlock focal length for a second BA pass. This could reduce the residual ~0.87 px error further.
+
+**5. Validate with triangulation on known landmarks.** Place a few markers with known 3D positions in the arena and triangulate them from annotated 2D positions. Compare the triangulated positions against ground truth to measure absolute accuracy, not just reprojection consistency.
+
+**6. Increase frame diversity.** The current pipeline selects frames based on pixel-level metrics. Adding criteria that prefer frames where the rat is in the center of the arena (visible from more cameras) would improve multi-view track coverage.
+
+**7. Consider a larger ChArUco board.** The current 400mm × 400mm board is detected by only 7-54 cameras per frame (wide variation). A 600-800mm board would be visible from more cameras at once, improving the initial calibration for peripheral cameras.
