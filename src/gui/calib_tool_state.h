@@ -182,6 +182,7 @@ struct CalibrationToolState {
     bool sp_lock_distortion = true;
     float sp_outlier_th1 = 10.0f;
     float sp_outlier_th2 = 3.0f;
+    int sp_ba_max_rounds = 5;
 
     // 3D calibration viewer (perspective)
     CalibViewerState calib_viewer;

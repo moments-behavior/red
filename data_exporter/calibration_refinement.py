@@ -675,6 +675,26 @@ def triangulate_and_filter_tracks(cameras, tracks, pair_quality, reproj_thresh=2
     return result, points_3d, stats
 
 
+def save_pairwise_matches(filtered_matches, output_dir):
+    """Save pairwise_matches.json for C++ track building pipeline."""
+    pairs = {}
+    for (sa, sb), mdata in filtered_matches.items():
+        key = f"{sa}-{sb}"
+        pairs[key] = {
+            "pts_a": mdata["pts_a"].tolist(),
+            "pts_b": mdata["pts_b"].tolist(),
+            "scores": mdata["scores"].tolist(),
+        }
+
+    output_path = Path(output_dir) / "pairwise_matches.json"
+    with open(output_path, "w") as f:
+        json.dump({"pairs": pairs}, f)
+
+    total_matches = sum(len(m["pts_a"]) for m in filtered_matches.values())
+    print(f"  Saved {len(pairs)} pairs, {total_matches} matches to {output_path}")
+    return str(output_path)
+
+
 def save_landmarks(tracks, output_dir, points_3d=None):
     """Save landmarks.json and optionally points_3d.json for the C++ pipeline."""
     output_path = Path(output_dir) / "landmarks.json"
@@ -774,12 +794,42 @@ def parse_args():
                         help='Torch device: "mps", "cpu", or "cuda" (default: auto-detect)')
     parser.add_argument("--workers", type=int, default=1,
                         help="Number of parallel workers for processing image sets (default: 1)")
+    parser.add_argument("--output_mode", type=str, default="full",
+                        choices=["full", "pairwise"],
+                        help="Output mode: 'full' (tracks+triangulation, default) or "
+                             "'pairwise' (raw filtered matches for C++ track building)")
     return parser.parse_args()
 
 
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
+def process_single_image_set_pairwise(image_dir, cameras, viable_pairs, device, args):
+    """Process one image directory in pairwise mode: extract, match, filter.
+
+    Returns filtered pairwise matches (no track building or triangulation).
+    Returns: (filtered_matches, diagnostic)
+    """
+    all_matches, features = extract_and_match(
+        image_dir, cameras, viable_pairs, device,
+        args.max_keypoints, args.resize, args.match_threshold,
+    )
+
+    all_matches = {
+        k: v for k, v in all_matches.items() if len(v["pts_a"]) >= args.min_matches
+    }
+    if len(all_matches) == 0:
+        return {}, {}
+
+    filtered_matches, diagnostic = run_reproj_diagnostic(
+        cameras, all_matches, args.reproj_thresh
+    )
+    filtered_matches = {
+        k: v for k, v in filtered_matches.items() if len(v["pts_a"]) >= args.min_matches
+    }
+    return filtered_matches, diagnostic
+
 
 def process_single_image_set(image_dir, cameras, viable_pairs, device, args, track_id_offset=0):
     """Process one image directory: extract, match, filter, build tracks, triangulate.
@@ -880,6 +930,58 @@ def merge_tracks(all_tracks_list, all_points_list):
     return {s: dict(v) for s, v in merged_tracks.items()}, merged_points
 
 
+def merge_pairwise_matches(all_matches_list):
+    """Merge filtered pairwise matches from multiple image sets."""
+    merged = {}
+    for matches in all_matches_list:
+        for (sa, sb), mdata in matches.items():
+            key = (sa, sb)
+            if key not in merged:
+                merged[key] = {k: v.copy() for k, v in mdata.items()}
+            else:
+                for field in ["pts_a", "pts_b", "scores"]:
+                    merged[key][field] = np.concatenate([merged[key][field], mdata[field]])
+    return merged
+
+
+def main_pairwise(args, cameras, viable_pairs, device):
+    """Pairwise output mode: extract + match + filter, skip track building."""
+    image_dirs = args.image_dir
+
+    all_matches_list = []
+    total_matches = 0
+
+    for i, img_dir in enumerate(image_dirs):
+        print(f"\n{'='*60}")
+        print(f"Image set {i+1}/{len(image_dirs)}: {img_dir}")
+        print(f"{'='*60}")
+        filtered_matches, diagnostic = process_single_image_set_pairwise(
+            img_dir, cameras, viable_pairs, device, args
+        )
+        if filtered_matches:
+            n = sum(len(m["pts_a"]) for m in filtered_matches.values())
+            all_matches_list.append(filtered_matches)
+            total_matches += n
+            print(f"  [{i+1}] {Path(img_dir).name}: {n} filtered matches in {len(filtered_matches)} pairs")
+        else:
+            print(f"  [{i+1}] {Path(img_dir).name}: no matches")
+
+    if total_matches == 0:
+        print("\nERROR: no matches survived across all image sets.")
+        sys.exit(1)
+
+    # Merge all pairwise matches
+    print(f"\nMerging {len(all_matches_list)} image sets: {total_matches} total matches")
+    merged = merge_pairwise_matches(all_matches_list)
+
+    # Save
+    print("\nSaving pairwise matches...")
+    pm_path = save_pairwise_matches(merged, args.output_dir)
+    print(f"\nDone! Pairwise matches saved to {pm_path}")
+    print(f"  {len(merged)} pairs, {total_matches} matches across {len(cameras)} cameras")
+    print(f"  Ready for C++ track building + bundle adjustment")
+
+
 def main():
     args = parse_args()
 
@@ -890,7 +992,7 @@ def main():
 
     device = detect_device(args.device)
     print(f"Using device: {device}")
-    print(f"Processing {len(image_dirs)} image set(s)")
+    print(f"Processing {len(image_dirs)} image set(s), mode={args.output_mode}")
 
     # Load calibration
     print("Loading calibration...")
@@ -905,6 +1007,13 @@ def main():
     viable_pairs = select_viable_pairs(cameras, args.max_angle)
     total_pairs = len(cameras) * (len(cameras) - 1) // 2
     print(f"  {len(viable_pairs)} viable pairs from {len(cameras)}C2={total_pairs} total")
+
+    # Branch on output mode
+    if args.output_mode == "pairwise":
+        main_pairwise(args, cameras, viable_pairs, device)
+        return
+
+    # --- Full mode (original behavior) ---
 
     # Process image sets (parallel or sequential)
     all_tracks_list = []

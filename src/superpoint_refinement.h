@@ -10,6 +10,7 @@
 
 #include "calibration_pipeline.h"  // CalibrationResult, CameraPose, write_calibration
 #include "feature_refinement.h"    // FeatureRefinement::run_feature_refinement
+#include "track_builder.h"         // TrackBuilder::build_tracks, load_all_pairwise_matches
 #include "ffmpeg_frame_reader.h"   // FrameReader
 #include "opencv_yaml_io.h"       // opencv_yaml::read
 #include "json.hpp"
@@ -124,6 +125,10 @@ struct SPConfig {
     bool lock_distortion = true;
     double prior_rot_weight = 10.0;
     double prior_trans_weight = 100.0;
+
+    // Multi-round BA convergence
+    int ba_max_rounds = 5;
+    double ba_convergence_eps = 0.001;
 };
 
 struct SPProgress {
@@ -140,6 +145,10 @@ struct SPProgress {
     // Step 3: Python matching
     std::atomic<int> sets_matched{0};
     std::atomic<int> total_sets{0};
+
+    // Step 4: BA rounds
+    std::atomic<int> ba_round{0};
+    std::atomic<int> ba_total_rounds{0};
 };
 
 struct SPResult {
@@ -154,6 +163,10 @@ struct SPResult {
     double mean_reproj_before = 0.0;
     double mean_reproj_after = 0.0;
     std::string output_folder;
+
+    // Multi-round BA diagnostics
+    int ba_rounds_completed = 0;
+    std::vector<double> per_round_reproj;
 
     // For 3D viewer
     CalibrationPipeline::CalibrationResult calib_result;
@@ -519,7 +532,8 @@ inline bool run_python_matching(
     snprintf(cmd_buf, sizeof(cmd_buf),
              "%s \"%s\" --image_dir%s --calib_dir \"%s\" --output_dir \"%s\" "
              "--max_keypoints %d --resize %d --match_threshold %.2f "
-             "--reproj_thresh %.1f --min_matches 5 --workers %d --device cpu 2>&1",
+             "--reproj_thresh %.1f --min_matches 5 --workers %d --device cpu "
+             "--output_mode pairwise 2>&1",
              config.python_path.c_str(),
              config.script_path.c_str(),
              image_dirs.c_str(),
@@ -574,16 +588,20 @@ inline bool run_python_matching(
         return false;
     }
 
-    // Verify landmarks.json was produced
-    std::string landmarks_path = match_output_dir + "/landmarks.json";
-    if (!fs::exists(landmarks_path)) {
-        if (status) *status = "Python matching completed but landmarks.json not found in " + match_output_dir;
-        return false;
+    // Verify pairwise_matches.json was produced
+    std::string pairwise_path = match_output_dir + "/pairwise_matches.json";
+    if (!fs::exists(pairwise_path)) {
+        // Fall back to landmarks.json for backward compat
+        std::string landmarks_path = match_output_dir + "/landmarks.json";
+        if (!fs::exists(landmarks_path)) {
+            if (status) *status = "Python matching completed but no output found in " + match_output_dir;
+            return false;
+        }
     }
 
     if (progress) progress->sets_matched.store(num_sets);
     if (status) *status = "Feature matching complete";
-    fprintf(stderr, "[SuperPoint] Feature matching complete, landmarks at %s\n", landmarks_path.c_str());
+    fprintf(stderr, "[SuperPoint] Feature matching complete, output at %s\n", match_output_dir.c_str());
     return true;
 }
 
@@ -754,13 +772,58 @@ inline SPResult run_superpoint_refinement(
         return result;
     }
 
+    // ── Step 3.5: C++ track building (if pairwise mode) ────────────────────
+
+    std::string pairwise_file = match_dir + "/pairwise_matches.json";
+    std::string landmarks_file = match_dir + "/landmarks.json";
+    std::string points_3d_file = match_dir + "/points_3d.json";
+
+    if (fs::exists(pairwise_file)) {
+        if (status) *status = "Building tracks from pairwise matches...";
+        fprintf(stderr, "[SuperPoint] Building tracks in C++ from pairwise matches\n");
+
+        std::string load_err;
+        auto pairwise_matches = TrackBuilder::load_pairwise_matches(pairwise_file, &load_err);
+        if (pairwise_matches.empty()) {
+            result.error = "Failed to load pairwise matches: " + load_err;
+            if (status) *status = result.error;
+            return result;
+        }
+
+        auto track_result = TrackBuilder::build_tracks(pairwise_matches);
+        if (track_result.num_tracks < 10) {
+            result.error = "Too few tracks from pairwise matches (" +
+                std::to_string(track_result.num_tracks) + ")";
+            if (status) *status = result.error;
+            return result;
+        }
+
+        // Write landmarks.json so FeatureRefinement can load it
+        {
+            nlohmann::json lj;
+            for (const auto &[cam, pts] : track_result.landmarks) {
+                nlohmann::json ids_arr = nlohmann::json::array();
+                nlohmann::json lm_arr = nlohmann::json::array();
+                for (const auto &[tid, px] : pts) {
+                    ids_arr.push_back(tid);
+                    lm_arr.push_back({px.x(), px.y()});
+                }
+                lj[cam] = {{"ids", ids_arr}, {"landmarks", lm_arr}};
+            }
+            std::ofstream f(landmarks_file);
+            if (f.is_open()) f << lj.dump(2);
+        }
+
+        fprintf(stderr, "[SuperPoint] Built %d tracks, %d observations -> %s\n",
+                track_result.num_tracks, track_result.num_observations,
+                landmarks_file.c_str());
+    }
+
     // ── Step 4: Bundle adjustment ──────────────────────────────────────────
 
     if (progress) progress->current_step.store(4);
-    if (status) *status = "Step 4/4: Running bundle adjustment...";
+    if (status) *status = "Step 4/5: Running multi-round bundle adjustment...";
 
-    std::string landmarks_file = match_dir + "/landmarks.json";
-    std::string points_3d_file = match_dir + "/points_3d.json";
     std::string refined_dir = output_dir + "/calibration";
 
     FeatureRefinement::FeatureConfig feat_config;
@@ -776,6 +839,8 @@ inline SPResult run_superpoint_refinement(
     feat_config.lock_distortion = config.lock_distortion;
     feat_config.prior_rot_weight = config.prior_rot_weight;
     feat_config.prior_trans_weight = config.prior_trans_weight;
+    feat_config.ba_max_rounds = config.ba_max_rounds;
+    feat_config.ba_convergence_eps = config.ba_convergence_eps;
 
     FeatureRefinement::FeatureResult feat_result =
         FeatureRefinement::run_feature_refinement(feat_config, status);
@@ -797,6 +862,8 @@ inline SPResult run_superpoint_refinement(
     result.mean_reproj_before = feat_result.mean_reproj_before;
     result.mean_reproj_after = feat_result.mean_reproj_after;
     result.camera_changes = feat_result.camera_changes;
+    result.ba_rounds_completed = feat_result.ba_rounds_completed;
+    result.per_round_reproj = feat_result.per_round_reproj;
 
     // Load refined calibration for 3D viewer
     result.calib_result = load_calib_result_from_folder(refined_dir, config.camera_names);

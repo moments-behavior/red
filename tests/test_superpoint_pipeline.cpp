@@ -92,6 +92,14 @@ int main(int argc, char *argv[]) {
     printf("  Outliers:         %d\n", result.ba_outliers_removed);
     printf("  Reproj:           %.3f px -> %.3f px\n",
            result.mean_reproj_before, result.mean_reproj_after);
+    printf("  BA rounds:        %d\n", result.ba_rounds_completed);
+    if (!result.per_round_reproj.empty()) {
+        printf("  Per-round reproj: ");
+        for (int i = 0; i < (int)result.per_round_reproj.size(); i++)
+            printf("%.3f%s", result.per_round_reproj[i],
+                   i < (int)result.per_round_reproj.size() - 1 ? " -> " : "");
+        printf(" px\n");
+    }
     printf("  Output:           %s\n", result.output_folder.c_str());
 
     printf("\nPer-camera changes:\n");

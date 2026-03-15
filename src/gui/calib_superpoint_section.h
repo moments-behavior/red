@@ -132,6 +132,11 @@ inline void DrawCalibSuperPointSection(
                                &state.sp_outlier_th1, 1.0f, 50.0f, "%.1f");
             ImGui::SliderFloat("Outlier Th 2 (px)##sp",
                                &state.sp_outlier_th2, 0.5f, 20.0f, "%.1f");
+            ImGui::SliderInt("Max BA Rounds##sp", &state.sp_ba_max_rounds, 1, 10);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip(
+                    "Number of re-triangulate + BA rounds.\n"
+                    "More rounds help convergence from poor initial calibrations.");
             ImGui::Unindent();
         }
 
@@ -163,6 +168,7 @@ inline void DrawCalibSuperPointSection(
             sp_cfg.lock_distortion = state.sp_lock_distortion;
             sp_cfg.ba_outlier_th1 = state.sp_outlier_th1;
             sp_cfg.ba_outlier_th2 = state.sp_outlier_th2;
+            sp_cfg.ba_max_rounds = state.sp_ba_max_rounds;
 
             state.sp_running = true;
             state.sp_done = false;
@@ -242,14 +248,24 @@ inline void DrawCalibSuperPointSection(
                     ImGui::ProgressBar(f3, ImVec2(-1, 0), overlay3);
                 }
 
-                // Step 4: Bundle Adjustment
+                // Step 4: Bundle Adjustment (multi-round)
                 if (step >= 4) {
-                    ImGui::Text("Step 4/5: Bundle Adjustment");
-                    if (step == 4)
+                    int ba_round = prog.ba_round.load(std::memory_order_relaxed);
+                    int ba_total = prog.ba_total_rounds.load(std::memory_order_relaxed);
+                    if (step == 4 && ba_total > 0) {
+                        float f4 = (float)ba_round / ba_total;
+                        char overlay4[64];
+                        snprintf(overlay4, sizeof(overlay4), "Round %d/%d", ba_round, ba_total);
+                        ImGui::Text("Step 4/5: Bundle Adjustment");
+                        ImGui::ProgressBar(f4, ImVec2(-1, 0), overlay4);
+                    } else if (step == 4) {
+                        ImGui::Text("Step 4/5: Bundle Adjustment");
                         ImGui::ProgressBar(-1.0f * (float)ImGui::GetTime(),
                                            ImVec2(-1, 0), "Running...");
-                    else
+                    } else {
+                        ImGui::Text("Step 4/5: Bundle Adjustment");
                         ImGui::ProgressBar(1.0f, ImVec2(-1, 0), "Done");
+                    }
                 }
 
                 // Step 5: Complete
@@ -275,6 +291,23 @@ inline void DrawCalibSuperPointSection(
                             state.sp_result.total_tracks,
                             state.sp_result.valid_3d_points,
                             state.sp_result.ba_outliers_removed);
+
+                // Per-round convergence
+                const auto &feat_changes = state.sp_result.camera_changes;
+                (void)feat_changes;
+                if (!state.sp_result.per_round_reproj.empty()) {
+                    ImGui::Text("BA Rounds: %d",
+                                state.sp_result.ba_rounds_completed);
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("(");
+                    for (int i = 0; i < (int)state.sp_result.per_round_reproj.size(); i++) {
+                        if (i > 0) { ImGui::SameLine(0, 0); ImGui::TextDisabled(","); ImGui::SameLine(0, 4); }
+                        ImGui::SameLine(0, 0);
+                        ImGui::Text("%.3f", state.sp_result.per_round_reproj[i]);
+                    }
+                    ImGui::SameLine(0, 0);
+                    ImGui::TextDisabled(" px)");
+                }
 
                 // Per-camera changes table
                 if (!state.sp_result.camera_changes.empty()) {

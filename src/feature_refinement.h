@@ -9,6 +9,7 @@
 #include <fstream>
 #include <chrono>
 #include <thread>
+#include <unordered_map>
 
 namespace FeatureRefinement {
 namespace fs = std::filesystem;
@@ -29,6 +30,10 @@ struct FeatureConfig {
     bool lock_distortion = true;
     double prior_rot_weight = 10.0;    // rotation prior (allow ~6° adjustment)
     double prior_trans_weight = 100.0; // translation prior (mounts don't slide)
+
+    // Multi-round convergence
+    int ba_max_rounds = 5;             // max re-triangulate+BA rounds
+    double ba_convergence_eps = 0.001; // stop when reproj change < this (px)
 };
 
 struct FeatureResult {
@@ -49,6 +54,10 @@ struct FeatureResult {
         double d_fx = 0, d_fy = 0, d_cx = 0, d_cy = 0;
     };
     std::vector<CameraChange> camera_changes;
+
+    // Multi-round convergence diagnostics
+    int ba_rounds_completed = 0;
+    std::vector<double> per_round_reproj;
 };
 
 // ---------------------------------------------------------------------------
@@ -114,7 +123,7 @@ inline double bundle_adjust_features(
     std::vector<int> pids;
     for (const auto &[id, _] : points_3d) pids.push_back(id);
     std::sort(pids.begin(), pids.end());
-    std::map<int, int> pidx;
+    std::unordered_map<int, int> pidx;
     std::vector<std::array<double, 3>> pp(pids.size());
     for (int i = 0; i < (int)pids.size(); i++) {
         pidx[pids[i]] = i;
@@ -185,19 +194,27 @@ inline double bundle_adjust_features(
     ceres::Solver::Summary summary;
     ceres::Solve(options, &problem, &summary);
 
+    // Precompute per-camera projection params from packed array
+    struct CamProj { Eigen::Vector3d rv, tv; Eigen::Matrix3d K; Eigen::Matrix<double, 5, 1> d; };
+    std::vector<CamProj> cam_proj(nc);
+    for (int i = 0; i < nc; i++) {
+        cam_proj[i].rv = Eigen::Vector3d(cp[i][0], cp[i][1], cp[i][2]);
+        cam_proj[i].tv = Eigen::Vector3d(cp[i][3], cp[i][4], cp[i][5]);
+        cam_proj[i].K = Eigen::Matrix3d::Identity();
+        cam_proj[i].K(0,0) = cp[i][6]; cam_proj[i].K(1,1) = cp[i][7];
+        cam_proj[i].K(0,2) = cp[i][8]; cam_proj[i].K(1,2) = cp[i][9];
+        cam_proj[i].d << cp[i][10], cp[i][11], cp[i][12], cp[i][13], cp[i][14];
+    }
+
     // Compute reprojection errors and reject outliers
     outliers_removed = 0;
     std::set<int> bad_points;
     double err_sum = 0;
     int err_count = 0;
     for (const auto &o : obs) {
-        Eigen::Vector3d rv(cp[o.ci][0], cp[o.ci][1], cp[o.ci][2]);
-        Eigen::Vector3d tv(cp[o.ci][3], cp[o.ci][4], cp[o.ci][5]);
-        Eigen::Matrix3d K = Eigen::Matrix3d::Identity();
-        K(0,0) = cp[o.ci][6]; K(1,1) = cp[o.ci][7]; K(0,2) = cp[o.ci][8]; K(1,2) = cp[o.ci][9];
-        Eigen::Matrix<double, 5, 1> d;
-        d << cp[o.ci][10], cp[o.ci][11], cp[o.ci][12], cp[o.ci][13], cp[o.ci][14];
-        auto pr = red_math::projectPoint(Eigen::Vector3d(pp[o.pi][0], pp[o.pi][1], pp[o.pi][2]), rv, tv, K, d);
+        const auto &cp_i = cam_proj[o.ci];
+        auto pr = red_math::projectPoint(Eigen::Vector3d(pp[o.pi][0], pp[o.pi][1], pp[o.pi][2]),
+                                          cp_i.rv, cp_i.tv, cp_i.K, cp_i.d);
         double e = (pr - Eigen::Vector2d(o.px, o.py)).norm();
         if (e > outlier_th) { bad_points.insert(pids[o.pi]); outliers_removed++; }
         else { err_sum += e; err_count++; }
@@ -351,34 +368,84 @@ inline FeatureResult run_feature_refinement(const FeatureConfig &config, std::st
                 result.mean_reproj_before, err_count);
     }
 
-    // 5. Bundle adjustment pass 1
-    if (status) *status = "Bundle adjustment pass 1 (" + std::to_string(np) + " points)...";
-    int outliers1 = 0;
-    double mean_reproj_pass1 = bundle_adjust_features(
+    // 5. Multi-round BA with re-triangulation for convergence
+    //    Modeled on bundle_adjust_experimental in calibration_pipeline.h.
+    //    Each round: re-triangulate with updated extrinsics, then BA with
+    //    progressively tighter outlier threshold. Stops when reproj error
+    //    change < convergence_eps or max_rounds reached.
+
+    int total_outliers = 0;
+
+    // Coarse pass: large outlier threshold to remove gross errors
+    if (status) *status = "BA coarse pass (" + std::to_string(np) + " points)...";
+    int outliers_coarse = 0;
+    double prev_reproj = bundle_adjust_features(
         nc, config.camera_names, landmarks, poses, points_3d,
         config.ba_outlier_th1, config.ba_max_iter, config.lock_intrinsics, config.lock_distortion,
-        config.prior_rot_weight, config.prior_trans_weight, outliers1);
-    fprintf(stderr, "Feature: BA pass 1 — %.3f px, %d outliers removed, %d points remaining\n",
-            mean_reproj_pass1, outliers1, (int)points_3d.size());
+        config.prior_rot_weight, config.prior_trans_weight, outliers_coarse);
+    total_outliers += outliers_coarse;
+    result.per_round_reproj.push_back(prev_reproj);
+    fprintf(stderr, "Feature: BA coarse — %.3f px, %d outliers, %d points\n",
+            prev_reproj, outliers_coarse, (int)points_3d.size());
 
-    // Re-triangulate with updated extrinsics
-    std::map<int, Eigen::Vector3d> points_3d_new;
-    CalibrationPipeline::triangulate_landmarks_multiview(calib_config, landmarks, poses, points_3d_new, config.reproj_threshold);
-    for (const auto &[id, pt] : points_3d_new) {
-        if (!points_3d.count(id)) points_3d[id] = pt;
+    // Convergence loop: re-triangulate + BA with tightening threshold
+    int round = 0;
+    for (; round < config.ba_max_rounds; round++) {
+        // Re-triangulate all tracks with updated extrinsics
+        std::map<int, Eigen::Vector3d> points_3d_new;
+        CalibrationPipeline::triangulate_landmarks_multiview(
+            calib_config, landmarks, poses, points_3d_new, config.reproj_threshold);
+        // Merge: add newly triangulated points (keep existing ones as-is since BA optimized them)
+        int new_pts = 0;
+        for (const auto &[id, pt] : points_3d_new) {
+            if (!points_3d.count(id)) { points_3d[id] = pt; new_pts++; }
+        }
+
+        // Progressive outlier threshold: 10 -> 8 -> 6 -> 4 -> 3 (floor)
+        double outlier_th = std::max(config.ba_outlier_th2,
+                                      config.ba_outlier_th1 - (round + 1) * 2.0);
+
+        if (status) *status = "BA round " + std::to_string(round + 1) + "/" +
+            std::to_string(config.ba_max_rounds) + " (th=" +
+            std::to_string(outlier_th).substr(0, 4) + " px, " +
+            std::to_string((int)points_3d.size()) + " pts)...";
+
+        int outliers_round = 0;
+        double reproj = bundle_adjust_features(
+            nc, config.camera_names, landmarks, poses, points_3d,
+            outlier_th, config.ba_max_iter, config.lock_intrinsics, config.lock_distortion,
+            config.prior_rot_weight, config.prior_trans_weight, outliers_round);
+        total_outliers += outliers_round;
+        result.per_round_reproj.push_back(reproj);
+
+        fprintf(stderr, "Feature: BA round %d — %.3f px (delta=%.4f), th=%.1f, +%d new, -%d outliers, %d pts\n",
+                round + 1, reproj, std::abs(prev_reproj - reproj), outlier_th,
+                new_pts, outliers_round, (int)points_3d.size());
+
+        // Check convergence
+        if (std::abs(prev_reproj - reproj) < config.ba_convergence_eps) {
+            fprintf(stderr, "Feature: converged after %d rounds (delta < %.4f px)\n",
+                    round + 1, config.ba_convergence_eps);
+            round++;
+            break;
+        }
+        prev_reproj = reproj;
     }
 
-    // 6. Bundle adjustment pass 2
-    if (status) *status = "Bundle adjustment pass 2 (" + std::to_string((int)points_3d.size()) + " points)...";
-    int outliers2 = 0;
+    // Final tight pass
+    if (status) *status = "BA final pass (th=" + std::to_string(config.ba_outlier_th2).substr(0, 4) + " px)...";
+    int outliers_final = 0;
     result.mean_reproj_after = bundle_adjust_features(
         nc, config.camera_names, landmarks, poses, points_3d,
         config.ba_outlier_th2, config.ba_max_iter, config.lock_intrinsics, config.lock_distortion,
-        config.prior_rot_weight, config.prior_trans_weight, outliers2);
-    result.ba_outliers_removed = outliers1 + outliers2;
+        config.prior_rot_weight, config.prior_trans_weight, outliers_final);
+    total_outliers += outliers_final;
+    result.per_round_reproj.push_back(result.mean_reproj_after);
+    result.ba_outliers_removed = total_outliers;
+    result.ba_rounds_completed = round + 2; // coarse + rounds + final
     result.valid_3d_points = (int)points_3d.size();
-    fprintf(stderr, "Feature: BA pass 2 — %.3f px, %d outliers removed, %d points remaining\n",
-            result.mean_reproj_after, outliers2, (int)points_3d.size());
+    fprintf(stderr, "Feature: BA final — %.3f px, %d outliers, %d points (%d total rounds)\n",
+            result.mean_reproj_after, outliers_final, (int)points_3d.size(), result.ba_rounds_completed);
 
     // 7. Compute per-camera changes
     result.camera_changes.resize(nc);
