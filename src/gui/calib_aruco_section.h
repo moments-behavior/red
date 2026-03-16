@@ -717,6 +717,30 @@ inline void DrawCalibArucoSection(CalibrationToolState &state, AppContext &ctx,
                                     exp_result->ba_rounds,
                                     exp_result->outliers_removed,
                                     exp_result->mean_reproj_error);
+
+                        // Global multi-view consistency (the metric that matters for 3D tracking)
+                        if (exp_result->global_consistency.computed) {
+                            const auto &gc = exp_result->global_consistency;
+                            ImVec4 gc_color = gc.mean_reproj < 3.0
+                                ? ImVec4(0.3f, 1.0f, 0.3f, 1.0f)     // green
+                                : gc.mean_reproj < 8.0
+                                    ? ImVec4(1.0f, 0.8f, 0.0f, 1.0f) // yellow
+                                    : ImVec4(1.0f, 0.3f, 0.3f, 1.0f); // red
+                            ImGui::TextColored(gc_color,
+                                "Multi-view consistency: %.2f px (median %.2f, 95th pct %.2f)  |  "
+                                "%d landmarks triangulated",
+                                gc.mean_reproj, gc.median_reproj, gc.pct95_reproj,
+                                gc.landmarks_triangulated);
+                            if (ImGui::IsItemHovered())
+                                ImGui::SetTooltip(
+                                    "Triangulates each board corner from ALL cameras that see it,\n"
+                                    "then measures reprojection error. This tests global extrinsic\n"
+                                    "consistency — the accuracy that matters for 3D tracking.\n\n"
+                                    "The per-board reproj (%.3f px) measures local fit quality.\n"
+                                    "Multi-view reproj (%.2f px) measures global consistency.\n\n"
+                                    "< 3 px = excellent | 3-8 px = acceptable | > 8 px = poor",
+                                    exp_result->mean_reproj_error, gc.mean_reproj);
+                        }
                         ImGui::Spacing();
 
                         // Prepare data arrays for ImPlot

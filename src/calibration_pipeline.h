@@ -193,6 +193,19 @@ struct CalibrationResult {
     int outliers_removed = 0;
     // Diagnostic database (populated during experimental pipeline)
     CalibrationDatabase db;
+
+    // Global multi-view consistency (Phase 1 diagnostic)
+    struct GlobalConsistency {
+        double mean_reproj = 0.0;
+        double median_reproj = 0.0;
+        double pct95_reproj = 0.0;
+        int landmarks_triangulated = 0;
+        int total_observations = 0;
+        bool computed = false;
+        struct CamResult { std::string name; double mean_reproj = 0.0; int obs = 0; };
+        std::vector<CamResult> per_camera;
+    };
+    GlobalConsistency global_consistency;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2201,6 +2214,87 @@ inline std::string find_calibration_database_path(const std::string &folder) {
 }
 
 // Load a CalibrationResult from an output folder (YAML files + calibration_data.json)
+// ─────────────────────────────────────────────────────────────────────────────
+// Global multi-view triangulation consistency.
+// For each landmark seen by 2+ cameras, triangulate from all views (DLT),
+// then reproject to each camera. This measures global extrinsic consistency —
+// the metric that actually matters for 3D tracking accuracy.
+// ─────────────────────────────────────────────────────────────────────────────
+inline CalibrationResult::GlobalConsistency compute_global_consistency(
+    const std::map<std::string, std::map<int, Eigen::Vector2d>> &landmarks,
+    const std::vector<CameraPose> &poses,
+    const std::vector<std::string> &cam_names) {
+
+    CalibrationResult::GlobalConsistency gc;
+    int nc = (int)cam_names.size();
+    if (nc == 0 || landmarks.empty()) return gc;
+
+    // Group observations by landmark ID
+    std::map<int, std::vector<std::pair<int, Eigen::Vector2d>>> pobs;
+    for (int c = 0; c < nc; c++) {
+        auto it = landmarks.find(cam_names[c]);
+        if (it == landmarks.end()) continue;
+        for (const auto &[pid, px] : it->second)
+            pobs[pid].push_back({c, px});
+    }
+
+    // Per-camera error accumulation
+    std::vector<double> cam_err_sum(nc, 0.0);
+    std::vector<int> cam_err_count(nc, 0);
+    std::vector<double> all_errors;
+
+    for (const auto &[pid, obs] : pobs) {
+        if ((int)obs.size() < 2) continue;
+
+        // Triangulate from all views
+        std::vector<Eigen::Vector2d> pts_undist;
+        std::vector<Eigen::Matrix<double, 3, 4>> Ps;
+        for (const auto &[ci, px] : obs) {
+            pts_undist.push_back(red_math::undistortPoint(px, poses[ci].K, poses[ci].dist));
+            Ps.push_back(red_math::projectionFromKRt(poses[ci].K, poses[ci].R, poses[ci].t));
+        }
+        Eigen::Vector3d X = red_math::triangulatePoints(pts_undist, Ps);
+
+        // Reproject to each camera
+        for (const auto &[ci, px] : obs) {
+            auto rv = red_math::rotationMatrixToVector(poses[ci].R);
+            auto pr = red_math::projectPoint(X, rv, poses[ci].t, poses[ci].K, poses[ci].dist);
+            double err = (pr - px).norm();
+            all_errors.push_back(err);
+            cam_err_sum[ci] += err;
+            cam_err_count[ci]++;
+        }
+        gc.landmarks_triangulated++;
+    }
+
+    if (all_errors.empty()) return gc;
+
+    // Compute global statistics
+    gc.total_observations = (int)all_errors.size();
+    std::sort(all_errors.begin(), all_errors.end());
+    double sum = 0;
+    for (double e : all_errors) sum += e;
+    gc.mean_reproj = sum / all_errors.size();
+    gc.median_reproj = all_errors[all_errors.size() / 2];
+    gc.pct95_reproj = all_errors[(int)(all_errors.size() * 0.95)];
+
+    // Per-camera
+    gc.per_camera.resize(nc);
+    for (int c = 0; c < nc; c++) {
+        gc.per_camera[c].name = cam_names[c];
+        gc.per_camera[c].obs = cam_err_count[c];
+        gc.per_camera[c].mean_reproj = cam_err_count[c] > 0
+            ? cam_err_sum[c] / cam_err_count[c] : 0.0;
+    }
+
+    gc.computed = true;
+    fprintf(stderr, "[Calib] Global consistency: mean=%.2f px, median=%.2f px, "
+            "95pct=%.2f px (%d landmarks, %d obs)\n",
+            gc.mean_reproj, gc.median_reproj, gc.pct95_reproj,
+            gc.landmarks_triangulated, gc.total_observations);
+    return gc;
+}
+
 inline CalibrationResult load_calibration_from_folder(
     const std::string &folder, const std::vector<std::string> &cam_names) {
     CalibrationResult result;
@@ -2402,6 +2496,12 @@ inline CalibrationResult load_calibration_from_folder(
     } catch (const std::exception &e) {
         result.error = std::string("JSON parse error: ") + e.what();
         return result;
+    }
+
+    // Compute global multi-view consistency if landmarks are available
+    if (!result.db.landmarks.empty() && !result.cameras.empty()) {
+        result.global_consistency = compute_global_consistency(
+            result.db.landmarks, result.cameras, result.cam_names);
     }
 
     result.output_folder = data_folder;
@@ -3241,9 +3341,23 @@ inline CalibrationResult run_experimental_pipeline(
     result.mean_reproj_error=(to>0)?(te/to):0;result.output_folder=outf;result.cameras=std::move(poses);result.points_3d=std::move(points_3d);result.success=true;
     // Write calibration database for 3D viewer inspection
     write_calibration_database(result.db, outf, &result.per_camera_metrics);
-    fprintf(stderr,"[Experimental] === Done: %.3f px (%d obs, %d cameras, %d board poses, %d residuals) ===\n\n",
-        result.mean_reproj_error,to,nc,(int)result.db.board_poses.size(),(int)result.db.residuals.size());
-    if(status)*status="Experimental done! "+std::to_string(result.mean_reproj_error).substr(0,5)+" px ("+std::to_string(to)+" obs, "+std::to_string(result.ba_rounds)+" BA rounds, "+std::to_string(result.outliers_removed)+" outliers)";
+
+    // Compute global multi-view triangulation consistency
+    // This is the real quality metric: how well all cameras agree on 3D point locations.
+    result.global_consistency = compute_global_consistency(
+        result.db.landmarks, result.cameras, result.cam_names);
+
+    fprintf(stderr,"[Experimental] === Done: %.3f px per-board, %.2f px multi-view (%d obs, %d cameras) ===\n\n",
+        result.mean_reproj_error, result.global_consistency.mean_reproj,
+        to, nc);
+    if(status){
+        std::string gc_str = result.global_consistency.computed
+            ? " | Multi-view: " + std::to_string(result.global_consistency.mean_reproj).substr(0, 5) + " px"
+            : "";
+        *status="Experimental done! "+std::to_string(result.mean_reproj_error).substr(0,5)+" px" + gc_str +
+            " ("+std::to_string(to)+" obs, "+std::to_string(result.ba_rounds)+" BA rounds, "+
+            std::to_string(result.outliers_removed)+" outliers)";
+    }
     return result;
 }
 
