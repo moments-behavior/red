@@ -61,7 +61,7 @@ int main(int argc, char *argv[]) {
     config.num_frame_sets = 50;
     config.scan_interval_sec = 2.0f;
     config.min_separation_sec = 5.0f;
-    config.workers = 12;
+    config.model_path = "models/superpoint/superpoint.mlpackage";
     config.prior_rot_weight = 10.0;
     config.prior_trans_weight = 100.0;
 

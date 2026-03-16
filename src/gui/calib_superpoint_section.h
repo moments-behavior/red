@@ -1,6 +1,7 @@
 #pragma once
 #include "superpoint_refinement.h"
 #include "../calibration_tool.h"
+#include <filesystem>
 
 // Forward declarations from the calibration tool framework
 struct CalibrationToolState;
@@ -102,9 +103,17 @@ inline void DrawCalibSuperPointSection(
         // --- Feature Matching ---
         if (ImGui::CollapsingHeader("Feature Matching##sp")) {
             ImGui::Indent();
-            ImGui::SetNextItemWidth(200.0f);
-            ImGui::InputText("Python##sp", &state.sp_python_path);
-            ImGui::SliderInt("Workers##sp", &state.sp_workers, 1, 16);
+            // SuperPoint model (auto-detected at startup in red.cpp)
+            if (state.sp_model_path.empty()) {
+                ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f),
+                    "SuperPoint model not found. Place superpoint.mlpackage in models/superpoint/");
+            } else {
+                // Show just the filename
+                std::string display = std::filesystem::path(state.sp_model_path).filename().string();
+                ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f), "Model: %s", display.c_str());
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("%s", state.sp_model_path.c_str());
+            }
             ImGui::SliderInt("Max Keypoints##sp", &state.sp_max_keypoints,
                              1024, 8192);
             ImGui::SliderFloat("Reproj Threshold (px)##sp",
@@ -158,8 +167,7 @@ inline void DrawCalibSuperPointSection(
             sp_cfg.num_frame_sets = state.sp_num_sets;
             sp_cfg.scan_interval_sec = state.sp_scan_interval;
             sp_cfg.min_separation_sec = state.sp_min_separation;
-            sp_cfg.python_path = state.sp_python_path;
-            sp_cfg.workers = state.sp_workers;
+            sp_cfg.model_path = state.sp_model_path;
             sp_cfg.max_keypoints = state.sp_max_keypoints;
             sp_cfg.reproj_thresh = state.sp_reproj_thresh;
             sp_cfg.prior_rot_weight = state.sp_rot_prior;
@@ -200,77 +208,61 @@ inline void DrawCalibSuperPointSection(
                 auto &prog = *state.sp_progress;
                 int step = prog.current_step.load(std::memory_order_relaxed);
 
-                // Step 1: Frame Selection
+                // Step 1: Feature Extraction
                 if (step >= 1) {
-                    int scanned = prog.frames_scanned.load(
-                        std::memory_order_relaxed);
-                    int total_scan = prog.total_scan_frames.load(
-                        std::memory_order_relaxed);
-                    float f1 = total_scan > 0
-                                   ? (float)scanned / total_scan
-                                   : 0.0f;
-                    char overlay1[64];
-                    snprintf(overlay1, sizeof(overlay1), "%d/%d", scanned,
-                             total_scan);
-                    ImGui::Text("Step 1/5: Frame Selection");
-                    ImGui::ProgressBar(f1, ImVec2(-1, 0), overlay1);
-                }
-
-                // Step 2: Frame Extraction
-                if (step >= 2) {
                     int extracted = prog.frames_extracted.load(
                         std::memory_order_relaxed);
                     int total_extract = prog.total_extract_frames.load(
                         std::memory_order_relaxed);
-                    float f2 = total_extract > 0
+                    float f1 = total_extract > 0
                                    ? (float)extracted / total_extract
                                    : 0.0f;
-                    char overlay2[64];
-                    snprintf(overlay2, sizeof(overlay2), "%d/%d", extracted,
+                    char overlay1[64];
+                    snprintf(overlay1, sizeof(overlay1), "%d/%d", extracted,
                              total_extract);
-                    ImGui::Text("Step 2/5: Frame Extraction");
+                    ImGui::Text("Step 1/4: Feature Extraction");
+                    ImGui::ProgressBar(f1, ImVec2(-1, 0), overlay1);
+                }
+
+                // Step 2: Matching
+                if (step >= 2) {
+                    int matched = prog.pairs_matched.load(
+                        std::memory_order_relaxed);
+                    int total_p = prog.total_pairs.load(
+                        std::memory_order_relaxed);
+                    float f2 = total_p > 0
+                                   ? (float)matched / total_p
+                                   : 0.0f;
+                    char overlay2[64];
+                    snprintf(overlay2, sizeof(overlay2), "%d/%d pairs", matched,
+                             total_p);
+                    ImGui::Text("Step 2/4: Matching");
                     ImGui::ProgressBar(f2, ImVec2(-1, 0), overlay2);
                 }
 
-                // Step 3: Feature Matching
+                // Step 3: Bundle Adjustment (multi-round)
                 if (step >= 3) {
-                    int matched = prog.sets_matched.load(
-                        std::memory_order_relaxed);
-                    int total_sets = prog.total_sets.load(
-                        std::memory_order_relaxed);
-                    float f3 = total_sets > 0
-                                   ? (float)matched / total_sets
-                                   : 0.0f;
-                    char overlay3[64];
-                    snprintf(overlay3, sizeof(overlay3), "%d/%d sets", matched,
-                             total_sets);
-                    ImGui::Text("Step 3/5: Feature Matching");
-                    ImGui::ProgressBar(f3, ImVec2(-1, 0), overlay3);
-                }
-
-                // Step 4: Bundle Adjustment (multi-round)
-                if (step >= 4) {
                     int ba_round = prog.ba_round.load(std::memory_order_relaxed);
                     int ba_total = prog.ba_total_rounds.load(std::memory_order_relaxed);
-                    if (step == 4 && ba_total > 0) {
-                        float f4 = (float)ba_round / ba_total;
-                        char overlay4[64];
-                        snprintf(overlay4, sizeof(overlay4), "Round %d/%d", ba_round, ba_total);
-                        ImGui::Text("Step 4/5: Bundle Adjustment");
-                        ImGui::ProgressBar(f4, ImVec2(-1, 0), overlay4);
-                    } else if (step == 4) {
-                        ImGui::Text("Step 4/5: Bundle Adjustment");
+                    if (step == 3 && ba_total > 0) {
+                        float f3 = (float)ba_round / ba_total;
+                        char overlay3[64];
+                        snprintf(overlay3, sizeof(overlay3), "Round %d/%d", ba_round, ba_total);
+                        ImGui::Text("Step 3/4: Bundle Adjustment");
+                        ImGui::ProgressBar(f3, ImVec2(-1, 0), overlay3);
+                    } else if (step == 3) {
+                        ImGui::Text("Step 3/4: Bundle Adjustment");
                         ImGui::ProgressBar(-1.0f * (float)ImGui::GetTime(),
                                            ImVec2(-1, 0), "Running...");
                     } else {
-                        ImGui::Text("Step 4/5: Bundle Adjustment");
+                        ImGui::Text("Step 3/4: Bundle Adjustment");
                         ImGui::ProgressBar(1.0f, ImVec2(-1, 0), "Done");
                     }
                 }
 
-                // Step 5: Complete
-                if (step >= 5) {
-                    ImGui::Text("Step 5/5: Complete!");
+                // Step 4: Complete
+                if (step >= 4) {
+                    ImGui::Text("Step 4/4: Complete!");
                     ImGui::ProgressBar(1.0f, ImVec2(-1, 0), "Done");
                 }
 

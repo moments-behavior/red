@@ -34,6 +34,10 @@ struct FeatureConfig {
     // Multi-round convergence
     int ba_max_rounds = 5;             // max re-triangulate+BA rounds
     double ba_convergence_eps = 0.001; // stop when reproj change < this (px)
+
+    // Cross-validation holdout
+    double holdout_fraction = 0.2;     // fraction of observations to hold out (0 = disable)
+    uint32_t holdout_seed = 42;        // for reproducibility
 };
 
 struct FeatureResult {
@@ -58,6 +62,13 @@ struct FeatureResult {
     // Multi-round convergence diagnostics
     int ba_rounds_completed = 0;
     std::vector<double> per_round_reproj;
+
+    // Cross-validation holdout diagnostics
+    double train_reproj = 0.0;         // reproj on training set (used for BA)
+    double holdout_reproj = 0.0;       // reproj on held-out set (not used for BA)
+    double holdout_ratio = 0.0;        // holdout/train — >1.5 = overfitting warning
+    int holdout_observations = 0;
+    int train_observations = 0;
 };
 
 // ---------------------------------------------------------------------------
@@ -241,9 +252,13 @@ inline double bundle_adjust_features(
 }
 
 // ---------------------------------------------------------------------------
-// Main entry point
+// Implementation: shared logic for both file-based and direct entry points
 // ---------------------------------------------------------------------------
-inline FeatureResult run_feature_refinement(const FeatureConfig &config, std::string *status = nullptr) {
+inline FeatureResult run_feature_refinement_impl(
+    const FeatureConfig &config,
+    const std::map<std::string, std::map<int, Eigen::Vector2d>> &landmarks,
+    std::string *status = nullptr) {
+
     FeatureResult result;
     auto t0 = std::chrono::steady_clock::now();
     int nc = (int)config.camera_names.size();
@@ -278,26 +293,6 @@ inline FeatureResult run_feature_refinement(const FeatureConfig &config, std::st
     // Save original poses for delta computation
     std::vector<CalibrationPipeline::CameraPose> original_poses = poses;
 
-    // 2. Read landmarks.json
-    if (status) *status = "Loading landmarks from " + config.landmarks_file;
-    std::map<std::string, std::map<int, Eigen::Vector2d>> landmarks;
-    try {
-        std::ifstream f(config.landmarks_file);
-        if (!f.is_open()) { result.error = "Cannot open " + config.landmarks_file; return result; }
-        nlohmann::json j;
-        f >> j;
-        for (auto &[cam, cam_j] : j.items()) {
-            auto &ids = cam_j["ids"];
-            auto &pts = cam_j["landmarks"];
-            for (int i = 0; i < (int)ids.size(); i++) {
-                landmarks[cam][ids[i].get<int>()] = Eigen::Vector2d(pts[i][0].get<double>(), pts[i][1].get<double>());
-            }
-        }
-    } catch (const std::exception &e) {
-        result.error = std::string("Error parsing landmarks: ") + e.what();
-        return result;
-    }
-
     // Count total tracks (unique point IDs across all cameras)
     std::set<int> all_ids;
     int total_obs = 0;
@@ -309,12 +304,51 @@ inline FeatureResult run_feature_refinement(const FeatureConfig &config, std::st
     result.total_observations = total_obs;
     fprintf(stderr, "Feature: %d tracks, %d observations across %d cameras\n", result.total_tracks, total_obs, nc);
 
+    // 2b. Split tracks into train/holdout sets for cross-validation
+    //     Split by track ID (not per-observation) so each track is entirely
+    //     in train or holdout — avoids leaking information through shared tracks.
+    std::map<std::string, std::map<int, Eigen::Vector2d>> landmarks_train;
+    std::map<std::string, std::map<int, Eigen::Vector2d>> landmarks_holdout;
+    std::set<int> holdout_ids;
+
+    if (config.holdout_fraction > 0 && config.holdout_fraction < 1.0) {
+        std::vector<int> id_list(all_ids.begin(), all_ids.end());
+        // Deterministic shuffle for reproducibility
+        std::mt19937 rng(config.holdout_seed);
+        std::shuffle(id_list.begin(), id_list.end(), rng);
+        int holdout_count = std::max(1, (int)(id_list.size() * config.holdout_fraction));
+        for (int i = 0; i < holdout_count; i++)
+            holdout_ids.insert(id_list[i]);
+
+        for (const auto &[cam, pts] : landmarks) {
+            for (const auto &[id, pt] : pts) {
+                if (holdout_ids.count(id))
+                    landmarks_holdout[cam][id] = pt;
+                else
+                    landmarks_train[cam][id] = pt;
+            }
+        }
+
+        int train_obs = 0, holdout_obs = 0;
+        for (const auto &[c, p] : landmarks_train) train_obs += (int)p.size();
+        for (const auto &[c, p] : landmarks_holdout) holdout_obs += (int)p.size();
+        result.train_observations = train_obs;
+        result.holdout_observations = holdout_obs;
+        fprintf(stderr, "Feature: holdout split — %d train tracks (%d obs), %d holdout tracks (%d obs)\n",
+                (int)(all_ids.size() - holdout_ids.size()), train_obs,
+                (int)holdout_ids.size(), holdout_obs);
+    } else {
+        landmarks_train = landmarks;
+        result.train_observations = total_obs;
+    }
+
+    // Use training set for all subsequent BA operations
+    const auto &landmarks_for_ba = landmarks_train;
+
     // 3. Create minimal CalibConfig for triangulation
     CalibrationTool::CalibConfig calib_config;
     calib_config.cam_ordered = config.camera_names;
 
-    // 4. Triangulate
-    if (status) *status = "Triangulating " + std::to_string(result.total_tracks) + " tracks...";
     // 4. Load or triangulate 3D points
     std::map<int, Eigen::Vector3d> points_3d;
     if (!config.points_3d_file.empty() && fs::exists(config.points_3d_file)) {
@@ -334,10 +368,10 @@ inline FeatureResult run_feature_refinement(const FeatureConfig &config, std::st
         }
         fprintf(stderr, "Feature: loaded %d pre-triangulated 3D points\n", (int)points_3d.size());
     } else {
-        // Triangulate from landmarks using calibration
+        // Triangulate from training landmarks using calibration
         if (status) *status = "Triangulating " + std::to_string(result.total_tracks) + " tracks...";
         CalibrationPipeline::triangulate_landmarks_multiview(
-            calib_config, landmarks, poses, points_3d, config.reproj_threshold);
+            calib_config, landmarks_for_ba, poses, points_3d, config.reproj_threshold);
         fprintf(stderr, "Feature: triangulated %d / %d tracks (threshold=%.0f)\n",
                 (int)points_3d.size(), result.total_tracks, config.reproj_threshold);
     }
@@ -353,8 +387,8 @@ inline FeatureResult run_feature_refinement(const FeatureConfig &config, std::st
     {
         double err_sum = 0; int err_count = 0;
         for (int c = 0; c < nc; c++) {
-            auto it = landmarks.find(config.camera_names[c]);
-            if (it == landmarks.end()) continue;
+            auto it = landmarks_for_ba.find(config.camera_names[c]);
+            if (it == landmarks_for_ba.end()) continue;
             for (const auto &[pid, px] : it->second) {
                 auto pit = points_3d.find(pid);
                 if (pit == points_3d.end()) continue;
@@ -380,7 +414,7 @@ inline FeatureResult run_feature_refinement(const FeatureConfig &config, std::st
     if (status) *status = "BA coarse pass (" + std::to_string(np) + " points)...";
     int outliers_coarse = 0;
     double prev_reproj = bundle_adjust_features(
-        nc, config.camera_names, landmarks, poses, points_3d,
+        nc, config.camera_names, landmarks_for_ba, poses, points_3d,
         config.ba_outlier_th1, config.ba_max_iter, config.lock_intrinsics, config.lock_distortion,
         config.prior_rot_weight, config.prior_trans_weight, outliers_coarse);
     total_outliers += outliers_coarse;
@@ -394,7 +428,7 @@ inline FeatureResult run_feature_refinement(const FeatureConfig &config, std::st
         // Re-triangulate all tracks with updated extrinsics
         std::map<int, Eigen::Vector3d> points_3d_new;
         CalibrationPipeline::triangulate_landmarks_multiview(
-            calib_config, landmarks, poses, points_3d_new, config.reproj_threshold);
+            calib_config, landmarks_for_ba, poses, points_3d_new, config.reproj_threshold);
         // Merge: add newly triangulated points (keep existing ones as-is since BA optimized them)
         int new_pts = 0;
         for (const auto &[id, pt] : points_3d_new) {
@@ -412,7 +446,7 @@ inline FeatureResult run_feature_refinement(const FeatureConfig &config, std::st
 
         int outliers_round = 0;
         double reproj = bundle_adjust_features(
-            nc, config.camera_names, landmarks, poses, points_3d,
+            nc, config.camera_names, landmarks_for_ba, poses, points_3d,
             outlier_th, config.ba_max_iter, config.lock_intrinsics, config.lock_distortion,
             config.prior_rot_weight, config.prior_trans_weight, outliers_round);
         total_outliers += outliers_round;
@@ -436,7 +470,7 @@ inline FeatureResult run_feature_refinement(const FeatureConfig &config, std::st
     if (status) *status = "BA final pass (th=" + std::to_string(config.ba_outlier_th2).substr(0, 4) + " px)...";
     int outliers_final = 0;
     result.mean_reproj_after = bundle_adjust_features(
-        nc, config.camera_names, landmarks, poses, points_3d,
+        nc, config.camera_names, landmarks_for_ba, poses, points_3d,
         config.ba_outlier_th2, config.ba_max_iter, config.lock_intrinsics, config.lock_distortion,
         config.prior_rot_weight, config.prior_trans_weight, outliers_final);
     total_outliers += outliers_final;
@@ -444,8 +478,46 @@ inline FeatureResult run_feature_refinement(const FeatureConfig &config, std::st
     result.ba_outliers_removed = total_outliers;
     result.ba_rounds_completed = round + 2; // coarse + rounds + final
     result.valid_3d_points = (int)points_3d.size();
+    result.train_reproj = result.mean_reproj_after;
     fprintf(stderr, "Feature: BA final — %.3f px, %d outliers, %d points (%d total rounds)\n",
             result.mean_reproj_after, outliers_final, (int)points_3d.size(), result.ba_rounds_completed);
+
+    // 6b. Holdout cross-validation: triangulate held-out tracks with refined
+    //     cameras and compute reprojection error on data BA never saw.
+    if (!holdout_ids.empty()) {
+        // Triangulate holdout tracks using refined cameras
+        std::map<int, Eigen::Vector3d> holdout_pts_3d;
+        CalibrationPipeline::triangulate_landmarks_multiview(
+            calib_config, landmarks_holdout, poses, holdout_pts_3d, config.reproj_threshold);
+
+        // Compute reprojection error on holdout observations
+        double ho_err_sum = 0; int ho_err_count = 0;
+        for (int c = 0; c < nc; c++) {
+            auto it = landmarks_holdout.find(config.camera_names[c]);
+            if (it == landmarks_holdout.end()) continue;
+            for (const auto &[pid, px] : it->second) {
+                auto pit = holdout_pts_3d.find(pid);
+                if (pit == holdout_pts_3d.end()) continue;
+                auto pr = red_math::projectPointR(pit->second, poses[c].R, poses[c].t, poses[c].K, poses[c].dist);
+                ho_err_sum += (pr - px).norm();
+                ho_err_count++;
+            }
+        }
+        result.holdout_reproj = ho_err_count > 0 ? ho_err_sum / ho_err_count : 0.0;
+        result.holdout_observations = ho_err_count;
+        result.holdout_ratio = (result.train_reproj > 0.01)
+            ? result.holdout_reproj / result.train_reproj : 0.0;
+
+        fprintf(stderr, "\nFeature: === CROSS-VALIDATION ===\n");
+        fprintf(stderr, "Feature:   Train reproj:   %.3f px (%d obs)\n",
+                result.train_reproj, result.train_observations);
+        fprintf(stderr, "Feature:   Holdout reproj: %.3f px (%d obs, %d 3D pts)\n",
+                result.holdout_reproj, ho_err_count, (int)holdout_pts_3d.size());
+        fprintf(stderr, "Feature:   Holdout/Train:  %.2fx %s\n",
+                result.holdout_ratio,
+                result.holdout_ratio > 1.5 ? "*** OVERFITTING WARNING ***" : "(OK)");
+        fprintf(stderr, "Feature: ========================\n\n");
+    }
 
     // 7. Compute per-camera changes
     result.camera_changes.resize(nc);
@@ -489,6 +561,49 @@ inline FeatureResult run_feature_refinement(const FeatureConfig &config, std::st
         " px (" + std::to_string(result.valid_3d_points) + " points, " + std::to_string(result.ba_outliers_removed) + " outliers)";
 
     return result;
+}
+
+// ---------------------------------------------------------------------------
+// Main entry point: reads landmarks from JSON file, then runs refinement
+// ---------------------------------------------------------------------------
+inline FeatureResult run_feature_refinement(const FeatureConfig &config, std::string *status = nullptr) {
+    if (status) *status = "Loading landmarks from " + config.landmarks_file;
+
+    std::map<std::string, std::map<int, Eigen::Vector2d>> landmarks;
+    try {
+        std::ifstream f(config.landmarks_file);
+        if (!f.is_open()) {
+            FeatureResult result;
+            result.error = "Cannot open " + config.landmarks_file;
+            return result;
+        }
+        nlohmann::json j;
+        f >> j;
+        for (auto &[cam, cam_j] : j.items()) {
+            auto &ids = cam_j["ids"];
+            auto &pts = cam_j["landmarks"];
+            for (int i = 0; i < (int)ids.size(); i++) {
+                landmarks[cam][ids[i].get<int>()] = Eigen::Vector2d(pts[i][0].get<double>(), pts[i][1].get<double>());
+            }
+        }
+    } catch (const std::exception &e) {
+        FeatureResult result;
+        result.error = std::string("Error parsing landmarks: ") + e.what();
+        return result;
+    }
+
+    return run_feature_refinement_impl(config, landmarks, status);
+}
+
+// ---------------------------------------------------------------------------
+// Direct entry point: accepts landmarks map in memory (skips JSON I/O)
+// ---------------------------------------------------------------------------
+inline FeatureResult run_feature_refinement_direct(
+    const FeatureConfig &config,
+    const std::map<std::string, std::map<int, Eigen::Vector2d>> &landmarks,
+    std::string *status = nullptr) {
+
+    return run_feature_refinement_impl(config, landmarks, status);
 }
 
 } // namespace FeatureRefinement

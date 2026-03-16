@@ -172,8 +172,7 @@ struct CalibrationToolState {
     int sp_num_sets = 50;
     float sp_scan_interval = 2.0f;
     float sp_min_separation = 5.0f;
-    int sp_workers = 12;
-    std::string sp_python_path = "python3";
+    std::string sp_model_path;  // path to superpoint.mlpackage (auto-detected)
     float sp_reproj_thresh = 15.0f;
     float sp_rot_prior = 10.0f;
     float sp_trans_prior = 100.0f;
@@ -183,6 +182,30 @@ struct CalibrationToolState {
     float sp_outlier_th1 = 10.0f;
     float sp_outlier_th2 = 3.0f;
     int sp_ba_max_rounds = 5;
+
+    // Manual keypoint refinement — evaluation result
+    struct KPCamEval { std::string serial; int labeled = 0; double mean_reproj = 0.0; };
+    struct KPEvalState {
+        bool success = false;
+        std::string error;
+        int total_keypoints = 0, total_cameras = 0, triangulated = 0;
+        double mean_reproj = 0.0, max_reproj = 0.0;
+        std::vector<KPCamEval> per_camera;
+    };
+
+    bool kp_skeleton_ready = false;
+    bool kp_running = false;
+    bool kp_refine_done = false;
+    std::string kp_status;
+    int kp_num_points = 4;
+    float kp_rot_prior = 50.0f;
+    float kp_trans_prior = 500.0f;
+    bool kp_lock_intrinsics = true;
+    bool kp_lock_distortion = true;
+    KPEvalState kp_eval;
+    FeatureRefinement::FeatureResult kp_feat_result;
+    std::future<FeatureRefinement::FeatureResult> kp_future;
+    std::map<std::string, std::map<int, Eigen::Vector2d>> kp_landmarks; // saved for async
 
     // 3D calibration viewer (perspective)
     CalibViewerState calib_viewer;

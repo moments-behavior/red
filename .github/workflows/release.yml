@@ -23,6 +23,7 @@ jobs:
       - name: Install dependencies
         run: |
           brew install eigen ffmpeg glfw jpeg-turbo pkg-config cmake
+          pip3 install --quiet torch torchvision coremltools
 
       - name: Configure
         run: |
@@ -34,6 +35,10 @@ jobs:
         run: |
           cmake --build release --config Release -j$(sysctl -n hw.logicalcpu)
 
+      - name: Convert SuperPoint model to CoreML
+        run: |
+          python3 scripts/convert_superpoint_coreml.py --output_dir models/superpoint
+
       # ---------------------------------------------------------------
       # Binary archive — pre-built executable users can run directly
       # ---------------------------------------------------------------
@@ -44,6 +49,8 @@ jobs:
           cp release/red dist/red
           # Include fonts directory (required at runtime)
           cp -r fonts dist/fonts
+          # Include bundled models (SuperPoint for calibration refinement)
+          cp -r models/superpoint dist/models/superpoint
           tar -czf "red-${VERSION}-macos-arm64.tar.gz" -C dist .
 
       # ---------------------------------------------------------------

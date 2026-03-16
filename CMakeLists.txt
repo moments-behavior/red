@@ -568,6 +568,7 @@ if(APPLE)
         src/aruco_metal.mm
         src/FFmpegDemuxer.cpp
         src/vt_async_decoder.mm
+        src/superpoint_coreml.mm
     )
     target_include_directories(test_superpoint_pipeline PRIVATE
         src
@@ -590,12 +591,15 @@ if(APPLE)
         "-framework CoreVideo"
         "-framework CoreMedia"
         "-framework VideoToolbox"
+        "-framework CoreML"
+        "-framework Accelerate"
         "-framework IOKit"
         pthread
     )
     set_source_files_properties(
         src/aruco_metal.mm
         src/vt_async_decoder.mm
+        src/superpoint_coreml.mm
         PROPERTIES COMPILE_FLAGS "-fobjc-arc"
     )
     set_target_properties(test_superpoint_pipeline PROPERTIES
@@ -603,12 +607,85 @@ if(APPLE)
         CXX_STANDARD_REQUIRED ON
     )
 
+    # SuperPoint native pipeline benchmark (full end-to-end)
+    add_executable(bench_superpoint_native
+        tests/bench_superpoint_native.cpp
+        src/aruco_metal.mm
+        src/FFmpegDemuxer.cpp
+        src/vt_async_decoder.mm
+        src/superpoint_coreml.mm
+    )
+    target_include_directories(bench_superpoint_native PRIVATE
+        src
+        lib/nvcodec
+        ${HOMEBREW_PREFIX}/include
+        ${HOMEBREW_PREFIX}/include/eigen3
+        ${FFMPEG_INCLUDE_DIRS}
+        ${TURBOJPEG_INCLUDE_DIRS}
+    )
+    target_link_directories(bench_superpoint_native PRIVATE
+        ${FFMPEG_LIBRARY_DIRS} ${TURBOJPEG_LIBRARY_DIRS})
+    target_link_libraries(bench_superpoint_native PRIVATE
+        Eigen3::Eigen
+        Ceres::ceres
+        ${FFMPEG_LIBRARIES}
+        ${TURBOJPEG_LIBRARIES}
+        "-framework Metal"
+        "-framework Foundation"
+        "-framework CoreGraphics"
+        "-framework CoreVideo"
+        "-framework CoreMedia"
+        "-framework VideoToolbox"
+        "-framework CoreML"
+        "-framework Accelerate"
+        "-framework IOKit"
+        pthread
+    )
+    set_source_files_properties(
+        src/aruco_metal.mm
+        src/vt_async_decoder.mm
+        src/superpoint_coreml.mm
+        PROPERTIES COMPILE_FLAGS "-fobjc-arc"
+    )
+    set_target_properties(bench_superpoint_native PROPERTIES
+        CXX_STANDARD 17
+        CXX_STANDARD_REQUIRED ON
+    )
+
+    # Holdout cross-validation comparison test
+    add_executable(test_holdout_compare
+        tests/test_holdout_compare.cpp
+        src/aruco_metal.mm
+        src/FFmpegDemuxer.cpp
+        src/vt_async_decoder.mm
+        src/superpoint_coreml.mm
+    )
+    target_include_directories(test_holdout_compare PRIVATE
+        src lib/nvcodec
+        ${HOMEBREW_PREFIX}/include ${HOMEBREW_PREFIX}/include/eigen3
+        ${FFMPEG_INCLUDE_DIRS} ${TURBOJPEG_INCLUDE_DIRS}
+    )
+    target_link_directories(test_holdout_compare PRIVATE
+        ${FFMPEG_LIBRARY_DIRS} ${TURBOJPEG_LIBRARY_DIRS})
+    target_link_libraries(test_holdout_compare PRIVATE
+        Eigen3::Eigen Ceres::ceres ${FFMPEG_LIBRARIES} ${TURBOJPEG_LIBRARIES}
+        "-framework Metal" "-framework Foundation" "-framework CoreGraphics"
+        "-framework CoreVideo" "-framework CoreMedia" "-framework VideoToolbox"
+        "-framework CoreML" "-framework Accelerate" "-framework IOKit" pthread
+    )
+    set_source_files_properties(
+        src/aruco_metal.mm src/vt_async_decoder.mm src/superpoint_coreml.mm
+        PROPERTIES COMPILE_FLAGS "-fobjc-arc"
+    )
+    set_target_properties(test_holdout_compare PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+
     # Feature-based calibration refinement test
     add_executable(test_feature_refinement
         tests/test_feature_refinement.cpp
         src/aruco_metal.mm
         src/FFmpegDemuxer.cpp
         src/vt_async_decoder.mm
+        src/superpoint_coreml.mm
     )
     target_include_directories(test_feature_refinement PRIVATE
         src
@@ -631,12 +708,15 @@ if(APPLE)
         "-framework CoreVideo"
         "-framework CoreMedia"
         "-framework VideoToolbox"
+        "-framework CoreML"
+        "-framework Accelerate"
         "-framework IOKit"
         pthread
     )
     set_source_files_properties(
         src/aruco_metal.mm
         src/vt_async_decoder.mm
+        src/superpoint_coreml.mm
         PROPERTIES COMPILE_FLAGS "-fobjc-arc"
     )
     set_target_properties(test_feature_refinement PROPERTIES

@@ -325,6 +325,22 @@ int main(int argc, char **argv) {
         }
     }
 
+    // Default SuperPoint model path: look relative to exe (../models/superpoint/)
+    {
+        std::string exe = window->exe_dir;
+        std::vector<std::string> search = {
+            exe + "/../models/superpoint/superpoint.mlpackage",   // build tree
+            exe + "/models/superpoint/superpoint.mlpackage",      // installed
+            exe + "/../share/red/models/superpoint/superpoint.mlpackage", // Homebrew
+        };
+        for (const auto &path : search) {
+            if (std::filesystem::exists(path)) {
+                win.calibration.sp_model_path = std::filesystem::canonical(path).string();
+                break;
+            }
+        }
+    }
+
     win.annotation.video_folder = user_settings.default_media_root_path.empty()
                                      ? media_root_dir
                                      : user_settings.default_media_root_path;

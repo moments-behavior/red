@@ -71,6 +71,12 @@ class Red < Formula
     (share/"red/fonts").install Dir["fonts/*"]
     (share/"red").install "default_imgui_layout.ini"
     (share/"red/scripts").install "scripts/pth_to_coreml.py"
+
+    # Install bundled models (SuperPoint for calibration refinement).
+    # The app searches for these at ../share/red/models/ relative to the binary.
+    if (buildpath/"models/superpoint/superpoint.mlpackage").exist?
+      (share/"red/models/superpoint").install Dir["models/superpoint/*"]
+    end
   end
 
   def caveats

@@ -8,6 +8,7 @@
 #include "calib_aruco_section.h"
 #include "calib_laser_section.h"
 #include "calib_superpoint_section.h"
+#include "calib_kp_manual_section.h"
 #include "calib_viewer_window.h"
 #include "tele_viewer_window.h"
 #include <ImGuiFileDialog.h>
@@ -286,6 +287,9 @@ inline void DrawCalibrationToolWindow(
             // SuperPoint refinement section (available after any calibration succeeds)
             DrawCalibSuperPointSection(state, ctx, cb);
 
+            // Manual keypoint calibration refinement
+            DrawCalibKPManualSection(state, ctx, cb);
+
             // Status text (general)
             if (!state.status.empty()) {
                 ImGui::Separator();
@@ -331,6 +335,10 @@ inline void DrawCalibrationToolWindow(
         state.tele_run_history.clear();
         state.tele_deferred_label_frames = 0;
         state.project.camera_names.clear();
+        state.kp_skeleton_ready = false;
+        state.kp_running = false;
+        state.kp_refine_done = false;
+        state.kp_status.clear();
         state.laser_ready = false;
         state.laser_done = false;
         state.laser_status.clear();
