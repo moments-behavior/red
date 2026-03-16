@@ -652,6 +652,28 @@ if(APPLE)
         CXX_STANDARD_REQUIRED ON
     )
 
+    # Run experimental calibration from CLI
+    add_executable(run_experimental_calib
+        tests/run_experimental_calib.cpp
+        src/aruco_metal.mm src/FFmpegDemuxer.cpp src/vt_async_decoder.mm src/superpoint_coreml.mm
+    )
+    target_include_directories(run_experimental_calib PRIVATE
+        src lib/nvcodec ${HOMEBREW_PREFIX}/include ${HOMEBREW_PREFIX}/include/eigen3
+        ${FFMPEG_INCLUDE_DIRS} ${TURBOJPEG_INCLUDE_DIRS}
+    )
+    target_link_directories(run_experimental_calib PRIVATE ${FFMPEG_LIBRARY_DIRS} ${TURBOJPEG_LIBRARY_DIRS})
+    target_link_libraries(run_experimental_calib PRIVATE
+        Eigen3::Eigen Ceres::ceres ${FFMPEG_LIBRARIES} ${TURBOJPEG_LIBRARIES}
+        "-framework Metal" "-framework Foundation" "-framework CoreGraphics"
+        "-framework CoreVideo" "-framework CoreMedia" "-framework VideoToolbox"
+        "-framework CoreML" "-framework Accelerate" "-framework IOKit" pthread
+    )
+    set_source_files_properties(
+        src/aruco_metal.mm src/vt_async_decoder.mm src/superpoint_coreml.mm
+        PROPERTIES COMPILE_FLAGS "-fobjc-arc"
+    )
+    set_target_properties(run_experimental_calib PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+
     # Calibration evaluation tool (global consistency + per-board reproj)
     add_executable(eval_calibration
         tests/eval_calibration.cpp

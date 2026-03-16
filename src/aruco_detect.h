@@ -710,7 +710,8 @@ inline std::vector<DetectedMarker>
 detectMarkers(const uint8_t *gray, int w, int h, const ArUcoDictionary &dict,
               GpuThresholdFunc gpu_thresh = nullptr, void *gpu_ctx = nullptr,
               const std::vector<std::vector<uint8_t>> *precomputed_ds = nullptr,
-              int precomputed_num_passes = 0) {
+              int precomputed_num_passes = 0,
+              int contour_ds_factor = 3) {  // 1=full res, 3=default downsample
     if (!dict.valid() || !gray || w < 10 || h < 10)
         return {};
 
@@ -732,19 +733,20 @@ detectMarkers(const uint8_t *gray, int w, int h, const ArUcoDictionary &dict,
     int C = 7;
     int num_passes = (int)window_sizes.size();
 
-    // Max contour length: ArUco markers have perimeter ~200-800px.
-    // Abort tracing for noise contours (large foreground blobs) early.
-    int max_contour_len = 800;
+    const int ds_factor = contour_ds_factor;
+
+    // Max contour length: ArUco markers have perimeter ~200-800px at 3x downsample.
+    // Scale with image size for full-resolution mode.
+    int max_contour_len = (ds_factor <= 1) ? std::max(w, h) : 800;
 
     std::vector<std::vector<Eigen::Vector2i>> all_contours;
 
-    // Lambda: downsample binary 2x, find contours, scale back to full res.
-    // The 2x downsample makes contour arrays fit in L2 cache (~1.76MB vs 7MB),
-    // giving ~50x speedup over full-resolution contour tracing.
-    // Downsample binary 3x, find contours on small image (784KB fits in L2),
-    // then scale contour points back to full resolution.
-    constexpr int ds_factor = 3;
+    // Lambda: downsample binary, find contours, scale back to full res.
     auto find_contours_downsampled = [&](const std::vector<uint8_t> &binary) {
+        if (ds_factor <= 1) {
+            // Full resolution contour finding (most accurate)
+            return detail::findContours(binary, w, h, nullptr, max_contour_len);
+        }
         int dw = 0, dh = 0;
         std::vector<uint8_t> small;
         detail::downsampleBinaryNx(binary.data(), w, h, small, dw, dh, ds_factor);
@@ -780,8 +782,9 @@ detectMarkers(const uint8_t *gray, int w, int h, const ArUcoDictionary &dict,
                                std::make_move_iterator(pass2.begin()),
                                std::make_move_iterator(pass2.end()));
         }
-    } else if (gpu_thresh && gpu_ctx) {
+    } else if (gpu_thresh && gpu_ctx && ds_factor > 1) {
         // GPU path: threshold + 3x downsample fused on GPU.
+        // Skipped when ds_factor=1 (full-res mode) since GPU always downsamples.
         // Only (w/3)*(h/3) bytes transferred back per pass (~784KB vs 7MB).
         int dw = w / 3, dh = h / 3;
         std::vector<std::vector<uint8_t>> ds_images(num_passes);
@@ -1212,12 +1215,14 @@ detectCharucoBoard(const uint8_t *gray, int w, int h,
                    GpuThresholdFunc gpu_thresh = nullptr,
                    void *gpu_ctx = nullptr,
                    const std::vector<std::vector<uint8_t>> *precomputed_ds = nullptr,
-                   int precomputed_num_passes = 0) {
+                   int precomputed_num_passes = 0,
+                   int contour_ds_factor = 3) {
     CharucoResult result;
 
     // Step 1: Detect ArUco markers
     auto markers = detectMarkers(gray, w, h, dict, gpu_thresh, gpu_ctx,
-                                 precomputed_ds, precomputed_num_passes);
+                                 precomputed_ds, precomputed_num_passes,
+                                 contour_ds_factor);
     if (markers.empty())
         return result;
 

@@ -392,7 +392,8 @@ detect_and_calibrate_intrinsics(
 
                     auto charuco = aruco_detect::detectCharucoBoard(
                         pixels, w, h, board, aruco_dict,
-                        gpu_thresh, gpu_ctx);
+                        gpu_thresh, gpu_ctx,
+                        nullptr, 0, 1);  // full-res contour finding for max accuracy
 
                     if ((int)charuco.ids.size() < 6) {
 #ifdef __APPLE__
@@ -421,7 +422,7 @@ detect_and_calibrate_intrinsics(
                     }
 
                     aruco_detect::cornerSubPix(
-                        pixels, w, h, charuco.corners, 6, 30, 0.01f);
+                        pixels, w, h, charuco.corners, 3, 100, 0.001f);
 
 #ifdef __APPLE__
                     free(pixels);
@@ -717,7 +718,7 @@ inline bool detect_and_calibrate_intrinsics_video(
                             gray.data(), w, h, board, aruco_dict,
                             nullptr, nullptr, &ds_images, num_passes);
                         if ((int)charuco.ids.size() >= 6) {
-                            aruco_detect::cornerSubPix(gray.data(), w, h, charuco.corners, 6, 30, 0.01f);
+                            aruco_detect::cornerSubPix(gray.data(), w, h, charuco.corners, 3, 100, 0.001f);
                             int sorted_idx = frame_to_idx[frame];
                             det.cam_data.corners_per_image[sorted_idx] = charuco.corners;
                             det.cam_data.ids_per_image[sorted_idx] = charuco.ids;
@@ -749,9 +750,10 @@ inline bool detect_and_calibrate_intrinsics_video(
                             for (int x = 0; x < w; x++)
                                 gray[y*w+x] = (uint8_t)((row[x*4+2]*77 + row[x*4+1]*150 + row[x*4]*29) >> 8); }
                         CVPixelBufferUnlockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
-                        auto charuco = aruco_detect::detectCharucoBoard(gray.data(), w, h, board, aruco_dict);
+                        auto charuco = aruco_detect::detectCharucoBoard(gray.data(), w, h, board, aruco_dict,
+                            nullptr, nullptr, nullptr, 0, 1);  // full-res
                         if ((int)charuco.ids.size() >= 6) {
-                            aruco_detect::cornerSubPix(gray.data(), w, h, charuco.corners, 6, 30, 0.01f);
+                            aruco_detect::cornerSubPix(gray.data(), w, h, charuco.corners, 3, 100, 0.001f);
                             int sorted_idx = frame_to_idx[frame];
                             det.cam_data.corners_per_image[sorted_idx] = charuco.corners;
                             det.cam_data.ids_per_image[sorted_idx] = charuco.ids;
@@ -801,9 +803,10 @@ inline bool detect_and_calibrate_intrinsics_video(
                     if (!rgb) continue;
                     for (int i = 0; i < w * h; i++)
                         gray[i] = (uint8_t)((rgb[i*3]*77 + rgb[i*3+1]*150 + rgb[i*3+2]*29) >> 8);
-                    auto charuco = aruco_detect::detectCharucoBoard(gray.data(), w, h, board, aruco_dict);
+                    auto charuco = aruco_detect::detectCharucoBoard(gray.data(), w, h, board, aruco_dict,
+                        nullptr, nullptr, nullptr, 0, 1);  // full-res
                     if ((int)charuco.ids.size() >= 6) {
-                        aruco_detect::cornerSubPix(gray.data(), w, h, charuco.corners, 6, 30, 0.01f);
+                        aruco_detect::cornerSubPix(gray.data(), w, h, charuco.corners, 3, 100, 0.001f);
                         int sorted_idx = frame_to_idx[frame_num];
                         det.cam_data.corners_per_image[sorted_idx] = charuco.corners;
                         det.cam_data.ids_per_image[sorted_idx] = charuco.ids;
@@ -3074,9 +3077,12 @@ inline bool bundle_adjust_experimental(
         // Stage 1: extrinsics + points
         {1,  4.0, 0},
         {1,  1.0, 10.0},
-        // Stage 2: full joint
-        {2,  1.0, 5.0},
-        {2,  1.0, 3.0},
+        // Stage 2: full joint (intrinsics + extrinsics + points)
+        // First pass: moderate Cauchy for outlier robustness
+        // Second pass: near-linear (scale=50) to give all observations equal weight
+        // for best 3D metric accuracy (matches MVC's linear loss strategy).
+        {2,  4.0, 15.0},
+        {2, 50.0, 10.0},
     };
 
     bool did_retri = false;
@@ -3115,19 +3121,24 @@ inline bool bundle_adjust_experimental(
             for(int c=0;c<nc;c++){std::vector<int> fix={6,7,8,9,10,11,12,13,14};
                 problem.SetManifold(cp[c].data(),new ceres::SubsetManifold(15,fix));}
         }
-        // fix_mode==2: everything free — but fix intrinsics for cameras
-        // with too few observations to constrain 15 parameters (6 extrinsic +
-        // 4 intrinsic + 5 distortion). This prevents the Schur complement from
-        // becoming indefinite, avoiding CHOLMOD "not positive definite" warnings.
+        // fix_mode==2: free extrinsics + fx,fy,cx,cy,k1,k2 + 3D points.
+        // Lock tangential distortion (p1,p2) and k3 — these are poorly
+        // constrained with typical ChArUco data and cause 3D accuracy loss
+        // when freed. Only unlock if user provides explicit ba_config bounds.
         if(bp.fix_mode==2){
             std::vector<int> obs_per_cam(nc, 0);
             for(const auto&obs:observations) obs_per_cam[obs.ci]++;
             for(int c=0;c<nc;c++){
                 if(obs_per_cam[c]<30){
+                    // Too few observations — fix all intrinsics
                     std::vector<int> fix={6,7,8,9,10,11,12,13,14};
                     problem.SetManifold(cp[c].data(),new ceres::SubsetManifold(15,fix));
-                    fprintf(stderr,"[Experimental]   Camera %s: %d obs < 30, fixing intrinsics in full joint pass\n",
+                    fprintf(stderr,"[Experimental]   Camera %s: %d obs < 30, fixing intrinsics\n",
                             config.cam_ordered[c].c_str(), obs_per_cam[c]);
+                } else {
+                    // Lock p1(12), p2(13), k3(14) — prevents distortion overfitting
+                    std::vector<int> fix={12,13,14};
+                    problem.SetManifold(cp[c].data(),new ceres::SubsetManifold(15,fix));
                 }
             }
         }
