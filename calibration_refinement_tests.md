@@ -324,6 +324,41 @@ The v1 calibration demonstrated why: it had the lowest per-board reproj (0.373 p
 | MVC | 0.678 px | 0.368 mm | #3 |
 | v4 | 0.437 px | 0.339 mm (best) | #2 |
 
+### 6.5 Distinguishing weak initial calibration from actual camera movement
+
+When SuperPoint refinement adjusts a camera's pose, it is impossible to tell from the rotation delta alone whether the camera physically moved between sessions or whether the initial ChArUco calibration was simply inaccurate for that camera. Both produce the same signal: the refinement shifts the camera to better explain the video features.
+
+**Why this ambiguity exists:**
+
+Consider a camera with only 6 board detections (like Cam2002492 in our dataset). Its extrinsics are poorly constrained — the bundle adjustment has few observations to pin down its pose. The resulting YAML may be off by 1-2 degrees even on calibration day. Three weeks later, the SuperPoint refinement corrects this error, but we observe a 1.2-degree delta and cannot distinguish it from physical movement.
+
+Conversely, a camera with 50+ board detections (like Cam710038) has a well-constrained initial calibration. If the refinement shifts it by 0.4 degrees, physical movement is the more likely explanation.
+
+**Evidence from our data:**
+
+| Camera | Board detections | SP rotation delta | Interpretation |
+|--------|-----------------|-------------------|----------------|
+| 2002492 | 6 | 1.165° | Ambiguous — could be weak initial calibration |
+| 2002493 | 13 | 2.232° | Likely moved — moderate detection count but large delta |
+| 2002485 | 19 | 1.224° | Likely moved — decent detection count |
+| 2002490 | 53 | 1.338° | Likely moved — strong initial calibration |
+| 710038 | 59 | 0.391° | Small adjustment — well-constrained, minor drift |
+| 2002491 | 10 | 0.006° | No movement — but also poorly constrained |
+
+**How to resolve this in the future:**
+
+1. **More calibration images per camera.** The most direct fix. Cameras with <15 board detections have unreliable extrinsics. We should flag these in the Quality Dashboard with a warning: "Low detection count — extrinsics may be imprecise."
+
+2. **Better board placement.** Ensure the calibration board is presented at multiple distances and angles to each camera, covering more of the image plane. Cameras at oblique angles (2002482, 2002492) need extra attention.
+
+3. **Same-day validation.** If a second set of calibration images is captured on the same day (e.g., at the start and end of a session), comparing the two calibrations reveals true measurement uncertainty. Any per-camera delta between two same-day calibrations is pure noise — this sets the floor for what the refinement should detect.
+
+4. **Per-camera confidence scores.** Report the observation-to-parameter ratio per camera. With 15 parameters per camera (6 extrinsic + 4 intrinsic + 5 distortion), a camera needs at least 75-150 observations (5-10x) for reliable estimation. Cameras below this threshold should be flagged.
+
+5. **Temporal calibration monitoring.** Running SuperPoint refinement at multiple time points throughout a recording session (e.g., every 30 minutes) would reveal whether cameras drift gradually or shift suddenly. A sudden shift suggests a physical disturbance; gradual drift suggests thermal expansion or mount relaxation.
+
+The goal for future work is to build these diagnostics into RED so that users can distinguish "your calibration is weak, recapture calibration images" from "your camera moved, run SuperPoint refinement."
+
 ---
 
 ## 7. Detection Algorithm Improvements (March 16)
