@@ -8,6 +8,7 @@
 #include "calib_tool_state.h"
 #include "app_context.h"
 #include "feature_refinement.h"
+#include "annotation_csv.h"
 #include "calibration_pipeline.h"
 #include "red_math.h"
 #include "imgui.h"
@@ -219,6 +220,21 @@ inline void DrawCalibKPManualSection(
             }
         }
         ImGui::Text("Labels: %d points across %d cameras", total_labeled, cams_with_labels);
+    }
+
+    // ---- Save labels ----
+    if (state.kp_skeleton_ready) {
+        if (ImGui::Button("Save Labels##kp")) {
+            std::string save_err;
+            std::string saved = AnnotationCSV::save_all(
+                pm.keypoints_root_folder, ctx.skeleton.name,
+                ctx.annotations, scene->num_cams, ctx.skeleton.num_nodes,
+                pm.camera_names, &save_err);
+            if (saved.empty())
+                state.kp_status = "Save failed: " + save_err;
+            else
+                state.kp_status = "Labels saved to " + saved;
+        }
     }
 
     ImGui::Separator();
