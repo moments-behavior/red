@@ -151,7 +151,13 @@ inline void DrawCalibKPManualSection(
     const CalibrationToolCallbacks &cb) {
 
     auto &pm = ctx.pm;
+    auto &ps = ctx.ps;
     auto *scene = ctx.scene;
+    auto *dc_context = ctx.dc_context;
+    auto &imgs_names = ctx.imgs_names;
+#ifdef __APPLE__
+    auto &mac_last_uploaded_frame = ctx.mac_last_uploaded_frame;
+#endif
 
     // Poll async refinement result
     if (state.kp_running && state.kp_future.valid()) {
@@ -174,8 +180,68 @@ inline void DrawCalibKPManualSection(
 
     ImGui::Indent();
 
+    // ---- Video Folder ----
+    ImGui::Text("Video Folder:");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 160.0f);
+    ImGui::InputText("##kp_vid_path", &state.kp_video_folder);
+    ImGui::SameLine();
+    if (ImGui::Button("Browse##kp_vid")) {
+        IGFD::FileDialogConfig cfg;
+        cfg.countSelectionMax = 1;
+        if (!state.kp_video_folder.empty())
+            cfg.path = state.kp_video_folder;
+        cfg.flags = ImGuiFileDialogFlags_Modal;
+        ImGuiFileDialog::Instance()->OpenDialog(
+            "ChooseKPVideoFolder", "Select Video Folder", nullptr, cfg);
+    }
+    if (ImGuiFileDialog::Instance()->Display(
+            "ChooseKPVideoFolder", ImGuiWindowFlags_NoCollapse,
+            ImVec2(680, 440))) {
+        if (ImGuiFileDialog::Instance()->IsOk())
+            state.kp_video_folder = ImGuiFileDialog::Instance()->GetCurrentPath();
+        ImGuiFileDialog::Instance()->Close();
+    }
+
+    ImGui::SameLine();
+    bool can_load = !state.kp_video_folder.empty() &&
+                    !state.project.camera_names.empty();
+    ImGui::BeginDisabled(!can_load);
+    if (ImGui::Button("Load Videos##kp")) {
+        cb.deferred->enqueue([&state, &pm, &ps, &cb, &imgs_names,
+                              scene, dc_context
+#ifdef __APPLE__
+                              , &mac_last_uploaded_frame
+#endif
+        ]() {
+            if (ps.video_loaded) cb.unload_media();
+            imgs_names.clear();
+#ifdef __APPLE__
+            for (size_t ci = 0; ci < mac_last_uploaded_frame.size(); ci++)
+                mac_last_uploaded_frame[ci] = -1;
+#endif
+            pm.media_folder = state.kp_video_folder;
+            pm.camera_names.clear();
+            for (const auto &cn : state.project.camera_names)
+                pm.camera_names.push_back("Cam" + cn);
+            cb.load_videos();
+            cb.print_metadata();
+            state.kp_videos_loaded = true;
+            state.kp_status = "Videos loaded (" +
+                std::to_string(state.project.camera_names.size()) + " cameras)";
+        });
+    }
+    ImGui::EndDisabled();
+
+    if (state.kp_videos_loaded) {
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f), "Videos loaded");
+    }
+
+    ImGui::Spacing();
+
     // ---- Setup ----
-    ImGui::SliderInt("Num Keypoints##kp", &state.kp_num_points, 2, 20);
+    ImGui::SliderInt("Num Keypoints##kp", &state.kp_num_points, 1, 20);
 
     if (ImGui::Button("Setup Keypoints##kp")) {
         setup_landmark_skeleton(ctx.skeleton, state.kp_num_points, pm,

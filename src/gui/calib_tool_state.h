@@ -194,9 +194,11 @@ struct CalibrationToolState {
     };
 
     bool kp_skeleton_ready = false;
+    bool kp_videos_loaded = false;
     bool kp_running = false;
     bool kp_refine_done = false;
     std::string kp_status;
+    std::string kp_video_folder;
     int kp_num_points = 4;
     float kp_rot_prior = 50.0f;
     float kp_trans_prior = 500.0f;
