@@ -26,7 +26,8 @@ collect_manual_landmarks(
     int frame_num,
     int num_keypoints,
     int num_cameras,
-    const std::vector<std::string> &camera_serials) {
+    const std::vector<std::string> &camera_serials,
+    int image_height = 0) {
 
     std::map<std::string, std::map<int, Eigen::Vector2d>> landmarks;
 
@@ -42,7 +43,11 @@ collect_manual_landmarks(
         for (int k = 0; k < num_keypoints && k < (int)cam.keypoints.size(); k++) {
             const auto &kp = cam.keypoints[k];
             if (kp.labeled && kp.x < UNLABELED * 0.9 && kp.y < UNLABELED * 0.9) {
-                landmarks[serial][k] = Eigen::Vector2d(kp.x, kp.y);
+                // Labels are in ImPlot coords (Y=0 at bottom).
+                // Calibration uses OpenCV coords (Y=0 at top).
+                // Flip Y if image_height is provided.
+                double y = (image_height > 0) ? (image_height - kp.y) : kp.y;
+                landmarks[serial][k] = Eigen::Vector2d(kp.x, y);
             }
         }
     }
@@ -333,10 +338,11 @@ inline void DrawCalibKPManualSection(
 
     ImGui::BeginDisabled(!can_eval);
     if (ImGui::Button("Evaluate Calibration##kp")) {
-        // Collect landmarks from annotations
+        // Collect landmarks from annotations (flip Y from ImPlot to OpenCV convention)
+        int img_h = (scene->num_cams > 0) ? scene->image_height[0] : 0;
         auto landmarks = collect_manual_landmarks(
             ctx.annotations, 0, state.kp_num_points,
-            scene->num_cams, state.project.camera_names);
+            scene->num_cams, state.project.camera_names, img_h);
 
         state.kp_eval = evaluate_manual_calibration(
             landmarks, state.project.calibration_folder,
@@ -400,10 +406,11 @@ inline void DrawCalibKPManualSection(
 
         ImGui::BeginDisabled(!can_refine);
         if (ImGui::Button("Run Refinement##kp")) {
-            // Collect landmarks
+            // Collect landmarks (flip Y from ImPlot to OpenCV convention)
+            int img_h = (scene->num_cams > 0) ? scene->image_height[0] : 0;
             auto landmarks = collect_manual_landmarks(
                 ctx.annotations, 0, state.kp_num_points,
-                scene->num_cams, state.project.camera_names);
+                scene->num_cams, state.project.camera_names, img_h);
 
             state.kp_landmarks = landmarks; // save for async use
 
