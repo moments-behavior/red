@@ -204,12 +204,11 @@ inline void DrawCalibKPManualSection(
     }
 
     ImGui::SameLine();
-    bool can_load = !state.kp_video_folder.empty() &&
-                    !state.project.camera_names.empty();
+    bool can_load = !state.kp_video_folder.empty();
     ImGui::BeginDisabled(!can_load);
     if (ImGui::Button("Load Videos##kp")) {
         cb.deferred->enqueue([&state, &pm, &ps, &cb, &imgs_names,
-                              scene, dc_context
+                              &ctx, scene, dc_context
 #ifdef __APPLE__
                               , &mac_last_uploaded_frame
 #endif
@@ -222,13 +221,36 @@ inline void DrawCalibKPManualSection(
 #endif
             pm.media_folder = state.kp_video_folder;
             pm.camera_names.clear();
-            for (const auto &cn : state.project.camera_names)
-                pm.camera_names.push_back("Cam" + cn);
+
+            // Derive camera names: prefer project config, fall back to
+            // scanning video folder for Cam*.mp4 files, or calibration YAMLs.
+            if (!state.project.camera_names.empty()) {
+                for (const auto &cn : state.project.camera_names)
+                    pm.camera_names.push_back("Cam" + cn);
+            } else if (!state.config.cam_ordered.empty()) {
+                for (const auto &cn : state.config.cam_ordered)
+                    pm.camera_names.push_back("Cam" + cn);
+                state.project.camera_names = state.config.cam_ordered;
+            } else {
+                // Scan video folder for Cam*.mp4 files
+                namespace fs = std::filesystem;
+                std::vector<std::string> serials;
+                for (const auto &entry : fs::directory_iterator(state.kp_video_folder)) {
+                    std::string fname = entry.path().stem().string();
+                    if (fname.substr(0, 3) == "Cam" && entry.path().extension() == ".mp4")
+                        serials.push_back(fname.substr(3));
+                }
+                std::sort(serials.begin(), serials.end());
+                for (const auto &s : serials)
+                    pm.camera_names.push_back("Cam" + s);
+                state.project.camera_names = serials;
+            }
+
             cb.load_videos();
             cb.print_metadata();
             state.kp_videos_loaded = true;
             state.kp_status = "Videos loaded (" +
-                std::to_string(state.project.camera_names.size()) + " cameras)";
+                std::to_string(pm.camera_names.size()) + " cameras)";
         });
     }
     ImGui::EndDisabled();
