@@ -10,7 +10,17 @@ namespace fs = std::filesystem;
 
 int main(int argc, char **argv) {
     if (argc < 3) {
-        printf("Usage: %s <landmarks.json> <calib_folder> [--rot-prior F] [--trans-prior F]\n", argv[0]);
+        printf("Usage: %s <landmarks.json> <calib_folder> [options]\n"
+               "  --rot-prior F       Rotation prior weight (default 50)\n"
+               "  --trans-prior F     Translation prior weight (default 500)\n"
+               "  --seed N            Holdout random seed (default 42)\n"
+               "  --outlier-th1 F     Coarse outlier threshold (default 10)\n"
+               "  --outlier-th2 F     Final outlier threshold (default 3)\n"
+               "  --unlock-intrinsics Unlock fx, fy, cx, cy during BA\n"
+               "  --unlock-distortion Unlock k1, k2, p1, p2, k3 during BA\n"
+               "  --unlock-all        Unlock both intrinsics and distortion\n"
+               "  --output DIR        Output folder (default /tmp/holdout_compare)\n",
+               argv[0]);
         return 1;
     }
 
@@ -21,6 +31,9 @@ int main(int argc, char **argv) {
     int holdout_seed = 42;
     float outlier_th1 = 10.0f;
     float outlier_th2 = 3.0f;
+    bool lock_intrinsics = true;
+    bool lock_distortion = true;
+    std::string output_folder = "/tmp/holdout_compare";
 
     for (int i = 3; i < argc; i++) {
         std::string arg = argv[i];
@@ -29,6 +42,10 @@ int main(int argc, char **argv) {
         else if (arg == "--seed" && i + 1 < argc) holdout_seed = std::stoi(argv[++i]);
         else if (arg == "--outlier-th1" && i + 1 < argc) outlier_th1 = std::stof(argv[++i]);
         else if (arg == "--outlier-th2" && i + 1 < argc) outlier_th2 = std::stof(argv[++i]);
+        else if (arg == "--unlock-intrinsics") lock_intrinsics = false;
+        else if (arg == "--unlock-distortion") lock_distortion = false;
+        else if (arg == "--unlock-all") { lock_intrinsics = false; lock_distortion = false; }
+        else if (arg == "--output" && i + 1 < argc) output_folder = argv[++i];
     }
 
     // Discover camera names from calibration folder
@@ -41,16 +58,19 @@ int main(int argc, char **argv) {
     }
     std::sort(camera_names.begin(), camera_names.end());
     printf("Found %d cameras\n", (int)camera_names.size());
+    printf("Lock intrinsics: %s\n", lock_intrinsics ? "YES" : "NO");
+    printf("Lock distortion: %s\n", lock_distortion ? "YES" : "NO");
+    printf("Output: %s\n", output_folder.c_str());
 
     FeatureRefinement::FeatureConfig config;
     config.landmarks_file = landmarks_file;
     config.calibration_folder = calib_folder;
-    config.output_folder = "/tmp/holdout_compare";
+    config.output_folder = output_folder;
     config.camera_names = camera_names;
     config.prior_rot_weight = rot_prior;
     config.prior_trans_weight = trans_prior;
-    config.lock_intrinsics = true;
-    config.lock_distortion = true;
+    config.lock_intrinsics = lock_intrinsics;
+    config.lock_distortion = lock_distortion;
     config.ba_outlier_th1 = outlier_th1;
     config.ba_outlier_th2 = outlier_th2;
     config.ba_max_rounds = 5;
