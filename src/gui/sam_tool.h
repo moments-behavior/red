@@ -38,8 +38,8 @@ struct SamToolState {
 
     // Model selection UI state
     int model_idx = 0; // 0 = MobileSAM, 1 = SAM 2.1 Tiny
-    std::string encoder_path;
-    std::string decoder_path;
+    std::string encoder_path = "models/mobilesam/mobile_sam_encoder.onnx";
+    std::string decoder_path = "models/mobilesam/mobile_sam_decoder.onnx";
 };
 
 // Draw accepted (stored) mask polygons from the AnnotationMap.

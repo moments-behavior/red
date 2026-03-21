@@ -170,8 +170,8 @@ struct WindowStates {
         sam_tool.prompt_frame = 0;
         sam_tool.prompt_cam = -1;
         sam_tool.model_idx = 0;
-        sam_tool.encoder_path.clear();
-        sam_tool.decoder_path.clear();
+        sam_tool.encoder_path = "models/mobilesam/mobile_sam_encoder.onnx";
+        sam_tool.decoder_path = "models/mobilesam/mobile_sam_decoder.onnx";
         show_help = false;
     }
 };
