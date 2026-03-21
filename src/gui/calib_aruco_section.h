@@ -296,6 +296,13 @@ inline void DrawCalibArucoSection(CalibrationToolState &state, AppContext &ctx,
                                                 Toast::Warning, 8.0f);
                             }
                             state.status = msg;
+                            // Show global registration status
+                            if (!state.aruco_result.global_reg_status.empty()) {
+                                bool gr_ok = state.aruco_result.global_reg_status.find("Aligning") != std::string::npos ||
+                                             state.aruco_result.global_reg_status.find("Using") != std::string::npos;
+                                ctx.toasts.push("Global Reg: " + state.aruco_result.global_reg_status,
+                                                gr_ok ? Toast::Info : Toast::Warning, 10.0f);
+                            }
                             // Auto-open 3D viewer
                             state.calib_viewer.result = &state.aruco_result;
                             state.calib_viewer.show = true;

@@ -186,6 +186,7 @@ struct CalibrationResult {
     bool success = false;
     std::string error;
     std::string warning;       // non-fatal issues (e.g., skipped cameras)
+    std::string global_reg_status; // "success: N points", "skipped: ...", "failed: ..."
     std::string output_folder;
     std::vector<PerCameraMetrics> per_camera_metrics;
     std::vector<double> all_reproj_errors;
@@ -1596,30 +1597,55 @@ inline bool detect_global_reg_board(
                 // Find the video for this camera
                 auto vids = CalibrationTool::discover_aruco_videos(
                     global_reg_folder, {serial});
-                if (vids.empty()) return;
+                if (vids.empty()) {
+                    fprintf(stderr, "[GlobalReg]   %s: no video found in %s\n",
+                            serial.c_str(), global_reg_folder.c_str());
+                    return;
+                }
                 const std::string &video_path = vids.begin()->second;
+                fprintf(stderr, "[GlobalReg]   %s: opening %s\n",
+                        serial.c_str(), video_path.c_str());
 
 #ifdef __APPLE__
                 // Decode frame 0 via FFmpeg + VideoToolbox
                 std::unique_ptr<FFmpegDemuxer> demuxer;
                 try { demuxer = std::make_unique<FFmpegDemuxer>(
                     video_path.c_str(), std::map<std::string, std::string>{});
-                } catch (...) { return; }
+                } catch (...) {
+                    fprintf(stderr, "[GlobalReg]   %s: FFmpegDemuxer failed\n", serial.c_str());
+                    return;
+                }
                 w = (int)demuxer->GetWidth(); h = (int)demuxer->GetHeight();
                 gray.resize(w * h);
 
                 VTAsyncDecoder vt;
                 if (!vt.init(demuxer->GetExtradata(), demuxer->GetExtradataSize(),
-                             demuxer->GetVideoCodec())) return;
+                             demuxer->GetVideoCodec())) {
+                    fprintf(stderr, "[GlobalReg]   %s: VTAsyncDecoder init failed\n", serial.c_str());
+                    return;
+                }
 
-                // Decode first frame
+                // Decode first frame — submit multiple packets to fill reorder queue
                 uint8_t *pkt_data = nullptr; size_t pkt_size = 0; PacketData pkt_info;
-                if (!demuxer->Demux(pkt_data, pkt_size, pkt_info)) return;
-                bool is_key = (pkt_info.flags & AV_PKT_FLAG_KEY) != 0;
-                vt.submit_blocking(pkt_data, pkt_size, pkt_info.pts,
-                                   pkt_info.dts, demuxer->GetTimebase(), is_key);
-                CVPixelBufferRef pb = vt.drain_one();
-                if (!pb) return;
+                CVPixelBufferRef pb = nullptr;
+                for (int pkt_i = 0; pkt_i < 16 && !pb; pkt_i++) {
+                    if (!demuxer->Demux(pkt_data, pkt_size, pkt_info)) {
+                        fprintf(stderr, "[GlobalReg]   %s: Demux failed at packet %d\n",
+                                serial.c_str(), pkt_i);
+                        break;
+                    }
+                    bool is_key = (pkt_info.flags & AV_PKT_FLAG_KEY) != 0;
+                    vt.submit_blocking(pkt_data, pkt_size, pkt_info.pts,
+                                       pkt_info.dts, demuxer->GetTimebase(), is_key);
+                    pb = vt.drain_one();
+                }
+                if (!pb) {
+                    fprintf(stderr, "[GlobalReg]   %s: no frame decoded after 16 packets\n",
+                            serial.c_str());
+                    return;
+                }
+                fprintf(stderr, "[GlobalReg]   %s: decoded frame %dx%d\n",
+                        serial.c_str(), w, h);
 
                 CVPixelBufferLockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
                 const uint8_t *bgra = (const uint8_t *)CVPixelBufferGetBaseAddress(pb);
@@ -1684,7 +1710,11 @@ inline bool detect_global_reg_board(
             auto charuco = aruco_detect::detectCharucoBoard(
                 gray.data(), w, h, board, aruco_dict,
                 nullptr, nullptr, nullptr, 0, 1);
-            if ((int)charuco.ids.size() < 4) return;
+            if ((int)charuco.ids.size() < 4) {
+                fprintf(stderr, "[GlobalReg]   %s: only %d corners (need 4), skipping\n",
+                        serial.c_str(), (int)charuco.ids.size());
+                return;
+            }
             aruco_detect::cornerSubPix(gray.data(), w, h, charuco.corners, 3, 100, 0.001f);
 
             for (int j = 0; j < (int)charuco.ids.size(); j++) {
@@ -1777,6 +1807,9 @@ inline bool global_registration(
     std::vector<Eigen::Vector3d> dst_pts; // world frame (gt_pts)
 
     // Try separate global registration media first (if provided)
+    fprintf(stderr, "[GlobalReg] global_reg_folder='%s' type='%s' cam_names=%s\n",
+            global_reg_folder.c_str(), global_reg_type.c_str(),
+            cam_names_for_global_reg ? std::to_string(cam_names_for_global_reg->size()).c_str() : "null");
     if (!global_reg_folder.empty() && cam_names_for_global_reg) {
         std::vector<Eigen::Vector3d> reg_pts_3d;
         std::vector<int> reg_corner_ids;
@@ -1800,12 +1833,20 @@ inline bool global_registration(
             if (src_pts.size() >= 3) {
                 fprintf(stderr, "[GlobalReg] Using %d points from separate global reg media\n",
                         (int)src_pts.size());
+            } else {
+                fprintf(stderr, "[GlobalReg] Only %d points from global reg media (need 3), falling back\n",
+                        (int)src_pts.size());
             }
+        } else {
+            fprintf(stderr, "[GlobalReg] detect_global_reg_board FAILED\n");
         }
+    } else {
+        fprintf(stderr, "[GlobalReg] No global_reg_folder provided, using calibration frames\n");
     }
 
     // Fallback: try using frames from the calibration data itself
     if (src_pts.size() < 3) {
+        fprintf(stderr, "[GlobalReg] Trying fallback: frames from calibration data...\n");
         std::map<int, int> img_num_to_idx;
         if (frame_numbers && !frame_numbers->empty()) {
             for (int i = 0; i < (int)frame_numbers->size(); i++)
@@ -3558,9 +3599,13 @@ inline CalibrationResult run_experimental_pipeline(
     if(status)*status="Step 5: Bundle adjustment...";
     if(!bundle_adjust_experimental(config,landmarks,poses,points_3d,result,status)){result.error=status?*status:"BA failed";return result;}
     if(status)*status="Step 6: Global registration...";
-    if(!global_registration(config,poses,points_3d,status,vfr?&video_frame_numbers:nullptr,
+    { std::string gr_status;
+      if(!global_registration(config,poses,points_3d,&gr_status,vfr?&video_frame_numbers:nullptr,
         config.global_reg_media_folder,config.global_reg_media_type,
-        &config.cam_ordered)){result.error=status?*status:"Registration failed";return result;}
+        &config.cam_ordered)){result.error=gr_status.empty()?"Registration failed":gr_status;return result;}
+      result.global_reg_status = gr_status;
+      fprintf(stderr,"[Experimental] Global reg: %s\n", gr_status.c_str());
+    }
     if(status)*status="Step 7: Writing files...";
     if(!write_calibration(poses,config.cam_ordered,outf,result.image_width,result.image_height,status)){result.error=status?*status:"Write failed";return result;}
     write_intermediate_output(config,intrinsics,landmarks,poses,points_3d,outf);
