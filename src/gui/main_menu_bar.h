@@ -83,6 +83,12 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
         if (ImGui::MenuItem("Create Calibration Project")) {
             calib_state.show = true;
             calib_state.show_create_dialog = true;
+            // Reset project fields for a fresh dialog
+            calib_state.project = CalibrationTool::CalibProject{};
+            calib_state.config = CalibrationTool::CalibConfig{};
+            calib_state.config_loaded = false;
+            calib_state.calib_aruco_media_info = {};
+            calib_state.calib_global_reg_info = {};
         }
         if (ImGui::MenuItem("Load Calibration Project")) {
             IGFD::FileDialogConfig cfg;

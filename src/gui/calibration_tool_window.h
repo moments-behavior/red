@@ -70,17 +70,35 @@ inline void DrawCalibrationToolWindow(
 
                     // Load aruco config if present
                     if (state.project.has_aruco()) {
-                        state.config_path = state.project.config_file;
-                        if (CalibrationTool::parse_config(
-                                state.config_path, state.config, err)) {
+                        if (!state.project.config_file.empty()) {
+                            // Config file provided — parse it
+                            state.config_path = state.project.config_file;
+                            if (CalibrationTool::parse_config(
+                                    state.config_path, state.config, err)) {
+                                state.config_loaded = true;
+                                state.init_camera_enabled();
+                                state.images_loaded = false;
+                                state.img_done = false;
+                                state.vid_done = false;
+                            } else {
+                                state.config_loaded = false;
+                                state.status = "Error parsing config: " + err;
+                            }
+                        } else if (!state.project.camera_names.empty()) {
+                            // Config-free project — synthesize CalibConfig
+                            // from persisted project fields (no media scan needed)
+                            state.config.cam_ordered = state.project.camera_names;
+                            state.config.charuco_setup = state.project.charuco_setup;
+                            state.config.img_path = state.project.aruco_media_folder;
                             state.config_loaded = true;
                             state.init_camera_enabled();
                             state.images_loaded = false;
                             state.img_done = false;
                             state.vid_done = false;
-                        } else {
-                            state.config_loaded = false;
-                            state.status = "Error parsing config: " + err;
+                            state.status =
+                                "Project loaded (config-free): " +
+                                std::to_string(state.config.cam_ordered.size()) +
+                                " cameras";
                         }
                     }
 

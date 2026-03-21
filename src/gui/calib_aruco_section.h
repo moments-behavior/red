@@ -241,15 +241,45 @@ inline void DrawCalibArucoSection(CalibrationToolState &state, AppContext &ctx,
                     ImGui::Separator();
                 }
 
-                // Global registration frame selector
-                if (!state.config.world_coordinate_imgs.empty()) {
-                    ImGui::Text("Global Registration Frame: %s",
-                        state.config.world_coordinate_imgs[0].c_str());
-                    if (!state.config.gt_pts.empty())
+                // Global registration section
+                {
+                    bool has_config_gt = !state.config.world_coordinate_imgs.empty() &&
+                                         !state.config.gt_pts.empty();
+                    bool has_global_reg_media = !state.project.global_reg_media_folder.empty();
+                    bool config_free = state.project.config_file.empty();
+
+                    if (has_config_gt && !config_free) {
+                        // Config-loaded: show read-only
+                        ImGui::Text("Global Registration Frame: %s",
+                            state.config.world_coordinate_imgs[0].c_str());
                         ImGui::SameLine();
                         ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f),
                             "(%d ground truth points)",
                             (int)state.config.gt_pts.begin()->second.size());
+                    } else if (config_free) {
+                        // Config-free: interactive global registration
+                        if (has_global_reg_media) {
+                            int n_pts = (state.project.charuco_setup.w - 1) *
+                                        (state.project.charuco_setup.h - 1);
+                            ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f),
+                                "Global Reg: separate media (%d pts, center-origin, z=0)",
+                                n_pts);
+                        } else if (is_video) {
+                            ImGui::Text("Global Reg Frame:");
+                            ImGui::SameLine();
+                            ImGui::SetNextItemWidth(80);
+                            ImGui::InputInt("##global_reg_frame", &state.global_reg_frame);
+                            state.global_reg_frame = std::max(0, state.global_reg_frame);
+                            int n_pts = (state.project.charuco_setup.w - 1) *
+                                        (state.project.charuco_setup.h - 1);
+                            ImGui::SameLine();
+                            ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f),
+                                "(%d pts, center-origin, z=0)", n_pts);
+                        } else {
+                            ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f),
+                                "Global Reg: provide Global Reg. Media or config.json");
+                        }
+                    }
                 }
 
                 ImGui::Separator();
@@ -336,6 +366,27 @@ inline void DrawCalibArucoSection(CalibrationToolState &state, AppContext &ctx,
                         state.project.global_reg_media_folder;
                     filtered_config.global_reg_media_type =
                         state.project.global_reg_media_type;
+
+                    // Config-free: auto-generate gt_pts from board geometry
+                    if (state.project.config_file.empty() &&
+                        filtered_config.gt_pts.empty()) {
+                        auto gt = CalibrationTool::generate_charuco_gt_pts(
+                            state.project.charuco_setup);
+                        if (!state.project.global_reg_media_folder.empty()) {
+                            // Separate global reg media — gt_pts keyed as "0"
+                            filtered_config.world_coordinate_imgs = {"0"};
+                            std::vector<std::vector<float>> pts_vec;
+                            for (const auto &p : gt) pts_vec.push_back(p);
+                            filtered_config.gt_pts["0"] = std::move(pts_vec);
+                        } else if (is_video && state.global_reg_frame >= 0) {
+                            // Use specific frame from calibration video
+                            std::string fr = std::to_string(state.global_reg_frame);
+                            filtered_config.world_coordinate_imgs = {fr};
+                            std::vector<std::vector<float>> pts_vec;
+                            for (const auto &p : gt) pts_vec.push_back(p);
+                            filtered_config.gt_pts[fr] = std::move(pts_vec);
+                        }
+                    }
 
                     if (is_video) {
                         CalibrationPipeline::VideoFrameRange vfr;

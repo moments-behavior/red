@@ -295,6 +295,88 @@ inline void DrawCalibCreateDialog(CalibrationToolState &state, AppContext &ctx,
                         "Select Laser Videos Folder", nullptr, cfg);
                 }
 
+                // ---- Board Setup (when no config file, aruco media detected) ----
+                if (state.project.config_file.empty() &&
+                    !state.calib_aruco_media_info.type.empty()) {
+                    // Separator row
+                    ImGui::TableNextRow();
+                    LabelCell(""); ImGui::TableSetColumnIndex(1);
+                    ImGui::Separator();
+
+                    ImGui::TableNextRow();
+                    LabelCell("Board Setup");
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f),
+                        "No config file — set board parameters:");
+
+                    auto &cs = state.project.charuco_setup;
+                    ImGui::TableNextRow();
+                    LabelCell("  Squares X");
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::SetNextItemWidth(120);
+                    ImGui::InputInt("##board_w", &cs.w);
+                    cs.w = std::max(3, std::min(cs.w, 20));
+
+                    ImGui::TableNextRow();
+                    LabelCell("  Squares Y");
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::SetNextItemWidth(120);
+                    ImGui::InputInt("##board_h", &cs.h);
+                    cs.h = std::max(3, std::min(cs.h, 20));
+
+                    ImGui::TableNextRow();
+                    LabelCell("  Square Size (mm)");
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::SetNextItemWidth(120);
+                    ImGui::InputFloat("##board_sqsize", &cs.square_side_length, 1.0f, 10.0f, "%.1f");
+                    cs.square_side_length = std::max(1.0f, cs.square_side_length);
+
+                    ImGui::TableNextRow();
+                    LabelCell("  Marker Size (mm)");
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::SetNextItemWidth(120);
+                    ImGui::InputFloat("##board_mksize", &cs.marker_side_length, 1.0f, 10.0f, "%.1f");
+                    cs.marker_side_length = std::max(1.0f, cs.marker_side_length);
+
+                    ImGui::TableNextRow();
+                    LabelCell("  Dictionary");
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::SetNextItemWidth(200);
+                    {
+                        const char *dict_names[] = {
+                            "DICT_4X4_50", "DICT_4X4_100", "DICT_4X4_250",
+                            "unused_3",
+                            "DICT_5X5_50", "DICT_5X5_100", "DICT_5X5_250",
+                            "unused_7",
+                            "DICT_6X6_50", "unused_9", "DICT_6X6_250"};
+                        // Map dictionary IDs (0-10) to combo, skipping unused
+                        int combo_items[] = {0, 1, 2, 4, 5, 6, 8, 10};
+                        const char *combo_labels[] = {
+                            "DICT_4X4_50", "DICT_4X4_100", "DICT_4X4_250",
+                            "DICT_5X5_50", "DICT_5X5_100", "DICT_5X5_250",
+                            "DICT_6X6_50", "DICT_6X6_250"};
+                        int combo_count = 8;
+                        int sel = 0;
+                        for (int i = 0; i < combo_count; i++)
+                            if (combo_items[i] == cs.dictionary) { sel = i; break; }
+                        if (ImGui::Combo("##board_dict", &sel, combo_labels, combo_count))
+                            cs.dictionary = combo_items[sel];
+                    }
+
+                    // Show auto-generated gt_pts summary
+                    {
+                        int n_pts = (cs.w - 1) * (cs.h - 1);
+                        float half_x = (cs.w - 2) * cs.square_side_length / 2.0f;
+                        float half_y = (cs.h - 2) * cs.square_side_length / 2.0f;
+                        ImGui::TableNextRow();
+                        LabelCell("  Ground Truth");
+                        ImGui::TableSetColumnIndex(1);
+                        ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f),
+                            "%d pts, center-origin, z=0 (%.0f to %.0f mm)",
+                            n_pts, -half_x, half_x);
+                    }
+                }
+
                 } else {
                 // ---- Telecentric mode fields ----
 
@@ -593,6 +675,8 @@ inline void DrawCalibCreateDialog(CalibrationToolState &state, AppContext &ctx,
                             state.config_path, state.config, err)) {
                         state.config_loaded = true;
                         state.init_camera_enabled();
+                        // Sync board setup to project for persistence
+                        state.project.charuco_setup = state.config.charuco_setup;
                         state.images_loaded = false;
                         state.img_done = false;
                         state.vid_done = false;
@@ -624,6 +708,30 @@ inline void DrawCalibCreateDialog(CalibrationToolState &state, AppContext &ctx,
                         state.config_loaded = false;
                         state.status = "Error parsing config: " + err;
                     }
+                }
+
+                // Config-free aruco: synthesize CalibConfig from UI fields
+                if (state.project.config_file.empty() &&
+                    !state.project.aruco_media_folder.empty() &&
+                    !state.calib_aruco_media_info.serials.empty()) {
+                    // Derive camera names from detected media
+                    state.project.camera_names =
+                        state.calib_aruco_media_info.serials;
+                    // Build CalibConfig from project fields
+                    state.config.cam_ordered =
+                        state.calib_aruco_media_info.serials;
+                    state.config.charuco_setup = state.project.charuco_setup;
+                    state.config.img_path = state.project.aruco_media_folder;
+                    state.config_loaded = true;
+                    state.init_camera_enabled();
+                    state.images_loaded = false;
+                    state.img_done = false;
+                    state.vid_done = false;
+                    // Populate legacy fields
+                    if (state.project.aruco_is_video())
+                        state.project.aruco_video_folder =
+                            state.project.aruco_media_folder;
+                    state.project.img_path = state.project.aruco_media_folder;
                 }
 
                 // Derive camera names for laser-only path (no config)

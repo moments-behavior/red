@@ -300,6 +300,30 @@ default_output_folder(const std::string &config_path) {
     return (parent / "calibration").string();
 }
 
+// Generate ground truth 3D points for a ChArUco board (center-origin, z=0).
+// Corner ordering matches aruco_detect corner IDs: row-major, X-decreasing, Y-increasing.
+// Optional offsets shift the entire grid (e.g., if board is not at arena center).
+inline std::vector<std::vector<float>>
+generate_charuco_gt_pts(const CharucoSetup &cs,
+                        float x_offset = 0, float y_offset = 0,
+                        float z_offset = 0) {
+    int inner_w = cs.w - 1;
+    int inner_h = cs.h - 1;
+    float half_x = (inner_w - 1) * cs.square_side_length / 2.0f;
+    float half_y = (inner_h - 1) * cs.square_side_length / 2.0f;
+
+    std::vector<std::vector<float>> pts;
+    pts.reserve(inner_w * inner_h);
+    for (int row = 0; row < inner_h; row++) {
+        for (int col = 0; col < inner_w; col++) {
+            float x = half_x - col * cs.square_side_length + x_offset;
+            float y = -half_y + row * cs.square_side_length + y_offset;
+            pts.push_back({x, y, z_offset});
+        }
+    }
+    return pts;
+}
+
 // ── Calibration Project (.redproj) ──────────────────────────────────────────
 
 enum class CameraModel { Projective = 0, Telecentric = 1 };
@@ -313,6 +337,9 @@ struct CalibProject {
     std::string config_file;           // path to config.json
     std::string aruco_media_folder;    // folder with aruco images or videos
     std::string aruco_media_type;      // "images" or "videos" (auto-detected)
+
+    // Board setup (persisted for config-free projects; overridden by config.json)
+    CharucoSetup charuco_setup;
 
     // Global registration media (optional — separate from calibration media)
     std::string global_reg_media_folder; // folder with global reg images or videos
@@ -390,6 +417,11 @@ inline void to_json(nlohmann::json &j, const CalibProject &p) {
                        {"config_file", p.config_file},
                        {"aruco_media_folder", p.aruco_media_folder},
                        {"aruco_media_type", p.aruco_media_type},
+                       {"charuco_w", p.charuco_setup.w},
+                       {"charuco_h", p.charuco_setup.h},
+                       {"charuco_square_side", p.charuco_setup.square_side_length},
+                       {"charuco_marker_side", p.charuco_setup.marker_side_length},
+                       {"charuco_dictionary", p.charuco_setup.dictionary},
                        {"global_reg_media_folder", p.global_reg_media_folder},
                        {"global_reg_media_type", p.global_reg_media_type},
                        // Legacy fields (kept for backward compat)
@@ -429,6 +461,13 @@ inline void from_json(const nlohmann::json &j, CalibProject &p) {
     // New unified aruco media fields
     p.aruco_media_folder = j.value("aruco_media_folder", std::string{});
     p.aruco_media_type = j.value("aruco_media_type", std::string{});
+    // Board setup (config-free projects)
+    p.charuco_setup.w = j.value("charuco_w", 5);
+    p.charuco_setup.h = j.value("charuco_h", 5);
+    p.charuco_setup.square_side_length = j.value("charuco_square_side", 60.0f);
+    p.charuco_setup.marker_side_length = j.value("charuco_marker_side", 37.5f);
+    p.charuco_setup.dictionary = j.value("charuco_dictionary", 0);
+
     p.global_reg_media_folder = j.value("global_reg_media_folder", std::string{});
     p.global_reg_media_type = j.value("global_reg_media_type", std::string{});
 
