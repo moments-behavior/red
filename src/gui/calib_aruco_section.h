@@ -95,173 +95,343 @@ inline void DrawCalibArucoSection(CalibrationToolState &state, AppContext &ctx,
                         state.config.charuco_setup.h,
                         state.config.charuco_setup.square_side_length);
 
-            // ---- Sub-section: Image Calibration ----
-            bool has_images = !state.config.img_path.empty();
-            if (has_images) {
-            if (ImGui::CollapsingHeader("Image Calibration",
-                    ImGuiTreeNodeFlags_DefaultOpen)) {
-                ImGui::Indent();
-                ImGui::Text("Image Path: %s",
-                            state.config.img_path.c_str());
+            // ── Unified ArUco Calibration ──
+            {
+                std::string media_folder = state.project.effective_aruco_media();
+                bool is_video = state.project.aruco_is_video();
+                bool is_image = state.project.aruco_is_image();
 
-                // Count images (cached)
-                static std::string cached_img_path;
-                static int cached_img_count = 0;
-                static int cached_per_cam = 0;
-                if (cached_img_path != state.config.img_path) {
-                    cached_img_path = state.config.img_path;
-                    auto files =
-                        CalibrationTool::discover_images(state.config);
-                    cached_img_count = (int)files.size();
-                    if (!state.config.cam_ordered.empty()) {
-                        cached_per_cam =
-                            CalibrationTool::count_images_per_camera(
-                                files, state.config.cam_ordered[0]);
+                // Auto-detect media info (cached)
+                static std::string cached_media_folder;
+                static CalibrationTool::ArucoMediaInfo cached_media_info;
+                if (cached_media_folder != media_folder) {
+                    cached_media_folder = media_folder;
+                    cached_media_info = CalibrationTool::detect_aruco_media(media_folder);
+                    if (is_video) {
+                        auto vids = CalibrationTool::discover_aruco_videos(
+                            media_folder, state.config.cam_ordered);
+                        state.aruco_video_count = (int)vids.size();
+                        if (!vids.empty())
+                            state.aruco_total_frames =
+                                CalibrationPipeline::get_video_frame_count(
+                                    vids.begin()->second);
                     }
                 }
-                ImGui::Text("Images: %d total (%d per camera)",
-                            cached_img_count, cached_per_cam);
 
-                // Load Images button
-                if (!state.images_loaded) {
-                    if (ImGui::Button("Load Images")) {
-                        auto files =
-                            CalibrationTool::discover_images(state.config);
-                        if (files.empty()) {
-                            state.status =
-                                "Error: No matching images found in " +
-                                state.config.img_path;
-                        } else {
-                            pm.media_folder = state.config.img_path;
-                            pm.camera_names.clear();
-                            imgs_names.clear();
-                            cb.load_images(files);
-                            state.images_loaded = true;
-                            state.status =
-                                "Loaded " + std::to_string(files.size()) +
-                                " images across " +
-                                std::to_string(
-                                    state.config.cam_ordered.size()) +
-                                " cameras";
+                ImGui::Text("Media: %s", media_folder.c_str());
+                if (!cached_media_info.description.empty())
+                    ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f),
+                        "%s", cached_media_info.description.c_str());
+
+                // Load Media button
+                if (is_video) {
+                    if (!state.aruco_media_loaded) {
+                        ImGui::BeginDisabled(
+                            state.aruco_video_count == 0 ||
+                            state.aruco_running());
+                        if (ImGui::Button("Load Videos##aruco_load")) {
+                            state.status = "Loading aruco videos...";
+                            cb.deferred->enqueue([&state, &pm, &ps, &cb,
+                                                  &imgs_names, dc_context, media_folder
+#ifdef __APPLE__
+                                                  , &mac_last_uploaded_frame
+#endif
+                            ]() {
+                                try {
+                                    if (ps.video_loaded)
+                                        cb.unload_media();
+                                    imgs_names.clear();
+#ifdef __APPLE__
+                                    for (size_t ci = 0;
+                                         ci < mac_last_uploaded_frame.size(); ci++)
+                                        mac_last_uploaded_frame[ci] = -1;
+#endif
+                                    pm.media_folder = media_folder;
+                                    pm.camera_names.clear();
+                                    for (const auto &cn :
+                                         state.config.cam_ordered)
+                                        pm.camera_names.push_back("Cam" + cn);
+                                    cb.load_videos();
+                                    cb.print_metadata();
+                                    state.aruco_total_frames =
+                                        dc_context->estimated_num_frames;
+                                    state.aruco_media_loaded = true;
+                                    state.status =
+                                        "Loaded " +
+                                        std::to_string(
+                                            state.config.cam_ordered.size()) +
+                                        " aruco videos";
+                                } catch (const std::exception &e) {
+                                    state.status =
+                                        std::string("Error loading videos: ") +
+                                        e.what();
+                                }
+                            });
+                        }
+                        ImGui::EndDisabled();
+                    } else {
+                        ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f),
+                                           "Videos loaded");
+                        ImGui::SameLine();
+                        if (ImGui::Button("Close##aruco_close")) {
+                            close_media_deferred(state.aruco_media_loaded,
+                                                 state.status, "Media closed");
                         }
                     }
-                } else {
-                    ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f),
-                                       "Images loaded");
-                    ImGui::SameLine();
-                    if (ImGui::Button("Close Images##aruco_close_img")) {
-                        close_media_deferred(state.images_loaded, state.status, "Images closed");
+                } else if (is_image) {
+                    if (!state.aruco_media_loaded) {
+                        if (ImGui::Button("Load Images##aruco_load")) {
+                            auto files =
+                                CalibrationTool::discover_images(state.config);
+                            if (files.empty()) {
+                                state.status =
+                                    "Error: No matching images found in " +
+                                    media_folder;
+                            } else {
+                                pm.media_folder = media_folder;
+                                pm.camera_names.clear();
+                                imgs_names.clear();
+                                cb.load_images(files);
+                                state.aruco_media_loaded = true;
+                                state.status =
+                                    "Loaded " + std::to_string(files.size()) +
+                                    " images across " +
+                                    std::to_string(
+                                        state.config.cam_ordered.size()) +
+                                    " cameras";
+                            }
+                        }
+                    } else {
+                        ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f),
+                                           "Images loaded");
+                        ImGui::SameLine();
+                        if (ImGui::Button("Close##aruco_close")) {
+                            close_media_deferred(state.aruco_media_loaded,
+                                                 state.status, "Media closed");
+                        }
                     }
                 }
 
                 ImGui::Separator();
 
-                // Poll image pipeline future
-                if (state.img_running && state.img_future.valid()) {
-                    auto fs = state.img_future.wait_for(
+                // Video-only: frame range sliders
+                if (is_video) {
+                    int slider_max = state.aruco_total_frames > 0
+                        ? state.aruco_total_frames : 100000;
+                    ImGui::SliderInt("Start Frame##aruco",
+                                     &state.aruco_start_frame, 0, slider_max);
+                    ImGui::SliderInt("Stop Frame (0=all)##aruco",
+                                     &state.aruco_stop_frame, 0, slider_max);
+                    ImGui::SliderInt("Every Nth Frame##aruco",
+                                     &state.aruco_frame_step, 1, 100);
+                    {
+                        int eff_stop = state.aruco_stop_frame > 0
+                            ? state.aruco_stop_frame
+                            : (state.aruco_total_frames > 0
+                                ? state.aruco_total_frames : 0);
+                        if (eff_stop > state.aruco_start_frame &&
+                            state.aruco_frame_step > 0) {
+                            int est = (eff_stop - state.aruco_start_frame) /
+                                      state.aruco_frame_step;
+                            ImGui::Text("~%d frames per camera (%d cameras = %d total)",
+                                        est, state.aruco_video_count,
+                                        est * state.aruco_video_count);
+                        }
+                    }
+                    ImGui::Separator();
+                }
+
+                // Global registration frame selector
+                if (!state.config.world_coordinate_imgs.empty()) {
+                    ImGui::Text("Global Registration Frame: %s",
+                        state.config.world_coordinate_imgs[0].c_str());
+                    if (!state.config.gt_pts.empty())
+                        ImGui::SameLine();
+                        ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f),
+                            "(%d ground truth points)",
+                            (int)state.config.gt_pts.begin()->second.size());
+                }
+
+                ImGui::Separator();
+
+                // Poll unified calibration future
+                if (state.aruco_running_flag && state.aruco_future.valid()) {
+                    auto fs = state.aruco_future.wait_for(
                         std::chrono::milliseconds(0));
                     if (fs == std::future_status::ready) {
-                        state.img_result = state.img_future.get();
-                        state.img_running = false;
-                        state.img_done = true;
-                        if (state.img_result.success) {
-                            state.project.image_output_folder =
-                                state.img_result.output_folder;
+                        state.aruco_result = state.aruco_future.get();
+                        state.aruco_running_flag = false;
+                        state.aruco_done = true;
+                        if (state.aruco_result.success) {
+                            state.project.aruco_output_folder =
+                                state.aruco_result.output_folder;
+                            // Persist calibration run parameters
+                            state.project.last_aruco_start_frame = state.aruco_start_frame;
+                            state.project.last_aruco_stop_frame = state.aruco_stop_frame;
+                            state.project.last_aruco_frame_step = is_video ? state.aruco_frame_step : 0;
+                            state.project.last_aruco_total_video_frames = state.aruco_total_frames;
+                            state.project.last_aruco_cameras_used = (int)state.aruco_result.cam_names.size();
+                            state.project.last_aruco_mean_reproj = state.aruco_result.mean_reproj_error;
                             std::string pf =
                                 state.project.project_path + "/" +
                                 state.project.project_name + ".redproj";
                             std::string se;
                             CalibrationTool::save_project(
                                 state.project, pf, &se);
-                            state.status =
-                                "Image calibration complete! Reproj: " +
+                            std::string msg =
+                                "Calibration complete! Reproj: " +
                                 std::to_string(
-                                    state.img_result.mean_reproj_error)
+                                    state.aruco_result.mean_reproj_error)
                                     .substr(0, 5) + " px";
+                            if (!state.aruco_result.warning.empty()) {
+                                msg += " | " + state.aruco_result.warning;
+                                for (size_t i = 0; i < state.config.cam_ordered.size(); i++) {
+                                    bool found = false;
+                                    for (const auto &name : state.aruco_result.cam_names)
+                                        if (name == state.config.cam_ordered[i]) { found = true; break; }
+                                    if (!found && i < state.camera_enabled.size())
+                                        state.camera_enabled[i] = false;
+                                }
+                                ctx.toasts.push(state.aruco_result.warning,
+                                                Toast::Warning, 8.0f);
+                            }
+                            state.status = msg;
+                            // Auto-open 3D viewer
+                            state.calib_viewer.result = &state.aruco_result;
+                            state.calib_viewer.show = true;
+                            state.calib_viewer.selected_camera = -1;
+                            state.calib_viewer.cached_selection = -2;
                         } else {
                             state.status =
-                                "Error: " + state.img_result.error;
+                                "Error: " + state.aruco_result.error;
                         }
                     }
                 }
 
-                // Calibrate (images) button
-                bool img_can_run = state.config_loaded &&
-                    !state.config.img_path.empty() &&
+                // Calibrate button (unified — runs experimental pipeline)
+                bool can_run = state.config_loaded &&
+                    !media_folder.empty() &&
                     !state.aruco_running();
-                ImGui::BeginDisabled(!img_can_run);
-                if (ImGui::Button("Calibrate##img")) {
-                    state.img_running = true;
-                    state.img_done = false;
-                    state.status = "Starting image calibration...";
+                ImGui::BeginDisabled(!can_run);
+                if (ImGui::Button("Calibrate##aruco_unified")) {
+                    state.aruco_running_flag = true;
+                    state.aruco_done = false;
+                    state.status = "Starting calibration...";
                     std::string base =
                         state.project.project_path +
-                        "/aruco_image_calibration";
-                    {
+                        "/aruco_calibration";
+
+                    auto enabled = state.enabled_cameras();
                     auto filtered_config = state.config;
-                    filtered_config.cam_ordered = state.enabled_cameras();
-                    state.img_future = std::async(
-                        std::launch::async,
-                        [config = filtered_config, base,
-                         status_ptr = &state.status]() {
+                    filtered_config.cam_ordered = enabled;
+                    // Pass global registration media info to pipeline
+                    filtered_config.global_reg_media_folder =
+                        state.project.global_reg_media_folder;
+                    filtered_config.global_reg_media_type =
+                        state.project.global_reg_media_type;
+
+                    if (is_video) {
+                        CalibrationPipeline::VideoFrameRange vfr;
+                        vfr.video_folder = media_folder;
+                        vfr.cam_ordered = enabled;
+                        vfr.start_frame = state.aruco_start_frame;
+                        vfr.stop_frame = state.aruco_stop_frame;
+                        vfr.frame_step = state.aruco_frame_step;
+                        state.aruco_future = std::async(
+                            std::launch::async,
+                            [config = filtered_config, base,
+                             status_ptr = &state.status, vfr]() {
 #ifdef __APPLE__
-                            auto am = aruco_metal_create();
-                            aruco_detect::GpuThresholdFunc gfn =
-                                am ? aruco_metal_threshold_batch : nullptr;
-                            auto r = CalibrationPipeline::run_full_pipeline(
-                                config, base, status_ptr,
-                                nullptr, gfn, am);
-                            aruco_metal_destroy(am);
-                            return r;
+                                auto am = aruco_metal_create();
+                                aruco_detect::GpuThresholdFunc gfn =
+                                    am ? aruco_metal_threshold_batch : nullptr;
+                                auto r = CalibrationPipeline::run_experimental_pipeline(
+                                    config, base, status_ptr,
+                                    &vfr, gfn, am);
+                                aruco_metal_destroy(am);
+                                return r;
 #else
-                            return CalibrationPipeline::run_full_pipeline(
-                                config, base, status_ptr);
+                                return CalibrationPipeline::run_experimental_pipeline(
+                                    config, base, status_ptr, &vfr);
 #endif
-                        });
+                            });
+                    } else {
+                        state.aruco_future = std::async(
+                            std::launch::async,
+                            [config = filtered_config, base,
+                             status_ptr = &state.status]() {
+#ifdef __APPLE__
+                                auto am = aruco_metal_create();
+                                aruco_detect::GpuThresholdFunc gfn =
+                                    am ? aruco_metal_threshold_batch : nullptr;
+                                auto r = CalibrationPipeline::run_experimental_pipeline(
+                                    config, base, status_ptr,
+                                    nullptr, gfn, am);
+                                aruco_metal_destroy(am);
+                                return r;
+#else
+                                return CalibrationPipeline::run_experimental_pipeline(
+                                    config, base, status_ptr);
+#endif
+                            });
                     }
                 }
                 ImGui::EndDisabled();
-                if (state.img_running) {
+                if (state.aruco_running_flag) {
                     ImGui::SameLine();
                     ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f),
                                        "Running...");
                 }
-                if (state.img_done && state.img_result.success) {
+
+                // Results display
+                if (state.aruco_done && state.aruco_result.success) {
                     ImGui::TextColored(
                         ImVec4(0.0f, 1.0f, 0.0f, 1.0f),
                         "Mean reproj error: %.3f px",
-                        state.img_result.mean_reproj_error);
+                        state.aruco_result.mean_reproj_error);
                     ImGui::Text("Output: %s",
-                        state.project.image_output_folder.c_str());
+                        state.project.aruco_output_folder.c_str());
+                    ImGui::SameLine();
+                    if (ImGui::Button("3D Viewer##aruco_viewer")) {
+                        state.calib_viewer.result = &state.aruco_result;
+                        state.calib_viewer.show = true;
+                        state.calib_viewer.selected_camera = -1;
+                        state.calib_viewer.cached_selection = -2;
+                    }
                 }
 
-                // Show 3D button for image experimental results (loads from disk if needed)
+                // Load previous calibration from disk
                 {
-                    std::string exp_folder = state.project.project_path + "/aruco_image_experimental";
-                    bool has_db = CalibrationPipeline::has_calibration_database(exp_folder);
-                    bool already_showing = (state.calib_viewer.show &&
-                        state.calib_viewer.result == &state.exp_img_result);
-                    // Also check if experimental result is in memory
-                    if (!has_db && state.exp_img_done && state.exp_img_result.success)
+                    std::string cal_folder = state.project.project_path + "/aruco_calibration";
+                    bool has_db = CalibrationPipeline::has_calibration_database(cal_folder);
+                    if (!has_db && state.aruco_done && state.aruco_result.success)
                         has_db = true;
+                    // Also check legacy folders
+                    if (!has_db) {
+                        std::string legacy_img = state.project.project_path + "/aruco_image_experimental";
+                        std::string legacy_vid = state.project.project_path + "/aruco_video_experimental";
+                        if (CalibrationPipeline::has_calibration_database(legacy_img))
+                            { cal_folder = legacy_img; has_db = true; }
+                        else if (CalibrationPipeline::has_calibration_database(legacy_vid))
+                            { cal_folder = legacy_vid; has_db = true; }
+                    }
                     ImGui::BeginDisabled(!has_db);
-                    if (ImGui::Button("Load Calibration##img_exp_load")) {
-                        if (state.exp_img_done && state.exp_img_result.success) {
-                            state.calib_viewer.result = &state.exp_img_result;
+                    if (ImGui::Button("Load Previous##aruco_load_prev")) {
+                        if (state.aruco_done && state.aruco_result.success) {
+                            state.calib_viewer.result = &state.aruco_result;
                         } else {
                             state.loaded_result = CalibrationPipeline::load_calibration_from_folder(
-                                exp_folder, state.config.cam_ordered);
+                                cal_folder, state.config.cam_ordered);
                             if (state.loaded_result.success) {
-                                state.exp_img_result = state.loaded_result;
-                                state.exp_img_done = true; // enables Quality Dashboard
-                                state.calib_viewer.result = &state.exp_img_result;
+                                state.aruco_result = state.loaded_result;
+                                state.aruco_done = true;
+                                state.calib_viewer.result = &state.aruco_result;
                                 std::string msg = "Loaded calibration (" +
                                     std::to_string((int)state.loaded_result.cameras.size()) +
                                     " cameras): " +
-                                    std::to_string(state.exp_img_result.mean_reproj_error).substr(0,5) + " px";
+                                    std::to_string(state.aruco_result.mean_reproj_error).substr(0,5) + " px";
                                 if (!state.loaded_result.warning.empty()) {
                                     msg += " | " + state.loaded_result.warning;
-                                    // Auto-uncheck cameras that weren't in the loaded result
                                     for (size_t i = 0; i < state.config.cam_ordered.size(); i++) {
                                         bool found = false;
                                         for (const auto &name : state.loaded_result.cam_names)
@@ -284,421 +454,18 @@ inline void DrawCalibArucoSection(CalibrationToolState &state, AppContext &ctx,
                     ImGui::EndDisabled();
                     if (!has_db) {
                         ImGui::SameLine();
-                        ImGui::TextDisabled("(run Experimental first)");
+                        ImGui::TextDisabled("(no previous calibration)");
                     }
                 }
+            } // end unified ArUco Calibration
 
-                ImGui::Spacing();
-
-                // Poll experimental image pipeline future
-                if (state.exp_img_running && state.exp_img_future.valid()) {
-                    auto fs = state.exp_img_future.wait_for(
-                        std::chrono::milliseconds(0));
-                    if (fs == std::future_status::ready) {
-                        state.exp_img_result = state.exp_img_future.get();
-                        state.exp_img_running = false;
-                        state.exp_img_done = true;
-                        if (state.exp_img_result.success) {
-                            state.project.image_experimental_folder =
-                                state.exp_img_result.output_folder;
-                            std::string pf =
-                                state.project.project_path + "/" +
-                                state.project.project_name + ".redproj";
-                            std::string se;
-                            CalibrationTool::save_project(
-                                state.project, pf, &se);
-                            std::string msg =
-                                "Experimental image calibration complete! Reproj: " +
-                                std::to_string(
-                                    state.exp_img_result.mean_reproj_error)
-                                    .substr(0, 5) + " px";
-                            // Show warning about skipped cameras and uncheck them
-                            if (!state.exp_img_result.warning.empty()) {
-                                msg += " | " + state.exp_img_result.warning;
-                                // Uncheck skipped cameras in the Camera Selection UI
-                                for (size_t i = 0; i < state.config.cam_ordered.size(); i++) {
-                                    // Check if this camera is NOT in the result's cam_names
-                                    bool found = false;
-                                    for (const auto &name : state.exp_img_result.cam_names)
-                                        if (name == state.config.cam_ordered[i]) { found = true; break; }
-                                    if (!found && i < state.camera_enabled.size())
-                                        state.camera_enabled[i] = false;
-                                }
-                                ctx.toasts.push(state.exp_img_result.warning,
-                                                Toast::Warning, 8.0f);
-                            }
-                            state.status = msg;
-                            // Auto-open 3D viewer
-                            state.calib_viewer.result = &state.exp_img_result;
-                            state.calib_viewer.show = true;
-                            state.calib_viewer.selected_camera = -1;
-                            state.calib_viewer.cached_selection = -2;
-                        } else {
-                            state.status =
-                                "Error: " + state.exp_img_result.error;
-                        }
-                    }
-                }
-
-                // Experimental (images) button
-                ImGui::BeginDisabled(!img_can_run);
-                if (ImGui::Button("Experimental##exp_img")) {
-                    state.exp_img_running = true;
-                    state.exp_img_done = false;
-                    state.status = "Starting experimental image calibration...";
-                    std::string base =
-                        state.project.project_path +
-                        "/aruco_image_experimental";
-                    {
-                    auto filtered_config = state.config;
-                    filtered_config.cam_ordered = state.enabled_cameras();
-                    state.exp_img_future = std::async(
-                        std::launch::async,
-                        [config = filtered_config, base,
-                         status_ptr = &state.status]() {
-#ifdef __APPLE__
-                            auto am = aruco_metal_create();
-                            aruco_detect::GpuThresholdFunc gfn =
-                                am ? aruco_metal_threshold_batch : nullptr;
-                            auto r = CalibrationPipeline::run_experimental_pipeline(
-                                config, base, status_ptr,
-                                nullptr, gfn, am);
-                            aruco_metal_destroy(am);
-                            return r;
-#else
-                            return CalibrationPipeline::run_experimental_pipeline(
-                                config, base, status_ptr);
-#endif
-                        });
-                    }
-                }
-                ImGui::EndDisabled();
-                if (state.exp_img_running) {
-                    ImGui::SameLine();
-                    ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f),
-                                       "Running...");
-                }
-                if (state.exp_img_done && state.exp_img_result.success) {
-                    ImGui::TextColored(
-                        ImVec4(0.0f, 1.0f, 0.0f, 1.0f),
-                        "Experimental reproj error: %.3f px",
-                        state.exp_img_result.mean_reproj_error);
-                    ImGui::Text("Output: %s",
-                        state.project.image_experimental_folder.c_str());
-                    ImGui::SameLine();
-                    if (ImGui::Button("Load Calibration##exp_img")) {
-                        state.calib_viewer.result = &state.exp_img_result;
-                        state.calib_viewer.show = true;
-                    }
-                }
-
-                ImGui::Unindent();
-            } // end Image Calibration header
-            } // end has_images
-
-            // ---- Sub-section: Video Calibration ----
-            bool has_videos = !state.project.aruco_video_folder.empty();
-            if (has_videos) {
-            if (ImGui::CollapsingHeader("Video Calibration",
-                    ImGuiTreeNodeFlags_DefaultOpen)) {
-                ImGui::Indent();
-
-                // Cache video discovery
-                static std::string cached_vid_folder;
-                if (cached_vid_folder != state.project.aruco_video_folder) {
-                    cached_vid_folder = state.project.aruco_video_folder;
-                    auto vids = CalibrationTool::discover_aruco_videos(
-                        state.project.aruco_video_folder,
-                        state.config.cam_ordered);
-                    state.aruco_video_count = (int)vids.size();
-                    if (!vids.empty()) {
-                        state.aruco_total_frames =
-                            CalibrationPipeline::get_video_frame_count(
-                                vids.begin()->second);
-                    }
-                }
-
-                ImGui::Text("Video Path: %s",
-                            state.project.aruco_video_folder.c_str());
-                ImGui::Text("Videos: %d cameras, ~%d frames each",
-                            state.aruco_video_count,
-                            state.aruco_total_frames);
-
-                // Load Videos button (display in camera viewports)
-                if (!state.aruco_videos_loaded) {
-                    ImGui::BeginDisabled(
-                        state.aruco_video_count == 0 ||
-                        state.aruco_running());
-                    if (ImGui::Button("Load Videos##aruco_vid")) {
-                        // Defer unload+load to next frame start
-                        // (freeing Metal textures mid-frame crashes ImGui)
-                        state.status = "Loading aruco videos...";
-                        cb.deferred->enqueue([&state, &pm, &ps, &cb,
-                                              &imgs_names, dc_context
-#ifdef __APPLE__
-                                              , &mac_last_uploaded_frame
-#endif
-                        ]() {
-                            try {
-                                if (ps.video_loaded)
-                                    cb.unload_media();
-                                imgs_names.clear();
-#ifdef __APPLE__
-                                for (size_t ci = 0;
-                                     ci < mac_last_uploaded_frame.size(); ci++)
-                                    mac_last_uploaded_frame[ci] = -1;
-#endif
-                                pm.media_folder =
-                                    state.project.aruco_video_folder;
-                                pm.camera_names.clear();
-                                for (const auto &cn :
-                                     state.config.cam_ordered)
-                                    pm.camera_names.push_back("Cam" + cn);
-                                cb.load_videos();
-                                cb.print_metadata();
-                                state.aruco_total_frames =
-                                    dc_context->estimated_num_frames;
-                                state.aruco_videos_loaded = true;
-                                state.status =
-                                    "Loaded " +
-                                    std::to_string(
-                                        state.config.cam_ordered.size()) +
-                                    " aruco videos";
-                            } catch (const std::exception &e) {
-                                state.status =
-                                    std::string("Error loading videos: ") +
-                                    e.what();
-                            }
-                        });
-                    }
-                    ImGui::EndDisabled();
-                } else {
-                    ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f),
-                                       "Videos loaded");
-                    ImGui::SameLine();
-                    if (ImGui::Button("Close Videos##aruco_close")) {
-                        close_media_deferred(state.aruco_videos_loaded, state.status, "Videos closed");
-                    }
-                }
-
-                ImGui::Separator();
-
-                int slider_max = state.aruco_total_frames > 0
-                    ? state.aruco_total_frames : 100000;
-                ImGui::SliderInt("Start Frame##aruco",
-                                 &state.aruco_start_frame, 0, slider_max);
-                ImGui::SliderInt("Stop Frame (0=all)##aruco",
-                                 &state.aruco_stop_frame, 0, slider_max);
-                ImGui::SliderInt("Every Nth Frame##aruco",
-                                 &state.aruco_frame_step, 1, 100);
-                {
-                    int eff_stop = state.aruco_stop_frame > 0
-                        ? state.aruco_stop_frame
-                        : (state.aruco_total_frames > 0
-                            ? state.aruco_total_frames : 0);
-                    if (eff_stop > state.aruco_start_frame &&
-                        state.aruco_frame_step > 0) {
-                        int est = (eff_stop - state.aruco_start_frame) /
-                                  state.aruco_frame_step;
-                        ImGui::Text("~%d frames per camera (%d cameras = %d total)",
-                                    est, state.aruco_video_count,
-                                    est * state.aruco_video_count);
-                    }
-                }
-
-                ImGui::Separator();
-
-                // Poll video pipeline future
-                if (state.vid_running && state.vid_future.valid()) {
-                    auto fs = state.vid_future.wait_for(
-                        std::chrono::milliseconds(0));
-                    if (fs == std::future_status::ready) {
-                        state.vid_result = state.vid_future.get();
-                        state.vid_running = false;
-                        state.vid_done = true;
-                        if (state.vid_result.success) {
-                            state.project.video_output_folder =
-                                state.vid_result.output_folder;
-                            std::string pf =
-                                state.project.project_path + "/" +
-                                state.project.project_name + ".redproj";
-                            std::string se;
-                            CalibrationTool::save_project(
-                                state.project, pf, &se);
-                            state.status =
-                                "Video calibration complete! Reproj: " +
-                                std::to_string(
-                                    state.vid_result.mean_reproj_error)
-                                    .substr(0, 5) + " px";
-                        } else {
-                            state.status =
-                                "Error: " + state.vid_result.error;
-                        }
-                    }
-                }
-
-                // Calibrate (video) button
-                bool vid_can_run = state.config_loaded &&
-                    state.aruco_video_count > 0 &&
-                    !state.aruco_running();
-                ImGui::BeginDisabled(!vid_can_run);
-                if (ImGui::Button("Calibrate##vid")) {
-                    state.vid_running = true;
-                    state.vid_done = false;
-                    state.status = "Starting video calibration...";
-                    std::string base =
-                        state.project.project_path +
-                        "/aruco_video_calibration";
-
-                    auto enabled = state.enabled_cameras();
-                    CalibrationPipeline::VideoFrameRange vfr;
-                    vfr.video_folder = state.project.aruco_video_folder;
-                    vfr.cam_ordered = enabled;
-                    vfr.start_frame = state.aruco_start_frame;
-                    vfr.stop_frame = state.aruco_stop_frame;
-                    vfr.frame_step = state.aruco_frame_step;
-
-                    auto filtered_config = state.config;
-                    filtered_config.cam_ordered = enabled;
-                    state.vid_future = std::async(
-                        std::launch::async,
-                        [config = filtered_config, base,
-                         status_ptr = &state.status, vfr]() {
-#ifdef __APPLE__
-                            auto am = aruco_metal_create();
-                            aruco_detect::GpuThresholdFunc gfn =
-                                am ? aruco_metal_threshold_batch : nullptr;
-                            auto r = CalibrationPipeline::run_full_pipeline(
-                                config, base, status_ptr,
-                                &vfr, gfn, am);
-                            aruco_metal_destroy(am);
-                            return r;
-#else
-                            return CalibrationPipeline::run_full_pipeline(
-                                config, base, status_ptr, &vfr);
-#endif
-                        });
-                }
-                ImGui::EndDisabled();
-                if (state.vid_running) {
-                    ImGui::SameLine();
-                    ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f),
-                                       "Running...");
-                }
-                if (state.vid_done && state.vid_result.success) {
-                    ImGui::TextColored(
-                        ImVec4(0.0f, 1.0f, 0.0f, 1.0f),
-                        "Mean reproj error: %.3f px",
-                        state.vid_result.mean_reproj_error);
-                    ImGui::Text("Output: %s",
-                        state.project.video_output_folder.c_str());
-                }
-
-                ImGui::Spacing();
-
-                // Poll experimental video pipeline future
-                if (state.exp_vid_running && state.exp_vid_future.valid()) {
-                    auto fs = state.exp_vid_future.wait_for(
-                        std::chrono::milliseconds(0));
-                    if (fs == std::future_status::ready) {
-                        state.exp_vid_result = state.exp_vid_future.get();
-                        state.exp_vid_running = false;
-                        state.exp_vid_done = true;
-                        if (state.exp_vid_result.success) {
-                            state.project.video_experimental_folder =
-                                state.exp_vid_result.output_folder;
-                            std::string pf =
-                                state.project.project_path + "/" +
-                                state.project.project_name + ".redproj";
-                            std::string se;
-                            CalibrationTool::save_project(
-                                state.project, pf, &se);
-                            state.status =
-                                "Experimental video calibration complete! Reproj: " +
-                                std::to_string(
-                                    state.exp_vid_result.mean_reproj_error)
-                                    .substr(0, 5) + " px";
-                            // Auto-open 3D viewer
-                            state.calib_viewer.result = &state.exp_vid_result;
-                            state.calib_viewer.show = true;
-                            state.calib_viewer.selected_camera = -1;
-                            state.calib_viewer.cached_selection = -2;
-                        } else {
-                            state.status =
-                                "Error: " + state.exp_vid_result.error;
-                        }
-                    }
-                }
-
-                // Experimental (video) button
-                ImGui::BeginDisabled(!vid_can_run);
-                if (ImGui::Button("Experimental##exp_vid")) {
-                    state.exp_vid_running = true;
-                    state.exp_vid_done = false;
-                    state.status = "Starting experimental video calibration...";
-                    std::string base =
-                        state.project.project_path +
-                        "/aruco_video_experimental";
-
-                    auto exp_enabled = state.enabled_cameras();
-                    CalibrationPipeline::VideoFrameRange exp_vfr;
-                    exp_vfr.video_folder = state.project.aruco_video_folder;
-                    exp_vfr.cam_ordered = exp_enabled;
-                    exp_vfr.start_frame = state.aruco_start_frame;
-                    exp_vfr.stop_frame = state.aruco_stop_frame;
-                    exp_vfr.frame_step = state.aruco_frame_step;
-
-                    auto exp_filtered_config = state.config;
-                    exp_filtered_config.cam_ordered = exp_enabled;
-                    state.exp_vid_future = std::async(
-                        std::launch::async,
-                        [config = exp_filtered_config, base,
-                         status_ptr = &state.status, exp_vfr]() {
-#ifdef __APPLE__
-                            auto am = aruco_metal_create();
-                            aruco_detect::GpuThresholdFunc gfn =
-                                am ? aruco_metal_threshold_batch : nullptr;
-                            auto r = CalibrationPipeline::run_experimental_pipeline(
-                                config, base, status_ptr,
-                                &exp_vfr, gfn, am);
-                            aruco_metal_destroy(am);
-                            return r;
-#else
-                            return CalibrationPipeline::run_experimental_pipeline(
-                                config, base, status_ptr, &exp_vfr);
-#endif
-                        });
-                }
-                ImGui::EndDisabled();
-                if (state.exp_vid_running) {
-                    ImGui::SameLine();
-                    ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f),
-                                       "Running...");
-                }
-                if (state.exp_vid_done && state.exp_vid_result.success) {
-                    ImGui::TextColored(
-                        ImVec4(0.0f, 1.0f, 0.0f, 1.0f),
-                        "Experimental reproj error: %.3f px",
-                        state.exp_vid_result.mean_reproj_error);
-                    ImGui::Text("Output: %s",
-                        state.project.video_experimental_folder.c_str());
-                    ImGui::SameLine();
-                    if (ImGui::Button("Load Calibration##exp_vid")) {
-                        state.calib_viewer.result = &state.exp_vid_result;
-                        state.calib_viewer.show = true;
-                        state.calib_viewer.selected_camera = -1;
-                        state.calib_viewer.cached_selection = -2;
-                    }
-                }
-
-                ImGui::Unindent();
-            } // end Video Calibration header
-            } // end has_videos
-
-            // ---- Quality Dashboard (visible after any experimental pipeline completes) ----
+            // ---- Quality Dashboard (visible after calibration completes) ----
             {
                 const CalibrationPipeline::CalibrationResult *exp_result = nullptr;
-                if (state.exp_vid_done && state.exp_vid_result.success)
+                // Prefer unified result, fall back to legacy
+                if (state.aruco_done && state.aruco_result.success)
+                    exp_result = &state.aruco_result;
+                else if (state.exp_vid_done && state.exp_vid_result.success)
                     exp_result = &state.exp_vid_result;
                 else if (state.exp_img_done && state.exp_img_result.success)
                     exp_result = &state.exp_img_result;

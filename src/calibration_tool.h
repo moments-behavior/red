@@ -28,6 +28,9 @@ struct CalibConfig {
     std::map<std::string, std::vector<std::vector<float>>> gt_pts;
     Eigen::Matrix3d world_frame_rotation = Eigen::Matrix3d::Identity(); // post-Procrustes rotation
     nlohmann::json ba_config;
+    // Separate global registration media (set from CalibProject, not config.json)
+    std::string global_reg_media_folder;
+    std::string global_reg_media_type; // "videos" or "images"
 };
 
 // Parse config.json into CalibConfig. Returns true on success.
@@ -201,6 +204,82 @@ discover_aruco_videos(const std::string &video_folder,
     return result;
 }
 
+// Result of scanning a folder for aruco media (images or videos).
+struct ArucoMediaInfo {
+    std::string type;                     // "images", "videos", or "" (nothing found)
+    std::vector<std::string> serials;     // camera serials found (sorted)
+    int file_count = 0;                   // total files matched
+    std::string description;              // human-readable summary
+};
+
+// Scan a folder and auto-detect whether it contains aruco videos or images.
+// Checks for videos first (Cam*.{mp4,avi,mov,mkv}), then images ({serial}_*.{jpg,png,...}).
+inline ArucoMediaInfo detect_aruco_media(const std::string &folder) {
+    namespace fs = std::filesystem;
+    ArucoMediaInfo info;
+
+    if (folder.empty() || !fs::is_directory(folder))
+        return info;
+
+    const std::vector<std::string> vid_exts = {".mp4", ".avi", ".mov", ".mkv"};
+    const std::vector<std::string> img_exts = {".jpg", ".jpeg", ".png", ".tiff", ".tif"};
+
+    // Pass 1: look for videos (Cam*.{mp4,avi,mov,mkv})
+    std::set<std::string> vid_serials;
+    int vid_count = 0;
+    for (const auto &entry : fs::directory_iterator(folder)) {
+        if (!entry.is_regular_file()) continue;
+        std::string ext = entry.path().extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(),
+                       [](unsigned char c) { return std::tolower(c); });
+        if (std::find(vid_exts.begin(), vid_exts.end(), ext) == vid_exts.end())
+            continue;
+        std::string stem = entry.path().stem().string();
+        if (stem.size() > 3 && stem.substr(0, 3) == "Cam") {
+            vid_serials.insert(stem.substr(3));
+            vid_count++;
+        }
+    }
+
+    if (!vid_serials.empty()) {
+        info.type = "videos";
+        info.serials.assign(vid_serials.begin(), vid_serials.end());
+        info.file_count = vid_count;
+        info.description = "Found " + std::to_string(vid_count) + " videos (" +
+                           std::to_string(vid_serials.size()) + " cameras)";
+        return info;
+    }
+
+    // Pass 2: look for images ({serial}_*.{jpg,png,...})
+    std::set<std::string> img_serials;
+    int img_count = 0;
+    for (const auto &entry : fs::directory_iterator(folder)) {
+        if (!entry.is_regular_file()) continue;
+        std::string ext = entry.path().extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(),
+                       [](unsigned char c) { return std::tolower(c); });
+        if (std::find(img_exts.begin(), img_exts.end(), ext) == img_exts.end())
+            continue;
+        std::string filename = entry.path().filename().string();
+        auto underscore = filename.find('_');
+        if (underscore != std::string::npos) {
+            img_serials.insert(filename.substr(0, underscore));
+            img_count++;
+        }
+    }
+
+    if (!img_serials.empty()) {
+        info.type = "images";
+        info.serials.assign(img_serials.begin(), img_serials.end());
+        info.file_count = img_count;
+        info.description = "Found " + std::to_string(img_count) + " images (" +
+                           std::to_string(img_serials.size()) + " cameras)";
+        return info;
+    }
+
+    return info; // type remains empty — nothing found
+}
+
 // Count images per camera from a discovered file map.
 inline int count_images_per_camera(
     const std::map<std::string, std::string> &files,
@@ -230,10 +309,18 @@ struct CalibProject {
     std::string project_path;      // folder containing .redproj
     std::string project_root_path; // parent of project_path
 
-    // Aruco calibration (optional — empty for laser-only projects)
-    std::string config_file;       // path to config.json
-    std::string img_path;          // image directory (from config)
-    std::string aruco_video_folder; // folder with aruco board .mp4 videos
+    // Unified aruco calibration (images or videos — auto-detected)
+    std::string config_file;           // path to config.json
+    std::string aruco_media_folder;    // folder with aruco images or videos
+    std::string aruco_media_type;      // "images" or "videos" (auto-detected)
+
+    // Global registration media (optional — separate from calibration media)
+    std::string global_reg_media_folder; // folder with global reg images or videos
+    std::string global_reg_media_type;   // "images" or "videos" (auto-detected)
+
+    // Legacy fields (kept for backward compat with old .redproj files)
+    std::string img_path;              // old: image directory (from config)
+    std::string aruco_video_folder;    // old: folder with aruco board .mp4 videos
 
     // Laser refinement (optional — empty until laser phase)
     std::string media_folder;      // folder with laser .mp4 videos
@@ -248,13 +335,22 @@ struct CalibProject {
     std::string landmarks_3d_file;      // CSV with 3D landmark coordinates
 
     // Output
-    std::string output_folder;           // legacy (migrated to image/video on save)
-    std::string image_output_folder;     // aruco image YAML output
-    std::string video_output_folder;     // aruco video YAML output
-    std::string image_experimental_folder; // experimental image YAML output
-    std::string video_experimental_folder; // experimental video YAML output
+    std::string aruco_output_folder;     // unified aruco calibration output
+    std::string output_folder;           // legacy (migrated)
+    std::string image_output_folder;     // legacy: aruco image YAML output
+    std::string video_output_folder;     // legacy: aruco video YAML output
+    std::string image_experimental_folder; // legacy: experimental image YAML output
+    std::string video_experimental_folder; // legacy: experimental video YAML output
     std::string laser_output_folder;     // laser YAML output
     std::string tele_output_folder;      // telecentric DLT output
+
+    // Last aruco calibration run parameters (persisted for reproducibility)
+    int last_aruco_start_frame = 0;
+    int last_aruco_stop_frame = 0;
+    int last_aruco_frame_step = 0;       // 0 = not set (images or not yet run)
+    int last_aruco_total_video_frames = 0;
+    int last_aruco_cameras_used = 0;
+    double last_aruco_mean_reproj = 0;
 
     // Last DLT calibration result (persisted for reopening)
     int dlt_method = -1;                  // -1 = not run, 0/1/2 = Linear/k1/k1k2
@@ -262,12 +358,22 @@ struct CalibProject {
     std::vector<double> dlt_per_camera_rmse;
 
     // Mode helpers
-    bool has_aruco() const { return !config_file.empty(); }
+    bool has_aruco() const { return !config_file.empty() || !aruco_media_folder.empty(); }
     bool has_laser_input() const { return !calibration_folder.empty() && !media_folder.empty(); }
     bool is_telecentric() const { return camera_model == CameraModel::Telecentric; }
+    bool aruco_is_video() const { return aruco_media_type == "videos"; }
+    bool aruco_is_image() const { return aruco_media_type == "images"; }
     std::string effective_labels_folder() const {
         if (!landmark_labels_folder.empty()) return landmark_labels_folder;
         return project_path.empty() ? std::string{} : (project_path + "/red_data");
+    }
+
+    // Effective aruco media folder (unified field, with legacy fallback)
+    std::string effective_aruco_media() const {
+        if (!aruco_media_folder.empty()) return aruco_media_folder;
+        // Legacy fallback: prefer video folder, then image path
+        if (!aruco_video_folder.empty()) return aruco_video_folder;
+        return img_path;
     }
 
     bool has_telecentric_input() const {
@@ -282,6 +388,11 @@ inline void to_json(nlohmann::json &j, const CalibProject &p) {
                        {"project_path", p.project_path},
                        {"project_root_path", p.project_root_path},
                        {"config_file", p.config_file},
+                       {"aruco_media_folder", p.aruco_media_folder},
+                       {"aruco_media_type", p.aruco_media_type},
+                       {"global_reg_media_folder", p.global_reg_media_folder},
+                       {"global_reg_media_type", p.global_reg_media_type},
+                       // Legacy fields (kept for backward compat)
                        {"img_path", p.img_path},
                        {"aruco_video_folder", p.aruco_video_folder},
                        {"media_folder", p.media_folder},
@@ -290,12 +401,20 @@ inline void to_json(nlohmann::json &j, const CalibProject &p) {
                        {"camera_model", static_cast<int>(p.camera_model)},
                        {"landmark_labels_folder", p.landmark_labels_folder},
                        {"landmarks_3d_file", p.landmarks_3d_file},
+                       {"aruco_output_folder", p.aruco_output_folder},
+                       // Legacy output fields (kept for backward compat)
                        {"image_output_folder", p.image_output_folder},
                        {"video_output_folder", p.video_output_folder},
                        {"image_experimental_folder", p.image_experimental_folder},
                        {"video_experimental_folder", p.video_experimental_folder},
                        {"laser_output_folder", p.laser_output_folder},
                        {"tele_output_folder", p.tele_output_folder},
+                       {"last_aruco_start_frame", p.last_aruco_start_frame},
+                       {"last_aruco_stop_frame", p.last_aruco_stop_frame},
+                       {"last_aruco_frame_step", p.last_aruco_frame_step},
+                       {"last_aruco_total_video_frames", p.last_aruco_total_video_frames},
+                       {"last_aruco_cameras_used", p.last_aruco_cameras_used},
+                       {"last_aruco_mean_reproj", p.last_aruco_mean_reproj},
                        {"dlt_method", p.dlt_method},
                        {"dlt_mean_rmse", p.dlt_mean_rmse},
                        {"dlt_per_camera_rmse", p.dlt_per_camera_rmse}};
@@ -306,14 +425,39 @@ inline void from_json(const nlohmann::json &j, CalibProject &p) {
     p.project_path = j.value("project_path", std::string{});
     p.project_root_path = j.value("project_root_path", std::string{});
     p.config_file = j.value("config_file", std::string{});
+
+    // New unified aruco media fields
+    p.aruco_media_folder = j.value("aruco_media_folder", std::string{});
+    p.aruco_media_type = j.value("aruco_media_type", std::string{});
+    p.global_reg_media_folder = j.value("global_reg_media_folder", std::string{});
+    p.global_reg_media_type = j.value("global_reg_media_type", std::string{});
+
+    // Legacy fields (read for backward compat)
     p.img_path = j.value("img_path", std::string{});
     p.aruco_video_folder = j.value("aruco_video_folder", std::string{});
+
+    // Backward compat: migrate old fields → unified aruco_media_folder
+    if (p.aruco_media_folder.empty()) {
+        if (!p.aruco_video_folder.empty()) {
+            p.aruco_media_folder = p.aruco_video_folder;
+            p.aruco_media_type = "videos";
+        } else if (!p.img_path.empty()) {
+            p.aruco_media_folder = p.img_path;
+            p.aruco_media_type = "images";
+        }
+    }
+
     p.media_folder = j.value("media_folder", std::string{});
     p.calibration_folder = j.value("calibration_folder", std::string{});
     p.camera_names = j.value("camera_names", std::vector<std::string>{});
     p.camera_model = static_cast<CameraModel>(j.value("camera_model", 0));
     p.landmark_labels_folder = j.value("landmark_labels_folder", std::string{});
     p.landmarks_3d_file = j.value("landmarks_3d_file", std::string{});
+
+    // New unified output folder
+    p.aruco_output_folder = j.value("aruco_output_folder", std::string{});
+
+    // Legacy output fields
     p.image_output_folder = j.value("image_output_folder", std::string{});
     p.video_output_folder = j.value("video_output_folder", std::string{});
     p.image_experimental_folder = j.value("image_experimental_folder", std::string{});
@@ -321,8 +465,26 @@ inline void from_json(const nlohmann::json &j, CalibProject &p) {
     // Backward compat: migrate old output_folder → image_output_folder
     if (p.image_output_folder.empty() && j.contains("output_folder"))
         p.image_output_folder = j.value("output_folder", std::string{});
+    // Backward compat: migrate legacy output folders → unified aruco_output_folder
+    if (p.aruco_output_folder.empty()) {
+        if (!p.image_experimental_folder.empty())
+            p.aruco_output_folder = p.image_experimental_folder;
+        else if (!p.video_experimental_folder.empty())
+            p.aruco_output_folder = p.video_experimental_folder;
+        else if (!p.image_output_folder.empty())
+            p.aruco_output_folder = p.image_output_folder;
+        else if (!p.video_output_folder.empty())
+            p.aruco_output_folder = p.video_output_folder;
+    }
+
     p.laser_output_folder = j.value("laser_output_folder", std::string{});
     p.tele_output_folder = j.value("tele_output_folder", std::string{});
+    p.last_aruco_start_frame = j.value("last_aruco_start_frame", 0);
+    p.last_aruco_stop_frame = j.value("last_aruco_stop_frame", 0);
+    p.last_aruco_frame_step = j.value("last_aruco_frame_step", 0);
+    p.last_aruco_total_video_frames = j.value("last_aruco_total_video_frames", 0);
+    p.last_aruco_cameras_used = j.value("last_aruco_cameras_used", 0);
+    p.last_aruco_mean_reproj = j.value("last_aruco_mean_reproj", 0.0);
     p.dlt_method = j.value("dlt_method", -1);
     p.dlt_mean_rmse = j.value("dlt_mean_rmse", 0.0);
     p.dlt_per_camera_rmse = j.value("dlt_per_camera_rmse", std::vector<double>{});

@@ -69,6 +69,10 @@ struct CalibrationToolState {
     bool images_loaded = false;
     std::string status;
 
+    // Aruco media auto-detection results (for Create Project dialog display)
+    CalibrationTool::ArucoMediaInfo calib_aruco_media_info;
+    CalibrationTool::ArucoMediaInfo calib_global_reg_info;
+
     // Per-camera enable/disable (populated from config.cam_ordered)
     std::vector<bool> camera_enabled;
 
@@ -86,6 +90,24 @@ struct CalibrationToolState {
         return result;
     }
 
+    // ── Unified aruco calibration pipeline ──
+    bool aruco_running_flag = false;
+    bool aruco_done = false;
+    CalibrationPipeline::CalibrationResult aruco_result;
+    std::future<CalibrationPipeline::CalibrationResult> aruco_future;
+
+    // Aruco media state (shared for images and videos)
+    bool aruco_media_loaded = false;
+    int aruco_start_frame = 0;
+    int aruco_stop_frame = 0;      // 0 = all (only used for videos)
+    int aruco_frame_step = 10;     // 30fps -> 3fps effective (only used for videos)
+    int aruco_total_frames = 0;
+    int aruco_video_count = 0;     // cached number of matched videos
+
+    // Global registration: which frame from calibration media to use (0-based)
+    int global_reg_frame = 0;      // user-selectable in Calibration Tool UI
+
+    // ── Legacy pipeline state (kept for backward compat during transition) ──
     // Aruco image pipeline async
     bool img_running = false;
     bool img_done = false;
@@ -98,13 +120,8 @@ struct CalibrationToolState {
     CalibrationPipeline::CalibrationResult vid_result;
     std::future<CalibrationPipeline::CalibrationResult> vid_future;
 
-    // Aruco video state
+    // Legacy aruco video state
     bool aruco_videos_loaded = false;
-    int aruco_start_frame = 0;
-    int aruco_stop_frame = 0;      // 0 = all
-    int aruco_frame_step = 10;     // 30fps -> 3fps effective
-    int aruco_total_frames = 0;
-    int aruco_video_count = 0;     // cached number of matched videos
 
     // Experimental image pipeline async
     bool exp_img_running = false;
@@ -120,7 +137,8 @@ struct CalibrationToolState {
 
     // Helper: is any aruco pipeline running?
     bool aruco_running() const {
-        return img_running || vid_running || exp_img_running || exp_vid_running;
+        return aruco_running_flag || img_running || vid_running ||
+               exp_img_running || exp_vid_running;
     }
 
     // Telecentric

@@ -117,7 +117,10 @@ inline void DrawCalibCreateDialog(CalibrationToolState &state, AppContext &ctx,
                             // Clear the other mode's fields
                             if (new_model == CalibrationTool::CameraModel::Telecentric) {
                                 state.project.config_file.clear();
-                                state.project.aruco_video_folder.clear();
+                                state.project.aruco_media_folder.clear();
+                                state.project.aruco_media_type.clear();
+                                state.project.global_reg_media_folder.clear();
+                                state.project.global_reg_media_type.clear();
                                 state.project.calibration_folder.clear();
                                 state.project.camera_names.clear();
                             } else {
@@ -163,27 +166,87 @@ inline void DrawCalibCreateDialog(CalibrationToolState &state, AppContext &ctx,
                         "Choose config.json", ".json", cfg);
                 }
 
-                // ---- Aruco Videos (optional) ----
+                // ---- Aruco Media (images or videos — auto-detected) ----
                 ImGui::TableNextRow();
-                LabelCell("Aruco Videos");
+                LabelCell("Aruco Media");
                 ImGui::TableSetColumnIndex(1);
                 ImGui::SetNextItemWidth(-FLT_MIN);
-                ImGui::InputText("##calib_arucovids",
-                                 &state.project.aruco_video_folder);
+                if (ImGui::InputText("##calib_arucomedia",
+                                     &state.project.aruco_media_folder)) {
+                    // Re-detect on manual edit
+                    auto info = CalibrationTool::detect_aruco_media(
+                        state.project.aruco_media_folder);
+                    state.project.aruco_media_type = info.type;
+                    state.calib_aruco_media_info = info;
+                }
                 ImGui::TableSetColumnIndex(2);
-                if (ImGui::Button("Browse##calib_arucovid")) {
+                if (ImGui::Button("Browse##calib_arucomedia")) {
                     IGFD::FileDialogConfig cfg;
                     cfg.countSelectionMax = 1;
-                    if (!state.project.aruco_video_folder.empty())
-                        cfg.path = state.project.aruco_video_folder;
+                    if (!state.project.aruco_media_folder.empty())
+                        cfg.path = state.project.aruco_media_folder;
                     else if (!user_settings.default_media_root_path.empty())
                         cfg.path = user_settings.default_media_root_path;
                     else
                         cfg.path = red_data_dir;
                     cfg.flags = ImGuiFileDialogFlags_Modal;
                     ImGuiFileDialog::Instance()->OpenDialog(
-                        "ChooseCalibArucoVideoFolder",
-                        "Select Aruco Videos Folder", nullptr, cfg);
+                        "ChooseCalibArucoMediaFolder",
+                        "Select Aruco Media Folder", nullptr, cfg);
+                }
+                // Show auto-detection result
+                if (!state.calib_aruco_media_info.description.empty()) {
+                    ImGui::TableNextRow();
+                    LabelCell("");
+                    ImGui::TableSetColumnIndex(1);
+                    if (state.calib_aruco_media_info.type.empty()) {
+                        ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f),
+                            "No aruco images or videos found in folder");
+                    } else {
+                        ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f),
+                            "%s", state.calib_aruco_media_info.description.c_str());
+                    }
+                }
+
+                // ---- Global Registration Media (optional) ----
+                ImGui::TableNextRow();
+                LabelCell("Global Reg. Media (optional)");
+                ImGui::TableSetColumnIndex(1);
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                if (ImGui::InputText("##calib_globalreg",
+                                     &state.project.global_reg_media_folder)) {
+                    auto info = CalibrationTool::detect_aruco_media(
+                        state.project.global_reg_media_folder);
+                    state.project.global_reg_media_type = info.type;
+                    state.calib_global_reg_info = info;
+                }
+                ImGui::TableSetColumnIndex(2);
+                if (ImGui::Button("Browse##calib_globalreg")) {
+                    IGFD::FileDialogConfig cfg;
+                    cfg.countSelectionMax = 1;
+                    if (!state.project.global_reg_media_folder.empty())
+                        cfg.path = state.project.global_reg_media_folder;
+                    else if (!user_settings.default_media_root_path.empty())
+                        cfg.path = user_settings.default_media_root_path;
+                    else
+                        cfg.path = red_data_dir;
+                    cfg.flags = ImGuiFileDialogFlags_Modal;
+                    ImGuiFileDialog::Instance()->OpenDialog(
+                        "ChooseCalibGlobalRegFolder",
+                        "Select Global Registration Media Folder", nullptr, cfg);
+                }
+                // Show auto-detection result
+                if (!state.calib_global_reg_info.description.empty()) {
+                    ImGui::TableNextRow();
+                    LabelCell("");
+                    ImGui::TableSetColumnIndex(1);
+                    if (state.calib_global_reg_info.type.empty()) {
+                        ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f),
+                            "No images or videos found in folder");
+                    } else {
+                        ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f),
+                            "%s", state.calib_global_reg_info.description.c_str());
+                    }
                 }
 
                 // ---- Initialize Calibration YAMLs (optional) ----
@@ -312,12 +375,29 @@ inline void DrawCalibCreateDialog(CalibrationToolState &state, AppContext &ctx,
                 ImGui::EndTable();
             }
 
-            // Handle file dialogs for Aruco Videos, YAML and Laser Video folder browsing
+            // Handle file dialogs for Aruco Media, Global Reg, YAML and Laser Video
             if (ImGuiFileDialog::Instance()->Display(
-                    "ChooseCalibArucoVideoFolder", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
-                if (ImGuiFileDialog::Instance()->IsOk())
-                    state.project.aruco_video_folder =
+                    "ChooseCalibArucoMediaFolder", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
+                if (ImGuiFileDialog::Instance()->IsOk()) {
+                    state.project.aruco_media_folder =
                         ImGuiFileDialog::Instance()->GetCurrentPath();
+                    auto info = CalibrationTool::detect_aruco_media(
+                        state.project.aruco_media_folder);
+                    state.project.aruco_media_type = info.type;
+                    state.calib_aruco_media_info = info;
+                }
+                ImGuiFileDialog::Instance()->Close();
+            }
+            if (ImGuiFileDialog::Instance()->Display(
+                    "ChooseCalibGlobalRegFolder", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
+                if (ImGuiFileDialog::Instance()->IsOk()) {
+                    state.project.global_reg_media_folder =
+                        ImGuiFileDialog::Instance()->GetCurrentPath();
+                    auto info = CalibrationTool::detect_aruco_media(
+                        state.project.global_reg_media_folder);
+                    state.project.global_reg_media_type = info.type;
+                    state.calib_global_reg_info = info;
+                }
                 ImGuiFileDialog::Instance()->Close();
             }
             if (ImGuiFileDialog::Instance()->Display(
@@ -483,7 +563,7 @@ inline void DrawCalibCreateDialog(CalibrationToolState &state, AppContext &ctx,
                     !state.project.project_root_path.empty() &&
                     (!state.project.config_file.empty() ||
                      !state.project.calibration_folder.empty() ||
-                     !state.project.aruco_video_folder.empty());
+                     !state.project.aruco_media_folder.empty());
             } else {
                 // Telecentric: labels folder is optional (can label in-app)
                 create_ok =
@@ -516,7 +596,30 @@ inline void DrawCalibCreateDialog(CalibrationToolState &state, AppContext &ctx,
                         state.images_loaded = false;
                         state.img_done = false;
                         state.vid_done = false;
+                        // Populate legacy img_path from config
                         state.project.img_path = state.config.img_path;
+                        // If user didn't set aruco_media_folder but config has img_path,
+                        // auto-populate from config
+                        if (state.project.aruco_media_folder.empty() &&
+                            !state.config.img_path.empty()) {
+                            state.project.aruco_media_folder = state.config.img_path;
+                            auto info = CalibrationTool::detect_aruco_media(
+                                state.project.aruco_media_folder);
+                            state.project.aruco_media_type = info.type;
+                        }
+                        // If config has global_registration_video, use as global reg media
+                        if (state.project.global_reg_media_folder.empty() &&
+                            !state.config.global_registration_video.empty()) {
+                            state.project.global_reg_media_folder =
+                                state.config.global_registration_video;
+                            auto info = CalibrationTool::detect_aruco_media(
+                                state.project.global_reg_media_folder);
+                            state.project.global_reg_media_type = info.type;
+                        }
+                        // Populate legacy aruco_video_folder for backward compat
+                        if (state.project.aruco_is_video())
+                            state.project.aruco_video_folder =
+                                state.project.aruco_media_folder;
                     } else {
                         state.config_loaded = false;
                         state.status = "Error parsing config: " + err;
