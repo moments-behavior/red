@@ -23,7 +23,7 @@ inline void DrawFrameBufferWindow(AppContext &ctx, int select_corr_head) {
             // Find a visible camera index
             int visible_idx = 0;
             if (!ps.pause_seeked) {
-                for (u32 i = 0; i < scene.num_cams; i++) {
+                for (u32 i = 0; i < scene.num_cams && i < ctx.pm.camera_names.size(); i++) {
                     if (ctx.window_was_decoding[ctx.pm.camera_names[i]]) {
                         visible_idx = (int)i;
                         break;

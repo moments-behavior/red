@@ -27,8 +27,8 @@ struct SeekInfo {
 
 struct PictureBuffer {
     unsigned char *frame;
-    int frame_number;
-    bool available_to_write;
+    std::atomic<int> frame_number;
+    std::atomic<bool> available_to_write;
 #ifdef __APPLE__
     // Phase 2/3: decoded CVPixelBuffer (retained by decoder, released by main thread)
     CVPixelBufferRef pixel_buffer;
@@ -36,8 +36,8 @@ struct PictureBuffer {
 };
 
 struct DecoderContext {
-    bool decoding_flag;
-    bool stop_flag;
+    std::atomic<bool> decoding_flag;
+    std::atomic<bool> stop_flag;
     int total_num_frame;
     int estimated_num_frames;
     int gpu_index;

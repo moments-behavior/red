@@ -36,7 +36,7 @@ inline void DrawKeypointsWindow(AppContext &ctx) {
                     "Name", ImGuiTableColumnFlags_NoHide |
                                 ImGuiTableColumnFlags_NoReorder);
 
-                for (int column = 1; column < columns_count; column++) {
+                for (int column = 1; column < columns_count && (column - 1) < (int)skeleton.node_names.size(); column++) {
                     ImGui::TableSetupColumn(
                         skeleton.node_names[column - 1].c_str(),
                         ImGuiTableColumnFlags_AngledHeader |
@@ -71,7 +71,8 @@ inline void DrawKeypointsWindow(AppContext &ctx) {
 
                     ImGui::TableSetColumnIndex(0);
                     ImGui::AlignTextToFramePadding();
-                    ImGui::Text("%s", pm.camera_names[row].c_str());
+                    ImGui::Text("%s", row < (int)pm.camera_names.size()
+                        ? pm.camera_names[row].c_str() : "?");
 
                     for (int column = 1; column < columns_count; column++) {
                         if (ImGui::TableSetColumnIndex(column)) {

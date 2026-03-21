@@ -133,6 +133,8 @@ triangulatePoints(const std::vector<Eigen::Vector2d> &pts2d,
     }
     Eigen::JacobiSVD<Eigen::MatrixXd> svd(A, Eigen::ComputeFullV);
     Eigen::Vector4d X = svd.matrixV().col(3);
+    if (std::abs(X(3)) < 1e-12)
+        return Eigen::Vector3d(std::nan(""), std::nan(""), std::nan(""));
     return X.head<3>() / X(3);
 }
 
@@ -154,6 +156,10 @@ projectPoints(const std::vector<Eigen::Vector3d> &pts3d,
 
     for (const auto &pt : pts3d) {
         Eigen::Vector3d cam = R * pt + tvec;
+        if (std::abs(cam(2)) < 1e-8) {
+            result.push_back(Eigen::Vector2d(std::nan(""), std::nan("")));
+            continue;
+        }
         double xp = cam(0) / cam(2);
         double yp = cam(1) / cam(2);
 
@@ -187,6 +193,8 @@ projectPointR(const Eigen::Vector3d &pt3d, const Eigen::Matrix3d &R,
     double fx = K(0,0), fy = K(1,1), cx = K(0,2), cy = K(1,2);
     double k1 = dist(0), k2 = dist(1), p1 = dist(2), p2 = dist(3), k3 = dist(4);
     Eigen::Vector3d cam = R * pt3d + tvec;
+    if (std::abs(cam(2)) < 1e-8)
+        return Eigen::Vector2d(std::nan(""), std::nan(""));
     double xp = cam(0) / cam(2), yp = cam(1) / cam(2);
     double r2 = xp*xp + yp*yp, r4 = r2*r2, r6 = r4*r2;
     double radial = 1.0 + k1*r2 + k2*r4 + k3*r6;

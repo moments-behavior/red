@@ -103,7 +103,7 @@ if(APPLE)
         Ceres::ceres
         pthread
     )
-    # Removed: Vulkan::Vulkan, -framework Accelerate (vImage no longer used)
+    # Removed: Vulkan::Vulkan (Accelerate still used by superpoint_coreml.mm / jarvis_coreml.mm)
 
     # Optional ONNX Runtime for SAM inference
     if(HAS_ONNXRUNTIME)
@@ -403,7 +403,6 @@ if(APPLE)
     add_executable(test_jarvis_import tests/test_jarvis_import.cpp)
     target_include_directories(test_jarvis_import PRIVATE
         ${CMAKE_SOURCE_DIR}/src
-        ${CMAKE_SOURCE_DIR}/lib/eigen
         ${HOMEBREW_PREFIX}/include
         ${HOMEBREW_PREFIX}/include/eigen3
     )
@@ -887,6 +886,10 @@ if(APPLE)
         set_target_properties(bench_coreml_accuracy PROPERTIES
             CXX_STANDARD 17
             CXX_STANDARD_REQUIRED ON
+        )
+        set_source_files_properties(
+            tests/bench_coreml_accuracy.mm
+            PROPERTIES COMPILE_FLAGS "-fobjc-arc"
         )
     endif()
 

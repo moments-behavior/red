@@ -25,8 +25,7 @@ void render_allocate_scene_memory(RenderScene *scene, u32 size_of_buffer) {
         (PictureBuffer **)malloc(num_cams * sizeof(PictureBuffer *));
 
     for (u32 j = 0; j < num_cams; j++) {
-        scene->display_buffer[j] =
-            (PictureBuffer *)malloc(size_of_buffer * sizeof(PictureBuffer));
+        scene->display_buffer[j] = new PictureBuffer[size_of_buffer]();
     }
 
     scene->pbo_cuda = (PBO_CUDA *)malloc(sizeof(PBO_CUDA) * num_cams);

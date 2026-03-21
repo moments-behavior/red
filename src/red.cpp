@@ -248,15 +248,10 @@ int main(int argc, char **argv) {
     std::vector<std::thread> decoder_threads;
     std::vector<FFmpegDemuxer *> demuxers;
 
-    DecoderContext *dc_context =
-        (DecoderContext *)malloc(sizeof(DecoderContext));
-    *dc_context = (DecoderContext){.decoding_flag = false,
-                                   .stop_flag = false,
-                                   .total_num_frame = int(INT_MAX),
-                                   .estimated_num_frames = 0,
-                                   .gpu_index = 0,
-                                   .seek_interval = 250,  // overwritten by auto-detect in media_loader
-                                   .video_fps = 60.0f};
+    DecoderContext *dc_context = new DecoderContext{};
+    dc_context->total_num_frame = int(INT_MAX);
+    dc_context->seek_interval = 250;  // overwritten by auto-detect in media_loader
+    dc_context->video_fps = 60.0f;
 
     // gui states — bundled into WindowStates (gui/window_states.h)
     WindowStates win;

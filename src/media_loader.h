@@ -60,7 +60,7 @@ unload_media(PlaybackState &ps, ProjectManager &pm,
                         cudaFree(scene->display_buffer[j][i].frame);
 #endif
                 }
-                free(scene->display_buffer[j]);
+                delete[] scene->display_buffer[j];
             }
         }
         free(scene->display_buffer);
