@@ -1235,7 +1235,7 @@ int main(int argc, char **argv) {
             }
 
 
-            // Hotkey 6: Run JARVIS prediction on current frame (all cameras)
+            // Hotkey 6: Run JARVIS prediction on current frame
             bool jarvis_predict_trigger =
                 (ImGui::IsKeyPressed(ImGuiKey_6, false) && !io.WantTextInput) ||
                 win.jarvis_predict.predict_requested;
@@ -1255,11 +1255,67 @@ int main(int argc, char **argv) {
                     heights[c] = (int)scene->image_height[c];
                 }
 
+                // "All" mode: ensure every camera has the current frame
+                if (win.jarvis_predict.predict_from_all) {
+                    // Check if any camera is missing a valid pixel buffer
+                    bool needs_seek = false;
+                    for (int c = 0; c < (int)scene->num_cams; ++c) {
+                        auto &slot = scene->display_buffer[c][mh];
+                        if (!slot.pixel_buffer ||
+                            slot.frame_number.load() != current_frame_num) {
+                            needs_seek = true;
+                            break;
+                        }
+                    }
+                    if (needs_seek) {
+                        seek_all_cameras(scene, current_frame_num,
+                                         dc_context->video_fps, ps, true);
+                        ps.pause_selected = 0;
+                        for (auto &[key, value] : window_need_decoding)
+                            value.store(true);
+                        mh = (ps.pause_selected + ps.read_head) % scene->size_of_buffer;
+                        // Wait for all cameras to fill slot (up to ~2s)
+                        for (int wait = 0; wait < 2000; ++wait) {
+                            bool ready = true;
+                            for (int c = 0; c < (int)scene->num_cams; ++c) {
+                                auto &slot = scene->display_buffer[c][0];
+                                if (slot.available_to_write.load() || !slot.pixel_buffer) {
+                                    ready = false;
+                                    break;
+                                }
+                            }
+                            if (ready) break;
+                            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                        }
+                        mh = 0; // seek resets to slot 0
+                        select_corr_head = mh;
+                    }
+                }
+
+                // Build pixel buffer array, filtering by mode
+                auto cam_included = [&](int c) -> bool {
+                    if (win.jarvis_predict.predict_from_all) return true;
+                    // "Shown" mode: only cameras visible AND with fresh frames
+                    if (c < (int)pm.camera_names.size() &&
+                        window_is_visible.count(pm.camera_names[c]) &&
+                        window_is_visible[pm.camera_names[c]]) {
+                        auto &slot = scene->display_buffer[c][mh];
+                        return slot.pixel_buffer &&
+                               slot.frame_number.load() == current_frame_num;
+                    }
+                    return false;
+                };
+
                 // Prefer CoreML (GPU/ANE) over ONNX Runtime (CPU)
                 if (jarvis_coreml_state.loaded) {
                     std::vector<CVPixelBufferRef> pbs(scene->num_cams, nullptr);
-                    for (int c = 0; c < (int)scene->num_cams; ++c)
-                        pbs[c] = scene->display_buffer[c][mh].pixel_buffer;
+                    int cams_used = 0;
+                    for (int c = 0; c < (int)scene->num_cams; ++c) {
+                        if (cam_included(c)) {
+                            pbs[c] = scene->display_buffer[c][mh].pixel_buffer;
+                            if (pbs[c]) cams_used++;
+                        }
+                    }
 
                     jarvis_coreml_predict_frame(jarvis_coreml_state, annotations,
                         (u32)current_frame_num, pbs, widths, heights,
@@ -1268,12 +1324,15 @@ int main(int argc, char **argv) {
                     // Triangulate (reprojection is in gui_keypoints.h, only in this TU)
                     reprojection(annotations.at(current_frame_num),
                                  &skeleton, pm.camera_params, scene);
-                    printf("[JARVIS CoreML] %s\n", jarvis_coreml_state.status.c_str());
+                    printf("[JARVIS CoreML] %s (%d/%d cameras)\n",
+                           jarvis_coreml_state.status.c_str(),
+                           cams_used, (int)scene->num_cams);
                 } else if (jarvis_state.loaded) {
                     // Fallback: ONNX Runtime (CPU) with BGRA→RGB conversion
                     std::vector<const uint8_t *> rgb_bufs(scene->num_cams, nullptr);
                     std::vector<std::vector<uint8_t>> rgb_storage(scene->num_cams);
                     for (int c = 0; c < (int)scene->num_cams; ++c) {
+                        if (!cam_included(c)) continue;
                         CVPixelBufferRef pb = scene->display_buffer[c][mh].pixel_buffer;
                         if (!pb) continue;
                         extract_rgb_from_cvpixelbuf(pb, rgb_storage[c], widths[c], heights[c]);

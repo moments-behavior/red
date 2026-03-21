@@ -40,6 +40,9 @@ struct JarvisPredictState {
     // Set by "Predict Current Frame" button; consumed by main loop
     bool predict_requested = false;
 
+    // Predict from: false = Shown (visible cameras only), true = All cameras
+    bool predict_from_all = false;
+
     // Batch prediction — non-blocking state machine (one frame per render iteration)
     enum class BatchPhase {
         IDLE, SEEK, WAIT_BUFFER, PREDICT, FINISHING
@@ -707,6 +710,17 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
                         jarvis.last_center_ms, jarvis.last_keypoint_ms,
                         jarvis.last_total_ms);
         }
+
+        ImGui::Text("Predict from:");
+        ImGui::SameLine();
+        if (ImGui::RadioButton("Shown", !state.predict_from_all))
+            state.predict_from_all = false;
+        ImGui::SameLine();
+        if (ImGui::RadioButton("All", state.predict_from_all))
+            state.predict_from_all = true;
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Shown: fast, uses visible cameras only\n"
+                              "All: seeks all cameras to current frame first");
 
         bool can_predict = jarvis.loaded;
 #ifdef __APPLE__
