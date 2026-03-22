@@ -473,4 +473,137 @@ The Full mode changes are large but physically interpretable:
 - After any physical change to the rig (camera moved, lens adjusted, rig relocated)
 - If behavioral tracking shows unexplained 3D drift
 - Periodically (e.g., monthly) to catch gradual drift
-- Always start from ArUco → PointSource, not pointsource-only (ArUco provides the world frame)
+- For rigs with existing calibration, use Loose Init + PointSource refinement (no ArUco needed)
+- For new rigs or when no calibration exists, use No Init mode (see Section 7)
+
+---
+
+## 7. PointSource Calibration Without ArUco (No Init Mode)
+
+**Date**: 2026-03-22
+**Key result**: Starting from ONLY ChArUco board images and light wand videos (no calibration YAML files), RED recovers all 16 cameras at 0.261 px reprojection error — matching or exceeding the full ArUco pipeline (0.300 px).
+
+### 7.1 Motivation
+
+The standard workflow (Section 6.4) requires ArUco board calibration as a first step. No Init mode eliminates this requirement, enabling calibration from just two recordings:
+1. A ChArUco board placed in the arena (one frame per camera, for world frame registration)
+2. Light wand sweep video (for multi-view constraints)
+
+This is useful when:
+- Setting up a new rig without a prior calibration
+- ArUco calibration failed or produced poor results
+- The existing calibration is outdated or from a different rig configuration
+
+### 7.2 Pipeline Overview
+
+No Init mode adds three new stages before the standard PointSource pipeline:
+
+| Stage | Input | Output | Key technique |
+|-------|-------|--------|---------------|
+| **Bootstrap** | ChArUco board images | Per-camera extrinsics (default intrinsics) | PnP per camera against known board coordinates |
+| **Loose Init** | PointSource detections + bootstrap poses | Refined poses for all visible cameras | Per-camera quality scoring → adaptive filtering → mini-BA |
+| **Camera Recovery** | BA-refined 3D points + missing camera detections | Poses for cameras that couldn't see the board | DLT PnP + Smart Blob re-detection + static artifact filter |
+
+After these stages, the standard BA pipeline runs with all cameras.
+
+### 7.3 Stage 1: Bootstrap from ChArUco Board (Global Reg. Media)
+
+For each camera that can see the ChArUco board in the Global Registration Media:
+
+1. **Default intrinsics**: `fx = fy = image_width` (3208 px), `cx = w/2`, `cy = h/2`, `dist = [0,0,0,0,0]`
+2. **ChArUco detection**: Same GPU-accelerated pipeline as ArUco calibration (threshold → detect markers → interpolate corners → sub-pixel refinement)
+3. **PnP per camera**: `solvePnPHomography()` for initial algebraic solution (planar board), then `refinePnPPose()` (Ceres 6-DOF) for geometric refinement
+4. **World frame**: Since every camera's PnP is relative to the same physical board, all cameras are automatically in world coordinates — no separate Procrustes alignment needed
+
+**Rob1 results**: 11/16 cameras detected the board (4-16 corners each). 5 cameras (2006050, 2006515, 2008667, 2008668, 2008669) had the board outside their field of view. PnP reproj: 0.12–1.37 px on board corners.
+
+### 7.4 Stage 2: Loose Init (Progressive Refinement)
+
+The bootstrapped cameras have default intrinsics (~20% off true focal length), so the standard `triangulate_and_validate` rejects most observations. Loose Init uses a multi-phase approach:
+
+**Phase A — Quality Assessment + Good Camera Triangulation:**
+- `assess_camera_quality()` triangulates with all cameras, computes per-camera median reprojection error
+- Adaptive threshold: cameras within 2× the best camera's median are classified as "good"
+- Triangulate using only good cameras → high-quality 3D points (3,871 points from 2 good cameras)
+
+**Phase B — PnP Re-initialization:**
+- For each poor camera with detections, collect 3D-2D correspondences (good 3D points ↔ camera's 2D detections)
+- `refinePnPPose()` with current (bad) extrinsics as initial guess
+- Accept if reproj improves (all 9 poor cameras with board detection were improved)
+
+**Phase B2 — Mini-BA:**
+- Run BA in Full mode on all cameras with valid poses (excluding identity-pose cameras)
+- Refines intrinsics, especially focal length (3208 → ~4037 px for cameras with true f ≈ 3900)
+- After mini-BA: 10 cameras at 0.24–0.35 px median reproj
+
+**Phase B3 — Re-assessment:**
+- Re-evaluate quality using `assess_camera_quality()` with `valid_cameras` mask (only triangulate from cameras with valid poses, preventing identity-pose cameras from corrupting 3D points)
+- PnP re-init remaining poor cameras using improved 3D points
+
+**Phase C — Final Triangulation:**
+- Filter `frame_obs` to exclude cameras still without valid poses
+- Standard `triangulate_and_validate()` with normal thresholds
+- Result: 4,001 points, 37,725 observations from 10 cameras
+
+### 7.5 Stage 3: Camera Recovery (Post-BA)
+
+After BA produces high-quality 3D points from the initial camera set, cameras with 0 observations are recovered:
+
+1. **Smart Blob re-detection**: Re-run light spot detection with `smart_blob=true` for missing cameras. When multiple green blobs exist in a frame (e.g., wand + persistent green artifact), BFS connected components identifies individual blobs and picks the largest valid-sized one.
+
+2. **Static artifact filter** (`filter_static_detections`): Bins detection centroids into a 32×32 pixel grid. Bins with >5× the median density are flagged as static artifact regions (LEDs, reflections, hot pixels). Detections in flagged regions (grown by 1 bin) are removed.
+   - Camera 2008666: 3,964 raw Smart Blob detections → 2,679 artifact detections removed → 1,284 clean wand detections kept
+
+3. **DLT PnP** (`solvePnPDLT`): Closed-form camera pose estimation via SVD of the projection equation. Unlike iterative Ceres PnP, this requires NO initial pose guess — it directly solves for the 3×4 projection matrix P with Hartley normalization, then extracts R, t from K⁻¹P.
+   - Camera 2008666: DLT+Ceres converged to 6.95 px (previous iterative-only approach failed at 645 px)
+
+4. **Re-triangulation + Re-BA**: With all recovered cameras, re-triangulate observations and run BA again in Full mode.
+
+### 7.6 Results: No Init vs ArUco-Initialized Pipelines
+
+| Metric | No Init (16/16) | Loose Init (16/16) | ArUco → PS Full (16/16) | ArUco Baseline (16/16) |
+|--------|-----------------|--------------------|-----------------------|----------------------|
+| **Input required** | Board images + wand video | Old YAML + wand video | ArUco video + wand video | ArUco video only |
+| **Reproj after BA** | **0.261 px** | 0.267 px | 0.268 px | 0.300 px |
+| **3D points** | 3,954 | 3,691 | 3,692 | 3,354 |
+| **Observations** | 47,182 | 51,242 | 51,245 | 18,640 |
+| **Known-geometry** | 20.6 mm | 20.0 mm | — | 20.0 mm |
+
+All PointSource-based calibrations converge to essentially the same solution regardless of initialization quality. The 0.261 px No Init result is slightly better than ArUco-initialized results because the iterative recovery process (mini-BA → PnP → re-BA) effectively runs multiple rounds of optimization.
+
+### 7.7 Smart Blob Detection Mode
+
+Smart Blob is a detection enhancement for cameras with persistent green artifacts (LEDs, reflections, sensor hot pixels) that interfere with the standard single-blob detection.
+
+**Standard detection** rejects any frame where:
+- GPU path: the bounding box of all mask pixels fails the compactness check (`bbox_area > 4 × pixel_count`)
+- CPU path: connected components finds ≠ 1 valid-sized blob
+
+**Smart Blob detection** (enabled per-run via checkbox):
+1. GPU threshold → erode → dilate (same as standard)
+2. GPU colorize pass copies dilated mask to CPU-readable buffer
+3. CPU BFS connected components identifies individual blobs
+4. Each blob is filtered by size (`min_blob_pixels` to `max_blob_pixels`)
+5. The **largest valid-sized blob** is selected and its intensity-weighted centroid is computed from only that blob's pixels
+
+**When `smart_blob = false` (default)**: behavior is completely unchanged — the compactness check and single-blob requirement are preserved.
+
+**Camera 2008666 example**: A persistent green artifact at pixel coordinates (2289–2717, 173–785) survived threshold + erode/dilate. Standard detection: 759 detections (80% of frames rejected). Smart Blob: 3,964 detections. After static artifact filtering: 1,284 clean wand detections.
+
+### 7.8 Dataset Locations (No Init Experiments)
+
+| Dataset | Path |
+|---------|------|
+| No Init project | `/Users/johnsonr/red_dev/Mar22/rob_ps1/` |
+| No Init output (16/16) | `.../rob_ps1_no_init/2026_03_22_18_12_14/` |
+| Loose Init output | `.../rob_ps1_loose_init/2026_03_22_12_14_16/` |
+| No Init test code | `/Users/johnsonr/red_dev/Mar22/test_no_init.cpp` |
+| Loose Init test code | `/Users/johnsonr/red_dev/Mar22/test_loose_init.cpp` |
+| Detection diagnostic | `/Users/johnsonr/red_dev/Mar22/test_detection_diag.cpp` |
+
+### 7.9 Updated Calibration Workflow Recommendations
+
+1. **New rig (no prior calibration)**: Record Global Reg. Media (ChArUco board) + light wand video → No Init mode with Full optimization → all cameras calibrated from scratch
+2. **Existing rig with old calibration**: Load old YAMLs + light wand video → Loose Init mode with Full optimization → PnP re-initializes any cameras that drifted
+3. **Existing rig with good ArUco calibration**: Standard ArUco → PointSource refinement (Full mode) → best possible accuracy
+4. **Cameras with green artifacts**: Enable Smart Blob checkbox in Detection Parameters → artifact detections are handled by largest-blob selection + static artifact filter
