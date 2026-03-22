@@ -153,17 +153,33 @@ inline void HandleMainMenuDialogs(
                 if (CalibrationTool::load_project(&loaded, cfg_path.string(), &err)) {
                     calib_state.project = loaded;
                     if (calib_state.project.has_aruco()) {
-                        calib_state.config_path = calib_state.project.config_file;
-                        if (CalibrationTool::parse_config(
-                                calib_state.config_path, calib_state.config, err)) {
+                        if (!calib_state.project.config_file.empty()) {
+                            // Config file provided — parse it
+                            calib_state.config_path = calib_state.project.config_file;
+                            if (CalibrationTool::parse_config(
+                                    calib_state.config_path, calib_state.config, err)) {
+                                calib_state.config_loaded = true;
+                                calib_state.init_camera_enabled();
+                                calib_state.images_loaded = false;
+                                calib_state.img_done = false;
+                                calib_state.vid_done = false;
+                            } else {
+                                calib_state.config_loaded = false;
+                                calib_state.status = "Error parsing config: " + err;
+                            }
+                        } else if (!calib_state.project.camera_names.empty()) {
+                            // Config-free project — synthesize from persisted fields
+                            calib_state.config.cam_ordered =
+                                calib_state.project.camera_names;
+                            calib_state.config.charuco_setup =
+                                calib_state.project.charuco_setup;
+                            calib_state.config.img_path =
+                                calib_state.project.aruco_media_folder;
                             calib_state.config_loaded = true;
                             calib_state.init_camera_enabled();
                             calib_state.images_loaded = false;
                             calib_state.img_done = false;
                             calib_state.vid_done = false;
-                        } else {
-                            calib_state.config_loaded = false;
-                            calib_state.status = "Error parsing config: " + err;
                         }
                     }
                     calib_state.project_loaded = true;
