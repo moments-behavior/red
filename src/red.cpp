@@ -764,6 +764,7 @@ int main(int argc, char **argv) {
                     int green_dom = lc.green_dominance;
                     int min_blob = lc.min_blob_pixels;
                     int max_blob = lc.max_blob_pixels;
+                    bool smart_blob = lc.smart_blob;
                     int ncams = scene->num_cams;
 
                     lv.computing.store(true, std::memory_order_release);
@@ -775,7 +776,7 @@ int main(int argc, char **argv) {
                     auto metal_ctx = lv.metal_ctx;
                     lv.worker = std::thread(
                         [inputs, ncams, green_th, green_dom,
-                         min_blob, max_blob, metal_ctx, &lv]() {
+                         min_blob, max_blob, smart_blob, metal_ctx, &lv]() {
                             std::vector<PointSourceVizState::CamResult> results(ncams);
 
                             // Phase 1: ALL cameras in parallel via fast detect (for stats)
@@ -785,12 +786,12 @@ int main(int argc, char **argv) {
                                     auto &inp = (*inputs)[ci];
                                     if (!inp.pixel_buffer) continue;
                                     threads.emplace_back([&inp, &results, ci,
-                                        metal_ctx, green_th, green_dom, min_blob, max_blob]() {
+                                        metal_ctx, green_th, green_dom, min_blob, max_blob, smart_blob]() {
                                         auto &res = results[ci];
                                         res.frame_num = inp.frame_num;
                                         auto spot = pointsource_metal_detect(
                                             metal_ctx, inp.pixel_buffer,
-                                            green_th, green_dom, min_blob, max_blob);
+                                            green_th, green_dom, min_blob, max_blob, smart_blob);
                                         if (spot.found) {
                                             res.num_blobs = 1;
                                         } else if (spot.pixel_count > 0) {

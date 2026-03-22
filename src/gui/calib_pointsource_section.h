@@ -254,6 +254,14 @@ inline void DrawCalibPointSourceSection(CalibrationToolState &state, AppContext 
                             ImGui::Text("~all frames per camera");
                         }
                     }
+                    ImGui::Spacing();
+                    ImGui::Checkbox("Smart Blob", &state.pointsource_config.smart_blob);
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip(
+                            "When multiple green blobs are detected in a frame,\n"
+                            "pick the largest valid blob instead of rejecting the frame.\n\n"
+                            "Use when cameras have persistent green artifacts\n"
+                            "(LEDs, reflections) that interfere with detection.");
                     ImGui::Unindent();
                     } // end Detection Parameters
 

@@ -23,7 +23,8 @@ PointSourceMetalSpot pointsource_metal_detect(PointSourceMetalHandle ctx,
                                    int green_threshold,
                                    int green_dominance,
                                    int min_blob_pixels,
-                                   int max_blob_pixels);
+                                   int max_blob_pixels,
+                                   bool smart_blob = false);
 
 // Detect light spot + produce RGBA visualization overlay.
 // GPU: threshold → erode → dilate → colorize (black/gray/green).

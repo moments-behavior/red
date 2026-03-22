@@ -265,7 +265,8 @@ PointSourceMetalSpot pointsource_metal_detect(PointSourceMetalHandle ctx,
                                    int green_threshold,
                                    int green_dominance,
                                    int min_blob_pixels,
-                                   int max_blob_pixels) {
+                                   int max_blob_pixels,
+                                   bool smart_blob) {
     PointSourceMetalSpot result = {0, 0, 0, false};
     if (!ctx || !pixel_buffer) return result;
 
@@ -395,16 +396,122 @@ PointSourceMetalSpot pointsource_metal_detect(PointSourceMetalHandle ctx,
 
         // Check blob size
         if ((int)count >= min_blob_pixels && (int)count <= max_blob_pixels && sum_g > 0) {
-            // The intensity-weighted centroid (sum_gx/sum_g, sum_gy/sum_g) is
-            // robust to sparse stray pixels because bright wand pixels dominate
-            // the green-intensity sum. We accept the detection as long as the
-            // pixel count is within the configured range. The previous bbox
-            // compactness check rejected valid detections when cameras had
-            // persistent green artifacts (LEDs, reflections) far from the wand.
-            result.cx = (double)sum_gx / (double)sum_g;
-            result.cy = (double)sum_gy / (double)sum_g;
-            result.pixel_count = (int)count;
-            result.found = true;
+            if (!smart_blob) {
+                // Default path: compactness check to reject multi-blob frames.
+                // A single compact blob fills >25% of its bbox (circle ~79%).
+                // Two distant blobs produce a huge bbox with low fill ratio.
+                uint64_t bbox_w = (uint64_t)(max_x - min_x + 1);
+                uint64_t bbox_h = (uint64_t)(max_y - min_y + 1);
+                uint64_t bbox_area = bbox_w * bbox_h;
+                if (bbox_area <= 4u * (uint64_t)count) {
+                    result.cx = (double)sum_gx / (double)sum_g;
+                    result.cy = (double)sum_gy / (double)sum_g;
+                    result.pixel_count = (int)count;
+                    result.found = true;
+                }
+            } else {
+                // Smart Blob: run BFS connected components on the dilated mask
+                // to find individual blobs, then pick the largest valid one.
+                // Same pattern as pointsource_metal_detect_viz (lines 522-579)
+                // but computes per-blob intensity-weighted centroid.
+
+                // We need the dilated mask on CPU. Run colorize pass to get it
+                // into a shared buffer (reuses viz infrastructure).
+                int npixels = width * height;
+                id<MTLBuffer> maskBuf =
+                    [ctx->device newBufferWithLength:npixels * 4
+                                             options:MTLResourceStorageModeShared];
+                {
+                    id<MTLCommandBuffer> cmdBuf2 = [ctx->queue commandBuffer];
+                    id<MTLComputeCommandEncoder> enc = [cmdBuf2 computeCommandEncoder];
+                    [enc setComputePipelineState:ctx->pso_colorize];
+                    [enc setTexture:maskTex    atIndex:0];
+                    [enc setTexture:dilatedTex atIndex:1];
+                    [enc setBuffer:maskBuf offset:0 atIndex:0];
+                    // maskCountBuf not needed — reuse a dummy
+                    id<MTLBuffer> dummyCount =
+                        [ctx->device newBufferWithLength:sizeof(uint32_t)
+                                                 options:MTLResourceStorageModeShared];
+                    *(uint32_t *)dummyCount.contents = 0;
+                    [enc setBuffer:dummyCount offset:0 atIndex:1];
+                    [enc dispatchThreads:gridSize threadsPerThreadgroup:tgSize];
+                    [enc endEncoding];
+                    [cmdBuf2 commit];
+                    [cmdBuf2 waitUntilCompleted];
+                }
+
+                // BFS connected components on dilated (green) pixels
+                uint8_t *rgba = (uint8_t *)maskBuf.contents;
+                int best_blob_size = 0;
+                double best_cx = 0, best_cy = 0;
+                int best_count = 0;
+                std::vector<int> queue;
+                queue.reserve(1024);
+
+                // Read source BGRA for intensity-weighted centroid
+                CVPixelBufferLockBaseAddress(pixel_buffer, kCVPixelBufferLock_ReadOnly);
+                const uint8_t *src_bgra = (const uint8_t *)CVPixelBufferGetBaseAddress(pixel_buffer);
+                int src_stride = (int)CVPixelBufferGetBytesPerRow(pixel_buffer);
+
+                for (int y = 1; y < height - 1; y++) {
+                    for (int x = 1; x < width - 1; x++) {
+                        int idx = y * width + x;
+                        int base = idx * 4;
+                        if (rgba[base] != 0 || rgba[base+1] != 255 || rgba[base+2] != 0)
+                            continue;
+
+                        // BFS flood-fill
+                        queue.clear();
+                        queue.push_back(idx);
+                        rgba[base] = 1; // mark visited
+
+                        for (size_t qi = 0; qi < queue.size(); qi++) {
+                            int ci = queue[qi];
+                            const int neighbors[4] = {ci-1, ci+1, ci-width, ci+width};
+                            for (int ni : neighbors) {
+                                if (ni < 0 || ni >= npixels) continue;
+                                int nb = ni * 4;
+                                if (rgba[nb] == 0 && rgba[nb+1] == 255 && rgba[nb+2] == 0) {
+                                    rgba[nb] = 1;
+                                    queue.push_back(ni);
+                                }
+                            }
+                        }
+
+                        int blob_size = (int)queue.size();
+                        if (blob_size < min_blob_pixels || blob_size > max_blob_pixels)
+                            continue;
+
+                        // This blob is valid-sized — compute intensity-weighted centroid
+                        if (blob_size > best_blob_size) {
+                            double sx = 0, sy = 0, sw = 0;
+                            for (int pi : queue) {
+                                int px = pi % width;
+                                int py = pi / width;
+                                double g = src_bgra[py * src_stride + px * 4 + 1]; // green channel (BGRA)
+                                sx += px * g;
+                                sy += py * g;
+                                sw += g;
+                            }
+                            if (sw > 0) {
+                                best_blob_size = blob_size;
+                                best_cx = sx / sw;
+                                best_cy = sy / sw;
+                                best_count = blob_size;
+                            }
+                        }
+                    }
+                }
+
+                CVPixelBufferUnlockBaseAddress(pixel_buffer, kCVPixelBufferLock_ReadOnly);
+
+                if (best_blob_size > 0) {
+                    result.cx = best_cx;
+                    result.cy = best_cy;
+                    result.pixel_count = best_count;
+                    result.found = true;
+                }
+            }
         }
     }
 

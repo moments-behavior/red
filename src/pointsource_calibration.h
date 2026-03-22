@@ -102,6 +102,9 @@ struct PointSourceConfig {
     Eigen::Matrix3d world_frame_rotation = Eigen::Matrix3d::Identity();
     bool do_global_reg = false;
 
+    // Detection modes
+    bool smart_blob = false;  // multi-blob: pick largest instead of rejecting frame
+
     // Initialization modes
     bool loose_init = false;  // auto-detect and PnP re-init poorly-calibrated cameras
     bool no_init = false;     // bootstrap all params from Global Reg. Media (implies loose_init)
@@ -130,6 +133,7 @@ inline nlohmann::json config_to_json(const PointSourceConfig &c) {
         {"do_global_reg", c.do_global_reg},
         {"global_reg_media_folder", c.global_reg_media_folder},
         {"global_reg_media_type", c.global_reg_media_type},
+        {"smart_blob", c.smart_blob},
         {"loose_init", c.loose_init},
         {"no_init", c.no_init}};
 }
@@ -344,11 +348,12 @@ enum PointSourcePixelFormat { POINTSOURCE_FMT_RGB24, POINTSOURCE_FMT_BGRA };
 // Detect a single green light spot in a frame (RGB24 or BGRA).
 // stride = bytes per row (may include padding for BGRA from CVPixelBuffer).
 // Returns true if exactly one valid blob found; fills detection.
+// smart_blob: when true, pick the largest valid blob instead of rejecting multi-blob frames.
 inline bool detect_light_spot(const uint8_t *pixels, int width, int height,
                               int stride, PointSourcePixelFormat fmt,
                               int green_threshold, int green_dominance,
                               int min_blob_pixels, int max_blob_pixels,
-                              SpotDetection &det) {
+                              SpotDetection &det, bool smart_blob = false) {
     int npixels = width * height;
     int bpp = (fmt == POINTSOURCE_FMT_BGRA) ? 4 : 3;
     int r_off = (fmt == POINTSOURCE_FMT_BGRA) ? 2 : 0;
@@ -428,11 +433,16 @@ inline bool detect_light_spot(const uint8_t *pixels, int width, int height,
             valid_roots.push_back(root);
     }
 
-    // Step 6: Decision — exactly 1 valid blob → intensity-weighted centroid
-    if (valid_roots.size() != 1)
+    // Step 6: Decision — select blob for centroid computation
+    if (valid_roots.empty())
+        return false;
+    if (valid_roots.size() > 1 && !smart_blob)
         return false;
 
+    // Pick the largest valid component
     int root = valid_roots[0];
+    for (int r : valid_roots)
+        if (component_sizes[r] > component_sizes[root]) root = r;
     double sum_x = 0, sum_y = 0, sum_w = 0;
     int count = 0;
     for (int i = 0; i < npixels; i++) {
@@ -561,7 +571,8 @@ inline std::vector<DetectionMap> detect_all_cameras(
                         PointSourceMetalSpot mdet = pointsource_metal_detect(
                             metal_ctx, pb,
                             config.green_threshold, config.green_dominance,
-                            config.min_blob_pixels, config.max_blob_pixels);
+                            config.min_blob_pixels, config.max_blob_pixels,
+                            config.smart_blob);
                         if (mdet.found) {
                             det.cx = mdet.cx;
                             det.cy = mdet.cy;
@@ -579,7 +590,8 @@ inline std::vector<DetectionMap> detect_all_cameras(
                                                   config.green_threshold,
                                                   config.green_dominance,
                                                   config.min_blob_pixels,
-                                                  config.max_blob_pixels, det);
+                                                  config.max_blob_pixels, det,
+                                                  config.smart_blob);
                         CVPixelBufferUnlockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
                     }
                     if (found) {
@@ -724,7 +736,8 @@ inline std::vector<DetectionMap> detect_all_cameras(
                                           config.green_threshold,
                                           config.green_dominance,
                                           config.min_blob_pixels,
-                                          config.max_blob_pixels, det)) {
+                                          config.max_blob_pixels, det,
+                                          config.smart_blob)) {
                         local_detections[frame] = det;
                         detected++;
                     }
