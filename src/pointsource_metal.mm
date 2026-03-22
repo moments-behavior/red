@@ -395,19 +395,16 @@ PointSourceMetalSpot pointsource_metal_detect(PointSourceMetalHandle ctx,
 
         // Check blob size
         if ((int)count >= min_blob_pixels && (int)count <= max_blob_pixels && sum_g > 0) {
-            // Compactness check: reject if "on" pixels span a bounding box
-            // much larger than the pixel count. A single compact blob fills
-            // >25% of its bbox (circle fills ~79%). Two distant blobs would
-            // produce a huge bbox with very low fill ratio.
-            uint64_t bbox_w = (uint64_t)(max_x - min_x + 1);
-            uint64_t bbox_h = (uint64_t)(max_y - min_y + 1);
-            uint64_t bbox_area = bbox_w * bbox_h;
-            if (bbox_area <= 4u * (uint64_t)count) {
-                result.cx = (double)sum_gx / (double)sum_g;
-                result.cy = (double)sum_gy / (double)sum_g;
-                result.pixel_count = (int)count;
-                result.found = true;
-            }
+            // The intensity-weighted centroid (sum_gx/sum_g, sum_gy/sum_g) is
+            // robust to sparse stray pixels because bright wand pixels dominate
+            // the green-intensity sum. We accept the detection as long as the
+            // pixel count is within the configured range. The previous bbox
+            // compactness check rejected valid detections when cameras had
+            // persistent green artifacts (LEDs, reflections) far from the wand.
+            result.cx = (double)sum_gx / (double)sum_g;
+            result.cy = (double)sum_gy / (double)sum_g;
+            result.pixel_count = (int)count;
+            result.found = true;
         }
     }
 

@@ -888,6 +888,21 @@ if(APPLE)
         CXX_STANDARD_REQUIRED ON
     )
 
+    add_executable(test_detection_diag
+        /Users/johnsonr/red_dev/Mar22/test_detection_diag.cpp
+        src/pointsource_metal.mm
+        src/vt_async_decoder.mm
+        src/FFmpegDemuxer.cpp)
+    target_include_directories(test_detection_diag PRIVATE
+        src ${HOMEBREW_PREFIX}/include ${HOMEBREW_PREFIX}/include/eigen3 ${FFMPEG_INCLUDE_DIRS})
+    target_link_directories(test_detection_diag PRIVATE ${FFMPEG_LIBRARY_DIRS})
+    target_link_libraries(test_detection_diag PRIVATE
+        Eigen3::Eigen Ceres::ceres ${FFMPEG_LIBRARIES}
+        "-L/opt/homebrew/opt/jpeg-turbo/lib" "-lturbojpeg"
+        "-framework VideoToolbox" "-framework CoreMedia" "-framework CoreVideo"
+        "-framework CoreFoundation" "-framework Metal" "-framework Foundation")
+    set_target_properties(test_detection_diag PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+
     add_executable(test_no_init
         /Users/johnsonr/red_dev/Mar22/test_no_init.cpp
         src/pointsource_metal.mm
