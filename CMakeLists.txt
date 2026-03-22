@@ -861,7 +861,7 @@ if(APPLE)
     # Laser refinement mode comparison test
     add_executable(test_laser_modes
         /Users/johnsonr/red_dev/quan_v_rob_calib/test_laser_modes.cpp
-        src/laser_metal.mm
+        src/pointsource_metal.mm
         src/vt_async_decoder.mm
         src/FFmpegDemuxer.cpp)
     target_include_directories(test_laser_modes PRIVATE

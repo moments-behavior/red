@@ -6,7 +6,7 @@
 #include "calib_create_dialog.h"
 #include "calib_tele_section.h"
 #include "calib_aruco_section.h"
-#include "calib_laser_section.h"
+#include "calib_pointsource_section.h"
 #include "calib_superpoint_section.h"
 #include "calib_kp_manual_section.h"
 #include "calib_viewer_window.h"
@@ -104,17 +104,17 @@ inline void DrawCalibrationToolWindow(
 
                     // Set up laser config if laser inputs present.
                     // For pure laser projects (no aruco), auto-load videos.
-                    // For aruco+laser projects, defer to the "Load Laser Videos" button.
+                    // For aruco+laser projects, defer to the "Load PointSource Videos" button.
                     if (state.project.has_laser_input() &&
                         !state.project.has_aruco()) {
-                        state.laser_config.media_folder = state.project.media_folder;
-                        state.laser_config.calibration_folder =
+                        state.pointsource_config.media_folder = state.project.media_folder;
+                        state.pointsource_config.calibration_folder =
                             state.project.calibration_folder;
-                        state.laser_config.camera_names = state.project.camera_names;
-                        state.laser_config.output_folder =
-                            state.project.project_path + "/laser_calibration";
-                        state.laser_ready = true;
-                        state.laser_focus_window = true;
+                        state.pointsource_config.camera_names = state.project.camera_names;
+                        state.pointsource_config.output_folder =
+                            state.project.project_path + "/pointsource_calibration";
+                        state.pointsource_ready = true;
+                        state.pointsource_focus_window = true;
 
                         // Load videos into 2x2 grid
                         if (!ps.video_loaded) {
@@ -125,7 +125,7 @@ inline void DrawCalibrationToolWindow(
                             cb.load_videos();
                             cb.print_metadata();
                         }
-                        state.laser_total_frames = dc_context->estimated_num_frames;
+                        state.pointsource_total_frames = dc_context->estimated_num_frames;
                     }
 
                     state.project_loaded = true;
@@ -191,7 +191,7 @@ inline void DrawCalibrationToolWindow(
                         state.status =
                             "Project loaded: " +
                             std::to_string(state.project.camera_names.size()) +
-                            " cameras (laser refinement)";
+                            " cameras (pointsource refinement)";
                     }
                 } else {
                     state.status = "Error loading project: " + err;
@@ -215,9 +215,9 @@ inline void DrawCalibrationToolWindow(
         // Clear stale dock-pending flag (no longer auto-docking)
         state.dock_pending = false;
         ImGui::SetNextWindowSize(ImVec2(580, 600), ImGuiCond_FirstUseEver);
-        if (state.laser_focus_window) {
+        if (state.pointsource_focus_window) {
             ImGui::SetNextWindowFocus();
-            state.laser_focus_window = false;
+            state.pointsource_focus_window = false;
         }
         if (ImGui::Begin("Calibration Tool", &state.show)) {
 
@@ -275,7 +275,7 @@ inline void DrawCalibrationToolWindow(
             bool show_laser_section =
                 state.project.has_laser_input() || aruco_succeeded;
 
-            // Auto-populate laser calibration_folder from aruco output
+            // Auto-populate pointsource calibration_folder from aruco output
             if (state.project.calibration_folder.empty()) {
                 // Check unified output first, then legacy
                 std::string aruco_out = state.project.aruco_output_folder;
@@ -289,8 +289,8 @@ inline void DrawCalibrationToolWindow(
                     state.project.camera_names =
                         CalibrationTool::derive_camera_names_from_yaml(
                             state.project.calibration_folder);
-                    state.project.laser_output_folder =
-                        state.project.project_path + "/laser_calibration";
+                    state.project.pointsource_output_folder =
+                        state.project.project_path + "/pointsource_calibration";
                     show_laser_section = true;
                     std::string proj_file =
                         state.project.project_path + "/" +
@@ -302,7 +302,7 @@ inline void DrawCalibrationToolWindow(
             }
 
             if (show_laser_section) {
-                DrawCalibLaserSection(state, ctx, cb);
+                DrawCalibPointSourceSection(state, ctx, cb);
             }
 
             // SuperPoint refinement section (available after any calibration succeeds)
@@ -346,7 +346,7 @@ inline void DrawCalibrationToolWindow(
         state.vid_running = false;
         state.exp_img_running = false;
         state.exp_vid_running = false;
-        state.laser_running = false;
+        state.pointsource_running = false;
         state.status.clear();
         state.aruco_videos_loaded = false;
         state.tele_videos_loaded = false;
@@ -360,14 +360,14 @@ inline void DrawCalibrationToolWindow(
         state.kp_running = false;
         state.kp_refine_done = false;
         state.kp_status.clear();
-        state.laser_ready = false;
-        state.laser_done = false;
-        state.laser_status.clear();
-        state.laser_show_detection = false;
-        if (state.laser_viz.worker.joinable())
-            state.laser_viz.worker.join();
-        state.laser_viz.ready.clear();
-        state.laser_viz.pending.clear();
+        state.pointsource_ready = false;
+        state.pointsource_done = false;
+        state.pointsource_status.clear();
+        state.pointsource_show_detection = false;
+        if (state.pointsource_viz.worker.joinable())
+            state.pointsource_viz.worker.join();
+        state.pointsource_viz.ready.clear();
+        state.pointsource_viz.pending.clear();
 #ifdef __APPLE__
         for (int ci = 0; ci < scene->num_cams; ci++)
             mac_last_uploaded_frame[ci] = -1;

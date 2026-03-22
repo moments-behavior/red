@@ -1,7 +1,7 @@
 #pragma once
 #include "calib_tool_state.h"
 #include "app_context.h"
-#include "laser_calibration.h"
+#include "pointsource_calibration.h"
 #include "imgui.h"
 #include <ImGuiFileDialog.h>
 #include <algorithm>
@@ -9,7 +9,7 @@
 
 // Draw the Laser Refinement section inside the Calibration Tool window.
 // Called only when show_laser_section is true.
-inline void DrawCalibLaserSection(CalibrationToolState &state, AppContext &ctx,
+inline void DrawCalibPointSourceSection(CalibrationToolState &state, AppContext &ctx,
                                    const CalibrationToolCallbacks &cb) {
     auto &pm = ctx.pm;
     auto &ps = ctx.ps;
@@ -41,32 +41,32 @@ inline void DrawCalibLaserSection(CalibrationToolState &state, AppContext &ctx,
         });
     };
 
-                if (ImGui::CollapsingHeader("Laser Refinement", ImGuiTreeNodeFlags_DefaultOpen)) {
+                if (ImGui::CollapsingHeader("PointSource Refinement", ImGuiTreeNodeFlags_DefaultOpen)) {
                 ImGui::Indent();
 
                 // Poll async result
-                if (state.laser_running && state.laser_future.valid()) {
-                    auto fut_status = state.laser_future.wait_for(
+                if (state.pointsource_running && state.pointsource_future.valid()) {
+                    auto fut_status = state.pointsource_future.wait_for(
                         std::chrono::milliseconds(0));
                     if (fut_status == std::future_status::ready) {
-                        state.laser_result = state.laser_future.get();
-                        state.laser_running = false;
-                        state.laser_done = true;
-                        if (state.laser_result.success) {
-                            state.laser_status =
+                        state.pointsource_result = state.pointsource_future.get();
+                        state.pointsource_running = false;
+                        state.pointsource_done = true;
+                        if (state.pointsource_result.success) {
+                            state.pointsource_status =
                                 "Complete! Reproj: " +
                                 std::to_string(
-                                    state.laser_result.mean_reproj_before)
+                                    state.pointsource_result.mean_reproj_before)
                                     .substr(0, 5) +
                                 " -> " +
                                 std::to_string(
-                                    state.laser_result.mean_reproj_after)
+                                    state.pointsource_result.mean_reproj_after)
                                     .substr(0, 5) +
                                 " px. Output: " +
-                                state.laser_result.output_folder;
+                                state.pointsource_result.output_folder;
                         } else {
-                            state.laser_status =
-                                "Error: " + state.laser_result.error;
+                            state.pointsource_status =
+                                "Error: " + state.pointsource_result.error;
                         }
                     }
                 }
@@ -76,10 +76,10 @@ inline void DrawCalibLaserSection(CalibrationToolState &state, AppContext &ctx,
 
                 // Laser Video Folder -- text field + Browse + Load button
                 ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 200.0f);
-                ImGui::InputText("##laser_vid_path",
+                ImGui::InputText("##ps_vid_path",
                                  &state.project.media_folder);
                 ImGui::SameLine();
-                if (ImGui::Button("Browse##laser_vid_tool")) {
+                if (ImGui::Button("Browse##ps_vid_tool")) {
                     IGFD::FileDialogConfig cfg;
                     cfg.countSelectionMax = 1;
                     if (!state.project.media_folder.empty())
@@ -90,8 +90,8 @@ inline void DrawCalibLaserSection(CalibrationToolState &state, AppContext &ctx,
                         cfg.path = red_data_dir;
                     cfg.flags = ImGuiFileDialogFlags_Modal;
                     ImGuiFileDialog::Instance()->OpenDialog(
-                        "ChooseLaserVideoTool",
-                        "Select Laser Video Folder", nullptr, cfg);
+                        "ChoosePointSourceVideoTool",
+                        "Select PointSource Video Folder", nullptr, cfg);
                 }
                 ImGui::SameLine();
                 {
@@ -104,7 +104,7 @@ inline void DrawCalibLaserSection(CalibrationToolState &state, AppContext &ctx,
                         !state.project.calibration_folder.empty()) {
                         last_media = state.project.media_folder;
                         last_calib = state.project.calibration_folder;
-                        state.project.camera_names = LaserCalibration::validate_cameras(
+                        state.project.camera_names = PointSourceCalibration::validate_cameras(
                             state.project.media_folder,
                             state.project.calibration_folder);
                     }
@@ -112,12 +112,12 @@ inline void DrawCalibLaserSection(CalibrationToolState &state, AppContext &ctx,
 
                     ImGui::BeginDisabled(
                         state.project.media_folder.empty() ||
-                        !has_valid_cameras || state.laser_running);
-                    if (!state.laser_ready) {
-                    if (ImGui::Button("Load Laser Videos")) {
+                        !has_valid_cameras || state.pointsource_running);
+                    if (!state.pointsource_ready) {
+                    if (ImGui::Button("Load PointSource Videos")) {
                         // Save updated media_folder to .redproj
-                        state.project.laser_output_folder =
-                            state.project.project_path + "/laser_calibration";
+                        state.project.pointsource_output_folder =
+                            state.project.project_path + "/pointsource_calibration";
                         std::string proj_file =
                             state.project.project_path + "/" +
                             state.project.project_name + ".redproj";
@@ -125,17 +125,17 @@ inline void DrawCalibLaserSection(CalibrationToolState &state, AppContext &ctx,
                         CalibrationTool::save_project(
                             state.project, proj_file, &save_err);
 
-                        // Set up laser_config
-                        state.laser_config.media_folder = state.project.media_folder;
-                        state.laser_config.calibration_folder =
+                        // Set up pointsource_config
+                        state.pointsource_config.media_folder = state.project.media_folder;
+                        state.pointsource_config.calibration_folder =
                             state.project.calibration_folder;
-                        state.laser_config.camera_names = state.project.camera_names;
-                        state.laser_config.output_folder =
-                            state.project.laser_output_folder;
+                        state.pointsource_config.camera_names = state.project.camera_names;
+                        state.pointsource_config.output_folder =
+                            state.project.pointsource_output_folder;
 
                         // Defer the actual unload+load to next frame start
                         // (freeing Metal textures mid-frame crashes ImGui rendering)
-                        state.laser_status = "Loading laser videos...";
+                        state.pointsource_status = "Loading pointsource videos...";
                         cb.deferred->enqueue([&state, &pm, &ps, &cb, &imgs_names,
                                               dc_context
 #ifdef __APPLE__
@@ -155,14 +155,14 @@ inline void DrawCalibLaserSection(CalibrationToolState &state, AppContext &ctx,
                                     pm.camera_names.push_back("Cam" + cn);
                                 cb.load_videos();
                                 cb.print_metadata();
-                                state.laser_total_frames = dc_context->estimated_num_frames;
-                                state.laser_ready = true;
-                                state.laser_status =
+                                state.pointsource_total_frames = dc_context->estimated_num_frames;
+                                state.pointsource_ready = true;
+                                state.pointsource_status =
                                     "Loaded " +
                                     std::to_string(state.project.camera_names.size()) +
-                                    " laser videos";
+                                    " pointsource videos";
                             } catch (const std::exception &e) {
-                                state.laser_status =
+                                state.pointsource_status =
                                     std::string("Error loading videos: ") + e.what();
                             }
                         });
@@ -171,8 +171,8 @@ inline void DrawCalibLaserSection(CalibrationToolState &state, AppContext &ctx,
                         ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f),
                                            "Videos loaded");
                         ImGui::SameLine();
-                        if (ImGui::Button("Close Videos##laser_close")) {
-                            close_media_deferred(state.laser_ready, state.laser_status, "Videos closed");
+                        if (ImGui::Button("Close Videos##ps_close")) {
+                            close_media_deferred(state.pointsource_ready, state.pointsource_status, "Videos closed");
                         }
                     }
                     ImGui::EndDisabled();
@@ -180,7 +180,7 @@ inline void DrawCalibLaserSection(CalibrationToolState &state, AppContext &ctx,
 
                 // Handle video folder browse dialog
                 if (ImGuiFileDialog::Instance()->Display(
-                        "ChooseLaserVideoTool", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
+                        "ChoosePointSourceVideoTool", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
                     if (ImGuiFileDialog::Instance()->IsOk()) {
                         state.project.media_folder =
                             ImGuiFileDialog::Instance()->GetCurrentPath();
@@ -210,34 +210,34 @@ inline void DrawCalibLaserSection(CalibrationToolState &state, AppContext &ctx,
                         "No matching videos found -- update the video folder path");
                 }
 
-                if (state.laser_ready) {
+                if (state.pointsource_ready) {
                     // Detection parameters
                     if (ImGui::CollapsingHeader("Detection Parameters")) {
                     ImGui::Indent();
                     ImGui::SliderInt("Green Threshold",
-                                     &state.laser_config.green_threshold, 20, 255);
+                                     &state.pointsource_config.green_threshold, 20, 255);
                     ImGui::SliderInt("Green Dominance",
-                                     &state.laser_config.green_dominance, 5, 100);
+                                     &state.pointsource_config.green_dominance, 5, 100);
                     ImGui::SliderInt("Min Blob Pixels",
-                                     &state.laser_config.min_blob_pixels, 1, 100);
+                                     &state.pointsource_config.min_blob_pixels, 1, 100);
                     ImGui::SliderInt("Max Blob Pixels",
-                                     &state.laser_config.max_blob_pixels, 50, 5000);
+                                     &state.pointsource_config.max_blob_pixels, 50, 5000);
 
-                    int slider_max = state.laser_total_frames > 0 ? state.laser_total_frames : 100000;
+                    int slider_max = state.pointsource_total_frames > 0 ? state.pointsource_total_frames : 100000;
                     ImGui::SliderInt("Start Frame",
-                                     &state.laser_config.start_frame, 0, slider_max);
+                                     &state.pointsource_config.start_frame, 0, slider_max);
                     ImGui::SliderInt("Stop Frame (0=all)",
-                                     &state.laser_config.stop_frame, 0, slider_max);
+                                     &state.pointsource_config.stop_frame, 0, slider_max);
                     ImGui::SliderInt("Every Nth Frame",
-                                     &state.laser_config.frame_step, 1, 100);
+                                     &state.pointsource_config.frame_step, 1, 100);
                     {
-                        int eff_stop = state.laser_config.stop_frame > 0
-                            ? state.laser_config.stop_frame
-                            : (state.laser_total_frames > 0 ? state.laser_total_frames : 0);
-                        if (eff_stop > state.laser_config.start_frame && state.laser_config.frame_step > 0) {
-                            int est = (eff_stop - state.laser_config.start_frame) / state.laser_config.frame_step;
+                        int eff_stop = state.pointsource_config.stop_frame > 0
+                            ? state.pointsource_config.stop_frame
+                            : (state.pointsource_total_frames > 0 ? state.pointsource_total_frames : 0);
+                        if (eff_stop > state.pointsource_config.start_frame && state.pointsource_config.frame_step > 0) {
+                            int est = (eff_stop - state.pointsource_config.start_frame) / state.pointsource_config.frame_step;
                             ImGui::Text("~%d frames per camera", est);
-                        } else if (state.laser_config.stop_frame == 0 && state.laser_total_frames == 0) {
+                        } else if (state.pointsource_config.stop_frame == 0 && state.pointsource_total_frames == 0) {
                             ImGui::Text("~all frames per camera");
                         }
                     }
@@ -248,30 +248,30 @@ inline void DrawCalibLaserSection(CalibrationToolState &state, AppContext &ctx,
                     if (ImGui::CollapsingHeader("Filtering")) {
                     ImGui::Indent();
                     int max_min_cams =
-                        std::max(2, (int)state.laser_config.camera_names.size());
+                        std::max(2, (int)state.pointsource_config.camera_names.size());
                     ImGui::SliderInt("Min Cameras",
-                                     &state.laser_config.min_cameras, 2,
+                                     &state.pointsource_config.min_cameras, 2,
                                      max_min_cams);
-                    float reproj_th = (float)state.laser_config.reproj_threshold;
+                    float reproj_th = (float)state.pointsource_config.reproj_threshold;
                     if (ImGui::SliderFloat("Reproj Threshold (px)", &reproj_th,
                                            1.0f, 50.0f))
-                        state.laser_config.reproj_threshold = reproj_th;
+                        state.pointsource_config.reproj_threshold = reproj_th;
                     ImGui::Unindent();
                     } // end Filtering
 
                     // BA parameters
                     if (ImGui::CollapsingHeader("Bundle Adjustment")) {
                     ImGui::Indent();
-                    float ba_th1 = (float)state.laser_config.ba_outlier_th1;
-                    float ba_th2 = (float)state.laser_config.ba_outlier_th2;
+                    float ba_th1 = (float)state.pointsource_config.ba_outlier_th1;
+                    float ba_th2 = (float)state.pointsource_config.ba_outlier_th2;
                     if (ImGui::SliderFloat("BA Outlier Pass 1 (px)", &ba_th1,
                                            1.0f, 50.0f))
-                        state.laser_config.ba_outlier_th1 = ba_th1;
+                        state.pointsource_config.ba_outlier_th1 = ba_th1;
                     if (ImGui::SliderFloat("BA Outlier Pass 2 (px)", &ba_th2,
                                            0.5f, 20.0f))
-                        state.laser_config.ba_outlier_th2 = ba_th2;
+                        state.pointsource_config.ba_outlier_th2 = ba_th2;
                     ImGui::SliderInt("BA Max Iterations",
-                                     &state.laser_config.ba_max_iter, 10, 200);
+                                     &state.pointsource_config.ba_max_iter, 10, 200);
                     // Optimization mode dropdown
                     {
                         const char *opt_labels[] = {
@@ -279,13 +279,13 @@ inline void DrawCalibLaserSection(CalibrationToolState &state, AppContext &ctx,
                             "Extrinsics + focal length",
                             "Extrinsics + all intrinsics",
                             "Full (all parameters free)"};
-                        int opt_idx = static_cast<int>(state.laser_config.opt_mode);
+                        int opt_idx = static_cast<int>(state.pointsource_config.opt_mode);
                         if (ImGui::Combo("Optimization Mode", &opt_idx, opt_labels, 4))
-                            state.laser_config.opt_mode =
-                                static_cast<LaserCalibration::LaserOptMode>(opt_idx);
+                            state.pointsource_config.opt_mode =
+                                static_cast<PointSourceCalibration::PointSourceOptMode>(opt_idx);
                         // Sync legacy field
-                        state.laser_config.lock_intrinsics =
-                            (state.laser_config.opt_mode == LaserCalibration::LaserOptMode::ExtrinsicsOnly);
+                        state.pointsource_config.lock_intrinsics =
+                            (state.pointsource_config.opt_mode == PointSourceCalibration::PointSourceOptMode::ExtrinsicsOnly);
                     }
                     if (ImGui::IsItemHovered())
                         ImGui::SetTooltip(
@@ -296,7 +296,7 @@ inline void DrawCalibLaserSection(CalibrationToolState &state, AppContext &ctx,
                             "Extrinsics + all intrinsics: Refine fx, fy, cx, cy, k1, k2.\n"
                             "  Locks p1, p2, k3. Use when initial calibration is poor.\n\n"
                             "Full: All parameters free including p1, p2, k3.\n"
-                            "  Only recommended with high-quality laser data (many points,\n"
+                            "  Only recommended with high-quality pointsource data (many points,\n"
                             "  good spatial coverage, high camera redundancy).");
                     ImGui::Unindent();
                     } // end Bundle Adjustment
@@ -304,53 +304,53 @@ inline void DrawCalibLaserSection(CalibrationToolState &state, AppContext &ctx,
                     ImGui::Separator();
 
                     // Run button
-                    bool can_run_laser = !state.laser_running &&
-                                       !state.laser_config.camera_names.empty();
+                    bool can_run_laser = !state.pointsource_running &&
+                                       !state.pointsource_config.camera_names.empty();
                     ImGui::BeginDisabled(!can_run_laser);
-                    if (ImGui::Button("Run Laser Refinement")) {
-                        state.laser_running = true;
-                        state.laser_done = false;
-                        state.laser_status =
-                            "Starting laser calibration pipeline...";
-                        state.laser_future = std::async(
+                    if (ImGui::Button("Run PointSource Refinement")) {
+                        state.pointsource_running = true;
+                        state.pointsource_done = false;
+                        state.pointsource_status =
+                            "Starting pointsource calibration pipeline...";
+                        state.pointsource_future = std::async(
                             std::launch::async,
-                            [config = state.laser_config,
-                             status_ptr = &state.laser_status,
-                             prog = state.laser_progress]() {
-                                return LaserCalibration::
-                                    run_laser_refinement(config, status_ptr,
+                            [config = state.pointsource_config,
+                             status_ptr = &state.pointsource_status,
+                             prog = state.pointsource_progress]() {
+                                return PointSourceCalibration::
+                                    run_pointsource_refinement(config, status_ptr,
                                                          prog.get());
                             });
                     }
                     ImGui::EndDisabled();
 
-                    if (state.laser_running) {
+                    if (state.pointsource_running) {
                         ImGui::SameLine();
                         ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f),
                                            "Running...");
                     }
 
                     // Progress sub-section (visible during/after detection)
-                    if (state.laser_running && !state.laser_progress->cameras.empty()) {
+                    if (state.pointsource_running && !state.pointsource_progress->cameras.empty()) {
                         if (ImGui::CollapsingHeader("Progress", ImGuiTreeNodeFlags_DefaultOpen)) {
                         ImGui::Indent();
-                            int eff_stop = state.laser_config.stop_frame > 0
-                                ? state.laser_config.stop_frame
-                                : (state.laser_total_frames > 0 ? state.laser_total_frames : 0);
-                            int eff_start = state.laser_config.start_frame;
-                            int eff_step = std::max(1, state.laser_config.frame_step);
+                            int eff_stop = state.pointsource_config.stop_frame > 0
+                                ? state.pointsource_config.stop_frame
+                                : (state.pointsource_total_frames > 0 ? state.pointsource_total_frames : 0);
+                            int eff_start = state.pointsource_config.start_frame;
+                            int eff_step = std::max(1, state.pointsource_config.frame_step);
                             int prog_total = (eff_stop > eff_start)
                                 ? (eff_stop - eff_start + eff_step - 1) / eff_step
                                 : 0;
                             int total_done = 0;
-                            for (int ci = 0; ci < (int)state.laser_progress->cameras.size(); ci++)
-                                if (state.laser_progress->cameras[ci]->done.load(std::memory_order_relaxed))
+                            for (int ci = 0; ci < (int)state.pointsource_progress->cameras.size(); ci++)
+                                if (state.pointsource_progress->cameras[ci]->done.load(std::memory_order_relaxed))
                                     total_done++;
                             ImGui::Text("Detection: %d / %d cameras complete",
-                                        total_done, (int)state.laser_progress->cameras.size());
+                                        total_done, (int)state.pointsource_progress->cameras.size());
 
                             if (ImGui::BeginTable(
-                                    "laser_det_progress", 4,
+                                    "ps_det_progress", 4,
                                     ImGuiTableFlags_RowBg |
                                         ImGuiTableFlags_BordersInnerV)) {
                                 ImGui::TableSetupColumn("Camera", ImGuiTableColumnFlags_WidthFixed, 100.0f);
@@ -359,8 +359,8 @@ inline void DrawCalibLaserSection(CalibrationToolState &state, AppContext &ctx,
                                 ImGui::TableSetupColumn("Rate", ImGuiTableColumnFlags_WidthFixed, 50.0f);
                                 ImGui::TableHeadersRow();
 
-                                for (int ci = 0; ci < (int)state.laser_progress->cameras.size(); ci++) {
-                                    auto &cp = state.laser_progress->cameras[ci];
+                                for (int ci = 0; ci < (int)state.pointsource_progress->cameras.size(); ci++) {
+                                    auto &cp = state.pointsource_progress->cameras[ci];
                                     int fr = cp->frames_processed.load(std::memory_order_relaxed);
                                     int sp = cp->spots_detected.load(std::memory_order_relaxed);
                                     bool dn = cp->done.load(std::memory_order_relaxed);
@@ -369,8 +369,8 @@ inline void DrawCalibLaserSection(CalibrationToolState &state, AppContext &ctx,
 
                                     ImGui::TableNextRow();
                                     ImGui::TableSetColumnIndex(0);
-                                    if (ci < (int)state.laser_config.camera_names.size())
-                                        ImGui::Text("Cam%s", state.laser_config.camera_names[ci].c_str());
+                                    if (ci < (int)state.pointsource_config.camera_names.size())
+                                        ImGui::Text("Cam%s", state.pointsource_config.camera_names[ci].c_str());
                                     ImGui::TableSetColumnIndex(1);
                                     char overlay[64];
                                     if (prog_total > 0)
@@ -394,30 +394,30 @@ inline void DrawCalibLaserSection(CalibrationToolState &state, AppContext &ctx,
                     }
 
                     // Results
-                    if (state.laser_done && state.laser_result.success) {
+                    if (state.pointsource_done && state.pointsource_result.success) {
                         if (ImGui::CollapsingHeader("Results", ImGuiTreeNodeFlags_DefaultOpen)) {
                         ImGui::Indent();
                         ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f),
                                            "Reprojection error: %.3f -> %.3f px",
-                                           state.laser_result.mean_reproj_before,
-                                           state.laser_result.mean_reproj_after);
-                        double avg_obs = state.laser_result.valid_3d_points > 0
-                            ? (double)state.laser_result.total_observations / state.laser_result.valid_3d_points
+                                           state.pointsource_result.mean_reproj_before,
+                                           state.pointsource_result.mean_reproj_after);
+                        double avg_obs = state.pointsource_result.valid_3d_points > 0
+                            ? (double)state.pointsource_result.total_observations / state.pointsource_result.valid_3d_points
                             : 0.0;
                         ImGui::Text("3D points: %d | Observations: %d (avg %.1f cameras/point)",
-                                    state.laser_result.valid_3d_points,
-                                    state.laser_result.total_observations,
+                                    state.pointsource_result.valid_3d_points,
+                                    state.pointsource_result.total_observations,
                                     avg_obs);
-                        if (state.laser_result.ba_outliers_removed > 0)
-                            ImGui::Text("BA outliers removed: %d", state.laser_result.ba_outliers_removed);
+                        if (state.pointsource_result.ba_outliers_removed > 0)
+                            ImGui::Text("BA outliers removed: %d", state.pointsource_result.ba_outliers_removed);
                         ImGui::Text("Output: %s",
-                                    state.laser_result.output_folder.c_str());
+                                    state.pointsource_result.output_folder.c_str());
 
                         // Per-camera changes table
-                        if (!state.laser_result.camera_changes.empty()) {
+                        if (!state.pointsource_result.camera_changes.empty()) {
                             if (ImGui::TreeNode("Per-camera changes")) {
                                 if (ImGui::BeginTable(
-                                        "laser_cam_changes", 9,
+                                        "ps_cam_changes", 9,
                                         ImGuiTableFlags_RowBg |
                                             ImGuiTableFlags_BordersInnerV |
                                             ImGuiTableFlags_Resizable |
@@ -433,7 +433,7 @@ inline void DrawCalibLaserSection(CalibrationToolState &state, AppContext &ctx,
                                     ImGui::TableSetupColumn("drot", 0, 60.0f);
                                     ImGui::TableHeadersRow();
 
-                                    for (const auto &cc : state.laser_result.camera_changes) {
+                                    for (const auto &cc : state.pointsource_result.camera_changes) {
                                         ImGui::TableNextRow();
                                         ImGui::TableSetColumnIndex(0);
                                         ImGui::Text("Cam%s", cc.name.c_str());
@@ -464,38 +464,38 @@ inline void DrawCalibLaserSection(CalibrationToolState &state, AppContext &ctx,
                     }
 
                     // Laser status
-                    if (!state.laser_status.empty()) {
+                    if (!state.pointsource_status.empty()) {
                         ImGui::Separator();
-                        if (state.laser_status.find("Error") !=
+                        if (state.pointsource_status.find("Error") !=
                             std::string::npos) {
                             ImGui::TextColored(
                                 ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s",
-                                state.laser_status.c_str());
+                                state.pointsource_status.c_str());
                         } else {
-                            ImGui::TextWrapped("%s", state.laser_status.c_str());
+                            ImGui::TextWrapped("%s", state.pointsource_status.c_str());
                         }
                     }
 
                     // Detection Processing visualization
                     if (ImGui::CollapsingHeader("Detection Processing")) {
                     ImGui::Indent();
-                    bool prev_detection = state.laser_show_detection;
-                    ImGui::Checkbox("Enable", &state.laser_show_detection);
-                    if (prev_detection && !state.laser_show_detection) {
+                    bool prev_detection = state.pointsource_show_detection;
+                    ImGui::Checkbox("Enable", &state.pointsource_show_detection);
+                    if (prev_detection && !state.pointsource_show_detection) {
 #ifdef __APPLE__
                         for (int ci = 0; ci < scene->num_cams; ci++)
                             mac_last_uploaded_frame[ci] = -1;
 #endif
-                        state.laser_viz.ready.clear();
+                        state.pointsource_viz.ready.clear();
                     }
-                    if (state.laser_show_detection && ps.video_loaded) {
-                        if (state.laser_viz.computing.load(std::memory_order_relaxed))
+                    if (state.pointsource_show_detection && ps.video_loaded) {
+                        if (state.pointsource_viz.computing.load(std::memory_order_relaxed))
                             ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f),
                                                "  Processing...");
                         int detecting_count = 0;
-                        int total_cams = std::min((int)state.laser_viz.ready.size(), (int)scene->num_cams);
+                        int total_cams = std::min((int)state.pointsource_viz.ready.size(), (int)scene->num_cams);
                         for (int ci = 0; ci < total_cams; ci++) {
-                            auto &cr = state.laser_viz.ready[ci];
+                            auto &cr = state.pointsource_viz.ready[ci];
                             const char *blob_str =
                                 cr.num_blobs == 0  ? "0 blobs" :
                                 cr.num_blobs == 1  ? "1 blob (OK)" :
@@ -527,13 +527,13 @@ inline void DrawCalibLaserSection(CalibrationToolState &state, AppContext &ctx,
                     // Laser inputs not yet complete -- show hint
                     if (state.project.media_folder.empty()) {
                         ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f),
-                            "Set Video Folder to enable laser refinement");
+                            "Set Video Folder to enable pointsource refinement");
                     } else if (state.project.camera_names.empty()) {
                         ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f),
-                            "Set Video Folder and click Load Laser Videos");
+                            "Set Video Folder and click Load PointSource Videos");
                     }
                 }
                 ImGui::Unindent();
-                } // end CollapsingHeader("Laser Refinement")
+                } // end CollapsingHeader("PointSource Refinement")
                 ImGui::Spacing();
 }

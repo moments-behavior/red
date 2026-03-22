@@ -4,7 +4,7 @@
 #import <CoreVideo/CoreVideo.h>
 #import <CoreVideo/CVMetalTextureCache.h>
 
-#include "laser_metal.h"
+#include "pointsource_metal.h"
 #include <stdio.h>
 #include <vector>
 #include <cstring>
@@ -164,10 +164,10 @@ kernel void colorize_viz(
 
 
 // ---------------------------------------------------------------------------
-// LaserMetalContext — holds all Metal state
+// PointSourceMetalContext — holds all Metal state
 // ---------------------------------------------------------------------------
 
-struct LaserMetalContext {
+struct PointSourceMetalContext {
     id<MTLDevice>              device;
     id<MTLCommandQueue>        queue;
     id<MTLComputePipelineState> pso_threshold;
@@ -189,9 +189,9 @@ struct LaserMetalContext {
 };
 
 
-LaserMetalHandle laser_metal_create() {
+PointSourceMetalHandle pointsource_metal_create() {
     @autoreleasepool {
-        auto *ctx = new LaserMetalContext{};
+        auto *ctx = new PointSourceMetalContext{};
 
         ctx->device = MTLCreateSystemDefaultDevice();
         if (!ctx->device) {
@@ -260,13 +260,13 @@ LaserMetalHandle laser_metal_create() {
 }
 
 
-LaserMetalSpot laser_metal_detect(LaserMetalHandle ctx,
+PointSourceMetalSpot pointsource_metal_detect(PointSourceMetalHandle ctx,
                                    CVPixelBufferRef pixel_buffer,
                                    int green_threshold,
                                    int green_dominance,
                                    int min_blob_pixels,
                                    int max_blob_pixels) {
-    LaserMetalSpot result = {0, 0, 0, false};
+    PointSourceMetalSpot result = {0, 0, 0, false};
     if (!ctx || !pixel_buffer) return result;
 
     @autoreleasepool {
@@ -415,14 +415,14 @@ LaserMetalSpot laser_metal_detect(LaserMetalHandle ctx,
 }
 
 
-LaserMetalVizResult laser_metal_detect_viz(
-    LaserMetalHandle ctx,
+PointSourceMetalVizResult pointsource_metal_detect_viz(
+    PointSourceMetalHandle ctx,
     CVPixelBufferRef pixel_buffer,
     int green_threshold, int green_dominance,
     int min_blob_pixels, int max_blob_pixels,
     uint8_t *rgba_out) {
 
-    LaserMetalVizResult result = {};
+    PointSourceMetalVizResult result = {};
     if (!ctx || !pixel_buffer || !rgba_out) return result;
 
     @autoreleasepool {
@@ -591,7 +591,7 @@ LaserMetalVizResult laser_metal_detect_viz(
 }
 
 
-void laser_metal_destroy(LaserMetalHandle ctx) {
+void pointsource_metal_destroy(PointSourceMetalHandle ctx) {
     if (!ctx) return;
     if (ctx->texCache) {
         CVMetalTextureCacheFlush(ctx->texCache, 0);

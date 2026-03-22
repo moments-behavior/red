@@ -28,7 +28,7 @@ using json = nlohmann::json;
 
 // ── Hardcoded paths (same pattern as test_calib_debug) ──
 static const std::string CALIB_PROJECT = "/Users/johnsonr/red_data/test_calib1/";
-static const std::string LASER_PROJECT = "/Users/johnsonr/red_data/test_laser2/";
+static const std::string POINTSOURCE_PROJECT = "/Users/johnsonr/red_data/test_pointsource2/";
 
 // ── CameraPose (matches CalibrationPipeline::CameraPose) ──
 struct CameraPose {
@@ -134,19 +134,19 @@ static void evaluate_poses(
 
 int main() {
     // ── Locate laser calibration output (latest timestamped dir) ──
-    std::string laser_calib_parent = LASER_PROJECT + "laser_calibration/";
-    if (!fs::exists(laser_calib_parent)) {
-        std::cerr << "Laser calibration dir not found: " << laser_calib_parent << "\n";
+    std::string pointsource_calib_parent = POINTSOURCE_PROJECT + "pointsource_calibration/";
+    if (!fs::exists(pointsource_calib_parent)) {
+        std::cerr << "Laser calibration dir not found: " << pointsource_calib_parent << "\n";
         return 1;
     }
-    std::string laser_calib_dir = find_latest_dir(laser_calib_parent);
+    std::string pointsource_calib_dir = find_latest_dir(pointsource_calib_parent);
 
     std::string calib_dir = CALIB_PROJECT + "calibration/";
     std::string landmarks_path = CALIB_PROJECT + "output/landmarks.json";
 
     std::cout << "=== Calibration Cross-Validation (triangulate-and-reproject) ===\n";
     std::cout << "Calib project: " << CALIB_PROJECT << "\n";
-    std::cout << "Laser project: " << laser_calib_dir << "/\n\n";
+    std::cout << "Laser project: " << pointsource_calib_dir << "/\n\n";
 
     // ── Load landmarks.json ──
     // Format: { "serial": { "ids": [int...], "landmarks": [[x,y]...] } }
@@ -192,10 +192,10 @@ int main() {
               << " (" << n_triangulable << " with 2+ views)\n";
 
     // ── Load poses for both calibrations ──
-    std::map<std::string, CameraPose> orig_poses, laser_poses;
+    std::map<std::string, CameraPose> orig_poses, pointsource_poses;
     for (const auto &serial : serials) {
         std::string orig_yaml = calib_dir + "Cam" + serial + ".yaml";
-        std::string laser_yaml = laser_calib_dir + "/Cam" + serial + ".yaml";
+        std::string laser_yaml = pointsource_calib_dir + "/Cam" + serial + ".yaml";
 
         if (fs::exists(orig_yaml))
             orig_poses[serial] = load_pose(orig_yaml);
@@ -203,21 +203,21 @@ int main() {
             std::cerr << "Warning: missing " << orig_yaml << "\n";
 
         if (fs::exists(laser_yaml))
-            laser_poses[serial] = load_pose(laser_yaml);
+            pointsource_poses[serial] = load_pose(laser_yaml);
         else
             std::cerr << "Warning: missing " << laser_yaml << "\n";
     }
 
     // ── Evaluate both sets of poses ──
-    std::map<std::string, double> orig_cam_err, laser_cam_err;
+    std::map<std::string, double> orig_cam_err, pointsource_cam_err;
     std::map<std::string, int> orig_cam_n, laser_cam_n;
     int orig_total_pts = 0, laser_total_pts = 0;
     double orig_total_err = 0.0, laser_total_err = 0.0;
 
     evaluate_poses(orig_poses, observations,
                    orig_cam_err, orig_cam_n, orig_total_pts, orig_total_err);
-    evaluate_poses(laser_poses, observations,
-                   laser_cam_err, laser_cam_n, laser_total_pts, laser_total_err);
+    evaluate_poses(pointsource_poses, observations,
+                   pointsource_cam_err, laser_cam_n, laser_total_pts, laser_total_err);
 
     // ── Print results ──
     std::cout << "\n";
@@ -236,7 +236,7 @@ int main() {
             continue;
 
         double mean_orig = n_orig > 0 ? orig_cam_err[serial] / n_orig : 0.0;
-        double mean_laser = n_laser > 0 ? laser_cam_err[serial] / n_laser : 0.0;
+        double mean_laser = n_laser > 0 ? pointsource_cam_err[serial] / n_laser : 0.0;
         double delta = mean_laser - mean_orig;
 
         std::cout << std::left << std::setw(14) << serial

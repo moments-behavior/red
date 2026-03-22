@@ -368,7 +368,7 @@ struct CalibProject {
     std::string video_output_folder;     // legacy: aruco video YAML output
     std::string image_experimental_folder; // legacy: experimental image YAML output
     std::string video_experimental_folder; // legacy: experimental video YAML output
-    std::string laser_output_folder;     // laser YAML output
+    std::string pointsource_output_folder;     // laser YAML output
     std::string tele_output_folder;      // telecentric DLT output
 
     // Last aruco calibration run parameters (persisted for reproducibility)
@@ -439,7 +439,7 @@ inline void to_json(nlohmann::json &j, const CalibProject &p) {
                        {"video_output_folder", p.video_output_folder},
                        {"image_experimental_folder", p.image_experimental_folder},
                        {"video_experimental_folder", p.video_experimental_folder},
-                       {"laser_output_folder", p.laser_output_folder},
+                       {"pointsource_output_folder", p.pointsource_output_folder},
                        {"tele_output_folder", p.tele_output_folder},
                        {"last_aruco_start_frame", p.last_aruco_start_frame},
                        {"last_aruco_stop_frame", p.last_aruco_stop_frame},
@@ -516,7 +516,10 @@ inline void from_json(const nlohmann::json &j, CalibProject &p) {
             p.aruco_output_folder = p.video_output_folder;
     }
 
-    p.laser_output_folder = j.value("laser_output_folder", std::string{});
+    p.pointsource_output_folder = j.value("pointsource_output_folder", std::string{});
+    // Backward compat: migrate old laser_output_folder
+    if (p.pointsource_output_folder.empty() && j.contains("laser_output_folder"))
+        p.pointsource_output_folder = j.value("laser_output_folder", std::string{});
     p.tele_output_folder = j.value("tele_output_folder", std::string{});
     p.last_aruco_start_frame = j.value("last_aruco_start_frame", 0);
     p.last_aruco_stop_frame = j.value("last_aruco_stop_frame", 0);

@@ -103,20 +103,20 @@ static void test_calib_state_defaults() {
     EXPECT_FALSE(s.vid_done);
 
     // Laser defaults
-    EXPECT_FALSE(s.laser_ready);
-    EXPECT_TRUE(s.laser_total_frames == 0);
-    EXPECT_FALSE(s.laser_running);
-    EXPECT_FALSE(s.laser_done);
-    EXPECT_TRUE(s.laser_status.empty());
-    EXPECT_FALSE(s.laser_show_detection);
-    EXPECT_FALSE(s.laser_focus_window);
-    EXPECT_TRUE(s.laser_progress != nullptr);
+    EXPECT_FALSE(s.pointsource_ready);
+    EXPECT_TRUE(s.pointsource_total_frames == 0);
+    EXPECT_FALSE(s.pointsource_running);
+    EXPECT_FALSE(s.pointsource_done);
+    EXPECT_TRUE(s.pointsource_status.empty());
+    EXPECT_FALSE(s.pointsource_show_detection);
+    EXPECT_FALSE(s.pointsource_focus_window);
+    EXPECT_TRUE(s.pointsource_progress != nullptr);
 
-    // LaserVizState defaults
-    EXPECT_TRUE(s.laser_viz.ready.empty());
-    EXPECT_TRUE(s.laser_viz.pending.empty());
-    EXPECT_FALSE(s.laser_viz.computing.load());
-    EXPECT_TRUE(s.laser_viz.last_green_th == -1);
+    // PointSourceVizState defaults
+    EXPECT_TRUE(s.pointsource_viz.ready.empty());
+    EXPECT_TRUE(s.pointsource_viz.pending.empty());
+    EXPECT_FALSE(s.pointsource_viz.computing.load());
+    EXPECT_TRUE(s.pointsource_viz.last_green_th == -1);
 }
 
 // ---------------------------------------------------------------------------
@@ -133,10 +133,10 @@ static void test_calib_state_reset_on_close() {
     s.images_loaded = true;
     s.img_done = true;
     s.status = "Calibration complete!";
-    s.laser_ready = true;
-    s.laser_done = true;
-    s.laser_status = "Laser done";
-    s.laser_show_detection = true;
+    s.pointsource_ready = true;
+    s.pointsource_done = true;
+    s.pointsource_status = "Laser done";
+    s.pointsource_show_detection = true;
 
     // Simulate closing (this is what DrawCalibrationToolWindow does when !state.show)
     s.show = false;
@@ -148,14 +148,14 @@ static void test_calib_state_reset_on_close() {
     s.img_done = false;
     s.vid_done = false;
     s.status.clear();
-    s.laser_ready = false;
-    s.laser_done = false;
-    s.laser_status.clear();
-    s.laser_show_detection = false;
-    if (s.laser_viz.worker.joinable())
-        s.laser_viz.worker.join();
-    s.laser_viz.ready.clear();
-    s.laser_viz.pending.clear();
+    s.pointsource_ready = false;
+    s.pointsource_done = false;
+    s.pointsource_status.clear();
+    s.pointsource_show_detection = false;
+    if (s.pointsource_viz.worker.joinable())
+        s.pointsource_viz.worker.join();
+    s.pointsource_viz.ready.clear();
+    s.pointsource_viz.pending.clear();
 
     // Verify all state is reset
     EXPECT_FALSE(s.show);
@@ -166,12 +166,12 @@ static void test_calib_state_reset_on_close() {
     EXPECT_FALSE(s.img_done);
     EXPECT_FALSE(s.vid_done);
     EXPECT_TRUE(s.status.empty());
-    EXPECT_FALSE(s.laser_ready);
-    EXPECT_FALSE(s.laser_done);
-    EXPECT_TRUE(s.laser_status.empty());
-    EXPECT_FALSE(s.laser_show_detection);
-    EXPECT_TRUE(s.laser_viz.ready.empty());
-    EXPECT_TRUE(s.laser_viz.pending.empty());
+    EXPECT_FALSE(s.pointsource_ready);
+    EXPECT_FALSE(s.pointsource_done);
+    EXPECT_TRUE(s.pointsource_status.empty());
+    EXPECT_FALSE(s.pointsource_show_detection);
+    EXPECT_TRUE(s.pointsource_viz.ready.empty());
+    EXPECT_TRUE(s.pointsource_viz.pending.empty());
 }
 
 // ---------------------------------------------------------------------------
@@ -229,14 +229,14 @@ static void test_calib_state_project_init() {
 }
 
 // ---------------------------------------------------------------------------
-// LaserVizState: double-buffer lifecycle
+// PointSourceVizState: double-buffer lifecycle
 // ---------------------------------------------------------------------------
 
-static void test_laser_viz_double_buffer() {
-    LaserVizState lv;
+static void test_pointsource_viz_double_buffer() {
+    PointSourceVizState lv;
 
     // Simulate producing results
-    std::vector<LaserVizState::CamResult> results(4);
+    std::vector<PointSourceVizState::CamResult> results(4);
     for (int i = 0; i < 4; i++) {
         results[i].frame_num = 42;
         results[i].num_blobs = (i == 0) ? 1 : 0;
@@ -266,11 +266,11 @@ static void test_laser_viz_double_buffer() {
 }
 
 // ---------------------------------------------------------------------------
-// LaserVizState: params-changed detection
+// PointSourceVizState: params-changed detection
 // ---------------------------------------------------------------------------
 
-static void test_laser_viz_params_changed() {
-    LaserVizState lv;
+static void test_pointsource_viz_params_changed() {
+    PointSourceVizState lv;
     lv.last_green_th = 100;
     lv.last_green_dom = 30;
     lv.last_min_blob = 5;
@@ -847,8 +847,8 @@ int main() {
     test_calib_state_reset_on_close();
     test_calib_callbacks_callable();
     test_calib_state_project_init();
-    test_laser_viz_double_buffer();
-    test_laser_viz_params_changed();
+    test_pointsource_viz_double_buffer();
+    test_pointsource_viz_params_changed();
     test_calib_menu_open_patterns();
 
     // Infrastructure tests

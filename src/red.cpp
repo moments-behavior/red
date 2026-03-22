@@ -49,9 +49,9 @@
 #include "deferred_queue.h"
 #include "user_settings.h"
 #include "jarvis_export.h"
-#include "laser_calibration.h"
+#include "pointsource_calibration.h"
 #include "aruco_metal.h"
-#include "laser_metal.h"
+#include "pointsource_metal.h"
 #include <ImGuiFileDialog.h>
 #include <algorithm>
 #include <cstddef>
@@ -699,9 +699,9 @@ int main(int argc, char **argv) {
             // --- Laser detection viz: dispatch once before camera loop ---
             // This must run before per-camera iteration so that hidden cameras
             // (not in a visible ImGui window) still get processed.
-            if (win.calibration.laser_show_detection && win.calibration.laser_ready) {
-                auto &lv = win.calibration.laser_viz;
-                auto &lc = win.calibration.laser_config;
+            if (win.calibration.pointsource_show_detection && win.calibration.pointsource_ready) {
+                auto &lv = win.calibration.pointsource_viz;
+                auto &lc = win.calibration.pointsource_config;
                 int mac_head_dispatch = ps.play_video ? ps.read_head : select_corr_head;
                 int fn0 = scene->display_buffer[0][mac_head_dispatch].frame_number;
 
@@ -734,7 +734,7 @@ int main(int argc, char **argv) {
 
                     // Lazy-init Metal context for GPU viz
                     if (!lv.metal_ctx)
-                        lv.metal_ctx = laser_metal_create();
+                        lv.metal_ctx = pointsource_metal_create();
 
                     // Retain CVPixelBuffers for background thread
                     struct CamInput {
@@ -776,7 +776,7 @@ int main(int argc, char **argv) {
                     lv.worker = std::thread(
                         [inputs, ncams, green_th, green_dom,
                          min_blob, max_blob, metal_ctx, &lv]() {
-                            std::vector<LaserVizState::CamResult> results(ncams);
+                            std::vector<PointSourceVizState::CamResult> results(ncams);
 
                             // Phase 1: ALL cameras in parallel via fast detect (for stats)
                             {
@@ -788,7 +788,7 @@ int main(int argc, char **argv) {
                                         metal_ctx, green_th, green_dom, min_blob, max_blob]() {
                                         auto &res = results[ci];
                                         res.frame_num = inp.frame_num;
-                                        auto spot = laser_metal_detect(
+                                        auto spot = pointsource_metal_detect(
                                             metal_ctx, inp.pixel_buffer,
                                             green_th, green_dom, min_blob, max_blob);
                                         if (spot.found) {
@@ -811,7 +811,7 @@ int main(int argc, char **argv) {
                                 }
                                 auto &res = results[ci];
                                 res.rgba.resize(inp.width * inp.height * 4);
-                                laser_metal_detect_viz(
+                                pointsource_metal_detect_viz(
                                     metal_ctx, inp.pixel_buffer,
                                     green_th, green_dom, min_blob, max_blob,
                                     res.rgba.data());
@@ -866,7 +866,7 @@ int main(int argc, char **argv) {
 
                 if (ps.play_video) {
                     window_need_decoding[win_name].store(
-                        is_visible || (win.calibration.laser_show_detection && win.calibration.laser_ready));
+                        is_visible || (win.calibration.pointsource_show_detection && win.calibration.pointsource_ready));
                 };
 
                 if (is_visible) {
@@ -886,9 +886,9 @@ int main(int argc, char **argv) {
                         uint32_t h = scene->image_height[j];
                         bool did_upload = false;
 
-                        if (win.calibration.laser_show_detection && win.calibration.laser_ready) {
+                        if (win.calibration.pointsource_show_detection && win.calibration.pointsource_ready) {
                             // Upload ready result for this camera if available
-                            auto &lv = win.calibration.laser_viz;
+                            auto &lv = win.calibration.pointsource_viz;
                             if (j < (int)lv.ready.size() &&
                                 !lv.ready[j].rgba.empty() &&
                                 !lv.ready[j].uploaded) {

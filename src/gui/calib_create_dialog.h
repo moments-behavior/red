@@ -274,7 +274,7 @@ inline void DrawCalibCreateDialog(CalibrationToolState &state, AppContext &ctx,
 
                 // ---- Laser Videos (optional) ----
                 ImGui::TableNextRow();
-                LabelCell("Laser Videos");
+                LabelCell("PointSource Videos");
                 ImGui::TableSetColumnIndex(1);
                 ImGui::SetNextItemWidth(-FLT_MIN);
                 ImGui::InputText("##calib_vidfolder",
@@ -291,8 +291,8 @@ inline void DrawCalibCreateDialog(CalibrationToolState &state, AppContext &ctx,
                         cfg.path = red_data_dir;
                     cfg.flags = ImGuiFileDialogFlags_Modal;
                     ImGuiFileDialog::Instance()->OpenDialog(
-                        "ChooseCalibVideoFolder",
-                        "Select Laser Videos Folder", nullptr, cfg);
+                        "ChooseCalibPointSourceFolder",
+                        "Select PointSource Videos Folder", nullptr, cfg);
                 }
 
                 // ---- Board Setup (when no config file, aruco media detected) ----
@@ -490,7 +490,7 @@ inline void DrawCalibCreateDialog(CalibrationToolState &state, AppContext &ctx,
                 ImGuiFileDialog::Instance()->Close();
             }
             if (ImGuiFileDialog::Instance()->Display(
-                    "ChooseCalibVideoFolder", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
+                    "ChooseCalibPointSourceFolder", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
                 if (ImGuiFileDialog::Instance()->IsOk())
                     state.project.media_folder =
                         ImGuiFileDialog::Instance()->GetCurrentPath();
@@ -524,7 +524,7 @@ inline void DrawCalibCreateDialog(CalibrationToolState &state, AppContext &ctx,
                 // Projective validation
                 if (!state.project.media_folder.empty() &&
                     !state.project.calibration_folder.empty()) {
-                    auto matched = LaserCalibration::validate_cameras(
+                    auto matched = PointSourceCalibration::validate_cameras(
                         state.project.media_folder,
                         state.project.calibration_folder);
                     state.project.camera_names = matched;
@@ -745,8 +745,8 @@ inline void DrawCalibCreateDialog(CalibrationToolState &state, AppContext &ctx,
 
                 // Set laser output folder if laser inputs present
                 if (!state.project.calibration_folder.empty())
-                    state.project.laser_output_folder =
-                        state.project.project_path + "/laser_calibration";
+                    state.project.pointsource_output_folder =
+                        state.project.project_path + "/pointsource_calibration";
 
                 // Only proceed if no parse error
                 if (state.status.find("Error") == std::string::npos) {
@@ -776,18 +776,18 @@ inline void DrawCalibCreateDialog(CalibrationToolState &state, AppContext &ctx,
                             state.show_create_dialog = false;
 
                             // For pure laser projects (no aruco), auto-load videos.
-                            // For aruco+laser, defer to "Load Laser Videos" button.
+                            // For aruco+laser, defer to "Load PointSource Videos" button.
                             if (state.project.has_laser_input() &&
                                 !state.project.has_aruco()) {
-                                state.laser_config.media_folder =
+                                state.pointsource_config.media_folder =
                                     state.project.media_folder;
-                                state.laser_config.calibration_folder =
+                                state.pointsource_config.calibration_folder =
                                     state.project.calibration_folder;
-                                state.laser_config.camera_names =
+                                state.pointsource_config.camera_names =
                                     state.project.camera_names;
-                                state.laser_config.output_folder =
-                                    state.project.laser_output_folder;
-                                state.laser_ready = true;
+                                state.pointsource_config.output_folder =
+                                    state.project.pointsource_output_folder;
+                                state.pointsource_ready = true;
 
                                 // Load videos
                                 if (!ps.video_loaded) {
@@ -798,7 +798,7 @@ inline void DrawCalibCreateDialog(CalibrationToolState &state, AppContext &ctx,
                                     cb.load_videos();
                                     cb.print_metadata();
                                 }
-                                state.laser_total_frames = dc_context->estimated_num_frames;
+                                state.pointsource_total_frames = dc_context->estimated_num_frames;
                             }
 
                             // Auto-load videos for telecentric (direct, like laser).
@@ -833,7 +833,7 @@ inline void DrawCalibCreateDialog(CalibrationToolState &state, AppContext &ctx,
                                     "Project created: " +
                                     std::to_string(
                                         state.project.camera_names.size()) +
-                                    " cameras (laser refinement)";
+                                    " cameras (pointsource refinement)";
                             }
                         }
                     }

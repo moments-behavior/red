@@ -1,4 +1,4 @@
-# Rob1 Calibration Study: ArUco + Laser Refinement
+# Rob1 Calibration Study: ArUco + PointSource Refinement
 
 **Date**: 2026-03-21
 **Rig**: 16-camera mouse behavioral arena (HHMI Janelia)
@@ -9,9 +9,9 @@
 
 ## 1. Overview
 
-This study evaluates the complete RED calibration pipeline on a 16-camera mouse behavioral rig: initial ArUco board calibration followed by laser pointer refinement with four optimization modes. We cross-validate each calibration against held-out ArUco board detections to assess whether laser refinement genuinely improves 3D accuracy or merely overfits to laser data.
+This study evaluates the complete RED calibration pipeline on a 16-camera mouse behavioral rig: initial ArUco board calibration followed by pointsource refinement using a light wand, with four optimization modes. A light wand is a thin wand with a tiny green optical fiber emitting light from the tip, creating a point source visible to multiple cameras simultaneously. We cross-validate each calibration against held-out ArUco board detections to assess whether pointsource refinement genuinely improves 3D accuracy or merely overfits to pointsource data.
 
-**Key result**: Full-parameter laser refinement achieves the best performance on both laser data (0.268 px) AND aruco cross-validation (1.649 px), confirming that a high-quality laser dataset with strong multi-view redundancy can reliably estimate all camera parameters.
+**Key result**: Full-parameter pointsource refinement achieves the best performance on both pointsource data (0.268 px) AND aruco cross-validation (1.649 px), confirming that a high-quality pointsource dataset with strong multi-view redundancy can reliably estimate all camera parameters.
 
 ### Dataset Locations
 
@@ -19,21 +19,21 @@ This study evaluates the complete RED calibration pipeline on a 16-camera mouse 
 |---------|------|
 | ArUco calibration videos (Rob) | `/Users/johnsonr/datasets/mouse/calibration/Mar202026/2026_03_20_11_43_33` |
 | Global registration videos | `/Users/johnsonr/datasets/mouse/calibration/Mar202026/2026_03_20_11_39_14` |
-| Laser pointer videos | `/Users/johnsonr/datasets/mouse/calibration/Mar202026/2026_03_20_11_51_00` |
+| Light wand videos | `/Users/johnsonr/datasets/mouse/calibration/Mar202026/2026_03_20_11_51_00` |
 | RED project folder | `/Users/johnsonr/red_dev/quan_v_rob_calib/rob1/` |
 | ArUco output | `.../rob1/aruco_calibration/2026_03_21_20_02_05/` |
-| Laser: Extrinsics only | `.../rob1/laser_calibration/2026_03_21_21_35_04/` |
-| Laser: Extrinsics + Focal | `.../rob1/laser_focal/2026_03_21_22_10_36/` |
-| Laser: Extrinsics + All | `.../rob1/laser_all_intrinsics/2026_03_21_22_15_00/` |
-| Laser: Full | `.../rob1/laser_full/2026_03_21_22_19_26/` |
+| PS: Extrinsics only | `.../rob1/laser_calibration/2026_03_21_21_35_04/` |
+| PS: Extrinsics + Focal | `.../rob1/laser_focal/2026_03_21_22_10_36/` |
+| PS: Extrinsics + All | `.../rob1/laser_all_intrinsics/2026_03_21_22_15_00/` |
+| PS: Full | `.../rob1/laser_full/2026_03_21_22_19_26/` |
 | Cross-validation test | `/Users/johnsonr/red_dev/quan_v_rob_calib/test_crossval_modes.cpp` |
-| Laser mode test | `/Users/johnsonr/red_dev/quan_v_rob_calib/test_laser_modes.cpp` |
+| PS mode test | `/Users/johnsonr/red_dev/quan_v_rob_calib/test_laser_modes.cpp` |
 
 ### Cameras
 
-16 FLIR cameras (3208 x 2200 px): `2002486, 2002487, 2005325, 2006050, 2006051, 2006052, 2006054, 2006055, 2006515, 2006516, 2008665, 2008666, 2008667, 2008668, 2008669, 2008670`
+16 Emergent Vision Technologies HB-7000-S cameras (7MP, 25GigE RDMA) (3208 x 2200 px): `2002486, 2002487, 2005325, 2006050, 2006051, 2006052, 2006054, 2006055, 2006515, 2006516, 2008665, 2008666, 2008667, 2008668, 2008669, 2008670`
 
-ArUco videos: ~445 frames each, ~224-250 MB per camera. Laser videos: ~958 MB each (~16 GB total for 16 cameras + 1 thermal Cam710040 excluded).
+ArUco videos: ~445 frames each, ~224-250 MB per camera. Light wand videos: ~958 MB each (~16 GB total for 16 cameras + 1 thermal Cam710040 excluded).
 
 ---
 
@@ -190,13 +190,13 @@ Per-camera YAML files (OpenCV format) with K, distortion, R, t. Summary data inc
 
 ---
 
-## 3. Laser Calibration Refinement
+## 3. PointSource Calibration Refinement
 
-### 3.1 The Laser Pipeline
+### 3.1 The PointSource Pipeline
 
-Laser refinement uses synchronized video of a green laser pointer to correct camera calibration. The laser creates a point visible to multiple cameras simultaneously, providing dense multi-view constraints that complement the sparse board-based calibration.
+PointSource refinement uses synchronized video of a green light wand to correct camera calibration. The light wand creates a point source visible to multiple cameras simultaneously, providing dense multi-view constraints that complement the sparse board-based calibration.
 
-#### Step 1: Laser Spot Detection (Parallel)
+#### Step 1: Light Spot Detection (Parallel)
 
 For each camera in parallel:
 1. **Video decode**: Same FFmpeg + VideoToolbox pipeline as ArUco
@@ -211,7 +211,7 @@ Optional: GPU-accelerated detection via Metal compute shader (macOS).
 
 #### Step 2: Multi-Camera Observation Assembly
 
-For each video frame, collect all cameras that detected a laser spot. Discard frames where fewer than `min_cameras` cameras detected the spot. This ensures every 3D point has strong multi-view constraint.
+For each video frame, collect all cameras that detected a light spot. Discard frames where fewer than `min_cameras` cameras detected the spot. This ensures every 3D point has strong multi-view constraint.
 
 #### Step 3: Triangulation + Validation
 
@@ -235,7 +235,7 @@ Camera 0 extrinsics are always locked (gauge freedom — the coordinate system m
 | Extrinsics Only | R, t (6 DOF/cam) | fx, fy, cx, cy, k1, k2, p1, p2, k3 | Trusted ArUco intrinsics |
 | Extrinsics + Focal | R, t, fx, fy (8 DOF/cam) | cx, cy, k1, k2, p1, p2, k3 | Focal drift suspected |
 | Extrinsics + All | R, t, fx, fy, cx, cy, k1, k2 (12 DOF/cam) | p1, p2, k3 | Poor initial calibration |
-| Full | R, t, fx, fy, cx, cy, k1, k2, p1, p2, k3 (15 DOF/cam) | (none) | Excellent laser data |
+| Full | R, t, fx, fy, cx, cy, k1, k2, p1, p2, k3 (15 DOF/cam) | (none) | Excellent pointsource data |
 
 Solver: Sparse Schur (multi-threaded), Huber loss (scale 1.0).
 
@@ -244,10 +244,10 @@ Solver: Sparse Schur (multi-threaded), Huber loss (scale 1.0).
 Refined YAML files + comprehensive metadata:
 - `settings.json`: All detection, filtering, and BA parameters
 - `summary.json`: Before/after reproj, per-camera changes (dfx, dfy, dcx, dcy, dt_norm, drot_deg)
-- `ba_points.json`: Triangulated 3D laser points
+- `ba_points.json`: Triangulated 3D pointsource points
 - `observations.json`: Per-point camera observations
 
-### 3.2 Laser Dataset Quality
+### 3.2 PointSource Dataset Quality
 
 | Metric | Value | Assessment |
 |--------|-------|-----------|
@@ -262,7 +262,7 @@ Refined YAML files + comprehensive metadata:
 | Outliers removed (all modes) | 0 | Perfectly clean data |
 | Points per camera | 3,207 - 3,680 | Well-distributed |
 
-**Exception**: Camera 2008666 detected only 759 spots (444 observations) — likely partially occluded or at an extreme angle. All other cameras detected 2,764 - 3,968 spots.
+**Exception**: Camera 2008666 detected only 759 light spots (444 observations) — likely partially occluded or at an extreme angle. All other cameras detected 2,764 - 3,968 light spots.
 
 ### 3.3 Detection Settings
 
@@ -278,7 +278,7 @@ Refined YAML files + comprehensive metadata:
 | ba_outlier_th2 | 5.0 px | Pass 2 threshold |
 | ba_max_iter | 50 | Ceres iterations per pass |
 
-### 3.4 Per-Camera Laser Detection Results
+### 3.4 Per-Camera Light Spot Detection Results
 
 | Camera | Detections | Observations (after filter) | Detection Rate |
 |--------|-----------|---------------------------|----------------|
@@ -299,13 +299,13 @@ Refined YAML files + comprehensive metadata:
 | 2008669 | 3,521 | 3,207 | 91.1% |
 | 2008670 | 3,648 | 3,382 | 92.7% |
 
-Camera 2008666 is an outlier with only 759 detections (58.5% observation rate) — likely partially occluded or at an extreme viewing angle during laser data collection.
+Camera 2008666 is an outlier with only 759 detections (58.5% observation rate) — likely partially occluded or at an extreme viewing angle during pointsource data collection.
 
 ---
 
-## 4. Laser Refinement Results
+## 4. PointSource Refinement Results
 
-### 4.1 Reprojection Error on Laser Data
+### 4.1 Reprojection Error on PointSource Data
 
 | Mode | Reproj After | Improvement | Time |
 |------|-------------|-------------|------|
@@ -363,11 +363,11 @@ Note: Camera 2002486 is camera 0 (gauge reference — extrinsics locked, intrins
 
 ### 4.3 Cross-Validation Against ArUco Board Detections
 
-This is the critical test: do the laser-refined calibrations improve on data they never saw?
+This is the critical test: do the pointsource-refined calibrations improve on data they never saw?
 
 We loaded the 2D ArUco board corner detections from the Rob1 calibration (3,354 landmarks, 18,640 observations across 16 cameras), triangulated each landmark using each calibration's camera poses, and measured reprojection error.
 
-| Calibration | Laser Reproj | ArUco Cross-Val | vs Baseline |
+| Calibration | PS Reproj | ArUco Cross-Val | vs Baseline |
 |------------|-------------|-----------------|-------------|
 | **ArUco baseline** | — | **1.664 px** | Reference |
 | **Extrinsics only** | 0.476 px | 2.014 px | +21% worse |
@@ -406,19 +406,19 @@ Full mode wins on 11 of 16 cameras. The ArUco baseline wins on 3 cameras (200605
 
 ### 5.1 Why Extrinsics-Only Hurts ArUco Cross-Validation
 
-When only extrinsics are free, the optimizer moves cameras to fit laser points. But the ArUco intrinsics may have small errors (focal length, principal point) that were compensated by the ArUco extrinsics. Moving extrinsics without correcting intrinsics breaks this compensation — the cameras move to a position that's better for laser data but worse for ArUco data.
+When only extrinsics are free, the optimizer moves cameras to fit pointsource points. But the ArUco intrinsics may have small errors (focal length, principal point) that were compensated by the ArUco extrinsics. Moving extrinsics without correcting intrinsics breaks this compensation — the cameras move to a position that's better for pointsource data but worse for ArUco data.
 
 This is a classic bias-variance tradeoff: the extrinsics-only model has low model flexibility, so it can't simultaneously fit both data sources.
 
 ### 5.2 Why Full Mode Wins Both
 
-With all parameters free, the optimizer can find a solution that genuinely improves the camera model — not just shift error between extrinsics and intrinsics. The large parameter changes (up to 71 px focal, 80 px cy) indicate the ArUco intrinsics had real errors that the laser data can correct.
+With all parameters free, the optimizer can find a solution that genuinely improves the camera model — not just shift error between extrinsics and intrinsics. The large parameter changes (up to 71 px focal, 80 px cy) indicate the ArUco intrinsics had real errors that the pointsource data can correct.
 
-The key enabler is data quality: 3,692 points with 13.88 cameras/point provides ~38 observations per free parameter. This is more than sufficient to constrain even p1, p2, k3 — parameters that are normally underdetermined from board data alone.
+The key enabler is data quality: 3,692 points with 13.88 cameras/point provides ~38 observations per free parameter. This is more than sufficient to constrain even p1, p2, k3 — parameters that are normally underdetermined from board data alone. The light wand's dense volumetric sampling provides constraints that planar boards cannot.
 
 ### 5.3 Camera 2008666 Anomaly
 
-Camera 2008666 is the one camera where Full mode (1.873 px) is worse than ArUco baseline (1.547 px) on cross-validation. This camera had only 759 laser detections (444 observations) — far fewer than other cameras (2,500-3,700). With fewer constraints, its parameters may be less reliable. This suggests a detection threshold: cameras with fewer than ~1,000 laser observations may benefit from locked intrinsics.
+Camera 2008666 is the one camera where Full mode (1.873 px) is worse than ArUco baseline (1.547 px) on cross-validation. This camera had only 759 light spot detections (444 observations) — far fewer than other cameras (2,500-3,700). With fewer constraints, its parameters may be less reliable. This suggests a detection threshold: cameras with fewer than ~1,000 pointsource observations may benefit from locked intrinsics.
 
 ### 5.4 Scale of Parameter Changes
 
@@ -433,39 +433,39 @@ The Full mode changes are large but physically interpretable:
 
 ## 6. Recommendations
 
-### 6.1 For High-Quality Laser Datasets (Like This One)
+### 6.1 For High-Quality PointSource Datasets (Like This One)
 
 - Use **Full** optimization mode
-- Requires: >3,000 laser points, >10 cameras/point average, good spatial coverage
-- Expect: 70%+ improvement on laser data, slight improvement on ArUco cross-validation
+- Requires: >3,000 pointsource points, >10 cameras/point average, good spatial coverage
+- Expect: 70%+ improvement on pointsource data, slight improvement on ArUco cross-validation
 - Monitor camera 2008666-like anomalies (low detection count cameras)
 
-### 6.2 For Moderate Laser Datasets
+### 6.2 For Moderate PointSource Datasets
 
 - Use **Extrinsics + All Intrinsics** mode (locks p1, p2, k3)
-- Suitable when: 1,000-3,000 laser points, 6-10 cameras/point
-- Expect: 50-65% improvement on laser data, comparable ArUco cross-validation
+- Suitable when: 1,000-3,000 pointsource points, 6-10 cameras/point
+- Expect: 50-65% improvement on pointsource data, comparable ArUco cross-validation
 
-### 6.3 For Minimal Laser Datasets
+### 6.3 For Minimal PointSource Datasets
 
 - Use **Extrinsics Only** mode
-- Suitable when: <1,000 laser points, or sparse camera coverage
-- Expect: 30-50% improvement on laser data, but may degrade ArUco cross-validation
+- Suitable when: <1,000 pointsource points, or sparse camera coverage
+- Expect: 30-50% improvement on pointsource data, but may degrade ArUco cross-validation
 - Consider running cross-validation to verify
 
 ### 6.4 General Calibration Workflow
 
 1. **ArUco calibration** (config-free or with config.json): Establishes initial intrinsics and extrinsics with global registration to world coordinate frame
-2. **Laser refinement (Full mode)**: Corrects all parameters using dense multi-view constraints. This is the production calibration.
+2. **PointSource refinement (Full mode)**: Corrects all parameters using dense multi-view constraints. This is the production calibration.
 3. **Cross-validation**: Run ArUco cross-validation to verify no degradation. If a specific camera degrades, re-run with that camera's intrinsics locked.
 
-### 6.5 Laser Data Collection Tips
+### 6.5 PointSource Data Collection Tips
 
-- Use a bright green laser pointer visible to all cameras
-- Move the laser slowly across the entire arena volume (not just a 2D plane)
+- Use a light wand with a bright green optical fiber tip visible to all cameras
+- Move the light wand slowly across the entire arena volume (not just a 2D plane)
 - Cover corners and edges, not just the center
 - Record for 3-5 minutes (more data = better constraint)
-- Verify all cameras can see the laser (check detection rates after running)
+- Verify all cameras can see the light wand (check detection rates after running)
 - Use frame_step=3 as a good balance between quality and speed
 
 ### 6.6 When to Re-Calibrate
@@ -473,4 +473,4 @@ The Full mode changes are large but physically interpretable:
 - After any physical change to the rig (camera moved, lens adjusted, rig relocated)
 - If behavioral tracking shows unexplained 3D drift
 - Periodically (e.g., monthly) to catch gradual drift
-- Always start from ArUco → Laser, not laser-only (ArUco provides the world frame)
+- Always start from ArUco → PointSource, not pointsource-only (ArUco provides the world frame)

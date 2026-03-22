@@ -35,10 +35,10 @@ struct WindowStates {
     void reset() {
         labeling = LabelingToolState{};
         // CalibrationToolState has futures + thread — wait then clear fields
-        if (calibration.laser_viz.worker.joinable())
-            calibration.laser_viz.worker.join();
-        calibration.laser_viz.ready.clear();
-        calibration.laser_viz.pending.clear();
+        if (calibration.pointsource_viz.worker.joinable())
+            calibration.pointsource_viz.worker.join();
+        calibration.pointsource_viz.ready.clear();
+        calibration.pointsource_viz.pending.clear();
         // Note: future destructors from std::async block until complete
         calibration.show = false;
         calibration.project_loaded = false;
@@ -60,11 +60,11 @@ struct WindowStates {
         calibration.tele_dlt_status.clear();
         calibration.tele_run_history.clear();
         calibration.tele_deferred_label_frames = 0;
-        calibration.laser_ready = false;
-        calibration.laser_running = false;
-        calibration.laser_done = false;
-        calibration.laser_status.clear();
-        calibration.laser_show_detection = false;
+        calibration.pointsource_ready = false;
+        calibration.pointsource_running = false;
+        calibration.pointsource_done = false;
+        calibration.pointsource_status.clear();
+        calibration.pointsource_show_detection = false;
         calibration.status.clear();
         // Clear stale result data (can be large)
         calibration.img_result = {};
@@ -72,7 +72,7 @@ struct WindowStates {
         calibration.exp_img_result = {};
         calibration.exp_vid_result = {};
         calibration.tele_dlt_result = {};
-        calibration.laser_result = {};
+        calibration.pointsource_result = {};
         calibration.loaded_result = {};
         // Null raw pointers to prevent dangling references
         calibration.tele_viewer.show = false;
@@ -84,7 +84,7 @@ struct WindowStates {
         calibration.project = {};
         calibration.config = {};
         calibration.config_path.clear();
-        calibration.laser_config = {};
+        calibration.pointsource_config = {};
         calibration.dock_pending = false;
         calibration.aruco_start_frame = 0;
         calibration.aruco_stop_frame = 0;
@@ -96,9 +96,9 @@ struct WindowStates {
         calibration.tele_zero_skew = false;
         calibration.tele_do_ba = true;
         calibration.tele_method = 0;
-        calibration.laser_total_frames = 0;
-        calibration.laser_focus_window = false;
-        calibration.laser_progress = std::make_shared<LaserCalibration::DetectionProgress>();
+        calibration.pointsource_total_frames = 0;
+        calibration.pointsource_focus_window = false;
+        calibration.pointsource_progress = std::make_shared<PointSourceCalibration::DetectionProgress>();
         annotation.show = false;
         annotation.video_folder.clear();
         annotation.discovered_cameras.clear();

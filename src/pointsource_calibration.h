@@ -1,6 +1,6 @@
 #pragma once
-// laser_calibration.h — Laser spot calibration refinement pipeline.
-// Uses synchronized video of a green laser pointer in a dark arena to
+// pointsource_calibration.h — Point-source calibration refinement pipeline.
+// Uses synchronized video of a green light wand in a dark arena to
 // refine camera calibration (intrinsics + extrinsics) via bundle adjustment.
 // Reference: github.com/JohnsonLabJanelia/laserCalib (rj branch)
 
@@ -11,7 +11,7 @@
 #ifdef __APPLE__
 #include "FFmpegDemuxer.h"        // Annex-B demuxing for VT decode
 #include "vt_async_decoder.h"     // HW decode → BGRA CVPixelBuffer (zero swscale)
-#include "laser_metal.h"          // GPU-accelerated laser spot detection
+#include "pointsource_metal.h"          // GPU-accelerated light spot detection
 #include <CoreVideo/CoreVideo.h>
 #else
 #include "ffmpeg_frame_reader.h"  // FFmpeg + swscale fallback (Linux)
@@ -39,7 +39,7 @@
 #include <thread>
 #include <vector>
 
-namespace LaserCalibration {
+namespace PointSourceCalibration {
 
 // Project persistence moved to CalibrationTool::CalibProject (calibration_tool.h)
 
@@ -47,25 +47,25 @@ namespace LaserCalibration {
 // Data structures
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Optimization mode for laser BA
-enum class LaserOptMode {
+// Optimization mode for pointsource BA
+enum class PointSourceOptMode {
     ExtrinsicsOnly = 0,      // Fix all intrinsics, optimize R + t
     ExtrinsicsAndFocal = 1,  // + optimize fx, fy
     ExtrinsicsAndAll = 2,    // + optimize fx, fy, cx, cy, k1, k2 (lock p1, p2, k3)
     Full = 3                 // All parameters free (fx, fy, cx, cy, k1, k2, p1, p2, k3)
 };
 
-inline const char *laser_opt_mode_name(LaserOptMode m) {
+inline const char *pointsource_opt_mode_name(PointSourceOptMode m) {
     switch (m) {
-        case LaserOptMode::ExtrinsicsOnly: return "Extrinsics only";
-        case LaserOptMode::ExtrinsicsAndFocal: return "Extrinsics + focal length";
-        case LaserOptMode::ExtrinsicsAndAll: return "Extrinsics + all intrinsics";
-        case LaserOptMode::Full: return "Full (all parameters free)";
+        case PointSourceOptMode::ExtrinsicsOnly: return "Extrinsics only";
+        case PointSourceOptMode::ExtrinsicsAndFocal: return "Extrinsics + focal length";
+        case PointSourceOptMode::ExtrinsicsAndAll: return "Extrinsics + all intrinsics";
+        case PointSourceOptMode::Full: return "Full (all parameters free)";
         default: return "Unknown";
     }
 }
 
-struct LaserConfig {
+struct PointSourceConfig {
     std::string media_folder;
     std::vector<std::string> camera_names;
     std::string calibration_folder;
@@ -91,10 +91,10 @@ struct LaserConfig {
     double ba_outlier_th2 = 5.0;
     int ba_max_iter = 50;
     bool lock_intrinsics = true;          // legacy (kept for backward compat)
-    LaserOptMode opt_mode = LaserOptMode::ExtrinsicsOnly;
+    PointSourceOptMode opt_mode = PointSourceOptMode::ExtrinsicsOnly;
 };
 
-inline nlohmann::json config_to_json(const LaserConfig &c) {
+inline nlohmann::json config_to_json(const PointSourceConfig &c) {
     return nlohmann::json{
         {"media_folder", c.media_folder},
         {"calibration_folder", c.calibration_folder},
@@ -113,7 +113,7 @@ inline nlohmann::json config_to_json(const LaserConfig &c) {
         {"ba_max_iter", c.ba_max_iter},
         {"lock_intrinsics", c.lock_intrinsics},
         {"opt_mode", static_cast<int>(c.opt_mode)},
-        {"opt_mode_name", laser_opt_mode_name(c.opt_mode)}};
+        {"opt_mode_name", pointsource_opt_mode_name(c.opt_mode)}};
 }
 
 struct SpotDetection {
@@ -142,11 +142,11 @@ struct CameraChange {
     double dt_norm = 0;     // ||delta_t||
     double drot_deg = 0;    // rotation change in degrees
     // Per-camera counts
-    int detections = 0;     // laser spots found
+    int detections = 0;     // light spots found
     int observations = 0;   // observations used in BA (after filtering)
 };
 
-struct LaserResult {
+struct PointSourceResult {
     bool success = false;
     std::string error;
     int total_frames_scanned = 0;
@@ -284,7 +284,7 @@ validate_cameras(const std::string &media_folder,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Step 1: Detect laser spot in a single frame
+// Step 1: Detect light spot in a single frame
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Union-Find for connected components
@@ -317,24 +317,24 @@ struct UnionFind {
     }
 };
 
-// Pixel format for detect_laser_spot.
+// Pixel format for detect_light_spot.
 // RGB24: R=0, G=1, B=2 (3 bpp, stride = width*3)
 // BGRA:  B=0, G=1, R=2, A=3 (4 bpp, stride from CVPixelBuffer)
-enum LaserPixelFormat { LASER_FMT_RGB24, LASER_FMT_BGRA };
+enum PointSourcePixelFormat { POINTSOURCE_FMT_RGB24, POINTSOURCE_FMT_BGRA };
 
-// Detect a single green laser spot in a frame (RGB24 or BGRA).
+// Detect a single green light spot in a frame (RGB24 or BGRA).
 // stride = bytes per row (may include padding for BGRA from CVPixelBuffer).
 // Returns true if exactly one valid blob found; fills detection.
-inline bool detect_laser_spot(const uint8_t *pixels, int width, int height,
-                              int stride, LaserPixelFormat fmt,
+inline bool detect_light_spot(const uint8_t *pixels, int width, int height,
+                              int stride, PointSourcePixelFormat fmt,
                               int green_threshold, int green_dominance,
                               int min_blob_pixels, int max_blob_pixels,
                               SpotDetection &det) {
     int npixels = width * height;
-    int bpp = (fmt == LASER_FMT_BGRA) ? 4 : 3;
-    int r_off = (fmt == LASER_FMT_BGRA) ? 2 : 0;
+    int bpp = (fmt == POINTSOURCE_FMT_BGRA) ? 4 : 3;
+    int r_off = (fmt == POINTSOURCE_FMT_BGRA) ? 2 : 0;
     // g_off = 1 for both formats
-    int b_off = (fmt == LASER_FMT_BGRA) ? 0 : 2;
+    int b_off = (fmt == POINTSOURCE_FMT_BGRA) ? 0 : 2;
 
     // Step 1: Threshold — binary mask
     std::vector<uint8_t> mask(npixels, 0);
@@ -438,7 +438,7 @@ inline bool detect_laser_spot(const uint8_t *pixels, int width, int height,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Step 1b: Detect laser spots across all cameras (parallel)
+// Step 1b: Detect light spots across all cameras (parallel)
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Per-camera detection results: frame_number → SpotDetection
@@ -450,7 +450,7 @@ using DetectionMap = std::map<int, SpotDetection>;
 // Skips swscale entirely; VT does YUV→BGRA on GPU.
 
 inline std::vector<DetectionMap> detect_all_cameras(
-    const LaserConfig &config,
+    const PointSourceConfig &config,
     const std::map<std::string, std::string> &video_files,
     std::string *status,
     DetectionProgress *progress = nullptr) {
@@ -462,9 +462,9 @@ inline std::vector<DetectionMap> detect_all_cameras(
     std::mutex det_mutex;
 
     // GPU-accelerated detection — shared across all camera threads
-    LaserMetalHandle metal_ctx = laser_metal_create();
+    PointSourceMetalHandle metal_ctx = pointsource_metal_create();
     if (!metal_ctx)
-        printf("Laser: Metal compute init failed, falling back to CPU\n");
+        printf("PointSource: Metal compute init failed, falling back to CPU\n");
 
     std::vector<std::thread> threads;
 
@@ -483,7 +483,7 @@ inline std::vector<DetectionMap> detect_all_cameras(
                     video_path.c_str(),
                     std::map<std::string, std::string>{});
             } catch (...) {
-                printf("Laser: failed to open demuxer: %s\n",
+                printf("PointSource: failed to open demuxer: %s\n",
                        video_path.c_str());
                 return;
             }
@@ -495,7 +495,7 @@ inline std::vector<DetectionMap> detect_all_cameras(
             VTAsyncDecoder vt;
             if (!vt.init(demuxer->GetExtradata(), demuxer->GetExtradataSize(),
                          demuxer->GetVideoCodec())) {
-                printf("Laser: VT init failed for %s\n", video_path.c_str());
+                printf("PointSource: VT init failed for %s\n", video_path.c_str());
                 return;
             }
 
@@ -539,7 +539,7 @@ inline std::vector<DetectionMap> detect_all_cameras(
                     bool found = false;
                     if (metal_ctx) {
                         // GPU path — process CVPixelBuffer directly (zero-copy)
-                        LaserMetalSpot mdet = laser_metal_detect(
+                        PointSourceMetalSpot mdet = pointsource_metal_detect(
                             metal_ctx, pb,
                             config.green_threshold, config.green_dominance,
                             config.min_blob_pixels, config.max_blob_pixels);
@@ -555,8 +555,8 @@ inline std::vector<DetectionMap> detect_all_cameras(
                         const uint8_t *bgra =
                             (const uint8_t *)CVPixelBufferGetBaseAddress(pb);
                         int stride = (int)CVPixelBufferGetBytesPerRow(pb);
-                        found = detect_laser_spot(bgra, width, height, stride,
-                                                  LASER_FMT_BGRA,
+                        found = detect_light_spot(bgra, width, height, stride,
+                                                  POINTSOURCE_FMT_BGRA,
                                                   config.green_threshold,
                                                   config.green_dominance,
                                                   config.min_blob_pixels,
@@ -628,7 +628,7 @@ inline std::vector<DetectionMap> detect_all_cameras(
             if (cam_prog)
                 cam_prog->done.store(true, std::memory_order_relaxed);
 
-            printf("Laser: Camera %s — %d frames decoded, %d spots detected "
+            printf("PointSource: Camera %s — %d frames decoded, %d spots detected "
                    "(range %d-%s, step %d) [VT+BGRA]\n",
                    config.camera_names[c].c_str(), frame, detected,
                    start_fr,
@@ -641,7 +641,7 @@ inline std::vector<DetectionMap> detect_all_cameras(
         t.join();
 
     if (metal_ctx)
-        laser_metal_destroy(metal_ctx);
+        pointsource_metal_destroy(metal_ctx);
 
     return all_detections;
 }
@@ -651,7 +651,7 @@ inline std::vector<DetectionMap> detect_all_cameras(
 // ── Linux fallback: FrameReader (FFmpeg + swscale → RGB24) ──
 
 inline std::vector<DetectionMap> detect_all_cameras(
-    const LaserConfig &config,
+    const PointSourceConfig &config,
     const std::map<std::string, std::string> &video_files,
     std::string *status,
     DetectionProgress *progress = nullptr) {
@@ -674,7 +674,7 @@ inline std::vector<DetectionMap> detect_all_cameras(
             CameraProgress *cam_prog = progress ? progress->cameras[c].get() : nullptr;
             ffmpeg_reader::FrameReader reader;
             if (!reader.open(video_path)) {
-                printf("Laser: failed to open video: %s\n",
+                printf("PointSource: failed to open video: %s\n",
                        video_path.c_str());
                 return;
             }
@@ -700,8 +700,8 @@ inline std::vector<DetectionMap> detect_all_cameras(
                 if (should_detect) {
                     int stride = reader.width() * 3;
                     SpotDetection det;
-                    if (detect_laser_spot(rgb, reader.width(), reader.height(),
-                                          stride, LASER_FMT_RGB24,
+                    if (detect_light_spot(rgb, reader.width(), reader.height(),
+                                          stride, POINTSOURCE_FMT_RGB24,
                                           config.green_threshold,
                                           config.green_dominance,
                                           config.min_blob_pixels,
@@ -726,7 +726,7 @@ inline std::vector<DetectionMap> detect_all_cameras(
             if (cam_prog)
                 cam_prog->done.store(true, std::memory_order_relaxed);
 
-            printf("Laser: Camera %s — %d frames decoded, %d spots detected "
+            printf("PointSource: Camera %s — %d frames decoded, %d spots detected "
                    "(range %d-%s, step %d)\n",
                    config.camera_names[c].c_str(), frame, detected,
                    start_fr,
@@ -884,7 +884,7 @@ inline bool triangulate_and_validate(
 // Step 4: Bundle adjustment (Ceres)
 // ─────────────────────────────────────────────────────────────────────────────
 
-inline bool bundle_adjust_laser(
+inline bool bundle_adjust_pointsource(
     const std::vector<std::string> &camera_names,
     std::vector<CalibrationPipeline::CameraPose> &poses,
     std::vector<Eigen::Vector3d> &points_3d,
@@ -892,7 +892,7 @@ inline bool bundle_adjust_laser(
     double outlier_th1, double outlier_th2, int max_iter,
     double &mean_reproj_error, std::string *status,
     int *outliers_removed_out = nullptr,
-    LaserOptMode opt_mode = LaserOptMode::ExtrinsicsOnly) {
+    PointSourceOptMode opt_mode = PointSourceOptMode::ExtrinsicsOnly) {
 
     int num_cameras = (int)poses.size();
 
@@ -967,11 +967,11 @@ inline bool bundle_adjust_laser(
         // Intrinsic indices: 6=fx, 7=fy, 8=cx, 9=cy, 10=k1, 11=k2, 12=p1, 13=p2, 14=k3
         {
             std::vector<int> fixed_cam0 = {0, 1, 2, 3, 4, 5}; // always lock extrinsics of cam 0
-            if (opt_mode == LaserOptMode::ExtrinsicsOnly) {
+            if (opt_mode == PointSourceOptMode::ExtrinsicsOnly) {
                 for (int k = 6; k < 15; k++) fixed_cam0.push_back(k);
-            } else if (opt_mode == LaserOptMode::ExtrinsicsAndFocal) {
+            } else if (opt_mode == PointSourceOptMode::ExtrinsicsAndFocal) {
                 for (int k : {8, 9, 10, 11, 12, 13, 14}) fixed_cam0.push_back(k);
-            } else if (opt_mode == LaserOptMode::ExtrinsicsAndAll) {
+            } else if (opt_mode == PointSourceOptMode::ExtrinsicsAndAll) {
                 for (int k : {12, 13, 14}) fixed_cam0.push_back(k);
             }
             // Full mode: only extrinsics of cam 0 are locked (all intrinsics free)
@@ -981,21 +981,21 @@ inline bool bundle_adjust_laser(
         }
 
         // Apply parameter locking for all other cameras based on opt_mode
-        if (opt_mode == LaserOptMode::ExtrinsicsOnly) {
+        if (opt_mode == PointSourceOptMode::ExtrinsicsOnly) {
             // Lock all intrinsics (indices 6-14)
             std::vector<int> locked = {6, 7, 8, 9, 10, 11, 12, 13, 14};
             for (int i = 1; i < num_cameras; i++)
                 problem.SetManifold(
                     camera_params[i].data(),
                     new ceres::SubsetManifold(15, locked));
-        } else if (opt_mode == LaserOptMode::ExtrinsicsAndFocal) {
+        } else if (opt_mode == PointSourceOptMode::ExtrinsicsAndFocal) {
             // Lock cx, cy, distortion (allow fx, fy to vary)
             std::vector<int> locked = {8, 9, 10, 11, 12, 13, 14};
             for (int i = 1; i < num_cameras; i++)
                 problem.SetManifold(
                     camera_params[i].data(),
                     new ceres::SubsetManifold(15, locked));
-        } else if (opt_mode == LaserOptMode::ExtrinsicsAndAll) {
+        } else if (opt_mode == PointSourceOptMode::ExtrinsicsAndAll) {
             // Lock p1, p2, k3 (same as aruco BA strategy)
             std::vector<int> locked = {12, 13, 14};
             for (int i = 1; i < num_cameras; i++)
@@ -1017,7 +1017,7 @@ inline bool bundle_adjust_laser(
         ceres::Solver::Summary summary;
         ceres::Solve(options, &problem, &summary);
 
-        printf("Laser BA pass %d: %s  initial_cost=%.2f  final_cost=%.2f  "
+        printf("PointSource BA pass %d: %s  initial_cost=%.2f  final_cost=%.2f  "
                "iterations=%d  time=%.2fs\n",
                pass + 1,
                summary.IsSolutionUsable() ? "CONVERGED" : "FAILED",
@@ -1062,13 +1062,13 @@ inline bool bundle_adjust_laser(
             observations = std::move(inliers);
             if (outliers_removed_out)
                 *outliers_removed_out = removed;
-            printf("Laser BA pass 1: removed %d outliers (threshold=%.1f)\n",
+            printf("PointSource BA pass 1: removed %d outliers (threshold=%.1f)\n",
                    removed, outlier_th);
         }
     }
 
     // Log intrinsic changes
-    printf("\n=== Laser BA Intrinsic Changes ===\n");
+    printf("\n=== PointSource BA Intrinsic Changes ===\n");
     printf("%-12s  %8s %8s %8s %8s  |  %8s %8s %8s %8s\n", "Camera",
            "fx_init", "fy_init", "cx_init", "cy_init", "dfx", "dfy", "dcx",
            "dcy");
@@ -1087,7 +1087,7 @@ inline bool bundle_adjust_laser(
     printf("==================================\n\n");
 
     // Log extrinsic changes
-    printf("=== Laser BA Extrinsic Changes ===\n");
+    printf("=== PointSource BA Extrinsic Changes ===\n");
     printf("%-12s  %9s %9s %9s  |  %9s %9s %9s  %8s  %8s\n", "Camera",
            "tx_init", "ty_init", "tz_init", "dtx", "dty", "dtz", "|dt|", "drot(d)");
     for (int i = 0; i < num_cameras; i++) {
@@ -1171,11 +1171,11 @@ inline bool bundle_adjust_laser(
 // Top-level pipeline
 // ─────────────────────────────────────────────────────────────────────────────
 
-inline LaserResult run_laser_refinement(const LaserConfig &config,
+inline PointSourceResult run_pointsource_refinement(const PointSourceConfig &config,
                                         std::string *status,
                                         DetectionProgress *progress = nullptr) {
     namespace fs = std::filesystem;
-    LaserResult result;
+    PointSourceResult result;
     auto t_start = std::chrono::steady_clock::now();
 
     // Find video files
@@ -1187,7 +1187,7 @@ inline LaserResult run_laser_refinement(const LaserConfig &config,
         result.error = "No video files found in " + config.media_folder;
         return result;
     }
-    printf("Laser: found %d video files\n", (int)video_files.size());
+    printf("PointSource: found %d video files\n", (int)video_files.size());
 
     // Load existing calibration
     if (status)
@@ -1218,7 +1218,7 @@ inline LaserResult run_laser_refinement(const LaserConfig &config,
                 image_width = yaml.getInt("image_width");
                 image_height = yaml.getInt("image_height");
             }
-            printf("Laser: loaded calibration for %s (fx=%.1f fy=%.1f)\n",
+            printf("PointSource: loaded calibration for %s (fx=%.1f fy=%.1f)\n",
                    config.camera_names[c].c_str(), poses[c].K(0, 0),
                    poses[c].K(1, 1));
         } catch (const std::exception &e) {
@@ -1227,13 +1227,13 @@ inline LaserResult run_laser_refinement(const LaserConfig &config,
         }
     }
 
-    // Step 1: Detect laser spots (parallel, one thread per camera)
+    // Step 1: Detect light spots (parallel, one thread per camera)
     {
         std::string range_str = "frames " + std::to_string(config.start_frame) +
             "-" + (config.stop_frame > 0 ? std::to_string(config.stop_frame) : "end") +
             ", step " + std::to_string(config.frame_step);
         if (status)
-            *status = "Detecting laser spots across " +
+            *status = "Detecting light spots across " +
                       std::to_string(num_cameras) + " cameras (" +
                       range_str + ")...";
     }
@@ -1247,7 +1247,7 @@ inline LaserResult run_laser_refinement(const LaserConfig &config,
 
     if (total_detections == 0) {
         result.error =
-            "No laser spots detected in any camera. Try adjusting "
+            "No light spots detected in any camera. Try adjusting "
             "green_threshold or green_dominance.";
         return result;
     }
@@ -1257,13 +1257,13 @@ inline LaserResult run_laser_refinement(const LaserConfig &config,
         *status = "Assembling multi-camera observations...";
     auto frame_obs =
         assemble_observations(all_detections, config.min_cameras);
-    printf("Laser: %d frames with >= %d cameras\n", (int)frame_obs.size(),
+    printf("PointSource: %d frames with >= %d cameras\n", (int)frame_obs.size(),
            config.min_cameras);
 
     if (frame_obs.empty()) {
         result.error =
             "No frames with >= " + std::to_string(config.min_cameras) +
-            " cameras detecting a laser spot. Total detections: " +
+            " cameras detecting a light spot. Total detections: " +
             std::to_string(total_detections);
         return result;
     }
@@ -1290,7 +1290,7 @@ inline LaserResult run_laser_refinement(const LaserConfig &config,
     result.total_observations = total_obs;
     result.valid_3d_points = (int)points_3d.size();
 
-    printf("Laser: %d valid 3D points, %d observations, mean reproj before "
+    printf("PointSource: %d valid 3D points, %d observations, mean reproj before "
            "BA: %.3f px\n",
            result.valid_3d_points, total_obs, mean_reproj_before);
 
@@ -1305,7 +1305,7 @@ inline LaserResult run_laser_refinement(const LaserConfig &config,
     auto poses_before = poses;
 
     int ba_outliers = 0;
-    if (!bundle_adjust_laser(config.camera_names, poses, points_3d,
+    if (!bundle_adjust_pointsource(config.camera_names, poses, points_3d,
                              obs_per_point, config.ba_outlier_th1,
                              config.ba_outlier_th2, config.ba_max_iter,
                              mean_reproj_after, status, &ba_outliers,
@@ -1354,7 +1354,7 @@ inline LaserResult run_laser_refinement(const LaserConfig &config,
     // Step 5: Write refined calibration to timestamped subfolder
     std::string base_folder = config.output_folder;
     if (base_folder.empty())
-        base_folder = config.calibration_folder + "_laser_refined";
+        base_folder = config.calibration_folder + "_pointsource_refined";
 
     // Create timestamped subfolder
     time_t now = time(0);
@@ -1458,7 +1458,7 @@ inline LaserResult run_laser_refinement(const LaserConfig &config,
     double elapsed =
         std::chrono::duration<double>(t_end - t_start).count();
 
-    printf("\n=== Laser Calibration Refinement Summary ===\n");
+    printf("\n=== PointSource Calibration Refinement Summary ===\n");
     printf("Frame range:        %d - %s (step %d)\n",
            config.start_frame,
            config.stop_frame > 0 ? std::to_string(config.stop_frame).c_str() : "end",
@@ -1472,7 +1472,7 @@ inline LaserResult run_laser_refinement(const LaserConfig &config,
     printf("=============================================\n\n");
 
     if (status)
-        *status = "Laser calibration complete! Reproj: " +
+        *status = "PointSource calibration complete! Reproj: " +
                   std::to_string(mean_reproj_before).substr(0, 5) + " -> " +
                   std::to_string(mean_reproj_after).substr(0, 5) +
                   " px. Output: " + out_folder;
@@ -1480,4 +1480,4 @@ inline LaserResult run_laser_refinement(const LaserConfig &config,
     return result;
 }
 
-} // namespace LaserCalibration
+} // namespace PointSourceCalibration

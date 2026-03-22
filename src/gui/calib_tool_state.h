@@ -2,12 +2,12 @@
 #include "imgui.h"
 #include "calibration_tool.h"
 #include "calibration_pipeline.h"
-#include "laser_calibration.h"
+#include "pointsource_calibration.h"
 #include "superpoint_refinement.h"
 #include "telecentric_dlt.h"
 #include "calib_viewer_window.h"
 #include "tele_viewer_window.h"
-#include "laser_metal.h"
+#include "pointsource_metal.h"
 #include "skeleton.h"
 #include "project.h"
 #include <atomic>
@@ -24,8 +24,8 @@
 struct AppContext;
 struct DeferredQueue;
 
-// Async detection visualization state (laser spot overlay)
-struct LaserVizState {
+// Async detection visualization state (light spot overlay)
+struct PointSourceVizState {
     // Double-buffered: "ready" results for display, "pending" being computed
     struct CamResult {
         int num_blobs = 0;
@@ -41,17 +41,17 @@ struct LaserVizState {
 
 #ifdef __APPLE__
     // Metal context for GPU-accelerated viz (macOS only)
-    LaserMetalHandle metal_ctx = nullptr;
+    PointSourceMetalHandle metal_ctx = nullptr;
 #endif
 
     // Params that triggered the current computation
     int last_green_th = -1, last_green_dom = -1;
     int last_min_blob = -1, last_max_blob = -1;
 
-    ~LaserVizState() {
+    ~PointSourceVizState() {
         if (worker.joinable()) worker.join();
 #ifdef __APPLE__
-        if (metal_ctx) laser_metal_destroy(metal_ctx);
+        if (metal_ctx) pointsource_metal_destroy(metal_ctx);
 #endif
     }
 };
@@ -160,21 +160,21 @@ struct CalibrationToolState {
     int tele_deferred_label_frames = 0;
 
     // Laser refinement
-    bool laser_ready = false;
-    LaserCalibration::LaserConfig laser_config;
-    int laser_total_frames = 0;
-    bool laser_running = false;
-    bool laser_done = false;
-    std::string laser_status;
-    LaserCalibration::LaserResult laser_result;
-    std::shared_ptr<LaserCalibration::DetectionProgress> laser_progress =
-        std::make_shared<LaserCalibration::DetectionProgress>();
-    std::future<LaserCalibration::LaserResult> laser_future;
-    bool laser_show_detection = false;
-    bool laser_focus_window = false;
+    bool pointsource_ready = false;
+    PointSourceCalibration::PointSourceConfig pointsource_config;
+    int pointsource_total_frames = 0;
+    bool pointsource_running = false;
+    bool pointsource_done = false;
+    std::string pointsource_status;
+    PointSourceCalibration::PointSourceResult pointsource_result;
+    std::shared_ptr<PointSourceCalibration::DetectionProgress> pointsource_progress =
+        std::make_shared<PointSourceCalibration::DetectionProgress>();
+    std::future<PointSourceCalibration::PointSourceResult> pointsource_future;
+    bool pointsource_show_detection = false;
+    bool pointsource_focus_window = false;
 
     // Laser visualization
-    LaserVizState laser_viz;
+    PointSourceVizState pointsource_viz;
 
     // SuperPoint refinement
     bool sp_running = false;
