@@ -2212,6 +2212,239 @@ inline PointSourceResult run_pointsource_refinement(const PointSourceConfig &con
         }
     }
 
+    // Step 4a: Recover missing cameras (No Init / Loose Init)
+    // After BA with the good cameras, use the refined 3D points to PnP-initialize
+    // any cameras that had 0 observations, then re-triangulate and re-run BA.
+    {
+        // Find cameras with 0 observations after first BA
+        std::vector<int> cam_obs_count_check(num_cameras, 0);
+        for (const auto &obs_list : obs_per_point)
+            for (const auto &obs : obs_list)
+                cam_obs_count_check[obs.cam_idx]++;
+
+        std::vector<int> missing_cams;
+        for (int c = 0; c < num_cameras; c++)
+            if (cam_obs_count_check[c] == 0 && (int)all_detections[c].size() > 0)
+                missing_cams.push_back(c);
+
+        if (!missing_cams.empty()) {
+            printf("\n=== Camera Recovery: %d cameras with 0 observations but %s detections ===\n",
+                   (int)missing_cams.size(),
+                   [&]() {
+                       std::string s;
+                       for (int c : missing_cams)
+                           s += (s.empty() ? "" : "/") + std::to_string(all_detections[c].size());
+                       return s;
+                   }().c_str());
+
+            // Build frame_num → point_index map from obs_per_point
+            // Each point in points_3d came from a specific frame in frame_obs.
+            // We need to find which frame produced which point. The observations
+            // in obs_per_point[i] all reference point index i, and their pixel
+            // coords match frame_obs entries for the same frame.
+            // Build reverse: for each (cam_idx, frame_num) → point_idx
+            std::map<int, int> frame_to_point; // frame_obs index → point_idx
+            for (int pi = 0; pi < (int)obs_per_point.size(); pi++) {
+                if (obs_per_point[pi].empty()) continue;
+                // Find the frame in frame_obs that matches this observation
+                const auto &first_obs = obs_per_point[pi][0];
+                for (int fi = 0; fi < (int)frame_obs.size(); fi++) {
+                    const auto &fobs = frame_obs[fi];
+                    for (int i = 0; i < (int)fobs.cam_indices.size(); i++) {
+                        if (fobs.cam_indices[i] == first_obs.cam_idx &&
+                            std::abs(fobs.pixel_coords[i].x() - first_obs.px) < 0.01 &&
+                            std::abs(fobs.pixel_coords[i].y() - first_obs.py) < 0.01) {
+                            frame_to_point[fi] = pi;
+                            goto found_frame;
+                        }
+                    }
+                }
+                found_frame:;
+            }
+            printf("  Mapped %d/%d points to frame_obs entries\n",
+                   (int)frame_to_point.size(), (int)points_3d.size());
+
+            // Compute median intrinsics from good cameras for initial guess
+            std::vector<double> good_fx, good_fy, good_cx, good_cy;
+            for (int c = 0; c < num_cameras; c++) {
+                if (cam_obs_count_check[c] > 0) {
+                    good_fx.push_back(poses[c].K(0, 0));
+                    good_fy.push_back(poses[c].K(1, 1));
+                    good_cx.push_back(poses[c].K(0, 2));
+                    good_cy.push_back(poses[c].K(1, 2));
+                }
+            }
+            auto median = [](std::vector<double> &v) {
+                std::sort(v.begin(), v.end());
+                return v[v.size() / 2];
+            };
+            double med_fx = median(good_fx), med_fy = median(good_fy);
+            double med_cx = median(good_cx), med_cy = median(good_cy);
+            printf("  Median intrinsics from good cameras: fx=%.1f fy=%.1f cx=%.1f cy=%.1f\n",
+                   med_fx, med_fy, med_cx, med_cy);
+
+            int n_recovered = 0;
+            for (int c : missing_cams) {
+                // Collect 3D-2D correspondences from BA-refined points + this camera's detections
+                std::vector<Eigen::Vector3d> obj_pts;
+                std::vector<Eigen::Vector2d> img_pts;
+
+                for (const auto &[fi, pi] : frame_to_point) {
+                    const auto &fobs = frame_obs[fi];
+                    for (int i = 0; i < (int)fobs.cam_indices.size(); i++) {
+                        if (fobs.cam_indices[i] == c) {
+                            obj_pts.push_back(points_3d[pi]);
+                            img_pts.push_back(fobs.pixel_coords[i]);
+                            break;
+                        }
+                    }
+                }
+
+                printf("  Camera %s: %d 3D-2D correspondences\n",
+                       config.camera_names[c].c_str(), (int)obj_pts.size());
+                if ((int)obj_pts.size() < 20) {
+                    printf("  Camera %s: too few correspondences, skipping\n",
+                           config.camera_names[c].c_str());
+                    continue;
+                }
+
+                // Set intrinsics from median of good cameras
+                poses[c].K = Eigen::Matrix3d::Identity();
+                poses[c].K(0, 0) = med_fx;
+                poses[c].K(1, 1) = med_fy;
+                poses[c].K(0, 2) = med_cx;
+                poses[c].K(1, 2) = med_cy;
+                poses[c].dist.setZero();
+
+                // Initial extrinsic guess: copy pose from the nearest good camera
+                // (by camera index). This gives a rough but reasonable starting
+                // point for Ceres PnP refinement.
+                {
+                    int best_gc = -1;
+                    int best_obs = 0;
+                    for (int gc = 0; gc < num_cameras; gc++) {
+                        if (cam_obs_count_check[gc] > best_obs) {
+                            best_obs = cam_obs_count_check[gc];
+                            best_gc = gc;
+                        }
+                    }
+                    if (best_gc >= 0) {
+                        poses[c].R = poses[best_gc].R;
+                        poses[c].t = poses[best_gc].t;
+                    }
+                }
+
+                // Refine with Ceres PnP (the rough initial guess may be enough for Ceres)
+                CalibrationPipeline::refinePnPPose(obj_pts, img_pts,
+                                                    poses[c].K, poses[c].dist,
+                                                    poses[c].R, poses[c].t);
+
+                // Check reproj quality
+                double total_err = 0;
+                Eigen::Vector3d rvec = red_math::rotationMatrixToVector(poses[c].R);
+                for (int i = 0; i < (int)obj_pts.size(); i++) {
+                    Eigen::Vector2d proj = red_math::projectPoint(
+                        obj_pts[i], rvec, poses[c].t, poses[c].K, poses[c].dist);
+                    total_err += (proj - img_pts[i]).norm();
+                }
+                double mean_err = total_err / obj_pts.size();
+                printf("  Camera %s: PnP reproj = %.2f px (%d pts, init from median intrinsics)\n",
+                       config.camera_names[c].c_str(), mean_err, (int)obj_pts.size());
+
+                if (mean_err < 50.0) {
+                    n_recovered++;
+                    printf("  Camera %s: RECOVERED\n", config.camera_names[c].c_str());
+                } else {
+                    printf("  Camera %s: PnP did not converge (%.1f px), keeping excluded\n",
+                           config.camera_names[c].c_str(), mean_err);
+                    // Reset to identity so it gets excluded in re-triangulation
+                    poses[c].R = Eigen::Matrix3d::Identity();
+                    poses[c].t.setZero();
+                }
+            }
+
+            if (n_recovered > 0) {
+                printf("\n=== Re-running pipeline with %d recovered cameras ===\n", n_recovered);
+                if (status)
+                    *status = "Re-triangulating with " + std::to_string(n_recovered) +
+                              " recovered cameras...";
+
+                // Re-triangulate with ALL cameras that have valid poses
+                points_3d.clear();
+                obs_per_point.clear();
+                double reproj_re = 0;
+
+                // Filter frame_obs: include cameras with good poses or recovered
+                std::vector<FrameObservations> recovery_obs;
+                for (const auto &fobs : frame_obs) {
+                    FrameObservations fo;
+                    fo.frame_num = fobs.frame_num;
+                    for (int i = 0; i < (int)fobs.cam_indices.size(); i++) {
+                        int c2 = fobs.cam_indices[i];
+                        bool is_identity = (poses[c2].R.isIdentity(1e-6) && poses[c2].t.norm() < 1.0);
+                        if (!is_identity) {
+                            fo.cam_indices.push_back(c2);
+                            fo.pixel_coords.push_back(fobs.pixel_coords[i]);
+                        }
+                    }
+                    if ((int)fo.cam_indices.size() >= config.min_cameras)
+                        recovery_obs.push_back(std::move(fo));
+                }
+
+                if (triangulate_and_validate(recovery_obs, poses, config.min_cameras,
+                                              config.reproj_threshold, points_3d,
+                                              obs_per_point, reproj_re, status)) {
+                    int total_obs_re = 0;
+                    for (const auto &ol : obs_per_point) total_obs_re += (int)ol.size();
+                    printf("  Re-triangulation: %d points, %d observations, %.3f px reproj\n",
+                           (int)points_3d.size(), total_obs_re, reproj_re);
+                    result.mean_reproj_before = reproj_re;
+
+                    // Re-run BA with all cameras
+                    if (status) *status = "Re-running BA with recovered cameras...";
+                    double reproj_re_after = 0;
+                    int outliers_re = 0;
+                    if (bundle_adjust_pointsource(
+                            config.camera_names, poses, points_3d,
+                            obs_per_point, config.ba_outlier_th1,
+                            config.ba_outlier_th2, config.ba_max_iter,
+                            reproj_re_after, status, &outliers_re,
+                            config.opt_mode)) {
+                        result.mean_reproj_after = reproj_re_after;
+                        result.ba_outliers_removed += outliers_re;
+                        printf("  Re-BA: %.4f px (%d outliers)\n", reproj_re_after, outliers_re);
+                    }
+
+                    // Update per-camera stats
+                    result.valid_3d_points = (int)points_3d.size();
+                    result.total_observations = 0;
+                    std::vector<int> cam_obs_final(num_cameras, 0);
+                    for (const auto &ol : obs_per_point)
+                        for (const auto &obs : ol)
+                            cam_obs_final[obs.cam_idx]++;
+                    for (int c = 0; c < num_cameras; c++) {
+                        result.camera_changes[c].observations = cam_obs_final[c];
+                        result.total_observations += cam_obs_final[c];
+                        // Update deltas from original poses_before
+                        result.camera_changes[c].dfx = poses[c].K(0, 0) - poses_before[c].K(0, 0);
+                        result.camera_changes[c].dfy = poses[c].K(1, 1) - poses_before[c].K(1, 1);
+                        result.camera_changes[c].dcx = poses[c].K(0, 2) - poses_before[c].K(0, 2);
+                        result.camera_changes[c].dcy = poses[c].K(1, 2) - poses_before[c].K(1, 2);
+                        Eigen::Vector3d dt = poses[c].t - poses_before[c].t;
+                        result.camera_changes[c].dt_x = dt.x();
+                        result.camera_changes[c].dt_y = dt.y();
+                        result.camera_changes[c].dt_z = dt.z();
+                        result.camera_changes[c].dt_norm = dt.norm();
+                        Eigen::Matrix3d dR = poses_before[c].R.transpose() * poses[c].R;
+                        double trace_val = std::min(3.0, std::max(-1.0, dR.trace()));
+                        result.camera_changes[c].drot_deg =
+                            std::acos((trace_val - 1.0) / 2.0) * 180.0 / M_PI;
+                    }
+                }
+            }
+        }
+    }
+
     // Step 4b: Global registration (optional Procrustes alignment to world frame)
     // Skip if No Init — cameras are already in world frame from PnP against the board
     if (config.do_global_reg && !config.global_reg_media_folder.empty() && !config.no_init) {
