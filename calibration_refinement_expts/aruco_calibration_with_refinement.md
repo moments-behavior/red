@@ -320,8 +320,8 @@ All modes: 3,692 points, 51,245 observations, 0 outliers removed.
 
 #### Extrinsic Changes
 
-| Mode | Mean |dt| (mm) | Max |dt| (mm) | Mean drot (deg) | Max drot (deg) |
-|------|---------------------|---------------------|---------------------|---------------------|
+| Mode | Mean dt (mm) | Max dt (mm) | Mean drot (deg) | Max drot (deg) |
+|------|-------------|------------|-----------------|----------------|
 | Extrinsics only | 0.51 | 0.96 | 0.030 | 0.072 |
 | + Focal | 1.23 | 5.59 | 0.042 | 0.084 |
 | + All Intrinsics | 4.46 | 7.03 | 0.249 | 0.484 |
@@ -329,8 +329,8 @@ All modes: 3,692 points, 51,245 observations, 0 outliers removed.
 
 #### Intrinsic Changes (Mean Absolute)
 
-| Mode | |dfx| (px) | |dfy| (px) | |dcx| (px) | |dcy| (px) |
-|------|-----------|-----------|-----------|-----------|
+| Mode | dfx (px) | dfy (px) | dcx (px) | dcy (px) |
+|------|----------|----------|----------|----------|
 | Extrinsics only | 0 | 0 | 0 | 0 |
 | + Focal | 7.29 | 5.19 | 0 | 0 |
 | + All Intrinsics | 9.53 | 9.72 | 9.51 | 5.96 |
@@ -340,8 +340,8 @@ All modes: 3,692 points, 51,245 observations, 0 outliers removed.
 
 #### Full Mode: Detailed Per-Camera Changes
 
-| Camera | dfx (px) | dfy (px) | dcx (px) | dcy (px) | |dt| (mm) | drot (deg) |
-|--------|---------|---------|---------|---------|------------|------------|
+| Camera | dfx (px) | dfy (px) | dcx (px) | dcy (px) | dt (mm) | drot (deg) |
+|--------|----------|----------|----------|----------|---------|------------|
 | 2002486 | -62.27 | -59.53 | +24.27 | +71.98 | 0.0 (cam 0) | 0.0 (cam 0) |
 | 2002487 | -5.57 | +6.96 | -7.22 | +29.99 | 31.31 | 1.219 |
 | 2005325 | -50.02 | -47.73 | +0.86 | +1.82 | 30.43 | 1.035 |
