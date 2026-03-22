@@ -1047,15 +1047,32 @@ inline bool triangulate_and_validate_progressive(
 
     // ── Phase A: Triangulate using only good cameras ──
     if (status) *status = "Loose Init Phase A: triangulating with good cameras only...";
-    printf("Loose Init Phase A: triangulating with %d good cameras...\n", n_good);
 
-    // Build projection matrices for good cameras
+    // Build projection matrices for all cameras
     std::vector<Eigen::Matrix<double, 3, 4>> Ps(num_cameras);
     std::vector<Eigen::Vector3d> rvecs(num_cameras);
     for (int c = 0; c < num_cameras; c++) {
         Ps[c] = red_math::projectionFromKRt(poses[c].K, poses[c].R, poses[c].t);
         rvecs[c] = red_math::rotationMatrixToVector(poses[c].R);
     }
+
+    // Adaptive Phase A threshold: use the max good-camera median reproj * 3
+    // (good cameras may still have large errors with default intrinsics in No Init mode)
+    double phase_a_threshold = reproj_threshold;
+    {
+        double max_good_median = 0;
+        for (int c = 0; c < num_cameras; c++)
+            if (is_good[c]) max_good_median = std::max(max_good_median, quality[c].median_reproj);
+        if (max_good_median > reproj_threshold)
+            phase_a_threshold = max_good_median * 3.0;
+    }
+
+    // Phase A min cameras: can't require more good cameras per frame than exist
+    int phase_a_min = std::min(n_good, std::max(2, min_cameras));
+
+    printf("Loose Init Phase A: triangulating with %d good cameras "
+           "(min=%d per frame, reproj threshold=%.1f px)...\n",
+           n_good, phase_a_min, phase_a_threshold);
 
     // Filter frame_obs to only good cameras, triangulate, validate
     std::vector<Eigen::Vector3d> good_pts;
@@ -1076,7 +1093,7 @@ inline bool triangulate_and_validate_progressive(
                 good_pixels.push_back(fobs.pixel_coords[i]);
             }
         }
-        if ((int)good_cam_idx.size() < std::max(2, min_cameras))
+        if ((int)good_cam_idx.size() < phase_a_min)
             continue;
 
         // Triangulate with good cameras
@@ -1090,14 +1107,14 @@ inline bool triangulate_and_validate_progressive(
         }
         Eigen::Vector3d pt3d = red_math::triangulatePoints(tri_pts, tri_Ps);
 
-        // Validate: check reproj for good cameras
+        // Validate: check reproj for good cameras (use adaptive threshold)
         bool all_ok = true;
         for (int i = 0; i < (int)good_cam_idx.size(); i++) {
             int c = good_cam_idx[i];
             Eigen::Vector2d proj = red_math::projectPoint(
                 pt3d, rvecs[c], poses[c].t, poses[c].K, poses[c].dist);
             double err = (proj - good_pixels[i]).norm();
-            if (err > reproj_threshold) { all_ok = false; break; }
+            if (err > phase_a_threshold) { all_ok = false; break; }
         }
         if (!all_ok) continue;
 
