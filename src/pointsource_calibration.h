@@ -467,11 +467,174 @@ inline bool detect_light_spot(const uint8_t *pixels, int width, int height,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Static artifact filter: remove detections at fixed locations.
+// The wand sweeps across the image, spreading detections across many spatial
+// bins. Artifacts (LEDs, reflections) produce dense clusters at fixed positions.
+// ─────────────────────────────────────────────────────────────────────────────
+
+using DetectionMap = std::map<int, SpotDetection>;
+
+inline int filter_static_detections(DetectionMap &detections,
+                                     int image_width, int image_height,
+                                     int bin_size = 32,
+                                     double static_threshold = 5.0) {
+    if (detections.size() < 50) return 0;
+
+    int bw = (image_width + bin_size - 1) / bin_size;
+    int bh = (image_height + bin_size - 1) / bin_size;
+    std::vector<int> bins(bw * bh, 0);
+
+    // Bin all detections
+    for (const auto &[frame, det] : detections) {
+        int bx = std::min((int)(det.cx / bin_size), bw - 1);
+        int by = std::min((int)(det.cy / bin_size), bh - 1);
+        bins[by * bw + bx]++;
+    }
+
+    // Compute median of non-empty bins
+    std::vector<int> nonempty;
+    for (int v : bins) if (v > 0) nonempty.push_back(v);
+    if (nonempty.empty()) return 0;
+    std::sort(nonempty.begin(), nonempty.end());
+    int median_count = nonempty[nonempty.size() / 2];
+
+    // Flag bins with count > static_threshold * median AND > 20
+    int threshold = std::max(20, (int)(static_threshold * median_count));
+    std::vector<bool> flagged(bw * bh, false);
+    for (int i = 0; i < bw * bh; i++)
+        if (bins[i] > threshold) flagged[i] = true;
+
+    // Grow flagged region by 1 bin in each direction
+    std::vector<bool> grown = flagged;
+    for (int y = 0; y < bh; y++) {
+        for (int x = 0; x < bw; x++) {
+            if (!flagged[y * bw + x]) continue;
+            for (int dy = -1; dy <= 1; dy++)
+                for (int dx = -1; dx <= 1; dx++) {
+                    int nx = x + dx, ny = y + dy;
+                    if (nx >= 0 && nx < bw && ny >= 0 && ny < bh)
+                        grown[ny * bw + nx] = true;
+                }
+        }
+    }
+
+    // Remove detections in flagged bins
+    int removed = 0;
+    for (auto it = detections.begin(); it != detections.end(); ) {
+        int bx = std::min((int)(it->second.cx / bin_size), bw - 1);
+        int by = std::min((int)(it->second.cy / bin_size), bh - 1);
+        if (grown[by * bw + bx]) {
+            it = detections.erase(it);
+            removed++;
+        } else {
+            ++it;
+        }
+    }
+    return removed;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DLT PnP: closed-form camera pose from 3D-2D correspondences.
+// No initialization needed — solves the projection matrix directly via SVD.
+// ─────────────────────────────────────────────────────────────────────────────
+
+inline bool solvePnPDLT(
+    const std::vector<Eigen::Vector3d> &pts_3d,
+    const std::vector<Eigen::Vector2d> &pts_2d,
+    const Eigen::Matrix3d &K,
+    Eigen::Matrix3d &R_out, Eigen::Vector3d &t_out) {
+
+    int n = (int)pts_3d.size();
+    if (n < 6) return false;
+
+    // Hartley normalization of 2D points
+    Eigen::Vector2d mean_2d = Eigen::Vector2d::Zero();
+    for (const auto &p : pts_2d) mean_2d += p;
+    mean_2d /= n;
+    double scale_2d = 0;
+    for (const auto &p : pts_2d) scale_2d += (p - mean_2d).norm();
+    scale_2d = std::sqrt(2.0) * n / scale_2d;
+    Eigen::Matrix3d T2d = Eigen::Matrix3d::Identity();
+    T2d(0, 0) = scale_2d; T2d(1, 1) = scale_2d;
+    T2d(0, 2) = -scale_2d * mean_2d.x();
+    T2d(1, 2) = -scale_2d * mean_2d.y();
+
+    // Normalize 3D points
+    Eigen::Vector3d mean_3d = Eigen::Vector3d::Zero();
+    for (const auto &p : pts_3d) mean_3d += p;
+    mean_3d /= n;
+    double scale_3d = 0;
+    for (const auto &p : pts_3d) scale_3d += (p - mean_3d).norm();
+    scale_3d = std::sqrt(3.0) * n / scale_3d;
+    Eigen::Matrix4d T3d = Eigen::Matrix4d::Identity();
+    T3d(0, 0) = scale_3d; T3d(1, 1) = scale_3d; T3d(2, 2) = scale_3d;
+    T3d(0, 3) = -scale_3d * mean_3d.x();
+    T3d(1, 3) = -scale_3d * mean_3d.y();
+    T3d(2, 3) = -scale_3d * mean_3d.z();
+
+    // Build 2N x 12 system: for each correspondence (X, x),
+    // x cross (P * X_h) = 0 gives two independent equations
+    Eigen::MatrixXd A(2 * n, 12);
+    for (int i = 0; i < n; i++) {
+        // Normalized points
+        Eigen::Vector3d xn = T2d * Eigen::Vector3d(pts_2d[i].x(), pts_2d[i].y(), 1.0);
+        Eigen::Vector4d Xn = T3d * Eigen::Vector4d(pts_3d[i].x(), pts_3d[i].y(), pts_3d[i].z(), 1.0);
+        double u = xn.x(), v = xn.y(), w = xn.z();
+
+        // Row 1: w*X^T*P2 - v*X^T*P3
+        A.row(2 * i + 0) << 0, 0, 0, 0,
+            -w * Xn.transpose(), v * Xn.transpose();
+        // Row 2: -w*X^T*P1 + u*X^T*P3
+        A.row(2 * i + 1) << w * Xn.transpose(), 0, 0, 0, 0,
+            -u * Xn.transpose();
+    }
+
+    // SVD: P is the last column of V
+    Eigen::JacobiSVD<Eigen::MatrixXd> svd(A, Eigen::ComputeFullV);
+    Eigen::VectorXd p = svd.matrixV().col(11);
+    Eigen::Matrix<double, 3, 4> P_norm;
+    P_norm.row(0) = p.segment<4>(0).transpose();
+    P_norm.row(1) = p.segment<4>(4).transpose();
+    P_norm.row(2) = p.segment<4>(8).transpose();
+
+    // Denormalize: P_real = T2d_inv * P_norm * T3d
+    Eigen::Matrix<double, 3, 4> P = T2d.inverse() * P_norm * T3d;
+
+    // Extract [R|t] = K_inv * P
+    Eigen::Matrix<double, 3, 4> Rt = K.inverse() * P;
+    Eigen::Matrix3d M = Rt.block<3, 3>(0, 0);
+    Eigen::Vector3d t_raw = Rt.col(3);
+
+    // Closest rotation matrix via SVD
+    Eigen::JacobiSVD<Eigen::Matrix3d> svd_r(M, Eigen::ComputeFullU | Eigen::ComputeFullV);
+    R_out = svd_r.matrixU() * svd_r.matrixV().transpose();
+    if (R_out.determinant() < 0) {
+        Eigen::Matrix3d V = svd_r.matrixV();
+        V.col(2) *= -1;
+        R_out = svd_r.matrixU() * V.transpose();
+    }
+
+    // Scale t by the same factor used to make M → R
+    double scale = svd_r.singularValues().mean();
+    t_out = t_raw / scale;
+
+    // Ensure the scene is in front of the camera (positive z)
+    Eigen::Vector3d center_proj = R_out * mean_3d + t_out;
+    if (center_proj.z() < 0) {
+        R_out = -R_out;
+        t_out = -t_out;
+        if (R_out.determinant() < 0) R_out = -R_out;
+    }
+
+    return true;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Step 1b: Detect light spots across all cameras (parallel)
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Per-camera detection results: frame_number → SpotDetection
-using DetectionMap = std::map<int, SpotDetection>;
+// (DetectionMap typedef is above, near filter_static_detections)
 
 #ifdef __APPLE__
 
@@ -2267,11 +2430,17 @@ inline PointSourceResult run_pointsource_refinement(const PointSourceConfig &con
                         *status = "Smart Blob re-detection for camera " + config.camera_names[c] + "...";
                     auto redet = detect_all_cameras(redet_config, redet_videos, status, nullptr);
                     if (!redet.empty() && (int)redet[0].size() > (int)all_detections[c].size()) {
-                        printf("  Camera %s: Smart Blob re-detection: %d -> %d detections\n",
+                        // Filter static artifact detections before accepting
+                        int n_before = (int)redet[0].size();
+                        int removed = filter_static_detections(redet[0], image_width, image_height);
+                        printf("  Camera %s: Smart Blob re-detection: %d -> %d detections "
+                               "(%d static artifact removed)\n",
                                config.camera_names[c].c_str(),
-                               (int)all_detections[c].size(), (int)redet[0].size());
-                        all_detections[c] = std::move(redet[0]);
-                        any_improved = true;
+                               (int)all_detections[c].size(), (int)redet[0].size(), removed);
+                        if ((int)redet[0].size() > (int)all_detections[c].size()) {
+                            all_detections[c] = std::move(redet[0]);
+                            any_improved = true;
+                        }
                     }
                 }
 
@@ -2362,40 +2531,57 @@ inline PointSourceResult run_pointsource_refinement(const PointSourceConfig &con
                 poses[c].K(1, 2) = med_cy;
                 poses[c].dist.setZero();
 
-                // Try PnP from multiple initial poses (each good camera as seed)
-                // and keep the best result. Different initial poses help Ceres
-                // avoid local minima when the camera's true pose is far from any
-                // single good camera.
-                double best_err = 1e9;
-                Eigen::Matrix3d best_R = Eigen::Matrix3d::Identity();
-                Eigen::Vector3d best_t = Eigen::Vector3d::Zero();
-                for (int gc = 0; gc < num_cameras; gc++) {
-                    if (cam_obs_count_check[gc] == 0) continue;
-                    Eigen::Matrix3d R_try = poses[gc].R;
-                    Eigen::Vector3d t_try = poses[gc].t;
+                // Step 1: DLT PnP — closed-form, no initialization needed
+                Eigen::Matrix3d R_dlt;
+                Eigen::Vector3d t_dlt;
+                bool dlt_ok = solvePnPDLT(obj_pts, img_pts, poses[c].K, R_dlt, t_dlt);
+
+                double mean_err = 1e9;
+                if (dlt_ok) {
+                    // Step 2: Refine DLT result with Ceres (more iterations than default)
                     CalibrationPipeline::refinePnPPose(obj_pts, img_pts,
                                                         poses[c].K, poses[c].dist,
-                                                        R_try, t_try);
+                                                        R_dlt, t_dlt);
                     double err = 0;
-                    Eigen::Vector3d rv = red_math::rotationMatrixToVector(R_try);
+                    Eigen::Vector3d rv = red_math::rotationMatrixToVector(R_dlt);
                     for (int i = 0; i < (int)obj_pts.size(); i++) {
                         Eigen::Vector2d proj = red_math::projectPoint(
-                            obj_pts[i], rv, t_try, poses[c].K, poses[c].dist);
+                            obj_pts[i], rv, t_dlt, poses[c].K, poses[c].dist);
                         err += (proj - img_pts[i]).norm();
                     }
-                    err /= obj_pts.size();
-                    if (err < best_err) {
-                        best_err = err;
-                        best_R = R_try;
-                        best_t = t_try;
-                    }
+                    mean_err = err / obj_pts.size();
+                    poses[c].R = R_dlt;
+                    poses[c].t = t_dlt;
+                    printf("  Camera %s: DLT+Ceres PnP reproj = %.2f px (%d pts)\n",
+                           config.camera_names[c].c_str(), mean_err, (int)obj_pts.size());
                 }
-                poses[c].R = best_R;
-                poses[c].t = best_t;
-                double mean_err = best_err;
-                printf("  Camera %s: best PnP reproj = %.2f px (%d pts, tried %d init poses)\n",
-                       config.camera_names[c].c_str(), mean_err, (int)obj_pts.size(),
-                       num_cameras - (int)missing_cams.size());
+
+                // Fallback: try each good camera as initial pose for Ceres
+                if (mean_err > 75.0) {
+                    for (int gc = 0; gc < num_cameras; gc++) {
+                        if (cam_obs_count_check[gc] == 0) continue;
+                        Eigen::Matrix3d R_try = poses[gc].R;
+                        Eigen::Vector3d t_try = poses[gc].t;
+                        CalibrationPipeline::refinePnPPose(obj_pts, img_pts,
+                                                            poses[c].K, poses[c].dist,
+                                                            R_try, t_try);
+                        double err = 0;
+                        Eigen::Vector3d rv = red_math::rotationMatrixToVector(R_try);
+                        for (int i = 0; i < (int)obj_pts.size(); i++) {
+                            Eigen::Vector2d proj = red_math::projectPoint(
+                                obj_pts[i], rv, t_try, poses[c].K, poses[c].dist);
+                            err += (proj - img_pts[i]).norm();
+                        }
+                        err /= obj_pts.size();
+                        if (err < mean_err) {
+                            mean_err = err;
+                            poses[c].R = R_try;
+                            poses[c].t = t_try;
+                        }
+                    }
+                    printf("  Camera %s: multi-pose fallback reproj = %.2f px\n",
+                           config.camera_names[c].c_str(), mean_err);
+                }
 
                 if (mean_err < 75.0) {
                     n_recovered++;
