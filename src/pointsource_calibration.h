@@ -806,11 +806,15 @@ struct CameraQuality {
 // Assess each camera's calibration quality by triangulating with all cameras
 // and computing per-camera median reprojection error. Cameras with median
 // reproj >= quality_threshold are marked as poor (is_good = false).
+// Optional valid_cameras mask: when provided, only those cameras participate
+// in triangulation (preventing garbage-pose cameras from corrupting 3D points).
+// All cameras still get their reproj measured against the clean 3D points.
 inline std::vector<CameraQuality> assess_camera_quality(
     const std::vector<FrameObservations> &frame_obs,
     const std::vector<CalibrationPipeline::CameraPose> &poses,
     double quality_threshold = 10.0,
-    std::string *status = nullptr) {
+    std::string *status = nullptr,
+    const std::vector<bool> *valid_cameras = nullptr) {
 
     int num_cameras = (int)poses.size();
 
@@ -829,18 +833,20 @@ inline std::vector<CameraQuality> assess_camera_quality(
         int n = (int)fobs.cam_indices.size();
         if (n < 2) continue;
 
-        // Undistort and triangulate using all cameras
-        std::vector<Eigen::Vector2d> tri_pts(n);
-        std::vector<Eigen::Matrix<double, 3, 4>> tri_Ps(n);
+        // Triangulate using only valid cameras (or all if no mask)
+        std::vector<Eigen::Vector2d> tri_pts;
+        std::vector<Eigen::Matrix<double, 3, 4>> tri_Ps;
         for (int i = 0; i < n; i++) {
             int c = fobs.cam_indices[i];
-            tri_pts[i] = red_math::undistortPoint(fobs.pixel_coords[i],
-                                                   poses[c].K, poses[c].dist);
-            tri_Ps[i] = Ps[c];
+            if (valid_cameras && !(*valid_cameras)[c]) continue;
+            tri_pts.push_back(red_math::undistortPoint(fobs.pixel_coords[i],
+                                                        poses[c].K, poses[c].dist));
+            tri_Ps.push_back(Ps[c]);
         }
+        if ((int)tri_pts.size() < 2) continue;
         Eigen::Vector3d pt3d = red_math::triangulatePoints(tri_pts, tri_Ps);
 
-        // Compute per-camera reproj error
+        // Compute reproj error for ALL cameras (including invalid ones)
         for (int i = 0; i < n; i++) {
             int c = fobs.cam_indices[i];
             Eigen::Vector2d proj = red_math::projectPoint(
@@ -1324,8 +1330,8 @@ inline bool triangulate_and_validate_progressive(
                     rvecs[c] = red_math::rotationMatrixToVector(poses[c].R);
                 }
 
-                // Re-assess quality
-                auto quality2 = assess_camera_quality(frame_obs, poses, 10.0);
+                // Re-assess quality (only triangulate with cameras that have valid poses)
+                auto quality2 = assess_camera_quality(frame_obs, poses, 10.0, nullptr, &has_pose);
                 int n_still_poor = 0;
                 for (int c = 0; c < num_cameras; c++) {
                     is_good[c] = quality2[c].is_good;
@@ -1407,7 +1413,40 @@ inline bool triangulate_and_validate_progressive(
         }
     }
 
-    // ── Phase C: Re-triangulate with all cameras using normal thresholds ──
+    // ── Phase C: Re-triangulate with cameras that have valid calibration ──
+    // If some cameras still have garbage poses (e.g., identity from No Init with
+    // no board detection), exclude them from frame_obs to prevent corrupting
+    // the DLT triangulation.
+    int n_still_good = 0;
+    for (int c = 0; c < num_cameras; c++)
+        if (is_good[c]) n_still_good++;
+
+    if (n_still_good < num_cameras) {
+        // Filter frame_obs to only include good cameras
+        std::vector<FrameObservations> filtered_obs;
+        for (const auto &fobs : frame_obs) {
+            FrameObservations fo;
+            fo.frame_num = fobs.frame_num;
+            for (int i = 0; i < (int)fobs.cam_indices.size(); i++) {
+                if (is_good[fobs.cam_indices[i]]) {
+                    fo.cam_indices.push_back(fobs.cam_indices[i]);
+                    fo.pixel_coords.push_back(fobs.pixel_coords[i]);
+                }
+            }
+            if ((int)fo.cam_indices.size() >= min_cameras)
+                filtered_obs.push_back(std::move(fo));
+        }
+        if (status) *status = "Loose Init Phase C: re-triangulating with " +
+                              std::to_string(n_still_good) + " good cameras...";
+        printf("Loose Init Phase C: re-triangulating with %d/%d good cameras (%d frames)...\n",
+               n_still_good, num_cameras, (int)filtered_obs.size());
+
+        return triangulate_and_validate(filtered_obs, poses, min_cameras,
+                                         reproj_threshold, points_3d,
+                                         clean_obs_per_point, mean_reproj_error,
+                                         status);
+    }
+
     if (status) *status = "Loose Init Phase C: re-triangulating with all cameras...";
     printf("Loose Init Phase C: re-triangulating with all %d cameras...\n", num_cameras);
 
