@@ -269,26 +269,29 @@ inline void DrawCalibrationToolWindow(
 
             // ---- Section 3: Laser Refinement ----
             bool aruco_succeeded =
+                (state.aruco_done && state.aruco_result.success) ||
                 (state.img_done && state.img_result.success) ||
                 (state.vid_done && state.vid_result.success);
             bool show_laser_section =
                 state.project.has_laser_input() || aruco_succeeded;
 
-            // Auto-populate laser calibration_folder from most recent aruco output
-            if (aruco_succeeded &&
-                state.project.calibration_folder.empty()) {
-                // Prefer video output if available, else image output
-                std::string aruco_out =
-                    !state.project.video_output_folder.empty()
-                        ? state.project.video_output_folder
-                        : state.project.image_output_folder;
-                if (!aruco_out.empty()) {
+            // Auto-populate laser calibration_folder from aruco output
+            if (state.project.calibration_folder.empty()) {
+                // Check unified output first, then legacy
+                std::string aruco_out = state.project.aruco_output_folder;
+                if (aruco_out.empty())
+                    aruco_out = state.project.video_output_folder.empty()
+                        ? state.project.image_output_folder
+                        : state.project.video_output_folder;
+                if (!aruco_out.empty() &&
+                    CalibrationPipeline::has_calibration_database(aruco_out)) {
                     state.project.calibration_folder = aruco_out;
                     state.project.camera_names =
                         CalibrationTool::derive_camera_names_from_yaml(
                             state.project.calibration_folder);
                     state.project.laser_output_folder =
                         state.project.project_path + "/laser_calibration";
+                    show_laser_section = true;
                     std::string proj_file =
                         state.project.project_path + "/" +
                         state.project.project_name + ".redproj";
