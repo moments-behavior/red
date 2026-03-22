@@ -1004,6 +1004,17 @@ inline bool triangulate_and_validate(
     return !points_3d.empty();
 }
 
+// Forward declaration (definition follows after BA section below)
+inline bool bundle_adjust_pointsource(
+    const std::vector<std::string> &camera_names,
+    std::vector<CalibrationPipeline::CameraPose> &poses,
+    std::vector<Eigen::Vector3d> &points_3d,
+    const std::vector<std::vector<Observation>> &obs_per_point,
+    double outlier_th1, double outlier_th2, int max_iter,
+    double &mean_reproj_error, std::string *status,
+    int *outliers_removed_out,
+    PointSourceOptMode opt_mode);
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Loose Init: progressive triangulation with PnP re-initialization
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1189,6 +1200,210 @@ inline bool triangulate_and_validate_progressive(
             printf("  Camera %d: accepted PnP re-initialization\n", c);
         } else {
             printf("  Camera %d: PnP did not improve, keeping original\n", c);
+        }
+    }
+
+    // ── Phase B2: Mini-BA to refine intrinsics (especially focal length) ──
+    // This is critical for No Init mode where default intrinsics (f=image_width)
+    // may be ~20% off. We triangulate with all PnP-improved cameras using a very
+    // loose threshold, run BA in Full mode to refine all parameters, then
+    // re-assess and re-do PnP with the improved 3D points.
+    {
+        // Triangulate with ALL cameras that have reasonable poses (not identity)
+        // using a very loose threshold to get enough observations for BA
+        std::vector<Eigen::Vector3d> mini_pts;
+        std::vector<std::vector<Observation>> mini_obs;
+        double mini_reproj = 0;
+
+        // Determine which cameras have been PnP-initialized (not identity pose)
+        // Cameras with identity/garbage poses must be EXCLUDED from mini-BA
+        // to prevent them from diverging and corrupting the optimization
+        std::vector<bool> has_pose(num_cameras, false);
+        int n_with_pose = 0;
+        for (int c = 0; c < num_cameras; c++) {
+            // Camera has a valid pose if: it's good, OR its PnP-reinitialized
+            // reproj is reasonable (not thousands of px from identity pose)
+            bool is_identity = (poses[c].R.isIdentity(1e-6) && poses[c].t.norm() < 1.0);
+            // Also check if PnP improved it to reasonable quality
+            bool pnp_reasonable = !is_identity && quality[c].median_reproj < 1000.0;
+            has_pose[c] = is_good[c] || pnp_reasonable;
+            if (has_pose[c]) n_with_pose++;
+        }
+        printf("Loose Init Phase B2: %d cameras with poses for mini-BA\n", n_with_pose);
+
+        if (n_with_pose >= 2) {
+            // Rebuild projection matrices with PnP-updated poses
+            for (int c = 0; c < num_cameras; c++) {
+                Ps[c] = red_math::projectionFromKRt(poses[c].K, poses[c].R, poses[c].t);
+                rvecs[c] = red_math::rotationMatrixToVector(poses[c].R);
+            }
+
+            // Triangulate using cameras with poses, very loose threshold
+            double loose_th = std::max(reproj_threshold, phase_a_threshold);
+            for (const auto &fobs : frame_obs) {
+                int n = (int)fobs.cam_indices.size();
+                std::vector<int> active_cams;
+                std::vector<Eigen::Vector2d> active_pixels;
+                for (int i = 0; i < n; i++) {
+                    int c = fobs.cam_indices[i];
+                    if (has_pose[c]) {
+                        active_cams.push_back(c);
+                        active_pixels.push_back(fobs.pixel_coords[i]);
+                    }
+                }
+                if ((int)active_cams.size() < 2) continue;
+
+                std::vector<Eigen::Vector2d> tri_pts_l;
+                std::vector<Eigen::Matrix<double, 3, 4>> tri_Ps_l;
+                for (int i = 0; i < (int)active_cams.size(); i++) {
+                    int c = active_cams[i];
+                    tri_pts_l.push_back(red_math::undistortPoint(
+                        active_pixels[i], poses[c].K, poses[c].dist));
+                    tri_Ps_l.push_back(Ps[c]);
+                }
+                Eigen::Vector3d pt = red_math::triangulatePoints(tri_pts_l, tri_Ps_l);
+
+                // Filter with loose threshold
+                std::vector<int> clean_c;
+                std::vector<Eigen::Vector2d> clean_px;
+                for (int i = 0; i < (int)active_cams.size(); i++) {
+                    int c = active_cams[i];
+                    Eigen::Vector2d proj = red_math::projectPoint(
+                        pt, rvecs[c], poses[c].t, poses[c].K, poses[c].dist);
+                    if ((proj - active_pixels[i]).norm() <= loose_th) {
+                        clean_c.push_back(c);
+                        clean_px.push_back(active_pixels[i]);
+                    }
+                }
+                if ((int)clean_c.size() < 2) continue;
+
+                // Re-triangulate with clean obs
+                if ((int)clean_c.size() < (int)active_cams.size()) {
+                    tri_pts_l.clear(); tri_Ps_l.clear();
+                    for (int i = 0; i < (int)clean_c.size(); i++) {
+                        int c = clean_c[i];
+                        tri_pts_l.push_back(red_math::undistortPoint(
+                            clean_px[i], poses[c].K, poses[c].dist));
+                        tri_Ps_l.push_back(Ps[c]);
+                    }
+                    pt = red_math::triangulatePoints(tri_pts_l, tri_Ps_l);
+                }
+
+                int pidx = (int)mini_pts.size();
+                mini_pts.push_back(pt);
+                std::vector<Observation> obs_list;
+                for (int i = 0; i < (int)clean_c.size(); i++)
+                    obs_list.push_back({clean_c[i], pidx, clean_px[i].x(), clean_px[i].y()});
+                mini_obs.push_back(std::move(obs_list));
+            }
+
+            int mini_total_obs = 0;
+            for (const auto &ol : mini_obs) mini_total_obs += (int)ol.size();
+            printf("Loose Init Phase B2: %d points, %d observations for mini-BA\n",
+                   (int)mini_pts.size(), mini_total_obs);
+
+            if ((int)mini_pts.size() >= 50 && mini_total_obs >= 200) {
+                if (status) *status = "Loose Init Phase B2: running mini-BA to refine intrinsics...";
+                std::vector<std::string> cam_names_vec(num_cameras);
+                for (int c = 0; c < num_cameras; c++)
+                    cam_names_vec[c] = std::to_string(c);
+                double mini_reproj_after = 0;
+                int mini_outliers = 0;
+                bundle_adjust_pointsource(cam_names_vec, poses, mini_pts,
+                                           mini_obs, loose_th, loose_th / 2,
+                                           50, mini_reproj_after, status,
+                                           &mini_outliers, PointSourceOptMode::Full);
+                printf("Loose Init Phase B2: mini-BA reproj -> %.3f px\n", mini_reproj_after);
+
+                // ── Phase B3: Re-assess and re-do PnP with improved 3D points ──
+                if (status) *status = "Loose Init Phase B3: re-assessing with improved parameters...";
+
+                // Rebuild projection matrices
+                for (int c = 0; c < num_cameras; c++) {
+                    Ps[c] = red_math::projectionFromKRt(poses[c].K, poses[c].R, poses[c].t);
+                    rvecs[c] = red_math::rotationMatrixToVector(poses[c].R);
+                }
+
+                // Re-assess quality
+                auto quality2 = assess_camera_quality(frame_obs, poses, 10.0);
+                int n_still_poor = 0;
+                for (int c = 0; c < num_cameras; c++) {
+                    is_good[c] = quality2[c].is_good;
+                    if (!is_good[c]) n_still_poor++;
+                }
+                printf("Loose Init Phase B3: after mini-BA, %d good, %d poor cameras\n",
+                       num_cameras - n_still_poor, n_still_poor);
+
+                if (n_still_poor > 0) {
+                    // Re-triangulate with good cameras (now have better intrinsics)
+                    good_pts.clear();
+                    good_pts_frame_idx.clear();
+                    n_good = num_cameras - n_still_poor;
+                    int phase_b3_min = std::min(n_good, std::max(2, min_cameras));
+                    double phase_b3_th = reproj_threshold;
+                    {
+                        double max_gm = 0;
+                        for (int c = 0; c < num_cameras; c++)
+                            if (is_good[c]) max_gm = std::max(max_gm, quality2[c].median_reproj);
+                        if (max_gm > reproj_threshold)
+                            phase_b3_th = max_gm * 3.0;
+                    }
+
+                    for (int fi = 0; fi < (int)frame_obs.size(); fi++) {
+                        const auto &fobs = frame_obs[fi];
+                        std::vector<int> gc; std::vector<Eigen::Vector2d> gp;
+                        for (int i = 0; i < (int)fobs.cam_indices.size(); i++) {
+                            int c = fobs.cam_indices[i];
+                            if (is_good[c]) { gc.push_back(c); gp.push_back(fobs.pixel_coords[i]); }
+                        }
+                        if ((int)gc.size() < phase_b3_min) continue;
+                        std::vector<Eigen::Vector2d> tp; std::vector<Eigen::Matrix<double,3,4>> tP;
+                        for (int i = 0; i < (int)gc.size(); i++) {
+                            tp.push_back(red_math::undistortPoint(gp[i], poses[gc[i]].K, poses[gc[i]].dist));
+                            tP.push_back(Ps[gc[i]]);
+                        }
+                        Eigen::Vector3d pt = red_math::triangulatePoints(tp, tP);
+                        bool ok = true;
+                        for (int i = 0; i < (int)gc.size(); i++) {
+                            double e = (red_math::projectPoint(pt, rvecs[gc[i]], poses[gc[i]].t,
+                                        poses[gc[i]].K, poses[gc[i]].dist) - gp[i]).norm();
+                            if (e > phase_b3_th) { ok = false; break; }
+                        }
+                        if (ok) { good_pts.push_back(pt); good_pts_frame_idx.push_back(fi); }
+                    }
+                    printf("Loose Init Phase B3: %d good 3D points for PnP re-init\n", (int)good_pts.size());
+
+                    // PnP re-init poor cameras with improved 3D points
+                    for (int c = 0; c < num_cameras; c++) {
+                        if (is_good[c]) continue;
+                        std::vector<Eigen::Vector3d> op; std::vector<Eigen::Vector2d> ip;
+                        for (int gi = 0; gi < (int)good_pts.size(); gi++) {
+                            const auto &fobs = frame_obs[good_pts_frame_idx[gi]];
+                            for (int i = 0; i < (int)fobs.cam_indices.size(); i++) {
+                                if (fobs.cam_indices[i] == c) {
+                                    op.push_back(good_pts[gi]); ip.push_back(fobs.pixel_coords[i]); break;
+                                }
+                            }
+                        }
+                        if ((int)op.size() < 10) {
+                            printf("  Camera %d: %d correspondences (too few)\n", c, (int)op.size());
+                            continue;
+                        }
+                        Eigen::Matrix3d Rn = poses[c].R; Eigen::Vector3d tn = poses[c].t;
+                        CalibrationPipeline::refinePnPPose(op, ip, poses[c].K, poses[c].dist, Rn, tn);
+                        Eigen::Vector3d rv_new = red_math::rotationMatrixToVector(Rn);
+                        Eigen::Vector3d rv_old = red_math::rotationMatrixToVector(poses[c].R);
+                        double eb = 0, ea = 0;
+                        for (int i = 0; i < (int)op.size(); i++) {
+                            eb += (red_math::projectPoint(op[i], rv_old, poses[c].t, poses[c].K, poses[c].dist) - ip[i]).norm();
+                            ea += (red_math::projectPoint(op[i], rv_new, tn, poses[c].K, poses[c].dist) - ip[i]).norm();
+                        }
+                        eb /= op.size(); ea /= op.size();
+                        printf("  Camera %d: PnP reproj %.2f -> %.2f px (%d corr)\n", c, eb, ea, (int)op.size());
+                        if (ea < eb) { poses[c].R = Rn; poses[c].t = tn; }
+                    }
+                }
+            }
         }
     }
 
