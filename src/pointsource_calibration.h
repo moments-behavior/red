@@ -2316,42 +2316,42 @@ inline PointSourceResult run_pointsource_refinement(const PointSourceConfig &con
                 poses[c].K(1, 2) = med_cy;
                 poses[c].dist.setZero();
 
-                // Initial extrinsic guess: copy pose from the nearest good camera
-                // (by camera index). This gives a rough but reasonable starting
-                // point for Ceres PnP refinement.
-                {
-                    int best_gc = -1;
-                    int best_obs = 0;
-                    for (int gc = 0; gc < num_cameras; gc++) {
-                        if (cam_obs_count_check[gc] > best_obs) {
-                            best_obs = cam_obs_count_check[gc];
-                            best_gc = gc;
-                        }
+                // Try PnP from multiple initial poses (each good camera as seed)
+                // and keep the best result. Different initial poses help Ceres
+                // avoid local minima when the camera's true pose is far from any
+                // single good camera.
+                double best_err = 1e9;
+                Eigen::Matrix3d best_R = Eigen::Matrix3d::Identity();
+                Eigen::Vector3d best_t = Eigen::Vector3d::Zero();
+                for (int gc = 0; gc < num_cameras; gc++) {
+                    if (cam_obs_count_check[gc] == 0) continue;
+                    Eigen::Matrix3d R_try = poses[gc].R;
+                    Eigen::Vector3d t_try = poses[gc].t;
+                    CalibrationPipeline::refinePnPPose(obj_pts, img_pts,
+                                                        poses[c].K, poses[c].dist,
+                                                        R_try, t_try);
+                    double err = 0;
+                    Eigen::Vector3d rv = red_math::rotationMatrixToVector(R_try);
+                    for (int i = 0; i < (int)obj_pts.size(); i++) {
+                        Eigen::Vector2d proj = red_math::projectPoint(
+                            obj_pts[i], rv, t_try, poses[c].K, poses[c].dist);
+                        err += (proj - img_pts[i]).norm();
                     }
-                    if (best_gc >= 0) {
-                        poses[c].R = poses[best_gc].R;
-                        poses[c].t = poses[best_gc].t;
+                    err /= obj_pts.size();
+                    if (err < best_err) {
+                        best_err = err;
+                        best_R = R_try;
+                        best_t = t_try;
                     }
                 }
+                poses[c].R = best_R;
+                poses[c].t = best_t;
+                double mean_err = best_err;
+                printf("  Camera %s: best PnP reproj = %.2f px (%d pts, tried %d init poses)\n",
+                       config.camera_names[c].c_str(), mean_err, (int)obj_pts.size(),
+                       num_cameras - (int)missing_cams.size());
 
-                // Refine with Ceres PnP (the rough initial guess may be enough for Ceres)
-                CalibrationPipeline::refinePnPPose(obj_pts, img_pts,
-                                                    poses[c].K, poses[c].dist,
-                                                    poses[c].R, poses[c].t);
-
-                // Check reproj quality
-                double total_err = 0;
-                Eigen::Vector3d rvec = red_math::rotationMatrixToVector(poses[c].R);
-                for (int i = 0; i < (int)obj_pts.size(); i++) {
-                    Eigen::Vector2d proj = red_math::projectPoint(
-                        obj_pts[i], rvec, poses[c].t, poses[c].K, poses[c].dist);
-                    total_err += (proj - img_pts[i]).norm();
-                }
-                double mean_err = total_err / obj_pts.size();
-                printf("  Camera %s: PnP reproj = %.2f px (%d pts, init from median intrinsics)\n",
-                       config.camera_names[c].c_str(), mean_err, (int)obj_pts.size());
-
-                if (mean_err < 50.0) {
+                if (mean_err < 75.0) {
                     n_recovered++;
                     printf("  Camera %s: RECOVERED\n", config.camera_names[c].c_str());
                 } else {
