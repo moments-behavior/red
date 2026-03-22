@@ -2250,6 +2250,39 @@ inline PointSourceResult run_pointsource_refinement(const PointSourceConfig &con
                        return s;
                    }().c_str());
 
+            // Smart Blob re-detection: for missing cameras that may have had
+            // detections rejected by the compactness check, re-detect with
+            // smart_blob=true to recover observations from multi-blob frames.
+            if (!config.smart_blob) {
+                bool any_improved = false;
+                for (int c : missing_cams) {
+                    PointSourceConfig redet_config = config;
+                    redet_config.camera_names = {config.camera_names[c]};
+                    redet_config.smart_blob = true;
+                    auto redet_videos = find_video_files(redet_config.media_folder,
+                                                          redet_config.camera_names);
+                    if (redet_videos.empty()) continue;
+
+                    if (status)
+                        *status = "Smart Blob re-detection for camera " + config.camera_names[c] + "...";
+                    auto redet = detect_all_cameras(redet_config, redet_videos, status, nullptr);
+                    if (!redet.empty() && (int)redet[0].size() > (int)all_detections[c].size()) {
+                        printf("  Camera %s: Smart Blob re-detection: %d -> %d detections\n",
+                               config.camera_names[c].c_str(),
+                               (int)all_detections[c].size(), (int)redet[0].size());
+                        all_detections[c] = std::move(redet[0]);
+                        any_improved = true;
+                    }
+                }
+
+                // Rebuild frame_obs if any camera got more detections
+                if (any_improved) {
+                    frame_obs = assemble_observations(all_detections, config.min_cameras);
+                    printf("  Rebuilt frame_obs: %d frames after Smart Blob re-detection\n",
+                           (int)frame_obs.size());
+                }
+            }
+
             // Build frame_num → point_index map from obs_per_point
             // Each point in points_3d came from a specific frame in frame_obs.
             // We need to find which frame produced which point. The observations
