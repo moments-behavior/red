@@ -161,8 +161,7 @@ inline void HandleMainMenuDialogs(
                                 calib_state.config_loaded = true;
                                 calib_state.init_camera_enabled();
                                 calib_state.images_loaded = false;
-                                calib_state.img_done = false;
-                                calib_state.vid_done = false;
+                                calib_state.aruco_done = false;
                             } else {
                                 calib_state.config_loaded = false;
                                 calib_state.status = "Error parsing config: " + err;
@@ -178,8 +177,7 @@ inline void HandleMainMenuDialogs(
                             calib_state.config_loaded = true;
                             calib_state.init_camera_enabled();
                             calib_state.images_loaded = false;
-                            calib_state.img_done = false;
-                            calib_state.vid_done = false;
+                            calib_state.aruco_done = false;
                         }
                     }
                     calib_state.project_loaded = true;

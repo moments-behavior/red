@@ -78,8 +78,7 @@ inline void DrawCalibrationToolWindow(
                                 state.config_loaded = true;
                                 state.init_camera_enabled();
                                 state.images_loaded = false;
-                                state.img_done = false;
-                                state.vid_done = false;
+                                state.aruco_done = false;
                             } else {
                                 state.config_loaded = false;
                                 state.status = "Error parsing config: " + err;
@@ -93,8 +92,7 @@ inline void DrawCalibrationToolWindow(
                             state.config_loaded = true;
                             state.init_camera_enabled();
                             state.images_loaded = false;
-                            state.img_done = false;
-                            state.vid_done = false;
+                            state.aruco_done = false;
                             state.status =
                                 "Project loaded (config-free): " +
                                 std::to_string(state.config.cam_ordered.size()) +
@@ -267,12 +265,10 @@ inline void DrawCalibrationToolWindow(
                 DrawCalibArucoSection(state, ctx, cb);
             }
 
-            // ---- Section 3: Laser Refinement ----
+            // ---- Section 3: PointSource Refinement ----
             bool aruco_succeeded =
-                (state.aruco_done && state.aruco_result.success) ||
-                (state.img_done && state.img_result.success) ||
-                (state.vid_done && state.vid_result.success);
-            bool show_laser_section =
+                (state.aruco_done && state.aruco_result.success);
+            bool show_pointsource_section =
                 state.project.has_laser_input() || aruco_succeeded;
 
             // Auto-populate pointsource calibration_folder from aruco output
@@ -291,7 +287,7 @@ inline void DrawCalibrationToolWindow(
                             state.project.calibration_folder);
                     state.project.pointsource_output_folder =
                         state.project.project_path + "/pointsource_calibration";
-                    show_laser_section = true;
+                    show_pointsource_section = true;
                     std::string proj_file =
                         state.project.project_path + "/" +
                         state.project.project_name + ".redproj";
@@ -301,7 +297,7 @@ inline void DrawCalibrationToolWindow(
                 }
             }
 
-            if (show_laser_section) {
+            if (show_pointsource_section) {
                 DrawCalibPointSourceSection(state, ctx, cb);
             }
 
@@ -338,32 +334,36 @@ inline void DrawCalibrationToolWindow(
         state.show_create_dialog = true;
         state.config_loaded = false;
         state.images_loaded = false;
-        state.img_done = false;
-        state.vid_done = false;
-        state.exp_img_done = false;
-        state.exp_vid_done = false;
-        state.img_running = false;
-        state.vid_running = false;
-        state.exp_img_running = false;
-        state.exp_vid_running = false;
+        // Unified aruco pipeline
+        state.aruco_running_flag = false;
+        state.aruco_done = false;
+        state.aruco_media_loaded = false;
+        // PointSource refinement
         state.pointsource_running = false;
-        state.status.clear();
-        state.aruco_videos_loaded = false;
+        state.pointsource_done = false;
+        state.pointsource_ready = false;
+        state.pointsource_status.clear();
+        state.pointsource_show_detection = false;
+        // SuperPoint refinement
+        state.sp_running = false;
+        state.sp_done = false;
+        state.sp_status.clear();
+        // Manual keypoint refinement
+        state.kp_skeleton_ready = false;
+        state.kp_running = false;
+        state.kp_refine_done = false;
+        state.kp_videos_loaded = false;
+        state.kp_status.clear();
+        // Telecentric
         state.tele_videos_loaded = false;
         state.tele_dlt_running = false;
         state.tele_dlt_done = false;
         state.tele_dlt_status.clear();
         state.tele_run_history.clear();
         state.tele_deferred_label_frames = 0;
+        // General
+        state.status.clear();
         state.project.camera_names.clear();
-        state.kp_skeleton_ready = false;
-        state.kp_running = false;
-        state.kp_refine_done = false;
-        state.kp_status.clear();
-        state.pointsource_ready = false;
-        state.pointsource_done = false;
-        state.pointsource_status.clear();
-        state.pointsource_show_detection = false;
         if (state.pointsource_viz.worker.joinable())
             state.pointsource_viz.worker.join();
         state.pointsource_viz.ready.clear();

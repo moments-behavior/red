@@ -45,32 +45,37 @@ struct WindowStates {
         calibration.show_create_dialog = true;
         calibration.config_loaded = false;
         calibration.images_loaded = false;
-        calibration.img_running = false;
-        calibration.img_done = false;
-        calibration.vid_running = false;
-        calibration.vid_done = false;
-        calibration.exp_img_running = false;
-        calibration.exp_img_done = false;
-        calibration.exp_vid_running = false;
-        calibration.exp_vid_done = false;
-        calibration.aruco_videos_loaded = false;
+        // Unified aruco pipeline
+        calibration.aruco_running_flag = false;
+        calibration.aruco_done = false;
+        calibration.aruco_media_loaded = false;
+        // PointSource refinement
+        calibration.pointsource_ready = false;
+        calibration.pointsource_running = false;
+        calibration.pointsource_done = false;
+        calibration.pointsource_status.clear();
+        calibration.pointsource_show_detection = false;
+        // SuperPoint
+        calibration.sp_running = false;
+        calibration.sp_done = false;
+        calibration.sp_status.clear();
+        // Manual keypoint
+        calibration.kp_skeleton_ready = false;
+        calibration.kp_running = false;
+        calibration.kp_refine_done = false;
+        calibration.kp_videos_loaded = false;
+        calibration.kp_status.clear();
+        // Telecentric
         calibration.tele_videos_loaded = false;
         calibration.tele_dlt_running = false;
         calibration.tele_dlt_done = false;
         calibration.tele_dlt_status.clear();
         calibration.tele_run_history.clear();
         calibration.tele_deferred_label_frames = 0;
-        calibration.pointsource_ready = false;
-        calibration.pointsource_running = false;
-        calibration.pointsource_done = false;
-        calibration.pointsource_status.clear();
-        calibration.pointsource_show_detection = false;
+        // General
         calibration.status.clear();
         // Clear stale result data (can be large)
-        calibration.img_result = {};
-        calibration.vid_result = {};
-        calibration.exp_img_result = {};
-        calibration.exp_vid_result = {};
+        calibration.aruco_result = {};
         calibration.tele_dlt_result = {};
         calibration.pointsource_result = {};
         calibration.loaded_result = {};

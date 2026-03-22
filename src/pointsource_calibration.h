@@ -2,7 +2,7 @@
 // pointsource_calibration.h — Point-source calibration refinement pipeline.
 // Uses synchronized video of a green light wand in a dark arena to
 // refine camera calibration (intrinsics + extrinsics) via bundle adjustment.
-// Reference: github.com/JohnsonLabJanelia/laserCalib (rj branch)
+// Reference: github.com/JohnsonLabJanelia/pointSourceCalib (rj branch)
 
 #include "calibration_pipeline.h" // ReprojectionCost, CameraPose, write_calibration
 #include "opencv_yaml_io.h"       // opencv_yaml::read

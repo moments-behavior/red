@@ -1,6 +1,6 @@
 #pragma once
 // superpoint_refinement.h — Native SuperPoint calibration refinement pipeline.
-// Header-only, namespace-scoped. Pattern follows laser_calibration.h.
+// Header-only, namespace-scoped. Pattern follows pointsource_calibration.h.
 //
 // Pipeline (macOS, native — no Python):
 //   1. Feature extraction  (VT decode → CoreML SuperPoint on ANE)

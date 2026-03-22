@@ -107,38 +107,9 @@ struct CalibrationToolState {
     // Global registration: which frame from calibration media to use (0-based)
     int global_reg_frame = 0;      // user-selectable in Calibration Tool UI
 
-    // ── Legacy pipeline state (kept for backward compat during transition) ──
-    // Aruco image pipeline async
-    bool img_running = false;
-    bool img_done = false;
-    CalibrationPipeline::CalibrationResult img_result;
-    std::future<CalibrationPipeline::CalibrationResult> img_future;
-
-    // Aruco video pipeline async
-    bool vid_running = false;
-    bool vid_done = false;
-    CalibrationPipeline::CalibrationResult vid_result;
-    std::future<CalibrationPipeline::CalibrationResult> vid_future;
-
-    // Legacy aruco video state
-    bool aruco_videos_loaded = false;
-
-    // Experimental image pipeline async
-    bool exp_img_running = false;
-    bool exp_img_done = false;
-    CalibrationPipeline::CalibrationResult exp_img_result;
-    std::future<CalibrationPipeline::CalibrationResult> exp_img_future;
-
-    // Experimental video pipeline async
-    bool exp_vid_running = false;
-    bool exp_vid_done = false;
-    CalibrationPipeline::CalibrationResult exp_vid_result;
-    std::future<CalibrationPipeline::CalibrationResult> exp_vid_future;
-
     // Helper: is any aruco pipeline running?
     bool aruco_running() const {
-        return aruco_running_flag || img_running || vid_running ||
-               exp_img_running || exp_vid_running;
+        return aruco_running_flag;
     }
 
     // Telecentric
@@ -159,7 +130,7 @@ struct CalibrationToolState {
     // Deferred label import (waits N frames for dock layout to stabilize)
     int tele_deferred_label_frames = 0;
 
-    // Laser refinement
+    // PointSource refinement
     bool pointsource_ready = false;
     PointSourceCalibration::PointSourceConfig pointsource_config;
     int pointsource_total_frames = 0;
@@ -173,7 +144,7 @@ struct CalibrationToolState {
     bool pointsource_show_detection = false;
     bool pointsource_focus_window = false;
 
-    // Laser visualization
+    // PointSource visualization
     PointSourceVizState pointsource_viz;
 
     // SuperPoint refinement

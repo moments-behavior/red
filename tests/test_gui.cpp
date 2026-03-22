@@ -97,12 +97,11 @@ static void test_calib_state_defaults() {
     EXPECT_FALSE(s.config_loaded);
     EXPECT_FALSE(s.images_loaded);
     EXPECT_TRUE(s.status.empty());
-    EXPECT_FALSE(s.img_running);
-    EXPECT_FALSE(s.img_done);
-    EXPECT_FALSE(s.vid_running);
-    EXPECT_FALSE(s.vid_done);
+    EXPECT_FALSE(s.aruco_running_flag);
+    EXPECT_FALSE(s.aruco_done);
+    EXPECT_FALSE(s.aruco_media_loaded);
 
-    // Laser defaults
+    // PointSource defaults
     EXPECT_FALSE(s.pointsource_ready);
     EXPECT_TRUE(s.pointsource_total_frames == 0);
     EXPECT_FALSE(s.pointsource_running);
@@ -131,7 +130,7 @@ static void test_calib_state_reset_on_close() {
     s.show_create_dialog = false;
     s.config_loaded = true;
     s.images_loaded = true;
-    s.img_done = true;
+    s.aruco_done = true;
     s.status = "Calibration complete!";
     s.pointsource_ready = true;
     s.pointsource_done = true;
@@ -145,8 +144,8 @@ static void test_calib_state_reset_on_close() {
     s.show_create_dialog = true;
     s.config_loaded = false;
     s.images_loaded = false;
-    s.img_done = false;
-    s.vid_done = false;
+    s.aruco_done = false;
+    s.aruco_media_loaded = false;
     s.status.clear();
     s.pointsource_ready = false;
     s.pointsource_done = false;
@@ -163,8 +162,8 @@ static void test_calib_state_reset_on_close() {
     EXPECT_TRUE(s.show_create_dialog);
     EXPECT_FALSE(s.config_loaded);
     EXPECT_FALSE(s.images_loaded);
-    EXPECT_FALSE(s.img_done);
-    EXPECT_FALSE(s.vid_done);
+    EXPECT_FALSE(s.aruco_done);
+    EXPECT_FALSE(s.aruco_media_loaded);
     EXPECT_TRUE(s.status.empty());
     EXPECT_FALSE(s.pointsource_ready);
     EXPECT_FALSE(s.pointsource_done);

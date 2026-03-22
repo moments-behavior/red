@@ -678,8 +678,7 @@ inline void DrawCalibCreateDialog(CalibrationToolState &state, AppContext &ctx,
                         // Sync board setup to project for persistence
                         state.project.charuco_setup = state.config.charuco_setup;
                         state.images_loaded = false;
-                        state.img_done = false;
-                        state.vid_done = false;
+                        state.aruco_done = false;
                         // Populate legacy img_path from config
                         state.project.img_path = state.config.img_path;
                         // If user didn't set aruco_media_folder but config has img_path,
@@ -725,8 +724,7 @@ inline void DrawCalibCreateDialog(CalibrationToolState &state, AppContext &ctx,
                     state.config_loaded = true;
                     state.init_camera_enabled();
                     state.images_loaded = false;
-                    state.img_done = false;
-                    state.vid_done = false;
+                    state.aruco_done = false;
                     // Populate legacy fields
                     if (state.project.aruco_is_video())
                         state.project.aruco_video_folder =

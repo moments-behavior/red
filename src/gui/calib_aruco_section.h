@@ -520,13 +520,8 @@ inline void DrawCalibArucoSection(CalibrationToolState &state, AppContext &ctx,
             // ---- Quality Dashboard (visible after calibration completes) ----
             {
                 const CalibrationPipeline::CalibrationResult *exp_result = nullptr;
-                // Prefer unified result, fall back to legacy
                 if (state.aruco_done && state.aruco_result.success)
                     exp_result = &state.aruco_result;
-                else if (state.exp_vid_done && state.exp_vid_result.success)
-                    exp_result = &state.exp_vid_result;
-                else if (state.exp_img_done && state.exp_img_result.success)
-                    exp_result = &state.exp_img_result;
 
                 if (exp_result && !exp_result->per_camera_metrics.empty()) {
                     if (ImGui::CollapsingHeader("Quality Dashboard",

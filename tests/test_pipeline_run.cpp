@@ -86,7 +86,8 @@ int main(int argc, char **argv) {
             config, out_base + "_experimental", &status,
             vfr_ptr, gpu_fn, gpu_ctx);
     } else {
-        result = CalibrationPipeline::run_full_pipeline(
+        // Legacy run_full_pipeline removed — always use experimental
+        result = CalibrationPipeline::run_experimental_pipeline(
             config, out_base, &status,
             vfr_ptr, gpu_fn, gpu_ctx);
     }

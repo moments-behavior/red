@@ -349,7 +349,7 @@ struct CalibProject {
     std::string img_path;              // old: image directory (from config)
     std::string aruco_video_folder;    // old: folder with aruco board .mp4 videos
 
-    // Laser refinement (optional — empty until laser phase)
+    // PointSource refinement (optional — empty until laser phase)
     std::string media_folder;      // folder with laser .mp4 videos
     std::string calibration_folder; // folder with CamXXXX.yaml (input)
     std::vector<std::string> camera_names; // validated camera serials

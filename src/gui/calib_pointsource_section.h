@@ -7,8 +7,8 @@
 #include <algorithm>
 #include <string>
 
-// Draw the Laser Refinement section inside the Calibration Tool window.
-// Called only when show_laser_section is true.
+// Draw the PointSource Refinement section inside the Calibration Tool window.
+// Called only when show_pointsource_section is true.
 inline void DrawCalibPointSourceSection(CalibrationToolState &state, AppContext &ctx,
                                    const CalibrationToolCallbacks &cb) {
     auto &pm = ctx.pm;
@@ -74,7 +74,7 @@ inline void DrawCalibPointSourceSection(CalibrationToolState &state, AppContext 
                 ImGui::Text("Calibration: %s",
                             state.project.calibration_folder.c_str());
 
-                // Laser Video Folder -- text field + Browse + Load button
+                // PointSource Video Folder -- text field + Browse + Load button
                 ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 200.0f);
                 ImGui::InputText("##ps_vid_path",
                                  &state.project.media_folder);
@@ -463,7 +463,7 @@ inline void DrawCalibPointSourceSection(CalibrationToolState &state, AppContext 
                         } // end CollapsingHeader("Results")
                     }
 
-                    // Laser status
+                    // PointSource status
                     if (!state.pointsource_status.empty()) {
                         ImGui::Separator();
                         if (state.pointsource_status.find("Error") !=
@@ -524,7 +524,7 @@ inline void DrawCalibPointSourceSection(CalibrationToolState &state, AppContext 
                     ImGui::Unindent();
                     } // end Detection Processing
                 } else {
-                    // Laser inputs not yet complete -- show hint
+                    // PointSource inputs not yet complete -- show hint
                     if (state.project.media_folder.empty()) {
                         ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f),
                             "Set Video Folder to enable pointsource refinement");

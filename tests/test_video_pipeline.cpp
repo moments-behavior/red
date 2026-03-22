@@ -215,7 +215,7 @@ static bool test_full_pipeline_video(
 
     std::string status;
     auto t0 = std::chrono::steady_clock::now();
-    auto result = CalibrationPipeline::run_full_pipeline(
+    auto result = CalibrationPipeline::run_experimental_pipeline(
         config, "/tmp/calib_video_test_output", &status,
         &vfr, gpu_fn, gpu_ctx);
     auto t1 = std::chrono::steady_clock::now();
@@ -291,7 +291,7 @@ static bool test_full_pipeline_step4(
 
     std::string status;
     auto t0 = std::chrono::steady_clock::now();
-    auto result = CalibrationPipeline::run_full_pipeline(
+    auto result = CalibrationPipeline::run_experimental_pipeline(
         config, "/tmp/calib_video_step4_test", &status,
         &vfr, gpu_fn, gpu_ctx);
     auto t1 = std::chrono::steady_clock::now();
@@ -324,7 +324,7 @@ static bool test_video_vs_image_consistency(
     // Run image-based pipeline (the existing reference)
     std::string img_status;
     auto t0 = std::chrono::steady_clock::now();
-    auto img_result = CalibrationPipeline::run_full_pipeline(
+    auto img_result = CalibrationPipeline::run_experimental_pipeline(
         config, "/tmp/calib_img_consistency_test", &img_status,
         nullptr, gpu_fn, gpu_ctx);
     auto t1 = std::chrono::steady_clock::now();
@@ -346,7 +346,7 @@ static bool test_video_vs_image_consistency(
 
     std::string vid_status;
     t0 = std::chrono::steady_clock::now();
-    auto vid_result = CalibrationPipeline::run_full_pipeline(
+    auto vid_result = CalibrationPipeline::run_experimental_pipeline(
         config, "/tmp/calib_vid_consistency_test", &vid_status,
         &vfr, gpu_fn, gpu_ctx);
     t1 = std::chrono::steady_clock::now();

@@ -3651,11 +3651,15 @@ inline CalibrationResult run_experimental_pipeline(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Top-level orchestrator: runs Steps 1-7 sequentially (original pipeline)
-// ─────────────────────────────────────────────────────────────────────────────
+} // namespace CalibrationPipeline
 
+// Legacy run_full_pipeline removed — use run_experimental_pipeline() instead.
+// The experimental pipeline uses incremental PnP registration (not spanning tree)
+// and 7-pass GNC Cauchy bundle adjustment. It produces strictly better results.
+
+#if 0 // DEAD CODE — kept as reference only
 inline CalibrationResult
-run_full_pipeline(const CalibrationTool::CalibConfig &config,
+run_full_pipeline_REMOVED(const CalibrationTool::CalibConfig &config,
                   const std::string &base_folder,
                   std::string *status,
                   const VideoFrameRange *vfr = nullptr,
@@ -3851,5 +3855,4 @@ run_full_pipeline(const CalibrationTool::CalibConfig &config,
 
     return result;
 }
-
-} // namespace CalibrationPipeline
+#endif // DEAD CODE
