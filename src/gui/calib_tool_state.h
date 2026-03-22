@@ -133,6 +133,7 @@ struct CalibrationToolState {
     // PointSource refinement
     bool pointsource_ready = false;
     PointSourceCalibration::PointSourceConfig pointsource_config;
+    CalibrationTool::ArucoMediaInfo pointsource_global_reg_info; // auto-detection for PS global reg media
     int pointsource_total_frames = 0;
     bool pointsource_running = false;
     bool pointsource_done = false;

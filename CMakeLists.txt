@@ -888,6 +888,35 @@ if(APPLE)
         CXX_STANDARD_REQUIRED ON
     )
 
+    add_executable(test_loose_init
+        /Users/johnsonr/red_dev/Mar22/test_loose_init.cpp
+        src/pointsource_metal.mm
+        src/vt_async_decoder.mm
+        src/FFmpegDemuxer.cpp)
+    target_include_directories(test_loose_init PRIVATE
+        src
+        ${HOMEBREW_PREFIX}/include
+        ${HOMEBREW_PREFIX}/include/eigen3
+        ${FFMPEG_INCLUDE_DIRS}
+    )
+    target_link_directories(test_loose_init PRIVATE ${FFMPEG_LIBRARY_DIRS})
+    target_link_libraries(test_loose_init PRIVATE
+        Eigen3::Eigen
+        Ceres::ceres
+        ${FFMPEG_LIBRARIES}
+        "-L/opt/homebrew/opt/jpeg-turbo/lib" "-lturbojpeg"
+        "-framework VideoToolbox"
+        "-framework CoreMedia"
+        "-framework CoreVideo"
+        "-framework CoreFoundation"
+        "-framework Metal"
+        "-framework Foundation"
+    )
+    set_target_properties(test_loose_init PROPERTIES
+        CXX_STANDARD 17
+        CXX_STANDARD_REQUIRED ON
+    )
+
     # JARVIS inference pipeline benchmark (ONNX Runtime only, no GUI deps)
     if(HAS_ONNXRUNTIME)
         add_executable(bench_jarvis tests/bench_jarvis.cpp)

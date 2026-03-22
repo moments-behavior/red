@@ -92,6 +92,19 @@ struct PointSourceConfig {
     int ba_max_iter = 50;
     bool lock_intrinsics = true;          // legacy (kept for backward compat)
     PointSourceOptMode opt_mode = PointSourceOptMode::ExtrinsicsOnly;
+
+    // Global registration (optional — Procrustes alignment after BA)
+    std::string global_reg_media_folder;
+    std::string global_reg_media_type;  // "videos" or "images"
+    CalibrationTool::CharucoSetup charuco_setup;
+    std::map<std::string, std::vector<std::vector<float>>> gt_pts;
+    std::vector<std::string> world_coordinate_imgs;
+    Eigen::Matrix3d world_frame_rotation = Eigen::Matrix3d::Identity();
+    bool do_global_reg = false;
+
+    // Initialization modes
+    bool loose_init = false;  // auto-detect and PnP re-init poorly-calibrated cameras
+    bool no_init = false;     // bootstrap all params from Global Reg. Media (implies loose_init)
 };
 
 inline nlohmann::json config_to_json(const PointSourceConfig &c) {
@@ -113,7 +126,12 @@ inline nlohmann::json config_to_json(const PointSourceConfig &c) {
         {"ba_max_iter", c.ba_max_iter},
         {"lock_intrinsics", c.lock_intrinsics},
         {"opt_mode", static_cast<int>(c.opt_mode)},
-        {"opt_mode_name", pointsource_opt_mode_name(c.opt_mode)}};
+        {"opt_mode_name", pointsource_opt_mode_name(c.opt_mode)},
+        {"do_global_reg", c.do_global_reg},
+        {"global_reg_media_folder", c.global_reg_media_folder},
+        {"global_reg_media_type", c.global_reg_media_type},
+        {"loose_init", c.loose_init},
+        {"no_init", c.no_init}};
 }
 
 struct SpotDetection {
@@ -157,6 +175,7 @@ struct PointSourceResult {
     double mean_reproj_after = 0.0;
     std::string output_folder;
     std::vector<CameraChange> camera_changes;
+    std::string global_reg_status;  // empty if not attempted, else Procrustes report
 };
 
 // Per-camera progress counters, shared between detection threads and UI
@@ -775,6 +794,111 @@ assemble_observations(const std::vector<DetectionMap> &all_detections,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Per-camera quality assessment for Loose Init mode
+// ─────────────────────────────────────────────────────────────────────────────
+
+struct CameraQuality {
+    double median_reproj = 0.0;
+    int n_frames = 0;
+    bool is_good = true;
+};
+
+// Assess each camera's calibration quality by triangulating with all cameras
+// and computing per-camera median reprojection error. Cameras with median
+// reproj >= quality_threshold are marked as poor (is_good = false).
+inline std::vector<CameraQuality> assess_camera_quality(
+    const std::vector<FrameObservations> &frame_obs,
+    const std::vector<CalibrationPipeline::CameraPose> &poses,
+    double quality_threshold = 10.0,
+    std::string *status = nullptr) {
+
+    int num_cameras = (int)poses.size();
+
+    // Build projection matrices and rvecs
+    std::vector<Eigen::Matrix<double, 3, 4>> Ps(num_cameras);
+    std::vector<Eigen::Vector3d> rvecs(num_cameras);
+    for (int c = 0; c < num_cameras; c++) {
+        Ps[c] = red_math::projectionFromKRt(poses[c].K, poses[c].R, poses[c].t);
+        rvecs[c] = red_math::rotationMatrixToVector(poses[c].R);
+    }
+
+    // Collect per-camera reproj errors across all frames
+    std::vector<std::vector<double>> per_cam_errors(num_cameras);
+
+    for (const auto &fobs : frame_obs) {
+        int n = (int)fobs.cam_indices.size();
+        if (n < 2) continue;
+
+        // Undistort and triangulate using all cameras
+        std::vector<Eigen::Vector2d> tri_pts(n);
+        std::vector<Eigen::Matrix<double, 3, 4>> tri_Ps(n);
+        for (int i = 0; i < n; i++) {
+            int c = fobs.cam_indices[i];
+            tri_pts[i] = red_math::undistortPoint(fobs.pixel_coords[i],
+                                                   poses[c].K, poses[c].dist);
+            tri_Ps[i] = Ps[c];
+        }
+        Eigen::Vector3d pt3d = red_math::triangulatePoints(tri_pts, tri_Ps);
+
+        // Compute per-camera reproj error
+        for (int i = 0; i < n; i++) {
+            int c = fobs.cam_indices[i];
+            Eigen::Vector2d proj = red_math::projectPoint(
+                pt3d, rvecs[c], poses[c].t, poses[c].K, poses[c].dist);
+            double err = (proj - fobs.pixel_coords[i]).norm();
+            per_cam_errors[c].push_back(err);
+        }
+    }
+
+    // Compute median per camera
+    std::vector<CameraQuality> quality(num_cameras);
+    std::vector<double> all_medians;
+    for (int c = 0; c < num_cameras; c++) {
+        auto &errs = per_cam_errors[c];
+        quality[c].n_frames = (int)errs.size();
+        if (errs.empty()) continue;
+        std::sort(errs.begin(), errs.end());
+        quality[c].median_reproj = errs[errs.size() / 2];
+        all_medians.push_back(quality[c].median_reproj);
+    }
+
+    // Adaptive threshold: if the user's threshold is too strict for this dataset,
+    // use a relative approach — good cameras are those in the better half
+    double effective_threshold = quality_threshold;
+    if (!all_medians.empty()) {
+        std::sort(all_medians.begin(), all_medians.end());
+        double best_median = all_medians[0];
+        // If even the best camera exceeds the threshold, use adaptive:
+        // "good" = within 2x of the best camera's median
+        if (best_median >= quality_threshold) {
+            effective_threshold = std::max(quality_threshold, best_median * 2.0);
+            printf("  Adaptive threshold: best camera median %.2f px > %.0f px, "
+                   "using %.1f px (2x best)\n",
+                   best_median, quality_threshold, effective_threshold);
+        }
+    }
+
+    // Classify
+    int n_poor = 0;
+    for (int c = 0; c < num_cameras; c++) {
+        if (per_cam_errors[c].empty()) {
+            quality[c].is_good = true;
+            continue;
+        }
+        quality[c].is_good = (quality[c].median_reproj < effective_threshold);
+        if (!quality[c].is_good) n_poor++;
+        printf("  Camera %d: median reproj %.2f px (%d frames) -> %s\n",
+               c, quality[c].median_reproj, quality[c].n_frames,
+               quality[c].is_good ? "GOOD" : "POOR");
+    }
+
+    if (status)
+        *status = "Camera quality: " + std::to_string(num_cameras - n_poor) +
+                  " good, " + std::to_string(n_poor) + " poor";
+    return quality;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Step 3: Triangulate and validate with existing calibration
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -878,6 +1002,187 @@ inline bool triangulate_and_validate(
                   " observations, mean reproj: " +
                   std::to_string(mean_reproj_error).substr(0, 5) + " px";
     return !points_3d.empty();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Loose Init: progressive triangulation with PnP re-initialization
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Three-phase approach for handling cameras with poor initial calibration:
+// Phase A: Triangulate using only good cameras → high-quality 3D points
+// Phase B: PnP re-init poor cameras using good 3D points + their 2D detections
+// Phase C: Re-triangulate with all cameras using normal thresholds
+inline bool triangulate_and_validate_progressive(
+    const std::vector<FrameObservations> &frame_obs,
+    std::vector<CalibrationPipeline::CameraPose> &poses,  // mutable: poor cameras get re-initialized
+    const std::vector<CameraQuality> &quality,
+    int min_cameras, double reproj_threshold,
+    std::vector<Eigen::Vector3d> &points_3d,
+    std::vector<std::vector<Observation>> &clean_obs_per_point,
+    double &mean_reproj_error, std::string *status) {
+
+    int num_cameras = (int)poses.size();
+
+    // Identify good and poor cameras
+    std::vector<bool> is_good(num_cameras);
+    int n_good = 0, n_poor = 0;
+    for (int c = 0; c < num_cameras; c++) {
+        is_good[c] = quality[c].is_good;
+        if (is_good[c]) n_good++; else n_poor++;
+    }
+
+    if (n_good < 2) {
+        if (status) *status = "Loose Init: fewer than 2 good cameras — cannot proceed";
+        return false;
+    }
+
+    printf("Loose Init: %d good cameras, %d poor cameras\n", n_good, n_poor);
+    if (n_poor == 0) {
+        // All cameras are good — fall through to standard triangulation
+        return triangulate_and_validate(frame_obs, poses, min_cameras,
+                                         reproj_threshold, points_3d,
+                                         clean_obs_per_point, mean_reproj_error,
+                                         status);
+    }
+
+    // ── Phase A: Triangulate using only good cameras ──
+    if (status) *status = "Loose Init Phase A: triangulating with good cameras only...";
+    printf("Loose Init Phase A: triangulating with %d good cameras...\n", n_good);
+
+    // Build projection matrices for good cameras
+    std::vector<Eigen::Matrix<double, 3, 4>> Ps(num_cameras);
+    std::vector<Eigen::Vector3d> rvecs(num_cameras);
+    for (int c = 0; c < num_cameras; c++) {
+        Ps[c] = red_math::projectionFromKRt(poses[c].K, poses[c].R, poses[c].t);
+        rvecs[c] = red_math::rotationMatrixToVector(poses[c].R);
+    }
+
+    // Filter frame_obs to only good cameras, triangulate, validate
+    std::vector<Eigen::Vector3d> good_pts;
+    // Map from good_pts index to frame_obs index (for Phase B lookup)
+    std::vector<int> good_pts_frame_idx;
+
+    for (int fi = 0; fi < (int)frame_obs.size(); fi++) {
+        const auto &fobs = frame_obs[fi];
+        int n = (int)fobs.cam_indices.size();
+
+        // Collect only good camera observations
+        std::vector<int> good_cam_idx;
+        std::vector<Eigen::Vector2d> good_pixels;
+        for (int i = 0; i < n; i++) {
+            int c = fobs.cam_indices[i];
+            if (is_good[c]) {
+                good_cam_idx.push_back(c);
+                good_pixels.push_back(fobs.pixel_coords[i]);
+            }
+        }
+        if ((int)good_cam_idx.size() < std::max(2, min_cameras))
+            continue;
+
+        // Triangulate with good cameras
+        std::vector<Eigen::Vector2d> tri_pts;
+        std::vector<Eigen::Matrix<double, 3, 4>> tri_Ps;
+        for (int i = 0; i < (int)good_cam_idx.size(); i++) {
+            int c = good_cam_idx[i];
+            tri_pts.push_back(red_math::undistortPoint(
+                good_pixels[i], poses[c].K, poses[c].dist));
+            tri_Ps.push_back(Ps[c]);
+        }
+        Eigen::Vector3d pt3d = red_math::triangulatePoints(tri_pts, tri_Ps);
+
+        // Validate: check reproj for good cameras
+        bool all_ok = true;
+        for (int i = 0; i < (int)good_cam_idx.size(); i++) {
+            int c = good_cam_idx[i];
+            Eigen::Vector2d proj = red_math::projectPoint(
+                pt3d, rvecs[c], poses[c].t, poses[c].K, poses[c].dist);
+            double err = (proj - good_pixels[i]).norm();
+            if (err > reproj_threshold) { all_ok = false; break; }
+        }
+        if (!all_ok) continue;
+
+        good_pts.push_back(pt3d);
+        good_pts_frame_idx.push_back(fi);
+    }
+
+    printf("Loose Init Phase A: %d good 3D points from good cameras\n", (int)good_pts.size());
+    if (good_pts.empty()) {
+        if (status) *status = "Loose Init: no valid 3D points from good cameras";
+        return false;
+    }
+
+    // ── Phase B: PnP re-initialization of poor cameras ──
+    if (status) *status = "Loose Init Phase B: re-initializing " +
+                          std::to_string(n_poor) + " poor cameras via PnP...";
+
+    for (int c = 0; c < num_cameras; c++) {
+        if (is_good[c]) continue;
+
+        // Collect 3D-2D correspondences: good 3D point ↔ this camera's detection
+        std::vector<Eigen::Vector3d> obj_pts;
+        std::vector<Eigen::Vector2d> img_pts;
+
+        for (int gi = 0; gi < (int)good_pts.size(); gi++) {
+            int fi = good_pts_frame_idx[gi];
+            const auto &fobs = frame_obs[fi];
+            // Find this camera's observation in this frame
+            for (int i = 0; i < (int)fobs.cam_indices.size(); i++) {
+                if (fobs.cam_indices[i] == c) {
+                    obj_pts.push_back(good_pts[gi]);
+                    img_pts.push_back(fobs.pixel_coords[i]);
+                    break;
+                }
+            }
+        }
+
+        printf("  Camera %d: %d correspondences for PnP\n", c, (int)obj_pts.size());
+        if ((int)obj_pts.size() < 10) {
+            printf("  Camera %d: too few correspondences, skipping PnP\n", c);
+            continue;
+        }
+
+        // Use refinePnPPose with current (bad) extrinsics as initial guess
+        Eigen::Matrix3d R_new = poses[c].R;
+        Eigen::Vector3d t_new = poses[c].t;
+        CalibrationPipeline::refinePnPPose(obj_pts, img_pts,
+                                            poses[c].K, poses[c].dist,
+                                            R_new, t_new);
+
+        // Compute reproj improvement
+        double err_before = 0, err_after = 0;
+        Eigen::Vector3d rvec_old = red_math::rotationMatrixToVector(poses[c].R);
+        Eigen::Vector3d rvec_new = red_math::rotationMatrixToVector(R_new);
+        for (int i = 0; i < (int)obj_pts.size(); i++) {
+            Eigen::Vector2d proj_old = red_math::projectPoint(
+                obj_pts[i], rvec_old, poses[c].t, poses[c].K, poses[c].dist);
+            Eigen::Vector2d proj_new = red_math::projectPoint(
+                obj_pts[i], rvec_new, t_new, poses[c].K, poses[c].dist);
+            err_before += (proj_old - img_pts[i]).norm();
+            err_after += (proj_new - img_pts[i]).norm();
+        }
+        err_before /= obj_pts.size();
+        err_after /= obj_pts.size();
+
+        printf("  Camera %d: PnP reproj %.2f -> %.2f px\n", c, err_before, err_after);
+
+        // Only accept if PnP improved things
+        if (err_after < err_before) {
+            poses[c].R = R_new;
+            poses[c].t = t_new;
+            printf("  Camera %d: accepted PnP re-initialization\n", c);
+        } else {
+            printf("  Camera %d: PnP did not improve, keeping original\n", c);
+        }
+    }
+
+    // ── Phase C: Re-triangulate with all cameras using normal thresholds ──
+    if (status) *status = "Loose Init Phase C: re-triangulating with all cameras...";
+    printf("Loose Init Phase C: re-triangulating with all %d cameras...\n", num_cameras);
+
+    return triangulate_and_validate(frame_obs, poses, min_cameras,
+                                     reproj_threshold, points_3d,
+                                     clean_obs_per_point, mean_reproj_error,
+                                     status);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1168,6 +1473,263 @@ inline bool bundle_adjust_pointsource(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// No Init: bootstrap camera parameters from Global Reg. Media (ChArUco board)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Bootstrap camera extrinsics (and default intrinsics) from a single ChArUco
+// board image/video per camera. Each camera's pose is solved via PnP relative
+// to the board's known 3D coordinates, so all cameras end up in world frame.
+// Returns false if fewer than 2 cameras could be bootstrapped.
+inline bool bootstrap_from_global_reg(
+    const PointSourceConfig &config,
+    std::vector<CalibrationPipeline::CameraPose> &poses,
+    int &image_width, int &image_height,
+    std::string *status) {
+
+    namespace fs = std::filesystem;
+    int num_cameras = (int)config.camera_names.size();
+    poses.resize(num_cameras);
+
+    const auto &cs = config.charuco_setup;
+    aruco_detect::CharucoBoard board;
+    board.squares_x = cs.w; board.squares_y = cs.h;
+    board.square_length = cs.square_side_length;
+    board.marker_length = cs.marker_side_length;
+    board.dictionary_id = cs.dictionary;
+    auto aruco_dict = aruco_detect::getDictionary(cs.dictionary);
+
+    // Generate 3D board corner coordinates (same as generate_charuco_gt_pts but as Vector3d)
+    int inner_w = cs.w - 1;
+    int inner_h = cs.h - 1;
+    float half_x = (inner_w - 1) * cs.square_side_length / 2.0f;
+    float half_y = (inner_h - 1) * cs.square_side_length / 2.0f;
+    std::vector<Eigen::Vector3d> board_pts_3d(inner_w * inner_h);
+    std::vector<Eigen::Vector2d> board_pts_2d(inner_w * inner_h); // for solvePnPHomography
+    for (int row = 0; row < inner_h; row++) {
+        for (int col = 0; col < inner_w; col++) {
+            int idx = row * inner_w + col;
+            double x = half_x - col * cs.square_side_length;
+            double y = -half_y + row * cs.square_side_length;
+            board_pts_3d[idx] = Eigen::Vector3d(x, y, 0);
+            board_pts_2d[idx] = Eigen::Vector2d(x, y);
+        }
+    }
+
+    if (status) *status = "No Init: detecting ChArUco board in global reg media...";
+    printf("No Init: bootstrapping %d cameras from %s (%s)\n",
+           num_cameras, config.global_reg_media_folder.c_str(),
+           config.global_reg_media_type.c_str());
+
+    // Per-camera: detect board and solve PnP (parallel)
+    struct CamBootstrap {
+        std::map<int, Eigen::Vector2d> corners;
+        int w = 0, h = 0;
+        bool valid = false;
+    };
+    std::vector<CamBootstrap> cam_boots(num_cameras);
+    std::vector<std::future<void>> futures;
+
+    for (int ci = 0; ci < num_cameras; ci++) {
+        futures.push_back(std::async(std::launch::async, [&, ci]() {
+            const std::string &serial = config.camera_names[ci];
+            auto &cb = cam_boots[ci];
+            int w = 0, h = 0;
+            std::vector<uint8_t> gray;
+
+            if (config.global_reg_media_type == "videos") {
+                auto vids = CalibrationTool::discover_aruco_videos(
+                    config.global_reg_media_folder, {serial});
+                if (vids.empty()) return;
+                const std::string &video_path = vids.begin()->second;
+#ifdef __APPLE__
+                std::unique_ptr<FFmpegDemuxer> demuxer;
+                try { demuxer = std::make_unique<FFmpegDemuxer>(
+                    video_path.c_str(), std::map<std::string, std::string>{});
+                } catch (...) { return; }
+                w = (int)demuxer->GetWidth(); h = (int)demuxer->GetHeight();
+                gray.resize(w * h);
+                VTAsyncDecoder vt;
+                if (!vt.init(demuxer->GetExtradata(), demuxer->GetExtradataSize(),
+                             demuxer->GetVideoCodec())) return;
+                uint8_t *pkt_data = nullptr; size_t pkt_size = 0; PacketData pkt_info;
+                CVPixelBufferRef pb = nullptr;
+                for (int pkt_i = 0; pkt_i < 16 && !pb; pkt_i++) {
+                    if (!demuxer->Demux(pkt_data, pkt_size, pkt_info)) break;
+                    bool is_key = (pkt_info.flags & AV_PKT_FLAG_KEY) != 0;
+                    vt.submit_blocking(pkt_data, pkt_size, pkt_info.pts,
+                                       pkt_info.dts, demuxer->GetTimebase(), is_key);
+                    pb = vt.drain_one();
+                }
+                if (!pb) return;
+                CVPixelBufferLockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
+                const uint8_t *bgra = (const uint8_t *)CVPixelBufferGetBaseAddress(pb);
+                int stride = (int)CVPixelBufferGetBytesPerRow(pb);
+                for (int y = 0; y < h; y++) {
+                    const uint8_t *row = bgra + y * stride;
+                    for (int x = 0; x < w; x++)
+                        gray[y*w+x] = (uint8_t)((row[x*4+2]*77 + row[x*4+1]*150 + row[x*4]*29) >> 8);
+                }
+                CVPixelBufferUnlockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
+                CFRelease(pb);
+#else
+                ffmpeg_reader::FrameReader reader;
+                if (!reader.open(video_path)) return;
+                w = reader.width(); h = reader.height();
+                gray.resize(w * h);
+                const uint8_t *rgb = reader.readFrame(0);
+                if (!rgb) return;
+                for (int i = 0; i < w * h; i++)
+                    gray[i] = (uint8_t)((rgb[i*3]*77 + rgb[i*3+1]*150 + rgb[i*3+2]*29) >> 8);
+#endif
+            } else {
+                // Images: find image for this camera
+                std::string found_path;
+                for (const auto &entry : fs::directory_iterator(config.global_reg_media_folder)) {
+                    if (!entry.is_regular_file()) continue;
+                    std::string fn = entry.path().filename().string();
+                    std::string ext = entry.path().extension().string();
+                    std::transform(ext.begin(), ext.end(), ext.begin(),
+                                   [](unsigned char c) { return std::tolower(c); });
+                    if (ext != ".jpg" && ext != ".jpeg" && ext != ".png") continue;
+                    if (fn.find(serial) != std::string::npos) {
+                        found_path = entry.path().string();
+                        break;
+                    }
+                }
+                if (found_path.empty()) return;
+#ifdef __APPLE__
+                tjhandle tj = tjInitDecompress();
+                FILE *fp = fopen(found_path.c_str(), "rb");
+                if (!fp) { tjDestroy(tj); return; }
+                fseek(fp, 0, SEEK_END); long fsize = ftell(fp); fseek(fp, 0, SEEK_SET);
+                std::vector<unsigned char> jpeg_buf(fsize);
+                fread(jpeg_buf.data(), 1, fsize, fp); fclose(fp);
+                int tj_sub, tj_cs;
+                if (tjDecompressHeader3(tj, jpeg_buf.data(), fsize, &w, &h, &tj_sub, &tj_cs) != 0)
+                    { tjDestroy(tj); return; }
+                gray.resize(w * h);
+                tjDecompress2(tj, jpeg_buf.data(), fsize, gray.data(), w, 0, h, TJPF_GRAY, TJFLAG_FASTDCT);
+                tjDestroy(tj);
+#else
+                int channels = 0;
+                unsigned char *pixels = stbi_load(found_path.c_str(), &w, &h, &channels, 1);
+                if (!pixels) return;
+                gray.assign(pixels, pixels + w * h);
+                stbi_image_free(pixels);
+#endif
+            }
+
+            // Detect ChArUco board
+            auto charuco = aruco_detect::detectCharucoBoard(
+                gray.data(), w, h, board, aruco_dict,
+                nullptr, nullptr, nullptr, 0, 1);
+            if ((int)charuco.ids.size() < 4) {
+                fprintf(stderr, "[NoInit]   %s: only %d corners (need 4)\n",
+                        serial.c_str(), (int)charuco.ids.size());
+                return;
+            }
+            aruco_detect::cornerSubPix(gray.data(), w, h, charuco.corners, 3, 100, 0.001f);
+
+            for (int j = 0; j < (int)charuco.ids.size(); j++) {
+                cb.corners[charuco.ids[j]] = Eigen::Vector2d(
+                    charuco.corners[j].x(), charuco.corners[j].y());
+            }
+            cb.w = w; cb.h = h;
+            cb.valid = true;
+            fprintf(stderr, "[NoInit]   %s: %d corners detected (%dx%d)\n",
+                    serial.c_str(), (int)cb.corners.size(), w, h);
+        }));
+    }
+    for (auto &f : futures) f.get();
+
+    // PnP per camera: solve pose relative to board (= world frame)
+    int n_bootstrapped = 0;
+    for (int ci = 0; ci < num_cameras; ci++) {
+        auto &cb = cam_boots[ci];
+        if (!cb.valid) {
+            printf("  Camera %s: no board detected, using identity pose\n",
+                   config.camera_names[ci].c_str());
+            poses[ci].K = Eigen::Matrix3d::Identity();
+            poses[ci].K(0,0) = cb.w > 0 ? cb.w : 3208;
+            poses[ci].K(1,1) = cb.w > 0 ? cb.w : 3208;
+            poses[ci].K(0,2) = cb.w > 0 ? cb.w / 2.0 : 1604;
+            poses[ci].K(1,2) = cb.h > 0 ? cb.h / 2.0 : 1100;
+            poses[ci].dist.setZero();
+            poses[ci].R = Eigen::Matrix3d::Identity();
+            poses[ci].t.setZero();
+            continue;
+        }
+
+        // Set image dimensions from first valid camera
+        if (image_width == 0) {
+            image_width = cb.w;
+            image_height = cb.h;
+        }
+
+        // Default intrinsics: f = image_width, cx = w/2, cy = h/2
+        poses[ci].K = Eigen::Matrix3d::Identity();
+        poses[ci].K(0,0) = cb.w;  // fx
+        poses[ci].K(1,1) = cb.w;  // fy (square pixels assumed)
+        poses[ci].K(0,2) = cb.w / 2.0;  // cx
+        poses[ci].K(1,2) = cb.h / 2.0;  // cy
+        poses[ci].dist.setZero();
+
+        // Build 3D-2D correspondences from detected corners
+        std::vector<Eigen::Vector3d> obj_pts;
+        std::vector<Eigen::Vector2d> img_pts;
+        std::vector<Eigen::Vector2d> obj_pts_2d_for_H;  // for solvePnPHomography (planar)
+        for (const auto &[corner_id, px] : cb.corners) {
+            if (corner_id >= 0 && corner_id < (int)board_pts_3d.size()) {
+                obj_pts.push_back(board_pts_3d[corner_id]);
+                obj_pts_2d_for_H.push_back(board_pts_2d[corner_id]);
+                img_pts.push_back(px);
+            }
+        }
+
+        if ((int)obj_pts.size() < 4) continue;
+
+        // Undistort for solvePnPHomography (dist is zero, so this is identity)
+        std::vector<Eigen::Vector2d> img_pts_und(img_pts.size());
+        for (int i = 0; i < (int)img_pts.size(); i++)
+            img_pts_und[i] = red_math::undistortPoint(img_pts[i], poses[ci].K, poses[ci].dist);
+
+        // Step 1: algebraic PnP (homography decomposition for planar target)
+        bool pnp_ok = CalibrationPipeline::solvePnPHomography(
+            obj_pts_2d_for_H, img_pts_und, poses[ci].K,
+            poses[ci].R, poses[ci].t);
+
+        if (!pnp_ok) {
+            printf("  Camera %s: solvePnPHomography failed\n",
+                   config.camera_names[ci].c_str());
+            continue;
+        }
+
+        // Step 2: Ceres refinement of pose (with distorted observations)
+        CalibrationPipeline::refinePnPPose(obj_pts, img_pts,
+                                            poses[ci].K, poses[ci].dist,
+                                            poses[ci].R, poses[ci].t);
+
+        // Compute reproj error
+        double total_err = 0;
+        Eigen::Vector3d rvec = red_math::rotationMatrixToVector(poses[ci].R);
+        for (int i = 0; i < (int)obj_pts.size(); i++) {
+            Eigen::Vector2d proj = red_math::projectPoint(
+                obj_pts[i], rvec, poses[ci].t, poses[ci].K, poses[ci].dist);
+            total_err += (proj - img_pts[i]).norm();
+        }
+        double mean_err = total_err / obj_pts.size();
+        printf("  Camera %s: PnP OK, %d corners, reproj %.2f px\n",
+               config.camera_names[ci].c_str(), (int)obj_pts.size(), mean_err);
+        n_bootstrapped++;
+    }
+
+    printf("No Init: bootstrapped %d/%d cameras\n", n_bootstrapped, num_cameras);
+    if (status) *status = "No Init: bootstrapped " + std::to_string(n_bootstrapped) +
+                          "/" + std::to_string(num_cameras) + " cameras from board";
+    return n_bootstrapped >= 2;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Top-level pipeline
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1189,41 +1751,54 @@ inline PointSourceResult run_pointsource_refinement(const PointSourceConfig &con
     }
     printf("PointSource: found %d video files\n", (int)video_files.size());
 
-    // Load existing calibration
-    if (status)
-        *status = "Loading calibration from " + config.calibration_folder;
+    // Load existing calibration (or bootstrap from Global Reg. Media in No Init mode)
     int num_cameras = (int)config.camera_names.size();
     std::vector<CalibrationPipeline::CameraPose> poses(num_cameras);
     int image_width = 0, image_height = 0;
 
-    for (int c = 0; c < num_cameras; c++) {
-        std::string yaml_path = config.calibration_folder + "/Cam" +
-                                config.camera_names[c] + ".yaml";
-        if (!fs::exists(yaml_path)) {
-            result.error = "Missing calibration file: " + yaml_path;
+    if (config.no_init) {
+        // No Init mode: bootstrap from Global Reg. Media
+        if (config.global_reg_media_folder.empty()) {
+            result.error = "No Init mode requires Global Reg. Media folder";
             return result;
         }
-        try {
-            auto yaml = opencv_yaml::read(yaml_path);
-            poses[c].K = yaml.getMatrix("camera_matrix").block<3, 3>(0, 0);
-            Eigen::MatrixXd dist_mat =
-                yaml.getMatrix("distortion_coefficients");
-            for (int j = 0; j < 5; j++)
-                poses[c].dist(j) = dist_mat(j, 0);
-            poses[c].R = yaml.getMatrix("rc_ext").block<3, 3>(0, 0);
-            Eigen::MatrixXd t_mat = yaml.getMatrix("tc_ext");
-            poses[c].t =
-                Eigen::Vector3d(t_mat(0, 0), t_mat(1, 0), t_mat(2, 0));
-            if (c == 0) {
-                image_width = yaml.getInt("image_width");
-                image_height = yaml.getInt("image_height");
-            }
-            printf("PointSource: loaded calibration for %s (fx=%.1f fy=%.1f)\n",
-                   config.camera_names[c].c_str(), poses[c].K(0, 0),
-                   poses[c].K(1, 1));
-        } catch (const std::exception &e) {
-            result.error = "Error reading " + yaml_path + ": " + e.what();
+        if (status) *status = "No Init: bootstrapping from ChArUco board...";
+        if (!bootstrap_from_global_reg(config, poses, image_width, image_height, status)) {
+            result.error = "No Init: failed to bootstrap cameras from Global Reg. Media";
             return result;
+        }
+    } else {
+        if (status)
+            *status = "Loading calibration from " + config.calibration_folder;
+        for (int c = 0; c < num_cameras; c++) {
+            std::string yaml_path = config.calibration_folder + "/Cam" +
+                                    config.camera_names[c] + ".yaml";
+            if (!fs::exists(yaml_path)) {
+                result.error = "Missing calibration file: " + yaml_path;
+                return result;
+            }
+            try {
+                auto yaml = opencv_yaml::read(yaml_path);
+                poses[c].K = yaml.getMatrix("camera_matrix").block<3, 3>(0, 0);
+                Eigen::MatrixXd dist_mat =
+                    yaml.getMatrix("distortion_coefficients");
+                for (int j = 0; j < 5; j++)
+                    poses[c].dist(j) = dist_mat(j, 0);
+                poses[c].R = yaml.getMatrix("rc_ext").block<3, 3>(0, 0);
+                Eigen::MatrixXd t_mat = yaml.getMatrix("tc_ext");
+                poses[c].t =
+                    Eigen::Vector3d(t_mat(0, 0), t_mat(1, 0), t_mat(2, 0));
+                if (c == 0) {
+                    image_width = yaml.getInt("image_width");
+                    image_height = yaml.getInt("image_height");
+                }
+                printf("PointSource: loaded calibration for %s (fx=%.1f fy=%.1f)\n",
+                       config.camera_names[c].c_str(), poses[c].K(0, 0),
+                       poses[c].K(1, 1));
+            } catch (const std::exception &e) {
+                result.error = "Error reading " + yaml_path + ": " + e.what();
+                return result;
+            }
         }
     }
 
@@ -1276,11 +1851,26 @@ inline PointSourceResult run_pointsource_refinement(const PointSourceConfig &con
     std::vector<std::vector<Observation>> obs_per_point;
     double mean_reproj_before = 0.0;
 
-    if (!triangulate_and_validate(frame_obs, poses, config.min_cameras,
-                                  config.reproj_threshold, points_3d,
-                                  obs_per_point, mean_reproj_before, status)) {
-        result.error = "Triangulation failed — no valid 3D points";
-        return result;
+    bool use_loose = config.loose_init || config.no_init;
+    if (use_loose) {
+        // Loose Init: assess quality, PnP re-init poor cameras, then triangulate
+        if (status) *status = "Assessing per-camera calibration quality...";
+        auto quality = assess_camera_quality(frame_obs, poses, 10.0, status);
+        if (!triangulate_and_validate_progressive(frame_obs, poses, quality,
+                                                   config.min_cameras,
+                                                   config.reproj_threshold,
+                                                   points_3d, obs_per_point,
+                                                   mean_reproj_before, status)) {
+            result.error = "Triangulation failed (Loose Init) — no valid 3D points";
+            return result;
+        }
+    } else {
+        if (!triangulate_and_validate(frame_obs, poses, config.min_cameras,
+                                      config.reproj_threshold, points_3d,
+                                      obs_per_point, mean_reproj_before, status)) {
+            result.error = "Triangulation failed — no valid 3D points";
+            return result;
+        }
     }
     result.mean_reproj_before = mean_reproj_before;
 
@@ -1348,6 +1938,44 @@ inline PointSourceResult run_pointsource_refinement(const PointSourceConfig &con
             Eigen::Matrix3d dR = poses_before[c].R.transpose() * poses[c].R;
             double trace_val = std::min(3.0, std::max(-1.0, dR.trace()));
             cc.drot_deg = std::acos((trace_val - 1.0) / 2.0) * 180.0 / M_PI;
+        }
+    }
+
+    // Step 4b: Global registration (optional Procrustes alignment to world frame)
+    // Skip if No Init — cameras are already in world frame from PnP against the board
+    if (config.do_global_reg && !config.global_reg_media_folder.empty() && !config.no_init) {
+        if (status)
+            *status = "Running global registration (Procrustes alignment)...";
+
+        // Build a CalibConfig with the fields global_registration() needs
+        CalibrationTool::CalibConfig greg_config;
+        greg_config.charuco_setup = config.charuco_setup;
+        greg_config.gt_pts = config.gt_pts;
+        greg_config.world_coordinate_imgs = config.world_coordinate_imgs;
+        greg_config.world_frame_rotation = config.world_frame_rotation;
+
+        // global_registration() expects map<int, Vector3d> for points_3d
+        std::map<int, Eigen::Vector3d> pts_map;
+        for (int i = 0; i < (int)points_3d.size(); i++)
+            pts_map[i] = points_3d[i];
+
+        std::string greg_status;
+        bool greg_ok = CalibrationPipeline::global_registration(
+            greg_config, poses, pts_map, &greg_status,
+            nullptr,
+            config.global_reg_media_folder,
+            config.global_reg_media_type,
+            &config.camera_names);
+
+        if (greg_ok) {
+            result.global_reg_status = "Global registration succeeded. " + greg_status;
+            // Copy transformed points back to vector
+            for (int i = 0; i < (int)points_3d.size(); i++)
+                points_3d[i] = pts_map[i];
+            printf("PointSource: global registration succeeded: %s\n", greg_status.c_str());
+        } else {
+            result.global_reg_status = "Global registration failed: " + greg_status;
+            printf("PointSource: global registration failed: %s\n", greg_status.c_str());
         }
     }
 

@@ -295,9 +295,10 @@ inline void DrawCalibCreateDialog(CalibrationToolState &state, AppContext &ctx,
                         "Select PointSource Videos Folder", nullptr, cfg);
                 }
 
-                // ---- Board Setup (when no config file, aruco media detected) ----
+                // ---- Board Setup (when no config file, aruco or global reg media detected) ----
                 if (state.project.config_file.empty() &&
-                    !state.calib_aruco_media_info.type.empty()) {
+                    (!state.calib_aruco_media_info.type.empty() ||
+                     !state.project.global_reg_media_folder.empty())) {
                     // Separator row
                     ImGui::TableNextRow();
                     LabelCell(""); ImGui::TableSetColumnIndex(1);

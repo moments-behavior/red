@@ -328,6 +328,16 @@ generate_charuco_gt_pts(const CharucoSetup &cs,
 
 enum class CameraModel { Projective = 0, Telecentric = 1 };
 
+// Calibration sub-type — makes the project's intent explicit in the .redproj JSON.
+// Inferred from existing fields for backward compat when not present.
+enum class CalibSubtype {
+    ArucoFull = 0,           // ArUco images/videos → full pipeline
+    ArucoAndPointSource,     // ArUco + subsequent PointSource refinement
+    PointSourceRefinement,   // Load existing YAML + PointSource videos → refine
+    PointSourceFromScratch,  // YAML intrinsics-only + PointSource + global reg
+    Telecentric,             // DLT with known landmarks
+};
+
 struct CalibProject {
     std::string project_name;      // e.g. "MyCalibration"
     std::string project_path;      // folder containing .redproj
@@ -356,6 +366,9 @@ struct CalibProject {
 
     // Camera model
     CameraModel camera_model = CameraModel::Projective;
+
+    // Calibration sub-type (informational — for project organization)
+    CalibSubtype subtype = CalibSubtype::ArucoFull;
 
     // Telecentric calibration (DLT with known 3D landmarks)
     std::string landmark_labels_folder; // folder with Cam<serial>.csv 2D labels
@@ -449,7 +462,8 @@ inline void to_json(nlohmann::json &j, const CalibProject &p) {
                        {"last_aruco_mean_reproj", p.last_aruco_mean_reproj},
                        {"dlt_method", p.dlt_method},
                        {"dlt_mean_rmse", p.dlt_mean_rmse},
-                       {"dlt_per_camera_rmse", p.dlt_per_camera_rmse}};
+                       {"dlt_per_camera_rmse", p.dlt_per_camera_rmse},
+                       {"calibration_subtype", static_cast<int>(p.subtype)}};
 }
 
 inline void from_json(const nlohmann::json &j, CalibProject &p) {
@@ -530,6 +544,22 @@ inline void from_json(const nlohmann::json &j, CalibProject &p) {
     p.dlt_method = j.value("dlt_method", -1);
     p.dlt_mean_rmse = j.value("dlt_mean_rmse", 0.0);
     p.dlt_per_camera_rmse = j.value("dlt_per_camera_rmse", std::vector<double>{});
+
+    // Calibration subtype (backward-compatible: infer from fields if not present)
+    int subtype_val = j.value("calibration_subtype", -1);
+    if (subtype_val >= 0) {
+        p.subtype = static_cast<CalibSubtype>(subtype_val);
+    } else {
+        // Infer from existing fields
+        if (p.is_telecentric())
+            p.subtype = CalibSubtype::Telecentric;
+        else if (p.has_aruco() && p.has_laser_input())
+            p.subtype = CalibSubtype::ArucoAndPointSource;
+        else if (p.has_aruco())
+            p.subtype = CalibSubtype::ArucoFull;
+        else if (p.has_laser_input())
+            p.subtype = CalibSubtype::PointSourceRefinement;
+    }
 }
 
 inline bool save_project(const CalibProject &p,

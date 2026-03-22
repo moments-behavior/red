@@ -187,6 +187,19 @@ inline void DrawCalibPointSourceSection(CalibrationToolState &state, AppContext 
                     }
                     ImGuiFileDialog::Instance()->Close();
                 }
+                // Handle global reg folder browse dialog
+                if (ImGuiFileDialog::Instance()->Display(
+                        "ChoosePSGlobalRegFolder", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
+                    if (ImGuiFileDialog::Instance()->IsOk()) {
+                        state.project.global_reg_media_folder =
+                            ImGuiFileDialog::Instance()->GetCurrentPath();
+                        auto info = CalibrationTool::detect_aruco_media(
+                            state.project.global_reg_media_folder);
+                        state.project.global_reg_media_type = info.type;
+                        state.pointsource_global_reg_info = info;
+                    }
+                    ImGuiFileDialog::Instance()->Close();
+                }
 
                 // Show matched cameras
                 if (!state.project.camera_names.empty()) {
@@ -256,6 +269,22 @@ inline void DrawCalibPointSourceSection(CalibrationToolState &state, AppContext 
                     if (ImGui::SliderFloat("Reproj Threshold (px)", &reproj_th,
                                            1.0f, 50.0f))
                         state.pointsource_config.reproj_threshold = reproj_th;
+
+                    // Loose Init: auto-detect and PnP re-init poorly-calibrated cameras
+                    if (state.pointsource_config.no_init) {
+                        bool forced = true;
+                        ImGui::BeginDisabled();
+                        ImGui::Checkbox("Loose Init", &forced);
+                        ImGui::EndDisabled();
+                    } else {
+                        ImGui::Checkbox("Loose Init", &state.pointsource_config.loose_init);
+                    }
+                    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                        ImGui::SetTooltip(
+                            "Auto-detect cameras with poor initial calibration\n"
+                            "and re-initialize their extrinsics via PnP from\n"
+                            "well-calibrated cameras' 3D points.\n\n"
+                            "Use when some cameras have old/inaccurate YAMLs.");
                     ImGui::Unindent();
                     } // end Filtering
 
@@ -301,6 +330,114 @@ inline void DrawCalibPointSourceSection(CalibrationToolState &state, AppContext 
                     ImGui::Unindent();
                     } // end Bundle Adjustment
 
+                    // Global Registration (optional — Procrustes alignment to world frame)
+                    if (ImGui::CollapsingHeader("Global Registration (optional)")) {
+                    ImGui::Indent();
+                    ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f),
+                        "Align output to world frame using a ChArUco board");
+
+                    // Global Reg. Media folder picker
+                    ImGui::Text("Global Reg. Media:");
+                    ImGui::SetNextItemWidth(-80.0f);
+                    if (ImGui::InputText("##ps_globalreg",
+                                         &state.project.global_reg_media_folder)) {
+                        auto info = CalibrationTool::detect_aruco_media(
+                            state.project.global_reg_media_folder);
+                        state.project.global_reg_media_type = info.type;
+                        state.pointsource_global_reg_info = info;
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button("Browse##ps_globalreg")) {
+                        IGFD::FileDialogConfig cfg;
+                        cfg.countSelectionMax = 1;
+                        if (!state.project.global_reg_media_folder.empty())
+                            cfg.path = state.project.global_reg_media_folder;
+                        cfg.flags = ImGuiFileDialogFlags_Modal;
+                        ImGuiFileDialog::Instance()->OpenDialog(
+                            "ChoosePSGlobalRegFolder",
+                            "Select Global Registration Media Folder", nullptr, cfg);
+                    }
+                    // Show auto-detection result
+                    if (!state.pointsource_global_reg_info.description.empty()) {
+                        if (state.pointsource_global_reg_info.type.empty()) {
+                            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f),
+                                "No images or videos found in folder");
+                        } else {
+                            ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f),
+                                "%s", state.pointsource_global_reg_info.description.c_str());
+                        }
+                    }
+
+                    // Board Setup (when global reg media is set and no config file)
+                    if (!state.project.global_reg_media_folder.empty() &&
+                        state.project.config_file.empty()) {
+                        ImGui::Spacing();
+                        ImGui::Text("Board Setup:");
+                        auto &cs = state.project.charuco_setup;
+
+                        ImGui::SetNextItemWidth(120);
+                        ImGui::InputInt("Squares X##ps_board", &cs.w);
+                        cs.w = std::max(3, std::min(cs.w, 20));
+
+                        ImGui::SetNextItemWidth(120);
+                        ImGui::InputInt("Squares Y##ps_board", &cs.h);
+                        cs.h = std::max(3, std::min(cs.h, 20));
+
+                        ImGui::SetNextItemWidth(120);
+                        ImGui::InputFloat("Square Size (mm)##ps_board",
+                                          &cs.square_side_length, 1.0f, 10.0f, "%.1f");
+                        cs.square_side_length = std::max(1.0f, cs.square_side_length);
+
+                        ImGui::SetNextItemWidth(120);
+                        ImGui::InputFloat("Marker Size (mm)##ps_board",
+                                          &cs.marker_side_length, 1.0f, 10.0f, "%.1f");
+                        cs.marker_side_length = std::max(1.0f, cs.marker_side_length);
+
+                        ImGui::SetNextItemWidth(200);
+                        {
+                            const char *combo_labels[] = {
+                                "DICT_4X4_50", "DICT_4X4_100", "DICT_4X4_250",
+                                "DICT_5X5_50", "DICT_5X5_100", "DICT_5X5_250",
+                                "DICT_6X6_50", "DICT_6X6_250"};
+                            int combo_items[] = {0, 1, 2, 4, 5, 6, 8, 10};
+                            int combo_count = 8;
+                            int sel = 0;
+                            for (int i = 0; i < combo_count; i++)
+                                if (combo_items[i] == cs.dictionary) { sel = i; break; }
+                            if (ImGui::Combo("Dictionary##ps_board", &sel, combo_labels, combo_count))
+                                cs.dictionary = combo_items[sel];
+                        }
+
+                        // Show auto-generated gt_pts summary
+                        {
+                            int n_pts = (cs.w - 1) * (cs.h - 1);
+                            float half_x = (cs.w - 2) * cs.square_side_length / 2.0f;
+                            ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f),
+                                "%d pts, center-origin, z=0 (%.0f to %.0f mm)",
+                                n_pts, -half_x, half_x);
+                        }
+                    }
+                    // No Init checkbox (requires global reg media + board params)
+                    ImGui::Spacing();
+                    bool can_no_init = !state.project.global_reg_media_folder.empty() &&
+                                       state.project.charuco_setup.w >= 3;
+                    ImGui::BeginDisabled(!can_no_init);
+                    if (ImGui::Checkbox("No Init", &state.pointsource_config.no_init)) {
+                        // No Init implies Loose Init
+                        if (state.pointsource_config.no_init)
+                            state.pointsource_config.loose_init = true;
+                    }
+                    ImGui::EndDisabled();
+                    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                        ImGui::SetTooltip(
+                            "Bootstrap all camera parameters from ChArUco board\n"
+                            "images alone. Does not require calibration YAML files.\n\n"
+                            "Uses default intrinsics (f=image_width) and PnP from\n"
+                            "board corners. Requires Global Reg. Media and Board Setup.");
+
+                    ImGui::Unindent();
+                    } // end Global Registration
+
                     ImGui::Separator();
 
                     // Run button
@@ -312,6 +449,23 @@ inline void DrawCalibPointSourceSection(CalibrationToolState &state, AppContext 
                         state.pointsource_done = false;
                         state.pointsource_status =
                             "Starting pointsource calibration pipeline...";
+
+                        // Populate global registration config from project
+                        state.pointsource_config.do_global_reg =
+                            !state.project.global_reg_media_folder.empty();
+                        state.pointsource_config.global_reg_media_folder =
+                            state.project.global_reg_media_folder;
+                        state.pointsource_config.global_reg_media_type =
+                            state.project.global_reg_media_type;
+                        state.pointsource_config.charuco_setup =
+                            state.project.charuco_setup;
+                        if (state.pointsource_config.do_global_reg) {
+                            auto gt = CalibrationTool::generate_charuco_gt_pts(
+                                state.project.charuco_setup);
+                            state.pointsource_config.world_coordinate_imgs = {"0"};
+                            state.pointsource_config.gt_pts["0"] = std::move(gt);
+                        }
+
                         state.pointsource_future = std::async(
                             std::launch::async,
                             [config = state.pointsource_config,
@@ -412,6 +566,17 @@ inline void DrawCalibPointSourceSection(CalibrationToolState &state, AppContext 
                             ImGui::Text("BA outliers removed: %d", state.pointsource_result.ba_outliers_removed);
                         ImGui::Text("Output: %s",
                                     state.pointsource_result.output_folder.c_str());
+
+                        // Global registration status
+                        if (!state.pointsource_result.global_reg_status.empty()) {
+                            if (state.pointsource_result.global_reg_status.find("failed") != std::string::npos) {
+                                ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f),
+                                    "Global Reg: %s", state.pointsource_result.global_reg_status.c_str());
+                            } else {
+                                ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f),
+                                    "Global Reg: %s", state.pointsource_result.global_reg_status.c_str());
+                            }
+                        }
 
                         // Per-camera changes table
                         if (!state.pointsource_result.camera_changes.empty()) {
