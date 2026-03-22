@@ -47,6 +47,24 @@ namespace LaserCalibration {
 // Data structures
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Optimization mode for laser BA
+enum class LaserOptMode {
+    ExtrinsicsOnly = 0,      // Fix all intrinsics, optimize R + t
+    ExtrinsicsAndFocal = 1,  // + optimize fx, fy
+    ExtrinsicsAndAll = 2,    // + optimize fx, fy, cx, cy, k1, k2 (lock p1, p2, k3)
+    Full = 3                 // All parameters free (fx, fy, cx, cy, k1, k2, p1, p2, k3)
+};
+
+inline const char *laser_opt_mode_name(LaserOptMode m) {
+    switch (m) {
+        case LaserOptMode::ExtrinsicsOnly: return "Extrinsics only";
+        case LaserOptMode::ExtrinsicsAndFocal: return "Extrinsics + focal length";
+        case LaserOptMode::ExtrinsicsAndAll: return "Extrinsics + all intrinsics";
+        case LaserOptMode::Full: return "Full (all parameters free)";
+        default: return "Unknown";
+    }
+}
+
 struct LaserConfig {
     std::string media_folder;
     std::vector<std::string> camera_names;
@@ -72,7 +90,8 @@ struct LaserConfig {
     double ba_outlier_th1 = 20.0;
     double ba_outlier_th2 = 5.0;
     int ba_max_iter = 50;
-    bool lock_intrinsics = true;
+    bool lock_intrinsics = true;          // legacy (kept for backward compat)
+    LaserOptMode opt_mode = LaserOptMode::ExtrinsicsOnly;
 };
 
 inline nlohmann::json config_to_json(const LaserConfig &c) {
@@ -92,7 +111,9 @@ inline nlohmann::json config_to_json(const LaserConfig &c) {
         {"ba_outlier_th1", c.ba_outlier_th1},
         {"ba_outlier_th2", c.ba_outlier_th2},
         {"ba_max_iter", c.ba_max_iter},
-        {"lock_intrinsics", c.lock_intrinsics}};
+        {"lock_intrinsics", c.lock_intrinsics},
+        {"opt_mode", static_cast<int>(c.opt_mode)},
+        {"opt_mode_name", laser_opt_mode_name(c.opt_mode)}};
 }
 
 struct SpotDetection {
@@ -871,7 +892,7 @@ inline bool bundle_adjust_laser(
     double outlier_th1, double outlier_th2, int max_iter,
     double &mean_reproj_error, std::string *status,
     int *outliers_removed_out = nullptr,
-    bool lock_intrinsics = false) {
+    LaserOptMode opt_mode = LaserOptMode::ExtrinsicsOnly) {
 
     int num_cameras = (int)poses.size();
 
@@ -943,25 +964,46 @@ inline bool bundle_adjust_laser(
         }
 
         // Fix camera 0 extrinsics (rvec + tvec, indices 0-5) — gauge freedom
-        // When lock_intrinsics: also fix indices 6-14 (fx,fy,cx,cy,k1-k3,p1,p2)
+        // Intrinsic indices: 6=fx, 7=fy, 8=cx, 9=cy, 10=k1, 11=k2, 12=p1, 13=p2, 14=k3
         {
-            std::vector<int> fixed_cam0 = {0, 1, 2, 3, 4, 5};
-            if (lock_intrinsics)
-                for (int k = 6; k < 15; k++)
-                    fixed_cam0.push_back(k);
+            std::vector<int> fixed_cam0 = {0, 1, 2, 3, 4, 5}; // always lock extrinsics of cam 0
+            if (opt_mode == LaserOptMode::ExtrinsicsOnly) {
+                for (int k = 6; k < 15; k++) fixed_cam0.push_back(k);
+            } else if (opt_mode == LaserOptMode::ExtrinsicsAndFocal) {
+                for (int k : {8, 9, 10, 11, 12, 13, 14}) fixed_cam0.push_back(k);
+            } else if (opt_mode == LaserOptMode::ExtrinsicsAndAll) {
+                for (int k : {12, 13, 14}) fixed_cam0.push_back(k);
+            }
+            // Full mode: only extrinsics of cam 0 are locked (all intrinsics free)
             problem.SetManifold(
                 camera_params[0].data(),
                 new ceres::SubsetManifold(15, fixed_cam0));
         }
 
-        // Lock intrinsics for all other cameras
-        if (lock_intrinsics) {
-            std::vector<int> intrinsic_indices = {6, 7, 8, 9, 10, 11, 12, 13, 14};
+        // Apply parameter locking for all other cameras based on opt_mode
+        if (opt_mode == LaserOptMode::ExtrinsicsOnly) {
+            // Lock all intrinsics (indices 6-14)
+            std::vector<int> locked = {6, 7, 8, 9, 10, 11, 12, 13, 14};
             for (int i = 1; i < num_cameras; i++)
                 problem.SetManifold(
                     camera_params[i].data(),
-                    new ceres::SubsetManifold(15, intrinsic_indices));
+                    new ceres::SubsetManifold(15, locked));
+        } else if (opt_mode == LaserOptMode::ExtrinsicsAndFocal) {
+            // Lock cx, cy, distortion (allow fx, fy to vary)
+            std::vector<int> locked = {8, 9, 10, 11, 12, 13, 14};
+            for (int i = 1; i < num_cameras; i++)
+                problem.SetManifold(
+                    camera_params[i].data(),
+                    new ceres::SubsetManifold(15, locked));
+        } else if (opt_mode == LaserOptMode::ExtrinsicsAndAll) {
+            // Lock p1, p2, k3 (same as aruco BA strategy)
+            std::vector<int> locked = {12, 13, 14};
+            for (int i = 1; i < num_cameras; i++)
+                problem.SetManifold(
+                    camera_params[i].data(),
+                    new ceres::SubsetManifold(15, locked));
         }
+        // Full mode: no intrinsic locking for other cameras (all 15 params free)
 
         ceres::Solver::Options options;
         options.linear_solver_type = ceres::SPARSE_SCHUR;
@@ -1267,7 +1309,7 @@ inline LaserResult run_laser_refinement(const LaserConfig &config,
                              obs_per_point, config.ba_outlier_th1,
                              config.ba_outlier_th2, config.ba_max_iter,
                              mean_reproj_after, status, &ba_outliers,
-                             config.lock_intrinsics)) {
+                             config.opt_mode)) {
         result.error = "Bundle adjustment failed";
         return result;
     }

@@ -272,12 +272,32 @@ inline void DrawCalibLaserSection(CalibrationToolState &state, AppContext &ctx,
                         state.laser_config.ba_outlier_th2 = ba_th2;
                     ImGui::SliderInt("BA Max Iterations",
                                      &state.laser_config.ba_max_iter, 10, 200);
-                    ImGui::Checkbox("Lock Intrinsics",
-                                    &state.laser_config.lock_intrinsics);
+                    // Optimization mode dropdown
+                    {
+                        const char *opt_labels[] = {
+                            "Extrinsics only",
+                            "Extrinsics + focal length",
+                            "Extrinsics + all intrinsics",
+                            "Full (all parameters free)"};
+                        int opt_idx = static_cast<int>(state.laser_config.opt_mode);
+                        if (ImGui::Combo("Optimization Mode", &opt_idx, opt_labels, 4))
+                            state.laser_config.opt_mode =
+                                static_cast<LaserCalibration::LaserOptMode>(opt_idx);
+                        // Sync legacy field
+                        state.laser_config.lock_intrinsics =
+                            (state.laser_config.opt_mode == LaserCalibration::LaserOptMode::ExtrinsicsOnly);
+                    }
                     if (ImGui::IsItemHovered())
                         ImGui::SetTooltip(
-                            "Fix focal length and distortion coefficients.\n"
-                            "Recommended when laser points lack depth diversity.");
+                            "Extrinsics only: Fix all intrinsics, optimize camera poses.\n"
+                            "  Recommended when aruco intrinsics are trusted.\n\n"
+                            "Extrinsics + focal length: Also refine fx, fy.\n"
+                            "  Use when focal length may have drifted.\n\n"
+                            "Extrinsics + all intrinsics: Refine fx, fy, cx, cy, k1, k2.\n"
+                            "  Locks p1, p2, k3. Use when initial calibration is poor.\n\n"
+                            "Full: All parameters free including p1, p2, k3.\n"
+                            "  Only recommended with high-quality laser data (many points,\n"
+                            "  good spatial coverage, high camera redundancy).");
                     ImGui::Unindent();
                     } // end Bundle Adjustment
 

@@ -845,6 +845,49 @@ if(APPLE)
         CXX_STANDARD_REQUIRED ON
     )
 
+    # Cross-validate laser modes against aruco detections
+    add_executable(test_crossval_modes /Users/johnsonr/red_dev/quan_v_rob_calib/test_crossval_modes.cpp)
+    target_include_directories(test_crossval_modes PRIVATE
+        src
+        ${HOMEBREW_PREFIX}/include
+        ${HOMEBREW_PREFIX}/include/eigen3
+    )
+    target_link_libraries(test_crossval_modes PRIVATE Eigen3::Eigen)
+    set_target_properties(test_crossval_modes PROPERTIES
+        CXX_STANDARD 17
+        CXX_STANDARD_REQUIRED ON
+    )
+
+    # Laser refinement mode comparison test
+    add_executable(test_laser_modes
+        /Users/johnsonr/red_dev/quan_v_rob_calib/test_laser_modes.cpp
+        src/laser_metal.mm
+        src/vt_async_decoder.mm
+        src/FFmpegDemuxer.cpp)
+    target_include_directories(test_laser_modes PRIVATE
+        src
+        ${HOMEBREW_PREFIX}/include
+        ${HOMEBREW_PREFIX}/include/eigen3
+        ${FFMPEG_INCLUDE_DIRS}
+    )
+    target_link_directories(test_laser_modes PRIVATE ${FFMPEG_LIBRARY_DIRS})
+    target_link_libraries(test_laser_modes PRIVATE
+        Eigen3::Eigen
+        Ceres::ceres
+        ${FFMPEG_LIBRARIES}
+        "-L/opt/homebrew/opt/jpeg-turbo/lib" "-lturbojpeg"
+        "-framework VideoToolbox"
+        "-framework CoreMedia"
+        "-framework CoreVideo"
+        "-framework CoreFoundation"
+        "-framework Metal"
+        "-framework Foundation"
+    )
+    set_target_properties(test_laser_modes PROPERTIES
+        CXX_STANDARD 17
+        CXX_STANDARD_REQUIRED ON
+    )
+
     # JARVIS inference pipeline benchmark (ONNX Runtime only, no GUI deps)
     if(HAS_ONNXRUNTIME)
         add_executable(bench_jarvis tests/bench_jarvis.cpp)
