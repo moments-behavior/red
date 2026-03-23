@@ -90,7 +90,6 @@ struct PointSourceConfig {
     double ba_outlier_th1 = 20.0;
     double ba_outlier_th2 = 5.0;
     int ba_max_iter = 50;
-    bool lock_intrinsics = true;          // legacy (kept for backward compat)
     PointSourceOptMode opt_mode = PointSourceOptMode::ExtrinsicsOnly;
 
     // Global registration (optional — Procrustes alignment after BA)
@@ -127,7 +126,6 @@ inline nlohmann::json config_to_json(const PointSourceConfig &c) {
         {"ba_outlier_th1", c.ba_outlier_th1},
         {"ba_outlier_th2", c.ba_outlier_th2},
         {"ba_max_iter", c.ba_max_iter},
-        {"lock_intrinsics", c.lock_intrinsics},
         {"opt_mode", static_cast<int>(c.opt_mode)},
         {"opt_mode_name", pointsource_opt_mode_name(c.opt_mode)},
         {"do_global_reg", c.do_global_reg},
@@ -171,7 +169,6 @@ struct CameraChange {
 struct PointSourceResult {
     bool success = false;
     std::string error;
-    int total_frames_scanned = 0;
     int valid_3d_points = 0;
     int total_observations = 0;
     int ba_outliers_removed = 0;
@@ -605,6 +602,10 @@ inline bool solvePnPDLT(
     Eigen::Matrix3d M = Rt.block<3, 3>(0, 0);
     Eigen::Vector3d t_raw = Rt.col(3);
 
+    // Resolve DLT sign ambiguity (P is defined up to scale/sign).
+    // Ensure M has positive determinant so SVD extracts a proper rotation.
+    if (M.determinant() < 0) { M = -M; t_raw = -t_raw; }
+
     // Closest rotation matrix via SVD
     Eigen::JacobiSVD<Eigen::Matrix3d> svd_r(M, Eigen::ComputeFullU | Eigen::ComputeFullV);
     R_out = svd_r.matrixU() * svd_r.matrixV().transpose();
@@ -617,14 +618,6 @@ inline bool solvePnPDLT(
     // Scale t by the same factor used to make M → R
     double scale = svd_r.singularValues().mean();
     t_out = t_raw / scale;
-
-    // Ensure the scene is in front of the camera (positive z)
-    Eigen::Vector3d center_proj = R_out * mean_3d + t_out;
-    if (center_proj.z() < 0) {
-        R_out = -R_out;
-        t_out = -t_out;
-        if (R_out.determinant() < 0) R_out = -R_out;
-    }
 
     return true;
 }
@@ -1395,7 +1388,6 @@ inline bool triangulate_and_validate_progressive(
         // using a very loose threshold to get enough observations for BA
         std::vector<Eigen::Vector3d> mini_pts;
         std::vector<std::vector<Observation>> mini_obs;
-        double mini_reproj = 0;
 
         // Determine which cameras have been PnP-initialized (not identity pose)
         // Cameras with identity/garbage poses must be EXCLUDED from mini-BA
@@ -2265,8 +2257,6 @@ inline PointSourceResult run_pointsource_refinement(const PointSourceConfig &con
     int total_detections = 0;
     for (int c = 0; c < num_cameras; c++)
         total_detections += (int)all_detections[c].size();
-    result.total_frames_scanned = 0; // set below from actual decode counts
-
     if (total_detections == 0) {
         result.error =
             "No light spots detected in any camera. Try adjusting "
@@ -2431,7 +2421,6 @@ inline PointSourceResult run_pointsource_refinement(const PointSourceConfig &con
                     auto redet = detect_all_cameras(redet_config, redet_videos, status, nullptr);
                     if (!redet.empty() && (int)redet[0].size() > (int)all_detections[c].size()) {
                         // Filter static artifact detections before accepting
-                        int n_before = (int)redet[0].size();
                         int removed = filter_static_detections(redet[0], image_width, image_height);
                         printf("  Camera %s: Smart Blob re-detection: %d -> %d detections "
                                "(%d static artifact removed)\n",
@@ -2489,7 +2478,8 @@ inline PointSourceResult run_pointsource_refinement(const PointSourceConfig &con
                     good_cy.push_back(poses[c].K(1, 2));
                 }
             }
-            auto median = [](std::vector<double> &v) {
+            auto median = [](std::vector<double> &v) -> double {
+                if (v.empty()) return 0.0;
                 std::sort(v.begin(), v.end());
                 return v[v.size() / 2];
             };

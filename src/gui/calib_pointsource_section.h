@@ -320,9 +320,6 @@ inline void DrawCalibPointSourceSection(CalibrationToolState &state, AppContext 
                         if (ImGui::Combo("Optimization Mode", &opt_idx, opt_labels, 4))
                             state.pointsource_config.opt_mode =
                                 static_cast<PointSourceCalibration::PointSourceOptMode>(opt_idx);
-                        // Sync legacy field
-                        state.pointsource_config.lock_intrinsics =
-                            (state.pointsource_config.opt_mode == PointSourceCalibration::PointSourceOptMode::ExtrinsicsOnly);
                     }
                     if (ImGui::IsItemHovered())
                         ImGui::SetTooltip(

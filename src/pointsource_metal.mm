@@ -467,9 +467,15 @@ PointSourceMetalSpot pointsource_metal_detect(PointSourceMetalHandle ctx,
 
                         for (size_t qi = 0; qi < queue.size(); qi++) {
                             int ci = queue[qi];
-                            const int neighbors[4] = {ci-1, ci+1, ci-width, ci+width};
+                            int cx_pos = ci % width, cy_pos = ci / width;
+                            const int neighbors[4] = {
+                                (cx_pos > 0)          ? ci - 1     : -1,
+                                (cx_pos < width - 1)  ? ci + 1     : -1,
+                                (cy_pos > 0)          ? ci - width  : -1,
+                                (cy_pos < height - 1) ? ci + width  : -1
+                            };
                             for (int ni : neighbors) {
-                                if (ni < 0 || ni >= npixels) continue;
+                                if (ni < 0) continue;
                                 int nb = ni * 4;
                                 if (rgba[nb] == 0 && rgba[nb+1] == 255 && rgba[nb+2] == 0) {
                                     rgba[nb] = 1;
@@ -653,10 +659,15 @@ PointSourceMetalVizResult pointsource_metal_detect_viz(
 
                 for (size_t qi = 0; qi < queue.size(); qi++) {
                     int ci = queue[qi];
-                    // 4-connected neighbors
-                    const int neighbors[4] = {ci - 1, ci + 1, ci - width, ci + width};
+                    int cx_pos = ci % width, cy_pos = ci / width;
+                    const int neighbors[4] = {
+                        (cx_pos > 0)          ? ci - 1     : -1,
+                        (cx_pos < width - 1)  ? ci + 1     : -1,
+                        (cy_pos > 0)          ? ci - width  : -1,
+                        (cy_pos < height - 1) ? ci + width  : -1
+                    };
                     for (int ni : neighbors) {
-                        if (ni < 0 || ni >= npixels) continue;
+                        if (ni < 0) continue;
                         int nb = ni * 4;
                         if (rgba[nb] == 0 && rgba[nb+1] == 255 && rgba[nb+2] == 0) {
                             rgba[nb] = 1; // mark visited
