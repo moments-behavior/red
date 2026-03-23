@@ -98,6 +98,20 @@ inline void DrawAnnotationDialog(AnnotationDialogState &state,
         // Back button — close dialog, return to welcome screen
         if (ImGui::SmallButton("< Back")) {
             state.show = false;
+            // Reset pm fields that the annotation dialog writes to every frame
+            pm.project_name.clear();
+            pm.project_path.clear();
+            pm.project_root_path.clear();
+            pm.skeleton_file.clear();
+            pm.skeleton_name.clear();
+            pm.calibration_folder.clear();
+            pm.camera_names.clear();
+            pm.load_skeleton_from_json = false;
+            // Reset dialog state
+            state.status.clear();
+            state.video_folder.clear();
+            state.discovered_cameras.clear();
+            state.camera_selected.clear();
             ImGui::End();
             return;
         }
