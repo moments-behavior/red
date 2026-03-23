@@ -165,7 +165,16 @@ inline void DrawCalibPointSourceSection(CalibrationToolState &state, AppContext 
                                     pm.camera_names.push_back("Cam" + cn);
                                 cb.load_videos();
                                 cb.print_metadata();
-                                state.pointsource_total_frames = dc_context->estimated_num_frames;
+                                // Query frame count from first PS camera (dc_context->estimated_num_frames
+                                // is unreliable with mixed-fps cameras — last decoder thread wins)
+                                if (!state.project.camera_names.empty()) {
+                                    std::string first_vid = state.project.media_folder + "/Cam" +
+                                        state.project.camera_names[0] + ".mp4";
+                                    state.pointsource_total_frames =
+                                        PointSourceCalibration::get_video_frame_count(first_vid);
+                                }
+                                if (state.pointsource_total_frames <= 0)
+                                    state.pointsource_total_frames = dc_context->estimated_num_frames;
                                 state.pointsource_ready = true;
                                 state.pointsource_status =
                                     "Loaded " +
