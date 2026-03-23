@@ -742,6 +742,14 @@ inline void DrawCalibCreateDialog(CalibrationToolState &state, AppContext &ctx,
                         CalibrationTool::derive_camera_names_from_yaml(
                             state.project.calibration_folder);
                 }
+                // No Init: derive from video filenames when no YAML folder
+                if (state.project.calibration_folder.empty() &&
+                    !state.project.media_folder.empty() &&
+                    state.project.camera_names.empty()) {
+                    state.project.camera_names =
+                        PointSourceCalibration::camera_names_from_videos(
+                            state.project.media_folder);
+                }
 
                 // Set pointsource output folder if pointsource inputs present
                 if (!state.project.calibration_folder.empty() || !state.project.media_folder.empty())

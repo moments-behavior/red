@@ -75,7 +75,7 @@ inline void DrawCalibPointSourceSection(CalibrationToolState &state, AppContext 
                             state.project.calibration_folder.c_str());
 
                 // PointSource Video Folder -- text field + Browse + Load button
-                ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 200.0f);
+                ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 290.0f);
                 ImGui::InputText("##ps_vid_path",
                                  &state.project.media_folder);
                 ImGui::SameLine();
@@ -111,6 +111,12 @@ inline void DrawCalibPointSourceSection(CalibrationToolState &state, AppContext 
                             state.project.camera_names = PointSourceCalibration::camera_names_from_videos(
                                 state.project.media_folder);
                         }
+                    }
+                    // Sync to pointsource_config if videos are loaded but config.camera_names is stale
+                    if (state.pointsource_ready &&
+                        state.pointsource_config.camera_names.empty() &&
+                        !state.project.camera_names.empty()) {
+                        state.pointsource_config.camera_names = state.project.camera_names;
                     }
                     bool has_valid_cameras = !state.project.camera_names.empty();
 
