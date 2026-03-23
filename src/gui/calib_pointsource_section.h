@@ -269,7 +269,8 @@ inline void DrawCalibPointSourceSection(CalibrationToolState &state, AppContext 
                                 state.pointsource_camera_enabled[i] = false;
                         }
                         if (ImGui::BeginTable("##cam_grid", 3,
-                                ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV)) {
+                                ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV |
+                                ImGuiTableFlags_SizingFixedFit)) {
                             ImGui::TableSetupColumn("Camera", 0, 150.0f);
                             ImGui::TableSetupColumn("Frames", 0, 70.0f);
                             ImGui::TableSetupColumn("Status", 0, 80.0f);
