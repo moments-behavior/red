@@ -79,14 +79,9 @@ inline void DrawCalibCreateDialog(CalibrationToolState &state, AppContext &ctx,
                 return;
             }
 
-            // Back button to return to workflow chooser
-            if (ImGui::SmallButton("< Back to workflow selection")) {
-                state.subtype_chosen = false;
-                state.project = CalibrationTool::CalibProject{};
-                state.config = CalibrationTool::CalibConfig{};
-                state.config_loaded = false;
-                state.calib_aruco_media_info = {};
-                state.calib_global_reg_info = {};
+            // Back button — close calibration tool, return to welcome screen
+            if (ImGui::SmallButton("< Back")) {
+                state.show = false;  // triggers close handler which resets all state
             }
             ImGui::Spacing();
 

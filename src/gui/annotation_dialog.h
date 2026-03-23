@@ -63,6 +63,12 @@ inline void DrawAnnotationDialog(AnnotationDialogState &state,
             ImGui::Separator();
         }
 
+        // Back button — close dialog, return to welcome screen
+        if (ImGui::SmallButton("< Back")) {
+            state.show = false;
+        }
+        ImGui::Spacing();
+
         // Build skeleton preset labels
         std::vector<const char *> annot_skel_labels;
         annot_skel_labels.reserve(skeleton_map.size());
