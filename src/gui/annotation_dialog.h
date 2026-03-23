@@ -53,20 +53,40 @@ inline void DrawAnnotationDialog(AnnotationDialogState &state,
         ctx.user_settings.default_media_root_path.empty()
             ? ctx.red_data_dir
             : ctx.user_settings.default_media_root_path;
-    // Back button state: set outside DrawPanel so it takes effect immediately
-    static bool back_requested = false;
-    if (back_requested) {
-        back_requested = false;
-        state.show = false;
-        state.status.clear();
-        state.video_folder.clear();
-        state.discovered_cameras.clear();
-        state.camera_selected.clear();
-        return;
+    // File dialog handlers (run every frame, even when window is hidden)
+    if (ImGuiFileDialog::Instance()->Display("ChooseAnnotVideoDir", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
+        if (ImGuiFileDialog::Instance()->IsOk()) {
+            std::filesystem::path chosen(
+                ImGuiFileDialog::Instance()->GetCurrentPath());
+            state.video_folder = chosen.string();
+            state.discovered_cameras = discover_mp4_cameras(state.video_folder);
+            state.camera_selected.assign(state.discovered_cameras.size(), true);
+            if (pm.project_name.empty())
+                pm.project_name = chosen.filename().string();
+        }
+        ImGuiFileDialog::Instance()->Close();
+    }
+    if (ImGuiFileDialog::Instance()->Display("ChooseAnnotRootDir", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
+        if (ImGuiFileDialog::Instance()->IsOk())
+            pm.project_root_path = ImGuiFileDialog::Instance()->GetCurrentPath();
+        ImGuiFileDialog::Instance()->Close();
+    }
+    if (ImGuiFileDialog::Instance()->Display("ChooseAnnotSkeleton", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
+        if (ImGuiFileDialog::Instance()->IsOk())
+            pm.skeleton_file = ImGuiFileDialog::Instance()->GetFilePathName();
+        ImGuiFileDialog::Instance()->Close();
+    }
+    if (ImGuiFileDialog::Instance()->Display("ChooseAnnotCalib", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
+        if (ImGuiFileDialog::Instance()->IsOk())
+            pm.calibration_folder = ImGuiFileDialog::Instance()->GetCurrentPath();
+        ImGuiFileDialog::Instance()->Close();
     }
 
-    DrawPanel("Create Annotation Project", state.show,
-        [&]() {
+    if (!state.show) return;
+
+    ImGui::SetNextWindowSize(ImVec2(720, 460), ImGuiCond_FirstUseEver);
+    if (ImGui::Begin("Create Annotation Project", &state.show, ImGuiWindowFlags_NoCollapse)) {
+
         // error banner
         if (!state.status.empty()) {
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.45f, 0.45f, 1.0f));
@@ -77,7 +97,7 @@ inline void DrawAnnotationDialog(AnnotationDialogState &state,
 
         // Back button — close dialog, return to welcome screen
         if (ImGui::SmallButton("< Back")) {
-            back_requested = true;
+            state.show = false;
         }
         ImGui::Spacing();
 
@@ -344,43 +364,6 @@ inline void DrawAnnotationDialog(AnnotationDialogState &state,
             }
         }
         ImGui::EndDisabled();
-        },
-        [&]() {
-        // File dialog handlers (run every frame)
-        if (ImGuiFileDialog::Instance()->Display("ChooseAnnotVideoDir", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
-            if (ImGuiFileDialog::Instance()->IsOk()) {
-                std::filesystem::path chosen(
-                    ImGuiFileDialog::Instance()->GetCurrentPath());
-                state.video_folder = chosen.string();
-                state.discovered_cameras = discover_mp4_cameras(state.video_folder);
-                state.camera_selected.assign(state.discovered_cameras.size(), true);
-                if (pm.project_name.empty())
-                    pm.project_name = chosen.filename().string();
-            }
-            ImGuiFileDialog::Instance()->Close();
-        }
-
-        if (ImGuiFileDialog::Instance()->Display("ChooseAnnotRootDir", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
-            if (ImGuiFileDialog::Instance()->IsOk()) {
-                pm.project_root_path =
-                    ImGuiFileDialog::Instance()->GetCurrentPath();
-            }
-            ImGuiFileDialog::Instance()->Close();
-        }
-
-        if (ImGuiFileDialog::Instance()->Display("ChooseAnnotSkeleton", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
-            if (ImGuiFileDialog::Instance()->IsOk()) {
-                pm.skeleton_file = ImGuiFileDialog::Instance()->GetFilePathName();
-            }
-            ImGuiFileDialog::Instance()->Close();
-        }
-
-        if (ImGuiFileDialog::Instance()->Display("ChooseAnnotCalib", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
-            if (ImGuiFileDialog::Instance()->IsOk()) {
-                pm.calibration_folder = ImGuiFileDialog::Instance()->GetCurrentPath();
-            }
-            ImGuiFileDialog::Instance()->Close();
-        }
-        },
-        ImVec2(720, 460), ImGuiWindowFlags_NoCollapse);
+    }
+    ImGui::End();
 }
