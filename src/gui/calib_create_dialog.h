@@ -2,6 +2,7 @@
 #include "calib_tool_state.h"
 #include "app_context.h"
 #include "imgui.h"
+#include "gui/gui_helpers.h"
 #include <ImGuiFileDialog.h>
 #include <misc/cpp/imgui_stdlib.h>
 #include <filesystem>
@@ -31,6 +32,64 @@ inline void DrawCalibCreateDialog(CalibrationToolState &state, AppContext &ctx,
                 ImGui::Separator();
             }
 
+            // ── Workflow Chooser Step ──
+            if (!state.subtype_chosen) {
+                ImGui::TextColored(ImVec4(0.7f, 0.9f, 0.7f, 1.0f),
+                    "Choose calibration workflow:");
+                ImGui::Spacing();
+
+                auto workflowBtn = [&](const char *label, const char *desc,
+                                       CalibrationTool::CalibSubtype sub) {
+                    ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0, 0.5f));
+                    if (ImGui::Button(label, ImVec2(-1, 32))) {
+                        state.project.subtype = sub;
+                        if (sub == CalibrationTool::CalibSubtype::Telecentric)
+                            state.project.camera_model = CalibrationTool::CameraModel::Telecentric;
+                        else
+                            state.project.camera_model = CalibrationTool::CameraModel::Projective;
+                        state.subtype_chosen = true;
+                    }
+                    ImGui::PopStyleVar();
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("%s", desc);
+                };
+
+                workflowBtn("ArUco Calibration",
+                    "Calibrate cameras from ChArUco board images or videos.\n"
+                    "Requires: calibration images/videos of ChArUco board.",
+                    CalibrationTool::CalibSubtype::ArucoFull);
+
+                workflowBtn("PointSource Refinement",
+                    "Refine an existing calibration using light wand data.\n"
+                    "Requires: existing camera YAML files + light wand videos.",
+                    CalibrationTool::CalibSubtype::PointSourceRefinement);
+
+                workflowBtn("PointSource From Scratch",
+                    "Full calibration from ChArUco board + light wand.\n"
+                    "No prior calibration needed. Requires: board images + wand videos.",
+                    CalibrationTool::CalibSubtype::PointSourceFromScratch);
+
+                workflowBtn("Telecentric DLT",
+                    "Calibrate telecentric cameras using known 3D landmarks.\n"
+                    "Requires: 3D landmark coordinates + 2D labels per camera.",
+                    CalibrationTool::CalibSubtype::Telecentric);
+
+                ImGui::Spacing();
+                ImGui::End();
+                return;
+            }
+
+            // Back button to return to workflow chooser
+            if (ImGui::SmallButton("< Back to workflow selection")) {
+                state.subtype_chosen = false;
+                state.project = CalibrationTool::CalibProject{};
+                state.config = CalibrationTool::CalibConfig{};
+                state.config_loaded = false;
+                state.calib_aruco_media_info = {};
+                state.calib_global_reg_info = {};
+            }
+            ImGui::Spacing();
+
             if (ImGui::BeginTable(
                     "calibCreateForm", 3,
                     ImGuiTableFlags_SizingStretchProp |
@@ -47,10 +106,14 @@ inline void DrawCalibCreateDialog(CalibrationToolState &state, AppContext &ctx,
                                         ImGuiTableColumnFlags_WidthFixed,
                                         110.0f);
 
-                auto LabelCell = [](const char *t) {
+                auto LabelCell = [](const char *t, const char *tooltip = nullptr) {
                     ImGui::TableSetColumnIndex(0);
                     ImGui::AlignTextToFramePadding();
                     ImGui::TextUnformatted(t);
+                    if (tooltip) {
+                        ImGui::SameLine();
+                        HelpMarker(tooltip);
+                    }
                 };
 
                 // ---- Project Name ----
@@ -137,10 +200,20 @@ inline void DrawCalibCreateDialog(CalibrationToolState &state, AppContext &ctx,
 
                 if (!state.project.is_telecentric()) {
                 // ---- Projective mode fields ----
+                auto sub = state.project.subtype;
+                bool show_aruco = (sub == CalibrationTool::CalibSubtype::ArucoFull ||
+                                   sub == CalibrationTool::CalibSubtype::ArucoAndPointSource);
+                bool show_calib_yamls = (sub == CalibrationTool::CalibSubtype::PointSourceRefinement ||
+                                         sub == CalibrationTool::CalibSubtype::ArucoAndPointSource);
+                bool show_ps_videos = (sub != CalibrationTool::CalibSubtype::ArucoFull);
+                bool show_global_reg = true;  // useful for all projective subtypes
 
                 // ---- Config File (optional -- empty for laser-only) ----
+                if (show_aruco) {
                 ImGui::TableNextRow();
-                LabelCell("Config File (optional)");
+                LabelCell("Config File (optional)",
+                    "JSON file with board dimensions and ground truth 3D coordinates.\n"
+                    "If omitted, enter board parameters below.");
                 ImGui::TableSetColumnIndex(1);
                 ImGui::SetNextItemWidth(-FLT_MIN);
                 ImGui::InputText("##calib_configfile",
@@ -166,9 +239,14 @@ inline void DrawCalibCreateDialog(CalibrationToolState &state, AppContext &ctx,
                         "Choose config.json", ".json", cfg);
                 }
 
+                } // end show_aruco: Config File
+
                 // ---- Aruco Media (images or videos — auto-detected) ----
+                if (show_aruco) {
                 ImGui::TableNextRow();
-                LabelCell("Aruco Media");
+                LabelCell("Aruco Media",
+                    "Folder of calibration images ({serial}_{num}.jpg) or\n"
+                    "videos (Cam{serial}.mp4) showing a ChArUco board.");
                 ImGui::TableSetColumnIndex(1);
                 ImGui::SetNextItemWidth(-FLT_MIN);
                 if (ImGui::InputText("##calib_arucomedia",
@@ -208,9 +286,14 @@ inline void DrawCalibCreateDialog(CalibrationToolState &state, AppContext &ctx,
                     }
                 }
 
+                } // end show_aruco: Aruco Media
+
                 // ---- Global Registration Media (optional) ----
+                if (show_global_reg) {
                 ImGui::TableNextRow();
-                LabelCell("Global Reg. Media (optional)");
+                LabelCell("Global Reg. Media (optional)",
+                    "Images/videos of a ChArUco board at a known world position.\n"
+                    "Used to align the calibration to a physical coordinate frame.");
                 ImGui::TableSetColumnIndex(1);
                 ImGui::SetNextItemWidth(-FLT_MIN);
                 if (ImGui::InputText("##calib_globalreg",
@@ -249,9 +332,14 @@ inline void DrawCalibCreateDialog(CalibrationToolState &state, AppContext &ctx,
                     }
                 }
 
+                } // end show_global_reg
+
                 // ---- Initialize Calibration YAMLs (optional) ----
+                if (show_calib_yamls) {
                 ImGui::TableNextRow();
-                LabelCell("Initialize Calibration YAMLs");
+                LabelCell("Initialize Calibration YAMLs",
+                    "Folder of Cam{serial}.yaml files from a prior calibration.\n"
+                    "PointSource refinement will improve these parameters.");
                 ImGui::TableSetColumnIndex(1);
                 ImGui::SetNextItemWidth(-FLT_MIN);
                 ImGui::InputText("##calib_yamlfolder",
@@ -272,9 +360,14 @@ inline void DrawCalibCreateDialog(CalibrationToolState &state, AppContext &ctx,
                         "Select Calibration YAMLs Folder", nullptr, cfg);
                 }
 
-                // ---- Laser Videos (optional) ----
+                } // end show_calib_yamls
+
+                // ---- PointSource Videos ----
+                if (show_ps_videos) {
                 ImGui::TableNextRow();
-                LabelCell("PointSource Videos");
+                LabelCell("PointSource Videos",
+                    "Folder of Cam{serial}.mp4 videos recorded while\n"
+                    "waving a green light wand through the arena.");
                 ImGui::TableSetColumnIndex(1);
                 ImGui::SetNextItemWidth(-FLT_MIN);
                 ImGui::InputText("##calib_vidfolder",
@@ -294,6 +387,8 @@ inline void DrawCalibCreateDialog(CalibrationToolState &state, AppContext &ctx,
                         "ChooseCalibPointSourceFolder",
                         "Select PointSource Videos Folder", nullptr, cfg);
                 }
+
+                } // end show_ps_videos
 
                 // ---- Board Setup (when no config file, aruco or global reg media detected) ----
                 if (state.project.config_file.empty() &&

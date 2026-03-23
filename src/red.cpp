@@ -25,6 +25,7 @@
 #include "gui/main_menu_dialogs.h"
 #include "gui/main_menu_bar.h"
 #include "gui/panel_registry.h"
+#include "gui/welcome_window.h"
 #include "gui/transport_bar.h"
 #include "gui/frame_buffer_window.h"
 #include "gui/popup_stack.h"
@@ -533,6 +534,10 @@ int main(int argc, char **argv) {
     panels.add({"SAM Assist",
                 [&]() { DrawSamToolWindow(win.sam_tool, sam_state, ctx); },
                 nullptr});
+    panels.add({"Welcome",
+                [&]() { DrawWelcomeWindow(ctx, win); },
+                [&]() { return pm.project_path.empty() && !ps.video_loaded &&
+                                !win.calibration.show && !win.annotation.show; }});
     panels.add({"JARVIS Predict",
                 [&]() { DrawJarvisPredictWindow(win.jarvis_predict, jarvis_state,
 #ifdef __APPLE__

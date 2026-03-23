@@ -63,6 +63,7 @@ struct CalibrationToolState {
     bool project_loaded = false;
     bool dock_pending = false;
     bool show_create_dialog = true;
+    bool subtype_chosen = false;  // workflow chooser step completed
     std::string config_path;
     CalibrationTool::CalibConfig config;
     bool config_loaded = false;

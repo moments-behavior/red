@@ -131,6 +131,12 @@ inline void DrawCalibrationToolWindow(
                     state.show_create_dialog = false;
                     state.show = true;
 
+                    // Track in recent projects
+                    std::string redproj = state.project.project_path + "/" +
+                                          state.project.project_name + ".redproj";
+                    ctx.user_settings.push_recent_project(redproj);
+                    save_user_settings(ctx.user_settings);
+
                     // Auto-load telecentric videos on project open (direct, like laser)
                     // Label import is deferred by a few frames to avoid dock crash.
                     if (state.project.is_telecentric() &&
@@ -251,6 +257,64 @@ inline void DrawCalibrationToolWindow(
                 ImGui::Text("Path:    %s",
                             state.project.project_path.c_str());
                 ImGui::Unindent();
+            }
+            ImGui::Spacing();
+
+            // ---- Pipeline Progress Indicator ----
+            {
+                auto sub = state.project.subtype;
+                struct Step { const char *label; bool done; };
+                std::vector<Step> steps;
+
+                if (state.project.is_telecentric()) {
+                    steps = {{"Load Videos", state.tele_videos_loaded},
+                             {"DLT", state.tele_dlt_done}};
+                } else if (sub == CalibrationTool::CalibSubtype::PointSourceFromScratch) {
+                    steps = {{"Bootstrap", false},
+                             {"Detect", false},
+                             {"Calibrate", state.pointsource_done},
+                             {"Register", state.pointsource_done && !state.project.global_reg_media_folder.empty()}};
+                } else if (sub == CalibrationTool::CalibSubtype::PointSourceRefinement) {
+                    steps = {{"Detect", false},
+                             {"Refine", state.pointsource_done}};
+                } else {
+                    // ArUco or ArUco+PointSource
+                    steps = {{"Detect", state.aruco_done},
+                             {"Calibrate", state.aruco_done && state.aruco_result.success},
+                             {"Refine", state.pointsource_done}};
+                }
+
+                if (!steps.empty()) {
+                    float avail = ImGui::GetContentRegionAvail().x;
+                    float step_w = avail / (float)steps.size();
+                    ImVec2 cursor = ImGui::GetCursorScreenPos();
+                    ImDrawList *dl = ImGui::GetWindowDrawList();
+                    float h = 22.0f;
+
+                    for (int i = 0; i < (int)steps.size(); i++) {
+                        float x0 = cursor.x + i * step_w + 2;
+                        float x1 = cursor.x + (i + 1) * step_w - 2;
+                        ImU32 col = steps[i].done
+                            ? IM_COL32(60, 160, 60, 200)   // green
+                            : IM_COL32(80, 80, 80, 200);   // grey
+                        dl->AddRectFilled(ImVec2(x0, cursor.y),
+                                          ImVec2(x1, cursor.y + h),
+                                          col, 4.0f);
+                        // Center label text
+                        ImVec2 tsz = ImGui::CalcTextSize(steps[i].label);
+                        float tx = x0 + (x1 - x0 - tsz.x) * 0.5f;
+                        float ty = cursor.y + (h - tsz.y) * 0.5f;
+                        dl->AddText(ImVec2(tx, ty), IM_COL32(220, 220, 220, 255),
+                                    steps[i].label);
+                        // Arrow between steps
+                        if (i < (int)steps.size() - 1) {
+                            float ax = x1 + 1;
+                            float ay = cursor.y + h * 0.5f;
+                            dl->AddText(ImVec2(ax - 3, ay - 7), IM_COL32(140, 140, 140, 200), ">");
+                        }
+                    }
+                    ImGui::Dummy(ImVec2(avail, h + 4));
+                }
             }
             ImGui::Spacing();
 

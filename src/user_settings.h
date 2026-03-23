@@ -26,6 +26,22 @@ struct UserSettings {
     float jarvis_train_ratio = 0.9f;
     int jarvis_seed = 42;
     int jarvis_jpeg_quality = 95;
+
+    // Recent projects (most recent first, max 10)
+    std::vector<std::string> recent_projects;
+
+    void push_recent_project(const std::string &path) {
+        if (path.empty()) return;
+        // Remove existing entry if present (dedup)
+        recent_projects.erase(
+            std::remove(recent_projects.begin(), recent_projects.end(), path),
+            recent_projects.end());
+        // Insert at front
+        recent_projects.insert(recent_projects.begin(), path);
+        // Cap at 10
+        if (recent_projects.size() > 10)
+            recent_projects.resize(10);
+    }
 };
 
 inline void to_json(nlohmann::json &j, const UserSettings &s) {
@@ -41,7 +57,8 @@ inline void to_json(nlohmann::json &j, const UserSettings &s) {
         {"jarvis_margin", s.jarvis_margin},
         {"jarvis_train_ratio", s.jarvis_train_ratio},
         {"jarvis_seed", s.jarvis_seed},
-        {"jarvis_jpeg_quality", s.jarvis_jpeg_quality}};
+        {"jarvis_jpeg_quality", s.jarvis_jpeg_quality},
+        {"recent_projects", s.recent_projects}};
 }
 
 inline void from_json(const nlohmann::json &j, UserSettings &s) {
@@ -59,6 +76,7 @@ inline void from_json(const nlohmann::json &j, UserSettings &s) {
     s.jarvis_train_ratio = j.value("jarvis_train_ratio", 0.9f);
     s.jarvis_seed = j.value("jarvis_seed", 42);
     s.jarvis_jpeg_quality = j.value("jarvis_jpeg_quality", 95);
+    s.recent_projects = j.value("recent_projects", std::vector<std::string>{});
 }
 
 inline std::filesystem::path user_settings_path() {

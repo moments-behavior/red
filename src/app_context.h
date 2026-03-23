@@ -343,4 +343,11 @@ inline void on_project_loaded(AppContext &ctx,
         }
     }
     if (print_summary_fn) print_summary_fn(most_recent_folder);
+
+    // Track in recent projects
+    if (!ctx.pm.project_path.empty()) {
+        std::string redproj = ctx.pm.project_path + "/" + ctx.pm.project_name + ".redproj";
+        ctx.user_settings.push_recent_project(redproj);
+        save_user_settings(ctx.user_settings);
+    }
 }
