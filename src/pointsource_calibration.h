@@ -303,6 +303,21 @@ validate_cameras(const std::string &media_folder,
     return result;
 }
 
+// Derive camera names from video filenames alone (No Init mode — no YAML files).
+inline std::vector<std::string>
+camera_names_from_videos(const std::string &media_folder) {
+    auto videos = find_video_files(media_folder, {});
+    std::vector<std::string> result;
+    for (const auto &[stem, _] : videos) {
+        std::string name = stem;
+        if (name.size() > 3 && name.substr(0, 3) == "Cam")
+            name = name.substr(3);
+        result.push_back(name);
+    }
+    std::sort(result.begin(), result.end());
+    return result;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Step 1: Detect light spot in a single frame
 // ─────────────────────────────────────────────────────────────────────────────

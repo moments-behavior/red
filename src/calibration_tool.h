@@ -400,6 +400,7 @@ struct CalibProject {
     // Mode helpers
     bool has_aruco() const { return !config_file.empty() || !aruco_media_folder.empty(); }
     bool has_laser_input() const { return !calibration_folder.empty() && !media_folder.empty(); }
+    bool has_pointsource_videos() const { return !media_folder.empty(); }
     bool is_telecentric() const { return camera_model == CameraModel::Telecentric; }
     bool aruco_is_video() const { return aruco_media_type == "videos"; }
     bool aruco_is_image() const { return aruco_media_type == "images"; }

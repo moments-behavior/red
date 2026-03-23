@@ -269,7 +269,9 @@ inline void DrawCalibrationToolWindow(
             bool aruco_succeeded =
                 (state.aruco_done && state.aruco_result.success);
             bool show_pointsource_section =
-                state.project.has_laser_input() || aruco_succeeded;
+                state.project.has_laser_input() ||
+                state.project.has_pointsource_videos() ||  // No Init: videos alone sufficient
+                aruco_succeeded;
 
             // Auto-populate pointsource calibration_folder from aruco output
             if (state.project.calibration_folder.empty()) {

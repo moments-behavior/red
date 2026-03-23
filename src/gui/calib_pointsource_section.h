@@ -99,14 +99,18 @@ inline void DrawCalibPointSourceSection(CalibrationToolState &state, AppContext 
                     static std::string last_media, last_calib;
                     bool paths_changed = (state.project.media_folder != last_media ||
                                           state.project.calibration_folder != last_calib);
-                    if (paths_changed &&
-                        !state.project.media_folder.empty() &&
-                        !state.project.calibration_folder.empty()) {
+                    if (paths_changed && !state.project.media_folder.empty()) {
                         last_media = state.project.media_folder;
                         last_calib = state.project.calibration_folder;
-                        state.project.camera_names = PointSourceCalibration::validate_cameras(
-                            state.project.media_folder,
-                            state.project.calibration_folder);
+                        if (!state.project.calibration_folder.empty()) {
+                            state.project.camera_names = PointSourceCalibration::validate_cameras(
+                                state.project.media_folder,
+                                state.project.calibration_folder);
+                        } else {
+                            // No Init: derive camera names from video filenames alone
+                            state.project.camera_names = PointSourceCalibration::camera_names_from_videos(
+                                state.project.media_folder);
+                        }
                     }
                     bool has_valid_cameras = !state.project.camera_names.empty();
 

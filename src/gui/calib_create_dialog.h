@@ -646,7 +646,8 @@ inline void DrawCalibCreateDialog(CalibrationToolState &state, AppContext &ctx,
                     !state.project.project_root_path.empty() &&
                     (!state.project.config_file.empty() ||
                      !state.project.calibration_folder.empty() ||
-                     !state.project.aruco_media_folder.empty());
+                     !state.project.aruco_media_folder.empty() ||
+                     !state.project.media_folder.empty());  // No Init: PS videos sufficient
             } else {
                 // Telecentric: labels folder is optional (can label in-app)
                 create_ok =
@@ -742,8 +743,8 @@ inline void DrawCalibCreateDialog(CalibrationToolState &state, AppContext &ctx,
                             state.project.calibration_folder);
                 }
 
-                // Set laser output folder if laser inputs present
-                if (!state.project.calibration_folder.empty())
+                // Set pointsource output folder if pointsource inputs present
+                if (!state.project.calibration_folder.empty() || !state.project.media_folder.empty())
                     state.project.pointsource_output_folder =
                         state.project.project_path + "/pointsource_calibration";
 
@@ -774,9 +775,9 @@ inline void DrawCalibCreateDialog(CalibrationToolState &state, AppContext &ctx,
                             state.dock_pending = true;
                             state.show_create_dialog = false;
 
-                            // For pure laser projects (no aruco), auto-load videos.
+                            // For pure pointsource projects (no aruco), auto-load videos.
                             // For aruco+laser, defer to "Load PointSource Videos" button.
-                            if (state.project.has_laser_input() &&
+                            if ((state.project.has_laser_input() || state.project.has_pointsource_videos()) &&
                                 !state.project.has_aruco()) {
                                 state.pointsource_config.media_folder =
                                     state.project.media_folder;
