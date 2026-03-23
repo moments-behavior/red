@@ -433,6 +433,13 @@ inline void DrawCalibPointSourceSection(CalibrationToolState &state, AppContext 
                         }
                     }
                     // No Init checkbox (requires global reg media + board params)
+                    // Auto-enable for PointSourceFromScratch when no calibration folder
+                    if (state.project.subtype == CalibrationTool::CalibSubtype::PointSourceFromScratch &&
+                        state.project.calibration_folder.empty() &&
+                        !state.project.global_reg_media_folder.empty()) {
+                        state.pointsource_config.no_init = true;
+                        state.pointsource_config.loose_init = true;
+                    }
                     ImGui::Spacing();
                     bool can_no_init = !state.project.global_reg_media_folder.empty() &&
                                        state.project.charuco_setup.w >= 3;
