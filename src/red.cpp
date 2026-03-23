@@ -537,7 +537,8 @@ int main(int argc, char **argv) {
     panels.add({"Welcome",
                 [&]() { DrawWelcomeWindow(ctx, win); },
                 [&]() { return pm.project_path.empty() && !ps.video_loaded &&
-                                !win.calibration.show && !win.annotation.show; }});
+                                !win.calibration.show && !win.annotation.show &&
+                                !ImGuiFileDialog::Instance()->IsOpened(); }});
     panels.add({"JARVIS Predict",
                 [&]() { DrawJarvisPredictWindow(win.jarvis_predict, jarvis_state,
 #ifdef __APPLE__
