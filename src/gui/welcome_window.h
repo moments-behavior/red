@@ -8,6 +8,13 @@
 
 // Blender-style welcome/startup screen shown when no project is loaded.
 inline void DrawWelcomeWindow(AppContext &ctx, WindowStates &win) {
+    // Skip input on the first frame the welcome screen appears, to prevent
+    // click-through from a closing dialog's button registering on a welcome
+    // screen button that appears at the same position.
+    static int last_drawn_frame = -2;
+    int cur_frame = ImGui::GetFrameCount();
+    bool just_appeared = (cur_frame - last_drawn_frame > 1);
+    last_drawn_frame = cur_frame;
     // Center on viewport
     ImVec2 center = ImGui::GetMainViewport()->GetCenter();
     ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
@@ -41,6 +48,10 @@ inline void DrawWelcomeWindow(AppContext &ctx, WindowStates &win) {
         ImGui::Separator();
         ImGui::Spacing();
     }
+
+    // Disable all buttons for one frame when the welcome screen first appears,
+    // to prevent click-through from a closing dialog's Back button.
+    ImGui::BeginDisabled(just_appeared);
 
     // Quick actions row
     {
@@ -183,6 +194,8 @@ inline void DrawWelcomeWindow(AppContext &ctx, WindowStates &win) {
     if (ImGui::Button("Help & Tutorials", ImVec2(btn_w, 0))) {
         win.show_help = true;
     }
+
+    ImGui::EndDisabled(); // matches BeginDisabled(just_appeared)
 
     ImGui::Spacing();
     ImGui::End();
