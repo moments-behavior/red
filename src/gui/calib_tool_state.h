@@ -136,6 +136,7 @@ struct CalibrationToolState {
     PointSourceCalibration::PointSourceConfig pointsource_config;
     CalibrationTool::ArucoMediaInfo pointsource_global_reg_info; // auto-detection for PS global reg media
     std::vector<bool> pointsource_camera_enabled; // per-camera enable/disable for PointSource
+    std::vector<int> pointsource_camera_frames;  // per-camera frame count (from video metadata)
     int pointsource_total_frames = 0;
     bool pointsource_running = false;
     bool pointsource_done = false;

@@ -222,36 +222,78 @@ inline void DrawCalibPointSourceSection(CalibrationToolState &state, AppContext 
 
                 // Show matched cameras
                 if (!state.project.camera_names.empty()) {
-                    // Sync enable vector size with camera list
-                    if (state.pointsource_camera_enabled.size() != state.project.camera_names.size())
-                        state.pointsource_camera_enabled.assign(state.project.camera_names.size(), true);
+                    int ncams = (int)state.project.camera_names.size();
+
+                    // Sync enable vector and frame count cache with camera list
+                    if ((int)state.pointsource_camera_enabled.size() != ncams)
+                        state.pointsource_camera_enabled.assign(ncams, true);
+                    if ((int)state.pointsource_camera_frames.size() != ncams) {
+                        state.pointsource_camera_frames.resize(ncams);
+                        for (int i = 0; i < ncams; i++) {
+                            std::string vid = state.project.media_folder + "/Cam" +
+                                state.project.camera_names[i] + ".mp4";
+                            state.pointsource_camera_frames[i] =
+                                PointSourceCalibration::get_video_frame_count(vid);
+                        }
+                        // Set total frames from median of enabled cameras
+                        std::vector<int> counts;
+                        for (int i = 0; i < ncams; i++)
+                            if (state.pointsource_camera_frames[i] > 0)
+                                counts.push_back(state.pointsource_camera_frames[i]);
+                        if (!counts.empty()) {
+                            std::sort(counts.begin(), counts.end());
+                            state.pointsource_total_frames = counts[counts.size() / 2];
+                        }
+                    }
+
+                    // Detect frame count outliers (> 10% from median)
+                    int median_frames = state.pointsource_total_frames;
 
                     int n_enabled = 0;
-                    for (bool e : state.pointsource_camera_enabled) if (e) n_enabled++;
+                    for (int i = 0; i < ncams; i++)
+                        if (state.pointsource_camera_enabled[i]) n_enabled++;
 
                     char cam_header[64];
                     snprintf(cam_header, sizeof(cam_header), "Cameras (%d/%d enabled)",
-                             n_enabled, (int)state.project.camera_names.size());
+                             n_enabled, ncams);
                     if (ImGui::CollapsingHeader(cam_header, ImGuiTreeNodeFlags_DefaultOpen)) {
                         ImGui::Indent();
                         // Enable All / Disable All buttons
                         if (ImGui::SmallButton("All##ps_cam")) {
-                            for (size_t i = 0; i < state.pointsource_camera_enabled.size(); i++)
+                            for (int i = 0; i < ncams; i++)
                                 state.pointsource_camera_enabled[i] = true;
                         }
                         ImGui::SameLine();
                         if (ImGui::SmallButton("None##ps_cam")) {
-                            for (size_t i = 0; i < state.pointsource_camera_enabled.size(); i++)
+                            for (int i = 0; i < ncams; i++)
                                 state.pointsource_camera_enabled[i] = false;
                         }
-                        if (ImGui::BeginTable("##cam_grid", 4)) {
-                            for (int i = 0; i < (int)state.project.camera_names.size(); i++) {
-                                ImGui::TableNextColumn();
+                        if (ImGui::BeginTable("##cam_grid", 3,
+                                ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV)) {
+                            ImGui::TableSetupColumn("Camera", 0, 150.0f);
+                            ImGui::TableSetupColumn("Frames", 0, 70.0f);
+                            ImGui::TableSetupColumn("Status", 0, 80.0f);
+                            ImGui::TableHeadersRow();
+                            for (int i = 0; i < ncams; i++) {
+                                ImGui::TableNextRow();
+                                ImGui::TableSetColumnIndex(0);
                                 char label[32];
                                 snprintf(label, sizeof(label), "Cam%s", state.project.camera_names[i].c_str());
                                 bool enabled = state.pointsource_camera_enabled[i];
                                 if (ImGui::Checkbox(label, &enabled))
                                     state.pointsource_camera_enabled[i] = enabled;
+                                ImGui::TableSetColumnIndex(1);
+                                ImGui::Text("%d", state.pointsource_camera_frames[i]);
+                                ImGui::TableSetColumnIndex(2);
+                                int fc = state.pointsource_camera_frames[i];
+                                if (fc == 0) {
+                                    ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "missing");
+                                } else if (median_frames > 0 &&
+                                           std::abs(fc - median_frames) > median_frames / 10) {
+                                    ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "mismatch");
+                                } else {
+                                    ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "ok");
+                                }
                             }
                             ImGui::EndTable();
                         }
