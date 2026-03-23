@@ -98,6 +98,8 @@ inline void DrawAnnotationDialog(AnnotationDialogState &state,
         // Back button — close dialog, return to welcome screen
         if (ImGui::SmallButton("< Back")) {
             state.show = false;
+            ImGui::End();
+            return;
         }
         ImGui::Spacing();
 
