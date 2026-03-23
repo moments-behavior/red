@@ -3,6 +3,7 @@
 #include "app_context.h"
 #include "gui/window_states.h"
 #include "calibration_tool.h"
+#include <ImGuiFileDialog.h>
 #include <filesystem>
 
 // Blender-style welcome/startup screen shown when no project is loaded.
@@ -15,7 +16,8 @@ inline void DrawWelcomeWindow(AppContext &ctx, WindowStates &win) {
     ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse |
                              ImGuiWindowFlags_NoResize |
                              ImGuiWindowFlags_NoMove |
-                             ImGuiWindowFlags_NoDocking;
+                             ImGuiWindowFlags_NoDocking |
+                             ImGuiWindowFlags_NoSavedSettings;
 
     if (!ImGui::Begin("##Welcome", nullptr, flags)) {
         ImGui::End();
@@ -31,9 +33,7 @@ inline void DrawWelcomeWindow(AppContext &ctx, WindowStates &win) {
         float avail = ImGui::GetContentRegionAvail().x;
 
         ImGui::SetCursorPosX((avail - title_w) * 0.5f);
-        ImGui::PushFont(nullptr); // default font, but larger via scale
         ImGui::TextColored(ImVec4(0.4f, 0.7f, 1.0f, 1.0f), "%s", title);
-        ImGui::PopFont();
 
         ImGui::SetCursorPosX((avail - sub_w) * 0.5f);
         ImGui::TextDisabled("%s", subtitle);
@@ -51,13 +51,12 @@ inline void DrawWelcomeWindow(AppContext &ctx, WindowStates &win) {
 
         ImGui::SetCursorPosX(start_x);
         if (ImGui::Button("Open Videos", ImVec2(btn_w, 30))) {
-            // Trigger the same action as File > Open Video(s)
             IGFD::FileDialogConfig cfg;
             cfg.countSelectionMax = 0;
             cfg.flags = ImGuiFileDialogFlags_Modal;
             ImGuiFileDialog::Instance()->OpenDialog(
-                "ChooseVideo", "Select Video(s)",
-                "Video{.mp4,.avi,.mkv,.mov}", cfg);
+                "ChooseMedia", "Select Video(s)",
+                ".mp4", cfg);
         }
         ImGui::SameLine(0, spacing);
         if (ImGui::Button("Load Project", ImVec2(btn_w, 30))) {
@@ -142,52 +141,34 @@ inline void DrawWelcomeWindow(AppContext &ctx, WindowStates &win) {
         ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "Recent Projects");
         ImGui::Spacing();
 
-        for (const auto &path : ctx.user_settings.recent_projects) {
-            // Show just the project name + parent folder
+        for (int ri = 0; ri < (int)ctx.user_settings.recent_projects.size(); ri++) {
+            const auto &path = ctx.user_settings.recent_projects[ri];
             std::filesystem::path p(path);
             std::string display = p.parent_path().filename().string() + "/" + p.filename().string();
             if (!std::filesystem::exists(path)) {
                 ImGui::TextDisabled("[missing] %s", display.c_str());
                 continue;
             }
+            ImGui::PushID(ri);  // unique ID per button
             ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0, 0.5f));
             if (ImGui::Button(display.c_str(), ImVec2(-1, 0))) {
-                // Load the project — detect type from JSON
-                try {
-                    std::ifstream f(path);
-                    nlohmann::json j;
-                    f >> j;
-                    std::string type = j.value("type", std::string{});
-                    if (type == "calibration" || type == "laser_calibration") {
-                        // Load as calibration project
-                        CalibrationTool::CalibProject loaded;
-                        std::string err;
-                        if (CalibrationTool::load_project(&loaded, path, &err)) {
-                            win.calibration.project = loaded;
-                            win.calibration.show = true;
-                            win.calibration.project_loaded = true;
-                            win.calibration.show_create_dialog = false;
-                        }
-                    } else {
-                        // Load as annotation project via file dialog result
-                        IGFD::FileDialogConfig cfg;
-                        cfg.countSelectionMax = 1;
-                        cfg.flags = ImGuiFileDialogFlags_Modal;
-                        // Set the path directly — trigger the normal load flow
-                        // by opening the ChooseProject dialog pre-pointed
-                        cfg.path = p.parent_path().string();
-                        cfg.fileName = p.filename().string();
-                        ImGuiFileDialog::Instance()->OpenDialog(
-                            "ChooseProject", "Load Project",
-                            "Red Project{.redproj}", cfg);
-                    }
-                } catch (...) {
-                    // Silently skip corrupt files
-                }
+                // Route through the standard load dialog so all initialization
+                // happens via the existing, tested load handlers.
+                IGFD::FileDialogConfig cfg;
+                cfg.countSelectionMax = 1;
+                cfg.flags = ImGuiFileDialogFlags_Modal;
+                cfg.path = p.parent_path().string();
+                cfg.fileName = p.filename().string();
+                // Use ChooseProject — the handler in main_menu_dialogs.h
+                // detects calibration vs annotation from JSON and routes correctly.
+                ImGuiFileDialog::Instance()->OpenDialog(
+                    "ChooseProject", "Load Project",
+                    "Red Project{.redproj}", cfg);
             }
             ImGui::PopStyleVar();
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("%s", path.c_str());
+            ImGui::PopID();
         }
     }
 

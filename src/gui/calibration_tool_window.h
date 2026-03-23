@@ -398,6 +398,7 @@ inline void DrawCalibrationToolWindow(
         state.tele_viewer.show = false;
         state.project_loaded = false;
         state.show_create_dialog = true;
+        state.subtype_chosen = false;
         state.config_loaded = false;
         state.images_loaded = false;
         // Unified aruco pipeline

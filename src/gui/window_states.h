@@ -43,6 +43,7 @@ struct WindowStates {
         calibration.show = false;
         calibration.project_loaded = false;
         calibration.show_create_dialog = true;
+        calibration.subtype_chosen = false;
         calibration.config_loaded = false;
         calibration.images_loaded = false;
         // Unified aruco pipeline

@@ -164,7 +164,8 @@ inline void DrawCalibCreateDialog(CalibrationToolState &state, AppContext &ctx,
                 ImGui::TableSetColumnIndex(2);
                 ImGui::Dummy(ImVec2(1, 1));
 
-                // ---- Camera Model ----
+                // ---- Camera Model (hidden when workflow chooser sets it) ----
+                if (!state.subtype_chosen) {
                 ImGui::TableNextRow();
                 LabelCell("Camera Model");
                 ImGui::TableSetColumnIndex(1);
@@ -197,6 +198,7 @@ inline void DrawCalibCreateDialog(CalibrationToolState &state, AppContext &ctx,
                 }
                 ImGui::TableSetColumnIndex(2);
                 ImGui::Dummy(ImVec2(1, 1));
+                } // end !subtype_chosen: Camera Model
 
                 if (!state.project.is_telecentric()) {
                 // ---- Projective mode fields ----
