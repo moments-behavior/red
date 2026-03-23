@@ -213,15 +213,36 @@ inline void DrawCalibPointSourceSection(CalibrationToolState &state, AppContext 
 
                 // Show matched cameras
                 if (!state.project.camera_names.empty()) {
+                    // Sync enable vector size with camera list
+                    if (state.pointsource_camera_enabled.size() != state.project.camera_names.size())
+                        state.pointsource_camera_enabled.assign(state.project.camera_names.size(), true);
+
+                    int n_enabled = 0;
+                    for (bool e : state.pointsource_camera_enabled) if (e) n_enabled++;
+
                     char cam_header[64];
-                    snprintf(cam_header, sizeof(cam_header), "Cameras (%d matched)",
-                             (int)state.project.camera_names.size());
+                    snprintf(cam_header, sizeof(cam_header), "Cameras (%d/%d enabled)",
+                             n_enabled, (int)state.project.camera_names.size());
                     if (ImGui::CollapsingHeader(cam_header, ImGuiTreeNodeFlags_DefaultOpen)) {
                         ImGui::Indent();
+                        // Enable All / Disable All buttons
+                        if (ImGui::SmallButton("All##ps_cam")) {
+                            for (size_t i = 0; i < state.pointsource_camera_enabled.size(); i++)
+                                state.pointsource_camera_enabled[i] = true;
+                        }
+                        ImGui::SameLine();
+                        if (ImGui::SmallButton("None##ps_cam")) {
+                            for (size_t i = 0; i < state.pointsource_camera_enabled.size(); i++)
+                                state.pointsource_camera_enabled[i] = false;
+                        }
                         if (ImGui::BeginTable("##cam_grid", 4)) {
                             for (int i = 0; i < (int)state.project.camera_names.size(); i++) {
                                 ImGui::TableNextColumn();
-                                ImGui::Text("Cam%s", state.project.camera_names[i].c_str());
+                                char label[32];
+                                snprintf(label, sizeof(label), "Cam%s", state.project.camera_names[i].c_str());
+                                bool enabled = state.pointsource_camera_enabled[i];
+                                if (ImGui::Checkbox(label, &enabled))
+                                    state.pointsource_camera_enabled[i] = enabled;
                             }
                             ImGui::EndTable();
                         }
@@ -471,6 +492,17 @@ inline void DrawCalibPointSourceSection(CalibrationToolState &state, AppContext 
                         state.pointsource_done = false;
                         state.pointsource_status =
                             "Starting pointsource calibration pipeline...";
+
+                        // Filter camera names by enabled checkboxes
+                        {
+                            std::vector<std::string> enabled_cams;
+                            for (int i = 0; i < (int)state.project.camera_names.size(); i++) {
+                                if (i < (int)state.pointsource_camera_enabled.size() &&
+                                    state.pointsource_camera_enabled[i])
+                                    enabled_cams.push_back(state.project.camera_names[i]);
+                            }
+                            state.pointsource_config.camera_names = std::move(enabled_cams);
+                        }
 
                         // Populate global registration config from project
                         state.pointsource_config.do_global_reg =
