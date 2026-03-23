@@ -880,6 +880,10 @@ inline void DrawCalibCreateDialog(CalibrationToolState &state, AppContext &ctx,
                             state.dock_pending = true;
                             state.show_create_dialog = false;
 
+                            // Track in recent projects
+                            ctx.user_settings.push_recent_project(proj_file);
+                            save_user_settings(ctx.user_settings);
+
                             // For pure pointsource projects (no aruco), auto-load videos.
                             // For aruco+laser, defer to "Load PointSource Videos" button.
                             if ((state.project.has_laser_input() || state.project.has_pointsource_videos()) &&

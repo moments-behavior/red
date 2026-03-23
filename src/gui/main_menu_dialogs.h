@@ -186,6 +186,10 @@ inline void HandleMainMenuDialogs(
                     calib_state.show = true;
                     calib_state.status = "Project loaded: " +
                         calib_state.project.project_name;
+
+                    // Track in recent projects
+                    ctx.user_settings.push_recent_project(cfg_path.string());
+                    save_user_settings(ctx.user_settings);
                 } else {
                     popups.pushError(err);
                 }
