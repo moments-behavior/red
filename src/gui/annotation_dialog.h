@@ -53,6 +53,18 @@ inline void DrawAnnotationDialog(AnnotationDialogState &state,
         ctx.user_settings.default_media_root_path.empty()
             ? ctx.red_data_dir
             : ctx.user_settings.default_media_root_path;
+    // Back button state: set outside DrawPanel so it takes effect immediately
+    static bool back_requested = false;
+    if (back_requested) {
+        back_requested = false;
+        state.show = false;
+        state.status.clear();
+        state.video_folder.clear();
+        state.discovered_cameras.clear();
+        state.camera_selected.clear();
+        return;
+    }
+
     DrawPanel("Create Annotation Project", state.show,
         [&]() {
         // error banner
@@ -65,7 +77,7 @@ inline void DrawAnnotationDialog(AnnotationDialogState &state,
 
         // Back button — close dialog, return to welcome screen
         if (ImGui::SmallButton("< Back")) {
-            state.show = false;
+            back_requested = true;
         }
         ImGui::Spacing();
 
