@@ -1102,6 +1102,10 @@ elseif(WIN32)
     target_compile_definitions(red PRIVATE NOMINMAX _USE_MATH_DEFINES)
     target_compile_options(red PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/bigobj /EHsc>)
 
+    # Use vcpkg GLFW and GLEW (version-matched headers + DLLs)
+    find_package(glfw3 CONFIG REQUIRED)
+    find_package(GLEW REQUIRED)
+
     target_include_directories(red PRIVATE
         ${CMAKE_SOURCE_DIR}/src
         ${DIR_IMGUI}
@@ -1111,8 +1115,6 @@ elseif(WIN32)
         ${DIR_FILEBROWSER}
         ${DIR_ICONFONT}
         ${DIR_NVCODEC}
-        ${DIR_GL}
-        ${DIR_GLFW}
         ${CUDA_DIR}/include
         ${FFMPEG_INCLUDE_DIRS}
     )
@@ -1124,10 +1126,9 @@ elseif(WIN32)
     target_link_libraries(red PRIVATE
         Eigen3::Eigen
         Ceres::ceres
-        # Bundled GLFW
-        "${DIR_GLFW}/lib-vc2019/glfw3.lib"
-        # Bundled GLEW
-        "${DIR_GL}/lib/x64/glew32.lib"
+        # vcpkg GLFW 3.4 + GLEW
+        glfw
+        GLEW::GLEW
         # System OpenGL
         opengl32
         # CUDA
@@ -1163,13 +1164,7 @@ elseif(WIN32)
         ole32
     )
 
-    # Copy DLLs to build directory for runtime
-    add_custom_command(TARGET red POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${DIR_GL}/lib/x64/glew32.dll"
-            "${DIR_GLFW}/lib-vc2019/glfw3.dll"
-            $<TARGET_FILE_DIR:red>
-    )
+    # vcpkg automatically copies dependent DLLs via its toolchain
 
     set_target_properties(red PROPERTIES
         CXX_STANDARD 17
