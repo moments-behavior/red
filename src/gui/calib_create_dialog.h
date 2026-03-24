@@ -891,6 +891,15 @@ inline void DrawCalibCreateDialog(CalibrationToolState &state, AppContext &ctx,
                                     state.project.camera_names;
                                 state.pointsource_config.output_folder =
                                     state.project.pointsource_output_folder;
+
+                                // Auto-enable No Init for PointSourceFromScratch
+                                if (state.project.subtype == CalibrationTool::CalibSubtype::PointSourceFromScratch &&
+                                    state.project.calibration_folder.empty() &&
+                                    !state.project.global_reg_media_folder.empty()) {
+                                    state.pointsource_config.no_init = true;
+                                    state.pointsource_config.loose_init = true;
+                                }
+
                                 state.pointsource_ready = true;
 
                                 // Load videos
