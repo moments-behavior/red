@@ -1053,17 +1053,20 @@ inline std::vector<CameraQuality> assess_camera_quality(
     }
 
     // Adaptive threshold: if the user's threshold is too strict for this dataset,
-    // use a relative approach — good cameras are those in the better half
+    // use a relative approach — cameras in the better half are "good"
     double effective_threshold = quality_threshold;
     if (!all_medians.empty()) {
         std::sort(all_medians.begin(), all_medians.end());
         double best_median = all_medians[0];
-        // If even the best camera exceeds the threshold, use adaptive:
-        // "good" = within 2x of the best camera's median
         if (best_median >= quality_threshold) {
-            effective_threshold = std::max(quality_threshold, best_median * 2.0);
+            // Use the median of all camera medians as the split point.
+            // This naturally divides cameras into better/worse halves
+            // regardless of absolute reproj scale (works for No Init where
+            // all cameras have high reproj from default intrinsics).
+            double median_of_medians = all_medians[all_medians.size() / 2];
+            effective_threshold = std::max(quality_threshold, median_of_medians);
             printf("  Adaptive threshold: best camera median %.2f px > %.0f px, "
-                   "using %.1f px (2x best)\n",
+                   "using %.1f px (median of medians)\n",
                    best_median, quality_threshold, effective_threshold);
         }
     }
