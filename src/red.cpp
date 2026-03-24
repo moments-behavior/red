@@ -38,6 +38,9 @@
 #else
 #include "imgui_impl_opengl3.h"
 #endif
+#ifdef _WIN32
+#include <windows.h>                       // GetModuleFileName
+#endif
 #include "implot.h"
 #include "implot_internal.h"
 #include "project.h"
@@ -215,12 +218,12 @@ static void print_project_summary(const ProjectManager &pm,
 
 int main(int argc, char **argv) {
     gx_context *window = (gx_context *)malloc(sizeof(gx_context));
-    *window =
-        (gx_context){.swap_interval = 1, // use vsync
-                     .width = 1920,
-                     .height = 1080,
-                     .render_target_title = (char *)malloc(100), // window title
-                     .glsl_version = (char *)malloc(100)};
+    memset(window, 0, sizeof(gx_context));
+    window->swap_interval = 1; // use vsync
+    window->width = 1920;
+    window->height = 1080;
+    window->render_target_title = (char *)malloc(100); // window title
+    window->glsl_version = (char *)malloc(100);
     // Resolve the real path of the executable.
     // std::filesystem::canonical(argv[0]) fails when the binary is invoked
     // via PATH (argv[0] is just "red" with no directory component).
@@ -233,6 +236,12 @@ int main(int argc, char **argv) {
             window->exe_dir = std::filesystem::canonical(exe_buf).parent_path().string();
         else
             window->exe_dir = std::filesystem::canonical(argv[0]).parent_path().string();
+    }
+#elif defined(_WIN32)
+    {
+        char exe_buf[MAX_PATH];
+        GetModuleFileNameA(NULL, exe_buf, MAX_PATH);
+        window->exe_dir = std::filesystem::canonical(exe_buf).parent_path().string();
     }
 #else
     window->exe_dir =
@@ -1411,7 +1420,11 @@ int main(int argc, char **argv) {
                         bool ready = true;
                         for (int c = 0; c < (int)scene->num_cams; c++) {
                             auto &slot = scene->display_buffer[c][bp.batch_chunk_last_slot];
+#ifdef __APPLE__
                             if (slot.available_to_write || !slot.pixel_buffer) {
+#else
+                            if (slot.available_to_write) {
+#endif
                                 ready = false;
                                 break;
                             }
@@ -1490,11 +1503,16 @@ int main(int argc, char **argv) {
                                                  &skeleton, pm.camera_params, scene);
                                 auto tp1 = std::chrono::steady_clock::now();
                                 bp.batch_predict_ms += std::chrono::duration<float, std::milli>(tp1 - tp0).count();
-#endif
                                 bp.batch_completed++;
                                 printf("[Batch] Frame %u (slot %d): %.0f ms  [%d/%d]\n",
                                        frame, slot, jarvis_coreml_state.last_total_ms,
                                        bp.batch_completed, bp.batch_total);
+#else
+                                bp.batch_completed++;
+                                printf("[Batch] Frame %u (slot %d)  [%d/%d]\n",
+                                       frame, slot,
+                                       bp.batch_completed, bp.batch_total);
+#endif
                             }
 
                             bp.batch_current += bp.batch_step;

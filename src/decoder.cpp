@@ -1,8 +1,9 @@
 #include "decoder.h"
 #include "global.h"
-#ifndef __APPLE__
+#if !defined(__APPLE__)
 #include "AppDecUtils.h"
-#else
+#endif
+#if defined(__APPLE__) || defined(_WIN32)
 #include "../lib/ImGuiFileDialog/stb/stb_image.h"
 #include <turbojpeg.h>
 #endif
@@ -477,8 +478,8 @@ void decoder_process(DecoderContext *dc_context, FFmpegDemuxer *demuxer,
 static inline bool load_image_rgba(const std::string &file_name,
                                    unsigned char *dst_buf,
                                    size_t *out_size) {
-#ifdef __APPLE__
-    // Try turbojpeg first for JPEG files (NEON SIMD, ~2-3x faster than stbi)
+#if defined(__APPLE__) || defined(_WIN32)
+    // Try turbojpeg first for JPEG files (SIMD-accelerated, ~2-3x faster than stbi)
     {
         FILE *fp = fopen(file_name.c_str(), "rb");
         if (fp) {
@@ -524,12 +525,13 @@ static inline bool load_image_rgba(const std::string &file_name,
     if (out_size) *out_size = buf_size;
     return true;
 #else
-    cv::Mat image = cv::imread(file_name, cv::IMREAD_COLOR);
-    if (image.empty()) return false;
-    cv::Mat image_rgba;
-    cv::cvtColor(image, image_rgba, cv::COLOR_BGR2RGBA);
-    size_t buf_size = image_rgba.total() * image_rgba.elemSize();
-    memcpy(dst_buf, image_rgba.data, buf_size);
+    // Linux: uses stbi (OpenCV removed)
+    int w, h, ch;
+    unsigned char *data = stbi_load(file_name.c_str(), &w, &h, &ch, 4);
+    if (!data) return false;
+    size_t buf_size = (size_t)w * h * 4;
+    memcpy(dst_buf, data, buf_size);
+    stbi_image_free(data);
     if (out_size) *out_size = buf_size;
     return true;
 #endif

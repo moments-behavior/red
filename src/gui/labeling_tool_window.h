@@ -194,7 +194,11 @@ inline void DrawLabelingToolWindow(
         if (state.last_saved != static_cast<std::time_t>(-1)) {
             char time_buf[32];
             struct tm tm_buf;
+#ifdef _WIN32
+            localtime_s(&tm_buf, &state.last_saved);
+#else
             localtime_r(&state.last_saved, &tm_buf);
+#endif
             strftime(time_buf, sizeof(time_buf), "%H:%M:%S", &tm_buf);
             ImGui::TextDisabled("Last saved: %s", time_buf);
         }

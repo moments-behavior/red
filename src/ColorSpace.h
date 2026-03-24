@@ -1,9 +1,11 @@
 #pragma once
 #include <stdint.h>
-#ifndef __APPLE__
+#if !defined(__APPLE__) && !defined(__CUDACC__)
+// When compiling C++ files (not .cu), include cuda_runtime.h for vector types.
+// MSVC needs this to be after stdint.h.
 #include <cuda_runtime.h>
-#else
-// Minimal CUDA vector type replacements for macOS compilation
+#elif defined(__APPLE__)
+// macOS: no CUDA — provide minimal replacements
 struct uchar4 { uint8_t x, y, z, w; };
 struct ushort4 { uint16_t x, y, z, w; };
 #endif

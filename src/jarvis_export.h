@@ -585,7 +585,11 @@ inline int detect_negative_pts_offset(const std::string &video_path, double fps)
     std::string cmd = "ffprobe -v quiet -select_streams v:0 -show_packets "
                       "-show_entries packet=pts_time -of csv=p=0 \"" +
                       video_path + "\" 2>/dev/null | head -1";
+#ifdef _WIN32
+    FILE *fp = _popen(cmd.c_str(), "r");
+#else
     FILE *fp = popen(cmd.c_str(), "r");
+#endif
     if (!fp) return 0;
     char buf[256];
     int offset = 0;
@@ -597,7 +601,11 @@ inline int detect_negative_pts_offset(const std::string &video_path, double fps)
             }
         } catch (...) {}
     }
+#ifdef _WIN32
+    _pclose(fp);
+#else
     pclose(fp);
+#endif
     return offset;
 }
 

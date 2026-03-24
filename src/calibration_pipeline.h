@@ -16,14 +16,23 @@
 #include "FFmpegDemuxer.h"
 #include "vt_async_decoder.h"
 #include "aruco_metal.h"
+#elif defined(_WIN32)
+#include <turbojpeg.h>
+#include "ffmpeg_frame_reader.h"
 #else
 #include "ffmpeg_frame_reader.h"
 #endif
 
 #include <ceres/ceres.h>
 #include <ceres/rotation.h>
+#ifdef _WIN32
+#include <io.h>
+#include <fcntl.h>
+#define STDERR_FILENO 2
+#else
 #include <fcntl.h>
 #include <unistd.h>
+#endif
 
 #include <Eigen/Core>
 #include <Eigen/Geometry>
@@ -1417,14 +1426,26 @@ inline bool bundle_adjust(
         options.num_threads = std::max(1, (int)std::thread::hardware_concurrency());
 
         // Suppress CHOLMOD warnings by temporarily redirecting stderr
+#ifdef _WIN32
+        int saved_stderr2 = _dup(STDERR_FILENO);
+        if (saved_stderr2 >= 0) {
+            int devnull2 = _open("NUL", O_WRONLY);
+            if (devnull2 >= 0) { _dup2(devnull2, STDERR_FILENO); _close(devnull2); }
+        }
+#else
         int saved_stderr2 = dup(STDERR_FILENO);
         if (saved_stderr2 >= 0) {
             int devnull2 = open("/dev/null", O_WRONLY);
             if (devnull2 >= 0) { dup2(devnull2, STDERR_FILENO); close(devnull2); }
         }
+#endif
         ceres::Solver::Summary summary;
         ceres::Solve(options, &problem, &summary);
+#ifdef _WIN32
+        if (saved_stderr2 >= 0) { _dup2(saved_stderr2, STDERR_FILENO); _close(saved_stderr2); }
+#else
         if (saved_stderr2 >= 0) { dup2(saved_stderr2, STDERR_FILENO); close(saved_stderr2); }
+#endif
 
         printf("BA pass %d: %s  initial_cost=%.2f  final_cost=%.2f  "
                "iterations=%d  time=%.2fs\n",
@@ -3429,13 +3450,25 @@ inline bool bundle_adjust_experimental(
         // Suppress CHOLMOD warnings by temporarily redirecting stderr.
         // CHOLMOD writes "not positive definite" via SuiteSparse's printf,
         // which is normal LM behavior (Ceres increases damping and retries).
+#ifdef _WIN32
+        int saved_stderr = _dup(STDERR_FILENO);
+        if (saved_stderr >= 0) {
+            int devnull = _open("NUL", O_WRONLY);
+            if (devnull >= 0) { _dup2(devnull, STDERR_FILENO); _close(devnull); }
+        }
+#else
         int saved_stderr = dup(STDERR_FILENO);
         if (saved_stderr >= 0) {
             int devnull = open("/dev/null", O_WRONLY);
             if (devnull >= 0) { dup2(devnull, STDERR_FILENO); close(devnull); }
         }
+#endif
         ceres::Solver::Summary sum; ceres::Solve(opt,&problem,&sum);
+#ifdef _WIN32
+        if (saved_stderr >= 0) { _dup2(saved_stderr, STDERR_FILENO); _close(saved_stderr); }
+#else
         if (saved_stderr >= 0) { dup2(saved_stderr, STDERR_FILENO); close(saved_stderr); }
+#endif
         fprintf(stderr,"[Experimental] Pass %d/%d (mode=%d cauchy=%.0f): %s cost %.2f→%.2f iters=%d time=%.2fs\n",
             pi_pass+1,(int)passes.size(),bp.fix_mode,bp.cauchy_scale,
             sum.IsSolutionUsable()?"OK":"FAIL",sum.initial_cost,sum.final_cost,
@@ -3486,7 +3519,13 @@ inline CalibrationResult run_experimental_pipeline(
     CalibrationTool::CalibConfig config = config_in; // mutable copy (cameras may be removed)
     CalibrationResult result; result.cam_names=config.cam_ordered;
     auto now=std::chrono::system_clock::now();auto t=std::chrono::system_clock::to_time_t(now);
-    std::tm ts;localtime_r(&t,&ts);char tb[64];std::strftime(tb,sizeof(tb),"%Y_%m_%d_%H_%M_%S",&ts);
+    std::tm ts;
+#ifdef _WIN32
+    localtime_s(&ts,&t);
+#else
+    localtime_r(&t,&ts);
+#endif
+    char tb[64];std::strftime(tb,sizeof(tb),"%Y_%m_%d_%H_%M_%S",&ts);
     std::string outf=base_folder+"/"+tb;
     {namespace fs=std::filesystem;std::error_code ec;fs::create_directories(outf,ec);if(ec){result.error="Cannot create: "+ec.message();return result;}}
     fprintf(stderr,"\n[Experimental] === Starting experimental pipeline ===\n");

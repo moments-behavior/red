@@ -619,9 +619,5 @@ FFmpegDemuxer::FFmpegDemuxer(AVFormatContext *fmtcx) : fmtc(fmtcx) {
 
     /* Some inputs doesn't allow seek functionality.
      * Check this ahead of time. */
-#ifdef __APPLE__
     is_seekable = fmtc->pb && (fmtc->pb->seekable & AVIO_SEEKABLE_NORMAL);
-#else
-    is_seekable = fmtc->iformat->read_seek || fmtc->iformat->read_seek2;
-#endif
 }

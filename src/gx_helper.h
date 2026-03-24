@@ -7,17 +7,19 @@
 #include "implot.h"
 #include "implot3d.h"
 #include "types.h"
-#include <GLFW/glfw3.h>
 #include <cstdio>
+#include <filesystem>
 #include <stdio.h>
 #include <stdlib.h>
 
 #ifdef __APPLE__
+#include <GLFW/glfw3.h>
 #include "metal_context.h"
 // imgui_impl_metal.h is ObjC-only; all Metal ImGui calls go through metal_context.mm
 #else
-#include "imgui_impl_opengl3.h"
 #include <GL/glew.h>
+#include <GLFW/glfw3.h>
+#include "imgui_impl_opengl3.h"
 #include <cuda_gl_interop.h>
 #endif
 

@@ -6,6 +6,11 @@
 // Model files can be in <project>/jarvis_models/ or loaded manually.
 // If only .pth checkpoints exist, offers Convert to CoreML / ONNX buttons.
 
+#ifdef _WIN32
+#define popen _popen
+#define pclose _pclose
+#endif
+
 #include "imgui.h"
 #include "app_context.h"
 #include "jarvis_inference.h"
@@ -114,7 +119,7 @@ inline JarvisLoadResult jarvis_load_from_dir(
     namespace fs = std::filesystem;
     JarvisLoadResult r;
     fs::path mi = fs::path(base_dir) / "model_info.json";
-    r.config = parse_jarvis_model_info(fs::exists(mi) ? mi.c_str() : nullptr);
+    r.config = parse_jarvis_model_info(fs::exists(mi) ? mi.string().c_str() : nullptr);
 
 #ifdef __APPLE__
     if (fs::exists(fs::path(base_dir) / "center_detect.mlpackage") &&

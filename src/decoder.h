@@ -3,7 +3,7 @@
 #include "ColorSpace.h"
 #include "FFmpegDemuxer.h"
 #include "NvCodecUtils.h"
-#ifndef __APPLE__
+#if !defined(__APPLE__)
 #include "NvDecoder.h"
 #include <cuda.h>
 #endif
@@ -14,9 +14,6 @@ extern "C" {
 #include <CoreVideo/CoreVideo.h>
 #endif
 #include <atomic>
-#ifndef __APPLE__
-#include <opencv2/opencv.hpp>
-#endif
 
 struct SeekInfo {
     bool use_seek;

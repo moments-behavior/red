@@ -10,6 +10,14 @@
 //
 // All functions are inline (header-only). Namespace: aruco_detect.
 
+#ifdef _MSC_VER
+#include <intrin.h>
+// Windows rpcndr.h defines 'small' as a macro — conflicts with variable names
+#ifdef small
+#undef small
+#endif
+#endif
+
 #include "red_math.h"
 
 #include <Eigen/Core>
@@ -550,7 +558,11 @@ inline uint64_t rotateBits90CW(uint64_t bits, int side) {
 
 // --- Hamming distance between two bit patterns ---
 inline int hammingDistance(uint64_t a, uint64_t b) {
+#ifdef _MSC_VER
+    return (int)__popcnt64(a ^ b);
+#else
     return __builtin_popcountll(a ^ b);
+#endif
 }
 
 // --- Warp quad candidate and read marker bits ---

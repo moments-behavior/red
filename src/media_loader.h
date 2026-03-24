@@ -12,8 +12,8 @@
 #include <vector>
 #ifdef __APPLE__
 #include <CoreFoundation/CoreFoundation.h>
-#include "../lib/ImGuiFileDialog/stb/stb_image.h"
 #endif
+#include "../lib/ImGuiFileDialog/stb/stb_image.h"
 
 // Tear down existing media (decoder threads, demuxers, scene memory)
 // so that load_images or load_videos can be called cleanly.
@@ -178,15 +178,17 @@ load_images(std::map<std::string, std::string> &selected_files,
     for (u32 j = 0; j < scene->num_cams; j++) {
         std::string file_name = pm.media_folder + "/" + pm.camera_names[j] +
                                 "_" + imgs_names[0] + "." + file_ext;
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(_WIN32)
         int w = 0, h = 0, ch = 0;
         stbi_info(file_name.c_str(), &w, &h, &ch);
         scene->image_width[j] = w;
         scene->image_height[j] = h;
 #else
-        cv::Mat image = cv::imread(file_name, cv::IMREAD_COLOR);
-        scene->image_width[j] = image.cols;
-        scene->image_height[j] = image.rows;
+        // Linux: use stbi as well (OpenCV removed)
+        int w = 0, h = 0, ch = 0;
+        stbi_info(file_name.c_str(), &w, &h, &ch);
+        scene->image_width[j] = w;
+        scene->image_height[j] = h;
 #endif
     }
     if (imgs_names.size() < (size_t)label_buffer_size) {

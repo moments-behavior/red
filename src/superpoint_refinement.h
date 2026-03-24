@@ -531,7 +531,11 @@ inline SPResult run_superpoint_refinement(
     auto now = std::chrono::system_clock::now();
     auto t = std::chrono::system_clock::to_time_t(now);
     struct tm tm_buf;
+#ifdef _WIN32
+    localtime_s(&tm_buf, &t);
+#else
     localtime_r(&t, &tm_buf);
+#endif
     char ts[64];
     strftime(ts, sizeof(ts), "%Y_%m_%d_%H_%M_%S", &tm_buf);
 

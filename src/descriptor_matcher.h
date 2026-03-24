@@ -12,7 +12,7 @@
 #ifdef __APPLE__
 #define ACCELERATE_NEW_LAPACK
 #include <Accelerate/Accelerate.h>
-#else
+#elif !defined(_WIN32)
 #include <cblas.h>
 #endif
 
@@ -44,10 +44,18 @@ inline std::vector<Match> match_descriptors(
     // Compute cosine similarity matrix: sim = desc_a @ desc_b^T  [M x N]
     // Since descriptors are L2-normalized, dot product = cosine similarity.
     std::vector<float> sim(M * N);
+#ifdef _WIN32
+    // Use Eigen for matrix multiply (no BLAS dependency on Windows)
+    Eigen::Map<const Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>> A(desc_a, M, dim);
+    Eigen::Map<const Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>> B(desc_b, N, dim);
+    Eigen::Map<Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>> C(sim.data(), M, N);
+    C.noalias() = A * B.transpose();
+#else
     cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
                 M, N, dim,
                 1.0f, desc_a, dim, desc_b, dim,
                 0.0f, sim.data(), N);
+#endif
 
     // For each row (desc_a[i]), find top-2 matches in desc_b
     std::vector<int> best_b(M, -1);    // best match in B for each A

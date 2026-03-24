@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.10)
+cmake_minimum_required(VERSION 3.18...4.2)
 
 if(APPLE)
     project(red LANGUAGES CXX OBJCXX)
@@ -1008,6 +1008,173 @@ if(APPLE)
             PROPERTIES COMPILE_FLAGS "-fobjc-arc"
         )
     endif()
+
+elseif(WIN32)
+    # Windows build with NVIDIA CUDA support (RTX 3090)
+    project(red LANGUAGES CXX CUDA)
+
+    # CUDA architecture: 86 for RTX 3090 (Ampere)
+    set(CMAKE_CUDA_ARCHITECTURES 86)
+    set(CMAKE_CXX_STANDARD 17)
+    set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+    # vcpkg integration
+    set(VCPKG_ROOT "$ENV{USERPROFILE}/vcpkg")
+    if(EXISTS "${VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake" AND NOT DEFINED CMAKE_TOOLCHAIN_FILE)
+        set(CMAKE_TOOLCHAIN_FILE "${VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake" CACHE STRING "")
+    endif()
+
+    # Find packages via vcpkg
+    find_package(Eigen3 REQUIRED)
+    find_package(Ceres REQUIRED)
+
+    # FFmpeg: find via vcpkg pkg-config or manual paths
+    find_package(PkgConfig QUIET)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(FFMPEG IMPORTED_TARGET libavcodec libavformat libavutil libswscale)
+    endif()
+    if(NOT FFMPEG_FOUND)
+        # Fallback: use vcpkg installed paths directly
+        find_path(FFMPEG_INCLUDE_DIR libavcodec/avcodec.h)
+        find_library(AVCODEC_LIB avcodec)
+        find_library(AVFORMAT_LIB avformat)
+        find_library(AVUTIL_LIB avutil)
+        find_library(SWSCALE_LIB swscale)
+        set(FFMPEG_LIBRARIES ${AVCODEC_LIB} ${AVFORMAT_LIB} ${AVUTIL_LIB} ${SWSCALE_LIB})
+        set(FFMPEG_INCLUDE_DIRS ${FFMPEG_INCLUDE_DIR})
+    endif()
+
+    # libjpeg-turbo
+    find_package(libjpeg-turbo CONFIG QUIET)
+    if(NOT libjpeg-turbo_FOUND)
+        find_library(TURBOJPEG_LIB turbojpeg)
+        find_path(TURBOJPEG_INCLUDE turbojpeg.h)
+    endif()
+
+    # CUDA paths
+    set(CUDA_DIR "$ENV{CUDA_PATH}")
+    if(NOT CUDA_DIR)
+        set(CUDA_DIR "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v13.2")
+    endif()
+
+    # Bundled Windows libraries
+    set(DIR_GL "${CMAKE_SOURCE_DIR}/lib/GL")
+    set(DIR_GLFW "${CMAKE_SOURCE_DIR}/lib/GLFW")
+    set(DIR_NVCODEC "${CMAKE_SOURCE_DIR}/lib/nvcodec")
+
+    # ImGui / ImPlot / etc
+    set(DIR_IMGUI "${CMAKE_SOURCE_DIR}/lib/imgui")
+    set(DIR_IMPLOT "${CMAKE_SOURCE_DIR}/lib/implot")
+    set(DIR_IMPLOT3D "${CMAKE_SOURCE_DIR}/lib/implot3d")
+    set(DIR_FILEBROWSER "${CMAKE_SOURCE_DIR}/lib/ImGuiFileDialog")
+    set(DIR_ICONFONT "${CMAKE_SOURCE_DIR}/lib/IconFontCppHeaders")
+
+    # Source files — use the macOS source list (most complete, no legacy OpenCV deps)
+    file(GLOB SRC_FILES src/*.cpp)
+
+    file(GLOB IMGUI_SRC
+        ${DIR_IMGUI}/*.cpp
+        ${DIR_IMGUI}/backends/imgui_impl_glfw.cpp
+        ${DIR_IMGUI}/backends/imgui_impl_opengl3.cpp
+        ${DIR_IMGUI}/misc/cpp/imgui_stdlib.cpp
+        ${DIR_FILEBROWSER}/ImGuiFileDialog.cpp
+    )
+    file(GLOB IMPLOT_SRC ${DIR_IMPLOT}/*.cpp)
+    file(GLOB IMPLOT3D_SRC ${DIR_IMPLOT3D}/*.cpp)
+    list(REMOVE_ITEM IMPLOT3D_SRC "${DIR_IMPLOT3D}/implot3d_demo.cpp")
+
+    # CUDA source files
+    set(CUDA_SRC_FILES
+        src/create_image_cuda.cu
+        src/ColorSpace.cu
+        src/kernel.cu
+    )
+
+    # Main executable
+    add_executable(red
+        ${SRC_FILES}
+        ${IMGUI_SRC}
+        ${IMPLOT_SRC}
+        ${IMPLOT3D_SRC}
+        ${CUDA_SRC_FILES}
+    )
+
+    target_compile_definitions(red PRIVATE NOMINMAX _USE_MATH_DEFINES)
+    target_compile_options(red PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/bigobj /EHsc>)
+
+    target_include_directories(red PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+        ${DIR_IMGUI}
+        ${DIR_IMGUI}/backends
+        ${DIR_IMPLOT}
+        ${DIR_IMPLOT3D}
+        ${DIR_FILEBROWSER}
+        ${DIR_ICONFONT}
+        ${DIR_NVCODEC}
+        ${DIR_GL}
+        ${DIR_GLFW}
+        ${CUDA_DIR}/include
+        ${FFMPEG_INCLUDE_DIRS}
+    )
+    if(TURBOJPEG_INCLUDE)
+        target_include_directories(red PRIVATE ${TURBOJPEG_INCLUDE})
+    endif()
+
+    # Link libraries
+    target_link_libraries(red PRIVATE
+        Eigen3::Eigen
+        Ceres::ceres
+        # Bundled GLFW
+        "${DIR_GLFW}/lib-vc2019/glfw3.lib"
+        # Bundled GLEW
+        "${DIR_GL}/lib/x64/glew32.lib"
+        # System OpenGL
+        opengl32
+        # CUDA
+        "${CUDA_DIR}/lib/x64/cudart.lib"
+        "${CUDA_DIR}/lib/x64/cuda.lib"
+        "${CUDA_DIR}/lib/x64/nppc.lib"
+        "${CUDA_DIR}/lib/x64/nppicc.lib"
+        "${CUDA_DIR}/lib/x64/nppidei.lib"
+        "${CUDA_DIR}/lib/x64/nppig.lib"
+        "${CUDA_DIR}/lib/x64/nppial.lib"
+        # Bundled NVDEC
+        "${DIR_NVCODEC}/x64/nvcuvid.lib"
+        "${DIR_NVCODEC}/x64/nvencodeapi.lib"
+    )
+
+    # FFmpeg libraries
+    if(FFMPEG_FOUND AND TARGET PkgConfig::FFMPEG)
+        target_link_libraries(red PRIVATE PkgConfig::FFMPEG)
+    else()
+        target_link_libraries(red PRIVATE ${FFMPEG_LIBRARIES})
+    endif()
+
+    # libjpeg-turbo
+    if(libjpeg-turbo_FOUND)
+        target_link_libraries(red PRIVATE libjpeg-turbo::turbojpeg)
+    elseif(TURBOJPEG_LIB)
+        target_link_libraries(red PRIVATE ${TURBOJPEG_LIB})
+    endif()
+
+    # Windows system libraries
+    target_link_libraries(red PRIVATE
+        shell32
+        ole32
+    )
+
+    # Copy DLLs to build directory for runtime
+    add_custom_command(TARGET red POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${DIR_GL}/lib/x64/glew32.dll"
+            "${DIR_GLFW}/lib-vc2019/glfw3.dll"
+            $<TARGET_FILE_DIR:red>
+    )
+
+    set_target_properties(red PROPERTIES
+        CXX_STANDARD 17
+        CXX_STANDARD_REQUIRED ON
+    )
 
 else()
     # Linux build with NVIDIA CUDA support
