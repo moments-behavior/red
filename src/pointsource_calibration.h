@@ -1059,14 +1059,11 @@ inline std::vector<CameraQuality> assess_camera_quality(
         std::sort(all_medians.begin(), all_medians.end());
         double best_median = all_medians[0];
         if (best_median >= quality_threshold) {
-            // Use the median of all camera medians as the split point.
-            // This naturally divides cameras into better/worse halves
-            // regardless of absolute reproj scale (works for No Init where
-            // all cameras have high reproj from default intrinsics).
-            double median_of_medians = all_medians[all_medians.size() / 2];
-            effective_threshold = std::max(quality_threshold, median_of_medians);
+            // All cameras exceed the absolute threshold. Use relative:
+            // "good" = within 2x of the best camera's median reproj.
+            effective_threshold = std::max(quality_threshold, best_median * 2.0);
             printf("  Adaptive threshold: best camera median %.2f px > %.0f px, "
-                   "using %.1f px (median of medians)\n",
+                   "using %.1f px (2x best)\n",
                    best_median, quality_threshold, effective_threshold);
         }
     }
@@ -2310,7 +2307,21 @@ inline PointSourceResult run_pointsource_refinement(const PointSourceConfig &con
     if (use_loose) {
         // Loose Init: assess quality, PnP re-init poor cameras, then triangulate
         if (status) *status = "Assessing per-camera calibration quality...";
-        auto quality = assess_camera_quality(frame_obs, poses, 10.0, status);
+
+        // For No Init: exclude identity-pose cameras from triangulation during
+        // quality assessment. Without this, the 5 cameras with garbage poses
+        // corrupt every DLT triangulation, inflating reproj for ALL cameras.
+        std::vector<bool> valid_for_quality;
+        std::vector<bool> *valid_mask = nullptr;
+        if (config.no_init) {
+            valid_for_quality.resize(num_cameras);
+            for (int c = 0; c < num_cameras; c++) {
+                bool is_identity = (poses[c].R.isIdentity(1e-6) && poses[c].t.norm() < 1.0);
+                valid_for_quality[c] = !is_identity;
+            }
+            valid_mask = &valid_for_quality;
+        }
+        auto quality = assess_camera_quality(frame_obs, poses, 10.0, status, valid_mask);
         if (!triangulate_and_validate_progressive(frame_obs, poses, quality,
                                                    config.min_cameras,
                                                    config.reproj_threshold,
