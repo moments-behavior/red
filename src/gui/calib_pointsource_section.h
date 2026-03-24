@@ -143,6 +143,14 @@ inline void DrawCalibPointSourceSection(CalibrationToolState &state, AppContext 
                         state.pointsource_config.output_folder =
                             state.project.pointsource_output_folder;
 
+                        // Auto-enable No Init for PointSourceFromScratch
+                        if (state.project.subtype == CalibrationTool::CalibSubtype::PointSourceFromScratch &&
+                            state.project.calibration_folder.empty() &&
+                            !state.project.global_reg_media_folder.empty()) {
+                            state.pointsource_config.no_init = true;
+                            state.pointsource_config.loose_init = true;
+                        }
+
                         // Defer the actual unload+load to next frame start
                         // (freeing Metal textures mid-frame crashes ImGui rendering)
                         state.pointsource_status = "Loading pointsource videos...";
@@ -418,6 +426,15 @@ inline void DrawCalibPointSourceSection(CalibrationToolState &state, AppContext 
                     ImGui::Unindent();
                     } // end Bundle Adjustment
 
+                    // Auto-enable No Init for PointSourceFromScratch (outside collapsing header
+                    // so it runs every frame regardless of header state)
+                    if (state.project.subtype == CalibrationTool::CalibSubtype::PointSourceFromScratch &&
+                        state.project.calibration_folder.empty() &&
+                        !state.project.global_reg_media_folder.empty()) {
+                        state.pointsource_config.no_init = true;
+                        state.pointsource_config.loose_init = true;
+                    }
+
                     // Global Registration (optional — Procrustes alignment to world frame)
                     if (ImGui::CollapsingHeader("Global Registration (optional)")) {
                     ImGui::Indent();
@@ -506,13 +523,6 @@ inline void DrawCalibPointSourceSection(CalibrationToolState &state, AppContext 
                         }
                     }
                     // No Init checkbox (requires global reg media + board params)
-                    // Auto-enable for PointSourceFromScratch when no calibration folder
-                    if (state.project.subtype == CalibrationTool::CalibSubtype::PointSourceFromScratch &&
-                        state.project.calibration_folder.empty() &&
-                        !state.project.global_reg_media_folder.empty()) {
-                        state.pointsource_config.no_init = true;
-                        state.pointsource_config.loose_init = true;
-                    }
                     ImGui::Spacing();
                     bool can_no_init = !state.project.global_reg_media_folder.empty() &&
                                        state.project.charuco_setup.w >= 3;
