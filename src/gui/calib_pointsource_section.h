@@ -426,15 +426,6 @@ inline void DrawCalibPointSourceSection(CalibrationToolState &state, AppContext 
                     ImGui::Unindent();
                     } // end Bundle Adjustment
 
-                    // Auto-enable No Init for PointSourceFromScratch (outside collapsing header
-                    // so it runs every frame regardless of header state)
-                    if (state.project.subtype == CalibrationTool::CalibSubtype::PointSourceFromScratch &&
-                        state.project.calibration_folder.empty() &&
-                        !state.project.global_reg_media_folder.empty()) {
-                        state.pointsource_config.no_init = true;
-                        state.pointsource_config.loose_init = true;
-                    }
-
                     // Global Registration (optional — Procrustes alignment to world frame)
                     if (ImGui::CollapsingHeader("Global Registration (optional)")) {
                     ImGui::Indent();
