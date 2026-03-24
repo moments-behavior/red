@@ -319,12 +319,36 @@ inline bool sam_init(SamState &s, SamModel model_type,
         } catch (...) {
             s.status = "CoreML unavailable, using CPU...";
         }
+#elif defined(_WIN32)
+        // Try CUDA EP for GPU acceleration, fall back to CPU
+        try {
+            OrtCUDAProviderOptions cuda_opts{};
+            cuda_opts.device_id = 0;
+            opts.AppendExecutionProvider_CUDA(cuda_opts);
+        } catch (...) {
+            // CUDA EP not available — CPU fallback
+        }
 #endif
 
+#ifdef _WIN32
+        // ONNX Runtime on Windows requires wide-string paths
+        auto to_wide = [](const char *path) -> std::wstring {
+            int len = MultiByteToWideChar(CP_UTF8, 0, path, -1, nullptr, 0);
+            std::wstring ws(len, L'\0');
+            MultiByteToWideChar(CP_UTF8, 0, path, -1, ws.data(), len);
+            if (!ws.empty() && ws.back() == L'\0') ws.pop_back();
+            return ws;
+        };
+        s.encoder_session = std::make_unique<Ort::Session>(
+            *s.env, to_wide(encoder_onnx).c_str(), opts);
+        s.decoder_session = std::make_unique<Ort::Session>(
+            *s.env, to_wide(decoder_onnx).c_str(), opts);
+#else
         s.encoder_session = std::make_unique<Ort::Session>(
             *s.env, encoder_onnx, opts);
         s.decoder_session = std::make_unique<Ort::Session>(
             *s.env, decoder_onnx, opts);
+#endif
 
         const char *model_name = (model_type == SamModel::MobileSAM)
                                      ? "MobileSAM" : "SAM 2.1";

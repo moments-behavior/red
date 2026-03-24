@@ -158,14 +158,45 @@ inline bool jarvis_init(JarvisState &s, const char *center_onnx,
         Ort::SessionOptions opts;
         opts.SetIntraOpNumThreads(4);
         opts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
-        // Use CPU provider (validated faster than CoreML for this model)
 
+        // Try CUDA execution provider first (GPU), fall back to CPU
+        std::string backend = "CPU";
+#ifdef _WIN32
+        try {
+            OrtCUDAProviderOptions cuda_opts{};
+            cuda_opts.device_id = 0;
+            cuda_opts.arena_extend_strategy = 1; // kSameAsRequested
+            cuda_opts.cudnn_conv_algo_search = OrtCudnnConvAlgoSearchDefault;
+            opts.AppendExecutionProvider_CUDA(cuda_opts);
+            backend = "CUDA (GPU)";
+        } catch (...) {
+            // CUDA EP not available — fall back to CPU (no-op, CPU is default)
+            fprintf(stderr, "[JARVIS] CUDA execution provider not available, using CPU\n");
+        }
+#endif
+
+#ifdef _WIN32
+        // ONNX Runtime on Windows requires wide-string paths
+        auto to_wide = [](const char *path) -> std::wstring {
+            int len = MultiByteToWideChar(CP_UTF8, 0, path, -1, nullptr, 0);
+            std::wstring ws(len, L'\0');
+            MultiByteToWideChar(CP_UTF8, 0, path, -1, ws.data(), len);
+            if (!ws.empty() && ws.back() == L'\0') ws.pop_back();
+            return ws;
+        };
+        s.center_session = std::make_unique<Ort::Session>(
+            *s.env, to_wide(center_onnx).c_str(), opts);
+        s.keypoint_session = std::make_unique<Ort::Session>(
+            *s.env, to_wide(keypoint_onnx).c_str(), opts);
+#else
         s.center_session = std::make_unique<Ort::Session>(
             *s.env, center_onnx, opts);
         s.keypoint_session = std::make_unique<Ort::Session>(
             *s.env, keypoint_onnx, opts);
+#endif
 
-        s.status = "JARVIS loaded (" + std::to_string(s.config.num_joints) + " joints)";
+        s.status = "JARVIS loaded (" + std::to_string(s.config.num_joints) +
+                   " joints, " + backend + ")";
         s.loaded = true;
         return true;
     } catch (const Ort::Exception &e) {

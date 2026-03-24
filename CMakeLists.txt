@@ -1101,7 +1101,19 @@ elseif(WIN32)
         ${CUDA_SRC_FILES}
     )
 
+    # ONNX Runtime (GPU build with CUDA execution provider)
+    set(ONNXRUNTIME_DIR "${CMAKE_SOURCE_DIR}/lib/onnxruntime")
+    if(EXISTS "${ONNXRUNTIME_DIR}/include/onnxruntime_cxx_api.h")
+        set(HAS_ONNXRUNTIME TRUE)
+    else()
+        set(HAS_ONNXRUNTIME FALSE)
+        message(WARNING "ONNX Runtime not found in lib/onnxruntime/ — JARVIS prediction disabled")
+    endif()
+
     target_compile_definitions(red PRIVATE NOMINMAX _USE_MATH_DEFINES USE_CUDA_POINTSOURCE)
+    if(HAS_ONNXRUNTIME)
+        target_compile_definitions(red PRIVATE RED_HAS_ONNXRUNTIME)
+    endif()
     target_compile_options(red PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/bigobj /EHsc>)
 
     # Use vcpkg GLFW and GLEW (version-matched headers + DLLs)
@@ -1122,6 +1134,9 @@ elseif(WIN32)
     )
     if(TURBOJPEG_INCLUDE)
         target_include_directories(red PRIVATE ${TURBOJPEG_INCLUDE})
+    endif()
+    if(HAS_ONNXRUNTIME)
+        target_include_directories(red PRIVATE "${ONNXRUNTIME_DIR}/include")
     endif()
 
     # Link libraries
@@ -1160,11 +1175,25 @@ elseif(WIN32)
         target_link_libraries(red PRIVATE ${TURBOJPEG_LIB})
     endif()
 
+    # ONNX Runtime (GPU with CUDA EP)
+    if(HAS_ONNXRUNTIME)
+        target_link_libraries(red PRIVATE "${ONNXRUNTIME_DIR}/lib/onnxruntime.lib")
+    endif()
+
     # Windows system libraries
     target_link_libraries(red PRIVATE
         shell32
         ole32
     )
+
+    # Copy ONNX Runtime DLLs to build directory
+    if(HAS_ONNXRUNTIME)
+        file(GLOB ORT_DLLS "${ONNXRUNTIME_DIR}/lib/*.dll")
+        foreach(dll ${ORT_DLLS})
+            add_custom_command(TARGET red POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different "${dll}" "$<TARGET_FILE_DIR:red>")
+        endforeach()
+    endif()
 
     # vcpkg automatically copies dependent DLLs via its toolchain
 
