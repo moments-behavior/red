@@ -7,7 +7,11 @@
 #include "telecentric_dlt.h"
 #include "calib_viewer_window.h"
 #include "tele_viewer_window.h"
+#ifdef __APPLE__
 #include "pointsource_metal.h"
+#elif defined(_WIN32) && defined(USE_CUDA_POINTSOURCE)
+#include "pointsource_cuda.h"
+#endif
 #include "skeleton.h"
 #include "project.h"
 #include <atomic>
@@ -42,6 +46,9 @@ struct PointSourceVizState {
 #ifdef __APPLE__
     // Metal context for GPU-accelerated viz (macOS only)
     PointSourceMetalHandle metal_ctx = nullptr;
+#elif defined(_WIN32) && defined(USE_CUDA_POINTSOURCE)
+    // CUDA context for GPU-accelerated viz (Windows only)
+    PointSourceCudaHandle cuda_ctx = nullptr;
 #endif
 
     // Params that triggered the current computation
@@ -52,6 +59,8 @@ struct PointSourceVizState {
         if (worker.joinable()) worker.join();
 #ifdef __APPLE__
         if (metal_ctx) pointsource_metal_destroy(metal_ctx);
+#elif defined(_WIN32) && defined(USE_CUDA_POINTSOURCE)
+        if (cuda_ctx) pointsource_cuda_destroy(cuda_ctx);
 #endif
     }
 };

@@ -15,6 +15,8 @@
 #include "jarvis_inference.h"
 #ifdef __APPLE__
 #include "jarvis_coreml.h"
+#elif defined(_WIN32)
+#include "jarvis_tensorrt.h"
 #endif
 #include "gui/jarvis_predict_window.h"
 #include "gui/annotation_dialog.h"
@@ -54,8 +56,15 @@
 #include "user_settings.h"
 #include "jarvis_export.h"
 #include "pointsource_calibration.h"
+#ifdef __APPLE__
 #include "aruco_metal.h"
 #include "pointsource_metal.h"
+#elif defined(_WIN32)
+#include "aruco_cuda.h"
+#if defined(USE_CUDA_POINTSOURCE)
+#include "pointsource_cuda.h"
+#endif
+#endif
 #include <ImGuiFileDialog.h>
 #include <algorithm>
 #include <cstddef>
@@ -308,6 +317,8 @@ int main(int argc, char **argv) {
     JarvisState jarvis_state;
 #ifdef __APPLE__
     JarvisCoreMLState jarvis_coreml_state;
+#elif defined(_WIN32)
+    JarvisTensorRTState jarvis_trt_state;
 #endif
 
     // Default SAM model paths: look relative to exe (../models/mobilesam/)
@@ -486,6 +497,8 @@ int main(int argc, char **argv) {
         jarvis_state = JarvisState{};
 #ifdef __APPLE__
         jarvis_coreml_state = JarvisCoreMLState{};
+#elif defined(_WIN32)
+        jarvis_trt_state = JarvisTensorRTState{};
 #endif
         pm_ref = new_pm;
         on_project_loaded(ctx, print_metadata, print_summary);
@@ -552,6 +565,8 @@ int main(int argc, char **argv) {
                 [&]() { DrawJarvisPredictWindow(win.jarvis_predict, jarvis_state,
 #ifdef __APPLE__
                                                  jarvis_coreml_state,
+#elif defined(_WIN32)
+                                                 jarvis_trt_state,
 #endif
                                                  ctx); },
                 nullptr});
@@ -666,6 +681,8 @@ int main(int argc, char **argv) {
                                   jarvis_state = JarvisState{};
 #ifdef __APPLE__
                                   jarvis_coreml_state = JarvisCoreMLState{};
+#elif defined(_WIN32)
+                                  jarvis_trt_state = JarvisTensorRTState{};
 #endif
                               });
 
@@ -1260,6 +1277,8 @@ int main(int argc, char **argv) {
             bool jarvis_any_loaded = jarvis_state.loaded;
 #ifdef __APPLE__
             jarvis_any_loaded = jarvis_any_loaded || jarvis_coreml_state.loaded;
+#elif defined(_WIN32)
+            jarvis_any_loaded = jarvis_any_loaded || jarvis_trt_state.loaded;
 #endif
             if (jarvis_predict_trigger && !ps.play_video &&
                 jarvis_any_loaded && scene->num_cams > 0) {
@@ -1360,6 +1379,63 @@ int main(int argc, char **argv) {
                         win.jarvis_predict.confidence_threshold);
                     printf("[JARVIS ONNX] %s\n", jarvis_state.status.c_str());
                 }
+#elif defined(_WIN32)
+                // Windows: TensorRT (GPU) preferred, ONNX (CPU) fallback
+                int mh = ps.play_video ? ps.read_head : select_corr_head;
+                std::vector<int> widths(scene->num_cams), heights(scene->num_cams);
+                for (int c = 0; c < (int)scene->num_cams; ++c) {
+                    widths[c] = (int)scene->image_width[c];
+                    heights[c] = (int)scene->image_height[c];
+                }
+
+                auto cam_included = [&](int c) -> bool {
+                    if (win.jarvis_predict.predict_from_all) return true;
+                    if (c < (int)pm.camera_names.size() &&
+                        window_is_visible.count(pm.camera_names[c]) &&
+                        window_is_visible[pm.camera_names[c]]) {
+                        auto &slot = scene->display_buffer[c][mh];
+                        return !slot.available_to_write &&
+                               slot.frame_number.load() == current_frame_num;
+                    }
+                    return false;
+                };
+
+                // Extract RGBA→RGB from GPU frame buffers
+                std::vector<const uint8_t *> rgb_bufs(scene->num_cams, nullptr);
+                std::vector<std::vector<uint8_t>> rgb_storage(scene->num_cams);
+                for (int c = 0; c < (int)scene->num_cams; ++c) {
+                    if (!cam_included(c)) continue;
+                    auto &slot = scene->display_buffer[c][mh];
+                    if (!slot.frame) continue;
+                    int w = widths[c], h = heights[c];
+                    // slot.frame is RGBA32 in GPU memory — copy to CPU, then strip alpha
+                    std::vector<uint8_t> rgba(w * h * 4);
+                    cudaMemcpy(rgba.data(), slot.frame, w * h * 4, cudaMemcpyDeviceToHost);
+                    rgb_storage[c].resize(w * h * 3);
+                    for (int i = 0; i < w * h; ++i) {
+                        rgb_storage[c][i * 3 + 0] = rgba[i * 4 + 0]; // R
+                        rgb_storage[c][i * 3 + 1] = rgba[i * 4 + 1]; // G
+                        rgb_storage[c][i * 3 + 2] = rgba[i * 4 + 2]; // B
+                    }
+                    rgb_bufs[c] = rgb_storage[c].data();
+                }
+
+                if (jarvis_trt_state.loaded) {
+                    jarvis_tensorrt_predict_frame(jarvis_trt_state, annotations,
+                        (u32)current_frame_num, rgb_bufs, widths, heights,
+                        skeleton, (int)scene->num_cams,
+                        win.jarvis_predict.confidence_threshold);
+                    if (!pm.camera_params.empty())
+                        reprojection(annotations.at(current_frame_num),
+                                     &skeleton, pm.camera_params, scene);
+                    printf("[JARVIS TensorRT] %s\n", jarvis_trt_state.status.c_str());
+                } else if (jarvis_state.loaded) {
+                    jarvis_predict_frame(jarvis_state, annotations,
+                        (u32)current_frame_num, rgb_bufs, widths, heights,
+                        skeleton, pm.camera_params, scene,
+                        win.jarvis_predict.confidence_threshold);
+                    printf("[JARVIS ONNX] %s\n", jarvis_state.status.c_str());
+                }
 #endif
             }
 
@@ -1451,14 +1527,16 @@ int main(int argc, char **argv) {
                         // Process all target frames in this chunk in a tight
                         // loop (no Metal render between them). This avoids
                         // IOSurface lock contention from Metal viewport blits.
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(_WIN32)
                         int nc_pred = (int)scene->num_cams;
                         std::vector<int> w_b(nc_pred), h_b(nc_pred);
-                        std::vector<CVPixelBufferRef> pbs(nc_pred, nullptr);
                         for (int c = 0; c < nc_pred; ++c) {
                             w_b[c] = (int)scene->image_width[c];
                             h_b[c] = (int)scene->image_height[c];
                         }
+#ifdef __APPLE__
+                        std::vector<CVPixelBufferRef> pbs(nc_pred, nullptr);
+#endif
 #endif
                         while (bp.batch_current <= bp.batch_end && bp.batch_running) {
                             int slot = bp.batch_current - bp.batch_chunk_start;
@@ -1507,6 +1585,48 @@ int main(int argc, char **argv) {
                                 printf("[Batch] Frame %u (slot %d): %.0f ms  [%d/%d]\n",
                                        frame, slot, jarvis_coreml_state.last_total_ms,
                                        bp.batch_completed, bp.batch_total);
+#elif defined(_WIN32)
+                                if (jarvis_trt_state.loaded || jarvis_state.loaded) {
+                                    auto tp0 = std::chrono::steady_clock::now();
+                                    // Extract RGB from RGBA GPU frame buffers
+                                    std::vector<const uint8_t *> rgb_bufs(nc_pred, nullptr);
+                                    std::vector<std::vector<uint8_t>> rgb_storage(nc_pred);
+                                    for (int c = 0; c < nc_pred; ++c) {
+                                        auto &s = scene->display_buffer[c][slot];
+                                        if (!s.frame) continue;
+                                        int w = w_b[c], h = h_b[c];
+                                        std::vector<uint8_t> rgba(w * h * 4);
+                                        cudaMemcpy(rgba.data(), s.frame, w * h * 4, cudaMemcpyDeviceToHost);
+                                        rgb_storage[c].resize(w * h * 3);
+                                        for (int i = 0; i < w * h; ++i) {
+                                            rgb_storage[c][i*3+0] = rgba[i*4+0];
+                                            rgb_storage[c][i*3+1] = rgba[i*4+1];
+                                            rgb_storage[c][i*3+2] = rgba[i*4+2];
+                                        }
+                                        rgb_bufs[c] = rgb_storage[c].data();
+                                    }
+                                    if (jarvis_trt_state.loaded) {
+                                        jarvis_tensorrt_predict_frame(jarvis_trt_state,
+                                            annotations, frame, rgb_bufs, w_b, h_b,
+                                            skeleton, nc_pred, bp.confidence_threshold);
+                                    } else {
+                                        jarvis_predict_frame(jarvis_state, annotations,
+                                            frame, rgb_bufs, w_b, h_b,
+                                            skeleton, pm.camera_params, scene,
+                                            bp.confidence_threshold);
+                                    }
+                                    if (!pm.camera_params.empty())
+                                        reprojection(annotations.at(frame),
+                                                     &skeleton, pm.camera_params, scene);
+                                    auto tp1 = std::chrono::steady_clock::now();
+                                    bp.batch_predict_ms += std::chrono::duration<float, std::milli>(tp1 - tp0).count();
+                                    bp.batch_completed++;
+                                    float last_ms = jarvis_trt_state.loaded ?
+                                        jarvis_trt_state.last_total_ms : jarvis_state.last_total_ms;
+                                    printf("[Batch] Frame %u (slot %d): %.0f ms  [%d/%d]\n",
+                                           frame, slot, last_ms,
+                                           bp.batch_completed, bp.batch_total);
+                                }
 #else
                                 bp.batch_completed++;
                                 printf("[Batch] Frame %u (slot %d)  [%d/%d]\n",

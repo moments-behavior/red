@@ -19,6 +19,7 @@
 #elif defined(_WIN32)
 #include <turbojpeg.h>
 #include "ffmpeg_frame_reader.h"
+#include "aruco_cuda.h"
 #else
 #include "ffmpeg_frame_reader.h"
 #endif

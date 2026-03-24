@@ -1088,6 +1088,8 @@ elseif(WIN32)
         src/create_image_cuda.cu
         src/ColorSpace.cu
         src/kernel.cu
+        src/aruco_cuda.cu
+        src/pointsource_cuda.cu
     )
 
     # Main executable
@@ -1099,7 +1101,7 @@ elseif(WIN32)
         ${CUDA_SRC_FILES}
     )
 
-    target_compile_definitions(red PRIVATE NOMINMAX _USE_MATH_DEFINES)
+    target_compile_definitions(red PRIVATE NOMINMAX _USE_MATH_DEFINES USE_CUDA_POINTSOURCE)
     target_compile_options(red PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/bigobj /EHsc>)
 
     # Use vcpkg GLFW and GLEW (version-matched headers + DLLs)

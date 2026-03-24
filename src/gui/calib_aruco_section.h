@@ -2,7 +2,11 @@
 #include "calib_tool_state.h"
 #include "app_context.h"
 #include "calibration_pipeline.h"
+#ifdef __APPLE__
 #include "aruco_metal.h"
+#elif defined(_WIN32)
+#include "aruco_cuda.h"
+#endif
 #include "imgui.h"
 #include "implot.h"
 #include <algorithm>
@@ -408,6 +412,15 @@ inline void DrawCalibArucoSection(CalibrationToolState &state, AppContext &ctx,
                                     &vfr, gfn, am);
                                 aruco_metal_destroy(am);
                                 return r;
+#elif defined(_WIN32)
+                                auto ac = aruco_cuda_create();
+                                aruco_detect::GpuThresholdFunc gfn =
+                                    ac ? aruco_cuda_threshold_batch : nullptr;
+                                auto r = CalibrationPipeline::run_experimental_pipeline(
+                                    config, base, status_ptr,
+                                    &vfr, gfn, (void *)ac);
+                                if (ac) aruco_cuda_destroy(ac);
+                                return r;
 #else
                                 return CalibrationPipeline::run_experimental_pipeline(
                                     config, base, status_ptr, &vfr);
@@ -426,6 +439,15 @@ inline void DrawCalibArucoSection(CalibrationToolState &state, AppContext &ctx,
                                     config, base, status_ptr,
                                     nullptr, gfn, am);
                                 aruco_metal_destroy(am);
+                                return r;
+#elif defined(_WIN32)
+                                auto ac = aruco_cuda_create();
+                                aruco_detect::GpuThresholdFunc gfn =
+                                    ac ? aruco_cuda_threshold_batch : nullptr;
+                                auto r = CalibrationPipeline::run_experimental_pipeline(
+                                    config, base, status_ptr,
+                                    nullptr, gfn, (void *)ac);
+                                if (ac) aruco_cuda_destroy(ac);
                                 return r;
 #else
                                 return CalibrationPipeline::run_experimental_pipeline(

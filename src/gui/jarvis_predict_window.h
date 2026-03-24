@@ -16,6 +16,8 @@
 #include "jarvis_inference.h"
 #ifdef __APPLE__
 #include "jarvis_coreml.h"
+#elif defined(_WIN32)
+#include "jarvis_tensorrt.h"
 #endif
 #include "gui/panel.h"
 #include <ImGuiFileDialog.h>
@@ -89,11 +91,15 @@ inline const JarvisModelConfig &jarvis_active_config(
     const JarvisState &jarvis
 #ifdef __APPLE__
     , const JarvisCoreMLState &coreml
+#elif defined(_WIN32)
+    , const JarvisTensorRTState &tensorrt
 #endif
 ) {
     static const JarvisModelConfig empty;
 #ifdef __APPLE__
     if (coreml.loaded) return coreml.config;
+#elif defined(_WIN32)
+    if (tensorrt.loaded) return tensorrt.config;
 #endif
     if (jarvis.loaded) return jarvis.config;
     return empty;
@@ -114,6 +120,8 @@ inline JarvisLoadResult jarvis_load_from_dir(
     JarvisState &jarvis
 #ifdef __APPLE__
     , JarvisCoreMLState &jarvis_coreml
+#elif defined(_WIN32)
+    , JarvisTensorRTState &jarvis_trt
 #endif
 ) {
     namespace fs = std::filesystem;
@@ -132,12 +140,25 @@ inline JarvisLoadResult jarvis_load_from_dir(
             return r;
         }
     }
+#elif defined(_WIN32)
+    if (fs::exists(fs::path(base_dir) / "center_detect.engine") &&
+        fs::exists(fs::path(base_dir) / "keypoint_detect.engine")) {
+        jarvis_cleanup(jarvis);
+        jarvis_tensorrt_init(jarvis_trt, base_dir, r.config);
+        if (jarvis_trt.loaded) {
+            r = {true, jarvis_trt.num_joints, jarvis_trt.center_input_size,
+                 jarvis_trt.keypoint_input_size, r.config};
+            return r;
+        }
+    }
 #endif
     std::string cd = base_dir + "/center_detect.onnx";
     std::string kd = base_dir + "/keypoint_detect.onnx";
     if (fs::exists(cd) && fs::exists(kd)) {
 #ifdef __APPLE__
         jarvis_coreml_cleanup(jarvis_coreml);
+#elif defined(_WIN32)
+        jarvis_tensorrt_cleanup(jarvis_trt);
 #endif
         jarvis_init(jarvis, cd.c_str(), kd.c_str(), r.config);
         if (jarvis.loaded) {
@@ -183,6 +204,8 @@ inline void jarvis_register_model(
 inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarvis,
 #ifdef __APPLE__
                                      JarvisCoreMLState &jarvis_coreml,
+#elif defined(_WIN32)
+                                     JarvisTensorRTState &jarvis_trt,
 #endif
                                      AppContext &ctx) {
     DrawPanel("JARVIS Predict", state.show,
@@ -200,6 +223,8 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
         auto &pm = ctx.pm;
 #ifdef __APPLE__
         bool any_loaded = jarvis.loaded || jarvis_coreml.loaded;
+#elif defined(_WIN32)
+        bool any_loaded = jarvis.loaded || jarvis_trt.loaded;
 #else
         bool any_loaded = jarvis.loaded;
 #endif
@@ -210,6 +235,8 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
             jarvis_load_from_dir(base, jarvis
 #ifdef __APPLE__
                 , jarvis_coreml
+#elif defined(_WIN32)
+                , jarvis_trt
 #endif
             );
             state.model_dir_display = m.relative_path;
@@ -232,6 +259,8 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
                         jarvis_load_from_dir(base, jarvis
 #ifdef __APPLE__
                             , jarvis_coreml
+#elif defined(_WIN32)
+                            , jarvis_trt
 #endif
                         );
                         state.model_dir_display = m.relative_path;
@@ -280,6 +309,8 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
                 auto lr = jarvis_load_from_dir(out_dir, jarvis
 #ifdef __APPLE__
                     , jarvis_coreml
+#elif defined(_WIN32)
+                    , jarvis_trt
 #endif
                 );
                 if (lr.loaded && !pm.project_path.empty()) {
@@ -436,6 +467,8 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
             auto lr = jarvis_load_from_dir(src_dir, jarvis
 #ifdef __APPLE__
                 , jarvis_coreml
+#elif defined(_WIN32)
+                , jarvis_trt
 #endif
             );
 
@@ -484,6 +517,8 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
             bool show_loaded = jarvis.loaded;
 #ifdef __APPLE__
             show_loaded = show_loaded || jarvis_coreml.loaded;
+#elif defined(_WIN32)
+            show_loaded = show_loaded || jarvis_trt.loaded;
 #endif
             if (show_loaded) {
                 ImGui::TextColored(ImVec4(0, 1, 0, 1), "Loaded");
@@ -494,6 +529,10 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
             else if (!jarvis_coreml.status.empty()) {
                 ImGui::TextColored(ImVec4(1, 0.3f, 0.3f, 1), "%s", jarvis_coreml.status.c_str());
             }
+#elif defined(_WIN32)
+            else if (!jarvis_trt.status.empty()) {
+                ImGui::TextColored(ImVec4(1, 0.3f, 0.3f, 1), "%s", jarvis_trt.status.c_str());
+            }
 #endif
         }
 
@@ -502,6 +541,8 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
             bool show_convert = has_pth && !can_load;
 #ifdef __APPLE__
             show_convert = show_convert && !jarvis.loaded && !jarvis_coreml.loaded;
+#elif defined(_WIN32)
+            show_convert = show_convert && !jarvis.loaded && !jarvis_trt.loaded;
 #else
             show_convert = show_convert && !jarvis.loaded;
 #endif
@@ -653,19 +694,108 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
                 }
             }
         }
+#elif defined(_WIN32)
+        // Convert to TensorRT button (Windows only — .pth exists, no .engine)
+        {
+            bool has_engine = fs::exists(fs::path(state.models_folder) / "center_detect.engine");
+            bool show_trt_convert = has_pth && !has_engine &&
+                !jarvis.loaded && !jarvis_trt.loaded;
+            bool converting = state.convert_job && state.convert_job->running.load();
+            if (show_trt_convert) {
+                ImGui::Separator();
+                if (!converting) {
+                    ImGui::TextWrapped("TensorRT engines not found. Convert .pth "
+                                       "checkpoints to TensorRT for GPU FP16 acceleration. "
+                                       "Point Models Folder to the JARVIS project directory "
+                                       "(with config.yaml) for best results.");
+                    if (ImGui::Button("Convert to TensorRT")) {
+                        std::string exe_dir = ctx.window->exe_dir;
+                        std::string script;
+                        for (auto &candidate : {
+                            exe_dir + "/../scripts/convert_pth_to_trt.py",
+                            exe_dir + "/../src/convert_pth_to_trt.py",
+                        }) {
+                            if (fs::exists(candidate)) {
+                                script = fs::canonical(candidate).string();
+                                break;
+                            }
+                        }
+
+                        if (script.empty()) {
+                            state.convert_status = "Error: convert_pth_to_trt.py not found";
+                        } else {
+                            std::string jarvis_project = state.models_folder;
+                            std::string folder_name = fs::path(state.models_folder)
+                                .filename().string();
+                            std::string output_dir =
+                                (fs::path(ctx.pm.project_path) /
+                                 "jarvis_models" / folder_name).string();
+                            fs::create_directories(output_dir);
+
+                            std::string cmd =
+                                "python \"" + script +
+                                "\" --jarvis_project \"" + jarvis_project +
+                                "\" --output_dir \"" + output_dir + "\" 2>&1";
+
+                            auto job = std::make_shared<ConvertJob>();
+                            job->running.store(true);
+                            job->output_path = output_dir;
+                            state.convert_job = job;
+                            state.convert_status = "Converting to TensorRT...";
+
+                            std::thread([job, cmd]() {
+                                FILE *pipe = popen(cmd.c_str(), "r");
+                                if (!pipe) {
+                                    job->message = "Error: failed to run conversion command";
+                                    job->success = false;
+                                    job->running.store(false);
+                                    job->finished.store(true);
+                                    return;
+                                }
+                                char buf[256];
+                                std::string output;
+                                while (fgets(buf, sizeof(buf), pipe))
+                                    output += buf;
+                                int ret = pclose(pipe);
+                                if (ret == 0) {
+                                    job->message = "TensorRT conversion complete.";
+                                    job->success = true;
+                                    job->force_rescan = true;
+                                } else {
+                                    job->message = "TensorRT conversion failed (exit " +
+                                        std::to_string(ret) + "): " + output.substr(0, 200);
+                                    job->success = false;
+                                }
+                                job->running.store(false);
+                                job->finished.store(true);
+                            }).detach();
+                        }
+                    }
+                } else {
+                    ImGui::BeginDisabled();
+                    ImGui::Button("Converting...");
+                    ImGui::EndDisabled();
+                }
+            }
+        }
 #endif
 
         // --- Model info (shown after loading) ---
         {
             bool onnx_active = jarvis.loaded;
             bool coreml_active = false;
+            bool trt_active = false;
 #ifdef __APPLE__
             coreml_active = jarvis_coreml.loaded;
+#elif defined(_WIN32)
+            trt_active = jarvis_trt.loaded;
 #endif
-            if (onnx_active || coreml_active) {
+            if (onnx_active || coreml_active || trt_active) {
                 const auto &cfg = jarvis_active_config(jarvis
 #ifdef __APPLE__
                     , jarvis_coreml
+#elif defined(_WIN32)
+                    , jarvis_trt
 #endif
                 );
 
@@ -674,7 +804,9 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
                 if (!cfg.project_name.empty())
                     ImGui::Text("Project:        %s", cfg.project_name.c_str());
 
-                if (coreml_active)
+                if (trt_active)
+                    ImGui::TextColored(ImVec4(0.5f, 1, 0.5f, 1), "Backend:        TensorRT (GPU FP16)");
+                else if (coreml_active)
                     ImGui::TextColored(ImVec4(0.5f, 1, 0.5f, 1), "Backend:        CoreML (GPU/ANE)");
                 else
                     ImGui::Text("Backend:        ONNX Runtime (CPU)");
@@ -709,6 +841,13 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
                 jarvis_coreml.last_center_ms, jarvis_coreml.last_keypoint_ms,
                 jarvis_coreml.last_total_ms);
         } else
+#elif defined(_WIN32)
+        if (jarvis_trt.loaded && jarvis_trt.last_total_ms > 0) {
+            ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
+                "TensorRT: Center %.1f ms + Keypoint %.1f ms = %.1f ms",
+                jarvis_trt.last_center_ms, jarvis_trt.last_keypoint_ms,
+                jarvis_trt.last_total_ms);
+        } else
 #endif
         if (jarvis.loaded && jarvis.last_total_ms > 0) {
             ImGui::Text("ONNX: Center %.1f ms + Keypoint %.1f ms = %.1f ms",
@@ -730,6 +869,8 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
         bool can_predict = jarvis.loaded;
 #ifdef __APPLE__
         can_predict = can_predict || jarvis_coreml.loaded;
+#elif defined(_WIN32)
+        can_predict = can_predict || jarvis_trt.loaded;
 #endif
         if (!can_predict) ImGui::BeginDisabled();
         if (ImGui::Button("Predict Current Frame")) {
