@@ -40,6 +40,12 @@ if(APPLE)
     set(DIR_IMGUI "${CMAKE_SOURCE_DIR}/lib/imgui")
     set(DIR_IMPLOT "${CMAKE_SOURCE_DIR}/lib/implot")
     set(DIR_IMPLOT3D "${CMAKE_SOURCE_DIR}/lib/implot3d")
+
+    # Use 32-bit vertex indices for ImGui/ImPlot3D to support large meshes.
+    # Default 16-bit indices cap at 65K vertices — with circle markers (~50
+    # verts each), this silently drops 3D points after ~1,300 points.
+    # Applied via compile definition so we don't modify the imgui submodule.
+    add_definitions(-DImDrawIdx=unsigned\ int)
     set(DIR_FILEBROWSER "${CMAKE_SOURCE_DIR}/lib/ImGuiFileDialog")
 
     file(GLOB SRC_FILES src/*.cpp)
