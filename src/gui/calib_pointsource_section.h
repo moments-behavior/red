@@ -184,6 +184,7 @@ inline void DrawCalibPointSourceSection(CalibrationToolState &state, AppContext 
                                 if (state.pointsource_total_frames <= 0)
                                     state.pointsource_total_frames = dc_context->estimated_num_frames;
                                 state.pointsource_ready = true;
+                                state.pointsource_camera_frames.clear(); // force re-probe
                                 state.pointsource_status =
                                     "Loaded " +
                                     std::to_string(state.project.camera_names.size()) +
@@ -639,65 +640,109 @@ inline void DrawCalibPointSourceSection(CalibrationToolState &state, AppContext 
 
                     // Progress sub-section (visible during/after detection)
                     if (state.pointsource_running && !state.pointsource_progress->cameras.empty()) {
-                        if (ImGui::CollapsingHeader("Progress", ImGuiTreeNodeFlags_DefaultOpen)) {
-                        ImGui::Indent();
-                            int eff_stop = state.pointsource_config.stop_frame > 0
-                                ? state.pointsource_config.stop_frame
-                                : (state.pointsource_total_frames > 0 ? state.pointsource_total_frames : 0);
-                            int eff_start = state.pointsource_config.start_frame;
-                            int eff_step = std::max(1, state.pointsource_config.frame_step);
-                            int prog_total = (eff_stop > eff_start)
-                                ? (eff_stop - eff_start + eff_step - 1) / eff_step
-                                : 0;
-                            int total_done = 0;
-                            for (int ci = 0; ci < (int)state.pointsource_progress->cameras.size(); ci++)
-                                if (state.pointsource_progress->cameras[ci]->done.load(std::memory_order_relaxed))
-                                    total_done++;
-                            ImGui::Text("Detection: %d / %d cameras complete",
-                                        total_done, (int)state.pointsource_progress->cameras.size());
+                        int ps_step = state.pointsource_progress->current_step.load(std::memory_order_relaxed);
 
-                            if (ImGui::BeginTable(
-                                    "ps_det_progress", 4,
-                                    ImGuiTableFlags_RowBg |
-                                        ImGuiTableFlags_BordersInnerV)) {
-                                ImGui::TableSetupColumn("Camera", ImGuiTableColumnFlags_WidthFixed, 100.0f);
-                                ImGui::TableSetupColumn("Progress", ImGuiTableColumnFlags_WidthStretch);
-                                ImGui::TableSetupColumn("Spots", ImGuiTableColumnFlags_WidthFixed, 60.0f);
-                                ImGui::TableSetupColumn("Rate", ImGuiTableColumnFlags_WidthFixed, 50.0f);
-                                ImGui::TableHeadersRow();
+                        // Per-camera detection progress (step 1)
+                        if (ps_step <= 1) {
+                            if (ImGui::CollapsingHeader("Detection Progress##ps", ImGuiTreeNodeFlags_DefaultOpen)) {
+                            ImGui::Indent();
+                                int eff_stop = state.pointsource_config.stop_frame > 0
+                                    ? state.pointsource_config.stop_frame
+                                    : (state.pointsource_total_frames > 0 ? state.pointsource_total_frames : 0);
+                                int eff_start = state.pointsource_config.start_frame;
+                                int eff_step = std::max(1, state.pointsource_config.frame_step);
+                                int prog_total = (eff_stop > eff_start)
+                                    ? (eff_stop - eff_start + eff_step - 1) / eff_step
+                                    : 0;
+                                int total_done = 0;
+                                for (int ci = 0; ci < (int)state.pointsource_progress->cameras.size(); ci++)
+                                    if (state.pointsource_progress->cameras[ci]->done.load(std::memory_order_relaxed))
+                                        total_done++;
+                                ImGui::Text("Detection: %d / %d cameras complete",
+                                            total_done, (int)state.pointsource_progress->cameras.size());
 
-                                for (int ci = 0; ci < (int)state.pointsource_progress->cameras.size(); ci++) {
-                                    auto &cp = state.pointsource_progress->cameras[ci];
-                                    int fr = cp->frames_processed.load(std::memory_order_relaxed);
-                                    int sp = cp->spots_detected.load(std::memory_order_relaxed);
-                                    bool dn = cp->done.load(std::memory_order_relaxed);
-                                    float frac = prog_total > 0 ? (float)fr / prog_total : 0.0f;
-                                    if (frac > 1.0f) frac = 1.0f;
+                                if (ImGui::BeginTable(
+                                        "ps_det_progress", 4,
+                                        ImGuiTableFlags_RowBg |
+                                            ImGuiTableFlags_BordersInnerV)) {
+                                    ImGui::TableSetupColumn("Camera", ImGuiTableColumnFlags_WidthFixed, 100.0f);
+                                    ImGui::TableSetupColumn("Progress", ImGuiTableColumnFlags_WidthStretch);
+                                    ImGui::TableSetupColumn("Spots", ImGuiTableColumnFlags_WidthFixed, 60.0f);
+                                    ImGui::TableSetupColumn("Rate", ImGuiTableColumnFlags_WidthFixed, 50.0f);
+                                    ImGui::TableHeadersRow();
 
-                                    ImGui::TableNextRow();
-                                    ImGui::TableSetColumnIndex(0);
-                                    if (ci < (int)state.pointsource_config.camera_names.size())
-                                        ImGui::Text("Cam%s", state.pointsource_config.camera_names[ci].c_str());
-                                    ImGui::TableSetColumnIndex(1);
-                                    char overlay[64];
-                                    if (prog_total > 0)
-                                        snprintf(overlay, sizeof(overlay), "%d / %d", fr, prog_total);
-                                    else
-                                        snprintf(overlay, sizeof(overlay), "%d", fr);
-                                    if (dn)
-                                        ImGui::PushStyleColor(ImGuiCol_PlotHistogram, ImVec4(0.2f, 0.8f, 0.2f, 1.0f));
-                                    ImGui::ProgressBar(frac, ImVec2(-FLT_MIN, 0), overlay);
-                                    if (dn)
-                                        ImGui::PopStyleColor();
-                                    ImGui::TableSetColumnIndex(2);
-                                    ImGui::Text("%d", sp);
-                                    ImGui::TableSetColumnIndex(3);
-                                    ImGui::Text("%.0f%%", fr > 0 ? 100.0 * sp / fr : 0.0);
+                                    for (int ci = 0; ci < (int)state.pointsource_progress->cameras.size(); ci++) {
+                                        auto &cp = state.pointsource_progress->cameras[ci];
+                                        int fr = cp->frames_processed.load(std::memory_order_relaxed);
+                                        int sp = cp->spots_detected.load(std::memory_order_relaxed);
+                                        bool dn = cp->done.load(std::memory_order_relaxed);
+                                        float frac = prog_total > 0 ? (float)fr / prog_total : 0.0f;
+                                        if (frac > 1.0f) frac = 1.0f;
+
+                                        ImGui::TableNextRow();
+                                        ImGui::TableSetColumnIndex(0);
+                                        if (ci < (int)state.pointsource_config.camera_names.size())
+                                            ImGui::Text("Cam%s", state.pointsource_config.camera_names[ci].c_str());
+                                        ImGui::TableSetColumnIndex(1);
+                                        char overlay[64];
+                                        if (prog_total > 0)
+                                            snprintf(overlay, sizeof(overlay), "%d / %d", fr, prog_total);
+                                        else
+                                            snprintf(overlay, sizeof(overlay), "%d", fr);
+                                        if (dn)
+                                            ImGui::PushStyleColor(ImGuiCol_PlotHistogram, ImVec4(0.2f, 0.8f, 0.2f, 1.0f));
+                                        ImGui::ProgressBar(frac, ImVec2(-FLT_MIN, 0), overlay);
+                                        if (dn)
+                                            ImGui::PopStyleColor();
+                                        ImGui::TableSetColumnIndex(2);
+                                        ImGui::Text("%d", sp);
+                                        ImGui::TableSetColumnIndex(3);
+                                        ImGui::Text("%.0f%%", fr > 0 ? 100.0 * sp / fr : 0.0);
+                                    }
+                                    ImGui::EndTable();
                                 }
-                                ImGui::EndTable();
+                            ImGui::Unindent();
                             }
-                        ImGui::Unindent();
-                        } // end Progress
+                        }
+
+                        // Pipeline step progress bar (steps 2+)
+                        if (ps_step >= 2) {
+                            ImGui::Spacing();
+                            const char *ps_step_labels[] = {
+                                "Detect", "Filter", "Assemble",
+                                "Triangulate", "Bundle Adj.", "Recovery",
+                                "Global Reg.", "Write"
+                            };
+                            int n_steps = 8;
+                            float avail_w = ImGui::GetContentRegionAvail().x;
+                            float step_w = avail_w / n_steps;
+                            ImVec2 cursor = ImGui::GetCursorScreenPos();
+                            ImDrawList *dl = ImGui::GetWindowDrawList();
+                            float bar_h = ImGui::GetTextLineHeight() + 6.0f;
+
+                            for (int s = 0; s < n_steps; s++) {
+                                float x0 = cursor.x + s * step_w;
+                                float x1 = x0 + step_w - 2.0f;
+                                float y0 = cursor.y;
+                                float y1 = y0 + bar_h;
+
+                                ImU32 col;
+                                if (s + 1 < ps_step)
+                                    col = IM_COL32(50, 180, 50, 255);   // completed — green
+                                else if (s + 1 == ps_step)
+                                    col = IM_COL32(60, 120, 220, 255);  // active — blue
+                                else
+                                    col = IM_COL32(80, 80, 80, 255);    // pending — dark gray
+
+                                dl->AddRectFilled(ImVec2(x0, y0), ImVec2(x1, y1), col, 3.0f);
+
+                                ImVec2 ts = ImGui::CalcTextSize(ps_step_labels[s]);
+                                float tx = x0 + (step_w - 2.0f - ts.x) * 0.5f;
+                                float ty = y0 + (bar_h - ts.y) * 0.5f;
+                                dl->AddText(ImVec2(tx, ty), IM_COL32(255, 255, 255, 255), ps_step_labels[s]);
+                            }
+                            ImGui::Dummy(ImVec2(avail_w, bar_h + 4.0f));
+                        }
                     }
 
                     // Results
@@ -917,8 +962,9 @@ inline void DrawCalibPointSourceSection(CalibrationToolState &state, AppContext 
                         } // end CollapsingHeader("Results")
                     }
 
-                    // PointSource status
-                    if (!state.pointsource_status.empty()) {
+                    // PointSource status (hide when results are shown to avoid duplication)
+                    if (!state.pointsource_status.empty() &&
+                        !(state.pointsource_done && state.pointsource_result.success)) {
                         ImGui::Separator();
                         if (state.pointsource_status.find("Error") !=
                             std::string::npos) {
@@ -1090,8 +1136,9 @@ inline void DrawCalibPointSourceSection(CalibrationToolState &state, AppContext 
                     } // end Results (loaded from disk)
                 }
 
-                // Status
-                if (!state.pointsource_status.empty()) {
+                // Status (hide when results are shown to avoid duplication)
+                if (!state.pointsource_status.empty() &&
+                    !(state.pointsource_done && state.pointsource_result.success)) {
                     ImGui::Separator();
                     if (state.pointsource_status.find("Error") != std::string::npos) {
                         ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s",

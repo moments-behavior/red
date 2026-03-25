@@ -188,11 +188,14 @@ struct CameraProgress {
 
 struct DetectionProgress {
     std::vector<std::unique_ptr<CameraProgress>> cameras;
+    std::atomic<int> current_step{0};  // 0=not started, 1-8 pipeline steps
+    std::atomic<int> total_steps{8};
     void init(int num_cameras) {
         cameras.clear();
         cameras.reserve(num_cameras);
         for (int i = 0; i < num_cameras; i++)
             cameras.push_back(std::make_unique<CameraProgress>());
+        current_step.store(0);
     }
 };
 
@@ -2361,7 +2364,22 @@ inline PointSourceResult run_pointsource_refinement(const PointSourceConfig &con
                       std::to_string(num_cameras) + " cameras (" +
                       range_str + ")...";
     }
+    if (progress) progress->current_step.store(1, std::memory_order_relaxed);
     auto all_detections = detect_all_cameras(config, video_files, status, progress);
+
+    // Filter static artifacts from all cameras (removes persistent bright spots
+    // like LEDs or reflections that stay in the same pixel location across frames)
+    if (progress) progress->current_step.store(2, std::memory_order_relaxed);
+    if (image_width > 0 && image_height > 0) {
+        for (int c = 0; c < num_cameras; c++) {
+            int before = (int)all_detections[c].size();
+            int removed = filter_static_detections(all_detections[c], image_width, image_height);
+            if (removed > 0) {
+                printf("PointSource: static filter on %s: %d → %d detections (%d removed)\n",
+                       config.camera_names[c].c_str(), before, (int)all_detections[c].size(), removed);
+            }
+        }
+    }
 
     // Report per-camera detection counts
     int total_detections = 0;
@@ -2374,7 +2392,8 @@ inline PointSourceResult run_pointsource_refinement(const PointSourceConfig &con
         return result;
     }
 
-    // Step 2: Assemble multi-camera observations
+    // Step 3: Assemble multi-camera observations
+    if (progress) progress->current_step.store(3, std::memory_order_relaxed);
     if (status)
         *status = "Assembling multi-camera observations...";
     auto frame_obs =
@@ -2390,7 +2409,8 @@ inline PointSourceResult run_pointsource_refinement(const PointSourceConfig &con
         return result;
     }
 
-    // Step 3: Triangulate and validate
+    // Step 4: Triangulate and validate
+    if (progress) progress->current_step.store(4, std::memory_order_relaxed);
     if (status)
         *status = "Triangulating " + std::to_string(frame_obs.size()) +
                   " 3D points...";
@@ -2445,7 +2465,8 @@ inline PointSourceResult run_pointsource_refinement(const PointSourceConfig &con
            "BA: %.3f px\n",
            result.valid_3d_points, total_obs, mean_reproj_before);
 
-    // Step 4: Bundle adjustment
+    // Step 5: Bundle adjustment
+    if (progress) progress->current_step.store(5, std::memory_order_relaxed);
     if (status)
         *status = "Running bundle adjustment (" +
                   std::to_string(result.valid_3d_points) + " points, " +
@@ -2502,7 +2523,8 @@ inline PointSourceResult run_pointsource_refinement(const PointSourceConfig &con
         }
     }
 
-    // Step 4a: Recover missing cameras (No Init / Loose Init)
+    // Step 6: Recover missing cameras (No Init / Loose Init)
+    if (progress) progress->current_step.store(6, std::memory_order_relaxed);
     // After BA with the good cameras, use the refined 3D points to PnP-initialize
     // any cameras that had 0 observations, then re-triangulate and re-run BA.
     {
@@ -2797,7 +2819,8 @@ inline PointSourceResult run_pointsource_refinement(const PointSourceConfig &con
         }
     }
 
-    // Step 4b: Global registration (optional Procrustes alignment to world frame)
+    // Step 7: Global registration (optional Procrustes alignment to world frame)
+    if (progress) progress->current_step.store(7, std::memory_order_relaxed);
     // Skip if No Init — cameras are already in world frame from PnP against the board
     if (config.do_global_reg && !config.global_reg_media_folder.empty() && !config.no_init) {
         if (status)
@@ -2839,6 +2862,9 @@ inline PointSourceResult run_pointsource_refinement(const PointSourceConfig &con
     std::string base_folder = config.output_folder;
     if (base_folder.empty())
         base_folder = config.calibration_folder + "_pointsource_refined";
+
+    // Step 8: Write output
+    if (progress) progress->current_step.store(8, std::memory_order_relaxed);
 
     // Create timestamped subfolder
     time_t now = time(0);

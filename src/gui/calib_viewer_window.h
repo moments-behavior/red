@@ -798,5 +798,12 @@ inline void DrawCalibViewerWindow(CalibViewerState &state) {
         ImGui::EndTooltip();
     }
 
+    // Click on empty space deselects point and camera
+    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+        state.hovered_point < 0 && state.hovered_camera < 0 && state.hovered_edge < 0) {
+        state.selected_point = -1;
+        state.selected_camera = -1;
+    }
+
     ImGui::End();
 }

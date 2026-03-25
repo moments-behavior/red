@@ -96,6 +96,8 @@ struct CalibrationToolState {
     bool aruco_done = false;
     CalibrationPipeline::CalibrationResult aruco_result;
     std::future<CalibrationPipeline::CalibrationResult> aruco_future;
+    std::shared_ptr<CalibrationPipeline::ArucoProgress> aruco_progress =
+        std::make_shared<CalibrationPipeline::ArucoProgress>();
 
     // Aruco media state (shared for images and videos)
     bool aruco_media_loaded = false;

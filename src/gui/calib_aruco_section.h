@@ -403,38 +403,42 @@ inline void DrawCalibArucoSection(CalibrationToolState &state, AppContext &ctx,
                         state.aruco_future = std::async(
                             std::launch::async,
                             [config = filtered_config, base,
-                             status_ptr = &state.status, vfr]() {
+                             status_ptr = &state.status, vfr,
+                             prog = state.aruco_progress]() {
 #ifdef __APPLE__
                                 auto am = aruco_metal_create();
                                 aruco_detect::GpuThresholdFunc gfn =
                                     am ? aruco_metal_threshold_batch : nullptr;
                                 auto r = CalibrationPipeline::run_experimental_pipeline(
                                     config, base, status_ptr,
-                                    &vfr, gfn, am);
+                                    &vfr, gfn, am, prog.get());
                                 aruco_metal_destroy(am);
                                 return r;
 #else
                                 return CalibrationPipeline::run_experimental_pipeline(
-                                    config, base, status_ptr, &vfr);
+                                    config, base, status_ptr, &vfr,
+                                    nullptr, nullptr, prog.get());
 #endif
                             });
                     } else {
                         state.aruco_future = std::async(
                             std::launch::async,
                             [config = filtered_config, base,
-                             status_ptr = &state.status]() {
+                             status_ptr = &state.status,
+                             prog = state.aruco_progress]() {
 #ifdef __APPLE__
                                 auto am = aruco_metal_create();
                                 aruco_detect::GpuThresholdFunc gfn =
                                     am ? aruco_metal_threshold_batch : nullptr;
                                 auto r = CalibrationPipeline::run_experimental_pipeline(
                                     config, base, status_ptr,
-                                    nullptr, gfn, am);
+                                    nullptr, gfn, am, prog.get());
                                 aruco_metal_destroy(am);
                                 return r;
 #else
                                 return CalibrationPipeline::run_experimental_pipeline(
-                                    config, base, status_ptr);
+                                    config, base, status_ptr,
+                                    nullptr, nullptr, nullptr, prog.get());
 #endif
                             });
                     }
@@ -444,6 +448,113 @@ inline void DrawCalibArucoSection(CalibrationToolState &state, AppContext &ctx,
                     ImGui::SameLine();
                     ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f),
                                        "Running...");
+                }
+
+                // ── Progress display (during calibration) ──
+                if (state.aruco_running_flag && !state.aruco_progress->cameras.empty()) {
+                    int cur_step = state.aruco_progress->current_step.load(std::memory_order_relaxed);
+
+                    // Per-camera detection progress (step 1)
+                    if (cur_step <= 1) {
+                        if (ImGui::CollapsingHeader("Detection Progress##aruco", ImGuiTreeNodeFlags_DefaultOpen)) {
+                            ImGui::Indent();
+                            int eff_stop = state.aruco_stop_frame > 0
+                                ? state.aruco_stop_frame
+                                : (state.aruco_total_frames > 0 ? state.aruco_total_frames : 0);
+                            int eff_start = state.aruco_start_frame;
+                            int eff_step = std::max(1, state.aruco_frame_step);
+                            int prog_total = (eff_stop > eff_start)
+                                ? (eff_stop - eff_start + eff_step - 1) / eff_step
+                                : 0;
+                            int total_done = 0;
+                            for (int ci = 0; ci < (int)state.aruco_progress->cameras.size(); ci++)
+                                if (state.aruco_progress->cameras[ci]->done.load(std::memory_order_relaxed))
+                                    total_done++;
+                            ImGui::Text("Detection: %d / %d cameras complete",
+                                        total_done, (int)state.aruco_progress->cameras.size());
+
+                            if (ImGui::BeginTable(
+                                    "aruco_det_progress", 4,
+                                    ImGuiTableFlags_RowBg |
+                                        ImGuiTableFlags_BordersInnerV)) {
+                                ImGui::TableSetupColumn("Camera", ImGuiTableColumnFlags_WidthFixed, 100.0f);
+                                ImGui::TableSetupColumn("Progress", ImGuiTableColumnFlags_WidthStretch);
+                                ImGui::TableSetupColumn("Boards", ImGuiTableColumnFlags_WidthFixed, 60.0f);
+                                ImGui::TableSetupColumn("Rate", ImGuiTableColumnFlags_WidthFixed, 50.0f);
+                                ImGui::TableHeadersRow();
+
+                                for (int ci = 0; ci < (int)state.aruco_progress->cameras.size(); ci++) {
+                                    auto &cp = state.aruco_progress->cameras[ci];
+                                    int fr = cp->frames_processed.load(std::memory_order_relaxed);
+                                    int bd = cp->corners_detected.load(std::memory_order_relaxed);
+                                    bool dn = cp->done.load(std::memory_order_relaxed);
+                                    float frac = prog_total > 0 ? (float)fr / prog_total : 0.0f;
+                                    if (frac > 1.0f) frac = 1.0f;
+
+                                    ImGui::TableNextRow();
+                                    ImGui::TableSetColumnIndex(0);
+                                    if (ci < (int)state.aruco_progress->camera_names.size())
+                                        ImGui::Text("Cam%s", state.aruco_progress->camera_names[ci].c_str());
+                                    ImGui::TableSetColumnIndex(1);
+                                    char overlay[64];
+                                    if (prog_total > 0)
+                                        snprintf(overlay, sizeof(overlay), "%d / %d", fr, prog_total);
+                                    else
+                                        snprintf(overlay, sizeof(overlay), "%d", fr);
+                                    if (dn)
+                                        ImGui::PushStyleColor(ImGuiCol_PlotHistogram, ImVec4(0.2f, 0.8f, 0.2f, 1.0f));
+                                    ImGui::ProgressBar(frac, ImVec2(-FLT_MIN, 0), overlay);
+                                    if (dn)
+                                        ImGui::PopStyleColor();
+                                    ImGui::TableSetColumnIndex(2);
+                                    ImGui::Text("%d", bd);
+                                    ImGui::TableSetColumnIndex(3);
+                                    ImGui::Text("%.0f%%", fr > 0 ? 100.0 * bd / fr : 0.0);
+                                }
+                                ImGui::EndTable();
+                            }
+                            ImGui::Unindent();
+                        }
+                    }
+
+                    // Pipeline step progress (steps 2-7)
+                    if (cur_step >= 2) {
+                        ImGui::Spacing();
+                        const char *step_labels[] = {
+                            "Detect", "Quality", "PnP Init",
+                            "Triangulate", "Bundle Adj.", "Global Reg.", "Write"
+                        };
+                        int n_steps = 7;
+                        float avail_w = ImGui::GetContentRegionAvail().x;
+                        float step_w = avail_w / n_steps;
+                        ImVec2 cursor = ImGui::GetCursorScreenPos();
+                        ImDrawList *dl = ImGui::GetWindowDrawList();
+                        float bar_h = ImGui::GetTextLineHeight() + 6.0f;
+
+                        for (int s = 0; s < n_steps; s++) {
+                            float x0 = cursor.x + s * step_w;
+                            float x1 = x0 + step_w - 2.0f;
+                            float y0 = cursor.y;
+                            float y1 = y0 + bar_h;
+
+                            ImU32 col;
+                            if (s + 1 < cur_step)
+                                col = IM_COL32(50, 180, 50, 255);   // completed — green
+                            else if (s + 1 == cur_step)
+                                col = IM_COL32(60, 120, 220, 255);  // active — blue
+                            else
+                                col = IM_COL32(80, 80, 80, 255);    // pending — dark gray
+
+                            dl->AddRectFilled(ImVec2(x0, y0), ImVec2(x1, y1), col, 3.0f);
+
+                            // Center label text
+                            ImVec2 ts = ImGui::CalcTextSize(step_labels[s]);
+                            float tx = x0 + (step_w - 2.0f - ts.x) * 0.5f;
+                            float ty = y0 + (bar_h - ts.y) * 0.5f;
+                            dl->AddText(ImVec2(tx, ty), IM_COL32(255, 255, 255, 255), step_labels[s]);
+                        }
+                        ImGui::Dummy(ImVec2(avail_w, bar_h + 4.0f));
+                    }
                 }
 
                 // Results display
@@ -471,18 +582,41 @@ inline void DrawCalibArucoSection(CalibrationToolState &state, AppContext &ctx,
                 // Load previous calibration from disk
                 {
                     std::string cal_folder = state.project.project_path + "/aruco_calibration";
-                    bool has_db = CalibrationPipeline::has_calibration_database(cal_folder);
+                    std::string db_path = CalibrationPipeline::find_calibration_database_path(cal_folder);
+                    bool has_db = !db_path.empty();
                     if (!has_db && state.aruco_done && state.aruco_result.success)
                         has_db = true;
                     // Also check legacy folders
-                    if (!has_db) {
+                    if (db_path.empty()) {
                         std::string legacy_img = state.project.project_path + "/aruco_image_experimental";
                         std::string legacy_vid = state.project.project_path + "/aruco_video_experimental";
-                        if (CalibrationPipeline::has_calibration_database(legacy_img))
-                            { cal_folder = legacy_img; has_db = true; }
-                        else if (CalibrationPipeline::has_calibration_database(legacy_vid))
-                            { cal_folder = legacy_vid; has_db = true; }
+                        db_path = CalibrationPipeline::find_calibration_database_path(legacy_img);
+                        if (db_path.empty())
+                            db_path = CalibrationPipeline::find_calibration_database_path(legacy_vid);
+                        if (!db_path.empty()) {
+                            has_db = true;
+                            cal_folder = std::filesystem::path(db_path).parent_path().parent_path().string();
+                        }
                     }
+
+                    // Show what would be loaded
+                    if (has_db && !(state.aruco_done && state.aruco_result.success)) {
+                        // Extract timestamp folder name from db_path
+                        std::string ts_folder = std::filesystem::path(db_path).parent_path().filename().string();
+                        // Show saved reproj from project metadata if available
+                        if (state.project.last_aruco_mean_reproj > 0) {
+                            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f),
+                                "Previous: %.3f px (%d cameras, step=%d) — %s",
+                                state.project.last_aruco_mean_reproj,
+                                state.project.last_aruco_cameras_used,
+                                state.project.last_aruco_frame_step,
+                                ts_folder.c_str());
+                        } else {
+                            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f),
+                                "Previous: %s", ts_folder.c_str());
+                        }
+                    }
+
                     ImGui::BeginDisabled(!has_db);
                     if (ImGui::Button("Load Previous##aruco_load_prev")) {
                         if (state.aruco_done && state.aruco_result.success) {
