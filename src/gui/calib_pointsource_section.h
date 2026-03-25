@@ -987,6 +987,119 @@ inline void DrawCalibPointSourceSection(CalibrationToolState &state, AppContext 
                             "Set Video Folder and click Load PointSource Videos");
                     }
                 }
+
+                // Results section — shown when results are loaded, even without videos
+                // (e.g., after "Load Previous Results")
+                if (!state.pointsource_ready &&
+                    state.pointsource_done && state.pointsource_result.success) {
+                    if (ImGui::CollapsingHeader("Results", ImGuiTreeNodeFlags_DefaultOpen)) {
+                    ImGui::Indent();
+                    ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f),
+                                       "Reprojection error: %.3f -> %.3f px",
+                                       state.pointsource_result.mean_reproj_before,
+                                       state.pointsource_result.mean_reproj_after);
+                    double avg_obs = state.pointsource_result.valid_3d_points > 0
+                        ? (double)state.pointsource_result.total_observations / state.pointsource_result.valid_3d_points
+                        : 0.0;
+                    ImGui::Text("3D points: %d | Observations: %d (avg %.1f cameras/point)",
+                                state.pointsource_result.valid_3d_points,
+                                state.pointsource_result.total_observations,
+                                avg_obs);
+                    if (!state.pointsource_result.output_folder.empty())
+                        ImGui::Text("Output: %s",
+                                    state.pointsource_result.output_folder.c_str());
+
+                    // 3D Viewer button (same as inside pointsource_ready block)
+                    if (!state.pointsource_result.output_folder.empty()) {
+                        ImGui::Spacing();
+                        if (ImGui::Button("3D Viewer##ps_viewer_loaded")) {
+                            namespace fs = std::filesystem;
+                            auto &lr = state.loaded_result;
+                            lr = CalibrationPipeline::CalibrationResult{};
+                            std::string out_folder = state.pointsource_result.output_folder;
+                            std::string summary_dir = out_folder + "/summary_data";
+
+                            // Load camera poses from YAML files
+                            for (const auto &cn : state.pointsource_config.camera_names) {
+                                std::string yaml_path = out_folder + "/Cam" + cn + ".yaml";
+                                if (!fs::exists(yaml_path)) continue;
+                                try {
+                                    auto yaml = opencv_yaml::read(yaml_path);
+                                    CalibrationPipeline::CameraPose cp;
+                                    cp.K = yaml.getMatrix("camera_matrix").block<3, 3>(0, 0);
+                                    Eigen::MatrixXd dm = yaml.getMatrix("distortion_coefficients");
+                                    for (int j = 0; j < 5; j++) cp.dist(j) = dm(j, 0);
+                                    cp.R = yaml.getMatrix("rc_ext").block<3, 3>(0, 0);
+                                    Eigen::MatrixXd tm = yaml.getMatrix("tc_ext");
+                                    cp.t = Eigen::Vector3d(tm(0, 0), tm(1, 0), tm(2, 0));
+                                    lr.cameras.push_back(cp);
+                                    lr.cam_names.push_back(cn);
+                                    if (lr.image_width == 0) {
+                                        lr.image_width = yaml.getInt("image_width");
+                                        lr.image_height = yaml.getInt("image_height");
+                                    }
+                                } catch (...) {}
+                            }
+
+                            // Load ba_points.json
+                            std::string pts_path = summary_dir + "/ba_points.json";
+                            if (fs::exists(pts_path)) {
+                                try {
+                                    std::ifstream pf(pts_path);
+                                    nlohmann::json pts_j;
+                                    pf >> pts_j;
+                                    for (int i = 0; i < (int)pts_j.size(); i++)
+                                        lr.points_3d[i] = Eigen::Vector3d(
+                                            pts_j[i][0].get<double>(),
+                                            pts_j[i][1].get<double>(),
+                                            pts_j[i][2].get<double>());
+                                } catch (...) {}
+                            }
+
+                            // Load observations.json for per-camera landmarks
+                            std::string obs_path = summary_dir + "/observations.json";
+                            if (fs::exists(obs_path)) {
+                                try {
+                                    std::ifstream of2(obs_path);
+                                    nlohmann::json obs_j;
+                                    of2 >> obs_j;
+                                    for (int pi = 0; pi < (int)obs_j.size(); pi++) {
+                                        for (const auto &obs : obs_j[pi]) {
+                                            int ci = obs["cam"].get<int>();
+                                            if (ci < (int)lr.cam_names.size()) {
+                                                auto px = obs["px"];
+                                                lr.db.landmarks[lr.cam_names[ci]][pi] =
+                                                    Eigen::Vector2d(px[0].get<double>(), px[1].get<double>());
+                                            }
+                                        }
+                                    }
+                                } catch (...) {}
+                            }
+
+                            state.calib_viewer.result = &state.loaded_result;
+                            state.calib_viewer.show = true;
+                            state.calib_viewer.cached_points_version = -1;
+                            state.calib_viewer.board_width_mm =
+                                (state.project.charuco_setup.w - 1) * state.project.charuco_setup.square_side_length;
+                            state.calib_viewer.board_height_mm =
+                                (state.project.charuco_setup.h - 1) * state.project.charuco_setup.square_side_length;
+                        }
+                    }
+                    ImGui::Unindent();
+                    } // end Results (loaded from disk)
+                }
+
+                // Status
+                if (!state.pointsource_status.empty()) {
+                    ImGui::Separator();
+                    if (state.pointsource_status.find("Error") != std::string::npos) {
+                        ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s",
+                                           state.pointsource_status.c_str());
+                    } else {
+                        ImGui::TextWrapped("%s", state.pointsource_status.c_str());
+                    }
+                }
+
                 ImGui::Unindent();
                 } // end CollapsingHeader("PointSource Refinement")
                 ImGui::Spacing();
