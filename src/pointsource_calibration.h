@@ -191,13 +191,105 @@ struct CameraProgress {
 
 struct DetectionProgress {
     std::vector<std::unique_ptr<CameraProgress>> cameras;
+    std::atomic<int> current_step{0};  // 0=not started, 1-8 pipeline steps
+    std::atomic<int> total_steps{8};
     void init(int num_cameras) {
         cameras.clear();
         cameras.reserve(num_cameras);
         for (int i = 0; i < num_cameras; i++)
             cameras.push_back(std::make_unique<CameraProgress>());
+        current_step.store(0);
     }
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Load previous results from disk
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Find the most recent timestamped subfolder (YYYY_MM_DD_HH_MM_SS) in a directory.
+// Returns empty string if none found.
+inline std::string find_latest_timestamped_subfolder(const std::string &dir) {
+    namespace fs = std::filesystem;
+    if (!fs::exists(dir) || !fs::is_directory(dir))
+        return "";
+    std::string latest;
+    for (const auto &entry : fs::directory_iterator(dir)) {
+        if (!entry.is_directory()) continue;
+        std::string name = entry.path().filename().string();
+        // Expect format: YYYY_MM_DD_HH_MM_SS (19 chars, all digits and underscores)
+        if (name.size() == 19 && name[4] == '_' && name[7] == '_' &&
+            name[10] == '_' && name[13] == '_' && name[16] == '_') {
+            if (name > latest)
+                latest = name;
+        }
+    }
+    if (latest.empty())
+        return "";
+    return dir + "/" + latest;
+}
+
+// Load a PointSourceResult from a summary.json file in a timestamped output folder.
+// Returns true on success, populating result. The output_folder field is set to
+// the timestamped folder containing the summary.
+inline bool load_result_from_summary(const std::string &timestamped_folder,
+                                     PointSourceResult &result,
+                                     std::string *err = nullptr) {
+    namespace fs = std::filesystem;
+    std::string summary_path = timestamped_folder + "/summary_data/summary.json";
+    if (!fs::exists(summary_path)) {
+        if (err) *err = "summary.json not found in " + timestamped_folder;
+        return false;
+    }
+    try {
+        std::ifstream ifs(summary_path);
+        nlohmann::json j;
+        ifs >> j;
+
+        result.success = true;
+        result.output_folder = timestamped_folder;
+        result.mean_reproj_before = j.value("mean_reproj_before", 0.0);
+        result.mean_reproj_after = j.value("mean_reproj_after", 0.0);
+        result.valid_3d_points = j.value("valid_3d_points", 0);
+        result.total_observations = j.value("total_observations", 0);
+        result.ba_outliers_removed = j.value("ba_outliers_removed", 0);
+
+        result.camera_changes.clear();
+        if (j.contains("camera_changes") && j["camera_changes"].is_array()) {
+            for (const auto &cam_j : j["camera_changes"]) {
+                CameraChange cc;
+                cc.name = cam_j.value("name", "");
+                cc.detections = cam_j.value("detections", 0);
+                cc.observations = cam_j.value("observations", 0);
+                cc.dfx = cam_j.value("dfx", 0.0);
+                cc.dfy = cam_j.value("dfy", 0.0);
+                cc.dcx = cam_j.value("dcx", 0.0);
+                cc.dcy = cam_j.value("dcy", 0.0);
+                cc.dt_x = cam_j.value("dt_x", 0.0);
+                cc.dt_y = cam_j.value("dt_y", 0.0);
+                cc.dt_z = cam_j.value("dt_z", 0.0);
+                cc.dt_norm = cam_j.value("dt_norm", 0.0);
+                cc.drot_deg = cam_j.value("drot_deg", 0.0);
+                result.camera_changes.push_back(cc);
+            }
+        }
+
+        // Check for global_reg_status in settings.json
+        std::string settings_path = timestamped_folder + "/summary_data/settings.json";
+        if (fs::exists(settings_path)) {
+            std::ifstream sfs(settings_path);
+            nlohmann::json sj;
+            sfs >> sj;
+            if (sj.contains("global_reg_status"))
+                result.global_reg_status = sj["global_reg_status"].get<std::string>();
+        }
+
+        return true;
+    } catch (const std::exception &e) {
+        if (err) *err = std::string("Failed to parse summary.json: ") + e.what();
+        result = PointSourceResult();
+        return false;
+    }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -1056,14 +1148,14 @@ inline std::vector<CameraQuality> assess_camera_quality(
     }
 
     // Adaptive threshold: if the user's threshold is too strict for this dataset,
-    // use a relative approach — good cameras are those in the better half
+    // use a relative approach — cameras in the better half are "good"
     double effective_threshold = quality_threshold;
     if (!all_medians.empty()) {
         std::sort(all_medians.begin(), all_medians.end());
         double best_median = all_medians[0];
-        // If even the best camera exceeds the threshold, use adaptive:
-        // "good" = within 2x of the best camera's median
         if (best_median >= quality_threshold) {
+            // All cameras exceed the absolute threshold. Use relative:
+            // "good" = within 2x of the best camera's median reproj.
             effective_threshold = std::max(quality_threshold, best_median * 2.0);
             printf("  Adaptive threshold: best camera median %.2f px > %.0f px, "
                    "using %.1f px (2x best)\n",
@@ -1386,8 +1478,9 @@ inline bool triangulate_and_validate_progressive(
 
         printf("  Camera %d: PnP reproj %.2f -> %.2f px\n", c, err_before, err_after);
 
-        // Only accept if PnP improved things
-        if (err_after < err_before) {
+        // Only accept if PnP improved AND result is reasonably good.
+        // Accepting cameras with 600+ px reproj corrupts downstream mini-BA.
+        if (err_after < err_before && err_after < 100.0) {
             poses[c].R = R_new;
             poses[c].t = t_new;
             printf("  Camera %d: accepted PnP re-initialization\n", c);
@@ -1417,7 +1510,7 @@ inline bool triangulate_and_validate_progressive(
             // reproj is reasonable (not thousands of px from identity pose)
             bool is_identity = (poses[c].R.isIdentity(1e-6) && poses[c].t.norm() < 1.0);
             // Also check if PnP improved it to reasonable quality
-            bool pnp_reasonable = !is_identity && quality[c].median_reproj < 1000.0;
+            bool pnp_reasonable = !is_identity && quality[c].median_reproj < 200.0;
             has_pose[c] = is_good[c] || pnp_reasonable;
             if (has_pose[c]) n_with_pose++;
         }
@@ -1619,15 +1712,20 @@ inline bool triangulate_and_validate_progressive(
                     fo.pixel_coords.push_back(fobs.pixel_coords[i]);
                 }
             }
-            if ((int)fo.cam_indices.size() >= min_cameras)
+            // Use min(n_still_good, min_cameras) so we don't require more
+            // cameras per frame than exist in the good set
+            int phase_c_min = std::min(n_still_good, std::max(2, min_cameras));
+            if ((int)fo.cam_indices.size() >= phase_c_min)
                 filtered_obs.push_back(std::move(fo));
         }
         if (status) *status = "Loose Init Phase C: re-triangulating with " +
                               std::to_string(n_still_good) + " good cameras...";
-        printf("Loose Init Phase C: re-triangulating with %d/%d good cameras (%d frames)...\n",
-               n_still_good, num_cameras, (int)filtered_obs.size());
+        printf("Loose Init Phase C: re-triangulating with %d/%d good cameras (%d frames, min=%d)...\n",
+               n_still_good, num_cameras, (int)filtered_obs.size(),
+               std::min(n_still_good, std::max(2, min_cameras)));
 
-        return triangulate_and_validate(filtered_obs, poses, min_cameras,
+        int phase_c_min = std::min(n_still_good, std::max(2, min_cameras));
+        return triangulate_and_validate(filtered_obs, poses, phase_c_min,
                                          reproj_threshold, points_3d,
                                          clean_obs_per_point, mean_reproj_error,
                                          status);
@@ -2269,7 +2367,22 @@ inline PointSourceResult run_pointsource_refinement(const PointSourceConfig &con
                       std::to_string(num_cameras) + " cameras (" +
                       range_str + ")...";
     }
+    if (progress) progress->current_step.store(1, std::memory_order_relaxed);
     auto all_detections = detect_all_cameras(config, video_files, status, progress);
+
+    // Filter static artifacts from all cameras (removes persistent bright spots
+    // like LEDs or reflections that stay in the same pixel location across frames)
+    if (progress) progress->current_step.store(2, std::memory_order_relaxed);
+    if (image_width > 0 && image_height > 0) {
+        for (int c = 0; c < num_cameras; c++) {
+            int before = (int)all_detections[c].size();
+            int removed = filter_static_detections(all_detections[c], image_width, image_height);
+            if (removed > 0) {
+                printf("PointSource: static filter on %s: %d → %d detections (%d removed)\n",
+                       config.camera_names[c].c_str(), before, (int)all_detections[c].size(), removed);
+            }
+        }
+    }
 
     // Report per-camera detection counts
     int total_detections = 0;
@@ -2282,7 +2395,8 @@ inline PointSourceResult run_pointsource_refinement(const PointSourceConfig &con
         return result;
     }
 
-    // Step 2: Assemble multi-camera observations
+    // Step 3: Assemble multi-camera observations
+    if (progress) progress->current_step.store(3, std::memory_order_relaxed);
     if (status)
         *status = "Assembling multi-camera observations...";
     auto frame_obs =
@@ -2298,7 +2412,8 @@ inline PointSourceResult run_pointsource_refinement(const PointSourceConfig &con
         return result;
     }
 
-    // Step 3: Triangulate and validate
+    // Step 4: Triangulate and validate
+    if (progress) progress->current_step.store(4, std::memory_order_relaxed);
     if (status)
         *status = "Triangulating " + std::to_string(frame_obs.size()) +
                   " 3D points...";
@@ -2310,7 +2425,21 @@ inline PointSourceResult run_pointsource_refinement(const PointSourceConfig &con
     if (use_loose) {
         // Loose Init: assess quality, PnP re-init poor cameras, then triangulate
         if (status) *status = "Assessing per-camera calibration quality...";
-        auto quality = assess_camera_quality(frame_obs, poses, 10.0, status);
+
+        // For No Init: exclude identity-pose cameras from triangulation during
+        // quality assessment. Without this, the 5 cameras with garbage poses
+        // corrupt every DLT triangulation, inflating reproj for ALL cameras.
+        std::vector<bool> valid_for_quality;
+        std::vector<bool> *valid_mask = nullptr;
+        if (config.no_init) {
+            valid_for_quality.resize(num_cameras);
+            for (int c = 0; c < num_cameras; c++) {
+                bool is_identity = (poses[c].R.isIdentity(1e-6) && poses[c].t.norm() < 1.0);
+                valid_for_quality[c] = !is_identity;
+            }
+            valid_mask = &valid_for_quality;
+        }
+        auto quality = assess_camera_quality(frame_obs, poses, 10.0, status, valid_mask);
         if (!triangulate_and_validate_progressive(frame_obs, poses, quality,
                                                    config.min_cameras,
                                                    config.reproj_threshold,
@@ -2339,7 +2468,8 @@ inline PointSourceResult run_pointsource_refinement(const PointSourceConfig &con
            "BA: %.3f px\n",
            result.valid_3d_points, total_obs, mean_reproj_before);
 
-    // Step 4: Bundle adjustment
+    // Step 5: Bundle adjustment
+    if (progress) progress->current_step.store(5, std::memory_order_relaxed);
     if (status)
         *status = "Running bundle adjustment (" +
                   std::to_string(result.valid_3d_points) + " points, " +
@@ -2396,7 +2526,8 @@ inline PointSourceResult run_pointsource_refinement(const PointSourceConfig &con
         }
     }
 
-    // Step 4a: Recover missing cameras (No Init / Loose Init)
+    // Step 6: Recover missing cameras (No Init / Loose Init)
+    if (progress) progress->current_step.store(6, std::memory_order_relaxed);
     // After BA with the good cameras, use the refined 3D points to PnP-initialize
     // any cameras that had 0 observations, then re-triangulate and re-run BA.
     {
@@ -2421,40 +2552,46 @@ inline PointSourceResult run_pointsource_refinement(const PointSourceConfig &con
                        return s;
                    }().c_str());
 
-            // Smart Blob re-detection: for missing cameras that may have had
-            // detections rejected by the compactness check, re-detect with
-            // smart_blob=true to recover observations from multi-blob frames.
-            if (!config.smart_blob) {
-                bool any_improved = false;
+            // Smart Blob re-detection and/or static artifact filtering for
+            // missing cameras. Two scenarios:
+            // A) smart_blob OFF: re-detect with smart_blob to recover frames
+            //    rejected by the compactness check, then filter static artifacts.
+            // B) smart_blob ON: initial detections may include artifact centroids.
+            //    Run static artifact filter on existing detections.
+            {
+                bool any_changed = false;
                 for (int c : missing_cams) {
-                    PointSourceConfig redet_config = config;
-                    redet_config.camera_names = {config.camera_names[c]};
-                    redet_config.smart_blob = true;
-                    auto redet_videos = find_video_files(redet_config.media_folder,
-                                                          redet_config.camera_names);
-                    if (redet_videos.empty()) continue;
-
-                    if (status)
-                        *status = "Smart Blob re-detection for camera " + config.camera_names[c] + "...";
-                    auto redet = detect_all_cameras(redet_config, redet_videos, status, nullptr);
-                    if (!redet.empty() && (int)redet[0].size() > (int)all_detections[c].size()) {
-                        // Filter static artifact detections before accepting
-                        int removed = filter_static_detections(redet[0], image_width, image_height);
-                        printf("  Camera %s: Smart Blob re-detection: %d -> %d detections "
-                               "(%d static artifact removed)\n",
-                               config.camera_names[c].c_str(),
-                               (int)all_detections[c].size(), (int)redet[0].size(), removed);
-                        if ((int)redet[0].size() > (int)all_detections[c].size()) {
-                            all_detections[c] = std::move(redet[0]);
-                            any_improved = true;
+                    if (!config.smart_blob) {
+                        // Re-detect with smart_blob enabled
+                        PointSourceConfig redet_config = config;
+                        redet_config.camera_names = {config.camera_names[c]};
+                        redet_config.smart_blob = true;
+                        auto redet_videos = find_video_files(redet_config.media_folder,
+                                                              redet_config.camera_names);
+                        if (!redet_videos.empty()) {
+                            if (status)
+                                *status = "Smart Blob re-detection for camera " + config.camera_names[c] + "...";
+                            auto redet = detect_all_cameras(redet_config, redet_videos, status, nullptr);
+                            if (!redet.empty() && (int)redet[0].size() > (int)all_detections[c].size()) {
+                                all_detections[c] = std::move(redet[0]);
+                            }
                         }
+                    }
+                    // Always run static artifact filter on missing cameras
+                    int before = (int)all_detections[c].size();
+                    int removed = filter_static_detections(all_detections[c], image_width, image_height);
+                    if (removed > 0 || before != (int)all_detections[c].size()) {
+                        printf("  Camera %s: %d detections (%d static artifact removed)\n",
+                               config.camera_names[c].c_str(),
+                               (int)all_detections[c].size(), removed);
+                        any_changed = true;
                     }
                 }
 
-                // Rebuild frame_obs if any camera got more detections
-                if (any_improved) {
+                // Rebuild frame_obs if any camera's detections changed
+                if (any_changed) {
                     frame_obs = assemble_observations(all_detections, config.min_cameras);
-                    printf("  Rebuilt frame_obs: %d frames after Smart Blob re-detection\n",
+                    printf("  Rebuilt frame_obs: %d frames after artifact filtering\n",
                            (int)frame_obs.size());
                 }
             }
@@ -2685,7 +2822,8 @@ inline PointSourceResult run_pointsource_refinement(const PointSourceConfig &con
         }
     }
 
-    // Step 4b: Global registration (optional Procrustes alignment to world frame)
+    // Step 7: Global registration (optional Procrustes alignment to world frame)
+    if (progress) progress->current_step.store(7, std::memory_order_relaxed);
     // Skip if No Init — cameras are already in world frame from PnP against the board
     if (config.do_global_reg && !config.global_reg_media_folder.empty() && !config.no_init) {
         if (status)
@@ -2727,6 +2865,9 @@ inline PointSourceResult run_pointsource_refinement(const PointSourceConfig &con
     std::string base_folder = config.output_folder;
     if (base_folder.empty())
         base_folder = config.calibration_folder + "_pointsource_refined";
+
+    // Step 8: Write output
+    if (progress) progress->current_step.store(8, std::memory_order_relaxed);
 
     // Create timestamped subfolder
     time_t now = time(0);

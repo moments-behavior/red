@@ -40,6 +40,12 @@ if(APPLE)
     set(DIR_IMGUI "${CMAKE_SOURCE_DIR}/lib/imgui")
     set(DIR_IMPLOT "${CMAKE_SOURCE_DIR}/lib/implot")
     set(DIR_IMPLOT3D "${CMAKE_SOURCE_DIR}/lib/implot3d")
+
+    # Use 32-bit vertex indices for ImGui/ImPlot3D to support large meshes.
+    # Default 16-bit indices cap at 65K vertices — with circle markers (~50
+    # verts each), this silently drops 3D points after ~1,300 points.
+    # Applied via compile definition so we don't modify the imgui submodule.
+    add_definitions(-DImDrawIdx=unsigned\ int)
     set(DIR_FILEBROWSER "${CMAKE_SOURCE_DIR}/lib/ImGuiFileDialog")
 
     file(GLOB SRC_FILES src/*.cpp)
@@ -887,6 +893,21 @@ if(APPLE)
         CXX_STANDARD 17
         CXX_STANDARD_REQUIRED ON
     )
+
+    add_executable(test_no_init_ui
+        /Users/johnsonr/red_dev/Mar24/test_no_init_ui.cpp
+        src/pointsource_metal.mm
+        src/vt_async_decoder.mm
+        src/FFmpegDemuxer.cpp)
+    target_include_directories(test_no_init_ui PRIVATE
+        src ${HOMEBREW_PREFIX}/include ${HOMEBREW_PREFIX}/include/eigen3 ${FFMPEG_INCLUDE_DIRS})
+    target_link_directories(test_no_init_ui PRIVATE ${FFMPEG_LIBRARY_DIRS})
+    target_link_libraries(test_no_init_ui PRIVATE
+        Eigen3::Eigen Ceres::ceres ${FFMPEG_LIBRARIES}
+        "-L/opt/homebrew/opt/jpeg-turbo/lib" "-lturbojpeg"
+        "-framework VideoToolbox" "-framework CoreMedia" "-framework CoreVideo"
+        "-framework CoreFoundation" "-framework Metal" "-framework Foundation")
+    set_target_properties(test_no_init_ui PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
 
     add_executable(test_detection_diag
         /Users/johnsonr/red_dev/Mar22/test_detection_diag.cpp

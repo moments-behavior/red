@@ -891,6 +891,15 @@ inline void DrawCalibCreateDialog(CalibrationToolState &state, AppContext &ctx,
                                     state.project.camera_names;
                                 state.pointsource_config.output_folder =
                                     state.project.pointsource_output_folder;
+
+                                // Auto-enable No Init for PointSourceFromScratch
+                                if (state.project.subtype == CalibrationTool::CalibSubtype::PointSourceFromScratch &&
+                                    state.project.calibration_folder.empty() &&
+                                    !state.project.global_reg_media_folder.empty()) {
+                                    state.pointsource_config.no_init = true;
+                                    state.pointsource_config.loose_init = true;
+                                }
+
                                 state.pointsource_ready = true;
 
                                 // Load videos
@@ -902,7 +911,15 @@ inline void DrawCalibCreateDialog(CalibrationToolState &state, AppContext &ctx,
                                     cb.load_videos();
                                     cb.print_metadata();
                                 }
-                                state.pointsource_total_frames = dc_context->estimated_num_frames;
+                                // Query frame count from first PS camera directly
+                                if (!state.project.camera_names.empty()) {
+                                    std::string first_vid = state.project.media_folder + "/Cam" +
+                                        state.project.camera_names[0] + ".mp4";
+                                    state.pointsource_total_frames =
+                                        PointSourceCalibration::get_video_frame_count(first_vid);
+                                }
+                                if (state.pointsource_total_frames <= 0)
+                                    state.pointsource_total_frames = dc_context->estimated_num_frames;
                             }
 
                             // Auto-load videos for telecentric (direct, like laser).

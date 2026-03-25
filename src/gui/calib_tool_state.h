@@ -105,6 +105,8 @@ struct CalibrationToolState {
     bool aruco_done = false;
     CalibrationPipeline::CalibrationResult aruco_result;
     std::future<CalibrationPipeline::CalibrationResult> aruco_future;
+    std::shared_ptr<CalibrationPipeline::ArucoProgress> aruco_progress =
+        std::make_shared<CalibrationPipeline::ArucoProgress>();
 
     // Aruco media state (shared for images and videos)
     bool aruco_media_loaded = false;
@@ -144,6 +146,8 @@ struct CalibrationToolState {
     bool pointsource_ready = false;
     PointSourceCalibration::PointSourceConfig pointsource_config;
     CalibrationTool::ArucoMediaInfo pointsource_global_reg_info; // auto-detection for PS global reg media
+    std::vector<bool> pointsource_camera_enabled; // per-camera enable/disable for PointSource
+    std::vector<int> pointsource_camera_frames;  // per-camera frame count (from video metadata)
     int pointsource_total_frames = 0;
     bool pointsource_running = false;
     bool pointsource_done = false;

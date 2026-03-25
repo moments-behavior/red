@@ -105,6 +105,32 @@ struct VideoFrameRange {
     int frame_step = 1;
 };
 
+// Progress tracking for ArUco calibration (shared between pipeline thread and UI)
+struct ArucoProgress {
+    // Per-camera detection progress
+    struct CameraProgress {
+        std::atomic<int> frames_processed{0};
+        std::atomic<int> corners_detected{0};  // frames with valid board detections
+        std::atomic<bool> done{false};
+    };
+    std::vector<std::unique_ptr<CameraProgress>> cameras;
+    std::vector<std::string> camera_names;
+
+    // Pipeline step progress (post-detection)
+    std::atomic<int> current_step{0};     // 0=not started, 1-7 = pipeline steps
+    std::atomic<int> total_steps{7};
+    std::atomic<int> intrinsics_done{0};  // cameras with intrinsics calibrated
+
+    void init(const std::vector<std::string> &cam_names) {
+        camera_names = cam_names;
+        cameras.clear();
+        for (size_t i = 0; i < cam_names.size(); i++)
+            cameras.push_back(std::make_unique<CameraProgress>());
+        current_step.store(0);
+        intrinsics_done.store(0);
+    }
+};
+
 // Get video frame count using FFmpeg
 inline int get_video_frame_count(const std::string &path) {
     AVFormatContext *ctx = avformat_alloc_context();
@@ -610,7 +636,8 @@ inline bool detect_and_calibrate_intrinsics_video(
     std::string *status,
     aruco_detect::GpuThresholdFunc gpu_thresh = nullptr,
     void *gpu_ctx = nullptr,
-    std::vector<std::string> *skipped_cameras = nullptr) {
+    std::vector<std::string> *skipped_cameras = nullptr,
+    ArucoProgress *progress = nullptr) {
 
     const auto &cs = config.charuco_setup;
 
@@ -651,6 +678,8 @@ inline bool detect_and_calibrate_intrinsics_video(
     int total_frames = num_cameras * frames_per_cam;
     std::atomic<int> frames_done{0};
     auto phase1_start = std::chrono::steady_clock::now();
+
+    if (progress) progress->init(vfr.cam_ordered);
 
     if (status) *status = "Detecting ChArUco corners from video (0/" +
                           std::to_string(total_frames) + " frames)...";
@@ -738,7 +767,11 @@ inline bool detect_and_calibrate_intrinsics_video(
                                 det.all_obj_points.push_back(std::move(obj_pts));
                                 det.all_img_points.push_back(std::move(img_pts));
                             }
+                            if (progress && cam_i < (int)progress->cameras.size())
+                                progress->cameras[cam_i]->corners_detected.fetch_add(1, std::memory_order_relaxed);
                         }
+                        if (progress && cam_i < (int)progress->cameras.size())
+                            progress->cameras[cam_i]->frames_processed.fetch_add(1, std::memory_order_relaxed);
                         int done_f = ++frames_done;
                         if (done_f % 20 == 0) {
                             auto now = std::chrono::steady_clock::now();
@@ -802,7 +835,11 @@ inline bool detect_and_calibrate_intrinsics_video(
                             det.all_obj_points.push_back(std::move(obj_pts));
                             det.all_img_points.push_back(std::move(img_pts));
                         }
+                        if (progress && cam_i < (int)progress->cameras.size())
+                            progress->cameras[cam_i]->corners_detected.fetch_add(1, std::memory_order_relaxed);
                     }
+                    if (progress && cam_i < (int)progress->cameras.size())
+                        progress->cameras[cam_i]->frames_processed.fetch_add(1, std::memory_order_relaxed);
                     int done_f = ++frames_done;
                     if (done_f % 20 == 0) {
                         auto now = std::chrono::steady_clock::now();
@@ -821,6 +858,8 @@ inline bool detect_and_calibrate_intrinsics_video(
                     det.error = "Too few valid frames for camera " + serial +
                                 " (" + std::to_string(det.all_obj_points.size()) + ")";
                 } else { det.ok = true; }
+                if (progress && cam_i < (int)progress->cameras.size())
+                    progress->cameras[cam_i]->done.store(true, std::memory_order_relaxed);
                 int done = ++cameras_done;
                 { std::lock_guard<std::mutex> lock(status_mutex);
                   if (status) *status = "Detecting corners — camera " +
@@ -3516,7 +3555,8 @@ inline bool bundle_adjust_experimental(
 inline CalibrationResult run_experimental_pipeline(
     const CalibrationTool::CalibConfig &config_in, const std::string &base_folder,
     std::string *status, const VideoFrameRange *vfr=nullptr,
-    aruco_detect::GpuThresholdFunc gpu_thresh=nullptr, void *gpu_ctx=nullptr) {
+    aruco_detect::GpuThresholdFunc gpu_thresh=nullptr, void *gpu_ctx=nullptr,
+    ArucoProgress *progress=nullptr) {
     CalibrationTool::CalibConfig config = config_in; // mutable copy (cameras may be removed)
     CalibrationResult result; result.cam_names=config.cam_ordered;
     auto now=std::chrono::system_clock::now();auto t=std::chrono::system_clock::to_time_t(now);
@@ -3530,10 +3570,11 @@ inline CalibrationResult run_experimental_pipeline(
     std::string outf=base_folder+"/"+tb;
     {namespace fs=std::filesystem;std::error_code ec;fs::create_directories(outf,ec);if(ec){result.error="Cannot create: "+ec.message();return result;}}
     fprintf(stderr,"\n[Experimental] === Starting experimental pipeline ===\n");
+    if(progress) progress->current_step.store(1, std::memory_order_relaxed);
     if(status)*status="Step 1: Detecting + calibrating intrinsics...";
     std::map<std::string,CameraIntrinsics> intrinsics;std::vector<int> video_frame_numbers;
     std::vector<std::string> skipped_cams;
-    if(vfr){if(!detect_and_calibrate_intrinsics_video(config,*vfr,intrinsics,&video_frame_numbers,status,gpu_thresh,gpu_ctx,&skipped_cams)){result.error=status?*status:"failed";return result;}}
+    if(vfr){if(!detect_and_calibrate_intrinsics_video(config,*vfr,intrinsics,&video_frame_numbers,status,gpu_thresh,gpu_ctx,&skipped_cams,progress)){result.error=status?*status:"failed";return result;}}
     else{if(!detect_and_calibrate_intrinsics(config,intrinsics,status,gpu_thresh,gpu_ctx,&skipped_cams)){result.error=status?*status:"failed";return result;}}
     // Remove skipped cameras from cam_ordered for subsequent pipeline steps
     if (!skipped_cams.empty()) {
@@ -3558,6 +3599,7 @@ inline CalibrationResult run_experimental_pipeline(
         auto it=intrinsics.find(m.name);if(it!=intrinsics.end()){m.detection_count=(int)it->second.corners_per_image.size();m.intrinsic_reproj=it->second.reproj_error;}}
 
     // Step 2: Intrinsic quality gate — re-calibrate cameras with high reproj error
+    if(progress) progress->current_step.store(2, std::memory_order_relaxed);
     if(status)*status="Step 2: Intrinsic quality gate...";
     for(int ci=0;ci<nc;ci++){
         const auto &serial=config.cam_ordered[ci];
@@ -3623,6 +3665,7 @@ inline CalibrationResult run_experimental_pipeline(
         }
     }
 
+    if(progress) progress->current_step.store(3, std::memory_order_relaxed);
     if(status)*status="Step 3: PnP initialization...";
     std::map<std::string,std::map<int,Eigen::Vector2d>> landmarks;
     build_landmarks(config,intrinsics,landmarks);
@@ -3631,13 +3674,16 @@ inline CalibrationResult run_experimental_pipeline(
         std::chrono::steady_clock::now() - std::chrono::steady_clock::now()).count(); // placeholder
     std::vector<CameraPose> poses;
     if(!initialize_extrinsics_pnp(config,intrinsics,poses,status,&result.db)){result.error=status?*status:"PnP failed";return result;}
+    if(progress) progress->current_step.store(4, std::memory_order_relaxed);
     if(status)*status="Step 4: Triangulation...";
     std::map<int,Eigen::Vector3d> points_3d;
     int np=triangulate_landmarks_multiview(config,landmarks,poses,points_3d,50.0);
     fprintf(stderr,"[Experimental] Triangulated %d landmarks (threshold=50px)\n",np);
     if(np<10){result.error="Too few points ("+std::to_string(np)+")";return result;}
+    if(progress) progress->current_step.store(5, std::memory_order_relaxed);
     if(status)*status="Step 5: Bundle adjustment...";
     if(!bundle_adjust_experimental(config,landmarks,poses,points_3d,result,status)){result.error=status?*status:"BA failed";return result;}
+    if(progress) progress->current_step.store(6, std::memory_order_relaxed);
     if(status)*status="Step 6: Global registration...";
     { std::string gr_status;
       if(!global_registration(config,poses,points_3d,&gr_status,vfr?&video_frame_numbers:nullptr,
@@ -3646,6 +3692,7 @@ inline CalibrationResult run_experimental_pipeline(
       result.global_reg_status = gr_status;
       fprintf(stderr,"[Experimental] Global reg: %s\n", gr_status.c_str());
     }
+    if(progress) progress->current_step.store(7, std::memory_order_relaxed);
     if(status)*status="Step 7: Writing files...";
     if(!write_calibration(poses,config.cam_ordered,outf,result.image_width,result.image_height,status)){result.error=status?*status:"Write failed";return result;}
     write_intermediate_output(config,intrinsics,landmarks,poses,points_3d,outf);

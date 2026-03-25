@@ -12,8 +12,13 @@
 #include <Eigen/Geometry>
 #include <algorithm>
 #include <cmath>
+#include <map>
+#include <set>
 #include <string>
 #include <vector>
+
+// Point color mode for 3D viewer
+enum class PointColorMode { Uniform = 0, ByObsCount, ByCamera };
 
 struct CalibViewerState {
     bool show = false;
@@ -24,6 +29,7 @@ struct CalibViewerState {
     bool show_labels = true;
     bool show_reg_graph = false;
     bool show_board_poses = false;
+    bool show_board_quad = false; // show ChArUco board at world origin
     bool show_axes_box = false; // show 3D box, axis labels, grid
     bool color_by_error = true;
     int hovered_camera = -1;
@@ -32,6 +38,23 @@ struct CalibViewerState {
     // Cached per-camera point indices (built on selection change)
     std::vector<int> selected_cam_point_ids;
     int cached_selection = -2; // force rebuild on first frame
+
+    // Point color mode
+    PointColorMode point_color_mode = PointColorMode::Uniform;
+
+    // Cached point arrays (avoid rebuilding from std::map every frame)
+    std::vector<float> cached_px, cached_py, cached_pz;
+    std::vector<int> cached_point_ids; // parallel to cached_p{x,y,z}
+    std::vector<int> point_obs_count;  // per-point observation count (parallel)
+    int cached_points_version = -1;    // tracks when cache needs rebuild
+
+    // Point hover/click selection
+    int selected_point = -1;   // index into cached arrays, -1 = none
+    int hovered_point = -1;    // index into cached arrays
+
+    // Board dimensions for "Show Board" quad (from CharucoSetup)
+    float board_width_mm = 0;
+    float board_height_mm = 0;
 };
 
 struct FrustumGeometry {
@@ -87,6 +110,61 @@ inline std::vector<int> find_camera_observed_points(
     return ids;
 }
 
+// Rebuild cached point float arrays from the result's points_3d map.
+// Also computes per-point observation counts from the landmark database.
+inline void rebuild_point_cache(CalibViewerState &state) {
+    const auto &res = *state.result;
+    int np = (int)res.points_3d.size();
+    state.cached_px.clear(); state.cached_py.clear(); state.cached_pz.clear();
+    state.cached_point_ids.clear();
+    state.point_obs_count.clear();
+    state.cached_px.reserve(np); state.cached_py.reserve(np); state.cached_pz.reserve(np);
+    state.cached_point_ids.reserve(np);
+    state.point_obs_count.reserve(np);
+
+    // Build reverse map: point_id → number of cameras observing it
+    std::map<int, int> obs_count_map;
+    for (const auto &[cam_name, lm_map] : res.db.landmarks) {
+        for (const auto &[pid, px] : lm_map) {
+            obs_count_map[pid]++;
+        }
+    }
+
+    for (const auto &[id, pt] : res.points_3d) {
+        state.cached_px.push_back((float)pt.x());
+        state.cached_py.push_back((float)pt.y());
+        state.cached_pz.push_back((float)pt.z());
+        state.cached_point_ids.push_back(id);
+        auto it = obs_count_map.find(id);
+        state.point_obs_count.push_back(it != obs_count_map.end() ? it->second : 0);
+    }
+    state.selected_point = -1;
+    state.hovered_point = -1;
+}
+
+// Cool-to-warm colormap: blue(2) → cyan(3) → green(4) → yellow(5-6) → orange(7-8) → red(9+)
+inline ImU32 obs_count_color(int count, int max_count) {
+    if (max_count <= 2) return IM_COL32(80, 130, 255, 180);
+    float t = (float)(count - 2) / (float)(max_count - 2);
+    t = std::clamp(t, 0.0f, 1.0f);
+    // 5-stop colormap: blue → cyan → green → yellow → red
+    int r, g, b;
+    if (t < 0.25f) {
+        float s = t / 0.25f;
+        r = 30; g = (int)(80 + 175*s); b = (int)(255*(1-s*0.5f));
+    } else if (t < 0.5f) {
+        float s = (t - 0.25f) / 0.25f;
+        r = (int)(30 + 100*s); g = 255; b = (int)(128*(1-s));
+    } else if (t < 0.75f) {
+        float s = (t - 0.5f) / 0.25f;
+        r = (int)(130 + 125*s); g = (int)(255*(1-s*0.3f)); b = 0;
+    } else {
+        float s = (t - 0.75f) / 0.25f;
+        r = 255; g = (int)(178*(1-s)); b = 0;
+    }
+    return IM_COL32(r, g, b, 200);
+}
+
 inline void DrawCalibViewerWindow(CalibViewerState &state) {
     if (!state.show || !state.result || !state.result->success) return;
 
@@ -98,6 +176,15 @@ inline void DrawCalibViewerWindow(CalibViewerState &state) {
     const auto &res = *state.result;
     int nc = (int)res.cameras.size();
 
+    // ── Rebuild point cache if needed ──
+    {
+        int version = (int)res.points_3d.size(); // simple version check
+        if (state.cached_points_version != version) {
+            rebuild_point_cache(state);
+            state.cached_points_version = version;
+        }
+    }
+
     // ── Controls ──
     ImVec4 label_col(0.5f, 0.7f, 1.0f, 1.0f); // light blue, matches Labeling Tool
     ImGui::SetNextItemWidth(120);
@@ -108,6 +195,7 @@ inline void DrawCalibViewerWindow(CalibViewerState &state) {
     ImGui::SameLine(); ImGui::Checkbox("Labels", &state.show_labels);
     ImGui::SameLine(); ImGui::Checkbox("Reg. Graph", &state.show_reg_graph);
     ImGui::SameLine(); ImGui::Checkbox("Boards", &state.show_board_poses);
+    ImGui::SameLine(); ImGui::Checkbox("Board##quad", &state.show_board_quad);
     ImGui::SameLine(); ImGui::Checkbox("Axes", &state.show_axes_box);
     ImGui::PopStyleColor();
 
@@ -157,6 +245,7 @@ inline void DrawCalibViewerWindow(CalibViewerState &state) {
                    (int)r.cameras.size(), r.output_folder.c_str());
         }
         state.cached_selection = -2;
+        state.cached_points_version = -1; // force cache rebuild
     }
     ImGui::SameLine();
     ImGui::TextDisabled("(?)");
@@ -165,6 +254,7 @@ inline void DrawCalibViewerWindow(CalibViewerState &state) {
                           "Saves proper rotations (det=+1) to YAML.\n"
                           "Click twice to undo.");
 
+    // Second row: camera selector + point color mode
     // Camera selector
     {
         const char *preview = (state.selected_camera < 0) ? "All Cameras" :
@@ -187,6 +277,16 @@ inline void DrawCalibViewerWindow(CalibViewerState &state) {
             }
             ImGui::EndCombo();
         }
+    }
+
+    // Point color mode dropdown
+    ImGui::SameLine();
+    {
+        const char *color_names[] = { "Uniform", "By Obs Count", "By Camera" };
+        ImGui::SetNextItemWidth(140);
+        int cm = (int)state.point_color_mode;
+        if (ImGui::Combo("Color##pt_color", &cm, color_names, 3))
+            state.point_color_mode = (PointColorMode)cm;
     }
 
     // Rebuild cached point list when selection changes
@@ -313,34 +413,157 @@ inline void DrawCalibViewerWindow(CalibViewerState &state) {
                 ImPlot3D::PlotText(res.cam_names[c].c_str(), f.center.x(), f.center.y(), f.center.z());
         }
 
-        // ── 3D points ──
-        if (state.show_points) {
-            if (single_cam && !state.selected_cam_point_ids.empty()) {
-                // Show only points visible to the selected camera
-                std::vector<float> px, py, pz;
-                for (int pid : state.selected_cam_point_ids) {
-                    auto it = res.points_3d.find(pid);
-                    if (it != res.points_3d.end()) {
-                        px.push_back((float)it->second.x());
-                        py.push_back((float)it->second.y());
-                        pz.push_back((float)it->second.z());
+        // ── 3D points (cached, color-bucketed) ──
+        if (state.show_points && !state.cached_px.empty()) {
+            int total_pts = (int)state.cached_px.size();
+
+            // Determine which points to show
+            // Build a set of visible indices for single-camera mode
+            std::vector<bool> visible(total_pts, true);
+            if (single_cam) {
+                std::fill(visible.begin(), visible.end(), false);
+                // Map selected_cam_point_ids (point IDs) to cached indices
+                std::set<int> sel_ids(state.selected_cam_point_ids.begin(),
+                                      state.selected_cam_point_ids.end());
+                for (int i = 0; i < total_pts; i++) {
+                    if (sel_ids.count(state.cached_point_ids[i]))
+                        visible[i] = true;
+                }
+            }
+
+            // Find max obs count for colormap normalization
+            int max_obs = 2;
+            for (int i = 0; i < total_pts; i++)
+                if (visible[i] && state.point_obs_count[i] > max_obs)
+                    max_obs = state.point_obs_count[i];
+
+            if (state.point_color_mode == PointColorMode::Uniform) {
+                // Single color — collect visible points and render in one call
+                std::vector<float> vx, vy, vz;
+                for (int i = 0; i < total_pts; i++) {
+                    if (!visible[i]) continue;
+                    vx.push_back(state.cached_px[i]);
+                    vy.push_back(state.cached_py[i]);
+                    vz.push_back(state.cached_pz[i]);
+                }
+                if (!vx.empty()) {
+                    ImU32 pt_col = single_cam
+                        ? IM_COL32(255, 200, 50, 200)
+                        : IM_COL32(80, 130, 255, 160);
+                    ImPlot3D::PlotScatter("Landmarks", vx.data(), vy.data(), vz.data(),
+                        (int)vx.size(),
+                        {ImPlot3DProp_MarkerSize, 1.5,
+                         ImPlot3DProp_MarkerFillColor, pt_col,
+                         ImPlot3DProp_Marker, (double)ImPlot3DMarker_Square});
+                }
+            } else if (state.point_color_mode == PointColorMode::ByObsCount) {
+                // Bucket points by obs count into 8 color groups
+                constexpr int NUM_BUCKETS = 8;
+                struct Bucket {
+                    std::vector<float> x, y, z;
+                    ImU32 color;
+                };
+                Bucket buckets[NUM_BUCKETS];
+
+                for (int b = 0; b < NUM_BUCKETS; b++) {
+                    // Bucket b covers obs counts: 2+b*(max-2)/8 .. 2+(b+1)*(max-2)/8
+                    float t = (b + 0.5f) / (float)NUM_BUCKETS;
+                    t = std::clamp(t, 0.0f, 1.0f);
+                    int mid_count = 2 + (int)(t * (max_obs - 2));
+                    buckets[b].color = obs_count_color(mid_count, max_obs);
+                }
+
+                for (int i = 0; i < total_pts; i++) {
+                    if (!visible[i]) continue;
+                    int obs = state.point_obs_count[i];
+                    int b = (max_obs <= 2) ? 0 :
+                        std::clamp((obs - 2) * NUM_BUCKETS / (max_obs - 2 + 1), 0, NUM_BUCKETS - 1);
+                    buckets[b].x.push_back(state.cached_px[i]);
+                    buckets[b].y.push_back(state.cached_py[i]);
+                    buckets[b].z.push_back(state.cached_pz[i]);
+                }
+
+                for (int b = 0; b < NUM_BUCKETS; b++) {
+                    if (buckets[b].x.empty()) continue;
+                    char label[32]; snprintf(label, sizeof(label), "##obs_b%d", b);
+                    ImPlot3D::PlotScatter(label,
+                        buckets[b].x.data(), buckets[b].y.data(), buckets[b].z.data(),
+                        (int)buckets[b].x.size(),
+                        {ImPlot3DProp_MarkerSize, 1.5,
+                         ImPlot3DProp_MarkerFillColor, buckets[b].color,
+                         ImPlot3DProp_Marker, (double)ImPlot3DMarker_Square});
+                }
+            } else if (state.point_color_mode == PointColorMode::ByCamera) {
+                // When a camera is selected: its points are gold, others grey
+                // When no camera selected: all points are uniform blue
+                if (single_cam) {
+                    std::vector<float> gx, gy, gz; // gold (selected cam)
+                    std::vector<float> rx, ry, rz; // grey (rest)
+                    std::set<int> sel_ids(state.selected_cam_point_ids.begin(),
+                                          state.selected_cam_point_ids.end());
+                    for (int i = 0; i < total_pts; i++) {
+                        if (sel_ids.count(state.cached_point_ids[i])) {
+                            gx.push_back(state.cached_px[i]);
+                            gy.push_back(state.cached_py[i]);
+                            gz.push_back(state.cached_pz[i]);
+                        } else {
+                            rx.push_back(state.cached_px[i]);
+                            ry.push_back(state.cached_py[i]);
+                            rz.push_back(state.cached_pz[i]);
+                        }
+                    }
+                    if (!rx.empty()) {
+                        ImPlot3D::PlotScatter("##grey_pts",
+                            rx.data(), ry.data(), rz.data(), (int)rx.size(),
+                            {ImPlot3DProp_MarkerSize, 1.5,
+                             ImPlot3DProp_MarkerFillColor, (ImU32)IM_COL32(120, 120, 120, 100),
+                             ImPlot3DProp_Marker, (double)ImPlot3DMarker_Square});
+                    }
+                    if (!gx.empty()) {
+                        ImPlot3D::PlotScatter(
+                            ("Observed by " + res.cam_names[state.selected_camera]).c_str(),
+                            gx.data(), gy.data(), gz.data(), (int)gx.size(),
+                            {ImPlot3DProp_MarkerSize, 1.5,
+                             ImPlot3DProp_MarkerFillColor, (ImU32)IM_COL32(255, 200, 50, 200),
+                             ImPlot3DProp_Marker, (double)ImPlot3DMarker_Square});
+                    }
+                } else {
+                    ImPlot3D::PlotScatter("Landmarks",
+                        state.cached_px.data(), state.cached_py.data(), state.cached_pz.data(),
+                        total_pts,
+                        {ImPlot3DProp_MarkerSize, 1.5,
+                         ImPlot3DProp_MarkerFillColor, (ImU32)IM_COL32(80, 130, 255, 160),
+                         ImPlot3DProp_Marker, (double)ImPlot3DMarker_Square});
+                }
+            }
+
+            // Selected point highlight — draw line from selected point to cameras
+            if (state.selected_point >= 0 && state.selected_point < total_pts) {
+                float spx = state.cached_px[state.selected_point];
+                float spy = state.cached_py[state.selected_point];
+                float spz = state.cached_pz[state.selected_point];
+                // Draw the selected point as a larger marker
+                ImPlot3D::PlotScatter("##sel_pt", &spx, &spy, &spz, 1,
+                    {ImPlot3DProp_MarkerSize, 4.0,
+                     ImPlot3DProp_MarkerFillColor, (ImU32)IM_COL32(255, 50, 50, 255),
+                     ImPlot3DProp_Marker, (double)ImPlot3DMarker_Square});
+
+                // Lines from selected point to all cameras that observe it
+                int sel_pid = state.cached_point_ids[state.selected_point];
+                for (int c = 0; c < nc; c++) {
+                    const auto &cam_name = res.cam_names[c];
+                    auto lm_it = res.db.landmarks.find(cam_name);
+                    if (lm_it != res.db.landmarks.end() && lm_it->second.count(sel_pid)) {
+                        const auto &fc = frustums[c].center;
+                        float lx[2] = {spx, (float)fc.x()};
+                        float ly[2] = {spy, (float)fc.y()};
+                        float lz[2] = {spz, (float)fc.z()};
+                        ImPlot3D::PlotLine(("##selray_" + std::to_string(c)).c_str(),
+                            lx, ly, lz, 2,
+                            {ImPlot3DProp_LineColor, (ImU32)IM_COL32(255, 100, 100, 150),
+                             ImPlot3DProp_LineWeight, 1.5});
                     }
                 }
-                if (!px.empty()) {
-                    ImPlot3D::PlotScatter(
-                        ("Observed by " + res.cam_names[state.selected_camera]).c_str(),
-                        px.data(), py.data(), pz.data(), (int)px.size(),
-                        {ImPlot3DProp_MarkerSize, 2.0, ImPlot3DProp_MarkerFillColor, (ImU32)IM_COL32(255,200,50,200)});
-                }
-            } else if (!single_cam && !res.points_3d.empty()) {
-                // Show all points
-                std::vector<float> px, py, pz;
-                px.reserve(res.points_3d.size()); py.reserve(res.points_3d.size()); pz.reserve(res.points_3d.size());
-                for (const auto &[id, pt] : res.points_3d) {
-                    px.push_back((float)pt.x()); py.push_back((float)pt.y()); pz.push_back((float)pt.z());
-                }
-                ImPlot3D::PlotScatter("Landmarks", px.data(), py.data(), pz.data(), (int)px.size(),
-                    {ImPlot3DProp_MarkerSize, 1.5, ImPlot3DProp_MarkerFillColor, (ImU32)IM_COL32(80,130,255,160)});
             }
         }
 
@@ -435,6 +658,29 @@ inline void DrawCalibViewerWindow(CalibViewerState &state) {
             }
         }
 
+        // ── Board quad at world origin ──
+        if (state.show_board_quad && state.board_width_mm > 0 && state.board_height_mm > 0) {
+            float bw = state.board_width_mm, bh = state.board_height_mm;
+            // Draw filled quad as two triangles (outline + fill)
+            float qx[5] = {0, bw, bw, 0, 0};
+            float qy[5] = {0, 0, bh, bh, 0};
+            float qz[5] = {0, 0, 0, 0, 0};
+            ImPlot3D::PlotLine("##board_quad", qx, qy, qz, 5,
+                {ImPlot3DProp_LineColor, (ImU32)IM_COL32(180, 140, 60, 200),
+                 ImPlot3DProp_LineWeight, 2.5});
+            // Draw diagonals for visibility
+            float dx[2] = {0, bw}, dy[2] = {0, bh}, dz[2] = {0, 0};
+            ImPlot3D::PlotLine("##board_diag1", dx, dy, dz, 2,
+                {ImPlot3DProp_LineColor, (ImU32)IM_COL32(180, 140, 60, 80),
+                 ImPlot3DProp_LineWeight, 1.0});
+            float dx2[2] = {bw, 0}, dy2[2] = {0, bh}, dz2[2] = {0, 0};
+            ImPlot3D::PlotLine("##board_diag2", dx2, dy2, dz2, 2,
+                {ImPlot3DProp_LineColor, (ImU32)IM_COL32(180, 140, 60, 80),
+                 ImPlot3DProp_LineWeight, 1.0});
+            // Label
+            ImPlot3D::PlotText("Board", bw * 0.5, bh * 0.5, 0);
+        }
+
         // ── World axes ──
         {
             float ax[2]={0,axis_len}, ay[2]={0,0}, az[2]={0,0};
@@ -445,13 +691,69 @@ inline void DrawCalibViewerWindow(CalibViewerState &state) {
             ImPlot3D::PlotLine("Z", cx2, cy2, cz2, 2, {ImPlot3DProp_LineColor, (ImU32)IM_COL32(80,80,255,255), ImPlot3DProp_LineWeight, 2.5});
         }
 
+        // ── Point hover detection (must be inside BeginPlot/EndPlot for PlotToPixels) ──
+        state.hovered_point = -1;
+        if (state.show_points && !state.cached_px.empty()) {
+            ImVec2 mouse = ImGui::GetMousePos();
+            float best_dist_sq = 15.0f * 15.0f;
+            int best_idx = -1;
+            int total_pts = (int)state.cached_px.size();
+            int stride = std::max(1, total_pts / 10000);
+            for (int i = 0; i < total_pts; i += stride) {
+                ImVec2 scr = ImPlot3D::PlotToPixels(
+                    state.cached_px[i], state.cached_py[i], state.cached_pz[i]);
+                float dx = scr.x - mouse.x, dy = scr.y - mouse.y;
+                float d2 = dx * dx + dy * dy;
+                if (d2 < best_dist_sq) { best_dist_sq = d2; best_idx = i; }
+            }
+            if (stride > 1 && best_idx >= 0) {
+                int lo = std::max(0, best_idx - stride);
+                int hi = std::min(total_pts, best_idx + stride);
+                for (int i = lo; i < hi; i++) {
+                    ImVec2 scr = ImPlot3D::PlotToPixels(
+                        state.cached_px[i], state.cached_py[i], state.cached_pz[i]);
+                    float dx = scr.x - mouse.x, dy = scr.y - mouse.y;
+                    float d2 = dx * dx + dy * dy;
+                    if (d2 < best_dist_sq) { best_dist_sq = d2; best_idx = i; }
+                }
+            }
+            state.hovered_point = best_idx;
+        }
+
         ImPlot3D::EndPlot();
     }
     if (!state.show_axes_box)
         ImPlot3D::PopStyleColor(3);
 
-    // ── Hover tooltip ──
-    if (state.hovered_camera >= 0 && state.hovered_camera < nc) {
+    // ── Point tooltip and click (outside plot, using ImGui) ──
+    if (state.hovered_point >= 0 && state.hovered_point < (int)state.cached_px.size()) {
+        int best_idx = state.hovered_point;
+        int pid = state.cached_point_ids[best_idx];
+        ImGui::BeginTooltip();
+        ImGui::Text("Point #%d", pid);
+        ImGui::Text("Pos: (%.2f, %.2f, %.2f) mm",
+            state.cached_px[best_idx], state.cached_py[best_idx], state.cached_pz[best_idx]);
+        int obs = state.point_obs_count[best_idx];
+        ImGui::Text("Observations: %d cameras", obs);
+        std::string cams_str;
+        for (int c = 0; c < nc; c++) {
+            auto lm_it = res.db.landmarks.find(res.cam_names[c]);
+            if (lm_it != res.db.landmarks.end() && lm_it->second.count(pid)) {
+                if (!cams_str.empty()) cams_str += ", ";
+                cams_str += res.cam_names[c];
+            }
+        }
+        if (!cams_str.empty())
+            ImGui::Text("Cameras: %s", cams_str.c_str());
+        ImGui::Text("(Click to select)");
+        ImGui::EndTooltip();
+
+        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+            state.selected_point = (state.selected_point == best_idx) ? -1 : best_idx;
+    }
+
+    // ── Camera hover tooltip ──
+    if (state.hovered_camera >= 0 && state.hovered_camera < nc && state.hovered_point < 0) {
         int c = state.hovered_camera;
         const auto &cam = res.cameras[c];
         const std::string &name = (c < (int)res.cam_names.size()) ? res.cam_names[c] : "?";
@@ -475,8 +777,8 @@ inline void DrawCalibViewerWindow(CalibViewerState &state) {
         ImGui::Text("(Click to select)");
         ImGui::EndTooltip();
 
-        // Click to select
-        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        // Click to select (only if not clicking on a point)
+        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && state.hovered_point < 0) {
             state.selected_camera = (state.selected_camera == c) ? -1 : c;
         }
     }
@@ -494,6 +796,13 @@ inline void DrawCalibViewerWindow(CalibViewerState &state) {
         if (step.num_3d_points > 0)
             ImGui::Text("3D points visible: %d", step.num_3d_points);
         ImGui::EndTooltip();
+    }
+
+    // Click on empty space deselects point and camera
+    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+        state.hovered_point < 0 && state.hovered_camera < 0 && state.hovered_edge < 0) {
+        state.selected_point = -1;
+        state.selected_camera = -1;
     }
 
     ImGui::End();

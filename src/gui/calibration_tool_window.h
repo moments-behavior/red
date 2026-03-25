@@ -123,7 +123,15 @@ inline void DrawCalibrationToolWindow(
                             cb.load_videos();
                             cb.print_metadata();
                         }
-                        state.pointsource_total_frames = dc_context->estimated_num_frames;
+                        // Query frame count from first PS camera directly
+                        if (!state.project.camera_names.empty()) {
+                            std::string first_vid = state.project.media_folder + "/Cam" +
+                                state.project.camera_names[0] + ".mp4";
+                            state.pointsource_total_frames =
+                                PointSourceCalibration::get_video_frame_count(first_vid);
+                        }
+                        if (state.pointsource_total_frames <= 0)
+                            state.pointsource_total_frames = dc_context->estimated_num_frames;
                     }
 
                     state.project_loaded = true;
