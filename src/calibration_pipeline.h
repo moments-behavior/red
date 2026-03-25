@@ -134,21 +134,50 @@ struct ArucoProgress {
 // Get video frame count using FFmpeg
 inline int get_video_frame_count(const std::string &path) {
     AVFormatContext *ctx = avformat_alloc_context();
-    if (!ctx) return 0;
+    if (!ctx) { fprintf(stderr, "[FrameCount] alloc failed\n"); return 0; }
     ctx->max_analyze_duration = 5 * AV_TIME_BASE;
-    if (avformat_open_input(&ctx, path.c_str(), nullptr, nullptr) < 0) return 0;
-    if (avformat_find_stream_info(ctx, nullptr) < 0) { avformat_close_input(&ctx); return 0; }
+    if (avformat_open_input(&ctx, path.c_str(), nullptr, nullptr) < 0) {
+        fprintf(stderr, "[FrameCount] open failed: %s\n", path.c_str());
+        return 0;
+    }
+    if (avformat_find_stream_info(ctx, nullptr) < 0) {
+        fprintf(stderr, "[FrameCount] find_stream_info failed\n");
+        avformat_close_input(&ctx); return 0;
+    }
     for (unsigned i = 0; i < ctx->nb_streams; i++) {
         if (ctx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
             int64_t nb = ctx->streams[i]->nb_frames;
-            if (nb > 0) { avformat_close_input(&ctx); return (int)nb; }
-            double dur = ctx->duration / (double)AV_TIME_BASE;
+            double dur = (ctx->duration != AV_NOPTS_VALUE)
+                ? ctx->duration / (double)AV_TIME_BASE : -1.0;
             AVRational rate = ctx->streams[i]->avg_frame_rate;
             double fps = (rate.num > 0 && rate.den > 0) ? (double)rate.num / rate.den : 30.0;
-            avformat_close_input(&ctx); return (int)(dur * fps);
+            fprintf(stderr, "[FrameCount] nb_frames=%lld dur=%.2fs fps=%.1f path=%s\n",
+                    (long long)nb, dur, fps, path.c_str());
+            if (nb > 0) { avformat_close_input(&ctx); return (int)nb; }
+            if (dur > 0) { avformat_close_input(&ctx); return (int)(dur * fps); }
+            // Fallback: try companion _meta.csv (one row per frame + header)
+            break;
         }
     }
-    avformat_close_input(&ctx); return 0;
+    avformat_close_input(&ctx);
+    // Fallback: count lines in companion _meta.csv file
+    {
+        namespace fs = std::filesystem;
+        fs::path vp(path);
+        std::string stem = vp.stem().string();
+        fs::path meta = vp.parent_path() / (stem + "_meta.csv");
+        if (fs::exists(meta)) {
+            std::ifstream f(meta);
+            int lines = 0;
+            std::string line;
+            while (std::getline(f, line)) lines++;
+            int frames = std::max(0, lines - 1); // subtract header
+            fprintf(stderr, "[FrameCount] meta.csv fallback: %d frames from %s\n",
+                    frames, meta.string().c_str());
+            return frames;
+        }
+    }
+    return 0;
 }
 
 struct PerCameraMetrics {
@@ -822,7 +851,7 @@ inline bool detect_and_calibrate_intrinsics_video(
                     for (int i = 0; i < w * h; i++)
                         gray[i] = (uint8_t)((rgb[i*3]*77 + rgb[i*3+1]*150 + rgb[i*3+2]*29) >> 8);
                     auto charuco = aruco_detect::detectCharucoBoard(gray.data(), w, h, board, aruco_dict,
-                        nullptr, nullptr, nullptr, 0, 1);  // full-res
+                        gpu_thresh, gpu_ctx, nullptr, 0, 1);  // full-res, with GPU threshold
                     if ((int)charuco.ids.size() >= 6) {
                         aruco_detect::cornerSubPix(gray.data(), w, h, charuco.corners, 3, 100, 0.001f);
                         int sorted_idx = frame_to_idx[frame_num];
@@ -3480,35 +3509,57 @@ inline bool bundle_adjust_experimental(
                 for(int p=0;p<15;p++){double b=bcp[p];if(b>0){problem.SetParameterLowerBound(cp[c].data(),p,cp[c][p]-b);problem.SetParameterUpperBound(cp[c].data(),p,cp[c][p]+b);}else if(b==0)ci.push_back(p);}
                 if(!ci.empty())problem.SetManifold(cp[c].data(),new ceres::SubsetManifold(15,ci));}}
 
-        ceres::Solver::Options opt; opt.linear_solver_type=ceres::SPARSE_SCHUR;
+        ceres::Solver::Options opt;
+        opt.linear_solver_type=ceres::SPARSE_SCHUR;
         opt.max_num_iterations=100;
         opt.function_tolerance=1e-10; opt.parameter_tolerance=1e-10; opt.gradient_tolerance=1e-12;
         opt.use_inner_iterations=true;
         opt.minimizer_progress_to_stdout=false;
         opt.logging_type=ceres::SILENT;
         opt.num_threads=std::max(1,(int)std::thread::hardware_concurrency());
-        // Suppress CHOLMOD warnings by temporarily redirecting stderr.
-        // CHOLMOD writes "not positive definite" via SuiteSparse's printf,
-        // which is normal LM behavior (Ceres increases damping and retries).
+
+        // Try solving, fall back to DENSE_SCHUR if SPARSE_SCHUR fails
+        // (vcpkg Ceres on Windows may lack SuiteSparse)
+        ceres::Solver::Summary sum;
+        {
+            // Suppress CHOLMOD warnings by temporarily redirecting stderr.
+            // CHOLMOD writes "not positive definite" via SuiteSparse's printf,
+            // which is normal LM behavior (Ceres increases damping and retries).
 #ifdef _WIN32
-        int saved_stderr = _dup(STDERR_FILENO);
-        if (saved_stderr >= 0) {
-            int devnull = _open("NUL", O_WRONLY);
-            if (devnull >= 0) { _dup2(devnull, STDERR_FILENO); _close(devnull); }
-        }
+            int saved_stderr = _dup(STDERR_FILENO);
+            if (saved_stderr >= 0) {
+                int devnull = _open("NUL", O_WRONLY);
+                if (devnull >= 0) { _dup2(devnull, STDERR_FILENO); _close(devnull); }
+            }
 #else
-        int saved_stderr = dup(STDERR_FILENO);
-        if (saved_stderr >= 0) {
-            int devnull = open("/dev/null", O_WRONLY);
-            if (devnull >= 0) { dup2(devnull, STDERR_FILENO); close(devnull); }
-        }
+            int saved_stderr = dup(STDERR_FILENO);
+            if (saved_stderr >= 0) {
+                int devnull = open("/dev/null", O_WRONLY);
+                if (devnull >= 0) { dup2(devnull, STDERR_FILENO); close(devnull); }
+            }
 #endif
-        ceres::Solver::Summary sum; ceres::Solve(opt,&problem,&sum);
+            ceres::Solve(opt,&problem,&sum);
 #ifdef _WIN32
-        if (saved_stderr >= 0) { _dup2(saved_stderr, STDERR_FILENO); _close(saved_stderr); }
+            if (saved_stderr >= 0) { _dup2(saved_stderr, STDERR_FILENO); _close(saved_stderr); }
 #else
-        if (saved_stderr >= 0) { dup2(saved_stderr, STDERR_FILENO); close(saved_stderr); }
+            if (saved_stderr >= 0) { dup2(saved_stderr, STDERR_FILENO); close(saved_stderr); }
 #endif
+        }
+        // Fallback: if SPARSE_SCHUR failed (no SuiteSparse), try DENSE_SCHUR
+        if (!sum.IsSolutionUsable() && opt.linear_solver_type == ceres::SPARSE_SCHUR) {
+            fprintf(stderr,"[Experimental]   SPARSE_SCHUR failed (%s), retrying with DENSE_SCHUR...\n",
+                    sum.message.c_str());
+            opt.linear_solver_type = ceres::DENSE_SCHUR;
+            opt.use_inner_iterations = false;  // inner iterations can also fail without sparse backend
+            ceres::Solve(opt,&problem,&sum);
+            if (!sum.IsSolutionUsable()) {
+                fprintf(stderr,"[Experimental]   DENSE_SCHUR also failed (%s), trying ITERATIVE_SCHUR...\n",
+                        sum.message.c_str());
+                opt.linear_solver_type = ceres::ITERATIVE_SCHUR;
+                opt.preconditioner_type = ceres::SCHUR_JACOBI;
+                ceres::Solve(opt,&problem,&sum);
+            }
+        }
         fprintf(stderr,"[Experimental] Pass %d/%d (mode=%d cauchy=%.0f): %s cost %.2f→%.2f iters=%d time=%.2fs\n",
             pi_pass+1,(int)passes.size(),bp.fix_mode,bp.cauchy_scale,
             sum.IsSolutionUsable()?"OK":"FAIL",sum.initial_cost,sum.final_cost,
@@ -3570,6 +3621,7 @@ inline CalibrationResult run_experimental_pipeline(
     std::string outf=base_folder+"/"+tb;
     {namespace fs=std::filesystem;std::error_code ec;fs::create_directories(outf,ec);if(ec){result.error="Cannot create: "+ec.message();return result;}}
     fprintf(stderr,"\n[Experimental] === Starting experimental pipeline ===\n");
+    auto pipeline_start = std::chrono::steady_clock::now();
     if(progress) progress->current_step.store(1, std::memory_order_relaxed);
     if(status)*status="Step 1: Detecting + calibrating intrinsics...";
     std::map<std::string,CameraIntrinsics> intrinsics;std::vector<int> video_frame_numbers;
@@ -3670,8 +3722,8 @@ inline CalibrationResult run_experimental_pipeline(
     std::map<std::string,std::map<int,Eigen::Vector2d>> landmarks;
     build_landmarks(config,intrinsics,landmarks);
     result.db.landmarks = landmarks; // Save landmark map for 3D viewer
-    result.db.detection_time_sec = std::chrono::duration<double>(
-        std::chrono::steady_clock::now() - std::chrono::steady_clock::now()).count(); // placeholder
+    auto detection_end = std::chrono::steady_clock::now();
+    result.db.detection_time_sec = std::chrono::duration<double>(detection_end - pipeline_start).count();
     std::vector<CameraPose> poses;
     if(!initialize_extrinsics_pnp(config,intrinsics,poses,status,&result.db)){result.error=status?*status:"PnP failed";return result;}
     if(progress) progress->current_step.store(4, std::memory_order_relaxed);
@@ -3682,7 +3734,9 @@ inline CalibrationResult run_experimental_pipeline(
     if(np<10){result.error="Too few points ("+std::to_string(np)+")";return result;}
     if(progress) progress->current_step.store(5, std::memory_order_relaxed);
     if(status)*status="Step 5: Bundle adjustment...";
+    { auto ba_start = std::chrono::steady_clock::now();
     if(!bundle_adjust_experimental(config,landmarks,poses,points_3d,result,status)){result.error=status?*status:"BA failed";return result;}
+    result.db.ba_time_sec = std::chrono::duration<double>(std::chrono::steady_clock::now() - ba_start).count(); }
     if(progress) progress->current_step.store(6, std::memory_order_relaxed);
     if(status)*status="Step 6: Global registration...";
     { std::string gr_status;
@@ -3714,7 +3768,11 @@ inline CalibrationResult run_experimental_pipeline(
     // Write run info for reproducibility
     { int tvf=0; if(vfr){auto vids=CalibrationTool::discover_aruco_videos(vfr->video_folder,vfr->cam_ordered);
       if(!vids.empty())tvf=get_video_frame_count(vids.begin()->second);}
-      write_run_info(config,outf,vfr,tvf,nc,result.mean_reproj_error,0,0,0); }
+      auto pipeline_end = std::chrono::steady_clock::now();
+      double total_s = std::chrono::duration<double>(pipeline_end - pipeline_start).count();
+      result.db.total_time_sec = total_s;
+      write_run_info(config,outf,vfr,tvf,nc,result.mean_reproj_error,
+                     result.db.detection_time_sec, result.db.ba_time_sec, total_s); }
     // Write calibration database for 3D viewer inspection
     write_calibration_database(result.db, outf, &result.per_camera_metrics);
 

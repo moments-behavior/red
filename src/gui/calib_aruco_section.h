@@ -424,7 +424,7 @@ inline void DrawCalibArucoSection(CalibrationToolState &state, AppContext &ctx,
                                     ac ? aruco_cuda_threshold_batch : nullptr;
                                 auto r = CalibrationPipeline::run_experimental_pipeline(
                                     config, base, status_ptr,
-                                    &vfr, gfn, (void *)ac);
+                                    &vfr, gfn, (void *)ac, prog.get());
                                 if (ac) aruco_cuda_destroy(ac);
                                 return r;
 #else
@@ -454,7 +454,7 @@ inline void DrawCalibArucoSection(CalibrationToolState &state, AppContext &ctx,
                                     ac ? aruco_cuda_threshold_batch : nullptr;
                                 auto r = CalibrationPipeline::run_experimental_pipeline(
                                     config, base, status_ptr,
-                                    nullptr, gfn, (void *)ac);
+                                    nullptr, gfn, (void *)ac, prog.get());
                                 if (ac) aruco_cuda_destroy(ac);
                                 return r;
 #else
