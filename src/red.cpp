@@ -857,7 +857,137 @@ int main(int argc, char **argv) {
                         });
                 }
             }
-#endif // __APPLE__
+#elif defined(_WIN32) && defined(USE_CUDA_POINTSOURCE)
+            // --- Windows: Laser detection viz dispatch (CUDA) ---
+            if (win.calibration.pointsource_show_detection && win.calibration.pointsource_ready) {
+                auto &lv = win.calibration.pointsource_viz;
+                auto &lc = win.calibration.pointsource_config;
+                int win_head = ps.play_video ? ps.read_head : select_corr_head;
+                int fn0 = scene->display_buffer[0][win_head].frame_number;
+
+                // Collect results from background thread
+                if (!lv.computing.load(std::memory_order_acquire) &&
+                    !lv.pending.empty()) {
+                    if (lv.worker.joinable())
+                        lv.worker.join();
+                    lv.ready = std::move(lv.pending);
+                    lv.pending.clear();
+                    for (auto &cr : lv.ready)
+                        cr.uploaded = false;
+                }
+
+                // Check if we need new work
+                bool params_changed =
+                    lc.green_threshold != lv.last_green_th ||
+                    lc.green_dominance != lv.last_green_dom ||
+                    lc.min_blob_pixels != lv.last_min_blob ||
+                    lc.max_blob_pixels != lv.last_max_blob;
+                bool frame_changed = lv.ready.empty() ||
+                    fn0 != lv.ready[0].frame_num;
+                bool need_dispatch = (frame_changed || params_changed) &&
+                    !lv.computing.load(std::memory_order_relaxed);
+
+                if (need_dispatch) {
+                    if (lv.worker.joinable())
+                        lv.worker.join();
+
+                    // Lazy-init CUDA context for GPU viz
+                    if (!lv.cuda_ctx)
+                        lv.cuda_ctx = pointsource_cuda_create();
+
+                    // Snapshot RGBA frame data for background thread.
+                    // Display buffer is RGBA (from Nv12ToColor32<RGBA32>).
+                    // The CUDA kernels work with RGBA: G is at offset 1 in both
+                    // RGBA and BGRA, and the R/B threshold checks are symmetric.
+                    struct CamInput {
+                        std::vector<uint8_t> rgba_cpu;  // CPU copy of frame
+                        int width, height, frame_num;
+                        bool needs_rgba;  // visible cameras need viz overlay
+                    };
+                    int ncams = scene->num_cams;
+                    auto inputs = std::make_shared<std::vector<CamInput>>(ncams);
+                    for (int ci = 0; ci < ncams; ci++) {
+                        auto &inp = (*inputs)[ci];
+                        int w = scene->image_width[ci];
+                        int h = scene->image_height[ci];
+                        inp.width = w;
+                        inp.height = h;
+                        inp.frame_num = scene->display_buffer[ci][win_head].frame_number;
+                        const std::string &cam_name = pm.camera_names[ci];
+                        inp.needs_rgba = window_is_visible.count(cam_name) &&
+                                         window_is_visible.at(cam_name);
+
+                        // Copy frame to CPU for background processing
+                        size_t frame_bytes = (size_t)w * h * 4;
+                        inp.rgba_cpu.resize(frame_bytes);
+                        unsigned char *src_frame = scene->display_buffer[ci][win_head].frame;
+                        if (src_frame) {
+                            if (scene->use_cpu_buffer) {
+                                memcpy(inp.rgba_cpu.data(), src_frame, frame_bytes);
+                            } else {
+                                cudaMemcpy(inp.rgba_cpu.data(), src_frame, frame_bytes,
+                                           cudaMemcpyDeviceToHost);
+                            }
+                        }
+                    }
+
+                    int green_th = lc.green_threshold;
+                    int green_dom = lc.green_dominance;
+                    int min_blob = lc.min_blob_pixels;
+                    int max_blob = lc.max_blob_pixels;
+                    bool smart_blob = lc.smart_blob;
+
+                    lv.computing.store(true, std::memory_order_release);
+                    lv.last_green_th = green_th;
+                    lv.last_green_dom = green_dom;
+                    lv.last_min_blob = min_blob;
+                    lv.last_max_blob = max_blob;
+
+                    auto cuda_ctx = lv.cuda_ctx;
+                    lv.worker = std::thread(
+                        [inputs, ncams, green_th, green_dom,
+                         min_blob, max_blob, smart_blob, cuda_ctx, &lv]() {
+                            std::vector<PointSourceVizState::CamResult> results(ncams);
+
+                            // Phase 1: detect spots on all cameras (stats)
+                            for (int ci = 0; ci < ncams; ci++) {
+                                auto &inp = (*inputs)[ci];
+                                if (inp.rgba_cpu.empty()) continue;
+                                auto &res = results[ci];
+                                res.frame_num = inp.frame_num;
+                                int stride = inp.width * 4;
+                                auto spot = pointsource_cuda_detect(
+                                    cuda_ctx, inp.rgba_cpu.data(),
+                                    inp.width, inp.height, stride,
+                                    green_th, green_dom, min_blob, max_blob, smart_blob);
+                                if (spot.found) {
+                                    res.num_blobs = 1;
+                                } else if (spot.pixel_count > 0) {
+                                    res.num_blobs = -1; // ambiguous
+                                }
+                                res.total_mask_pixels = spot.pixel_count;
+                            }
+
+                            // Phase 2: visible cameras get RGBA overlay
+                            for (int ci = 0; ci < ncams; ci++) {
+                                auto &inp = (*inputs)[ci];
+                                if (inp.rgba_cpu.empty() || !inp.needs_rgba) continue;
+                                auto &res = results[ci];
+                                res.rgba.resize(inp.width * inp.height * 4);
+                                int stride = inp.width * 4;
+                                pointsource_cuda_detect_viz(
+                                    cuda_ctx, inp.rgba_cpu.data(),
+                                    inp.width, inp.height, stride,
+                                    green_th, green_dom, min_blob, max_blob,
+                                    res.rgba.data());
+                            }
+
+                            lv.pending = std::move(results);
+                            lv.computing.store(false, std::memory_order_release);
+                        });
+                }
+            }
+#endif // __APPLE__ / _WIN32
 
             for (int j = 0; j < scene->num_cams; j++) {
                 const std::string &win_name = pm.camera_names[j];
@@ -960,49 +1090,73 @@ int main(int argc, char **argv) {
                                 (float)display.brightness, display.pivot_midgray);
                     }
 #else
-                    if (ps.play_video) {
-                        current_frame_num = ps.to_display_frame_number;
-                        if (scene->use_cpu_buffer) {
-                            ck(cudaMemcpy(
-                                scene->pbo_cuda[j].cuda_buffer,
-                                scene->display_buffer[j][ps.read_head].frame,
-                                scene->image_width[j] * scene->image_height[j] *
-                                    4,
-                                cudaMemcpyHostToDevice));
-                        } else {
-                            ck(cudaMemcpy(
-                                scene->pbo_cuda[j].cuda_buffer,
-                                scene->display_buffer[j][ps.read_head].frame,
-                                scene->image_width[j] * scene->image_height[j] *
-                                    4,
-                                cudaMemcpyDeviceToDevice));
+                    {
+                        bool viz_uploaded = false;
+#ifdef USE_CUDA_POINTSOURCE
+                        // Check for PointSource viz overlay data
+                        if (win.calibration.pointsource_show_detection &&
+                            win.calibration.pointsource_ready) {
+                            auto &lv = win.calibration.pointsource_viz;
+                            if (j < (int)lv.ready.size() &&
+                                !lv.ready[j].rgba.empty() &&
+                                !lv.ready[j].uploaded) {
+                                // Upload viz overlay (CPU RGBA) to PBO
+                                ck(cudaMemcpy(
+                                    scene->pbo_cuda[j].cuda_buffer,
+                                    lv.ready[j].rgba.data(),
+                                    scene->image_width[j] * scene->image_height[j] * 4,
+                                    cudaMemcpyHostToDevice));
+                                lv.ready[j].uploaded = true;
+                                viz_uploaded = true;
+                            }
                         }
-                    } else {
-                        if (scene->use_cpu_buffer) {
-                            ck(cudaMemcpy(
-                                scene->pbo_cuda[j].cuda_buffer,
-                                scene->display_buffer[j][select_corr_head]
-                                    .frame,
-                                scene->image_width[j] * scene->image_height[j] *
-                                    4,
-                                cudaMemcpyHostToDevice));
+#endif
+                        if (!viz_uploaded) {
+                            if (ps.play_video) {
+                                current_frame_num = ps.to_display_frame_number;
+                                if (scene->use_cpu_buffer) {
+                                    ck(cudaMemcpy(
+                                        scene->pbo_cuda[j].cuda_buffer,
+                                        scene->display_buffer[j][ps.read_head].frame,
+                                        scene->image_width[j] * scene->image_height[j] *
+                                            4,
+                                        cudaMemcpyHostToDevice));
+                                } else {
+                                    ck(cudaMemcpy(
+                                        scene->pbo_cuda[j].cuda_buffer,
+                                        scene->display_buffer[j][ps.read_head].frame,
+                                        scene->image_width[j] * scene->image_height[j] *
+                                            4,
+                                        cudaMemcpyDeviceToDevice));
+                                }
+                            } else {
+                                if (scene->use_cpu_buffer) {
+                                    ck(cudaMemcpy(
+                                        scene->pbo_cuda[j].cuda_buffer,
+                                        scene->display_buffer[j][select_corr_head]
+                                            .frame,
+                                        scene->image_width[j] * scene->image_height[j] *
+                                            4,
+                                        cudaMemcpyHostToDevice));
 
-                            apply_contrast_brightness_rgba(
-                                scene->pbo_cuda[j].cuda_buffer,
-                                scene->image_width[j], scene->image_height[j],
-                                display.contrast,
-                                (float)display.brightness,
-                                display.pivot_midgray,
-                                0);
+                                    apply_contrast_brightness_rgba(
+                                        scene->pbo_cuda[j].cuda_buffer,
+                                        scene->image_width[j], scene->image_height[j],
+                                        display.contrast,
+                                        (float)display.brightness,
+                                        display.pivot_midgray,
+                                        0);
 
-                        } else {
-                            ck(cudaMemcpy(
-                                scene->pbo_cuda[j].cuda_buffer,
-                                scene->display_buffer[j][select_corr_head]
-                                    .frame,
-                                scene->image_width[j] * scene->image_height[j] *
-                                    4,
-                                cudaMemcpyDeviceToDevice));
+                                } else {
+                                    ck(cudaMemcpy(
+                                        scene->pbo_cuda[j].cuda_buffer,
+                                        scene->display_buffer[j][select_corr_head]
+                                            .frame,
+                                        scene->image_width[j] * scene->image_height[j] *
+                                            4,
+                                        cudaMemcpyDeviceToDevice));
+                                }
+                            }
                         }
                     }
                     bind_pbo(&scene->pbo_cuda[j].pbo);

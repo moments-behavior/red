@@ -44,8 +44,10 @@ RED is a multi-camera 3D keypoint labeling system (~35K LOC) originally built fo
 | `5deeb55` | Switch to vcpkg GLFW 3.4 + GLEW, fix Windows shell command |
 | `8f43c02` | Add CUDA GPU compute kernels and TensorRT inference for Windows |
 | `8c1d4e4` | Add ONNX Runtime GPU inference with CUDA execution provider |
+| `4eeacfd` | Add Windows GPU test suite, cuDNN support, and port documentation |
+| *(pending)* | Fix build scripts (CUDA 12.6), PointSource viz dispatch, test_annotation stack |
 
-**Stats:** 29 files changed, +2,825 / -46 lines across the Windows port commits.
+**Stats:** 29 files changed, +2,825 / -46 lines across the initial Windows port commits.
 
 ---
 
@@ -522,7 +524,52 @@ endforeach()
 
 **test_gui.exe:** 178 tests, all pass — tests DeferredQueue, PopupStack, ToastQueue, TransportBar, playback speed, INI migration, and other pure logic.
 
-**test_annotation.exe:** Crashes with `STATUS_STACK_BUFFER_OVERRUN` (0xC0000409) — stack overflow from large static initializers in the STB image headers. Pre-existing issue, needs `/STACK:8000000` linker flag. Not related to GPU porting work.
+**test_annotation.exe:** Previously crashed with `STATUS_STACK_BUFFER_OVERRUN` (0xC0000409). Root cause: build scripts linked against CUDA 13.2 (incompatible with driver 560.94) + insufficient stack for STB static initializers. Fixed by correcting build scripts to CUDA 12.6 and adding `/STACK:67108864` linker flag. Now passes all tests (exit code 0).
+
+---
+
+## 8.5. Phase 7: Pre-Testing Fixes
+
+**Date:** March 2026 (session 2)
+
+Fixes applied before real-data testing, after all synthetic tests passed.
+
+### Build Script CUDA Version Fix
+
+Both `build.bat` and `build.ps1` were configured for CUDA v13.2, but the NVIDIA driver (560.94) only supports CUDA ≤ 12.6. This caused `test_annotation.exe` to crash with `STATUS_STACK_BUFFER_OVERRUN` during DLL initialization — the CUDA 13.2 runtime was incompatible.
+
+**Changes:**
+- `build.bat`: Changed `CUDA_PATH`, `CudaToolkitDir`, and `CMAKE_CUDA_COMPILER` from v13.2 → v12.6. Added `-DCMAKE_TOOLCHAIN_FILE` for vcpkg so clean reconfigures work.
+- `build.ps1`: Same CUDA v13.2 → v12.6 fix + vcpkg toolchain.
+
+### test_annotation Stack Size
+
+Added `/STACK:67108864` (64MB) linker flag for `test_annotation` in CMakeLists.txt. The default 1MB MSVC stack is insufficient for the large static initializers created by `STB_IMAGE_IMPLEMENTATION` and `STB_IMAGE_WRITE_IMPLEMENTATION`.
+
+### Windows PointSource Viz Dispatch
+
+Added `#elif defined(_WIN32) && defined(USE_CUDA_POINTSOURCE)` block in `red.cpp` (after the macOS `#ifdef __APPLE__` viz dispatch) that provides real-time PointSource detection visualization on Windows:
+
+**How it works:**
+1. Snapshots RGBA frame data from `display_buffer` (handles both CPU and GPU memory via `memcpy` / `cudaMemcpy`)
+2. Dispatches background thread with:
+   - Phase 1: `pointsource_cuda_detect()` on all cameras for blob stats
+   - Phase 2: `pointsource_cuda_detect_viz()` on visible cameras for RGBA overlay
+3. Results are double-buffered (pending → ready) and uploaded to OpenGL PBO/texture
+
+**Format compatibility:** The CUDA PointSource kernels work with both RGBA (Windows/NVDEC output) and BGRA (macOS/VideoToolbox output):
+- Green channel is at byte offset 1 in both formats
+- The threshold condition `g >= r && g >= b && g > r + gd && g > b + gd` is symmetric in R and B
+- `reduce_centroid_kernel` only reads the green channel (offset 1)
+
+Also updated `pointsource_cuda.h` documentation to clarify that both BGRA and RGBA input are supported.
+
+**Files changed:**
+- `CMakeLists.txt` — `/STACK:67108864` for test_annotation
+- `build.bat` — CUDA 13.2 → 12.6 + vcpkg toolchain
+- `build.ps1` — CUDA 13.2 → 12.6 + vcpkg toolchain
+- `src/red.cpp` — Windows PointSource viz dispatch + viz overlay upload
+- `src/pointsource_cuda.h` — Updated docs (BGRA/RGBA both supported)
 
 ---
 
@@ -618,11 +665,11 @@ if (gpu_ctx) gpu_destroy(gpu_ctx);
 
 ### Non-Blocking Issues
 
-1. **PointSource CUDA format mismatch:** Expects BGRA input, Windows FrameReader produces RGB24. CPU fallback works. Needs format adaptation kernel or pre-conversion for `detect_all_cameras`.
+1. **~~PointSource CUDA format mismatch~~ (FIXED):** The CUDA kernels accept both BGRA and RGBA input — green is at offset 1 in both formats, and the R/B threshold comparisons are symmetric. Windows PointSource viz dispatch added to `red.cpp` using RGBA display buffer data from NVDEC. Bulk detection in `detect_all_cameras` uses the CPU `detect_light_spot` path (RGB24 from FrameReader), which works correctly.
 
 2. **RGBA→RGB in prediction path:** `red.cpp` copies GPU→CPU for JARVIS prediction (`cudaMemcpy` + per-pixel loop). Could be optimized with a CUDA RGBA→RGB kernel.
 
-3. **test_annotation.exe stack overflow:** Crashes with `STATUS_STACK_BUFFER_OVERRUN`. Large static arrays from STB headers exceed default stack. Fix: add `/STACK:8000000` linker flag.
+3. **~~test_annotation.exe stack overflow~~ (FIXED):** Root cause was twofold: (a) build scripts (`build.bat`, `build.ps1`) were pointing to CUDA v13.2 while the driver only supports ≤12.6, causing runtime crashes during DLL init; (b) default 1MB MSVC stack was insufficient for STB static initializers. Fix: corrected build scripts to CUDA 12.6 + added `/STACK:67108864` (64MB) linker flag for test_annotation in CMakeLists.txt.
 
 4. **NVDEC decode optimization (deferred):** Could add async decode and eliminate double GPU buffering for lower latency. Lower priority since decode works.
 

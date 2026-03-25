@@ -16,12 +16,14 @@ typedef struct PointSourceCudaContext *PointSourceCudaHandle;
 // Returns nullptr if CUDA init fails (caller should fall back to CPU).
 PointSourceCudaHandle pointsource_cuda_create();
 
-// Detect green light spot in a BGRA frame using CUDA compute.
-// bgra_data: pointer to CPU-side BGRA pixel data (width*height*4 bytes).
+// Detect green light spot in a 4-channel frame (BGRA or RGBA) using CUDA.
+// data: pointer to CPU-side 4-byte-per-pixel data (width*height*4 bytes).
+// Works with both BGRA and RGBA: G is at offset 1 in both, and the R/B
+// threshold checks are symmetric (g >= r && g >= b).
 // stride: bytes per row (may include padding).
 // Returns result synchronously (GPU work completes before return).
 PointSourceCudaSpot pointsource_cuda_detect(PointSourceCudaHandle ctx,
-                                            const uint8_t *bgra_data,
+                                            const uint8_t *data,
                                             int width, int height, int stride,
                                             int green_threshold,
                                             int green_dominance,
@@ -32,6 +34,7 @@ PointSourceCudaSpot pointsource_cuda_detect(PointSourceCudaHandle ctx,
 // Detect light spot + produce RGBA visualization overlay.
 // GPU: threshold -> erode -> dilate -> colorize (black/gray/green).
 // CPU: BFS connected components on dilated pixels -> recolor per blob size.
+// Input: 4-byte-per-pixel data (BGRA or RGBA — both work, see detect above).
 // rgba_out must be pre-allocated to width*height*4 bytes.
 // Returns synchronously after GPU+CPU work completes.
 struct PointSourceCudaVizResult {
@@ -41,7 +44,7 @@ struct PointSourceCudaVizResult {
 
 PointSourceCudaVizResult pointsource_cuda_detect_viz(
     PointSourceCudaHandle ctx,
-    const uint8_t *bgra_data,
+    const uint8_t *data,
     int width, int height, int stride,
     int green_threshold, int green_dominance,
     int min_blob_pixels, int max_blob_pixels,

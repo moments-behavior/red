@@ -1281,6 +1281,10 @@ elseif(WIN32)
         )
     endforeach()
 
+    # test_annotation needs a larger stack — STB image headers create large
+    # static initializers that overflow the default 1MB MSVC stack
+    target_link_options(test_annotation PRIVATE /STACK:67108864)
+
 else()
     # Linux build with NVIDIA CUDA support
     project(red LANGUAGES CXX CUDA)
