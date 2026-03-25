@@ -524,6 +524,165 @@ PointSourceMetalSpot pointsource_metal_detect(PointSourceMetalHandle ctx,
     return result;
 }
 
+// Smart Blob v2: return ALL valid-sized blobs (not just the largest).
+// Reuses the same GPU pipeline (threshold → erode → dilate) then does BFS
+// on CPU to find all connected components.
+std::vector<PointSourceMetalBlob> pointsource_metal_detect_all(
+    PointSourceMetalHandle ctx,
+    CVPixelBufferRef pixel_buffer,
+    int green_threshold, int green_dominance,
+    int min_blob_pixels, int max_blob_pixels) {
+
+    std::vector<PointSourceMetalBlob> blobs;
+    if (!ctx || !pixel_buffer) return blobs;
+
+    int width  = (int)CVPixelBufferGetWidth(pixel_buffer);
+    int height = (int)CVPixelBufferGetHeight(pixel_buffer);
+
+    // Create Metal texture from CVPixelBuffer (same as pointsource_metal_detect)
+    CVMetalTextureRef cvTex = nullptr;
+    CVReturn cvr = CVMetalTextureCacheCreateTextureFromImage(
+        kCFAllocatorDefault, ctx->texCache, pixel_buffer, nullptr,
+        MTLPixelFormatBGRA8Unorm, width, height, 0, &cvTex);
+    if (cvr != kCVReturnSuccess || !cvTex) return blobs;
+    id<MTLTexture> inputTex = CVMetalTextureGetTexture(cvTex);
+
+    // Intermediate textures (R8Uint — matching pointsource_metal_detect)
+    MTLTextureDescriptor *desc = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatR8Uint
+                                                                                    width:width height:height mipmapped:NO];
+    desc.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
+    desc.storageMode = MTLStorageModePrivate;
+    id<MTLTexture> maskTex    = [ctx->device newTextureWithDescriptor:desc];
+    id<MTLTexture> erodedTex  = [ctx->device newTextureWithDescriptor:desc];
+    id<MTLTexture> dilatedTex = [ctx->device newTextureWithDescriptor:desc];
+
+    // GPU: threshold → erode → dilate
+    @autoreleasepool {
+        id<MTLCommandBuffer> cmdBuf = [ctx->queue commandBuffer];
+        MTLSize gridSize = MTLSizeMake(width, height, 1);
+        MTLSize tgSize   = MTLSizeMake(16, 16, 1);
+
+        // Threshold
+        {
+            id<MTLComputeCommandEncoder> enc = [cmdBuf computeCommandEncoder];
+            [enc setComputePipelineState:ctx->pso_threshold];
+            [enc setTexture:inputTex atIndex:0];
+            [enc setTexture:maskTex  atIndex:1];
+            uint32_t params[2] = {(uint32_t)green_threshold, (uint32_t)green_dominance};
+            [enc setBytes:params length:sizeof(params) atIndex:0];
+            [enc dispatchThreads:gridSize threadsPerThreadgroup:tgSize];
+            [enc endEncoding];
+        }
+        // Erode
+        {
+            id<MTLComputeCommandEncoder> enc = [cmdBuf computeCommandEncoder];
+            [enc setComputePipelineState:ctx->pso_erode];
+            [enc setTexture:maskTex   atIndex:0];
+            [enc setTexture:erodedTex atIndex:1];
+            [enc dispatchThreads:gridSize threadsPerThreadgroup:tgSize];
+            [enc endEncoding];
+        }
+        // Dilate
+        {
+            id<MTLComputeCommandEncoder> enc = [cmdBuf computeCommandEncoder];
+            [enc setComputePipelineState:ctx->pso_dilate];
+            [enc setTexture:erodedTex  atIndex:0];
+            [enc setTexture:dilatedTex atIndex:1];
+            [enc dispatchThreads:gridSize threadsPerThreadgroup:tgSize];
+            [enc endEncoding];
+        }
+        [cmdBuf commit];
+        [cmdBuf waitUntilCompleted];
+
+        // Read dilated mask to CPU via colorize pass (reuses existing infrastructure)
+        int npixels = width * height;
+        id<MTLBuffer> maskBuf =
+            [ctx->device newBufferWithLength:npixels * 4
+                                     options:MTLResourceStorageModeShared];
+        {
+            id<MTLCommandBuffer> cmdBuf2 = [ctx->queue commandBuffer];
+            id<MTLComputeCommandEncoder> enc = [cmdBuf2 computeCommandEncoder];
+            [enc setComputePipelineState:ctx->pso_colorize];
+            [enc setTexture:maskTex    atIndex:0];
+            [enc setTexture:dilatedTex atIndex:1];
+            [enc setBuffer:maskBuf offset:0 atIndex:0];
+            id<MTLBuffer> dummyCount =
+                [ctx->device newBufferWithLength:sizeof(uint32_t)
+                                         options:MTLResourceStorageModeShared];
+            *(uint32_t *)dummyCount.contents = 0;
+            [enc setBuffer:dummyCount offset:0 atIndex:1];
+            [enc dispatchThreads:gridSize threadsPerThreadgroup:tgSize];
+            [enc endEncoding];
+            [cmdBuf2 commit];
+            [cmdBuf2 waitUntilCompleted];
+        }
+
+        // BFS connected components — collect ALL valid blobs
+        uint8_t *rgba = (uint8_t *)maskBuf.contents;
+        std::vector<int> queue;
+        queue.reserve(1024);
+
+        CVPixelBufferLockBaseAddress(pixel_buffer, kCVPixelBufferLock_ReadOnly);
+        const uint8_t *src_bgra = (const uint8_t *)CVPixelBufferGetBaseAddress(pixel_buffer);
+        int src_stride = (int)CVPixelBufferGetBytesPerRow(pixel_buffer);
+
+        for (int y = 1; y < height - 1; y++) {
+            for (int x = 1; x < width - 1; x++) {
+                int idx = y * width + x;
+                int base = idx * 4;
+                if (rgba[base] != 0 || rgba[base+1] != 255 || rgba[base+2] != 0)
+                    continue;
+
+                // BFS flood-fill
+                queue.clear();
+                queue.push_back(idx);
+                rgba[base] = 1; // mark visited
+
+                for (size_t qi = 0; qi < queue.size(); qi++) {
+                    int ci = queue[qi];
+                    int cx_pos = ci % width, cy_pos = ci / width;
+                    const int neighbors[4] = {
+                        (cx_pos > 0)          ? ci - 1     : -1,
+                        (cx_pos < width - 1)  ? ci + 1     : -1,
+                        (cy_pos > 0)          ? ci - width  : -1,
+                        (cy_pos < height - 1) ? ci + width  : -1
+                    };
+                    for (int ni : neighbors) {
+                        if (ni < 0) continue;
+                        int nb = ni * 4;
+                        if (rgba[nb] == 0 && rgba[nb+1] == 255 && rgba[nb+2] == 0) {
+                            rgba[nb] = 1;
+                            queue.push_back(ni);
+                        }
+                    }
+                }
+
+                int blob_size = (int)queue.size();
+                if (blob_size < min_blob_pixels || blob_size > max_blob_pixels)
+                    continue;
+
+                // Compute intensity-weighted centroid
+                double sx = 0, sy = 0, sw = 0;
+                for (int pi : queue) {
+                    int px = pi % width, py = pi / width;
+                    double g = src_bgra[py * src_stride + px * 4 + 1];
+                    sx += px * g;
+                    sy += py * g;
+                    sw += g;
+                }
+                if (sw > 0) {
+                    blobs.push_back({sx / sw, sy / sw, blob_size});
+                }
+            }
+        }
+
+        CVPixelBufferUnlockBaseAddress(pixel_buffer, kCVPixelBufferLock_ReadOnly);
+    }
+
+    CFRelease(cvTex);
+    return blobs;
+}
+
 
 PointSourceMetalVizResult pointsource_metal_detect_viz(
     PointSourceMetalHandle ctx,

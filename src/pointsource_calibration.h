@@ -141,6 +141,13 @@ struct SpotDetection {
     int pixel_count;
 };
 
+// Smart Blob v2: store all valid blobs per frame for deferred resolution
+struct BlobCandidate {
+    float cx, cy;       // intensity-weighted centroid
+    int pixel_count;    // blob area (dilated pixels)
+};
+using FrameCandidates = std::map<int, std::vector<BlobCandidate>>;
+
 struct FrameObservations {
     int frame_num;
     std::vector<int> cam_indices;
@@ -570,6 +577,103 @@ inline bool detect_light_spot(const uint8_t *pixels, int width, int height,
     return true;
 }
 
+// Smart Blob v2: detect ALL valid-sized blobs in a frame (CPU path).
+// Same pipeline as detect_light_spot (threshold → erode → dilate → union-find)
+// but returns all valid blobs instead of picking one.
+inline std::vector<BlobCandidate> detect_all_blobs(
+    const uint8_t *pixels, int width, int height,
+    int stride, PointSourcePixelFormat fmt,
+    int green_threshold, int green_dominance,
+    int min_blob_pixels, int max_blob_pixels) {
+
+    int npixels = width * height;
+    int bpp = (fmt == POINTSOURCE_FMT_BGRA) ? 4 : 3;
+    int r_off = (fmt == POINTSOURCE_FMT_BGRA) ? 2 : 0;
+    int b_off = (fmt == POINTSOURCE_FMT_BGRA) ? 0 : 2;
+
+    // Step 1: Threshold
+    std::vector<uint8_t> mask(npixels, 0);
+    for (int y = 0; y < height; y++) {
+        const uint8_t *row = pixels + y * stride;
+        for (int x = 0; x < width; x++) {
+            uint8_t r = row[x * bpp + r_off];
+            uint8_t g = row[x * bpp + 1];
+            uint8_t b = row[x * bpp + b_off];
+            if (g > green_threshold && g >= r && g >= b &&
+                (  (g > r + green_dominance && g > b + green_dominance)
+                || (g > 200 && g >= r && g >= b)  ))
+                mask[y * width + x] = 1;
+        }
+    }
+
+    // Step 2: Erode (3x3)
+    std::vector<uint8_t> eroded(npixels, 0);
+    for (int y = 1; y < height - 1; y++) {
+        for (int x = 1; x < width - 1; x++) {
+            int idx = y * width + x;
+            if (!mask[idx]) continue;
+            bool all = true;
+            for (int dy = -1; dy <= 1 && all; dy++)
+                for (int dx = -1; dx <= 1 && all; dx++)
+                    if (!mask[(y + dy) * width + (x + dx)]) all = false;
+            if (all) eroded[idx] = 1;
+        }
+    }
+
+    // Step 3: Dilate (3x3)
+    std::vector<uint8_t> dilated(npixels, 0);
+    for (int y = 1; y < height - 1; y++) {
+        for (int x = 1; x < width - 1; x++) {
+            bool has_neighbor = false;
+            for (int dy = -1; dy <= 1 && !has_neighbor; dy++)
+                for (int dx = -1; dx <= 1 && !has_neighbor; dx++)
+                    if (eroded[(y + dy) * width + (x + dx)]) has_neighbor = true;
+            if (has_neighbor) dilated[y * width + x] = 1;
+        }
+    }
+
+    // Step 4: Connected components (4-connectivity)
+    UnionFind uf(npixels);
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+            int idx = y * width + x;
+            if (!dilated[idx]) continue;
+            if (x > 0 && dilated[idx - 1]) uf.unite(idx, idx - 1);
+            if (y > 0 && dilated[idx - width]) uf.unite(idx, idx - width);
+        }
+    }
+
+    // Step 5: Filter by area, compute centroid for each valid blob
+    std::map<int, int> component_sizes;
+    for (int i = 0; i < npixels; i++)
+        if (dilated[i]) component_sizes[uf.find(i)] = uf.sz[uf.find(i)];
+
+    std::vector<int> valid_roots;
+    for (auto &[root, s] : component_sizes)
+        if (s >= min_blob_pixels && s <= max_blob_pixels)
+            valid_roots.push_back(root);
+
+    std::vector<BlobCandidate> result;
+    for (int root : valid_roots) {
+        double sum_x = 0, sum_y = 0, sum_w = 0;
+        int count = 0;
+        for (int i = 0; i < npixels; i++) {
+            if (dilated[i] && uf.find(i) == root) {
+                int px = i % width, py = i / width;
+                double w = pixels[py * stride + px * bpp + 1]; // green channel
+                sum_x += px * w;
+                sum_y += py * w;
+                sum_w += w;
+                count++;
+            }
+        }
+        if (sum_w > 1e-9) {
+            result.push_back({(float)(sum_x / sum_w), (float)(sum_y / sum_w), count});
+        }
+    }
+    return result;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Static artifact filter: remove detections at fixed locations.
 // The wand sweeps across the image, spreading detections across many spatial
@@ -635,6 +739,189 @@ inline int filter_static_detections(DetectionMap &detections,
         }
     }
     return removed;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Smart Blob v2: resolve multi-blob candidates into a single detection per frame.
+//
+// Stage 1: Build artifact zone map from spatial clustering of ALL candidates
+// Stage 2: For each frame, filter artifact-zone candidates
+// Stage 3: Tiebreak remaining candidates via reprojection or size consistency
+// ─────────────────────────────────────────────────────────────────────────────
+
+inline DetectionMap resolve_blob_candidates(
+    const FrameCandidates &candidates,
+    int image_width, int image_height,
+    int bin_size = 32,
+    double static_threshold = 5.0,
+    // Optional: for reprojection-based tiebreaking (Refinement mode)
+    const std::vector<CalibrationPipeline::CameraPose> *poses = nullptr,
+    int cam_idx = -1,
+    const std::vector<DetectionMap> *other_detections = nullptr,
+    int num_cameras = 0) {
+
+    DetectionMap result;
+    if (candidates.empty()) return result;
+
+    int bw = (image_width + bin_size - 1) / bin_size;
+    int bh = (image_height + bin_size - 1) / bin_size;
+
+    // ── Stage 1: Build artifact zone map ──
+    // Bin ALL blob centroids from ALL frames
+    std::vector<int> bins(bw * bh, 0);
+    for (const auto &[frame, blobs] : candidates)
+        for (const auto &b : blobs) {
+            int bx = std::clamp((int)(b.cx / bin_size), 0, bw - 1);
+            int by = std::clamp((int)(b.cy / bin_size), 0, bh - 1);
+            bins[by * bw + bx]++;
+        }
+
+    // Median of non-empty bins
+    std::vector<int> nonempty;
+    for (int v : bins) if (v > 0) nonempty.push_back(v);
+    if (nonempty.empty()) return result;
+    std::sort(nonempty.begin(), nonempty.end());
+    int median_count = nonempty[nonempty.size() / 2];
+
+    // Flag dense bins as artifact zones
+    int threshold = std::max(20, (int)(static_threshold * median_count));
+    std::vector<bool> artifact(bw * bh, false);
+    for (int i = 0; i < bw * bh; i++)
+        if (bins[i] > threshold) artifact[i] = true;
+
+    // Grow artifact zone by 1 bin in each direction
+    std::vector<bool> grown = artifact;
+    for (int y = 0; y < bh; y++)
+        for (int x = 0; x < bw; x++) {
+            if (!artifact[y * bw + x]) continue;
+            for (int dy = -1; dy <= 1; dy++)
+                for (int dx = -1; dx <= 1; dx++) {
+                    int nx = x + dx, ny = y + dy;
+                    if (nx >= 0 && nx < bw && ny >= 0 && ny < bh)
+                        grown[ny * bw + nx] = true;
+                }
+        }
+
+    // Helper: is a point in the artifact zone?
+    auto in_artifact = [&](float cx, float cy) -> bool {
+        int bx = std::clamp((int)(cx / bin_size), 0, bw - 1);
+        int by = std::clamp((int)(cy / bin_size), 0, bh - 1);
+        return grown[by * bw + bx];
+    };
+
+    // ── Compute median blob size from single-candidate frames (for size tiebreaker) ──
+    std::vector<int> single_blob_sizes;
+    for (const auto &[frame, blobs] : candidates) {
+        // Count non-artifact candidates
+        std::vector<const BlobCandidate*> clean;
+        for (const auto &b : blobs)
+            if (!in_artifact(b.cx, b.cy)) clean.push_back(&b);
+        if (clean.size() == 1)
+            single_blob_sizes.push_back(clean[0]->pixel_count);
+    }
+    int median_blob_size = 0;
+    if (!single_blob_sizes.empty()) {
+        std::sort(single_blob_sizes.begin(), single_blob_sizes.end());
+        median_blob_size = single_blob_sizes[single_blob_sizes.size() / 2];
+    }
+
+    // Count artifact removals for logging
+    int artifact_frames_recovered = 0;
+    int artifact_detections_removed = 0;
+    int reprojection_tiebreaks = 0;
+    int size_tiebreaks = 0;
+
+    // ── Stage 2 & 3: Per-frame resolution ──
+    for (const auto &[frame, blobs] : candidates) {
+        // Filter out artifact-zone candidates
+        std::vector<const BlobCandidate*> clean;
+        for (const auto &b : blobs) {
+            if (in_artifact(b.cx, b.cy))
+                artifact_detections_removed++;
+            else
+                clean.push_back(&b);
+        }
+
+        if (clean.empty()) continue;
+
+        const BlobCandidate *winner = nullptr;
+
+        if (clean.size() == 1) {
+            winner = clean[0];
+            if (blobs.size() > 1) artifact_frames_recovered++;
+        } else {
+            // Multiple non-artifact candidates — need tiebreaker
+
+            // Tiebreaker A: Reprojection (if poses available)
+            if (poses && other_detections && cam_idx >= 0 && num_cameras > 0) {
+                // Find this frame in other cameras' resolved detections
+                std::vector<std::pair<int, Eigen::Vector2d>> other_obs;
+                for (int oc = 0; oc < num_cameras; oc++) {
+                    if (oc == cam_idx) continue;
+                    auto it = (*other_detections)[oc].find(frame);
+                    if (it != (*other_detections)[oc].end()) {
+                        other_obs.push_back({oc, Eigen::Vector2d(it->second.cx, it->second.cy)});
+                    }
+                }
+
+                if ((int)other_obs.size() >= 2) {
+                    // Triangulate 3D point from other cameras
+                    std::vector<Eigen::Vector2d> pts2d;
+                    std::vector<Eigen::Matrix<double, 3, 4>> Ps;
+                    for (const auto &[oc, px] : other_obs) {
+                        Eigen::Vector2d und = red_math::undistortPoint(
+                            px, (*poses)[oc].K, (*poses)[oc].dist);
+                        pts2d.push_back(und);
+                        Ps.push_back(red_math::projectionFromKRt(
+                            (*poses)[oc].K, (*poses)[oc].R, (*poses)[oc].t));
+                    }
+                    Eigen::Vector3d X = red_math::triangulatePoints(pts2d, Ps);
+
+                    // Project into this camera, pick closest candidate
+                    Eigen::Vector3d rvec = red_math::rotationMatrixToVector((*poses)[cam_idx].R);
+                    Eigen::Vector2d proj = red_math::projectPoint(
+                        X, rvec, (*poses)[cam_idx].t,
+                        (*poses)[cam_idx].K, (*poses)[cam_idx].dist);
+
+                    double best_dist = 1e18;
+                    for (const auto *c : clean) {
+                        double d = std::hypot(c->cx - proj.x(), c->cy - proj.y());
+                        if (d < best_dist) { best_dist = d; winner = c; }
+                    }
+                    reprojection_tiebreaks++;
+                }
+            }
+
+            // Tiebreaker B: Size consistency (fallback)
+            if (!winner && median_blob_size > 0) {
+                int best_diff = INT_MAX;
+                for (const auto *c : clean) {
+                    int diff = std::abs(c->pixel_count - median_blob_size);
+                    if (diff < best_diff) { best_diff = diff; winner = c; }
+                }
+                size_tiebreaks++;
+            }
+
+            // Last resort: pick largest
+            if (!winner) {
+                for (const auto *c : clean)
+                    if (!winner || c->pixel_count > winner->pixel_count) winner = c;
+            }
+        }
+
+        if (winner) {
+            result[frame] = {winner->cx, winner->cy, winner->pixel_count};
+        }
+    }
+
+    int total_frames = (int)candidates.size();
+    int resolved = (int)result.size();
+    printf("  resolve_blob_candidates: %d/%d frames resolved "
+           "(%d artifact detections removed, %d frames recovered, "
+           "%d reproj tiebreaks, %d size tiebreaks)\n",
+           resolved, total_frames, artifact_detections_removed,
+           artifact_frames_recovered, reprojection_tiebreaks, size_tiebreaks);
+    return result;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -751,6 +1038,9 @@ inline std::vector<DetectionMap> detect_all_cameras(
     if (progress)
         progress->init(num_cameras);
     std::vector<DetectionMap> all_detections(num_cameras);
+    std::vector<FrameCandidates> all_candidates(num_cameras); // Smart Blob v2
+    std::vector<std::pair<int,int>> cam_dims(num_cameras, {0,0}); // width,height per camera
+    bool collect_candidates = config.smart_blob;
     std::mutex det_mutex;
 
     // GPU-accelerated detection — shared across all camera threads
@@ -765,7 +1055,8 @@ inline std::vector<DetectionMap> detect_all_cameras(
         if (it == video_files.end())
             continue;
 
-        threads.emplace_back([&config, &all_detections, &det_mutex, c,
+        threads.emplace_back([&config, &all_detections, &all_candidates,
+                              &cam_dims, collect_candidates, &det_mutex, c,
                               video_path = it->second, progress, metal_ctx]() {
             CameraProgress *cam_prog = progress ? progress->cameras[c].get() : nullptr;
             // Open demuxer (handles Annex-B conversion for VT)
@@ -782,6 +1073,7 @@ inline std::vector<DetectionMap> detect_all_cameras(
 
             int width = (int)demuxer->GetWidth();
             int height = (int)demuxer->GetHeight();
+            cam_dims[c] = {width, height};
 
             // Init VT decoder from stream extradata
             VTAsyncDecoder vt;
@@ -816,6 +1108,7 @@ inline std::vector<DetectionMap> detect_all_cameras(
             }
 
             DetectionMap local_detections;
+            FrameCandidates local_candidates; // Smart Blob v2
             int detected = 0;
             int packets_submitted = 0;
 
@@ -827,39 +1120,67 @@ inline std::vector<DetectionMap> detect_all_cameras(
                                      frame < stop_fr &&
                                      ((frame - start_fr) % step == 0);
                 if (should_detect) {
-                    SpotDetection det;
-                    bool found = false;
-                    if (metal_ctx) {
-                        // GPU path — process CVPixelBuffer directly (zero-copy)
-                        PointSourceMetalSpot mdet = pointsource_metal_detect(
-                            metal_ctx, pb,
-                            config.green_threshold, config.green_dominance,
-                            config.min_blob_pixels, config.max_blob_pixels,
-                            config.smart_blob);
-                        if (mdet.found) {
-                            det.cx = mdet.cx;
-                            det.cy = mdet.cy;
-                            det.pixel_count = mdet.pixel_count;
-                            found = true;
+                    if (collect_candidates) {
+                        // Smart Blob v2: collect ALL valid blobs per frame
+                        std::vector<BlobCandidate> frame_blobs;
+                        if (metal_ctx) {
+                            auto mblobs = pointsource_metal_detect_all(
+                                metal_ctx, pb,
+                                config.green_threshold, config.green_dominance,
+                                config.min_blob_pixels, config.max_blob_pixels);
+                            for (const auto &mb : mblobs)
+                                frame_blobs.push_back({(float)mb.cx, (float)mb.cy, mb.pixel_count});
+                        } else {
+                            CVPixelBufferLockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
+                            const uint8_t *bgra =
+                                (const uint8_t *)CVPixelBufferGetBaseAddress(pb);
+                            int bstride = (int)CVPixelBufferGetBytesPerRow(pb);
+                            frame_blobs = detect_all_blobs(bgra, width, height, bstride,
+                                                           POINTSOURCE_FMT_BGRA,
+                                                           config.green_threshold,
+                                                           config.green_dominance,
+                                                           config.min_blob_pixels,
+                                                           config.max_blob_pixels);
+                            CVPixelBufferUnlockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
+                        }
+                        if (!frame_blobs.empty()) {
+                            local_candidates[frame] = std::move(frame_blobs);
+                            detected++;
                         }
                     } else {
-                        // CPU fallback
-                        CVPixelBufferLockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
-                        const uint8_t *bgra =
-                            (const uint8_t *)CVPixelBufferGetBaseAddress(pb);
-                        int stride = (int)CVPixelBufferGetBytesPerRow(pb);
-                        found = detect_light_spot(bgra, width, height, stride,
-                                                  POINTSOURCE_FMT_BGRA,
-                                                  config.green_threshold,
-                                                  config.green_dominance,
-                                                  config.min_blob_pixels,
-                                                  config.max_blob_pixels, det,
-                                                  config.smart_blob);
-                        CVPixelBufferUnlockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
-                    }
-                    if (found) {
-                        local_detections[frame] = det;
-                        detected++;
+                        // Original path: single detection per frame
+                        SpotDetection det;
+                        bool found = false;
+                        if (metal_ctx) {
+                            PointSourceMetalSpot mdet = pointsource_metal_detect(
+                                metal_ctx, pb,
+                                config.green_threshold, config.green_dominance,
+                                config.min_blob_pixels, config.max_blob_pixels,
+                                false); // no smart_blob in v1 path
+                            if (mdet.found) {
+                                det.cx = mdet.cx;
+                                det.cy = mdet.cy;
+                                det.pixel_count = mdet.pixel_count;
+                                found = true;
+                            }
+                        } else {
+                            CVPixelBufferLockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
+                            const uint8_t *bgra =
+                                (const uint8_t *)CVPixelBufferGetBaseAddress(pb);
+                            int bstride = (int)CVPixelBufferGetBytesPerRow(pb);
+                            found = detect_light_spot(bgra, width, height, bstride,
+                                                      POINTSOURCE_FMT_BGRA,
+                                                      config.green_threshold,
+                                                      config.green_dominance,
+                                                      config.min_blob_pixels,
+                                                      config.max_blob_pixels, det,
+                                                      false);
+                            CVPixelBufferUnlockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
+                        }
+                        if (found) {
+                            local_detections[frame] = det;
+                            detected++;
+                        }
                     }
                     processed++;
                 }
@@ -916,15 +1237,19 @@ inline std::vector<DetectionMap> detect_all_cameras(
 
             {
                 std::lock_guard<std::mutex> lock(det_mutex);
-                all_detections[c] = std::move(local_detections);
+                if (collect_candidates)
+                    all_candidates[c] = std::move(local_candidates);
+                else
+                    all_detections[c] = std::move(local_detections);
             }
 
             if (cam_prog)
                 cam_prog->done.store(true, std::memory_order_relaxed);
 
-            printf("PointSource: Camera %s — %d frames decoded, %d spots detected "
+            printf("PointSource: Camera %s — %d frames decoded, %d %s "
                    "(range %d-%s, step %d) [VT+BGRA]\n",
                    config.camera_names[c].c_str(), frame, detected,
+                   collect_candidates ? "frames with blobs" : "spots detected",
                    start_fr,
                    stop_fr == INT_MAX ? "end" : std::to_string(stop_fr).c_str(),
                    step);
@@ -936,6 +1261,16 @@ inline std::vector<DetectionMap> detect_all_cameras(
 
     if (metal_ctx)
         pointsource_metal_destroy(metal_ctx);
+
+    // Smart Blob v2: resolve candidates → detections
+    if (collect_candidates) {
+        printf("PointSource: Smart Blob v2 — resolving blob candidates...\n");
+        for (int c = 0; c < num_cameras; c++) {
+            printf("  Camera %s:\n", config.camera_names[c].c_str());
+            all_detections[c] = resolve_blob_candidates(
+                all_candidates[c], cam_dims[c].first, cam_dims[c].second);
+        }
+    }
 
     return all_detections;
 }
@@ -954,6 +1289,9 @@ inline std::vector<DetectionMap> detect_all_cameras(
     if (progress)
         progress->init(num_cameras);
     std::vector<DetectionMap> all_detections(num_cameras);
+    std::vector<FrameCandidates> all_candidates(num_cameras);
+    std::vector<std::pair<int,int>> cam_dims(num_cameras, {0,0});
+    bool collect_candidates = config.smart_blob;
     std::mutex det_mutex;
 
     std::vector<std::thread> threads;
@@ -963,7 +1301,8 @@ inline std::vector<DetectionMap> detect_all_cameras(
         if (it == video_files.end())
             continue;
 
-        threads.emplace_back([&config, &all_detections, &det_mutex, c,
+        threads.emplace_back([&config, &all_detections, &all_candidates,
+                              &cam_dims, collect_candidates, &det_mutex, c,
                               video_path = it->second, progress]() {
             CameraProgress *cam_prog = progress ? progress->cameras[c].get() : nullptr;
             ffmpeg_reader::FrameReader reader;
@@ -973,6 +1312,9 @@ inline std::vector<DetectionMap> detect_all_cameras(
                 return;
             }
 
+            int w = reader.width(), h = reader.height();
+            cam_dims[c] = {w, h};
+
             int start_fr = config.start_frame;
             int stop_fr = config.stop_frame;
             int step = std::max(1, config.frame_step);
@@ -980,6 +1322,7 @@ inline std::vector<DetectionMap> detect_all_cameras(
                 stop_fr = INT_MAX;
 
             DetectionMap local_detections;
+            FrameCandidates local_candidates;
             int frame = 0;
             int detected = 0;
             int processed = 0;
@@ -992,17 +1335,28 @@ inline std::vector<DetectionMap> detect_all_cameras(
                 bool should_detect = frame >= start_fr &&
                                      ((frame - start_fr) % step == 0);
                 if (should_detect) {
-                    int stride = reader.width() * 3;
-                    SpotDetection det;
-                    if (detect_light_spot(rgb, reader.width(), reader.height(),
-                                          stride, POINTSOURCE_FMT_RGB24,
-                                          config.green_threshold,
-                                          config.green_dominance,
-                                          config.min_blob_pixels,
-                                          config.max_blob_pixels, det,
-                                          config.smart_blob)) {
-                        local_detections[frame] = det;
-                        detected++;
+                    int stride = w * 3;
+                    if (collect_candidates) {
+                        auto frame_blobs = detect_all_blobs(
+                            rgb, w, h, stride, POINTSOURCE_FMT_RGB24,
+                            config.green_threshold, config.green_dominance,
+                            config.min_blob_pixels, config.max_blob_pixels);
+                        if (!frame_blobs.empty()) {
+                            local_candidates[frame] = std::move(frame_blobs);
+                            detected++;
+                        }
+                    } else {
+                        SpotDetection det;
+                        if (detect_light_spot(rgb, w, h, stride,
+                                              POINTSOURCE_FMT_RGB24,
+                                              config.green_threshold,
+                                              config.green_dominance,
+                                              config.min_blob_pixels,
+                                              config.max_blob_pixels, det,
+                                              false)) {
+                            local_detections[frame] = det;
+                            detected++;
+                        }
                     }
                     processed++;
                 }
@@ -1015,7 +1369,10 @@ inline std::vector<DetectionMap> detect_all_cameras(
 
             {
                 std::lock_guard<std::mutex> lock(det_mutex);
-                all_detections[c] = std::move(local_detections);
+                if (collect_candidates)
+                    all_candidates[c] = std::move(local_candidates);
+                else
+                    all_detections[c] = std::move(local_detections);
             }
 
             if (cam_prog)
@@ -1032,6 +1389,16 @@ inline std::vector<DetectionMap> detect_all_cameras(
 
     for (auto &t : threads)
         t.join();
+
+    // Smart Blob v2: resolve candidates → detections
+    if (collect_candidates) {
+        printf("PointSource: Smart Blob v2 — resolving blob candidates...\n");
+        for (int c = 0; c < num_cameras; c++) {
+            printf("  Camera %s:\n", config.camera_names[c].c_str());
+            all_detections[c] = resolve_blob_candidates(
+                all_candidates[c], cam_dims[c].first, cam_dims[c].second);
+        }
+    }
 
     return all_detections;
 }
@@ -2367,10 +2734,9 @@ inline PointSourceResult run_pointsource_refinement(const PointSourceConfig &con
     if (progress) progress->current_step.store(1, std::memory_order_relaxed);
     auto all_detections = detect_all_cameras(config, video_files, status, progress);
 
-    // Filter static artifacts from all cameras (removes persistent bright spots
-    // like LEDs or reflections that stay in the same pixel location across frames)
+    // Filter static artifacts (skip when smart_blob v2 — resolve_blob_candidates already did this)
     if (progress) progress->current_step.store(2, std::memory_order_relaxed);
-    if (image_width > 0 && image_height > 0) {
+    if (!config.smart_blob && image_width > 0 && image_height > 0) {
         for (int c = 0; c < num_cameras; c++) {
             int before = (int)all_detections[c].size();
             int removed = filter_static_detections(all_detections[c], image_width, image_height);
@@ -2549,46 +2915,47 @@ inline PointSourceResult run_pointsource_refinement(const PointSourceConfig &con
                        return s;
                    }().c_str());
 
-            // Smart Blob re-detection and/or static artifact filtering for
-            // missing cameras. Two scenarios:
-            // A) smart_blob OFF: re-detect with smart_blob to recover frames
-            //    rejected by the compactness check, then filter static artifacts.
-            // B) smart_blob ON: initial detections may include artifact centroids.
-            //    Run static artifact filter on existing detections.
+            // Camera recovery: re-detect missing cameras with Smart Blob v2
+            // (artifact filtering built into resolve_blob_candidates)
             {
                 bool any_changed = false;
                 for (int c : missing_cams) {
-                    if (!config.smart_blob) {
-                        // Re-detect with smart_blob enabled
-                        PointSourceConfig redet_config = config;
-                        redet_config.camera_names = {config.camera_names[c]};
-                        redet_config.smart_blob = true;
-                        auto redet_videos = find_video_files(redet_config.media_folder,
-                                                              redet_config.camera_names);
-                        if (!redet_videos.empty()) {
-                            if (status)
-                                *status = "Smart Blob re-detection for camera " + config.camera_names[c] + "...";
-                            auto redet = detect_all_cameras(redet_config, redet_videos, status, nullptr);
-                            if (!redet.empty() && (int)redet[0].size() > (int)all_detections[c].size()) {
-                                all_detections[c] = std::move(redet[0]);
-                            }
+                    if (status)
+                        *status = "Re-detecting camera " + config.camera_names[c] + "...";
+
+                    // Re-detect with smart_blob v2 (collects all candidates, resolves with artifact filter)
+                    PointSourceConfig redet_config = config;
+                    redet_config.camera_names = {config.camera_names[c]};
+                    redet_config.smart_blob = true; // force v2 for recovery
+                    auto redet_videos = find_video_files(redet_config.media_folder,
+                                                          redet_config.camera_names);
+                    if (!redet_videos.empty()) {
+                        auto redet = detect_all_cameras(redet_config, redet_videos, status, nullptr);
+                        if (!redet.empty() && (int)redet[0].size() > (int)all_detections[c].size()) {
+                            printf("  Camera %s: re-detect %d → %d detections (Smart Blob v2)\n",
+                                   config.camera_names[c].c_str(),
+                                   (int)all_detections[c].size(), (int)redet[0].size());
+                            all_detections[c] = std::move(redet[0]);
+                            any_changed = true;
                         }
                     }
-                    // Always run static artifact filter on missing cameras
-                    int before = (int)all_detections[c].size();
-                    int removed = filter_static_detections(all_detections[c], image_width, image_height);
-                    if (removed > 0 || before != (int)all_detections[c].size()) {
-                        printf("  Camera %s: %d detections (%d static artifact removed)\n",
-                               config.camera_names[c].c_str(),
-                               (int)all_detections[c].size(), removed);
-                        any_changed = true;
+
+                    // Fallback static filter for non-smart-blob initial detection
+                    if (!config.smart_blob) {
+                        int before = (int)all_detections[c].size();
+                        int removed = filter_static_detections(all_detections[c], image_width, image_height);
+                        if (removed > 0) {
+                            printf("  Camera %s: %d static artifacts removed\n",
+                                   config.camera_names[c].c_str(), removed);
+                            any_changed = true;
+                        }
                     }
                 }
 
                 // Rebuild frame_obs if any camera's detections changed
                 if (any_changed) {
                     frame_obs = assemble_observations(all_detections, config.min_cameras);
-                    printf("  Rebuilt frame_obs: %d frames after artifact filtering\n",
+                    printf("  Rebuilt frame_obs: %d frames after recovery re-detection\n",
                            (int)frame_obs.size());
                 }
             }

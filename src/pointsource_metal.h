@@ -2,6 +2,7 @@
 #ifdef __APPLE__
 #include <CoreVideo/CoreVideo.h>
 #include <cstdint>
+#include <vector>
 
 struct PointSourceMetalSpot {
     double cx, cy;
@@ -25,6 +26,18 @@ PointSourceMetalSpot pointsource_metal_detect(PointSourceMetalHandle ctx,
                                    int min_blob_pixels,
                                    int max_blob_pixels,
                                    bool smart_blob = false);
+
+// Smart Blob v2: detect ALL valid-sized blobs (returns vector instead of single spot).
+struct PointSourceMetalBlob {
+    double cx, cy;
+    int pixel_count;
+};
+
+std::vector<PointSourceMetalBlob> pointsource_metal_detect_all(
+    PointSourceMetalHandle ctx,
+    CVPixelBufferRef pixel_buffer,
+    int green_threshold, int green_dominance,
+    int min_blob_pixels, int max_blob_pixels);
 
 // Detect light spot + produce RGBA visualization overlay.
 // GPU: threshold → erode → dilate → colorize (black/gray/green).
