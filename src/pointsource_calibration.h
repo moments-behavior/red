@@ -1383,8 +1383,9 @@ inline bool triangulate_and_validate_progressive(
 
         printf("  Camera %d: PnP reproj %.2f -> %.2f px\n", c, err_before, err_after);
 
-        // Only accept if PnP improved things
-        if (err_after < err_before) {
+        // Only accept if PnP improved AND result is reasonably good.
+        // Accepting cameras with 600+ px reproj corrupts downstream mini-BA.
+        if (err_after < err_before && err_after < 100.0) {
             poses[c].R = R_new;
             poses[c].t = t_new;
             printf("  Camera %d: accepted PnP re-initialization\n", c);
@@ -1414,7 +1415,7 @@ inline bool triangulate_and_validate_progressive(
             // reproj is reasonable (not thousands of px from identity pose)
             bool is_identity = (poses[c].R.isIdentity(1e-6) && poses[c].t.norm() < 1.0);
             // Also check if PnP improved it to reasonable quality
-            bool pnp_reasonable = !is_identity && quality[c].median_reproj < 1000.0;
+            bool pnp_reasonable = !is_identity && quality[c].median_reproj < 200.0;
             has_pose[c] = is_good[c] || pnp_reasonable;
             if (has_pose[c]) n_with_pose++;
         }
@@ -1616,15 +1617,20 @@ inline bool triangulate_and_validate_progressive(
                     fo.pixel_coords.push_back(fobs.pixel_coords[i]);
                 }
             }
-            if ((int)fo.cam_indices.size() >= min_cameras)
+            // Use min(n_still_good, min_cameras) so we don't require more
+            // cameras per frame than exist in the good set
+            int phase_c_min = std::min(n_still_good, std::max(2, min_cameras));
+            if ((int)fo.cam_indices.size() >= phase_c_min)
                 filtered_obs.push_back(std::move(fo));
         }
         if (status) *status = "Loose Init Phase C: re-triangulating with " +
                               std::to_string(n_still_good) + " good cameras...";
-        printf("Loose Init Phase C: re-triangulating with %d/%d good cameras (%d frames)...\n",
-               n_still_good, num_cameras, (int)filtered_obs.size());
+        printf("Loose Init Phase C: re-triangulating with %d/%d good cameras (%d frames, min=%d)...\n",
+               n_still_good, num_cameras, (int)filtered_obs.size(),
+               std::min(n_still_good, std::max(2, min_cameras)));
 
-        return triangulate_and_validate(filtered_obs, poses, min_cameras,
+        int phase_c_min = std::min(n_still_good, std::max(2, min_cameras));
+        return triangulate_and_validate(filtered_obs, poses, phase_c_min,
                                          reproj_threshold, points_3d,
                                          clean_obs_per_point, mean_reproj_error,
                                          status);
