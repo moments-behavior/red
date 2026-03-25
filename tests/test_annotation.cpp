@@ -37,6 +37,22 @@
 #include "test_framework.h"
 
 // ---------------------------------------------------------------------------
+// Platform-aware temp directory
+// ---------------------------------------------------------------------------
+static std::string test_tmp_prefix() {
+#ifdef _WIN32
+    // Use system temp dir on Windows
+    std::string tmp = std::filesystem::temp_directory_path().string();
+    // Normalize slashes
+    for (auto &c : tmp) if (c == '\\') c = '/';
+    if (!tmp.empty() && tmp.back() != '/') tmp += '/';
+    return tmp;
+#else
+    return test_tmp_prefix() + "";
+#endif
+}
+
+// ---------------------------------------------------------------------------
 // Helper: create a mock RenderScene + SkeletonContext
 // ---------------------------------------------------------------------------
 
@@ -345,7 +361,7 @@ static void test_json_file_save_load() {
     printf("  test_json_file_save_load...\n");
 
     namespace fs = std::filesystem;
-    std::string tmpdir = "/tmp/test_annotation_json_" + std::to_string(getpid());
+    std::string tmpdir = test_tmp_prefix() + "test_annotation_json_" + std::to_string(getpid());
     fs::create_directories(tmpdir);
 
     AnnotationMap amap;
@@ -376,7 +392,7 @@ static void test_json_file_missing_is_ok() {
 
     AnnotationMap amap;
     // Loading from nonexistent directory is OK (returns true, does nothing)
-    EXPECT_TRUE(load_annotations_json(amap, "/tmp/nonexistent_dir_12345"));
+    EXPECT_TRUE(load_annotations_json(amap, test_tmp_prefix() + "nonexistent_dir_12345"));
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -913,7 +929,7 @@ struct ExportTestFixture {
 
     ExportTestFixture() {
         namespace fs = std::filesystem;
-        tmpdir = "/tmp/test_export_" + std::to_string(getpid());
+        tmpdir = test_tmp_prefix() + "test_export_" + std::to_string(getpid());
         calib_dir = tmpdir + "/calibration";
         output_dir = tmpdir + "/output";
         fs::create_directories(calib_dir);
@@ -1176,7 +1192,7 @@ static void test_export_no_labeled_frames() {
     printf("  test_export_no_labeled_frames...\n");
     namespace fs = std::filesystem;
 
-    std::string tmpdir = "/tmp/test_export_empty_" + std::to_string(getpid());
+    std::string tmpdir = test_tmp_prefix() + "test_export_empty_" + std::to_string(getpid());
     std::string calib_dir = tmpdir + "/calib";
     fs::create_directories(calib_dir);
     write_mock_calib_yaml(calib_dir + "/cam0.yaml", 640, 480);
@@ -1209,7 +1225,7 @@ static void test_export_missing_calibration() {
     printf("  test_export_missing_calibration...\n");
     namespace fs = std::filesystem;
 
-    std::string tmpdir = "/tmp/test_export_nocal_" + std::to_string(getpid());
+    std::string tmpdir = test_tmp_prefix() + "test_export_nocal_" + std::to_string(getpid());
     fs::create_directories(tmpdir);
 
     AnnotationMap amap;
@@ -1235,7 +1251,7 @@ static void test_export_dispatch() {
     printf("  test_export_dispatch...\n");
     namespace fs = std::filesystem;
 
-    std::string tmpdir = "/tmp/test_dispatch_" + std::to_string(getpid());
+    std::string tmpdir = test_tmp_prefix() + "test_dispatch_" + std::to_string(getpid());
     fs::create_directories(tmpdir);
 
     AnnotationMap amap;
@@ -1326,7 +1342,7 @@ static void test_save_load_keypoints_roundtrip() {
 
     std::vector<std::string> camera_names = {"cam0", "cam1"};
 
-    std::string tmpdir = "/tmp/test_saveload_" + std::to_string(getpid());
+    std::string tmpdir = test_tmp_prefix() + "test_saveload_" + std::to_string(getpid());
     std::string label_root = tmpdir + "/labeled_data";
     fs::create_directories(label_root);
 
@@ -1412,7 +1428,7 @@ static void test_save_load_with_extended_data() {
 
     std::vector<std::string> camera_names = {"cam0"};
 
-    std::string tmpdir = "/tmp/test_saveload_ext_" + std::to_string(getpid());
+    std::string tmpdir = test_tmp_prefix() + "test_saveload_ext_" + std::to_string(getpid());
     std::string label_root = tmpdir + "/labeled_data";
     fs::create_directories(label_root);
 
@@ -1463,7 +1479,7 @@ static void test_yolo_pose_y_flip() {
     namespace fs = std::filesystem;
 
     // Setup: single camera, single frame, known ImPlot coords
-    std::string tmpdir = "/tmp/test_yflip_yolo_" + std::to_string(getpid());
+    std::string tmpdir = test_tmp_prefix() + "test_yflip_yolo_" + std::to_string(getpid());
     std::string calib_dir = tmpdir + "/calib";
     std::string output_dir = tmpdir + "/output";
     fs::create_directories(calib_dir);
@@ -1515,7 +1531,7 @@ static void test_dlc_y_flip() {
     printf("  test_dlc_y_flip...\n");
     namespace fs = std::filesystem;
 
-    std::string tmpdir = "/tmp/test_yflip_dlc_" + std::to_string(getpid());
+    std::string tmpdir = test_tmp_prefix() + "test_yflip_dlc_" + std::to_string(getpid());
     std::string calib_dir = tmpdir + "/calib";
     std::string output_dir = tmpdir + "/output";
     fs::create_directories(calib_dir);
@@ -1795,7 +1811,7 @@ static void test_bridge_keypoints_and_extended_roundtrip() {
     auto skel = make_mock_skeleton(3);
     std::vector<std::string> camera_names = {"cam0", "cam1"};
 
-    std::string tmpdir = "/tmp/test_bridge_rt_" + std::to_string(getpid());
+    std::string tmpdir = test_tmp_prefix() + "test_bridge_rt_" + std::to_string(getpid());
     std::string label_root = tmpdir + "/labeled_data";
     fs::create_directories(label_root);
 
@@ -2107,7 +2123,7 @@ static void test_export_coco_single_camera() {
     printf("  test_export_coco_single_camera...\n");
     namespace fs = std::filesystem;
 
-    std::string tmpdir = "/tmp/test_coco_1cam_" + std::to_string(getpid());
+    std::string tmpdir = test_tmp_prefix() + "test_coco_1cam_" + std::to_string(getpid());
     std::string calib_dir = tmpdir + "/calib";
     std::string output_dir = tmpdir + "/output";
     fs::create_directories(calib_dir);
@@ -2151,7 +2167,7 @@ static void test_export_empty_annotation_map() {
     printf("  test_export_empty_annotation_map...\n");
     namespace fs = std::filesystem;
 
-    std::string tmpdir = "/tmp/test_empty_amap_" + std::to_string(getpid());
+    std::string tmpdir = test_tmp_prefix() + "test_empty_amap_" + std::to_string(getpid());
     std::string calib_dir = tmpdir + "/calib";
     std::string output_dir = tmpdir + "/output";
     fs::create_directories(calib_dir);
@@ -2187,7 +2203,7 @@ static void test_export_coco_y_flip_consistency() {
     // Verify COCO and YOLO produce consistent Y coordinates
     namespace fs = std::filesystem;
 
-    std::string tmpdir = "/tmp/test_yflip_coco_" + std::to_string(getpid());
+    std::string tmpdir = test_tmp_prefix() + "test_yflip_coco_" + std::to_string(getpid());
     std::string calib_dir = tmpdir + "/calib";
     std::string output_dir = tmpdir + "/output";
     fs::create_directories(calib_dir);
@@ -2224,7 +2240,7 @@ static void test_export_yolo_detect_has_no_keypoints() {
     printf("  test_export_yolo_detect_has_no_keypoints...\n");
     namespace fs = std::filesystem;
 
-    std::string tmpdir = "/tmp/test_yolo_det_nokp_" + std::to_string(getpid());
+    std::string tmpdir = test_tmp_prefix() + "test_yolo_det_nokp_" + std::to_string(getpid());
     std::string calib_dir = tmpdir + "/calib";
     std::string output_dir = tmpdir + "/output";
     fs::create_directories(calib_dir);

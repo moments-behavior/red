@@ -1054,7 +1054,7 @@ elseif(WIN32)
     # CUDA paths
     set(CUDA_DIR "$ENV{CUDA_PATH}")
     if(NOT CUDA_DIR)
-        set(CUDA_DIR "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v13.2")
+        set(CUDA_DIR "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.6")
     endif()
 
     # Bundled Windows libraries
@@ -1195,12 +1195,91 @@ elseif(WIN32)
         endforeach()
     endif()
 
+    # Copy cuDNN DLLs to build directory (needed by ONNX Runtime CUDA EP)
+    set(CUDNN_DIR "${CMAKE_SOURCE_DIR}/lib/cudnn")
+    if(EXISTS "${CUDNN_DIR}/bin/cudnn64_9.dll")
+        file(GLOB CUDNN_DLLS "${CUDNN_DIR}/bin/*.dll")
+        foreach(dll ${CUDNN_DLLS})
+            add_custom_command(TARGET red POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different "${dll}" "$<TARGET_FILE_DIR:red>")
+        endforeach()
+    endif()
+
     # vcpkg automatically copies dependent DLLs via its toolchain
 
     set_target_properties(red PROPERTIES
         CXX_STANDARD 17
         CXX_STANDARD_REQUIRED ON
     )
+
+    # ── Test targets (same deps as red, replacing red.cpp) ──────────────────
+    set(TEST_GUI_SRC_FILES ${SRC_FILES})
+    list(REMOVE_ITEM TEST_GUI_SRC_FILES "${CMAKE_SOURCE_DIR}/src/red.cpp")
+
+    foreach(TEST_NAME test_gui test_annotation)
+        add_executable(${TEST_NAME}
+            ${TEST_GUI_SRC_FILES}
+            ${IMGUI_SRC}
+            ${IMPLOT_SRC}
+            ${IMPLOT3D_SRC}
+            ${CUDA_SRC_FILES}
+            tests/${TEST_NAME}.cpp
+        )
+        target_compile_definitions(${TEST_NAME} PRIVATE NOMINMAX _USE_MATH_DEFINES USE_CUDA_POINTSOURCE)
+        target_compile_options(${TEST_NAME} PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/bigobj /EHsc>)
+        target_include_directories(${TEST_NAME} PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+            ${DIR_IMGUI}
+            ${DIR_IMGUI}/backends
+            ${DIR_IMPLOT}
+            ${DIR_IMPLOT3D}
+            ${DIR_FILEBROWSER}
+            ${DIR_ICONFONT}
+            ${DIR_NVCODEC}
+            ${CUDA_DIR}/include
+            ${FFMPEG_INCLUDE_DIRS}
+        )
+        if(TURBOJPEG_INCLUDE)
+            target_include_directories(${TEST_NAME} PRIVATE ${TURBOJPEG_INCLUDE})
+        endif()
+        target_link_libraries(${TEST_NAME} PRIVATE
+            Eigen3::Eigen
+            Ceres::ceres
+            glfw
+            GLEW::GLEW
+            opengl32
+            "${CUDA_DIR}/lib/x64/cudart.lib"
+            "${CUDA_DIR}/lib/x64/cuda.lib"
+            "${CUDA_DIR}/lib/x64/nppc.lib"
+            "${CUDA_DIR}/lib/x64/nppicc.lib"
+            "${CUDA_DIR}/lib/x64/nppidei.lib"
+            "${CUDA_DIR}/lib/x64/nppig.lib"
+            "${CUDA_DIR}/lib/x64/nppial.lib"
+            "${DIR_NVCODEC}/x64/nvcuvid.lib"
+            "${DIR_NVCODEC}/x64/nvencodeapi.lib"
+            shell32
+            ole32
+        )
+        if(FFMPEG_FOUND AND TARGET PkgConfig::FFMPEG)
+            target_link_libraries(${TEST_NAME} PRIVATE PkgConfig::FFMPEG)
+        else()
+            target_link_libraries(${TEST_NAME} PRIVATE ${FFMPEG_LIBRARIES})
+        endif()
+        if(libjpeg-turbo_FOUND)
+            target_link_libraries(${TEST_NAME} PRIVATE libjpeg-turbo::turbojpeg)
+        elseif(TURBOJPEG_LIB)
+            target_link_libraries(${TEST_NAME} PRIVATE ${TURBOJPEG_LIB})
+        endif()
+        if(HAS_ONNXRUNTIME)
+            target_compile_definitions(${TEST_NAME} PRIVATE RED_HAS_ONNXRUNTIME)
+            target_include_directories(${TEST_NAME} PRIVATE "${ONNXRUNTIME_DIR}/include")
+            target_link_libraries(${TEST_NAME} PRIVATE "${ONNXRUNTIME_DIR}/lib/onnxruntime.lib")
+        endif()
+        set_target_properties(${TEST_NAME} PROPERTIES
+            CXX_STANDARD 17
+            CXX_STANDARD_REQUIRED ON
+        )
+    endforeach()
 
 else()
     # Linux build with NVIDIA CUDA support

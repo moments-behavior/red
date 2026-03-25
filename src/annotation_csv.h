@@ -707,7 +707,7 @@ inline int find_most_recent_labels(const std::string &root_dir,
         if (!entry.is_directory()) continue;
         std::string folder_name = entry.path().filename().string();
         if (std::regex_match(folder_name, datetime_regex)) {
-            folders.push_back(entry.path().string());
+            folders.push_back(entry.path().generic_string());
         }
     }
 
