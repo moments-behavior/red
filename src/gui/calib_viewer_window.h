@@ -691,75 +691,65 @@ inline void DrawCalibViewerWindow(CalibViewerState &state) {
             ImPlot3D::PlotLine("Z", cx2, cy2, cz2, 2, {ImPlot3DProp_LineColor, (ImU32)IM_COL32(80,80,255,255), ImPlot3DProp_LineWeight, 2.5});
         }
 
+        // ── Point hover detection (must be inside BeginPlot/EndPlot for PlotToPixels) ──
+        state.hovered_point = -1;
+        if (state.show_points && !state.cached_px.empty()) {
+            ImVec2 mouse = ImGui::GetMousePos();
+            float best_dist_sq = 15.0f * 15.0f;
+            int best_idx = -1;
+            int total_pts = (int)state.cached_px.size();
+            int stride = std::max(1, total_pts / 10000);
+            for (int i = 0; i < total_pts; i += stride) {
+                ImVec2 scr = ImPlot3D::PlotToPixels(
+                    state.cached_px[i], state.cached_py[i], state.cached_pz[i]);
+                float dx = scr.x - mouse.x, dy = scr.y - mouse.y;
+                float d2 = dx * dx + dy * dy;
+                if (d2 < best_dist_sq) { best_dist_sq = d2; best_idx = i; }
+            }
+            if (stride > 1 && best_idx >= 0) {
+                int lo = std::max(0, best_idx - stride);
+                int hi = std::min(total_pts, best_idx + stride);
+                for (int i = lo; i < hi; i++) {
+                    ImVec2 scr = ImPlot3D::PlotToPixels(
+                        state.cached_px[i], state.cached_py[i], state.cached_pz[i]);
+                    float dx = scr.x - mouse.x, dy = scr.y - mouse.y;
+                    float d2 = dx * dx + dy * dy;
+                    if (d2 < best_dist_sq) { best_dist_sq = d2; best_idx = i; }
+                }
+            }
+            state.hovered_point = best_idx;
+        }
+
         ImPlot3D::EndPlot();
     }
     if (!state.show_axes_box)
         ImPlot3D::PopStyleColor(3);
 
-    // ── Point hover/click detection (screen-space nearest neighbor) ──
-    state.hovered_point = -1;
-    if (state.show_points && !state.cached_px.empty()) {
-        ImVec2 mouse = ImGui::GetMousePos();
-        float best_dist_sq = 15.0f * 15.0f; // 15px threshold
-        int best_idx = -1;
-        int total_pts = (int)state.cached_px.size();
-        // Only check visible points (limit to avoid perf issues with huge clouds)
-        int stride = std::max(1, total_pts / 10000); // sample at most ~10K points
-        for (int i = 0; i < total_pts; i += stride) {
-            ImVec2 scr = ImPlot3D::PlotToPixels(
-                state.cached_px[i], state.cached_py[i], state.cached_pz[i]);
-            float dx = scr.x - mouse.x, dy = scr.y - mouse.y;
-            float d2 = dx * dx + dy * dy;
-            if (d2 < best_dist_sq) {
-                best_dist_sq = d2;
-                best_idx = i;
+    // ── Point tooltip and click (outside plot, using ImGui) ──
+    if (state.hovered_point >= 0 && state.hovered_point < (int)state.cached_px.size()) {
+        int best_idx = state.hovered_point;
+        int pid = state.cached_point_ids[best_idx];
+        ImGui::BeginTooltip();
+        ImGui::Text("Point #%d", pid);
+        ImGui::Text("Pos: (%.2f, %.2f, %.2f) mm",
+            state.cached_px[best_idx], state.cached_py[best_idx], state.cached_pz[best_idx]);
+        int obs = state.point_obs_count[best_idx];
+        ImGui::Text("Observations: %d cameras", obs);
+        std::string cams_str;
+        for (int c = 0; c < nc; c++) {
+            auto lm_it = res.db.landmarks.find(res.cam_names[c]);
+            if (lm_it != res.db.landmarks.end() && lm_it->second.count(pid)) {
+                if (!cams_str.empty()) cams_str += ", ";
+                cams_str += res.cam_names[c];
             }
         }
-        // If we sampled, refine around the best hit
-        if (stride > 1 && best_idx >= 0) {
-            int lo = std::max(0, best_idx - stride);
-            int hi = std::min(total_pts, best_idx + stride);
-            for (int i = lo; i < hi; i++) {
-                ImVec2 scr = ImPlot3D::PlotToPixels(
-                    state.cached_px[i], state.cached_py[i], state.cached_pz[i]);
-                float dx = scr.x - mouse.x, dy = scr.y - mouse.y;
-                float d2 = dx * dx + dy * dy;
-                if (d2 < best_dist_sq) {
-                    best_dist_sq = d2;
-                    best_idx = i;
-                }
-            }
-        }
-        state.hovered_point = best_idx;
+        if (!cams_str.empty())
+            ImGui::Text("Cameras: %s", cams_str.c_str());
+        ImGui::Text("(Click to select)");
+        ImGui::EndTooltip();
 
-        // Point tooltip
-        if (best_idx >= 0) {
-            ImGui::BeginTooltip();
-            int pid = state.cached_point_ids[best_idx];
-            ImGui::Text("Point #%d", pid);
-            ImGui::Text("Pos: (%.2f, %.2f, %.2f) mm",
-                state.cached_px[best_idx], state.cached_py[best_idx], state.cached_pz[best_idx]);
-            int obs = state.point_obs_count[best_idx];
-            ImGui::Text("Observations: %d cameras", obs);
-            // List which cameras see this point
-            std::string cams_str;
-            for (int c = 0; c < nc; c++) {
-                auto lm_it = res.db.landmarks.find(res.cam_names[c]);
-                if (lm_it != res.db.landmarks.end() && lm_it->second.count(pid)) {
-                    if (!cams_str.empty()) cams_str += ", ";
-                    cams_str += res.cam_names[c];
-                }
-            }
-            if (!cams_str.empty())
-                ImGui::Text("Cameras: %s", cams_str.c_str());
-            ImGui::Text("(Click to select)");
-            ImGui::EndTooltip();
-
-            // Click to select/deselect point
-            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-                state.selected_point = (state.selected_point == best_idx) ? -1 : best_idx;
-            }
-        }
+        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+            state.selected_point = (state.selected_point == best_idx) ? -1 : best_idx;
     }
 
     // ── Camera hover tooltip ──
