@@ -338,6 +338,11 @@ inline void DrawCalibArucoSection(CalibrationToolState &state, AppContext &ctx,
                             state.calib_viewer.show = true;
                             state.calib_viewer.selected_camera = -1;
                             state.calib_viewer.cached_selection = -2;
+                            state.calib_viewer.cached_points_version = -1;
+                            state.calib_viewer.board_width_mm =
+                                state.config.charuco_setup.square_side_length * (state.config.charuco_setup.w - 1);
+                            state.calib_viewer.board_height_mm =
+                                state.config.charuco_setup.square_side_length * (state.config.charuco_setup.h - 1);
                         } else {
                             state.status =
                                 "Error: " + state.aruco_result.error;
@@ -455,6 +460,11 @@ inline void DrawCalibArucoSection(CalibrationToolState &state, AppContext &ctx,
                         state.calib_viewer.show = true;
                         state.calib_viewer.selected_camera = -1;
                         state.calib_viewer.cached_selection = -2;
+                        state.calib_viewer.cached_points_version = -1;
+                        state.calib_viewer.board_width_mm =
+                            state.config.charuco_setup.square_side_length * (state.config.charuco_setup.w - 1);
+                        state.calib_viewer.board_height_mm =
+                            state.config.charuco_setup.square_side_length * (state.config.charuco_setup.h - 1);
                     }
                 }
 

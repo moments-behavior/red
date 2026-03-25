@@ -731,6 +731,142 @@ inline void DrawCalibPointSourceSection(CalibrationToolState &state, AppContext 
                                 ImGui::TreePop();
                             }
                         }
+                        // ── 3D Viewer button ──
+                        ImGui::Separator();
+                        if (ImGui::Button("3D Viewer##ps_viewer")) {
+                            // Build a CalibrationResult from PointSource output files
+                            const auto &ps_res = state.pointsource_result;
+                            const auto &ps_cfg = state.pointsource_config;
+                            namespace fs = std::filesystem;
+                            std::string out_dir = ps_res.output_folder;
+                            std::string summary_dir = out_dir + "/summary_data";
+
+                            // Load cameras from YAML files
+                            state.loaded_result = CalibrationPipeline::CalibrationResult();
+                            auto &lr = state.loaded_result;
+                            lr.output_folder = out_dir;
+                            lr.success = true;
+                            lr.mean_reproj_error = ps_res.mean_reproj_after;
+
+                            for (const auto &cam_name : ps_cfg.camera_names) {
+                                std::string yaml_path = out_dir + "/Cam" + cam_name + ".yaml";
+                                if (!fs::exists(yaml_path)) continue;
+                                try {
+                                    auto yf = opencv_yaml::read(yaml_path);
+                                    CalibrationPipeline::CameraPose pose;
+                                    pose.K = yf.getMatrix("camera_matrix");
+                                    Eigen::MatrixXd dist_mat = yf.getMatrix("distortion_coefficients");
+                                    for (int j = 0; j < 5 && j < (int)dist_mat.rows(); j++)
+                                        pose.dist(j) = dist_mat(j, 0);
+                                    pose.R = yf.getMatrix("rc_ext");
+                                    Eigen::MatrixXd t_mat = yf.getMatrix("tc_ext");
+                                    pose.t = Eigen::Vector3d(t_mat(0,0), t_mat(1,0), t_mat(2,0));
+                                    int iw = yf.getInt("image_width"), ih = yf.getInt("image_height");
+                                    if (lr.cameras.empty()) { lr.image_width = iw; lr.image_height = ih; }
+                                    lr.cameras.push_back(pose);
+                                    lr.cam_names.push_back(cam_name);
+                                } catch (const std::exception &e) {
+                                    fprintf(stderr, "[PS Viewer] Skipping %s: %s\n",
+                                            cam_name.c_str(), e.what());
+                                }
+                            }
+
+                            // Load ba_points.json (array of [x,y,z])
+                            std::string pts_path = summary_dir + "/ba_points.json";
+                            if (fs::exists(pts_path)) {
+                                try {
+                                    std::ifstream pf(pts_path);
+                                    nlohmann::json pts_j;
+                                    pf >> pts_j;
+                                    for (int i = 0; i < (int)pts_j.size(); i++) {
+                                        lr.points_3d[i] = Eigen::Vector3d(
+                                            pts_j[i][0].get<double>(),
+                                            pts_j[i][1].get<double>(),
+                                            pts_j[i][2].get<double>());
+                                    }
+                                } catch (const std::exception &e) {
+                                    fprintf(stderr, "[PS Viewer] Failed to load ba_points.json: %s\n", e.what());
+                                }
+                            }
+
+                            // Load observations.json and build landmarks map
+                            std::string obs_path = summary_dir + "/observations.json";
+                            if (fs::exists(obs_path)) {
+                                try {
+                                    std::ifstream of(obs_path);
+                                    nlohmann::json obs_j;
+                                    of >> obs_j;
+                                    // obs_j is array of arrays: obs_j[point_idx] = [{cam, px:[x,y]}, ...]
+                                    for (int pi = 0; pi < (int)obs_j.size(); pi++) {
+                                        for (const auto &o : obs_j[pi]) {
+                                            int ci = o["cam"].get<int>();
+                                            double px = o["px"][0].get<double>();
+                                            double py = o["px"][1].get<double>();
+                                            if (ci >= 0 && ci < (int)lr.cam_names.size()) {
+                                                lr.db.landmarks[lr.cam_names[ci]][pi] =
+                                                    Eigen::Vector2d(px, py);
+                                            }
+                                        }
+                                    }
+                                } catch (const std::exception &e) {
+                                    fprintf(stderr, "[PS Viewer] Failed to load observations.json: %s\n", e.what());
+                                }
+                            }
+
+                            // Build per-camera metrics from CameraChange data
+                            int nc = (int)lr.cam_names.size();
+                            lr.per_camera_metrics.resize(nc);
+                            for (int c = 0; c < nc; c++) {
+                                auto &m = lr.per_camera_metrics[c];
+                                m.name = lr.cam_names[c];
+                                // Find matching CameraChange
+                                for (const auto &cc : ps_res.camera_changes) {
+                                    if (cc.name == lr.cam_names[c]) {
+                                        m.detection_count = cc.detections;
+                                        m.observation_count = cc.observations;
+                                        break;
+                                    }
+                                }
+                                // Compute reprojection stats from landmarks + 3D points
+                                auto lm_it = lr.db.landmarks.find(lr.cam_names[c]);
+                                if (lm_it != lr.db.landmarks.end() && !lr.cameras.empty()) {
+                                    Eigen::Vector3d rvec = red_math::rotationMatrixToVector(lr.cameras[c].R);
+                                    std::vector<double> errs;
+                                    for (const auto &[pid, px] : lm_it->second) {
+                                        auto pt_it = lr.points_3d.find(pid);
+                                        if (pt_it == lr.points_3d.end()) continue;
+                                        Eigen::Vector2d proj = red_math::projectPoint(
+                                            pt_it->second, rvec, lr.cameras[c].t,
+                                            lr.cameras[c].K, lr.cameras[c].dist);
+                                        double err = (proj - px).norm();
+                                        errs.push_back(err);
+                                    }
+                                    if (!errs.empty()) {
+                                        std::sort(errs.begin(), errs.end());
+                                        double sum = 0;
+                                        for (double e : errs) sum += e;
+                                        m.mean_reproj = sum / errs.size();
+                                        m.median_reproj = errs[errs.size() / 2];
+                                        m.max_reproj = errs.back();
+                                    }
+                                }
+                            }
+
+                            // Set board dimensions for the board quad visualization
+                            state.calib_viewer.board_width_mm =
+                                ps_cfg.charuco_setup.square_side_length * (ps_cfg.charuco_setup.w - 1);
+                            state.calib_viewer.board_height_mm =
+                                ps_cfg.charuco_setup.square_side_length * (ps_cfg.charuco_setup.h - 1);
+
+                            // Open viewer
+                            state.calib_viewer.result = &state.loaded_result;
+                            state.calib_viewer.cached_points_version = -1; // force cache rebuild
+                            state.calib_viewer.cached_selection = -2;
+                            state.calib_viewer.show = true;
+                            fprintf(stderr, "[PS Viewer] Loaded %d cameras, %d 3D points, %d landmark cameras\n",
+                                    nc, (int)lr.points_3d.size(), (int)lr.db.landmarks.size());
+                        }
+
                         ImGui::Unindent();
                         } // end CollapsingHeader("Results")
                     }
