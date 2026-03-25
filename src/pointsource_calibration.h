@@ -197,6 +197,95 @@ struct DetectionProgress {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Load previous results from disk
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Find the most recent timestamped subfolder (YYYY_MM_DD_HH_MM_SS) in a directory.
+// Returns empty string if none found.
+inline std::string find_latest_timestamped_subfolder(const std::string &dir) {
+    namespace fs = std::filesystem;
+    if (!fs::exists(dir) || !fs::is_directory(dir))
+        return "";
+    std::string latest;
+    for (const auto &entry : fs::directory_iterator(dir)) {
+        if (!entry.is_directory()) continue;
+        std::string name = entry.path().filename().string();
+        // Expect format: YYYY_MM_DD_HH_MM_SS (19 chars, all digits and underscores)
+        if (name.size() == 19 && name[4] == '_' && name[7] == '_' &&
+            name[10] == '_' && name[13] == '_' && name[16] == '_') {
+            if (name > latest)
+                latest = name;
+        }
+    }
+    if (latest.empty())
+        return "";
+    return dir + "/" + latest;
+}
+
+// Load a PointSourceResult from a summary.json file in a timestamped output folder.
+// Returns true on success, populating result. The output_folder field is set to
+// the timestamped folder containing the summary.
+inline bool load_result_from_summary(const std::string &timestamped_folder,
+                                     PointSourceResult &result,
+                                     std::string *err = nullptr) {
+    namespace fs = std::filesystem;
+    std::string summary_path = timestamped_folder + "/summary_data/summary.json";
+    if (!fs::exists(summary_path)) {
+        if (err) *err = "summary.json not found in " + timestamped_folder;
+        return false;
+    }
+    try {
+        std::ifstream ifs(summary_path);
+        nlohmann::json j;
+        ifs >> j;
+
+        result.success = true;
+        result.output_folder = timestamped_folder;
+        result.mean_reproj_before = j.value("mean_reproj_before", 0.0);
+        result.mean_reproj_after = j.value("mean_reproj_after", 0.0);
+        result.valid_3d_points = j.value("valid_3d_points", 0);
+        result.total_observations = j.value("total_observations", 0);
+        result.ba_outliers_removed = j.value("ba_outliers_removed", 0);
+
+        result.camera_changes.clear();
+        if (j.contains("camera_changes") && j["camera_changes"].is_array()) {
+            for (const auto &cam_j : j["camera_changes"]) {
+                CameraChange cc;
+                cc.name = cam_j.value("name", "");
+                cc.detections = cam_j.value("detections", 0);
+                cc.observations = cam_j.value("observations", 0);
+                cc.dfx = cam_j.value("dfx", 0.0);
+                cc.dfy = cam_j.value("dfy", 0.0);
+                cc.dcx = cam_j.value("dcx", 0.0);
+                cc.dcy = cam_j.value("dcy", 0.0);
+                cc.dt_x = cam_j.value("dt_x", 0.0);
+                cc.dt_y = cam_j.value("dt_y", 0.0);
+                cc.dt_z = cam_j.value("dt_z", 0.0);
+                cc.dt_norm = cam_j.value("dt_norm", 0.0);
+                cc.drot_deg = cam_j.value("drot_deg", 0.0);
+                result.camera_changes.push_back(cc);
+            }
+        }
+
+        // Check for global_reg_status in settings.json
+        std::string settings_path = timestamped_folder + "/summary_data/settings.json";
+        if (fs::exists(settings_path)) {
+            std::ifstream sfs(settings_path);
+            nlohmann::json sj;
+            sfs >> sj;
+            if (sj.contains("global_reg_status"))
+                result.global_reg_status = sj["global_reg_status"].get<std::string>();
+        }
+
+        return true;
+    } catch (const std::exception &e) {
+        if (err) *err = std::string("Failed to parse summary.json: ") + e.what();
+        result = PointSourceResult();
+        return false;
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 

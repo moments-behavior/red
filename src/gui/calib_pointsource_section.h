@@ -314,6 +314,52 @@ inline void DrawCalibPointSourceSection(CalibrationToolState &state, AppContext 
                         "No matching videos found -- update the video folder path");
                 }
 
+                // ── Load Previous Results button ──
+                // Shown when output folder exists on disk but results aren't loaded yet
+                if (!state.pointsource_done &&
+                    !state.project.pointsource_output_folder.empty()) {
+                    std::string latest_folder =
+                        PointSourceCalibration::find_latest_timestamped_subfolder(
+                            state.project.pointsource_output_folder);
+                    if (!latest_folder.empty()) {
+                        namespace fs = std::filesystem;
+                        if (fs::exists(latest_folder + "/summary_data/summary.json")) {
+                            ImGui::Spacing();
+                            // Extract just the timestamp for display
+                            std::string ts_name = fs::path(latest_folder).filename().string();
+                            if (ImGui::Button("Load Previous Results")) {
+                                std::string load_err;
+                                if (PointSourceCalibration::load_result_from_summary(
+                                        latest_folder, state.pointsource_result, &load_err)) {
+                                    state.pointsource_done = true;
+                                    state.pointsource_status =
+                                        "Loaded results from " + ts_name +
+                                        ". Reproj: " +
+                                        std::to_string(state.pointsource_result.mean_reproj_before).substr(0, 5) +
+                                        " -> " +
+                                        std::to_string(state.pointsource_result.mean_reproj_after).substr(0, 5) + " px";
+                                    // Populate config camera_names from result if empty
+                                    if (state.pointsource_config.camera_names.empty()) {
+                                        for (const auto &cc : state.pointsource_result.camera_changes)
+                                            state.pointsource_config.camera_names.push_back(cc.name);
+                                    }
+                                    // Ensure config fields are set for 3D viewer
+                                    if (state.pointsource_config.output_folder.empty())
+                                        state.pointsource_config.output_folder =
+                                            state.project.pointsource_output_folder;
+                                    state.pointsource_config.charuco_setup =
+                                        state.project.charuco_setup;
+                                } else {
+                                    state.pointsource_status = "Error: " + load_err;
+                                }
+                            }
+                            ImGui::SameLine();
+                            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f),
+                                "(%s)", ts_name.c_str());
+                        }
+                    }
+                }
+
                 if (state.pointsource_ready) {
                     // Detection parameters
                     if (ImGui::CollapsingHeader("Detection Parameters")) {
