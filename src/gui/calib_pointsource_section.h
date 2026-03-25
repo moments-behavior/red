@@ -1076,6 +1076,7 @@ inline void DrawCalibPointSourceSection(CalibrationToolState &state, AppContext 
                                 } catch (...) {}
                             }
 
+                            lr.success = true;
                             state.calib_viewer.result = &state.loaded_result;
                             state.calib_viewer.show = true;
                             state.calib_viewer.cached_points_version = -1;
