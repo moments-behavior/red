@@ -568,8 +568,8 @@ std::vector<PointSourceMetalBlob> pointsource_metal_detect_all(
             [enc setComputePipelineState:ctx->pso_threshold];
             [enc setTexture:inputTex atIndex:0];
             [enc setTexture:maskTex  atIndex:1];
-            uint32_t params[2] = {(uint32_t)green_threshold, (uint32_t)green_dominance};
-            [enc setBytes:params length:sizeof(params) atIndex:0];
+            [enc setBytes:&green_threshold length:sizeof(int) atIndex:0];
+            [enc setBytes:&green_dominance length:sizeof(int) atIndex:1];
             [enc dispatchThreads:gridSize threadsPerThreadgroup:tgSize];
             [enc endEncoding];
         }

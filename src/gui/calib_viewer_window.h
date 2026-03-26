@@ -798,8 +798,9 @@ inline void DrawCalibViewerWindow(CalibViewerState &state) {
         ImGui::EndTooltip();
     }
 
-    // Click on empty space deselects point and camera
-    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+    // Double-click on empty space deselects point and camera.
+    // Use double-click to avoid interfering with plot rotation (single-click-drag).
+    if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) &&
         state.hovered_point < 0 && state.hovered_camera < 0 && state.hovered_edge < 0) {
         state.selected_point = -1;
         state.selected_camera = -1;
