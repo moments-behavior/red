@@ -259,6 +259,165 @@ PointSourceMetalHandle pointsource_metal_create() {
     }
 }
 
+// ── Shared GPU pipeline: threshold → erode → dilate → colorize readback ──
+// Returns the RGBA buffer with green=(0,255,0) for dilated pixels, ready for BFS.
+// Caller must CFRelease cvTex when done.
+struct MetalPipelineResult {
+    uint8_t *rgba = nullptr;     // pointer into maskBuf contents
+    id<MTLBuffer> maskBuf;       // retains the RGBA data
+    CVMetalTextureRef cvTex = nullptr;
+    int width = 0, height = 0;
+    bool ok = false;
+};
+
+static MetalPipelineResult run_metal_green_pipeline(
+    PointSourceMetalHandle ctx, CVPixelBufferRef pixel_buffer,
+    int green_threshold, int green_dominance) {
+
+    MetalPipelineResult r;
+    if (!ctx || !pixel_buffer) return r;
+
+    r.width  = (int)CVPixelBufferGetWidth(pixel_buffer);
+    r.height = (int)CVPixelBufferGetHeight(pixel_buffer);
+
+    CVReturn rv = CVMetalTextureCacheCreateTextureFromImage(
+        kCFAllocatorDefault, ctx->texCache, pixel_buffer, NULL,
+        MTLPixelFormatBGRA8Unorm, r.width, r.height, 0, &r.cvTex);
+    if (rv != kCVReturnSuccess || !r.cvTex) return r;
+    id<MTLTexture> srcTex = CVMetalTextureGetTexture(r.cvTex);
+
+    MTLTextureDescriptor *desc =
+        [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatR8Uint
+                                                          width:r.width height:r.height mipmapped:NO];
+    desc.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
+    desc.storageMode = MTLStorageModePrivate;
+
+    id<MTLTexture> maskTex    = [ctx->device newTextureWithDescriptor:desc];
+    id<MTLTexture> erodedTex  = [ctx->device newTextureWithDescriptor:desc];
+    id<MTLTexture> dilatedTex = [ctx->device newTextureWithDescriptor:desc];
+
+    int npixels = r.width * r.height;
+    r.maskBuf = [ctx->device newBufferWithLength:npixels * 4
+                                         options:MTLResourceStorageModeShared];
+    id<MTLBuffer> dummyCount =
+        [ctx->device newBufferWithLength:sizeof(uint32_t)
+                                 options:MTLResourceStorageModeShared];
+    *(uint32_t *)dummyCount.contents = 0;
+
+    MTLSize gridSize = MTLSizeMake(r.width, r.height, 1);
+    MTLSize tgSize   = MTLSizeMake(16, 16, 1);
+
+    id<MTLCommandBuffer> cmdBuf = [ctx->queue commandBuffer];
+
+    // Threshold
+    {
+        id<MTLComputeCommandEncoder> enc = [cmdBuf computeCommandEncoder];
+        [enc setComputePipelineState:ctx->pso_threshold];
+        [enc setTexture:srcTex  atIndex:0];
+        [enc setTexture:maskTex atIndex:1];
+        [enc setBytes:&green_threshold length:sizeof(int) atIndex:0];
+        [enc setBytes:&green_dominance length:sizeof(int) atIndex:1];
+        [enc dispatchThreads:gridSize threadsPerThreadgroup:tgSize];
+        [enc endEncoding];
+    }
+    // Erode
+    {
+        id<MTLComputeCommandEncoder> enc = [cmdBuf computeCommandEncoder];
+        [enc setComputePipelineState:ctx->pso_erode];
+        [enc setTexture:maskTex   atIndex:0];
+        [enc setTexture:erodedTex atIndex:1];
+        [enc dispatchThreads:gridSize threadsPerThreadgroup:tgSize];
+        [enc endEncoding];
+    }
+    // Dilate
+    {
+        id<MTLComputeCommandEncoder> enc = [cmdBuf computeCommandEncoder];
+        [enc setComputePipelineState:ctx->pso_dilate];
+        [enc setTexture:erodedTex  atIndex:0];
+        [enc setTexture:dilatedTex atIndex:1];
+        [enc dispatchThreads:gridSize threadsPerThreadgroup:tgSize];
+        [enc endEncoding];
+    }
+    // Colorize (writes RGBA with green=(0,255,0) for dilated pixels)
+    {
+        id<MTLComputeCommandEncoder> enc = [cmdBuf computeCommandEncoder];
+        [enc setComputePipelineState:ctx->pso_colorize];
+        [enc setTexture:maskTex    atIndex:0];
+        [enc setTexture:dilatedTex atIndex:1];
+        [enc setBuffer:r.maskBuf  offset:0 atIndex:0];
+        [enc setBuffer:dummyCount offset:0 atIndex:1];
+        [enc dispatchThreads:gridSize threadsPerThreadgroup:tgSize];
+        [enc endEncoding];
+    }
+
+    [cmdBuf commit];
+    [cmdBuf waitUntilCompleted];
+
+    r.rgba = (uint8_t *)r.maskBuf.contents;
+    r.ok = true;
+    return r;
+}
+
+// ── Shared BFS: find all valid-sized connected components in the RGBA buffer ──
+// Green pixels (0,255,0) are dilated; BFS marks them visited by setting R=1.
+// Returns blob centroids using source pixel buffer for intensity weighting.
+static std::vector<PointSourceMetalBlob> bfs_find_blobs(
+    uint8_t *rgba, int width, int height,
+    const uint8_t *src_bgra, int src_stride,
+    int min_blob_pixels, int max_blob_pixels) {
+
+    std::vector<PointSourceMetalBlob> blobs;
+    std::vector<int> queue;
+    queue.reserve(1024);
+
+    for (int y = 1; y < height - 1; y++) {
+        for (int x = 1; x < width - 1; x++) {
+            int idx = y * width + x;
+            int base = idx * 4;
+            if (rgba[base] != 0 || rgba[base+1] != 255 || rgba[base+2] != 0)
+                continue;
+
+            // BFS flood-fill
+            queue.clear();
+            queue.push_back(idx);
+            rgba[base] = 1; // mark visited
+
+            for (size_t qi = 0; qi < queue.size(); qi++) {
+                int ci = queue[qi];
+                int cx_pos = ci % width, cy_pos = ci / width;
+                const int neighbors[4] = {
+                    (cx_pos > 0)          ? ci - 1     : -1,
+                    (cx_pos < width - 1)  ? ci + 1     : -1,
+                    (cy_pos > 0)          ? ci - width  : -1,
+                    (cy_pos < height - 1) ? ci + width  : -1
+                };
+                for (int ni : neighbors) {
+                    if (ni < 0) continue;
+                    int nb = ni * 4;
+                    if (rgba[nb] == 0 && rgba[nb+1] == 255 && rgba[nb+2] == 0) {
+                        rgba[nb] = 1;
+                        queue.push_back(ni);
+                    }
+                }
+            }
+
+            int blob_size = (int)queue.size();
+            if (blob_size < min_blob_pixels || blob_size > max_blob_pixels)
+                continue;
+
+            // Compute intensity-weighted centroid
+            double sx = 0, sy = 0, sw = 0;
+            for (int pi : queue) {
+                int px = pi % width, py = pi / width;
+                double g = src_bgra[py * src_stride + px * 4 + 1]; // green (BGRA)
+                sx += px * g; sy += py * g; sw += g;
+            }
+            if (sw > 0)
+                blobs.push_back({sx / sw, sy / sw, blob_size});
+        }
+    }
+    return blobs;
+}
 
 PointSourceMetalSpot pointsource_metal_detect(PointSourceMetalHandle ctx,
                                    CVPixelBufferRef pixel_buffer,
@@ -271,262 +430,40 @@ PointSourceMetalSpot pointsource_metal_detect(PointSourceMetalHandle ctx,
     if (!ctx || !pixel_buffer) return result;
 
     @autoreleasepool {
-        int width  = (int)CVPixelBufferGetWidth(pixel_buffer);
-        int height = (int)CVPixelBufferGetHeight(pixel_buffer);
+        auto pipeline = run_metal_green_pipeline(ctx, pixel_buffer,
+                                                  green_threshold, green_dominance);
+        if (!pipeline.ok) return result;
 
-        // Zero-copy: wrap CVPixelBuffer as MTLTexture via IOSurface
-        CVMetalTextureRef cvTex = NULL;
-        CVReturn rv = CVMetalTextureCacheCreateTextureFromImage(
-            kCFAllocatorDefault, ctx->texCache, pixel_buffer, NULL,
-            MTLPixelFormatBGRA8Unorm, width, height, 0, &cvTex);
-        if (rv != kCVReturnSuccess || !cvTex) {
-            fprintf(stderr, "[LaserMetal] CVMetalTexture create failed: %d\n", rv);
-            return result;
-        }
-        id<MTLTexture> srcTex = CVMetalTextureGetTexture(cvTex);
+        // Use shared BFS to find all blobs, then pick based on mode
+        CVPixelBufferLockBaseAddress(pixel_buffer, kCVPixelBufferLock_ReadOnly);
+        const uint8_t *src_bgra = (const uint8_t *)CVPixelBufferGetBaseAddress(pixel_buffer);
+        int src_stride = (int)CVPixelBufferGetBytesPerRow(pixel_buffer);
 
-        // Thread-safe: allocate local textures/buffers per call.
-        // This function is called concurrently from multiple threads in
-        // detect_all_cameras, so it must NOT use shared pre-allocated state.
-        MTLTextureDescriptor *maskDesc =
-            [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatR8Uint
-                                                              width:width
-                                                             height:height
-                                                          mipmapped:NO];
-        maskDesc.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
-        maskDesc.storageMode = MTLStorageModePrivate;
+        auto blobs = bfs_find_blobs(pipeline.rgba, pipeline.width, pipeline.height,
+                                     src_bgra, src_stride,
+                                     min_blob_pixels, max_blob_pixels);
+        CVPixelBufferUnlockBaseAddress(pixel_buffer, kCVPixelBufferLock_ReadOnly);
+        CFRelease(pipeline.cvTex);
 
-        id<MTLTexture> maskTex    = [ctx->device newTextureWithDescriptor:maskDesc];
-        id<MTLTexture> erodedTex  = [ctx->device newTextureWithDescriptor:maskDesc];
-        id<MTLTexture> dilatedTex = [ctx->device newTextureWithDescriptor:maskDesc];
-
-        // Result buffer: 8 × uint32
-        id<MTLBuffer> resultBuf =
-            [ctx->device newBufferWithLength:8 * sizeof(uint32_t)
-                                     options:MTLResourceStorageModeShared];
-        uint32_t *init_vals = (uint32_t *)resultBuf.contents;
-        init_vals[0] = 0;          // count
-        init_vals[1] = 0;          // sum_gx
-        init_vals[2] = 0;          // sum_gy
-        init_vals[3] = 0;          // sum_g
-        init_vals[4] = 0xFFFFFFFF; // min_x (init high for atomic_min)
-        init_vals[5] = 0xFFFFFFFF; // min_y
-        init_vals[6] = 0;          // max_x (init low for atomic_max)
-        init_vals[7] = 0;          // max_y
-
-        // Parameter buffers
-        id<MTLBuffer> threshBuf =
-            [ctx->device newBufferWithBytes:&green_threshold
-                                     length:sizeof(int)
-                                    options:MTLResourceStorageModeShared];
-        id<MTLBuffer> domBuf =
-            [ctx->device newBufferWithBytes:&green_dominance
-                                     length:sizeof(int)
-                                    options:MTLResourceStorageModeShared];
-
-        // Threadgroup / grid sizing
-        MTLSize tgSize = MTLSizeMake(16, 16, 1);
-        MTLSize gridSize = MTLSizeMake(width, height, 1);
-
-        // Command buffer
-        id<MTLCommandBuffer> cmdBuf = [ctx->queue commandBuffer];
-
-        // Pass 1: threshold_green
-        {
-            id<MTLComputeCommandEncoder> enc = [cmdBuf computeCommandEncoder];
-            [enc setComputePipelineState:ctx->pso_threshold];
-            [enc setTexture:srcTex  atIndex:0];
-            [enc setTexture:maskTex atIndex:1];
-            [enc setBuffer:threshBuf offset:0 atIndex:0];
-            [enc setBuffer:domBuf    offset:0 atIndex:1];
-            [enc dispatchThreads:gridSize threadsPerThreadgroup:tgSize];
-            [enc endEncoding];
-        }
-
-        // Pass 2: erode_3x3
-        {
-            id<MTLComputeCommandEncoder> enc = [cmdBuf computeCommandEncoder];
-            [enc setComputePipelineState:ctx->pso_erode];
-            [enc setTexture:maskTex   atIndex:0];
-            [enc setTexture:erodedTex atIndex:1];
-            [enc dispatchThreads:gridSize threadsPerThreadgroup:tgSize];
-            [enc endEncoding];
-        }
-
-        // Pass 3: dilate_3x3
-        {
-            id<MTLComputeCommandEncoder> enc = [cmdBuf computeCommandEncoder];
-            [enc setComputePipelineState:ctx->pso_dilate];
-            [enc setTexture:erodedTex  atIndex:0];
-            [enc setTexture:dilatedTex atIndex:1];
-            [enc dispatchThreads:gridSize threadsPerThreadgroup:tgSize];
-            [enc endEncoding];
-        }
-
-        // Pass 4: reduce_centroid
-        {
-            id<MTLComputeCommandEncoder> enc = [cmdBuf computeCommandEncoder];
-            [enc setComputePipelineState:ctx->pso_reduce];
-            [enc setTexture:dilatedTex atIndex:0];
-            [enc setTexture:srcTex     atIndex:1];
-            [enc setBuffer:resultBuf offset:0 atIndex:0];
-            [enc dispatchThreads:gridSize threadsPerThreadgroup:tgSize];
-            [enc endEncoding];
-        }
-
-        [cmdBuf commit];
-        [cmdBuf waitUntilCompleted];
-
-        // Read back results
-        const uint32_t *vals = (const uint32_t *)resultBuf.contents;
-        uint32_t count  = vals[0];
-        uint32_t sum_gx = vals[1];
-        uint32_t sum_gy = vals[2];
-        uint32_t sum_g  = vals[3];
-        uint32_t min_x  = vals[4];
-        uint32_t min_y  = vals[5];
-        uint32_t max_x  = vals[6];
-        uint32_t max_y  = vals[7];
-
-        // Always report dilated pixel count (even when not a valid single blob)
-        result.pixel_count = (int)count;
-
-        // Release CVMetalTexture
-        CFRelease(cvTex);
-
-        // Check blob size
-        if ((int)count >= min_blob_pixels && (int)count <= max_blob_pixels && sum_g > 0) {
-            if (!smart_blob) {
-                // Default path: compactness check to reject multi-blob frames.
-                // A single compact blob fills >25% of its bbox (circle ~79%).
-                // Two distant blobs produce a huge bbox with low fill ratio.
-                uint64_t bbox_w = (uint64_t)(max_x - min_x + 1);
-                uint64_t bbox_h = (uint64_t)(max_y - min_y + 1);
-                uint64_t bbox_area = bbox_w * bbox_h;
-                if (bbox_area <= 4u * (uint64_t)count) {
-                    result.cx = (double)sum_gx / (double)sum_g;
-                    result.cy = (double)sum_gy / (double)sum_g;
-                    result.pixel_count = (int)count;
-                    result.found = true;
-                }
-            } else {
-                // Smart Blob: run BFS connected components on the dilated mask
-                // to find individual blobs, then pick the largest valid one.
-                // Same pattern as pointsource_metal_detect_viz (lines 522-579)
-                // but computes per-blob intensity-weighted centroid.
-
-                // We need the dilated mask on CPU. Run colorize pass to get it
-                // into a shared buffer (reuses viz infrastructure).
-                int npixels = width * height;
-                id<MTLBuffer> maskBuf =
-                    [ctx->device newBufferWithLength:npixels * 4
-                                             options:MTLResourceStorageModeShared];
-                {
-                    id<MTLCommandBuffer> cmdBuf2 = [ctx->queue commandBuffer];
-                    id<MTLComputeCommandEncoder> enc = [cmdBuf2 computeCommandEncoder];
-                    [enc setComputePipelineState:ctx->pso_colorize];
-                    [enc setTexture:maskTex    atIndex:0];
-                    [enc setTexture:dilatedTex atIndex:1];
-                    [enc setBuffer:maskBuf offset:0 atIndex:0];
-                    // maskCountBuf not needed — reuse a dummy
-                    id<MTLBuffer> dummyCount =
-                        [ctx->device newBufferWithLength:sizeof(uint32_t)
-                                                 options:MTLResourceStorageModeShared];
-                    *(uint32_t *)dummyCount.contents = 0;
-                    [enc setBuffer:dummyCount offset:0 atIndex:1];
-                    [enc dispatchThreads:gridSize threadsPerThreadgroup:tgSize];
-                    [enc endEncoding];
-                    [cmdBuf2 commit];
-                    [cmdBuf2 waitUntilCompleted];
-                }
-
-                // BFS connected components on dilated (green) pixels
-                uint8_t *rgba = (uint8_t *)maskBuf.contents;
-                int best_blob_size = 0;
-                double best_cx = 0, best_cy = 0;
-                int best_count = 0;
-                std::vector<int> queue;
-                queue.reserve(1024);
-
-                // Read source BGRA for intensity-weighted centroid
-                CVPixelBufferLockBaseAddress(pixel_buffer, kCVPixelBufferLock_ReadOnly);
-                const uint8_t *src_bgra = (const uint8_t *)CVPixelBufferGetBaseAddress(pixel_buffer);
-                int src_stride = (int)CVPixelBufferGetBytesPerRow(pixel_buffer);
-
-                for (int y = 1; y < height - 1; y++) {
-                    for (int x = 1; x < width - 1; x++) {
-                        int idx = y * width + x;
-                        int base = idx * 4;
-                        if (rgba[base] != 0 || rgba[base+1] != 255 || rgba[base+2] != 0)
-                            continue;
-
-                        // BFS flood-fill
-                        queue.clear();
-                        queue.push_back(idx);
-                        rgba[base] = 1; // mark visited
-
-                        for (size_t qi = 0; qi < queue.size(); qi++) {
-                            int ci = queue[qi];
-                            int cx_pos = ci % width, cy_pos = ci / width;
-                            const int neighbors[4] = {
-                                (cx_pos > 0)          ? ci - 1     : -1,
-                                (cx_pos < width - 1)  ? ci + 1     : -1,
-                                (cy_pos > 0)          ? ci - width  : -1,
-                                (cy_pos < height - 1) ? ci + width  : -1
-                            };
-                            for (int ni : neighbors) {
-                                if (ni < 0) continue;
-                                int nb = ni * 4;
-                                if (rgba[nb] == 0 && rgba[nb+1] == 255 && rgba[nb+2] == 0) {
-                                    rgba[nb] = 1;
-                                    queue.push_back(ni);
-                                }
-                            }
-                        }
-
-                        int blob_size = (int)queue.size();
-                        if (blob_size < min_blob_pixels || blob_size > max_blob_pixels)
-                            continue;
-
-                        // This blob is valid-sized — compute intensity-weighted centroid
-                        if (blob_size > best_blob_size) {
-                            double sx = 0, sy = 0, sw = 0;
-                            for (int pi : queue) {
-                                int px = pi % width;
-                                int py = pi / width;
-                                double g = src_bgra[py * src_stride + px * 4 + 1]; // green channel (BGRA)
-                                sx += px * g;
-                                sy += py * g;
-                                sw += g;
-                            }
-                            if (sw > 0) {
-                                best_blob_size = blob_size;
-                                best_cx = sx / sw;
-                                best_cy = sy / sw;
-                                best_count = blob_size;
-                            }
-                        }
-                    }
-                }
-
-                CVPixelBufferUnlockBaseAddress(pixel_buffer, kCVPixelBufferLock_ReadOnly);
-
-                if (best_blob_size > 0) {
-                    result.cx = best_cx;
-                    result.cy = best_cy;
-                    result.pixel_count = best_count;
-                    result.found = true;
-                }
+        if (!blobs.empty()) {
+            if (blobs.size() == 1 || smart_blob) {
+                // Pick the largest blob
+                auto *best = &blobs[0];
+                for (auto &b : blobs)
+                    if (b.pixel_count > best->pixel_count) best = &b;
+                result.cx = best->cx;
+                result.cy = best->cy;
+                result.pixel_count = best->pixel_count;
+                result.found = true;
             }
+            // else: multiple blobs without smart_blob → reject (result.found stays false)
         }
     }
 
     return result;
 }
 
-// Smart Blob v2: return ALL valid-sized blobs (not just the largest).
-// Reuses the same GPU pipeline (threshold → erode → dilate) then does BFS
-// on CPU to find all connected components.
+// Smart Blob v3: return ALL valid-sized blobs for deferred resolution.
 std::vector<PointSourceMetalBlob> pointsource_metal_detect_all(
     PointSourceMetalHandle ctx,
     CVPixelBufferRef pixel_buffer,
@@ -536,150 +473,21 @@ std::vector<PointSourceMetalBlob> pointsource_metal_detect_all(
     std::vector<PointSourceMetalBlob> blobs;
     if (!ctx || !pixel_buffer) return blobs;
 
-    int width  = (int)CVPixelBufferGetWidth(pixel_buffer);
-    int height = (int)CVPixelBufferGetHeight(pixel_buffer);
-
-    // Create Metal texture from CVPixelBuffer (same as pointsource_metal_detect)
-    CVMetalTextureRef cvTex = nullptr;
-    CVReturn cvr = CVMetalTextureCacheCreateTextureFromImage(
-        kCFAllocatorDefault, ctx->texCache, pixel_buffer, nullptr,
-        MTLPixelFormatBGRA8Unorm, width, height, 0, &cvTex);
-    if (cvr != kCVReturnSuccess || !cvTex) return blobs;
-    id<MTLTexture> inputTex = CVMetalTextureGetTexture(cvTex);
-
-    // Intermediate textures (R8Uint — matching pointsource_metal_detect)
-    MTLTextureDescriptor *desc = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatR8Uint
-                                                                                    width:width height:height mipmapped:NO];
-    desc.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
-    desc.storageMode = MTLStorageModePrivate;
-    id<MTLTexture> maskTex    = [ctx->device newTextureWithDescriptor:desc];
-    id<MTLTexture> erodedTex  = [ctx->device newTextureWithDescriptor:desc];
-    id<MTLTexture> dilatedTex = [ctx->device newTextureWithDescriptor:desc];
-
-    // GPU: threshold → erode → dilate
     @autoreleasepool {
-        id<MTLCommandBuffer> cmdBuf = [ctx->queue commandBuffer];
-        MTLSize gridSize = MTLSizeMake(width, height, 1);
-        MTLSize tgSize   = MTLSizeMake(16, 16, 1);
-
-        // Threshold
-        {
-            id<MTLComputeCommandEncoder> enc = [cmdBuf computeCommandEncoder];
-            [enc setComputePipelineState:ctx->pso_threshold];
-            [enc setTexture:inputTex atIndex:0];
-            [enc setTexture:maskTex  atIndex:1];
-            [enc setBytes:&green_threshold length:sizeof(int) atIndex:0];
-            [enc setBytes:&green_dominance length:sizeof(int) atIndex:1];
-            [enc dispatchThreads:gridSize threadsPerThreadgroup:tgSize];
-            [enc endEncoding];
-        }
-        // Erode
-        {
-            id<MTLComputeCommandEncoder> enc = [cmdBuf computeCommandEncoder];
-            [enc setComputePipelineState:ctx->pso_erode];
-            [enc setTexture:maskTex   atIndex:0];
-            [enc setTexture:erodedTex atIndex:1];
-            [enc dispatchThreads:gridSize threadsPerThreadgroup:tgSize];
-            [enc endEncoding];
-        }
-        // Dilate
-        {
-            id<MTLComputeCommandEncoder> enc = [cmdBuf computeCommandEncoder];
-            [enc setComputePipelineState:ctx->pso_dilate];
-            [enc setTexture:erodedTex  atIndex:0];
-            [enc setTexture:dilatedTex atIndex:1];
-            [enc dispatchThreads:gridSize threadsPerThreadgroup:tgSize];
-            [enc endEncoding];
-        }
-        [cmdBuf commit];
-        [cmdBuf waitUntilCompleted];
-
-        // Read dilated mask to CPU via colorize pass (reuses existing infrastructure)
-        int npixels = width * height;
-        id<MTLBuffer> maskBuf =
-            [ctx->device newBufferWithLength:npixels * 4
-                                     options:MTLResourceStorageModeShared];
-        {
-            id<MTLCommandBuffer> cmdBuf2 = [ctx->queue commandBuffer];
-            id<MTLComputeCommandEncoder> enc = [cmdBuf2 computeCommandEncoder];
-            [enc setComputePipelineState:ctx->pso_colorize];
-            [enc setTexture:maskTex    atIndex:0];
-            [enc setTexture:dilatedTex atIndex:1];
-            [enc setBuffer:maskBuf offset:0 atIndex:0];
-            id<MTLBuffer> dummyCount =
-                [ctx->device newBufferWithLength:sizeof(uint32_t)
-                                         options:MTLResourceStorageModeShared];
-            *(uint32_t *)dummyCount.contents = 0;
-            [enc setBuffer:dummyCount offset:0 atIndex:1];
-            [enc dispatchThreads:gridSize threadsPerThreadgroup:tgSize];
-            [enc endEncoding];
-            [cmdBuf2 commit];
-            [cmdBuf2 waitUntilCompleted];
-        }
-
-        // BFS connected components — collect ALL valid blobs
-        uint8_t *rgba = (uint8_t *)maskBuf.contents;
-        std::vector<int> queue;
-        queue.reserve(1024);
+        auto pipeline = run_metal_green_pipeline(ctx, pixel_buffer,
+                                                  green_threshold, green_dominance);
+        if (!pipeline.ok) return blobs;
 
         CVPixelBufferLockBaseAddress(pixel_buffer, kCVPixelBufferLock_ReadOnly);
         const uint8_t *src_bgra = (const uint8_t *)CVPixelBufferGetBaseAddress(pixel_buffer);
         int src_stride = (int)CVPixelBufferGetBytesPerRow(pixel_buffer);
 
-        for (int y = 1; y < height - 1; y++) {
-            for (int x = 1; x < width - 1; x++) {
-                int idx = y * width + x;
-                int base = idx * 4;
-                if (rgba[base] != 0 || rgba[base+1] != 255 || rgba[base+2] != 0)
-                    continue;
-
-                // BFS flood-fill
-                queue.clear();
-                queue.push_back(idx);
-                rgba[base] = 1; // mark visited
-
-                for (size_t qi = 0; qi < queue.size(); qi++) {
-                    int ci = queue[qi];
-                    int cx_pos = ci % width, cy_pos = ci / width;
-                    const int neighbors[4] = {
-                        (cx_pos > 0)          ? ci - 1     : -1,
-                        (cx_pos < width - 1)  ? ci + 1     : -1,
-                        (cy_pos > 0)          ? ci - width  : -1,
-                        (cy_pos < height - 1) ? ci + width  : -1
-                    };
-                    for (int ni : neighbors) {
-                        if (ni < 0) continue;
-                        int nb = ni * 4;
-                        if (rgba[nb] == 0 && rgba[nb+1] == 255 && rgba[nb+2] == 0) {
-                            rgba[nb] = 1;
-                            queue.push_back(ni);
-                        }
-                    }
-                }
-
-                int blob_size = (int)queue.size();
-                if (blob_size < min_blob_pixels || blob_size > max_blob_pixels)
-                    continue;
-
-                // Compute intensity-weighted centroid
-                double sx = 0, sy = 0, sw = 0;
-                for (int pi : queue) {
-                    int px = pi % width, py = pi / width;
-                    double g = src_bgra[py * src_stride + px * 4 + 1];
-                    sx += px * g;
-                    sy += py * g;
-                    sw += g;
-                }
-                if (sw > 0) {
-                    blobs.push_back({sx / sw, sy / sw, blob_size});
-                }
-            }
-        }
-
+        blobs = bfs_find_blobs(pipeline.rgba, pipeline.width, pipeline.height,
+                                src_bgra, src_stride,
+                                min_blob_pixels, max_blob_pixels);
         CVPixelBufferUnlockBaseAddress(pixel_buffer, kCVPixelBufferLock_ReadOnly);
+        CFRelease(pipeline.cvTex);
     }
-
-    CFRelease(cvTex);
     return blobs;
 }
 
