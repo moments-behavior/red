@@ -155,13 +155,20 @@ using FrameCandidates = std::map<int, std::vector<BlobCandidate>>;
 // Preferred mode: keyframe pre-scan (spatially distributed samples from throughout
 // the video). Fallback: rolling accumulation during detection.
 // Once ready, is_artifact() provides O(1) lookup for filtering.
+// Unified spatial artifact mask — used by keyframe pre-scan, filter_static_detections,
+// and resolve_blob_candidates. Configurable threshold mode and bin growth.
 struct ArtifactMask {
     int bw = 0, bh = 0, bin_size = 32;
     std::vector<int> bins;
-    std::vector<bool> mask;     // flagged + grown artifact zones
+    std::vector<bool> mask;
     int frames_seen = 0;
     bool ready = false;
     int artifact_bins_flagged = 0;
+
+    enum ThresholdMode {
+        Percentage,      // threshold = max(10, pct * frames_seen) — for keyframe pre-scan
+        MedianMultiple   // threshold = max(20, mult * median_nonempty) — for post-hoc filtering
+    };
 
     void init(int img_w, int img_h, int bs = 32) {
         bin_size = bs;
@@ -183,22 +190,49 @@ struct ArtifactMask {
         frames_seen++;
     }
 
-    void finalize() {
-        // A bin is "artifact" if it has hits on >70% of sampled frames.
-        // With keyframes distributed throughout the video, the wand is in different
-        // places on each keyframe so bins rarely exceed 30-40%. A static artifact
-        // (LED, reflection) hits the same bin on >90% of keyframes.
-        int threshold = std::max(10, (int)(0.7 * frames_seen));
+    // Add detections from a DetectionMap (for filter_static_detections compatibility)
+    void add_detections(const std::map<int, SpotDetection> &detections) {
+        for (const auto &[frame, det] : detections) {
+            int bx = std::clamp((int)(det.cx / bin_size), 0, bw - 1);
+            int by = std::clamp((int)(det.cy / bin_size), 0, bh - 1);
+            bins[by * bw + bx]++;
+        }
+        frames_seen += (int)detections.size();
+    }
 
-        // Flag dense bins
+    void finalize(ThresholdMode mode = Percentage, double param = 0.7, bool grow = false) {
+        int threshold;
+        if (mode == Percentage) {
+            threshold = std::max(10, (int)(param * frames_seen));
+        } else {
+            // MedianMultiple: param is the multiplier (e.g., 5.0)
+            std::vector<int> nonempty;
+            for (int v : bins) if (v > 0) nonempty.push_back(v);
+            if (nonempty.empty()) { ready = true; return; }
+            std::sort(nonempty.begin(), nonempty.end());
+            int median = nonempty[nonempty.size() / 2];
+            threshold = std::max(20, (int)(param * median));
+        }
+
         std::vector<bool> flagged(bw * bh, false);
         for (int i = 0; i < bw * bh; i++)
             if (bins[i] > threshold) flagged[i] = true;
 
-        // No growth — the keyframe scan identifies artifact bins precisely.
-        // A 32px bin already covers 4x the artifact radius (~5px).
-        // Growth would catch wand detections passing near the artifact.
-        mask = flagged;
+        if (grow) {
+            mask.assign(bw * bh, false);
+            for (int y = 0; y < bh; y++)
+                for (int x = 0; x < bw; x++) {
+                    if (!flagged[y * bw + x]) continue;
+                    for (int dy = -1; dy <= 1; dy++)
+                        for (int dx = -1; dx <= 1; dx++) {
+                            int nx = x + dx, ny = y + dy;
+                            if (nx >= 0 && nx < bw && ny >= 0 && ny < bh)
+                                mask[ny * bw + nx] = true;
+                        }
+                }
+        } else {
+            mask = flagged;
+        }
         artifact_bins_flagged = 0;
         for (bool b : mask) if (b) artifact_bins_flagged++;
         ready = true;
@@ -218,6 +252,21 @@ struct ArtifactMask {
             [this](const BlobCandidate &b) { return is_artifact(b.cx, b.cy); }),
             blobs.end());
         return before - (int)blobs.size();
+    }
+
+    // Filter a DetectionMap in-place (for filter_static_detections compatibility)
+    int filter_detections(std::map<int, SpotDetection> &detections) const {
+        if (!ready) return 0;
+        int removed = 0;
+        for (auto it = detections.begin(); it != detections.end(); ) {
+            if (is_artifact((float)it->second.cx, (float)it->second.cy)) {
+                it = detections.erase(it);
+                removed++;
+            } else {
+                ++it;
+            }
+        }
+        return removed;
     }
 };
 
@@ -533,15 +582,19 @@ enum PointSourcePixelFormat { POINTSOURCE_FMT_RGB24, POINTSOURCE_FMT_BGRA };
 // stride = bytes per row (may include padding for BGRA from CVPixelBuffer).
 // Returns true if exactly one valid blob found; fills detection.
 // smart_blob: when true, pick the largest valid blob instead of rejecting multi-blob frames.
-inline bool detect_light_spot(const uint8_t *pixels, int width, int height,
-                              int stride, PointSourcePixelFormat fmt,
-                              int green_threshold, int green_dominance,
-                              int min_blob_pixels, int max_blob_pixels,
-                              SpotDetection &det, bool smart_blob = false) {
+// ── Shared green blob detection pipeline (CPU path) ──
+// Threshold → erode → dilate → connected components → size filter → centroids.
+// Returns all valid-sized blobs with intensity-weighted centroids.
+// Single-pass centroid computation: O(N) instead of O(k*N).
+inline std::vector<BlobCandidate> detect_green_blobs(
+    const uint8_t *pixels, int width, int height,
+    int stride, PointSourcePixelFormat fmt,
+    int green_threshold, int green_dominance,
+    int min_blob_pixels, int max_blob_pixels) {
+
     int npixels = width * height;
     int bpp = (fmt == POINTSOURCE_FMT_BGRA) ? 4 : 3;
     int r_off = (fmt == POINTSOURCE_FMT_BGRA) ? 2 : 0;
-    // g_off = 1 for both formats
     int b_off = (fmt == POINTSOURCE_FMT_BGRA) ? 0 : 2;
 
     // Step 1: Threshold — binary mask
@@ -564,126 +617,6 @@ inline bool detect_light_spot(const uint8_t *pixels, int width, int height,
     for (int y = 1; y < height - 1; y++) {
         for (int x = 1; x < width - 1; x++) {
             int idx = y * width + x;
-            if (!mask[idx])
-                continue;
-            bool all = true;
-            for (int dy = -1; dy <= 1 && all; dy++)
-                for (int dx = -1; dx <= 1 && all; dx++)
-                    if (!mask[(y + dy) * width + (x + dx)])
-                        all = false;
-            if (all)
-                eroded[idx] = 1;
-        }
-    }
-
-    // Step 3: Dilate (3x3) — pixel becomes 1 if any neighbor is 1
-    std::vector<uint8_t> dilated(npixels, 0);
-    for (int y = 1; y < height - 1; y++) {
-        for (int x = 1; x < width - 1; x++) {
-            bool has_neighbor = false;
-            for (int dy = -1; dy <= 1 && !has_neighbor; dy++)
-                for (int dx = -1; dx <= 1 && !has_neighbor; dx++)
-                    if (eroded[(y + dy) * width + (x + dx)])
-                        has_neighbor = true;
-            if (has_neighbor)
-                dilated[y * width + x] = 1;
-        }
-    }
-
-    // Step 4: Connected components (4-connectivity) via union-find
-    UnionFind uf(npixels);
-    for (int y = 0; y < height; y++) {
-        for (int x = 0; x < width; x++) {
-            int idx = y * width + x;
-            if (!dilated[idx])
-                continue;
-            if (x > 0 && dilated[idx - 1])
-                uf.unite(idx, idx - 1);
-            if (y > 0 && dilated[idx - width])
-                uf.unite(idx, idx - width);
-        }
-    }
-
-    // Step 5: Filter by area
-    std::map<int, int> component_sizes;
-    for (int i = 0; i < npixels; i++) {
-        if (dilated[i])
-            component_sizes[uf.find(i)] = uf.sz[uf.find(i)];
-    }
-
-    std::vector<int> valid_roots;
-    for (auto &[root, s] : component_sizes) {
-        if (s >= min_blob_pixels && s <= max_blob_pixels)
-            valid_roots.push_back(root);
-    }
-
-    // Step 6: Decision — select blob for centroid computation
-    if (valid_roots.empty())
-        return false;
-    if (valid_roots.size() > 1 && !smart_blob)
-        return false;
-
-    // Pick the largest valid component
-    int root = valid_roots[0];
-    for (int r : valid_roots)
-        if (component_sizes[r] > component_sizes[root]) root = r;
-    double sum_x = 0, sum_y = 0, sum_w = 0;
-    int count = 0;
-    for (int i = 0; i < npixels; i++) {
-        if (dilated[i] && uf.find(i) == root) {
-            int px = i % width;
-            int py = i / width;
-            double w = pixels[py * stride + px * bpp + 1]; // green channel
-            sum_x += px * w;
-            sum_y += py * w;
-            sum_w += w;
-            count++;
-        }
-    }
-
-    if (sum_w < 1e-9)
-        return false;
-
-    det.cx = sum_x / sum_w;
-    det.cy = sum_y / sum_w;
-    det.pixel_count = count;
-    return true;
-}
-
-// Smart Blob v2: detect ALL valid-sized blobs in a frame (CPU path).
-// Same pipeline as detect_light_spot (threshold → erode → dilate → union-find)
-// but returns all valid blobs instead of picking one.
-inline std::vector<BlobCandidate> detect_all_blobs(
-    const uint8_t *pixels, int width, int height,
-    int stride, PointSourcePixelFormat fmt,
-    int green_threshold, int green_dominance,
-    int min_blob_pixels, int max_blob_pixels) {
-
-    int npixels = width * height;
-    int bpp = (fmt == POINTSOURCE_FMT_BGRA) ? 4 : 3;
-    int r_off = (fmt == POINTSOURCE_FMT_BGRA) ? 2 : 0;
-    int b_off = (fmt == POINTSOURCE_FMT_BGRA) ? 0 : 2;
-
-    // Step 1: Threshold
-    std::vector<uint8_t> mask(npixels, 0);
-    for (int y = 0; y < height; y++) {
-        const uint8_t *row = pixels + y * stride;
-        for (int x = 0; x < width; x++) {
-            uint8_t r = row[x * bpp + r_off];
-            uint8_t g = row[x * bpp + 1];
-            uint8_t b = row[x * bpp + b_off];
-            if (g > green_threshold && g >= r && g >= b &&
-                (  (g > r + green_dominance && g > b + green_dominance)
-                || (g > 200 && g >= r && g >= b)  ))
-                mask[y * width + x] = 1;
-        }
-    }
-
-    // Step 2: Erode (3x3)
-    std::vector<uint8_t> eroded(npixels, 0);
-    for (int y = 1; y < height - 1; y++) {
-        for (int x = 1; x < width - 1; x++) {
-            int idx = y * width + x;
             if (!mask[idx]) continue;
             bool all = true;
             for (int dy = -1; dy <= 1 && all; dy++)
@@ -693,7 +626,7 @@ inline std::vector<BlobCandidate> detect_all_blobs(
         }
     }
 
-    // Step 3: Dilate (3x3)
+    // Step 3: Dilate (3x3) — pixel becomes 1 if any neighbor is 1
     std::vector<uint8_t> dilated(npixels, 0);
     for (int y = 1; y < height - 1; y++) {
         for (int x = 1; x < width - 1; x++) {
@@ -705,46 +638,70 @@ inline std::vector<BlobCandidate> detect_all_blobs(
         }
     }
 
-    // Step 4: Connected components (4-connectivity)
+    // Step 4: Connected components (4-connectivity) via union-find
     UnionFind uf(npixels);
-    for (int y = 0; y < height; y++) {
+    for (int y = 0; y < height; y++)
         for (int x = 0; x < width; x++) {
             int idx = y * width + x;
             if (!dilated[idx]) continue;
             if (x > 0 && dilated[idx - 1]) uf.unite(idx, idx - 1);
             if (y > 0 && dilated[idx - width]) uf.unite(idx, idx - width);
         }
+
+    // Step 5: Size filter + single-pass centroid computation
+    // Accumulate per-root centroid in one pass over all dilated pixels.
+    struct Accum { double sx = 0, sy = 0, sw = 0; int count = 0; };
+    std::map<int, Accum> accums;
+    for (int i = 0; i < npixels; i++) {
+        if (!dilated[i]) continue;
+        int root = uf.find(i);
+        int sz = uf.sz[root];
+        if (sz < min_blob_pixels || sz > max_blob_pixels) continue;
+        int px = i % width, py = i / width;
+        double w = pixels[py * stride + px * bpp + 1]; // green channel
+        auto &a = accums[root];
+        a.sx += px * w; a.sy += py * w; a.sw += w; a.count++;
     }
-
-    // Step 5: Filter by area, compute centroid for each valid blob
-    std::map<int, int> component_sizes;
-    for (int i = 0; i < npixels; i++)
-        if (dilated[i]) component_sizes[uf.find(i)] = uf.sz[uf.find(i)];
-
-    std::vector<int> valid_roots;
-    for (auto &[root, s] : component_sizes)
-        if (s >= min_blob_pixels && s <= max_blob_pixels)
-            valid_roots.push_back(root);
 
     std::vector<BlobCandidate> result;
-    for (int root : valid_roots) {
-        double sum_x = 0, sum_y = 0, sum_w = 0;
-        int count = 0;
-        for (int i = 0; i < npixels; i++) {
-            if (dilated[i] && uf.find(i) == root) {
-                int px = i % width, py = i / width;
-                double w = pixels[py * stride + px * bpp + 1]; // green channel
-                sum_x += px * w;
-                sum_y += py * w;
-                sum_w += w;
-                count++;
-            }
-        }
-        if (sum_w > 1e-9) {
-            result.push_back({(float)(sum_x / sum_w), (float)(sum_y / sum_w), count});
-        }
+    for (auto &[root, a] : accums) {
+        if (a.sw > 1e-9)
+            result.push_back({(float)(a.sx / a.sw), (float)(a.sy / a.sw), a.count});
     }
     return result;
+}
+
+// Single-blob detection (conservative path): reject frames with multiple blobs.
+// Used when smart_blob=false.
+inline bool detect_light_spot(const uint8_t *pixels, int width, int height,
+                              int stride, PointSourcePixelFormat fmt,
+                              int green_threshold, int green_dominance,
+                              int min_blob_pixels, int max_blob_pixels,
+                              SpotDetection &det, bool smart_blob = false) {
+    auto blobs = detect_green_blobs(pixels, width, height, stride, fmt,
+                                     green_threshold, green_dominance,
+                                     min_blob_pixels, max_blob_pixels);
+    if (blobs.empty()) return false;
+    if (blobs.size() > 1 && !smart_blob) return false;
+    // Pick the largest valid blob
+    const BlobCandidate *best = &blobs[0];
+    for (const auto &b : blobs)
+        if (b.pixel_count > best->pixel_count) best = &b;
+    det.cx = best->cx;
+    det.cy = best->cy;
+    det.pixel_count = best->pixel_count;
+    return true;
+}
+
+// Multi-blob detection (Smart Blob path): return all valid blobs for deferred resolution.
+inline std::vector<BlobCandidate> detect_all_blobs(
+    const uint8_t *pixels, int width, int height,
+    int stride, PointSourcePixelFormat fmt,
+    int green_threshold, int green_dominance,
+    int min_blob_pixels, int max_blob_pixels) {
+    return detect_green_blobs(pixels, width, height, stride, fmt,
+                              green_threshold, green_dominance,
+                              min_blob_pixels, max_blob_pixels);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -755,63 +712,17 @@ inline std::vector<BlobCandidate> detect_all_blobs(
 
 using DetectionMap = std::map<int, SpotDetection>;
 
+// Thin wrapper: filter static detections using ArtifactMask (5x median, with growth).
 inline int filter_static_detections(DetectionMap &detections,
                                      int image_width, int image_height,
                                      int bin_size = 32,
                                      double static_threshold = 5.0) {
     if (detections.size() < 50) return 0;
-
-    int bw = (image_width + bin_size - 1) / bin_size;
-    int bh = (image_height + bin_size - 1) / bin_size;
-    std::vector<int> bins(bw * bh, 0);
-
-    // Bin all detections
-    for (const auto &[frame, det] : detections) {
-        int bx = std::min((int)(det.cx / bin_size), bw - 1);
-        int by = std::min((int)(det.cy / bin_size), bh - 1);
-        bins[by * bw + bx]++;
-    }
-
-    // Compute median of non-empty bins
-    std::vector<int> nonempty;
-    for (int v : bins) if (v > 0) nonempty.push_back(v);
-    if (nonempty.empty()) return 0;
-    std::sort(nonempty.begin(), nonempty.end());
-    int median_count = nonempty[nonempty.size() / 2];
-
-    // Flag bins with count > static_threshold * median AND > 20
-    int threshold = std::max(20, (int)(static_threshold * median_count));
-    std::vector<bool> flagged(bw * bh, false);
-    for (int i = 0; i < bw * bh; i++)
-        if (bins[i] > threshold) flagged[i] = true;
-
-    // Grow flagged region by 1 bin in each direction
-    std::vector<bool> grown = flagged;
-    for (int y = 0; y < bh; y++) {
-        for (int x = 0; x < bw; x++) {
-            if (!flagged[y * bw + x]) continue;
-            for (int dy = -1; dy <= 1; dy++)
-                for (int dx = -1; dx <= 1; dx++) {
-                    int nx = x + dx, ny = y + dy;
-                    if (nx >= 0 && nx < bw && ny >= 0 && ny < bh)
-                        grown[ny * bw + nx] = true;
-                }
-        }
-    }
-
-    // Remove detections in flagged bins
-    int removed = 0;
-    for (auto it = detections.begin(); it != detections.end(); ) {
-        int bx = std::min((int)(it->second.cx / bin_size), bw - 1);
-        int by = std::min((int)(it->second.cy / bin_size), bh - 1);
-        if (grown[by * bw + bx]) {
-            it = detections.erase(it);
-            removed++;
-        } else {
-            ++it;
-        }
-    }
-    return removed;
+    ArtifactMask am;
+    am.init(image_width, image_height, bin_size);
+    am.add_detections(detections);
+    am.finalize(ArtifactMask::MedianMultiple, static_threshold, /*grow=*/true);
+    return am.filter_detections(detections);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -836,51 +747,14 @@ inline DetectionMap resolve_blob_candidates(
     DetectionMap result;
     if (candidates.empty()) return result;
 
-    int bw = (image_width + bin_size - 1) / bin_size;
-    int bh = (image_height + bin_size - 1) / bin_size;
-
-    // ── Stage 1: Build artifact zone map ──
-    // Bin ALL blob centroids from ALL frames
-    std::vector<int> bins(bw * bh, 0);
+    // ── Stage 1: Build artifact zone map using ArtifactMask ──
+    ArtifactMask am;
+    am.init(image_width, image_height, bin_size);
     for (const auto &[frame, blobs] : candidates)
-        for (const auto &b : blobs) {
-            int bx = std::clamp((int)(b.cx / bin_size), 0, bw - 1);
-            int by = std::clamp((int)(b.cy / bin_size), 0, bh - 1);
-            bins[by * bw + bx]++;
-        }
+        am.add_frame(blobs);
+    am.finalize(ArtifactMask::MedianMultiple, static_threshold, /*grow=*/true);
 
-    // Median of non-empty bins
-    std::vector<int> nonempty;
-    for (int v : bins) if (v > 0) nonempty.push_back(v);
-    if (nonempty.empty()) return result;
-    std::sort(nonempty.begin(), nonempty.end());
-    int median_count = nonempty[nonempty.size() / 2];
-
-    // Flag dense bins as artifact zones
-    int threshold = std::max(20, (int)(static_threshold * median_count));
-    std::vector<bool> artifact(bw * bh, false);
-    for (int i = 0; i < bw * bh; i++)
-        if (bins[i] > threshold) artifact[i] = true;
-
-    // Grow artifact zone by 1 bin in each direction
-    std::vector<bool> grown = artifact;
-    for (int y = 0; y < bh; y++)
-        for (int x = 0; x < bw; x++) {
-            if (!artifact[y * bw + x]) continue;
-            for (int dy = -1; dy <= 1; dy++)
-                for (int dx = -1; dx <= 1; dx++) {
-                    int nx = x + dx, ny = y + dy;
-                    if (nx >= 0 && nx < bw && ny >= 0 && ny < bh)
-                        grown[ny * bw + nx] = true;
-                }
-        }
-
-    // Helper: is a point in the artifact zone?
-    auto in_artifact = [&](float cx, float cy) -> bool {
-        int bx = std::clamp((int)(cx / bin_size), 0, bw - 1);
-        int by = std::clamp((int)(cy / bin_size), 0, bh - 1);
-        return grown[by * bw + bx];
-    };
+    auto in_artifact = [&](float cx, float cy) { return am.is_artifact(cx, cy); };
 
     // ── Compute median blob size from single-candidate frames (for size tiebreaker) ──
     std::vector<int> single_blob_sizes;
