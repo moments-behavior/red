@@ -366,11 +366,11 @@ inline void DrawCalibPointSourceSection(CalibrationToolState &state, AppContext 
                     if (ImGui::CollapsingHeader("Detection Parameters")) {
                     ImGui::Indent();
                     ImGui::SliderInt("Green Threshold",
-                                     &state.pointsource_config.green_threshold, 20, 255);
+                                     &state.pointsource_config.green_threshold, 15, 255);
                     ImGui::SliderInt("Green Dominance",
-                                     &state.pointsource_config.green_dominance, 5, 100);
+                                     &state.pointsource_config.green_dominance, 3, 100);
                     ImGui::SliderInt("Min Blob Pixels",
-                                     &state.pointsource_config.min_blob_pixels, 1, 100);
+                                     &state.pointsource_config.min_blob_pixels, 5, 100);
                     ImGui::SliderInt("Max Blob Pixels",
                                      &state.pointsource_config.max_blob_pixels, 50, 5000);
 

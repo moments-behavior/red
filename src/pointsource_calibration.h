@@ -74,16 +74,16 @@ struct PointSourceConfig {
     std::string calibration_folder;
     std::string output_folder;
 
-    // Detection
-    int green_threshold = 40;
-    int green_dominance = 5;
-    int min_blob_pixels = 10;
-    int max_blob_pixels = 600;
+    // Detection (defaults from parameter sweep, March 26 2026)
+    int green_threshold = 30;  // 25-40 all good; <15 causes failure
+    int green_dominance = 5;   // no sensitivity in range 3-15
+    int min_blob_pixels = 20;  // filters noise; 10 works but 20 gives +23% more points
+    int max_blob_pixels = 600; // no wand blobs exceed this; >600 adds overhead
 
     // Frame range
     int start_frame = 0;    // first frame to process
     int stop_frame = 0;     // last frame (0 = process all)
-    int frame_step = 1;     // process every Nth frame (1 = every frame)
+    int frame_step = 3;     // optimal quality/speed tradeoff at 180fps
 
     // Filtering
     int min_cameras = 4;
