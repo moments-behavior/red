@@ -148,21 +148,20 @@ struct BlobCandidate {
 };
 using FrameCandidates = std::map<int, std::vector<BlobCandidate>>;
 
-// Smart Blob v3: rolling artifact mask — identifies static blobs during detection.
-// Maintains a spatial histogram that converges after seed_frames (~50 frames).
+// Smart Blob v3: artifact mask — identifies static blobs before main detection.
+// Preferred mode: keyframe pre-scan (spatially distributed samples from throughout
+// the video). Fallback: rolling accumulation during detection.
 // Once ready, is_artifact() provides O(1) lookup for filtering.
-struct RollingArtifactMask {
+struct ArtifactMask {
     int bw = 0, bh = 0, bin_size = 32;
     std::vector<int> bins;
     std::vector<bool> mask;     // flagged + grown artifact zones
     int frames_seen = 0;
-    int seed_frames = 50;
     bool ready = false;
     int artifact_bins_flagged = 0;
 
-    void init(int img_w, int img_h, int bs = 32, int seed = 50) {
+    void init(int img_w, int img_h, int bs = 32) {
         bin_size = bs;
-        seed_frames = seed;
         bw = (img_w + bs - 1) / bs;
         bh = (img_h + bs - 1) / bs;
         bins.assign(bw * bh, 0);
@@ -179,37 +178,25 @@ struct RollingArtifactMask {
             bins[by * bw + bx]++;
         }
         frames_seen++;
-        if (!ready && frames_seen >= seed_frames)
-            finalize();
     }
 
     void finalize() {
-        // Median of non-empty bins
-        std::vector<int> nonempty;
-        for (int v : bins) if (v > 0) nonempty.push_back(v);
-        if (nonempty.empty()) { ready = true; return; }
-        std::sort(nonempty.begin(), nonempty.end());
-        int median = nonempty[nonempty.size() / 2];
-        int threshold = std::max(20, (int)(5.0 * median));
+        // A bin is "artifact" if it has hits on >70% of sampled frames.
+        // With keyframes distributed throughout the video, the wand is in different
+        // places on each keyframe so bins rarely exceed 30-40%. A static artifact
+        // (LED, reflection) hits the same bin on >90% of keyframes.
+        int threshold = std::max(10, (int)(0.7 * frames_seen));
 
         // Flag dense bins
         std::vector<bool> flagged(bw * bh, false);
         for (int i = 0; i < bw * bh; i++)
             if (bins[i] > threshold) flagged[i] = true;
 
-        // Grow by 1 bin
-        mask.assign(bw * bh, false);
+        // No growth — the keyframe scan identifies artifact bins precisely.
+        // A 32px bin already covers 4x the artifact radius (~5px).
+        // Growth would catch wand detections passing near the artifact.
+        mask = flagged;
         artifact_bins_flagged = 0;
-        for (int y = 0; y < bh; y++)
-            for (int x = 0; x < bw; x++) {
-                if (!flagged[y * bw + x]) continue;
-                for (int dy = -1; dy <= 1; dy++)
-                    for (int dx = -1; dx <= 1; dx++) {
-                        int nx = x + dx, ny = y + dy;
-                        if (nx >= 0 && nx < bw && ny >= 0 && ny < bh)
-                            mask[ny * bw + nx] = true;
-                    }
-            }
         for (bool b : mask) if (b) artifact_bins_flagged++;
         ready = true;
     }
@@ -221,7 +208,6 @@ struct RollingArtifactMask {
         return mask[by * bw + bx];
     }
 
-    // Filter blobs in-place, returns number removed
     int filter(std::vector<BlobCandidate> &blobs) const {
         if (!ready) return 0;
         int before = (int)blobs.size();
@@ -1233,13 +1219,68 @@ inline std::vector<DetectionMap> detect_all_cameras(
 
             DetectionMap local_detections;
             FrameCandidates local_candidates; // Smart Blob v2/v3
-            RollingArtifactMask rolling_mask; // Smart Blob v3
-            if (collect_candidates)
-                rolling_mask.init(width, height, 32, 50);
-            int rolling_filtered = 0;
+            ArtifactMask artifact_mask;
+            int artifact_filtered = 0;
+
+            // ── Smart Blob v3: keyframe pre-scan for artifact detection ──
+            // Seek to ~30 evenly-spaced keyframes throughout the video.
+            // Blobs that appear at the same location across distant keyframes
+            // are static artifacts (LEDs, reflections). Takes ~1-2 seconds.
+            if (collect_candidates) {
+                artifact_mask.init(width, height, 32);
+                int total_frames = CalibrationPipeline::get_video_frame_count(video_path);
+                int n_samples = std::min(40, std::max(20, total_frames / 300));
+                int sample_step = std::max(1, total_frames / n_samples);
+
+                // Open a separate demuxer+decoder for the pre-scan
+                std::unique_ptr<FFmpegDemuxer> scan_demux;
+                try { scan_demux = std::make_unique<FFmpegDemuxer>(
+                    video_path.c_str(), std::map<std::string, std::string>{}); } catch (...) {}
+
+                if (scan_demux) {
+                    VTAsyncDecoder scan_vt;
+                    scan_vt.init(scan_demux->GetExtradata(), scan_demux->GetExtradataSize(),
+                                 scan_demux->GetVideoCodec());
+
+                    for (int si = 0; si < n_samples; si++) {
+                        int target = si * sample_step;
+                        SeekContext seek_ctx((uint64_t)target, PREV_KEY_FRAME, BY_NUMBER);
+                        uint8_t *pkt = nullptr; size_t pkt_sz = 0; PacketData pkt_info;
+                        if (!scan_demux->Seek(seek_ctx, pkt, pkt_sz, pkt_info)) continue;
+
+                        bool is_key = (pkt_info.flags & AV_PKT_FLAG_KEY) != 0;
+                        scan_vt.submit_blocking(pkt, pkt_sz, pkt_info.pts,
+                                                pkt_info.dts, scan_demux->GetTimebase(), is_key);
+                        CVPixelBufferRef pb = scan_vt.drain_one();
+                        if (!pb) continue;
+
+                        std::vector<BlobCandidate> blobs;
+                        if (metal_ctx) {
+                            auto mblobs = pointsource_metal_detect_all(
+                                metal_ctx, pb,
+                                config.green_threshold, config.green_dominance,
+                                config.min_blob_pixels, config.max_blob_pixels);
+                            for (const auto &mb : mblobs)
+                                blobs.push_back({(float)mb.cx, (float)mb.cy, mb.pixel_count});
+                        } else {
+                            CVPixelBufferLockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
+                            const uint8_t *bgra = (const uint8_t *)CVPixelBufferGetBaseAddress(pb);
+                            int bstride = (int)CVPixelBufferGetBytesPerRow(pb);
+                            blobs = detect_all_blobs(bgra, width, height, bstride,
+                                                     POINTSOURCE_FMT_BGRA,
+                                                     config.green_threshold, config.green_dominance,
+                                                     config.min_blob_pixels, config.max_blob_pixels);
+                            CVPixelBufferUnlockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
+                        }
+                        CFRelease(pb);
+                        artifact_mask.add_frame(blobs);
+                    }
+                    artifact_mask.finalize();
+                }
+            }
+
             int detected = 0;
             int packets_submitted = 0;
-
             int processed = 0;
 
             auto process_frame = [&](CVPixelBufferRef pb) {
@@ -1249,7 +1290,7 @@ inline std::vector<DetectionMap> detect_all_cameras(
                                      ((frame - start_fr) % step == 0);
                 if (should_detect) {
                     if (collect_candidates) {
-                        // Smart Blob v3: collect ALL blobs, feed rolling mask, filter inline
+                        // Smart Blob v3: collect ALL blobs, filter with pre-built artifact mask
                         std::vector<BlobCandidate> frame_blobs;
                         if (metal_ctx) {
                             auto mblobs = pointsource_metal_detect_all(
@@ -1271,10 +1312,8 @@ inline std::vector<DetectionMap> detect_all_cameras(
                                                            config.max_blob_pixels);
                             CVPixelBufferUnlockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
                         }
-                        // v3: feed rolling mask (always, even if no blobs)
-                        rolling_mask.add_frame(frame_blobs);
-                        // v3: filter artifact blobs inline once mask is ready
-                        rolling_filtered += rolling_mask.filter(frame_blobs);
+                        // v3: filter with keyframe-derived artifact mask
+                        artifact_filtered += artifact_mask.filter(frame_blobs);
                         if (!frame_blobs.empty()) {
                             local_candidates[frame] = std::move(frame_blobs);
                             detected++;
@@ -1378,11 +1417,12 @@ inline std::vector<DetectionMap> detect_all_cameras(
             if (cam_prog)
                 cam_prog->done.store(true, std::memory_order_relaxed);
 
-            if (collect_candidates && rolling_mask.artifact_bins_flagged > 0) {
+            if (collect_candidates && artifact_mask.artifact_bins_flagged > 0) {
                 printf("PointSource: Camera %s — %d decoded, %d blobs, "
-                       "%d rolling-filtered (%d artifact bins) [v3]\n",
+                       "%d artifact-filtered (%d bins, %d keyframes) [v3]\n",
                        config.camera_names[c].c_str(), frame, detected,
-                       rolling_filtered, rolling_mask.artifact_bins_flagged);
+                       artifact_filtered, artifact_mask.artifact_bins_flagged,
+                       artifact_mask.frames_seen);
             } else {
                 printf("PointSource: Camera %s — %d decoded, %d %s "
                        "(range %d-%s, step %d)\n",
@@ -1462,10 +1502,28 @@ inline std::vector<DetectionMap> detect_all_cameras(
 
             DetectionMap local_detections;
             FrameCandidates local_candidates;
-            RollingArtifactMask rolling_mask;
-            if (collect_candidates)
-                rolling_mask.init(w, h, 32, 50);
-            int rolling_filtered = 0;
+            ArtifactMask artifact_mask;
+            int artifact_filtered = 0;
+
+            // Keyframe pre-scan for artifact detection (Linux)
+            if (collect_candidates) {
+                artifact_mask.init(w, h, 32);
+                int total_frames = reader.frameCount();
+                int n_samples = std::min(40, std::max(20, total_frames / 300));
+                int sample_step = std::max(1, total_frames / n_samples);
+                for (int si = 0; si < n_samples; si++) {
+                    int target = si * sample_step;
+                    const uint8_t *rgb_s = reader.readFrame(target);
+                    if (!rgb_s) continue;
+                    auto blobs = detect_all_blobs(rgb_s, w, h, w * 3,
+                        POINTSOURCE_FMT_RGB24, config.green_threshold,
+                        config.green_dominance, config.min_blob_pixels,
+                        config.max_blob_pixels);
+                    artifact_mask.add_frame(blobs);
+                }
+                artifact_mask.finalize();
+            }
+
             int frame = 0;
             int detected = 0;
             int processed = 0;
@@ -1484,8 +1542,7 @@ inline std::vector<DetectionMap> detect_all_cameras(
                             rgb, w, h, stride, POINTSOURCE_FMT_RGB24,
                             config.green_threshold, config.green_dominance,
                             config.min_blob_pixels, config.max_blob_pixels);
-                        rolling_mask.add_frame(frame_blobs);
-                        rolling_filtered += rolling_mask.filter(frame_blobs);
+                        artifact_filtered += artifact_mask.filter(frame_blobs);
                         if (!frame_blobs.empty()) {
                             local_candidates[frame] = std::move(frame_blobs);
                             detected++;

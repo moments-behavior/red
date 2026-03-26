@@ -923,6 +923,50 @@ if(APPLE)
         CXX_STANDARD_REQUIRED ON
     )
 
+    add_executable(test_all_opt_modes
+        /Users/johnsonr/red_dev/Mar25_fulltest/test_all_opt_modes.cpp
+        src/pointsource_metal.mm
+        src/vt_async_decoder.mm
+        src/FFmpegDemuxer.cpp)
+    target_include_directories(test_all_opt_modes PRIVATE
+        src
+        ${HOMEBREW_PREFIX}/include
+        ${HOMEBREW_PREFIX}/include/eigen3
+        ${FFMPEG_INCLUDE_DIRS}
+    )
+    target_link_directories(test_all_opt_modes PRIVATE ${FFMPEG_LIBRARY_DIRS})
+    target_link_libraries(test_all_opt_modes PRIVATE
+        Eigen3::Eigen
+        Ceres::ceres
+        ${FFMPEG_LIBRARIES}
+        "-L/opt/homebrew/opt/jpeg-turbo/lib" "-lturbojpeg"
+        "-framework VideoToolbox"
+        "-framework CoreMedia"
+        "-framework CoreVideo"
+        "-framework CoreFoundation"
+        "-framework Metal"
+        "-framework Foundation"
+    )
+    set_target_properties(test_all_opt_modes PROPERTIES
+        CXX_STANDARD 17
+        CXX_STANDARD_REQUIRED ON
+    )
+
+    add_executable(test_ps_scratch_v3
+        /Users/johnsonr/red_dev/Mar25_fulltest/test_ps_scratch_v3.cpp
+        src/pointsource_metal.mm
+        src/vt_async_decoder.mm
+        src/FFmpegDemuxer.cpp)
+    target_include_directories(test_ps_scratch_v3 PRIVATE
+        src ${HOMEBREW_PREFIX}/include ${HOMEBREW_PREFIX}/include/eigen3 ${FFMPEG_INCLUDE_DIRS})
+    target_link_directories(test_ps_scratch_v3 PRIVATE ${FFMPEG_LIBRARY_DIRS})
+    target_link_libraries(test_ps_scratch_v3 PRIVATE
+        Eigen3::Eigen Ceres::ceres ${FFMPEG_LIBRARIES}
+        "-L/opt/homebrew/opt/jpeg-turbo/lib" "-lturbojpeg"
+        "-framework VideoToolbox" "-framework CoreMedia" "-framework CoreVideo"
+        "-framework CoreFoundation" "-framework Metal" "-framework Foundation")
+    set_target_properties(test_ps_scratch_v3 PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+
     add_executable(test_no_init_ui
         /Users/johnsonr/red_dev/Mar24/test_no_init_ui.cpp
         src/pointsource_metal.mm
