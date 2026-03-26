@@ -1,0 +1,48 @@
+# RED paper matplotlib style
+# Usage: plt.style.use('path/to/paper.mplstyle')
+
+# Font
+font.family: sans-serif
+font.sans-serif: Arial, Helvetica, DejaVu Sans
+font.size: 8
+
+# Axes
+axes.labelsize: 9
+axes.titlesize: 10
+axes.titleweight: bold
+axes.linewidth: 0.8
+axes.facecolor: white
+axes.edgecolor: 333333
+axes.labelcolor: 333333
+axes.spines.top: False
+axes.spines.right: False
+
+# Ticks
+xtick.labelsize: 7
+ytick.labelsize: 7
+xtick.major.width: 0.6
+ytick.major.width: 0.6
+xtick.major.size: 3
+ytick.major.size: 3
+xtick.direction: out
+ytick.direction: out
+
+# Lines
+lines.linewidth: 1.2
+lines.markersize: 4
+
+# Legend
+legend.fontsize: 7
+legend.frameon: False
+legend.handlelength: 1.5
+
+# Figure
+figure.facecolor: white
+figure.dpi: 150
+figure.constrained_layout.use: True
+
+# Saving
+savefig.dpi: 300
+savefig.facecolor: white
+savefig.bbox: tight
+savefig.pad_inches: 0.02
