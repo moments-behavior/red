@@ -96,12 +96,12 @@ inline void DrawCalibPointSourceSection(CalibrationToolState &state, AppContext 
                 ImGui::SameLine();
                 {
                     // Validate cameras only when paths change (avoid per-frame filesystem I/O)
-                    static std::string last_media, last_calib;
-                    bool paths_changed = (state.project.media_folder != last_media ||
-                                          state.project.calibration_folder != last_calib);
+                    bool paths_changed = (state.project.media_folder != state.last_ps_media ||
+                                          state.project.calibration_folder != state.last_ps_calib);
                     if (paths_changed && !state.project.media_folder.empty()) {
-                        last_media = state.project.media_folder;
-                        last_calib = state.project.calibration_folder;
+                        state.last_ps_media = state.project.media_folder;
+                        state.last_ps_calib = state.project.calibration_folder;
+                        state.pointsource_camera_frames.clear(); // invalidate frame count cache
                         if (!state.project.calibration_folder.empty()) {
                             state.project.camera_names = PointSourceCalibration::validate_cameras(
                                 state.project.media_folder,
