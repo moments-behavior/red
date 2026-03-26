@@ -3437,7 +3437,7 @@ inline PointSourceResult run_pointsource_refinement(const PointSourceConfig &con
         }
     }
 
-    // Step 5: Write refined calibration to timestamped subfolder
+    // Step 8: Write refined calibration to timestamped subfolder
     std::string base_folder = config.output_folder;
     if (base_folder.empty())
         base_folder = config.calibration_folder + "_pointsource_refined";
@@ -3477,11 +3477,11 @@ inline PointSourceResult run_pointsource_refinement(const PointSourceConfig &con
     // Write summary_data/summary.json — overall stats and per-camera changes
     {
         nlohmann::json j;
-        j["mean_reproj_before"] = mean_reproj_before;
-        j["mean_reproj_after"] = mean_reproj_after;
+        j["mean_reproj_before"] = result.mean_reproj_before;
+        j["mean_reproj_after"] = result.mean_reproj_after;
         j["valid_3d_points"] = result.valid_3d_points;
         j["total_observations"] = result.total_observations;
-        j["ba_outliers_removed"] = ba_outliers;
+        j["ba_outliers_removed"] = result.ba_outliers_removed;
         j["num_cameras"] = num_cameras;
         j["image_width"] = image_width;
         j["image_height"] = image_height;
