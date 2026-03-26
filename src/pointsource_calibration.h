@@ -2857,12 +2857,22 @@ inline bool bootstrap_from_global_reg(
 // Top-level pipeline
 // ─────────────────────────────────────────────────────────────────────────────
 
-inline PointSourceResult run_pointsource_refinement(const PointSourceConfig &config,
+inline PointSourceResult run_pointsource_refinement(const PointSourceConfig &config_in,
                                         std::string *status,
                                         DetectionProgress *progress = nullptr) {
     namespace fs = std::filesystem;
     PointSourceResult result;
     auto t_start = std::chrono::steady_clock::now();
+
+    // No Init: force smart_blob off for initial detection. The quality assessment
+    // requires clean single-blob detections to identify good cameras from rough
+    // bootstrapped poses. Camera recovery will re-detect with Smart Blob where needed.
+    PointSourceConfig config = config_in;
+    if (config.no_init && config.smart_blob) {
+        printf("PointSource: No Init mode — using conservative detection for initial pass "
+               "(Smart Blob will be used during camera recovery)\n");
+        config.smart_blob = false;
+    }
 
     // Find video files
     if (status)
