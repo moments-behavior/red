@@ -1100,59 +1100,60 @@ inline std::vector<DetectionMap> detect_all_cameras(
             int artifact_filtered = 0;
 
             // ── Smart Blob v3: keyframe pre-scan for artifact detection ──
-            // Seek to ~30 evenly-spaced keyframes throughout the video.
-            // Blobs that appear at the same location across distant keyframes
-            // are static artifacts (LEDs, reflections). Takes ~1-2 seconds.
+            // Seek to ~30 evenly-spaced keyframes throughout the video using
+            // the main demuxer+decoder (avoids creating extra VT sessions).
             if (collect_candidates) {
                 artifact_mask.init(width, height, 32);
                 int total_frames = CalibrationPipeline::get_video_frame_count(video_path);
                 int n_samples = std::min(40, std::max(20, total_frames / 300));
                 int sample_step = std::max(1, total_frames / n_samples);
 
-                // Open a separate demuxer+decoder for the pre-scan
-                std::unique_ptr<FFmpegDemuxer> scan_demux;
-                try { scan_demux = std::make_unique<FFmpegDemuxer>(
-                    video_path.c_str(), std::map<std::string, std::string>{}); } catch (...) {}
+                for (int si = 0; si < n_samples; si++) {
+                    int target = si * sample_step;
+                    SeekContext seek_ctx((uint64_t)target, PREV_KEY_FRAME, BY_NUMBER);
+                    uint8_t *pkt = nullptr; size_t pkt_sz = 0; PacketData pkt_info;
+                    if (!demuxer->Seek(seek_ctx, pkt, pkt_sz, pkt_info)) continue;
 
-                if (scan_demux) {
-                    VTAsyncDecoder scan_vt;
-                    scan_vt.init(scan_demux->GetExtradata(), scan_demux->GetExtradataSize(),
-                                 scan_demux->GetVideoCodec());
+                    bool is_key = (pkt_info.flags & AV_PKT_FLAG_KEY) != 0;
+                    vt.submit_blocking(pkt, pkt_sz, pkt_info.pts,
+                                       pkt_info.dts, demuxer->GetTimebase(), is_key);
+                    CVPixelBufferRef pb = vt.drain_one();
+                    if (!pb) continue;
 
-                    for (int si = 0; si < n_samples; si++) {
-                        int target = si * sample_step;
-                        SeekContext seek_ctx((uint64_t)target, PREV_KEY_FRAME, BY_NUMBER);
-                        uint8_t *pkt = nullptr; size_t pkt_sz = 0; PacketData pkt_info;
-                        if (!scan_demux->Seek(seek_ctx, pkt, pkt_sz, pkt_info)) continue;
-
-                        bool is_key = (pkt_info.flags & AV_PKT_FLAG_KEY) != 0;
-                        scan_vt.submit_blocking(pkt, pkt_sz, pkt_info.pts,
-                                                pkt_info.dts, scan_demux->GetTimebase(), is_key);
-                        CVPixelBufferRef pb = scan_vt.drain_one();
-                        if (!pb) continue;
-
-                        std::vector<BlobCandidate> blobs;
-                        if (metal_ctx) {
-                            auto mblobs = pointsource_metal_detect_all(
-                                metal_ctx, pb,
-                                config.green_threshold, config.green_dominance,
-                                config.min_blob_pixels, config.max_blob_pixels);
-                            for (const auto &mb : mblobs)
-                                blobs.push_back({(float)mb.cx, (float)mb.cy, mb.pixel_count});
-                        } else {
-                            CVPixelBufferLockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
-                            const uint8_t *bgra = (const uint8_t *)CVPixelBufferGetBaseAddress(pb);
-                            int bstride = (int)CVPixelBufferGetBytesPerRow(pb);
-                            blobs = detect_all_blobs(bgra, width, height, bstride,
-                                                     POINTSOURCE_FMT_BGRA,
-                                                     config.green_threshold, config.green_dominance,
-                                                     config.min_blob_pixels, config.max_blob_pixels);
-                            CVPixelBufferUnlockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
-                        }
-                        CFRelease(pb);
-                        artifact_mask.add_frame(blobs);
+                    std::vector<BlobCandidate> blobs;
+                    if (metal_ctx) {
+                        auto mblobs = pointsource_metal_detect_all(
+                            metal_ctx, pb,
+                            config.green_threshold, config.green_dominance,
+                            config.min_blob_pixels, config.max_blob_pixels);
+                        for (const auto &mb : mblobs)
+                            blobs.push_back({(float)mb.cx, (float)mb.cy, mb.pixel_count});
+                    } else {
+                        CVPixelBufferLockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
+                        const uint8_t *bgra = (const uint8_t *)CVPixelBufferGetBaseAddress(pb);
+                        int bstride = (int)CVPixelBufferGetBytesPerRow(pb);
+                        blobs = detect_all_blobs(bgra, width, height, bstride,
+                                                 POINTSOURCE_FMT_BGRA,
+                                                 config.green_threshold, config.green_dominance,
+                                                 config.min_blob_pixels, config.max_blob_pixels);
+                        CVPixelBufferUnlockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
                     }
-                    artifact_mask.finalize();
+                    CFRelease(pb);
+                    artifact_mask.add_frame(blobs);
+                }
+                artifact_mask.finalize();
+
+                // Flush decoder and re-seek to start_frame for main detection
+                vt.flush();
+                frame = 0;
+                first_pkt_from_seek = false;
+                if (start_fr > 0) {
+                    SeekContext sc((uint64_t)start_fr, PREV_KEY_FRAME, BY_NUMBER);
+                    if (demuxer->Seek(sc, seek_pkt, seek_pkt_size, seek_pkt_info)) {
+                        frame = (int)demuxer->FrameNumberFromTs(sc.out_frame_pts);
+                        if (frame < 0) frame = 0;
+                        first_pkt_from_seek = true;
+                    }
                 }
             }
 

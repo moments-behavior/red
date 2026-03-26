@@ -77,7 +77,7 @@ struct CalibrationToolState {
     CalibrationTool::CalibConfig config;
     bool config_loaded = false;
     bool images_loaded = false;
-    std::string status;
+    std::string status; // written by pipeline thread, read by UI (low-risk race on SSO strings)
 
     // Aruco media auto-detection results (for Create Project dialog display)
     CalibrationTool::ArucoMediaInfo calib_aruco_media_info;
@@ -148,6 +148,7 @@ struct CalibrationToolState {
     CalibrationTool::ArucoMediaInfo pointsource_global_reg_info; // auto-detection for PS global reg media
     std::vector<bool> pointsource_camera_enabled; // per-camera enable/disable for PointSource
     std::vector<int> pointsource_camera_frames;  // per-camera frame count (from video metadata)
+    std::string last_ps_media, last_ps_calib;    // cache keys for camera validation
     int pointsource_total_frames = 0;
     bool pointsource_running = false;
     bool pointsource_done = false;
