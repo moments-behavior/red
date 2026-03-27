@@ -1143,12 +1143,14 @@ inline std::vector<DetectionMap> detect_all_cameras(
                 }
                 artifact_mask.finalize();
 
-                // Flush decoder and re-seek to start_frame for main detection
+                // Flush decoder and re-seek to start for main detection.
+                // Must always seek — the pre-scan left the demuxer near EOF.
                 vt.flush();
                 frame = 0;
                 first_pkt_from_seek = false;
-                if (start_fr > 0) {
-                    SeekContext sc((uint64_t)start_fr, PREV_KEY_FRAME, BY_NUMBER);
+                {
+                    int seek_target = std::max(0, start_fr);
+                    SeekContext sc((uint64_t)seek_target, PREV_KEY_FRAME, BY_NUMBER);
                     if (demuxer->Seek(sc, seek_pkt, seek_pkt_size, seek_pkt_info)) {
                         frame = (int)demuxer->FrameNumberFromTs(sc.out_frame_pts);
                         if (frame < 0) frame = 0;
