@@ -89,6 +89,7 @@ inline void DrawTransportBar(TransportBarState &state, AppContext &ctx) {
                 ps.accumulated_play_time =
                     ps.to_display_frame_number / dc->video_fps;
                 ps.last_play_time_start = std::chrono::steady_clock::now();
+                ps.accumulated_play_time = ps.to_display_frame_number / dc->video_fps;
             } else {
                 ps.pause_selected = 0;
             }
