@@ -626,7 +626,6 @@ int main(int argc, char **argv) {
                 ps.set_playback_speed;
             ps.last_play_time_start = now;
         }
-        double playback_time_now = ps.accumulated_play_time;
 
         // Instantaneous speed computation (logic, not UI)
         if (ps.video_loaded) {
@@ -1236,6 +1235,7 @@ int main(int argc, char **argv) {
                 if (ps.play_video) {
                     ps.pause_seeked = false;
                     ps.last_play_time_start = std::chrono::steady_clock::now();
+                    ps.accumulated_play_time = ps.to_display_frame_number / dc_context->video_fps;
                 } else {
                     ps.pause_selected = 0;
                 }
@@ -1605,7 +1605,7 @@ int main(int argc, char **argv) {
                 if (ps.realtime_playback) {
                     // --- Real-time frame selection: advance by wall clock ---
                     frame_to_show = static_cast<int>(
-                        std::ceil(playback_time_now * dc_context->video_fps));
+                        std::ceil(ps.accumulated_play_time * dc_context->video_fps));
                 } else {
                     // --- Tick-based mode: advance one frame per render tick,
                     //     but never past what the decoder has filled ---
