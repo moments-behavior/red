@@ -75,7 +75,8 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
         ImGui::SeparatorText("Format");
         static const char *format_labels[] = {
             "JARVIS", "COCO Keypoints",
-            "DeepLabCut", "YOLO Pose", "YOLO Detection"
+            "DeepLabCut", "YOLO Pose", "YOLO Detection",
+            "Nerfstudio / 3DGS"
         };
         ImGui::Combo("Export Format", &state.format_idx, format_labels,
                      IM_ARRAYSIZE(format_labels));
@@ -87,6 +88,7 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
             ExportFormats::DEEPLABCUT,
             ExportFormats::YOLO_POSE,
             ExportFormats::YOLO_DETECT,
+            ExportFormats::NERFSTUDIO,
         };
         auto fmt = format_map[state.format_idx];
         bool is_jarvis = (fmt == ExportFormats::JARVIS);
@@ -158,14 +160,27 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
 
         ImGui::SeparatorText("Options");
 
-        // Common options
-        ImGui::SliderFloat("Train Ratio", &state.train_ratio, 0.5f, 0.99f);
-        ImGui::InputInt("Random Seed", &state.seed);
+        bool is_nerfstudio = (fmt == ExportFormats::NERFSTUDIO);
+
+        // Common options (not applicable to Nerfstudio)
+        if (!is_nerfstudio) {
+            ImGui::SliderFloat("Train Ratio", &state.train_ratio, 0.5f, 0.99f);
+            ImGui::InputInt("Random Seed", &state.seed);
+        }
 
         // Format-specific options
         if (is_jarvis || fmt == ExportFormats::COCO ||
             fmt == ExportFormats::YOLO_POSE || fmt == ExportFormats::YOLO_DETECT) {
             ImGui::SliderFloat("Bbox Margin (px)", &state.margin, 0.0f, 200.0f);
+        }
+        if (is_nerfstudio) {
+            ImGui::TextWrapped(
+                "Exports camera calibration as transforms.json and extracts "
+                "JPEG frames for 3D Gaussian Splatting / novel-view synthesis. "
+                "Uses all annotated frames.");
+            if (pm.camera_params.empty())
+                ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f),
+                    "No calibration loaded — camera params required.");
         }
         if (!pm.media_folder.empty()) {
             ImGui::SliderInt("JPEG Quality", &state.jpeg_quality, 10, 100);
@@ -182,12 +197,14 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
                 dispatch_fmt = ExportFormats::JARVIS_TR;
 
             if (ImGui::Button("Start Export")) {
-                if (state.label_folder.empty() && total_count == 0) {
+                if (state.label_folder.empty() && total_count == 0 && !is_nerfstudio) {
                     validation_error = "No annotations found (keypoints or masks)";
                 } else if (pm.calibration_folder.empty()) {
                     validation_error = "No calibration folder set";
                 } else if (is_jarvis && pm.media_folder.empty()) {
                     validation_error = "No media folder set (required for JARVIS)";
+                } else if (is_nerfstudio && pm.camera_params.empty()) {
+                    validation_error = "No camera calibration loaded (required for Nerfstudio)";
                 } else if (state.output_dir.empty()) {
                     validation_error = "Output directory not set";
                 } else if (pm.camera_names.empty()) {
@@ -232,6 +249,7 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
                     ecfg.train_ratio        = state.train_ratio;
                     ecfg.seed               = state.seed;
                     ecfg.jpeg_quality       = state.jpeg_quality;
+                    ecfg.camera_params      = pm.camera_params;
                     ecfg.node_names         = skeleton.node_names;
                     for (const auto &e : skeleton.edges)
                         ecfg.edges.push_back({e.x, e.y});

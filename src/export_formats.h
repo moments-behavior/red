@@ -6,6 +6,7 @@
 // (jarvis_export.h) is called through this dispatcher for JARVIS format.
 
 #include "annotation.h"
+#include "camera.h"
 #include "jarvis_export.h"
 #include "json.hpp"
 #include "opencv_yaml_io.h"
@@ -34,6 +35,7 @@ enum Format {
     DEEPLABCUT,
     YOLO_POSE,
     YOLO_DETECT,
+    NERFSTUDIO,
     FORMAT_COUNT
 };
 
@@ -45,6 +47,7 @@ inline const char *format_name(Format f) {
     case DEEPLABCUT:  return "DeepLabCut";
     case YOLO_POSE:   return "YOLO Pose";
     case YOLO_DETECT: return "YOLO Detection";
+    case NERFSTUDIO:  return "Nerfstudio / 3DGS";
     default:          return "Unknown";
     }
 }
@@ -65,11 +68,17 @@ struct ExportConfig {
     std::vector<std::pair<int, int>> edges;
     int num_keypoints = 0;
 
+    // Camera params (loaded from project, indexed parallel to camera_names)
+    std::vector<CameraParams> camera_params;
+
     // Export options
     float bbox_margin = 50.0f;
     float train_ratio = 0.9f;
     int seed = 42;
     int jpeg_quality = 95;
+
+    // Nerfstudio-specific: frame list (if empty, uses annotated frames)
+    std::vector<int> nerfstudio_frames;
 };
 
 // ── Train/val split helper ──
@@ -674,6 +683,235 @@ inline bool export_jarvis_tr(const ExportConfig &cfg, const AnnotationMap &amap,
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// Nerfstudio / 3DGS export
+// ═══════════════════════════════════════════════════════════════════════════
+// Exports camera calibration as transforms.json and extracts JPEG frames
+// for use with nerfstudio (splatfacto), 3D Gaussian Splatting, or similar
+// novel-view-synthesis / 3D reconstruction tools.
+//
+// Output structure:
+//   <output>/
+//     transforms.json
+//     images/
+//       <Cam>_<Frame>.jpg
+//
+// Camera convention: nerfstudio expects camera-to-world matrices in OpenGL
+// convention (Y-up, Z-back). RED stores world-to-camera in OpenCV convention
+// (Y-down, Z-forward). The conversion is:
+//   c2w = [R^T | -R^T t]   (invert w2c)
+//   c2w[:3, 1:3] *= -1     (flip Y and Z columns: OpenCV → OpenGL)
+
+inline void extract_jpegs_flat(
+    const std::string &cam,
+    const std::string &video_path,
+    const std::string &output_dir,
+    const std::vector<int> &frames,
+    std::string *status, std::mutex *status_mutex,
+    std::atomic<int> *images_saved_counter = nullptr,
+    int jpeg_quality = 95) {
+
+    namespace fs = std::filesystem;
+    fs::create_directories(output_dir);
+
+    std::vector<int> sorted_frames = frames;
+    std::sort(sorted_frames.begin(), sorted_frames.end());
+
+    ffmpeg_reader::FrameReader reader;
+    // Use software decode for batch extraction — avoids VideoToolbox session
+    // limits and transient reconfig errors when cold-starting multiple decoders.
+    // HW decode is faster but only reliable when decoders are warmed up
+    // (e.g., during interactive playback in the main app).
+    if (!reader.open(video_path, false)) {
+        if (status && status_mutex) {
+            std::lock_guard<std::mutex> lock(*status_mutex);
+            *status = "Error: Cannot open video: " + video_path;
+        }
+        return;
+    }
+
+    double fps = reader.fps();
+    int w = reader.width();
+    int h = reader.height();
+
+    int pts_offset = JarvisExport::detect_negative_pts_offset(video_path, fps);
+
+    for (int frame_num : sorted_frames) {
+        int seek_frame = frame_num - pts_offset;
+        if (seek_frame < 0) continue;
+
+        const uint8_t *rgb = reader.readFrame(seek_frame);
+        if (!rgb) continue;
+
+        std::string filename = output_dir + "/" + cam + "_" +
+                               std::to_string(frame_num) + ".jpg";
+        JarvisExport::write_jpeg(filename.c_str(), w, h, 3, rgb, jpeg_quality);
+        if (images_saved_counter)
+            images_saved_counter->fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+inline bool export_nerfstudio(const ExportConfig &cfg, const AnnotationMap &amap,
+                               std::string *status,
+                               std::atomic<int> *img_counter = nullptr) {
+    namespace fs = std::filesystem;
+
+    // Validate calibration
+    if (cfg.camera_params.empty()) {
+        if (status) *status = "Error: No camera calibration loaded.";
+        return false;
+    }
+    if (cfg.camera_params.size() != cfg.camera_names.size()) {
+        if (status) *status = "Error: Camera params / names size mismatch.";
+        return false;
+    }
+
+    // Determine which frames to export
+    std::vector<int> frames;
+    if (!cfg.nerfstudio_frames.empty()) {
+        frames = cfg.nerfstudio_frames;
+    } else {
+        auto labeled = get_labeled_frames(amap);
+        for (u32 f : labeled) frames.push_back((int)f);
+    }
+    if (frames.empty()) {
+        if (status) *status = "Error: No frames to export.";
+        return false;
+    }
+    std::sort(frames.begin(), frames.end());
+
+    // Read per-camera image dimensions from calibration
+    std::map<std::string, std::pair<int, int>> cam_dims;
+    for (const auto &cam : cfg.camera_names) {
+        std::string path = cfg.calibration_folder + "/" + cam + ".yaml";
+        try {
+            auto yaml = opencv_yaml::read(path);
+            cam_dims[cam] = {yaml.getInt("image_width"),
+                             yaml.getInt("image_height")};
+        } catch (...) {}
+    }
+    if (cam_dims.empty()) {
+        if (status) *status = "Error: Cannot read image dimensions from calibration.";
+        return false;
+    }
+
+    // Build transforms.json
+    nlohmann::json transforms;
+    transforms["camera_model"] = "OPENCV";
+    nlohmann::json jframes = nlohmann::json::array();
+
+    for (int frame_num : frames) {
+        for (size_t ci = 0; ci < cfg.camera_names.size(); ++ci) {
+            const auto &cam_name = cfg.camera_names[ci];
+            const auto &cp = cfg.camera_params[ci];
+
+            // Skip telecentric cameras (not supported by nerfstudio)
+            if (cp.telecentric) continue;
+
+            auto dim_it = cam_dims.find(cam_name);
+            if (dim_it == cam_dims.end()) continue;
+            int img_w = dim_it->second.first;
+            int img_h = dim_it->second.second;
+
+            // world-to-camera: R, t
+            Eigen::Matrix3d R = cp.r;
+            Eigen::Vector3d t = cp.tvec;
+
+            // Invert to camera-to-world
+            Eigen::Matrix3d R_c2w = R.transpose();
+            Eigen::Vector3d t_c2w = -R.transpose() * t;
+
+            // Build 4x4 c2w matrix
+            Eigen::Matrix4d c2w = Eigen::Matrix4d::Identity();
+            c2w.block<3, 3>(0, 0) = R_c2w;
+            c2w.block<3, 1>(0, 3) = t_c2w;
+
+            // OpenCV -> OpenGL: negate Y and Z columns
+            c2w.block<3, 1>(0, 1) *= -1.0;
+            c2w.block<3, 1>(0, 2) *= -1.0;
+
+            // Serialize as row-major nested array
+            nlohmann::json mat = nlohmann::json::array();
+            for (int r = 0; r < 4; r++) {
+                nlohmann::json row = nlohmann::json::array();
+                for (int c = 0; c < 4; c++)
+                    row.push_back(c2w(r, c));
+                mat.push_back(row);
+            }
+
+            nlohmann::json entry;
+            entry["file_path"] = "images/" + cam_name + "_" +
+                                 std::to_string(frame_num) + ".jpg";
+            entry["transform_matrix"] = mat;
+            entry["fl_x"] = cp.k(0, 0);
+            entry["fl_y"] = cp.k(1, 1);
+            entry["cx"] = cp.k(0, 2);
+            entry["cy"] = cp.k(1, 2);
+            entry["w"] = img_w;
+            entry["h"] = img_h;
+            entry["k1"] = cp.dist_coeffs(0);
+            entry["k2"] = cp.dist_coeffs(1);
+            entry["p1"] = cp.dist_coeffs(2);
+            entry["p2"] = cp.dist_coeffs(3);
+
+            jframes.push_back(entry);
+        }
+    }
+    transforms["frames"] = jframes;
+
+    // Write transforms.json
+    fs::create_directories(cfg.output_folder);
+    {
+        std::ofstream f(cfg.output_folder + "/transforms.json");
+        if (!f.is_open()) {
+            if (status) *status = "Error: Cannot write transforms.json";
+            return false;
+        }
+        f << transforms.dump(2);
+    }
+
+    // Extract frames (parallel, capped at 4 concurrent HW decode sessions
+    // to avoid exceeding macOS VideoToolbox session limits)
+    if (!cfg.media_folder.empty()) {
+        if (status) *status = "Extracting images...";
+        std::string img_dir = cfg.output_folder + "/images";
+        std::mutex status_mutex;
+
+        // Collect camera/video pairs
+        std::vector<std::pair<std::string, std::string>> cam_vids;
+        for (const auto &cam : cfg.camera_names) {
+            std::string video_path = cfg.media_folder + "/" + cam + ".mp4";
+            if (fs::exists(video_path))
+                cam_vids.push_back({cam, video_path});
+        }
+
+        // Process in batches of 4 to stay within VT session limits
+        const size_t batch_size = 4;
+        for (size_t start = 0; start < cam_vids.size(); start += batch_size) {
+            size_t end = std::min(start + batch_size, cam_vids.size());
+            std::vector<std::thread> threads;
+            for (size_t i = start; i < end; ++i) {
+                threads.emplace_back(
+                    extract_jpegs_flat,
+                    cam_vids[i].first, cam_vids[i].second,
+                    img_dir, frames,
+                    status, &status_mutex, img_counter, cfg.jpeg_quality);
+            }
+            for (auto &t : threads) t.join();
+        }
+
+        if (status && status->find("Error") != std::string::npos)
+            return false;
+    }
+
+    if (status)
+        *status = "Nerfstudio export complete: " +
+                  std::to_string(frames.size()) + " frames x " +
+                  std::to_string(cfg.camera_names.size()) + " cameras -> " +
+                  cfg.output_folder;
+    return true;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Main dispatch
 // ═══════════════════════════════════════════════════════════════════════════
 inline bool export_dataset(Format fmt, const ExportConfig &cfg,
@@ -689,6 +927,7 @@ inline bool export_dataset(Format fmt, const ExportConfig &cfg,
     case YOLO_POSE:   return export_yolo(cfg, amap, true, status, img_counter);
     case YOLO_DETECT: return export_yolo(cfg, amap, false, status, img_counter);
     case DEEPLABCUT:  return export_deeplabcut(cfg, amap, status, img_counter);
+    case NERFSTUDIO:  return export_nerfstudio(cfg, amap, status, img_counter);
     default:
         if (status) *status = "Error: Unknown export format";
         return false;
