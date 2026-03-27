@@ -74,10 +74,10 @@ struct PointSourceConfig {
     std::string calibration_folder;
     std::string output_folder;
 
-    // Detection (defaults from parameter sweep, March 26 2026)
-    int green_threshold = 30;  // 25-40 all good; <15 causes failure
-    int green_dominance = 5;   // no sensitivity in range 3-15
-    int min_blob_pixels = 20;  // filters noise; 10 works but 20 gives +23% more points
+    // Detection (defaults from parameter sweep, March 26 2026 — post Metal fix)
+    int green_threshold = 30;  // 25-40 all good; <15 was fragile pre-fix, now works
+    int green_dominance = 10;  // 10-15 optimal (0.255 px); was insensitive pre-Metal-fix
+    int min_blob_pixels = 20;  // filters noise; marginally better than 10
     int max_blob_pixels = 600; // no wand blobs exceed this; >600 adds overhead
 
     // Frame range
