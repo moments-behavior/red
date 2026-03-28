@@ -81,7 +81,9 @@ inline bool mujoco_ik_solve(MujocoContext &mj, MujocoIKState &state,
     // are much larger, they're likely in mm (common for camera calibration).
     double sf = (double)mj.scale_factor;
     if (sf <= 0.0) {
-        // Compute centroid magnitude of keypoints
+        // Auto-detect unit system from centroid magnitude.
+        // MuJoCo models are in meters (body ~0.2m). If keypoint centroid
+        // magnitude is >>1, data is likely in mm (camera calibration units).
         double centroid[3] = {0, 0, 0};
         int n_active = 0;
         for (int n = 0; n < num_nodes; n++) {
@@ -92,14 +94,12 @@ inline bool mujoco_ik_solve(MujocoContext &mj, MujocoIKState &state,
             n_active++;
         }
         if (n_active > 0) {
-            double mag = std::sqrt(centroid[0]*centroid[0] + centroid[1]*centroid[1] +
-                                   centroid[2]*centroid[2]) / n_active;
-            // Heuristic: if centroid magnitude > 10, data is likely in mm
-            // Model centroid is typically < 1m, so 10 is a safe threshold
-            if (mag > 10.0)
-                sf = 0.001; // mm → meters
-            else
-                sf = 1.0;   // already in meters
+            // Centroid magnitude = ||mean position||
+            double cx = centroid[0] / n_active;
+            double cy = centroid[1] / n_active;
+            double cz = centroid[2] / n_active;
+            double mag = std::sqrt(cx*cx + cy*cy + cz*cz);
+            sf = (mag > 10.0) ? 0.001 : 1.0;
         } else {
             sf = 1.0;
         }

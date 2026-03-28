@@ -89,13 +89,11 @@ static void check_limb_chain(const mjModel *m, const mjData *d,
         // Find the closest capsule endpoint of the parent to the child origin.
         double min_dist = 1e9;
         auto caps = get_capsule_endpoints(m, d);
-        for (auto &c : caps) {
-            if (c.bodyid != parent_id) continue;
-            double d1 = dist3(c.p1, child_pos);
-            double d2 = dist3(c.p2, child_pos);
-            double dc = dist3(d->geom_xpos + 3 * (&c - &caps[0]), child_pos);
-            // Actually just use the geom index properly
-            min_dist = std::min(min_dist, std::min(d1, std::min(d2, dc)));
+        for (size_t ci = 0; ci < caps.size(); ci++) {
+            if (caps[ci].bodyid != parent_id) continue;
+            double d1 = dist3(caps[ci].p1, child_pos);
+            double d2 = dist3(caps[ci].p2, child_pos);
+            min_dist = std::min(min_dist, std::min(d1, d2));
         }
 
         // Also check body-to-body distance directly

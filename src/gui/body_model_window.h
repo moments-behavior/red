@@ -27,7 +27,6 @@ struct BodyModelState {
     bool auto_solve = false;
     bool show_skin = true;
     bool show_site_markers = true;
-    bool show_target_lines = true;
 
     // Deferred unload (processed at start of next frame)
     bool unload_requested = false;
@@ -200,8 +199,6 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
             ImGui::Checkbox("Skin", &state.show_skin);
             ImGui::SameLine();
             ImGui::Checkbox("Site markers", &state.show_site_markers);
-            ImGui::SameLine();
-            ImGui::Checkbox("Target lines", &state.show_target_lines);
 
             // --- Camera controls ---
             ImGui::SliderFloat("Distance", &state.cam_distance, 0.05f, 5.0f, "%.2f");

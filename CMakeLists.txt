@@ -39,6 +39,8 @@ if(APPLE)
 
     # Optional MuJoCo for body model IK (use official macOS framework release)
     set(MUJOCO_FRAMEWORK_DIR "${CMAKE_SOURCE_DIR}/lib/mujoco.framework")
+    set(MUJOCO_DYLIB_VERSION "3.6.0")
+    set(MUJOCO_DYLIB "${MUJOCO_FRAMEWORK_DIR}/Versions/A/libmujoco.${MUJOCO_DYLIB_VERSION}.dylib")
     if(EXISTS "${MUJOCO_FRAMEWORK_DIR}/Headers/mujoco.h")
         set(HAS_MUJOCO TRUE)
         message(STATUS "MuJoCo framework found at ${MUJOCO_FRAMEWORK_DIR}")
@@ -132,7 +134,7 @@ if(APPLE)
     if(HAS_MUJOCO)
         target_compile_definitions(red PRIVATE RED_HAS_MUJOCO)
         target_include_directories(red PRIVATE "${MUJOCO_FRAMEWORK_DIR}/Headers")
-        target_link_libraries(red PRIVATE "${MUJOCO_FRAMEWORK_DIR}/Versions/A/libmujoco.3.6.0.dylib")
+        target_link_libraries(red PRIVATE "${MUJOCO_DYLIB}")
         # Set rpath so the binary finds the MuJoCo dylib at runtime
         set_target_properties(red PROPERTIES BUILD_RPATH "${CMAKE_SOURCE_DIR}/lib")
     endif()
@@ -211,7 +213,7 @@ if(APPLE)
     if(HAS_MUJOCO)
         target_compile_definitions(test_gui PRIVATE RED_HAS_MUJOCO)
         target_include_directories(test_gui PRIVATE "${MUJOCO_FRAMEWORK_DIR}/Headers")
-        target_link_libraries(test_gui PRIVATE "${MUJOCO_FRAMEWORK_DIR}/Versions/A/libmujoco.3.6.0.dylib")
+        target_link_libraries(test_gui PRIVATE "${MUJOCO_DYLIB}")
         set_target_properties(test_gui PROPERTIES BUILD_RPATH "${CMAKE_SOURCE_DIR}/lib")
     endif()
 
@@ -268,7 +270,7 @@ if(APPLE)
     if(HAS_MUJOCO)
         target_compile_definitions(test_annotation PRIVATE RED_HAS_MUJOCO)
         target_include_directories(test_annotation PRIVATE "${MUJOCO_FRAMEWORK_DIR}/Headers")
-        target_link_libraries(test_annotation PRIVATE "${MUJOCO_FRAMEWORK_DIR}/Versions/A/libmujoco.3.6.0.dylib")
+        target_link_libraries(test_annotation PRIVATE "${MUJOCO_DYLIB}")
         set_target_properties(test_annotation PROPERTIES BUILD_RPATH "${CMAKE_SOURCE_DIR}/lib")
     endif()
     set_target_properties(test_annotation PROPERTIES
@@ -412,7 +414,7 @@ if(APPLE)
             ${FFMPEG_INCLUDE_DIRS} "${MUJOCO_FRAMEWORK_DIR}/Headers"
         )
         target_link_libraries(test_mujoco_units PRIVATE Eigen3::Eigen
-            "${MUJOCO_FRAMEWORK_DIR}/Versions/A/libmujoco.3.6.0.dylib")
+            "${MUJOCO_DYLIB}")
         target_compile_definitions(test_mujoco_units PRIVATE RED_HAS_MUJOCO)
         set_target_properties(test_mujoco_units PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON
             BUILD_RPATH "${CMAKE_SOURCE_DIR}/lib")
@@ -431,7 +433,7 @@ if(APPLE)
             ${FFMPEG_INCLUDE_DIRS} "${MUJOCO_FRAMEWORK_DIR}/Headers"
         )
         target_link_libraries(test_mujoco_geometry PRIVATE Eigen3::Eigen
-            "${MUJOCO_FRAMEWORK_DIR}/Versions/A/libmujoco.3.6.0.dylib")
+            "${MUJOCO_DYLIB}")
         target_compile_definitions(test_mujoco_geometry PRIVATE RED_HAS_MUJOCO)
         set_target_properties(test_mujoco_geometry PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON
             BUILD_RPATH "${CMAKE_SOURCE_DIR}/lib")
@@ -450,7 +452,7 @@ if(APPLE)
             ${FFMPEG_INCLUDE_DIRS} "${MUJOCO_FRAMEWORK_DIR}/Headers"
         )
         target_link_libraries(test_mujoco_joints PRIVATE Eigen3::Eigen
-            "${MUJOCO_FRAMEWORK_DIR}/Versions/A/libmujoco.3.6.0.dylib")
+            "${MUJOCO_DYLIB}")
         target_compile_definitions(test_mujoco_joints PRIVATE RED_HAS_MUJOCO)
         set_target_properties(test_mujoco_joints PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON
             BUILD_RPATH "${CMAKE_SOURCE_DIR}/lib")
@@ -479,7 +481,7 @@ if(APPLE)
         )
         target_link_libraries(test_mujoco_ik PRIVATE
             Eigen3::Eigen
-            "${MUJOCO_FRAMEWORK_DIR}/Versions/A/libmujoco.3.6.0.dylib"
+            "${MUJOCO_DYLIB}"
         )
         target_compile_definitions(test_mujoco_ik PRIVATE RED_HAS_MUJOCO)
         set_target_properties(test_mujoco_ik PROPERTIES
