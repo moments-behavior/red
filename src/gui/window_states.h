@@ -181,7 +181,6 @@ struct WindowStates {
         body_model.last_solved_frame = -1;
         body_model.model_path.clear();
         body_model.show_site_markers = true;
-        body_model.show_target_lines = true;
         body_model.cam_lookat[0] = 0; body_model.cam_lookat[1] = 0; body_model.cam_lookat[2] = 0.05f;
         body_model.cam_distance = 0.5f;
         body_model.cam_azimuth = 135.0f;

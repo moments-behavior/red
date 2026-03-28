@@ -114,7 +114,7 @@ struct MujocoContext {
         model = mj_compile(spec, nullptr);
         mj_deleteSpec(spec);
         if (!model) {
-            load_error = "mj_compile failed after adding free joint";
+            load_error = "mj_compile failed (check XML validity)";
             std::cerr << load_error << std::endl;
             return false;
         }
@@ -262,6 +262,7 @@ struct MujocoContext {
 #endif
         loaded = false;
         has_free_joint = false;
+        scale_factor = 0.0f;
         model_path.clear();
         load_error.clear();
         site_to_skeleton.clear();
@@ -280,6 +281,8 @@ struct MujocoContext {
         if (this != &o) {
             unload();
             loaded = o.loaded;
+            has_free_joint = o.has_free_joint;
+            scale_factor = o.scale_factor;
             model_path = std::move(o.model_path);
             load_error = std::move(o.load_error);
             site_to_skeleton = std::move(o.site_to_skeleton);
@@ -294,6 +297,8 @@ struct MujocoContext {
             memset(&o.opt, 0, sizeof(o.opt));
 #endif
             o.loaded = false;
+            o.has_free_joint = false;
+            o.scale_factor = 0.0f;
         }
         return *this;
     }

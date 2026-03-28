@@ -155,7 +155,7 @@ static std::vector<uint32_t> make_capsule_indices(int rings, int sectors) {
     std::vector<uint32_t> idx;
     int total_rings = rings + 2; // hemisphere + 2 cylinder + hemisphere
     int stride = sectors + 1;
-    for (int r = 0; r < total_rings; r++) {
+    for (int r = 0; r < total_rings - 1; r++) {
         for (int s = 0; s < sectors; s++) {
             uint32_t a = r * stride + s;
             uint32_t b = a + stride;
@@ -353,6 +353,8 @@ void mujoco_renderer_resize(MujocoRenderer *r, uint32_t width, uint32_t height) 
     if (!r || (r->width == width && r->height == height)) return;
     r->width = width;
     r->height = height;
+    r->color_tex = nil; // release old textures before creating new
+    r->depth_tex = nil;
     create_textures(r);
 }
 
