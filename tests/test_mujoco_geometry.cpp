@@ -154,7 +154,6 @@ int main() {
 
     MujocoIKState ik;
     ik.max_iterations = 200;
-    ik.damping = 1e-3;
     mj.scale_factor = 0.0f;
 
     int frames_tested = 0;

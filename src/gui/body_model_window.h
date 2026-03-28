@@ -136,10 +136,11 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
             if (mj.scale_factor == 0.0f)
                 ImGui::SameLine(), ImGui::TextDisabled("(auto-detect from data)");
 
-            ImGui::SliderInt("Max iterations", &state.ik_state.max_iterations, 1, 200);
-            float damping_log = log10f((float)state.ik_state.damping);
-            if (ImGui::SliderFloat("Damping (log10)", &damping_log, -4.0f, 0.0f, "%.1f"))
-                state.ik_state.damping = pow(10.0, damping_log);
+            ImGui::SliderInt("Max iterations", &state.ik_state.max_iterations, 1, 2000);
+            float reg_log = (state.ik_state.reg_strength > 0)
+                                ? log10f((float)state.ik_state.reg_strength) : -6.0f;
+            if (ImGui::SliderFloat("Regularization (log10)", &reg_log, -6.0f, 0.0f, "%.1f"))
+                state.ik_state.reg_strength = pow(10.0, reg_log);
             ImGui::Checkbox("Auto-solve on frame change", &state.auto_solve);
             ImGui::SameLine();
             if (ImGui::Button("Solve Frame")) {
@@ -185,11 +186,11 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                                    ? ImVec4(0.2f, 0.9f, 0.2f, 1.0f)
                                    : ImVec4(1.0f, 0.7f, 0.2f, 1.0f);
                 ImGui::TextColored(color, "%s in %d iters (%.1f ms)  |  "
-                                   "Residual: %.4f m  |  Sites: %d",
+                                   "Residual: %.1f mm  |  Sites: %d",
                                    state.ik_state.converged ? "Converged" : "Not converged",
                                    state.ik_state.iterations_used,
                                    state.ik_state.solve_time_ms,
-                                   state.ik_state.final_residual,
+                                   state.ik_state.final_residual * 1000.0,
                                    state.ik_state.active_sites);
             }
 
