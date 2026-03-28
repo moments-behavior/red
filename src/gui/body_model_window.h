@@ -31,19 +31,17 @@ struct BodyModelState {
     // Deferred unload (processed at start of next frame)
     bool unload_requested = false;
 
-    // Camera for 3D view (good default for looking at rat on arena)
-    float cam_lookat[3] = {0.0f, 0.0f, 0.04f};
-    float cam_distance  = 0.4f;
-    float cam_azimuth   = 160.0f;
-    float cam_elevation  = -30.0f;
-    bool  show_arena     = true;
+    // Camera for 3D view (uses MuJoCo's mjvCamera for native controls)
+    bool  cam_initialized = false;
+    bool  show_arena      = true;
 
     // Track which frame we last solved for
     int last_solved_frame = -1;
 
-    // Renderer handle
+    // Renderer handle + native MuJoCo camera
 #ifdef RED_HAS_MUJOCO
     MujocoRenderer *renderer = nullptr;
+    mjvCamera mjcam;  // initialized in draw function on first use
 #endif
 
     // Model path for file dialog
@@ -150,9 +148,9 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                     // Auto-center camera on the torso body after solve
                     int torso_id = mj_name2id(mj.model, mjOBJ_BODY, "torso");
                     if (torso_id >= 0) {
-                        state.cam_lookat[0] = (float)mj.data->xpos[3*torso_id+0];
-                        state.cam_lookat[1] = (float)mj.data->xpos[3*torso_id+1];
-                        state.cam_lookat[2] = (float)mj.data->xpos[3*torso_id+2];
+                        state.mjcam.lookat[0] = mj.data->xpos[3*torso_id+0];
+                        state.mjcam.lookat[1] = mj.data->xpos[3*torso_id+1];
+                        state.mjcam.lookat[2] = mj.data->xpos[3*torso_id+2];
                     }
                 }
             }
@@ -169,9 +167,9 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                     // Follow the model
                     int torso_id = mj_name2id(mj.model, mjOBJ_BODY, "torso");
                     if (torso_id >= 0) {
-                        state.cam_lookat[0] = (float)mj.data->xpos[3*torso_id+0];
-                        state.cam_lookat[1] = (float)mj.data->xpos[3*torso_id+1];
-                        state.cam_lookat[2] = (float)mj.data->xpos[3*torso_id+2];
+                        state.mjcam.lookat[0] = mj.data->xpos[3*torso_id+0];
+                        state.mjcam.lookat[1] = mj.data->xpos[3*torso_id+1];
+                        state.mjcam.lookat[2] = mj.data->xpos[3*torso_id+2];
                     }
                 }
             }
@@ -199,8 +197,17 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
             ImGui::SameLine();
             ImGui::Checkbox("Arena", &state.show_arena);
 
-            // --- Camera controls ---
-            ImGui::SliderFloat("Distance", &state.cam_distance, 0.05f, 5.0f, "%.2f");
+            // --- Initialize MuJoCo camera on first use ---
+            if (!state.cam_initialized) {
+                mjv_defaultCamera(&state.mjcam);
+                state.mjcam.lookat[0] = 0.0;
+                state.mjcam.lookat[1] = 0.0;
+                state.mjcam.lookat[2] = 0.04;
+                state.mjcam.distance  = 0.4;
+                state.mjcam.azimuth   = 160.0;
+                state.mjcam.elevation = -30.0;
+                state.cam_initialized = true;
+            }
 
             // --- 3D Viewport ---
             ImVec2 avail = ImGui::GetContentRegionAvail();
@@ -219,45 +226,42 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
             }
 
             if (state.renderer) {
-                mujoco_renderer_render(state.renderer, &mj,
-                                       state.cam_lookat, state.cam_distance,
-                                       state.cam_azimuth, state.cam_elevation,
+                mujoco_renderer_render(state.renderer, &mj, &state.mjcam,
                                        state.show_skin, state.show_site_markers,
                                        state.show_arena);
                 ImTextureID tex = mujoco_renderer_get_texture(state.renderer);
                 if (tex) {
-                    ImVec2 cursor = ImGui::GetCursorScreenPos();
                     ImGui::Image(tex, ImVec2(vp_w, vp_h));
 
-                    // Camera interaction on the image
+                    // Mouse controls (matches MuJoCo simulate.cc):
+                    //   Left-drag:   orbit (rotate)
+                    //   Right-drag:  pan (translate lookat)
+                    //   Scroll:      zoom (distance)
                     if (ImGui::IsItemHovered()) {
                         ImGuiIO &io = ImGui::GetIO();
+                        double dx =  (double)io.MouseDelta.x / (double)vp_h;
+                        double dy = -(double)io.MouseDelta.y / (double)vp_h;
 
-                        // Scroll to zoom (smooth logarithmic)
+                        // Left-drag to orbit
+                        if (ImGui::IsMouseDragging(ImGuiMouseButton_Left))
+                            mjv_moveCamera(mj.model, mjMOUSE_ROTATE_V, dx, dy,
+                                           &mj.scene, &state.mjcam);
+
+                        // Right-drag to pan
+                        if (ImGui::IsMouseDragging(ImGuiMouseButton_Right))
+                            mjv_moveCamera(mj.model, mjMOUSE_MOVE_V, dx, dy,
+                                           &mj.scene, &state.mjcam);
+
+                        // Middle-drag to zoom
+                        if (ImGui::IsMouseDragging(ImGuiMouseButton_Middle))
+                            mjv_moveCamera(mj.model, mjMOUSE_ZOOM, dx, dy,
+                                           &mj.scene, &state.mjcam);
+
+                        // Scroll to zoom
                         if (io.MouseWheel != 0.0f)
-                            state.cam_distance *= powf(0.9f, io.MouseWheel);
-                        state.cam_distance = std::max(0.02f, std::min(5.0f, state.cam_distance));
-
-                        // Left-drag or middle-drag to orbit
-                        if (ImGui::IsMouseDragging(ImGuiMouseButton_Left) ||
-                            ImGui::IsMouseDragging(ImGuiMouseButton_Middle)) {
-                            ImVec2 delta = io.MouseDelta;
-                            state.cam_azimuth   -= delta.x * 0.3f;
-                            state.cam_elevation += delta.y * 0.3f;
-                            state.cam_elevation = std::max(-89.0f, std::min(89.0f, state.cam_elevation));
-                        }
-
-                        // Right-drag to pan (in camera-local right/up plane)
-                        if (ImGui::IsMouseDragging(ImGuiMouseButton_Right)) {
-                            ImVec2 delta = io.MouseDelta;
-                            float scale = state.cam_distance * 0.001f;
-                            float az = state.cam_azimuth * 3.14159f / 180.0f;
-                            // Camera right vector projected to XY
-                            float rx = cosf(az), ry = -sinf(az);
-                            state.cam_lookat[0] += delta.x * scale * rx;
-                            state.cam_lookat[1] += delta.x * scale * ry;
-                            state.cam_lookat[2] += delta.y * scale;
-                        }
+                            mjv_moveCamera(mj.model, mjMOUSE_ZOOM, 0,
+                                           -0.05 * io.MouseWheel,
+                                           &mj.scene, &state.mjcam);
                     }
                 }
             }

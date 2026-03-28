@@ -9,6 +9,7 @@
 #ifdef RED_HAS_MUJOCO
 
 #include "imgui.h"
+#include <mujoco.h>
 #include <stdint.h>
 
 struct MujocoContext;
@@ -24,12 +25,9 @@ void            mujoco_renderer_resize(MujocoRenderer *r, uint32_t width, uint32
 // Render the current MuJoCo scene to the offscreen texture.
 // Call after mj_forward() has been called (site positions are up to date).
 // camera_lookat/distance/azimuth/elevation control the viewpoint.
-// show_skin: render the smooth skin mesh (if model has one).
-// show_sites: render keypoint site markers.
-// show_arena: render a 1828mm arena floor plane with ramp.
+// Render using a MuJoCo camera (pass the mjvCamera directly).
 void mujoco_renderer_render(MujocoRenderer *r, MujocoContext *mj,
-                            const float lookat[3], float distance,
-                            float azimuth, float elevation,
+                            mjvCamera *cam,
                             bool show_skin = true,
                             bool show_sites = true,
                             bool show_arena = true);

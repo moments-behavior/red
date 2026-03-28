@@ -427,34 +427,26 @@ struct SceneUniforms {
 };
 
 void mujoco_renderer_render(MujocoRenderer *r, MujocoContext *mj,
-                            const float lookat[3], float distance,
-                            float azimuth, float elevation,
+                            mjvCamera *cam,
                             bool show_skin, bool show_sites,
                             bool show_arena) {
-    if (!r || !mj || !mj->loaded) return;
+    if (!r || !mj || !mj->loaded || !cam) return;
 
     @autoreleasepool {
-        // Update abstract scene
-        mjvCamera cam;
-        mjv_defaultCamera(&cam);
-        cam.lookat[0] = lookat[0];
-        cam.lookat[1] = lookat[1];
-        cam.lookat[2] = lookat[2];
-        cam.distance = distance;
-        cam.azimuth = azimuth;
-        cam.elevation = elevation;
-        mjv_updateScene(mj->model, mj->data, &mj->opt, nullptr, &cam, mjCAT_ALL, &mj->scene);
+        // Update abstract scene using the MuJoCo camera
+        mjv_updateScene(mj->model, mj->data, &mj->opt, nullptr, cam, mjCAT_ALL, &mj->scene);
 
-        // Build view/projection
-        float az = azimuth * M_PI / 180.0f;
-        float el = elevation * M_PI / 180.0f;
+        // Build view/projection from mjvCamera spherical coordinates
+        float az = (float)cam->azimuth * M_PI / 180.0f;
+        float el = (float)cam->elevation * M_PI / 180.0f;
+        float dist = (float)cam->distance;
+        simd_float3 center = {(float)cam->lookat[0], (float)cam->lookat[1], (float)cam->lookat[2]};
         simd_float3 eye = {
-            lookat[0] + distance * cosf(el) * sinf(az),
-            lookat[1] + distance * sinf(el),
-            lookat[2] + distance * cosf(el) * cosf(az)
+            center.x + dist * cosf(el) * sinf(az),
+            center.y + dist * sinf(el),
+            center.z + dist * cosf(el) * cosf(az)
         };
-        simd_float3 center = {lookat[0], lookat[1], lookat[2]};
-        simd_float3 up = {0, 1, 0};
+        simd_float3 up = {0, 0, 1}; // Z-up (MuJoCo convention)
 
         float aspect = (float)r->width / (float)r->height;
         simd_float4x4 view = look_at(eye, center, up);
