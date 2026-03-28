@@ -18,13 +18,16 @@
 #include <algorithm>
 
 struct MujocoIKState {
-    // Solver configuration (matching Python defaults)
-    int    max_iterations   = 200;
+    // Solver configuration (matching Python defaults: max_steps=20000)
+    int    max_iterations   = 5000;
     double lr               = 0.01;    // learning rate
     double beta             = 0.99;    // momentum coefficient
     double reg_strength     = 1e-4;    // L2 regularization on hinge joints
     double progress_thresh  = 0.01;    // convergence: lr*||update||/err < thresh
     int    check_every      = 100;     // convergence check interval
+
+    // Time budget: 0 = unlimited, >0 = stop after this many ms (for auto-solve)
+    double time_budget_ms   = 0.0;
 
     // Warm-start state
     std::vector<double> prev_qpos;
@@ -36,6 +39,7 @@ struct MujocoIKState {
     double final_objective  = 0.0;   // full objective (with regularization)
     int    iterations_used  = 0;
     bool   converged        = false;
+    bool   time_limited     = false; // true if stopped by time budget
     double solve_time_ms    = 0.0;
     int    active_sites     = 0;
 
@@ -170,9 +174,13 @@ inline bool mujoco_ik_solve(MujocoContext &mj, MujocoIKState &state,
     using RowMajorMatXd = Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
 
     state.converged = false;
+    state.time_limited = false;
     state.iterations_used = 0;
     state.final_residual = 0.0;
     state.final_objective = 0.0;
+
+    // Pre-allocate diff vector outside the loop
+    std::vector<double> diff(3 * N);
 
     for (int iter = 0; iter < state.max_iterations; iter++) {
         state.iterations_used = iter + 1;
@@ -188,7 +196,6 @@ inline bool mujoco_ik_solve(MujocoContext &mj, MujocoIKState &state,
         // Compute residual: site_xpos - target (note: Python uses this sign)
         // and position error squared
         double err_sq = 0.0;
-        std::vector<double> diff(3 * N);
         for (int k = 0; k < N; k++) {
             const double *sp = mj.data->site_xpos + 3 * targets[k].site_idx;
             for (int c = 0; c < 3; c++) {
@@ -230,8 +237,9 @@ inline bool mujoco_ik_solve(MujocoContext &mj, MujocoIKState &state,
         // Forward kinematics to update site positions
         mj_fwdPosition(mj.model, mj.data);
 
-        // Check convergence every check_every iterations
-        if (state.check_every > 0 && iter % state.check_every == 0) {
+        // Check convergence every check_every iterations (skip iter 0 —
+        // momentum hasn't accumulated yet and can trigger false convergence)
+        if (state.check_every > 0 && iter > 0 && iter % state.check_every == 0) {
             // Recompute objective with regularization
             double reg_sq = 0.0;
             for (int dof : hinge_dof_indices) {
@@ -246,6 +254,17 @@ inline bool mujoco_ik_solve(MujocoContext &mj, MujocoIKState &state,
             if (obj > 1e-12 && update_norm / obj < state.progress_thresh) {
                 state.converged = true;
                 break;
+            }
+
+            // Time budget check (only at convergence check points to minimize
+            // clock overhead — checking every 100 iters is ~0.1% overhead)
+            if (state.time_budget_ms > 0.0) {
+                auto now = std::chrono::high_resolution_clock::now();
+                double elapsed = std::chrono::duration<double, std::milli>(now - t0).count();
+                if (elapsed >= state.time_budget_ms) {
+                    state.time_limited = true;
+                    break;
+                }
             }
         }
     }
@@ -283,6 +302,24 @@ inline bool mujoco_ik_solve(MujocoContext &, MujocoIKState &,
 
 #endif // RED_HAS_MUJOCO
 
+// Continue solving from the current pose — runs additional iterations without
+// resetting qpos or momentum. Useful for incremental refinement.
+inline bool mujoco_ik_continue(MujocoContext &mj, MujocoIKState &state,
+                               const Keypoint3D *kp3d, int num_nodes,
+                               int current_frame, int extra_iterations) {
+    if (!mj.loaded || !mj.model || !mj.data) return false;
+    // Temporarily increase max_iterations, solve (warm-started), restore
+    int saved_max = state.max_iterations;
+    state.max_iterations = extra_iterations;
+    // Force warm-start: the model is already in the current pose
+    state.prev_qpos.assign(mj.data->qpos, mj.data->qpos + mj.model->nq);
+    state.has_warm_start = true;
+    state.prev_frame = current_frame;
+    bool result = mujoco_ik_solve(mj, state, kp3d, num_nodes, current_frame);
+    state.max_iterations = saved_max;
+    return result;
+}
+
 // Reset warm-start and momentum (e.g., on project switch or large frame jump).
 // Does NOT reset solver configuration (lr, beta, reg_strength, etc.)
 inline void mujoco_ik_reset(MujocoIKState &state) {
@@ -290,6 +327,7 @@ inline void mujoco_ik_reset(MujocoIKState &state) {
     state.has_warm_start = false;
     state.prev_frame = -1;
     state.converged = false;
+    state.time_limited = false;
     state.final_residual = 0.0;
     state.final_objective = 0.0;
     state.iterations_used = 0;

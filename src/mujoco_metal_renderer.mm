@@ -436,17 +436,23 @@ void mujoco_renderer_render(MujocoRenderer *r, MujocoContext *mj,
         // Update abstract scene using the MuJoCo camera
         mjv_updateScene(mj->model, mj->data, &mj->opt, nullptr, cam, mjCAT_ALL, &mj->scene);
 
-        // Build view/projection from mjvCamera spherical coordinates
+        // Build view/projection from mjvCamera spherical coordinates.
+        // Matches MuJoCo's mjv_cameraFrame (engine_vis_visualize.c):
+        //   forward = { ce*ca, ce*sa, se }
+        //   up      = { -se*ca, -se*sa, ce }
+        //   eye     = lookat - distance * forward
         float az = (float)cam->azimuth * M_PI / 180.0f;
         float el = (float)cam->elevation * M_PI / 180.0f;
+        float ca = cosf(az), sa = sinf(az);
+        float ce = cosf(el), se = sinf(el);
         float dist = (float)cam->distance;
         simd_float3 center = {(float)cam->lookat[0], (float)cam->lookat[1], (float)cam->lookat[2]};
         simd_float3 eye = {
-            center.x + dist * cosf(el) * sinf(az),
-            center.y + dist * sinf(el),
-            center.z + dist * cosf(el) * cosf(az)
+            center.x - dist * ce * ca,
+            center.y - dist * ce * sa,
+            center.z - dist * se
         };
-        simd_float3 up = {0, 0, 1}; // Z-up (MuJoCo convention)
+        simd_float3 up = {-se * ca, -se * sa, ce};
 
         float aspect = (float)r->width / (float)r->height;
         simd_float4x4 view = look_at(eye, center, up);
