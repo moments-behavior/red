@@ -215,14 +215,41 @@ static std::vector<Vertex> make_unit_capsule(int rings, int sectors) {
 
 static std::vector<uint32_t> make_capsule_indices(int rings, int sectors) {
     std::vector<uint32_t> idx;
-    int total_rings = rings + 2; // hemisphere + 2 cylinder + hemisphere
+    // Vertex rows: top hemi (rings/2+1) + cylinder (2) + bottom hemi (rings/2+1)
+    int total_rows = rings + 4;
     int stride = sectors + 1;
-    for (int r = 0; r < total_rings - 1; r++) {
+    for (int r = 0; r < total_rows - 1; r++) {
         for (int s = 0; s < sectors; s++) {
             uint32_t a = r * stride + s;
             uint32_t b = a + stride;
             idx.insert(idx.end(), {a, b, a + 1, a + 1, b, b + 1});
         }
+    }
+    return idx;
+}
+
+// Unit cylinder tube (open ends): radius 1, extends from z=-0.5 to z=+0.5.
+// Used for capsule rendering where hemisphere caps are drawn separately.
+static std::vector<Vertex> make_unit_cylinder(int sectors) {
+    std::vector<Vertex> verts;
+    for (int cap = 0; cap < 2; cap++) {
+        float z = cap ? -0.5f : 0.5f;
+        for (int s = 0; s <= sectors; s++) {
+            float theta = 2.0f * M_PI * s / sectors;
+            simd_float3 n = {cosf(theta), sinf(theta), 0.0f};
+            simd_float3 p = {n.x, n.y, z};
+            verts.push_back({p, n});
+        }
+    }
+    return verts;
+}
+
+static std::vector<uint32_t> make_cylinder_indices(int sectors) {
+    std::vector<uint32_t> idx;
+    int stride = sectors + 1;
+    for (int s = 0; s < sectors; s++) {
+        uint32_t a = s, b = a + stride;
+        idx.insert(idx.end(), {a, b, a + 1, a + 1, b, b + 1});
     }
     return idx;
 }
@@ -277,6 +304,8 @@ struct MujocoRenderer {
     int capsule_idx_count;
     id<MTLBuffer> box_vb, box_ib;
     int box_idx_count;
+    id<MTLBuffer> cylinder_vb, cylinder_ib;
+    int cylinder_idx_count;
 
     // Dynamic skin buffers (rebuilt each frame from mjvScene skin data)
     id<MTLBuffer> skin_vb;
@@ -393,6 +422,12 @@ MujocoRenderer *mujoco_renderer_create(uint32_t width, uint32_t height) {
     r->box_ib = make_buffer(r->device, bi.data(), bi.size() * sizeof(uint32_t));
     r->box_idx_count = (int)bi.size();
 
+    auto cyv = make_unit_cylinder(sectors);
+    auto cyi = make_cylinder_indices(sectors);
+    r->cylinder_vb = make_buffer(r->device, cyv.data(), cyv.size() * sizeof(Vertex));
+    r->cylinder_ib = make_buffer(r->device, cyi.data(), cyi.size() * sizeof(uint32_t));
+    r->cylinder_idx_count = (int)cyi.size();
+
     // Skin buffers initialized lazily on first render
     r->skin_vb = nil;
     r->skin_ib = nil;
@@ -418,6 +453,7 @@ void mujoco_renderer_destroy(MujocoRenderer *r) {
         r->sphere_vb = nil;  r->sphere_ib = nil;
         r->capsule_vb = nil; r->capsule_ib = nil;
         r->box_vb = nil;     r->box_ib = nil;
+        r->cylinder_vb = nil; r->cylinder_ib = nil;
         r->skin_vb = nil;    r->skin_ib = nil;
         r->pipeline = nil;
         r->floor_pipeline = nil;
@@ -580,60 +616,76 @@ void mujoco_renderer_render(MujocoRenderer *r, MujocoContext *mj,
             int idx_count = 0;
             simd_float4x4 model_mat;
 
+            // Helper: emit one draw call
+            auto draw_geom = [&](id<MTLBuffer> vb, id<MTLBuffer> ib,
+                                 int idx_count, simd_float4x4 model_mat) {
+                Uniforms u;
+                u.model_mat = model_mat;
+                u.mvp = simd_mul(vp, model_mat);
+                extract_normal_columns(model_mat, u.normal_col0, u.normal_col1, u.normal_col2);
+                u.color = {g.rgba[0], g.rgba[1], g.rgba[2], g.rgba[3]};
+                [enc setVertexBuffer:vb offset:0 atIndex:0];
+                [enc setVertexBytes:&u length:sizeof(u) atIndex:1];
+                [enc drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+                                indexCount:idx_count indexType:MTLIndexTypeUInt32
+                               indexBuffer:ib indexBufferOffset:0];
+            };
+
             switch (g.type) {
                 case mjGEOM_SPHERE:
                 case mjGEOM_ELLIPSOID: {
-                    vb = r->sphere_vb; ib = r->sphere_ib;
-                    idx_count = r->sphere_idx_count;
                     float sx = g.size[0], sy = g.size[1], sz = g.size[2];
                     if (g.type == mjGEOM_SPHERE) sy = sz = sx;
-                    model_mat = geom_model_matrix(g, sx, sy, sz);
+                    draw_geom(r->sphere_vb, r->sphere_ib, r->sphere_idx_count,
+                              geom_model_matrix(g, sx, sy, sz));
                     break;
                 }
                 case mjGEOM_CAPSULE: {
-                    vb = r->capsule_vb; ib = r->capsule_ib;
-                    idx_count = r->capsule_idx_count;
-                    float radius = g.size[0];
-                    float half_len = g.size[2]; // mjvGeom: size=(radius, radius, half_cyl_len)
-                    // MuJoCo capsule axis = Z of geom frame.
-                    // Unit capsule extends along Z: X=radius, Y=radius, Z=half_len.
-                    model_mat = geom_model_matrix(g, radius, radius, half_len);
+                    // Render as 3 parts: cylinder tube + 2 hemisphere caps.
+                    // This avoids non-uniform Z scaling on the spherical caps.
+                    float rad = g.size[0];
+                    float hl  = g.size[2]; // half cylinder length
+
+                    // 1) Cylinder tube: scale (radius, radius, half_len)
+                    draw_geom(r->cylinder_vb, r->cylinder_ib, r->cylinder_idx_count,
+                              geom_model_matrix(g, rad, rad, hl));
+
+                    // 2) Top sphere cap: translate +half_len along local Z, uniform radius
+                    // Local Z axis = column 2 of geom rotation (mat[6], mat[7], mat[8])
+                    {
+                        mjvGeom gc = g; // copy pos, mat, rgba
+                        gc.pos[0] += hl * g.mat[6];
+                        gc.pos[1] += hl * g.mat[7];
+                        gc.pos[2] += hl * g.mat[8];
+                        draw_geom(r->sphere_vb, r->sphere_ib, r->sphere_idx_count,
+                                  geom_model_matrix(gc, rad, rad, rad));
+                    }
+                    // 3) Bottom sphere cap: translate -half_len along local Z
+                    {
+                        mjvGeom gc = g;
+                        gc.pos[0] -= hl * g.mat[6];
+                        gc.pos[1] -= hl * g.mat[7];
+                        gc.pos[2] -= hl * g.mat[8];
+                        draw_geom(r->sphere_vb, r->sphere_ib, r->sphere_idx_count,
+                                  geom_model_matrix(gc, rad, rad, rad));
+                    }
                     break;
                 }
                 case mjGEOM_CYLINDER: {
-                    vb = r->capsule_vb; ib = r->capsule_ib;
-                    idx_count = r->capsule_idx_count;
                     float radius = g.size[0];
-                    float half_len = g.size[2]; // mjvGeom: size=(radius, radius, half_cyl_len)
-                    model_mat = geom_model_matrix(g, radius, radius, half_len);
+                    float half_len = g.size[2];
+                    draw_geom(r->capsule_vb, r->capsule_ib, r->capsule_idx_count,
+                              geom_model_matrix(g, radius, radius, half_len));
                     break;
                 }
                 case mjGEOM_BOX: {
-                    vb = r->box_vb; ib = r->box_ib;
-                    idx_count = r->box_idx_count;
-                    model_mat = geom_model_matrix(g, g.size[0], g.size[1], g.size[2]);
+                    draw_geom(r->box_vb, r->box_ib, r->box_idx_count,
+                              geom_model_matrix(g, g.size[0], g.size[1], g.size[2]));
                     break;
                 }
                 default:
-                    // Skip mesh, plane, etc. for now
                     continue;
             }
-
-            if (!vb || !ib || idx_count == 0) continue;
-
-            Uniforms u;
-            u.model_mat = model_mat;
-            u.mvp = simd_mul(vp, model_mat);
-            extract_normal_columns(model_mat, u.normal_col0, u.normal_col1, u.normal_col2);
-            u.color = {g.rgba[0], g.rgba[1], g.rgba[2], g.rgba[3]};
-
-            [enc setVertexBuffer:vb offset:0 atIndex:0];
-            [enc setVertexBytes:&u length:sizeof(u) atIndex:1];
-            [enc drawIndexedPrimitives:MTLPrimitiveTypeTriangle
-                            indexCount:idx_count
-                             indexType:MTLIndexTypeUInt32
-                           indexBuffer:ib
-                     indexBufferOffset:0];
         }
 
         // --- Render skins (smooth mesh) ---

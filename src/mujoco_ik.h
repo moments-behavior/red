@@ -234,6 +234,19 @@ inline bool mujoco_ik_solve(MujocoContext &mj, MujocoIKState &state,
         // Integrate qpos (handles quaternion joints correctly)
         mj_integratePos(mj.model, mj.data->qpos, state.nv_step.data(), 1.0);
 
+        // Clamp joints to their defined ranges (prevents spine collapse)
+        for (int j = 0; j < (int)mj.model->njnt; j++) {
+            if (!mj.model->jnt_limited[j]) continue;
+            int qa = (int)mj.model->jnt_qposadr[j];
+            if (mj.model->jnt_type[j] == mjJNT_HINGE ||
+                mj.model->jnt_type[j] == mjJNT_SLIDE) {
+                double lo = mj.model->jnt_range[2 * j];
+                double hi = mj.model->jnt_range[2 * j + 1];
+                if (mj.data->qpos[qa] < lo) mj.data->qpos[qa] = lo;
+                if (mj.data->qpos[qa] > hi) mj.data->qpos[qa] = hi;
+            }
+        }
+
         // Forward kinematics to update site positions
         mj_fwdPosition(mj.model, mj.data);
 

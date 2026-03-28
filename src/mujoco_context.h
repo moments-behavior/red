@@ -72,29 +72,38 @@ struct MujocoContext {
                          "root position will be fixed" << std::endl;
         }
 
-        // Add missing keypoint sites if they don't already exist.
-        // The dm_rodent model lacks many tracking sites (nose, ears, tail, etc.)
-        // that the rodent_no_collision model had. We add them here so the
-        // IK solver can target all 24 rat24 keypoints.
-        struct SiteDef { const char *name; const char *body; double pos[3]; };
-        static const SiteDef kp_sites[] = {
-            {"nose",     "skull",        { 0.043700,  0.000000, -0.004600}},
-            {"ear_L",    "skull",        {-0.012650,  0.014720,  0.014950}},
-            {"ear_R",    "skull",        {-0.012650, -0.014720,  0.014950}},
-            {"neck",     "torso",        { 0.028750,  0.000000,  0.023000}},
-            {"spineL",   "vertebra_5",   { 0.000000,  0.000000,  0.008050}},
-            {"tailbase", "vertebra_C4",  { 0.000000,  0.000000,  0.012650}},
-            {"hand_L",   "finger_L",     { 0.000000,  0.000000,  0.000000}},
-            {"hand_R",   "finger_R",     { 0.000000,  0.000000,  0.000000}},
-            {"foot_L",   "toe_L",        { 0.000000,  0.000000,  0.000000}},
-            {"foot_R",   "toe_R",        { 0.000000,  0.000000,  0.000000}},
-            {"tailtip",  "vertebra_C30", { 0.000000,  0.000000,  0.000000}},
-            {"tailmid",  "vertebra_C17", { 0.000000,  0.000000,  0.000000}},
-            {"tail1Q",   "vertebra_C11", { 0.000000,  0.000000,  0.000000}},
-            {"tail3Q",   "vertebra_C23", { 0.000000,  0.000000,  0.000000}},
+        // Add missing keypoint sites for models that lack them.
+        // The rodent_no_collision.xml already has all 24 *_kpsite sites;
+        // the dm_rodent rodent.xml does not. We check for both the plain
+        // name ("nose") and the _kpsite variant ("nose_0_kpsite") before
+        // adding, to avoid duplicates.
+        struct SiteDef {
+            const char *name; const char *kpsite; const char *body; double pos[3];
         };
-        int sites_added = 0;
+        static const SiteDef kp_sites[] = {
+            {"nose",     "nose_0_kpsite",       "skull",        { 0.043700,  0.000000, -0.004600}},
+            {"ear_L",    "ear_L_1_kpsite",      "skull",        {-0.012650,  0.014720,  0.014950}},
+            {"ear_R",    "ear_R_2_kpsite",      "skull",        {-0.012650, -0.014720,  0.014950}},
+            {"neck",     "neck_3_kpsite",       "torso",        { 0.028750,  0.000000,  0.023000}},
+            {"spineL",   "spineL_4_kpsite",     "vertebra_5",   { 0.000000,  0.000000,  0.008050}},
+            {"tailbase", "tailbase_5_kpsite",   "vertebra_C4",  { 0.000000,  0.000000,  0.012650}},
+            {"hand_L",   "hand_L_9_kpsite",     "finger_L",     { 0.000000,  0.000000,  0.000000}},
+            {"hand_R",   "hand_R_13_kpsite",    "finger_R",     { 0.000000,  0.000000,  0.000000}},
+            {"foot_L",   "foot_L_16_kpsite",    "toe_L",        { 0.000000,  0.000000,  0.000000}},
+            {"foot_R",   "foot_R_19_kpsite",    "toe_R",        { 0.000000,  0.000000,  0.000000}},
+            {"tailtip",  "tailtip_20_kpsite",   "vertebra_C30", { 0.000000,  0.000000,  0.000000}},
+            {"tailmid",  "tailmid_21_kpsite",   "vertebra_C17", { 0.000000,  0.000000,  0.000000}},
+            {"tail1Q",   "tail1Q_22_kpsite",    "vertebra_C11", { 0.000000,  0.000000,  0.000000}},
+            {"tail3Q",   "tail3Q_23_kpsite",    "vertebra_C23", { 0.000000,  0.000000,  0.000000}},
+        };
+        int sites_added = 0, sites_skipped = 0;
         for (const auto &sd : kp_sites) {
+            // Skip if either the plain name or the _kpsite variant already exists
+            if (mjs_findElement(spec, mjOBJ_SITE, sd.name) ||
+                mjs_findElement(spec, mjOBJ_SITE, sd.kpsite)) {
+                sites_skipped++;
+                continue;
+            }
             mjsBody *body = mjs_findBody(spec, sd.body);
             if (body) {
                 mjsSite *site = mjs_addSite(body, nullptr);
@@ -108,7 +117,11 @@ struct MujocoContext {
             }
         }
         if (sites_added > 0)
-            std::cout << "[MuJoCo] Added " << sites_added << " keypoint sites" << std::endl;
+            std::cout << "[MuJoCo] Added " << sites_added << " keypoint sites"
+                      << " (skipped " << sites_skipped << " already present)" << std::endl;
+        else if (sites_skipped > 0)
+            std::cout << "[MuJoCo] All " << sites_skipped
+                      << " keypoint sites already present in model" << std::endl;
 
         // Compile the edited spec into mjModel
         model = mj_compile(spec, nullptr);
