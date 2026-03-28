@@ -19,6 +19,7 @@ __pycache__
 
 lib/libtorch/
 lib/onnxruntime/
+lib/mujoco.framework/
 
 skeleton/*.json
 

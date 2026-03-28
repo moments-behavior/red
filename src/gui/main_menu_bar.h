@@ -129,6 +129,12 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
         if (ImGui::MenuItem("JARVIS Predict")) {
             jarvis_predict_state.show = true;
         }
+#ifdef RED_HAS_MUJOCO
+        ImGui::Separator();
+        if (ImGui::MenuItem("Body Model")) {
+            win.body_model.show = true;
+        }
+#endif
         ImGui::EndMenu();
     }
 

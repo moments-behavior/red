@@ -11,6 +11,9 @@
 #include "gui/bbox_tool.h"
 #include "gui/obb_tool.h"
 #include "gui/sam_tool.h"
+#ifdef RED_HAS_MUJOCO
+#include "gui/body_model_window.h"
+#endif
 
 // Bundle of all tool-window states.  Inference-engine states (JarvisState,
 // JarvisCoreMLState, SamState) are intentionally excluded — those are
@@ -28,6 +31,9 @@ struct WindowStates {
     BBoxToolState bbox;
     OBBToolState obb;
     SamToolState sam_tool;
+#ifdef RED_HAS_MUJOCO
+    BodyModelState body_model;
+#endif
     bool show_help = false;
 
     // Reset all tool window state for project switching.
@@ -165,6 +171,24 @@ struct WindowStates {
         obb.show = false;
         obb.enabled = false;
         obb.draw_state = OBBDrawState::Idle;
+#ifdef RED_HAS_MUJOCO
+        if (body_model.renderer) {
+            mujoco_renderer_destroy(body_model.renderer);
+            body_model.renderer = nullptr;
+        }
+        body_model.show = false;
+        body_model.auto_solve = false;
+        body_model.last_solved_frame = -1;
+        body_model.model_path.clear();
+        body_model.show_site_markers = true;
+        body_model.show_target_lines = true;
+        body_model.cam_lookat[0] = 0; body_model.cam_lookat[1] = 0; body_model.cam_lookat[2] = 0.05f;
+        body_model.cam_distance = 0.5f;
+        body_model.cam_azimuth = 135.0f;
+        body_model.cam_elevation = -25.0f;
+        body_model.dragging = false;
+        mujoco_ik_reset(body_model.ik_state);
+#endif
         sam_tool.show = false;
         sam_tool.enabled = false;
         sam_tool.fg_points.clear();
