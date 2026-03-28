@@ -207,7 +207,6 @@ static void test_model(const char *xml_path, const char *label) {
 
     MujocoIKState ik;
     ik.max_iterations = 100;
-    ik.damping = 1e-4;
     mj.scale_factor = 1.0f;
     mujoco_ik_solve(mj, ik, targets.data(), 24, 0);
 

@@ -1,5 +1,11 @@
 #pragma once
-// mujoco_ik.h — Damped least-squares IK solver using MuJoCo C API
+// mujoco_ik.h — Gradient descent IK solver with momentum (matches Python pipeline)
+//
+// Algorithm from inverse_kinematics.py (IK_resources):
+//   objective = ||s(q) - s*||² + reg_strength * ||q_hinge||²
+//   gradient  = 2 * J^T * (s(q) - s*) + 2 * reg_strength * q_hinge
+//   update    = beta * update + gradient
+//   qpos     -= lr * update
 //
 // Uses analytical Jacobians (mj_jacSite) for maximum performance.
 // Warm-starts from previous frame for temporal consistency.
@@ -8,15 +14,17 @@
 #include "mujoco_context.h"
 #include "annotation.h"
 #include <Eigen/Core>
-#include <Eigen/Dense>
 #include <chrono>
+#include <algorithm>
 
 struct MujocoIKState {
-    // Solver configuration
-    int   max_iterations = 50;
-    double damping       = 1e-3;     // lambda for damped least-squares
-    double tolerance     = 1e-4;     // convergence threshold (meters)
-    double max_update    = 2.0;      // clamp step size
+    // Solver configuration (matching Python defaults)
+    int    max_iterations   = 200;
+    double lr               = 0.01;    // learning rate
+    double beta             = 0.99;    // momentum coefficient
+    double reg_strength     = 1e-4;    // L2 regularization on hinge joints
+    double progress_thresh  = 0.01;    // convergence: lr*||update||/err < thresh
+    int    check_every      = 100;     // convergence check interval
 
     // Warm-start state
     std::vector<double> prev_qpos;
@@ -24,24 +32,25 @@ struct MujocoIKState {
     int  prev_frame     = -1;
 
     // Solver output (last call)
-    double final_residual   = 0.0;
+    double final_residual   = 0.0;   // position-only error (no regularization)
+    double final_objective  = 0.0;   // full objective (with regularization)
     int    iterations_used  = 0;
     bool   converged        = false;
     double solve_time_ms    = 0.0;
     int    active_sites     = 0;
 
     // Pre-allocated workspace (sized on first use)
-    std::vector<double> jacp_buf;  // 3*N_active * nv (stacked Jacobian)
-    std::vector<double> residual;  // 3*N_active
-    std::vector<double> dq_buf;    // nv
+    std::vector<double> jacp_buf;    // 3*N_active * nv (stacked Jacobian)
+    std::vector<double> grad_buf;    // nv (gradient)
+    std::vector<double> update_buf;  // nv (momentum accumulator)
+    std::vector<double> nv_step;     // nv (full step vector)
 };
 
 #ifdef RED_HAS_MUJOCO
 
 // Solve IK: pose the MuJoCo model to match triangulated 3D keypoints.
-// kp3d: array indexed by skeleton node index (length = num_nodes).
-// Only nodes where kp3d[i].triangulated==true are used as targets.
-// Returns true if converged within tolerance.
+// Matches the algorithm from inverse_kinematics.py: gradient descent with
+// momentum and L2 regularization on hinge joint angles.
 inline bool mujoco_ik_solve(MujocoContext &mj, MujocoIKState &state,
                             const Keypoint3D *kp3d, int num_nodes,
                             int current_frame) {
@@ -53,7 +62,6 @@ inline bool mujoco_ik_solve(MujocoContext &mj, MujocoIKState &state,
     const int nq = (int)mj.model->nq;
 
     // --- Initialize qpos ---
-    // Warm-start from previous frame if recent (within 5 frames)
     bool cold_start = true;
     if (state.has_warm_start && state.prev_frame >= 0 &&
         std::abs(current_frame - state.prev_frame) <= 5 &&
@@ -61,29 +69,18 @@ inline bool mujoco_ik_solve(MujocoContext &mj, MujocoIKState &state,
         std::copy(state.prev_qpos.begin(), state.prev_qpos.end(), mj.data->qpos);
         cold_start = false;
     } else {
-        // Cold start: use default pose
         std::copy(mj.model->qpos0, mj.model->qpos0 + nq, mj.data->qpos);
     }
     mj_forward(mj.model, mj.data);
 
     // --- Build active site list ---
-    // Collect (mj_site_idx, target_xyz) for all triangulated keypoints
-    struct SiteTarget {
-        int site_idx;
-        double target[3];
-    };
+    struct SiteTarget { int site_idx; double target[3]; };
     std::vector<SiteTarget> targets;
     targets.reserve(num_nodes);
 
-    // Determine scale factor. If scale_factor > 0, use it directly.
-    // If scale_factor == 0 (auto), detect the unit system from data magnitude.
-    // MuJoCo models are in meters (typical body ~0.2m). If keypoint coordinates
-    // are much larger, they're likely in mm (common for camera calibration).
+    // Auto-detect unit system
     double sf = (double)mj.scale_factor;
     if (sf <= 0.0) {
-        // Auto-detect unit system from centroid magnitude.
-        // MuJoCo models are in meters (body ~0.2m). If keypoint centroid
-        // magnitude is >>1, data is likely in mm (camera calibration units).
         double centroid[3] = {0, 0, 0};
         int n_active = 0;
         for (int n = 0; n < num_nodes; n++) {
@@ -94,10 +91,7 @@ inline bool mujoco_ik_solve(MujocoContext &mj, MujocoIKState &state,
             n_active++;
         }
         if (n_active > 0) {
-            // Centroid magnitude = ||mean position||
-            double cx = centroid[0] / n_active;
-            double cy = centroid[1] / n_active;
-            double cz = centroid[2] / n_active;
+            double cx = centroid[0]/n_active, cy = centroid[1]/n_active, cz = centroid[2]/n_active;
             double mag = std::sqrt(cx*cx + cy*cy + cz*cz);
             sf = (mag > 10.0) ? 0.001 : 1.0;
         } else {
@@ -107,8 +101,7 @@ inline bool mujoco_ik_solve(MujocoContext &mj, MujocoIKState &state,
 
     for (int n = 0; n < num_nodes; n++) {
         if (!kp3d[n].triangulated) continue;
-        int site_idx = (n < (int)mj.skeleton_to_site.size())
-                           ? mj.skeleton_to_site[n] : -1;
+        int site_idx = (n < (int)mj.skeleton_to_site.size()) ? mj.skeleton_to_site[n] : -1;
         if (site_idx < 0) continue;
         targets.push_back({site_idx, {kp3d[n].x * sf, kp3d[n].y * sf, kp3d[n].z * sf}});
     }
@@ -118,15 +111,13 @@ inline bool mujoco_ik_solve(MujocoContext &mj, MujocoIKState &state,
     if (N == 0) {
         state.converged = false;
         state.final_residual = 0.0;
+        state.final_objective = 0.0;
         state.iterations_used = 0;
         state.solve_time_ms = 0.0;
         return false;
     }
 
     // --- Cold-start root alignment ---
-    // When the model has a free joint (added by mujoco_context.h), set the
-    // root position to align the model centroid with the target centroid.
-    // This handles arbitrary world coordinate systems.
     if (cold_start && mj.has_free_joint) {
         double tc[3] = {0, 0, 0}, mc[3] = {0, 0, 0};
         for (int k = 0; k < N; k++) {
@@ -135,7 +126,6 @@ inline bool mujoco_ik_solve(MujocoContext &mj, MujocoIKState &state,
                 mc[c] += mj.data->site_xpos[3 * targets[k].site_idx + c];
             }
         }
-        // Find the free joint's qpos address (first joint with type FREE)
         for (int j = 0; j < (int)mj.model->njnt; j++) {
             if (mj.model->jnt_type[j] == mjJNT_FREE) {
                 int qa = (int)mj.model->jnt_qposadr[j];
@@ -148,86 +138,129 @@ inline bool mujoco_ik_solve(MujocoContext &mj, MujocoIKState &state,
         mj_forward(mj.model, mj.data);
     }
 
+    // --- Pre-identify hinge joints and their DOF indices ---
+    // Matches Python: regularization only applies to hinge joints
+    std::vector<int> hinge_dof_indices;
+    hinge_dof_indices.reserve(nv);
+    for (int j = 0; j < (int)mj.model->njnt; j++) {
+        if (mj.model->jnt_type[j] == mjJNT_HINGE) {
+            int dof_adr = (int)mj.model->jnt_dofadr[j];
+            hinge_dof_indices.push_back(dof_adr);
+        }
+    }
+
     // --- Ensure workspace is sized ---
     int jacp_size = 3 * N * nv;
-    if ((int)state.jacp_buf.size() != jacp_size)
+    if ((int)state.jacp_buf.size() < jacp_size)
         state.jacp_buf.resize(jacp_size);
-    if ((int)state.residual.size() != 3 * N)
-        state.residual.resize(3 * N);
-    if ((int)state.dq_buf.size() != nv)
-        state.dq_buf.resize(nv);
+    if ((int)state.grad_buf.size() < nv)
+        state.grad_buf.resize(nv);
+    if ((int)state.update_buf.size() < nv) {
+        state.update_buf.resize(nv);
+        std::fill(state.update_buf.begin(), state.update_buf.end(), 0.0);
+    }
+    if ((int)state.nv_step.size() < nv)
+        state.nv_step.resize(nv);
 
-    // --- Iterative solve ---
+    // Reset momentum on cold start
+    if (cold_start)
+        std::fill(state.update_buf.begin(), state.update_buf.begin() + nv, 0.0);
+
+    // --- Iterative gradient descent with momentum ---
     using RowMajorMatXd = Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
 
     state.converged = false;
     state.iterations_used = 0;
     state.final_residual = 0.0;
+    state.final_objective = 0.0;
 
     for (int iter = 0; iter < state.max_iterations; iter++) {
-        // Compute residual: target - current site position
-        double err_sq = 0.0;
-        for (int k = 0; k < N; k++) {
-            const double *sp = mj.data->site_xpos + 3 * targets[k].site_idx;
-            for (int c = 0; c < 3; c++) {
-                double r = targets[k].target[c] - sp[c];
-                state.residual[3 * k + c] = r;
-                err_sq += r * r;
-            }
-        }
-
-        double err_norm = std::sqrt(err_sq / N);
-        state.final_residual = err_norm;
         state.iterations_used = iter + 1;
-
-        if (err_norm < state.tolerance) {
-            state.converged = true;
-            break;
-        }
 
         // Compute stacked Jacobian [3N x nv] (row-major)
         std::fill(state.jacp_buf.begin(), state.jacp_buf.begin() + jacp_size, 0.0);
         for (int k = 0; k < N; k++) {
             mj_jacSite(mj.model, mj.data,
                        state.jacp_buf.data() + 3 * k * nv,
-                       nullptr, // no rotation Jacobian
-                       targets[k].site_idx);
+                       nullptr, targets[k].site_idx);
         }
 
-        // Map to Eigen (no copy)
+        // Compute residual: site_xpos - target (note: Python uses this sign)
+        // and position error squared
+        double err_sq = 0.0;
+        std::vector<double> diff(3 * N);
+        for (int k = 0; k < N; k++) {
+            const double *sp = mj.data->site_xpos + 3 * targets[k].site_idx;
+            for (int c = 0; c < 3; c++) {
+                double d = sp[c] - targets[k].target[c];
+                diff[3 * k + c] = d;
+                err_sq += d * d;
+            }
+        }
+
+        // Compute gradient: 2 * J^T * diff + 2 * reg * hinge_qpos
+        // J is [3N x nv], diff is [3N], grad is [nv]
         Eigen::Map<RowMajorMatXd> J(state.jacp_buf.data(), 3 * N, nv);
-        Eigen::Map<Eigen::VectorXd> r(state.residual.data(), 3 * N);
-        Eigen::Map<Eigen::VectorXd> dq(state.dq_buf.data(), nv);
+        Eigen::Map<Eigen::VectorXd> d_vec(diff.data(), 3 * N);
+        Eigen::Map<Eigen::VectorXd> grad(state.grad_buf.data(), nv);
 
-        // Damped least-squares: dq = J^T (J J^T + lambda*I)^{-1} r
-        // For N<nv (underdetermined), this form is more efficient.
-        Eigen::MatrixXd JJt = J * J.transpose();
-        JJt.diagonal().array() += state.damping;
-        Eigen::VectorXd y = JJt.ldlt().solve(r);
-        dq = J.transpose() * y;
+        grad = 2.0 * J.transpose() * d_vec;
 
-        // Clamp update norm
-        double dq_norm = dq.norm();
-        if (dq_norm > state.max_update)
-            dq *= state.max_update / dq_norm;
+        // Add regularization gradient: 2 * reg_strength * q_hinge
+        if (state.reg_strength > 0.0) {
+            for (int dof : hinge_dof_indices) {
+                // qpos index for a hinge joint == its dof address (1:1 mapping)
+                int qa = (int)mj.model->jnt_qposadr[
+                    mj.model->dof_jntid[dof]];
+                grad[dof] += 2.0 * state.reg_strength * mj.data->qpos[qa];
+            }
+        }
+
+        // Momentum update: update = beta * update + grad
+        Eigen::Map<Eigen::VectorXd> update(state.update_buf.data(), nv);
+        update = state.beta * update + grad;
+
+        // Build full step: nv_step = -lr * update
+        Eigen::Map<Eigen::VectorXd> step(state.nv_step.data(), nv);
+        step = -state.lr * update;
 
         // Integrate qpos (handles quaternion joints correctly)
-        mj_integratePos(mj.model, mj.data->qpos, state.dq_buf.data(), 1.0);
-
-        // Project hinge and slide joints onto their limits
-        for (int j = 0; j < (int)mj.model->njnt; j++) {
-            if (!mj.model->jnt_limited[j]) continue;
-            int type = mj.model->jnt_type[j];
-            if (type != mjJNT_HINGE && type != mjJNT_SLIDE) continue;
-            int qa = mj.model->jnt_qposadr[j];
-            double lo = mj.model->jnt_range[2 * j];
-            double hi = mj.model->jnt_range[2 * j + 1];
-            if (mj.data->qpos[qa] < lo) mj.data->qpos[qa] = lo;
-            if (mj.data->qpos[qa] > hi) mj.data->qpos[qa] = hi;
-        }
+        mj_integratePos(mj.model, mj.data->qpos, state.nv_step.data(), 1.0);
 
         // Forward kinematics to update site positions
-        mj_forward(mj.model, mj.data);
+        mj_fwdPosition(mj.model, mj.data);
+
+        // Check convergence every check_every iterations
+        if (state.check_every > 0 && iter % state.check_every == 0) {
+            // Recompute objective with regularization
+            double reg_sq = 0.0;
+            for (int dof : hinge_dof_indices) {
+                int qa = (int)mj.model->jnt_qposadr[mj.model->dof_jntid[dof]];
+                reg_sq += mj.data->qpos[qa] * mj.data->qpos[qa];
+            }
+            double obj = err_sq + state.reg_strength * reg_sq;
+            state.final_objective = obj;
+            state.final_residual = std::sqrt(err_sq / N);
+
+            double update_norm = state.lr * update.norm();
+            if (obj > 1e-12 && update_norm / obj < state.progress_thresh) {
+                state.converged = true;
+                break;
+            }
+        }
+    }
+
+    // Final residual (position-only, for display)
+    {
+        double err_sq = 0.0;
+        for (int k = 0; k < N; k++) {
+            const double *sp = mj.data->site_xpos + 3 * targets[k].site_idx;
+            for (int c = 0; c < 3; c++) {
+                double d = sp[c] - targets[k].target[c];
+                err_sq += d * d;
+            }
+        }
+        state.final_residual = std::sqrt(err_sq / N);
     }
 
     // Store warm-start for next frame
@@ -250,14 +283,18 @@ inline bool mujoco_ik_solve(MujocoContext &, MujocoIKState &,
 
 #endif // RED_HAS_MUJOCO
 
-// Reset warm-start (e.g., on project switch or large frame jump)
+// Reset warm-start and momentum (e.g., on project switch or large frame jump).
+// Does NOT reset solver configuration (lr, beta, reg_strength, etc.)
 inline void mujoco_ik_reset(MujocoIKState &state) {
     state.prev_qpos.clear();
     state.has_warm_start = false;
     state.prev_frame = -1;
     state.converged = false;
     state.final_residual = 0.0;
+    state.final_objective = 0.0;
     state.iterations_used = 0;
     state.solve_time_ms = 0.0;
     state.active_sites = 0;
+    // Reset momentum accumulator
+    std::fill(state.update_buf.begin(), state.update_buf.end(), 0.0);
 }

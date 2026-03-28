@@ -81,7 +81,6 @@ int main() {
     for (int t = 0; t < 4; t++) {
         MujocoIKState ik;
         ik.max_iterations = 200;
-        ik.damping = 1e-3;
         mj.scale_factor = scales[t];
         std::copy(mj.model->qpos0, mj.model->qpos0 + (int)mj.model->nq, mj.data->qpos);
         mj_forward(mj.model, mj.data);
@@ -96,7 +95,6 @@ int main() {
     printf("\n--- 20 consecutive frames (auto-detect scale, 50 iter, warm-start) ---\n");
     MujocoIKState ik2;
     ik2.max_iterations = 50;
-    ik2.damping = 1e-3;
     mj.scale_factor = 0.0f; // auto
     std::copy(mj.model->qpos0, mj.model->qpos0 + (int)mj.model->nq, mj.data->qpos);
     mj_forward(mj.model, mj.data);
