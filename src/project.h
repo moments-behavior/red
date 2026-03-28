@@ -189,6 +189,7 @@ inline bool setup_project(ProjectManager &pm, SkeletonContext &skeleton,
         // doesn't contain YAML/CSV files directly but has a single
         // timestamped subdirectory (YYYY_MM_DD_*), use that instead.
         std::string calib_dir = pm.calibration_folder;
+        if (!calib_dir.empty() && fs::is_directory(calib_dir))
         {
             bool has_calib_files = false;
             std::string newest_subdir;
