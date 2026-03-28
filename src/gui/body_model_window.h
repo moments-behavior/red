@@ -38,6 +38,9 @@ struct BodyModelState {
     // Track which frame we last solved for
     int last_solved_frame = -1;
 
+    // Calibration camera view: -1 = free camera, 0..N-1 = calibration camera index
+    int selected_camera = -1;
+
     // Renderer handle + native MuJoCo camera
 #ifdef RED_HAS_MUJOCO
     MujocoRenderer *renderer = nullptr;
@@ -76,10 +79,15 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                 ImGui::Spacing();
 
                 if (state.model_path.empty()) {
-                    // Try default path relative to exe
-                    std::string default_path = "models/rodent/rodent_no_collision.xml";
-                    if (std::filesystem::exists(default_path))
-                        state.model_path = default_path;
+                    // Try last-used path from settings, then default
+                    if (!ctx.user_settings.last_mujoco_model.empty() &&
+                        std::filesystem::exists(ctx.user_settings.last_mujoco_model))
+                        state.model_path = ctx.user_settings.last_mujoco_model;
+                    else {
+                        std::string default_path = "models/rodent/rodent_no_collision.xml";
+                        if (std::filesystem::exists(default_path))
+                            state.model_path = default_path;
+                    }
                 }
 
                 ImGui::InputText("Model XML", &state.model_path);
@@ -99,12 +107,35 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
 
                 if (ImGui::Button("Load Model") && !state.model_path.empty()) {
                     if (mj.load(state.model_path, ctx.skeleton)) {
+                        ctx.user_settings.last_mujoco_model = state.model_path;
+                        save_user_settings(ctx.user_settings);
                         ctx.toasts.push("MuJoCo model loaded: " +
                                         std::to_string(mj.mapped_count) + "/" +
                                         std::to_string(ctx.skeleton.num_nodes) +
                                         " sites matched");
                     } else {
                         ctx.toasts.push("Failed: " + mj.load_error, Toast::Error);
+                    }
+                }
+
+                // Quick-load the last used model
+                if (!ctx.user_settings.last_mujoco_model.empty() &&
+                    std::filesystem::exists(ctx.user_settings.last_mujoco_model)) {
+                    ImGui::SameLine();
+                    if (ImGui::Button("Load Previous")) {
+                        state.model_path = ctx.user_settings.last_mujoco_model;
+                        if (mj.load(state.model_path, ctx.skeleton)) {
+                            ctx.toasts.push("MuJoCo model loaded: " +
+                                            std::to_string(mj.mapped_count) + "/" +
+                                            std::to_string(ctx.skeleton.num_nodes) +
+                                            " sites matched");
+                        } else {
+                            ctx.toasts.push("Failed: " + mj.load_error, Toast::Error);
+                        }
+                    }
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip("%s",
+                            ctx.user_settings.last_mujoco_model.c_str());
                     }
                 }
 
@@ -241,6 +272,64 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                 state.cam_initialized = true;
             }
 
+            // --- Camera selector: free camera or calibration cameras ---
+            if (!ctx.pm.camera_params.empty()) {
+                ImGui::Separator();
+                ImGui::Text("Camera View");
+                const char *preview = (state.selected_camera < 0)
+                    ? "Free Camera"
+                    : ctx.pm.camera_names[state.selected_camera].c_str();
+                ImGui::SetNextItemWidth(-1);
+                if (ImGui::BeginCombo("##CameraSelect", preview)) {
+                    if (ImGui::Selectable("Free Camera", state.selected_camera < 0))
+                        state.selected_camera = -1;
+                    for (int i = 0; i < (int)ctx.pm.camera_names.size(); i++) {
+                        if (i >= (int)ctx.pm.camera_params.size()) break;
+                        if (ctx.pm.camera_params[i].telecentric) continue;
+                        bool selected = (state.selected_camera == i);
+                        if (ImGui::Selectable(ctx.pm.camera_names[i].c_str(), selected))
+                            state.selected_camera = i;
+                    }
+                    ImGui::EndCombo();
+                }
+
+                // Apply calibration camera pose to mjvCamera
+                if (state.selected_camera >= 0 &&
+                    state.selected_camera < (int)ctx.pm.camera_params.size()) {
+                    const CameraParams &cp = ctx.pm.camera_params[state.selected_camera];
+
+                    // Camera position in world: eye = -R^T * t
+                    Eigen::Vector3d eye_world = -cp.r.transpose() * cp.tvec;
+
+                    // Scale from calibration units (mm) to model units (m)
+                    double sf = (double)mj.scale_factor;
+                    if (sf <= 0.0) sf = 0.001; // auto: assume mm→m
+                    eye_world *= sf;
+
+                    // Camera forward direction in world: R^T * [0,0,1]
+                    // (OpenCV camera looks along +Z in camera frame)
+                    Eigen::Vector3d fwd = cp.r.transpose() * Eigen::Vector3d(0, 0, 1);
+                    fwd.normalize();
+
+                    // Set lookat to a point along the forward direction,
+                    // at the distance from camera to world origin
+                    double dist_to_origin = eye_world.norm();
+                    double lookat_dist = std::max(dist_to_origin * 0.8, 0.1);
+
+                    Eigen::Vector3d lookat = eye_world + lookat_dist * fwd;
+
+                    state.mjcam.lookat[0] = lookat.x();
+                    state.mjcam.lookat[1] = lookat.y();
+                    state.mjcam.lookat[2] = lookat.z();
+                    state.mjcam.distance = lookat_dist;
+
+                    // MuJoCo: forward = { ce*ca, ce*sa, se }
+                    state.mjcam.azimuth = atan2(fwd.y(), fwd.x()) * 180.0 / M_PI;
+                    state.mjcam.elevation = asin(std::clamp(fwd.z(), -1.0, 1.0))
+                                            * 180.0 / M_PI;
+                }
+            }
+
             // --- 3D Viewport ---
             ImVec2 avail = ImGui::GetContentRegionAvail();
             float vp_w = avail.x > 100 ? avail.x : 400;
@@ -280,9 +369,9 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                             mjv_moveCamera(mj.model, mjMOUSE_ROTATE_V, dx, -dy,
                                            &mj.scene, &state.mjcam);
 
-                        // Right-drag to pan
+                        // Right-drag to pan (negate dy so drag-up pans up)
                         if (ImGui::IsMouseDragging(ImGuiMouseButton_Right))
-                            mjv_moveCamera(mj.model, mjMOUSE_MOVE_V, dx, dy,
+                            mjv_moveCamera(mj.model, mjMOUSE_MOVE_V, dx, -dy,
                                            &mj.scene, &state.mjcam);
 
                         // Middle-drag to zoom

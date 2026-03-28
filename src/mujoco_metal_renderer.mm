@@ -34,7 +34,11 @@ struct Uniforms {
 struct SceneUniforms {
     float4x4 view_proj;
     float3   light_dir;
+    float    _pad0;
+    float3   light_dir2;
+    float    _pad1;
     float3   eye_pos;
+    float    _pad2;
 };
 
 struct VertexOut {
@@ -60,16 +64,74 @@ vertex VertexOut vertex_main(VertexIn in [[stage_in]],
 fragment float4 fragment_main(VertexOut in [[stage_in]],
                               constant SceneUniforms &su [[buffer(2)]]) {
     float3 N = normalize(in.normal);
-    float3 L = normalize(su.light_dir);
     float3 V = normalize(su.eye_pos - in.world_pos);
-    float3 H = normalize(L + V);
 
-    float ambient = 0.25;
-    float diffuse = max(dot(N, L), 0.0) * 0.55;
-    float spec = pow(max(dot(N, H), 0.0), 32.0) * 0.2;
+    // Two-light setup: key light (above) + fill light (side)
+    float3 L1 = normalize(su.light_dir);
+    float3 L2 = normalize(su.light_dir2);
+    float3 H1 = normalize(L1 + V);
+    float3 H2 = normalize(L2 + V);
+
+    float ambient = 0.20;
+    float diffuse = max(dot(N, L1), 0.0) * 0.50
+                  + max(dot(N, L2), 0.0) * 0.25;
+    float spec = pow(max(dot(N, H1), 0.0), 32.0) * 0.25
+               + pow(max(dot(N, H2), 0.0), 32.0) * 0.10;
 
     float3 color = in.color.rgb * (ambient + diffuse) + float3(spec);
     return float4(color, in.color.a);
+}
+
+// --- Floor shader: checkerboard tiles with grid lines and reflections ---
+
+struct FloorUniforms {
+    float4x4 mvp;
+    float    half_size;    // arena half-extent in meters
+    int      grid_divs;    // number of grid divisions per axis
+    float    _pad[2];
+};
+
+fragment float4 fragment_floor(VertexOut in [[stage_in]],
+                               constant SceneUniforms &su [[buffer(2)]],
+                               constant FloorUniforms &fu [[buffer(3)]]) {
+    float3 N = float3(0, 0, 1);
+    float3 V = normalize(su.eye_pos - in.world_pos);
+
+    // Tile coordinates
+    float tile_size = (2.0 * fu.half_size) / float(fu.grid_divs);
+    float2 uv = (in.world_pos.xy + float2(fu.half_size)) / tile_size;
+    int2 tile = int2(floor(uv));
+    float2 frac_uv = fract(uv);
+
+    // Checkerboard: alternating dark/light blue-gray tiles
+    bool checker = ((tile.x + tile.y) & 1) == 0;
+    float3 tile_dark  = float3(0.22, 0.28, 0.36);
+    float3 tile_light = float3(0.28, 0.35, 0.44);
+    float3 base_color = checker ? tile_dark : tile_light;
+
+    // Grid lines: bright lines at tile edges
+    float line_w = 0.015; // fraction of tile
+    float lx = min(frac_uv.x, 1.0 - frac_uv.x);
+    float ly = min(frac_uv.y, 1.0 - frac_uv.y);
+    float line_dist = min(lx, ly);
+    float line = 1.0 - smoothstep(0.0, line_w, line_dist);
+    float3 line_color = float3(0.75, 0.80, 0.85);
+    base_color = mix(base_color, line_color, line * 0.8);
+
+    // Two-light diffuse + strong specular for reflective look
+    float3 L1 = normalize(su.light_dir);
+    float3 L2 = normalize(su.light_dir2);
+    float3 H1 = normalize(L1 + V);
+    float3 H2 = normalize(L2 + V);
+
+    float ambient = 0.25;
+    float diffuse = max(dot(N, L1), 0.0) * 0.45
+                  + max(dot(N, L2), 0.0) * 0.20;
+    float spec = pow(max(dot(N, H1), 0.0), 64.0) * 0.45
+               + pow(max(dot(N, H2), 0.0), 64.0) * 0.15;
+
+    float3 color = base_color * (ambient + diffuse) + float3(spec);
+    return float4(color, 1.0);
 }
 )";
 
@@ -202,6 +264,7 @@ struct MujocoRenderer {
     id<MTLDevice>              device;
     id<MTLCommandQueue>        queue;
     id<MTLRenderPipelineState> pipeline;
+    id<MTLRenderPipelineState> floor_pipeline;
     id<MTLDepthStencilState>   depth_state;
     id<MTLTexture>             color_tex;
     id<MTLTexture>             depth_tex;
@@ -290,6 +353,16 @@ MujocoRenderer *mujoco_renderer_create(uint32_t width, uint32_t height) {
         return nullptr;
     }
 
+    // Floor pipeline (same vertex shader, different fragment shader)
+    pd.fragmentFunction = [lib newFunctionWithName:@"fragment_floor"];
+    r->floor_pipeline = [r->device newRenderPipelineStateWithDescriptor:pd error:&err];
+    if (!r->floor_pipeline) {
+        fprintf(stderr, "[MuJoCo Metal] Floor pipeline creation failed: %s\n",
+                [[err localizedDescription] UTF8String]);
+        // Non-fatal: fall back to regular pipeline for floor
+        r->floor_pipeline = r->pipeline;
+    }
+
     // Depth stencil
     MTLDepthStencilDescriptor *dsd = [[MTLDepthStencilDescriptor alloc] init];
     dsd.depthCompareFunction = MTLCompareFunctionLess;
@@ -347,6 +420,7 @@ void mujoco_renderer_destroy(MujocoRenderer *r) {
         r->box_vb = nil;     r->box_ib = nil;
         r->skin_vb = nil;    r->skin_ib = nil;
         r->pipeline = nil;
+        r->floor_pipeline = nil;
         r->depth_state = nil;
         r->queue = nil;
         r->device = nil;
@@ -422,8 +496,17 @@ struct SceneUniforms {
     simd_float4x4 view_proj;
     simd_float3   light_dir;
     float          _pad0;
-    simd_float3   eye_pos;
+    simd_float3   light_dir2;
     float          _pad1;
+    simd_float3   eye_pos;
+    float          _pad2;
+};
+
+struct FloorUniforms {
+    simd_float4x4 mvp;
+    float          half_size;
+    int            grid_divs;
+    float          _pad[2];
 };
 
 void mujoco_renderer_render(MujocoRenderer *r, MujocoContext *mj,
@@ -461,7 +544,8 @@ void mujoco_renderer_render(MujocoRenderer *r, MujocoContext *mj,
 
         SceneUniforms su;
         su.view_proj = vp;
-        su.light_dir = simd_normalize((simd_float3){0.5f, 1.0f, 0.3f});
+        su.light_dir  = simd_normalize((simd_float3){0.2f, 0.1f, 1.0f});  // key: above
+        su.light_dir2 = simd_normalize((simd_float3){0.5f, 0.8f, 0.3f});  // fill: side
         su.eye_pos = eye;
 
         // Begin render pass
@@ -604,7 +688,7 @@ void mujoco_renderer_render(MujocoRenderer *r, MujocoContext *mj,
                      indexBufferOffset:0];
         }
 
-        // --- Render arena (floor plane + ramp) ---
+        // --- Render arena (checkerboard floor + ramp) ---
         if (show_arena) {
             // Arena: 1828mm x 1828mm centered at origin, Z=0
             float half = 0.914f; // 1828mm / 2 in meters
@@ -623,47 +707,30 @@ void mujoco_renderer_render(MujocoRenderer *r, MujocoContext *mj,
             id<MTLBuffer> fib = [r->device newBufferWithBytes:floor_idx
                                  length:sizeof(floor_idx) options:MTLResourceStorageModeShared];
 
+            // Use floor pipeline for checkerboard effect
+            [enc setRenderPipelineState:r->floor_pipeline];
+
+            // Vertex shader still needs Uniforms at buffer(1)
             Uniforms fu;
             fu.model_mat = matrix_identity_float4x4;
             fu.mvp = vp;
             fu.normal_col0 = {1,0,0,0}; fu.normal_col1 = {0,1,0,0}; fu.normal_col2 = {0,0,1,0};
-            fu.color = {0.25f, 0.35f, 0.45f, 0.7f}; // dark blue-gray, semi-transparent
+            fu.color = {0.25f, 0.32f, 0.42f, 1.0f};
+
+            // Floor-specific uniforms at buffer(3)
+            FloorUniforms ffu;
+            ffu.mvp = vp;
+            ffu.half_size = half;
+            ffu.grid_divs = 4; // 4x4 tiles
 
             [enc setVertexBuffer:fvb offset:0 atIndex:0];
             [enc setVertexBytes:&fu length:sizeof(fu) atIndex:1];
+            [enc setFragmentBytes:&ffu length:sizeof(ffu) atIndex:3];
             [enc drawIndexedPrimitives:MTLPrimitiveTypeTriangle indexCount:6
                              indexType:MTLIndexTypeUInt32 indexBuffer:fib indexBufferOffset:0];
 
-            // Ramp: rectangular prism at 15 degrees, connecting to arena edge
-            // Ramp is ~30cm wide, ~50cm long, tilted 15 degrees at -X edge
-            float ramp_len = 0.50f;  // 500mm
-            float ramp_w   = 0.30f;  // 300mm
-            float ramp_h   = 0.01f;  // thin slab
-            float angle    = 15.0f * M_PI / 180.0f;
-            float ca = cosf(angle), sa = sinf(angle);
-
-            // Ramp center: offset from -X edge of arena, tilted up
-            float ramp_cx = -half - ramp_len * ca * 0.5f;
-            float ramp_cz = ramp_len * sa * 0.5f;
-
-            // Build ramp model matrix (rotate around Y axis by -15 deg)
-            simd_float4x4 ramp_mat;
-            ramp_mat.columns[0] = { ca * ramp_len, 0, sa * ramp_len, 0};
-            ramp_mat.columns[1] = {0, ramp_w, 0, 0};
-            ramp_mat.columns[2] = {-sa * ramp_h, 0, ca * ramp_h, 0};
-            ramp_mat.columns[3] = {ramp_cx, 0, ramp_cz, 1.0f};
-
-            Uniforms ru;
-            ru.model_mat = ramp_mat;
-            ru.mvp = simd_mul(vp, ramp_mat);
-            extract_normal_columns(ramp_mat, ru.normal_col0, ru.normal_col1, ru.normal_col2);
-            ru.color = {0.5f, 0.5f, 0.5f, 0.8f}; // gray ramp
-
-            [enc setVertexBuffer:r->box_vb offset:0 atIndex:0];
-            [enc setVertexBytes:&ru length:sizeof(ru) atIndex:1];
-            [enc drawIndexedPrimitives:MTLPrimitiveTypeTriangle
-                            indexCount:r->box_idx_count indexType:MTLIndexTypeUInt32
-                           indexBuffer:r->box_ib indexBufferOffset:0];
+            // Switch back to main pipeline for subsequent draws
+            [enc setRenderPipelineState:r->pipeline];
         }
 
         [enc endEncoding];
