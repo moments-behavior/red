@@ -27,6 +27,9 @@ struct UserSettings {
     int jarvis_seed = 42;
     int jarvis_jpeg_quality = 95;
 
+    // MuJoCo
+    std::string last_mujoco_model;
+
     // Recent projects (most recent first, max 10)
     std::vector<std::string> recent_projects;
 
@@ -58,6 +61,7 @@ inline void to_json(nlohmann::json &j, const UserSettings &s) {
         {"jarvis_train_ratio", s.jarvis_train_ratio},
         {"jarvis_seed", s.jarvis_seed},
         {"jarvis_jpeg_quality", s.jarvis_jpeg_quality},
+        {"last_mujoco_model", s.last_mujoco_model},
         {"recent_projects", s.recent_projects}};
 }
 
@@ -76,6 +80,7 @@ inline void from_json(const nlohmann::json &j, UserSettings &s) {
     s.jarvis_train_ratio = j.value("jarvis_train_ratio", 0.9f);
     s.jarvis_seed = j.value("jarvis_seed", 42);
     s.jarvis_jpeg_quality = j.value("jarvis_jpeg_quality", 95);
+    s.last_mujoco_model = j.value("last_mujoco_model", std::string{});
     s.recent_projects = j.value("recent_projects", std::vector<std::string>{});
 }
 
