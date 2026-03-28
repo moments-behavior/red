@@ -181,11 +181,11 @@ struct WindowStates {
         body_model.last_solved_frame = -1;
         body_model.model_path.clear();
         body_model.show_site_markers = true;
-        body_model.cam_lookat[0] = 0; body_model.cam_lookat[1] = 0; body_model.cam_lookat[2] = 0.05f;
-        body_model.cam_distance = 0.5f;
-        body_model.cam_azimuth = 135.0f;
-        body_model.cam_elevation = -25.0f;
-        body_model.dragging = false;
+        body_model.show_arena = true;
+        body_model.cam_lookat[0] = 0; body_model.cam_lookat[1] = 0; body_model.cam_lookat[2] = 0.04f;
+        body_model.cam_distance = 0.4f;
+        body_model.cam_azimuth = 160.0f;
+        body_model.cam_elevation = -30.0f;
         mujoco_ik_reset(body_model.ik_state);
 #endif
         sam_tool.show = false;

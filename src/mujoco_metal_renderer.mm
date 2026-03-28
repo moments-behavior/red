@@ -264,6 +264,11 @@ MujocoRenderer *mujoco_renderer_create(uint32_t width, uint32_t height) {
     pd.vertexFunction = [lib newFunctionWithName:@"vertex_main"];
     pd.fragmentFunction = [lib newFunctionWithName:@"fragment_main"];
     pd.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+    pd.colorAttachments[0].blendingEnabled = YES;
+    pd.colorAttachments[0].sourceRGBBlendFactor = MTLBlendFactorSourceAlpha;
+    pd.colorAttachments[0].destinationRGBBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
+    pd.colorAttachments[0].sourceAlphaBlendFactor = MTLBlendFactorOne;
+    pd.colorAttachments[0].destinationAlphaBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
     pd.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
 
     // Vertex descriptor
@@ -424,7 +429,8 @@ struct SceneUniforms {
 void mujoco_renderer_render(MujocoRenderer *r, MujocoContext *mj,
                             const float lookat[3], float distance,
                             float azimuth, float elevation,
-                            bool show_skin, bool show_sites) {
+                            bool show_skin, bool show_sites,
+                            bool show_arena) {
     if (!r || !mj || !mj->loaded) return;
 
     @autoreleasepool {
@@ -598,6 +604,68 @@ void mujoco_renderer_render(MujocoRenderer *r, MujocoContext *mj,
                              indexType:MTLIndexTypeUInt32
                            indexBuffer:r->skin_ib
                      indexBufferOffset:0];
+        }
+
+        // --- Render arena (floor plane + ramp) ---
+        if (show_arena) {
+            // Arena: 1828mm x 1828mm centered at origin, Z=0
+            float half = 0.914f; // 1828mm / 2 in meters
+
+            // Floor quad (two triangles)
+            Vertex floor_verts[4] = {
+                {{-half, -half, 0}, {0, 0, 1}},
+                {{ half, -half, 0}, {0, 0, 1}},
+                {{ half,  half, 0}, {0, 0, 1}},
+                {{-half,  half, 0}, {0, 0, 1}},
+            };
+            uint32_t floor_idx[6] = {0, 1, 2, 0, 2, 3};
+
+            id<MTLBuffer> fvb = [r->device newBufferWithBytes:floor_verts
+                                 length:sizeof(floor_verts) options:MTLResourceStorageModeShared];
+            id<MTLBuffer> fib = [r->device newBufferWithBytes:floor_idx
+                                 length:sizeof(floor_idx) options:MTLResourceStorageModeShared];
+
+            Uniforms fu;
+            fu.model_mat = matrix_identity_float4x4;
+            fu.mvp = vp;
+            fu.normal_col0 = {1,0,0,0}; fu.normal_col1 = {0,1,0,0}; fu.normal_col2 = {0,0,1,0};
+            fu.color = {0.25f, 0.35f, 0.45f, 0.7f}; // dark blue-gray, semi-transparent
+
+            [enc setVertexBuffer:fvb offset:0 atIndex:0];
+            [enc setVertexBytes:&fu length:sizeof(fu) atIndex:1];
+            [enc drawIndexedPrimitives:MTLPrimitiveTypeTriangle indexCount:6
+                             indexType:MTLIndexTypeUInt32 indexBuffer:fib indexBufferOffset:0];
+
+            // Ramp: rectangular prism at 15 degrees, connecting to arena edge
+            // Ramp is ~30cm wide, ~50cm long, tilted 15 degrees at -X edge
+            float ramp_len = 0.50f;  // 500mm
+            float ramp_w   = 0.30f;  // 300mm
+            float ramp_h   = 0.01f;  // thin slab
+            float angle    = 15.0f * M_PI / 180.0f;
+            float ca = cosf(angle), sa = sinf(angle);
+
+            // Ramp center: offset from -X edge of arena, tilted up
+            float ramp_cx = -half - ramp_len * ca * 0.5f;
+            float ramp_cz = ramp_len * sa * 0.5f;
+
+            // Build ramp model matrix (rotate around Y axis by -15 deg)
+            simd_float4x4 ramp_mat;
+            ramp_mat.columns[0] = { ca * ramp_len, 0, sa * ramp_len, 0};
+            ramp_mat.columns[1] = {0, ramp_w, 0, 0};
+            ramp_mat.columns[2] = {-sa * ramp_h, 0, ca * ramp_h, 0};
+            ramp_mat.columns[3] = {ramp_cx, 0, ramp_cz, 1.0f};
+
+            Uniforms ru;
+            ru.model_mat = ramp_mat;
+            ru.mvp = simd_mul(vp, ramp_mat);
+            extract_normal_columns(ramp_mat, ru.normal_col0, ru.normal_col1, ru.normal_col2);
+            ru.color = {0.5f, 0.5f, 0.5f, 0.8f}; // gray ramp
+
+            [enc setVertexBuffer:r->box_vb offset:0 atIndex:0];
+            [enc setVertexBytes:&ru length:sizeof(ru) atIndex:1];
+            [enc drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+                            indexCount:r->box_idx_count indexType:MTLIndexTypeUInt32
+                           indexBuffer:r->box_ib indexBufferOffset:0];
         }
 
         [enc endEncoding];

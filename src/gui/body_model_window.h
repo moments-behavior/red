@@ -31,16 +31,12 @@ struct BodyModelState {
     // Deferred unload (processed at start of next frame)
     bool unload_requested = false;
 
-    // Camera for 3D view
-    float cam_lookat[3] = {0.0f, 0.0f, 0.05f};
-    float cam_distance  = 0.5f;
-    float cam_azimuth   = 135.0f;
-    float cam_elevation  = -25.0f;
-
-    // Mouse drag state for orbit
-    bool dragging = false;
-    ImVec2 drag_start;
-    float drag_az_start = 0, drag_el_start = 0;
+    // Camera for 3D view (good default for looking at rat on arena)
+    float cam_lookat[3] = {0.0f, 0.0f, 0.04f};
+    float cam_distance  = 0.4f;
+    float cam_azimuth   = 160.0f;
+    float cam_elevation  = -30.0f;
+    bool  show_arena     = true;
 
     // Track which frame we last solved for
     int last_solved_frame = -1;
@@ -199,7 +195,9 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
             // --- Display options ---
             ImGui::Checkbox("Skin", &state.show_skin);
             ImGui::SameLine();
-            ImGui::Checkbox("Site markers", &state.show_site_markers);
+            ImGui::Checkbox("Sites", &state.show_site_markers);
+            ImGui::SameLine();
+            ImGui::Checkbox("Arena", &state.show_arena);
 
             // --- Camera controls ---
             ImGui::SliderFloat("Distance", &state.cam_distance, 0.05f, 5.0f, "%.2f");
@@ -224,47 +222,42 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                 mujoco_renderer_render(state.renderer, &mj,
                                        state.cam_lookat, state.cam_distance,
                                        state.cam_azimuth, state.cam_elevation,
-                                       state.show_skin, state.show_site_markers);
+                                       state.show_skin, state.show_site_markers,
+                                       state.show_arena);
                 ImTextureID tex = mujoco_renderer_get_texture(state.renderer);
                 if (tex) {
                     ImVec2 cursor = ImGui::GetCursorScreenPos();
                     ImGui::Image(tex, ImVec2(vp_w, vp_h));
 
-                    // Orbit interaction on the image
+                    // Camera interaction on the image
                     if (ImGui::IsItemHovered()) {
-                        // Scroll to zoom
-                        float scroll = ImGui::GetIO().MouseWheel;
-                        if (scroll != 0.0f)
-                            state.cam_distance *= (1.0f - scroll * 0.1f);
+                        ImGuiIO &io = ImGui::GetIO();
 
-                        // Drag to orbit
-                        if (ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
-                            if (!state.dragging) {
-                                state.dragging = true;
-                                state.drag_start = ImGui::GetMousePos();
-                                state.drag_az_start = state.cam_azimuth;
-                                state.drag_el_start = state.cam_elevation;
-                            }
-                            ImVec2 delta = {ImGui::GetMousePos().x - state.drag_start.x,
-                                            ImGui::GetMousePos().y - state.drag_start.y};
-                            state.cam_azimuth = state.drag_az_start - delta.x * 0.5f;
-                            state.cam_elevation = state.drag_el_start + delta.y * 0.5f;
-                            // Clamp elevation
-                            if (state.cam_elevation > 89.0f) state.cam_elevation = 89.0f;
-                            if (state.cam_elevation < -89.0f) state.cam_elevation = -89.0f;
-                        } else {
-                            state.dragging = false;
+                        // Scroll to zoom (smooth logarithmic)
+                        if (io.MouseWheel != 0.0f)
+                            state.cam_distance *= powf(0.9f, io.MouseWheel);
+                        state.cam_distance = std::max(0.02f, std::min(5.0f, state.cam_distance));
+
+                        // Left-drag or middle-drag to orbit
+                        if (ImGui::IsMouseDragging(ImGuiMouseButton_Left) ||
+                            ImGui::IsMouseDragging(ImGuiMouseButton_Middle)) {
+                            ImVec2 delta = io.MouseDelta;
+                            state.cam_azimuth   -= delta.x * 0.3f;
+                            state.cam_elevation += delta.y * 0.3f;
+                            state.cam_elevation = std::max(-89.0f, std::min(89.0f, state.cam_elevation));
                         }
 
-                        // Right-drag to pan
+                        // Right-drag to pan (in camera-local right/up plane)
                         if (ImGui::IsMouseDragging(ImGuiMouseButton_Right)) {
-                            ImVec2 delta = ImGui::GetIO().MouseDelta;
-                            float scale = state.cam_distance * 0.002f;
-                            state.cam_lookat[0] -= delta.x * scale;
-                            state.cam_lookat[1] += delta.y * scale;
+                            ImVec2 delta = io.MouseDelta;
+                            float scale = state.cam_distance * 0.001f;
+                            float az = state.cam_azimuth * 3.14159f / 180.0f;
+                            // Camera right vector projected to XY
+                            float rx = cosf(az), ry = -sinf(az);
+                            state.cam_lookat[0] += delta.x * scale * rx;
+                            state.cam_lookat[1] += delta.x * scale * ry;
+                            state.cam_lookat[2] += delta.y * scale;
                         }
-                    } else {
-                        state.dragging = false;
                     }
                 }
             }
