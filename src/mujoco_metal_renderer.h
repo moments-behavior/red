@@ -26,11 +26,13 @@ void            mujoco_renderer_resize(MujocoRenderer *r, uint32_t width, uint32
 // camera_lookat/distance/azimuth/elevation control the viewpoint.
 // show_skin: render the smooth skin mesh (if model has one).
 // show_sites: render keypoint site markers.
+// show_arena: render a 1828mm arena floor plane with ramp.
 void mujoco_renderer_render(MujocoRenderer *r, MujocoContext *mj,
                             const float lookat[3], float distance,
                             float azimuth, float elevation,
                             bool show_skin = true,
-                            bool show_sites = true);
+                            bool show_sites = true,
+                            bool show_arena = true);
 
 // Get the rendered texture as an ImGui texture ID.
 ImTextureID mujoco_renderer_get_texture(MujocoRenderer *r);
