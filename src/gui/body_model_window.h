@@ -130,20 +130,32 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
             if (mj.scale_factor == 0.0f)
                 ImGui::SameLine(), ImGui::TextDisabled("(auto-detect from data)");
 
-            ImGui::SliderInt("Max iterations", &state.ik_state.max_iterations, 1, 2000);
+            ImGui::SliderInt("Max iterations", &state.ik_state.max_iterations, 100, 20000,
+                            "%d", ImGuiSliderFlags_Logarithmic);
             float reg_log = (state.ik_state.reg_strength > 0)
                                 ? log10f((float)state.ik_state.reg_strength) : -6.0f;
             if (ImGui::SliderFloat("Regularization (log10)", &reg_log, -6.0f, 0.0f, "%.1f"))
                 state.ik_state.reg_strength = pow(10.0, reg_log);
             ImGui::Checkbox("Auto-solve on frame change", &state.auto_solve);
-            ImGui::SameLine();
+            if (state.auto_solve) {
+                ImGui::SameLine();
+                float budget = (float)state.ik_state.time_budget_ms;
+                ImGui::SetNextItemWidth(120);
+                if (ImGui::SliderFloat("Budget (ms)", &budget, 0.0f, 100.0f,
+                                       budget == 0.0f ? "unlimited" : "%.0f ms"))
+                    state.ik_state.time_budget_ms = (double)budget;
+            }
+
             if (ImGui::Button("Solve Frame")) {
                 auto it = ctx.annotations.find(ctx.current_frame_num);
                 if (it != ctx.annotations.end() && !it->second.kp3d.empty()) {
+                    double saved_budget = state.ik_state.time_budget_ms;
+                    state.ik_state.time_budget_ms = 0.0; // no time limit for manual solve
                     mujoco_ik_solve(mj, state.ik_state,
                                     it->second.kp3d.data(),
                                     ctx.skeleton.num_nodes,
                                     ctx.current_frame_num);
+                    state.ik_state.time_budget_ms = saved_budget;
                     state.last_solved_frame = ctx.current_frame_num;
                     // Auto-center camera on the torso body after solve
                     int torso_id = mj_name2id(mj.model, mjOBJ_BODY, "torso");
@@ -153,6 +165,23 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                         state.mjcam.lookat[2] = mj.data->xpos[3*torso_id+2];
                     }
                 }
+            }
+            // Continue button: run more iterations from current pose
+            if (state.ik_state.active_sites > 0 && !state.ik_state.converged) {
+                ImGui::SameLine();
+                if (ImGui::Button("Continue")) {
+                    auto it = ctx.annotations.find(ctx.current_frame_num);
+                    if (it != ctx.annotations.end() && !it->second.kp3d.empty()) {
+                        mujoco_ik_continue(mj, state.ik_state,
+                                           it->second.kp3d.data(),
+                                           ctx.skeleton.num_nodes,
+                                           ctx.current_frame_num,
+                                           state.ik_state.max_iterations);
+                    }
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Run %d more iterations from current pose",
+                                      state.ik_state.max_iterations);
             }
 
             // Auto-solve logic
@@ -176,12 +205,15 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
 
             // Solver status
             if (state.ik_state.active_sites > 0) {
+                const char *status = state.ik_state.converged    ? "Converged"
+                                   : state.ik_state.time_limited ? "Time limit"
+                                   :                               "Not converged";
                 ImVec4 color = state.ik_state.converged
                                    ? ImVec4(0.2f, 0.9f, 0.2f, 1.0f)
                                    : ImVec4(1.0f, 0.7f, 0.2f, 1.0f);
                 ImGui::TextColored(color, "%s in %d iters (%.1f ms)  |  "
                                    "Residual: %.1f mm  |  Sites: %d",
-                                   state.ik_state.converged ? "Converged" : "Not converged",
+                                   status,
                                    state.ik_state.iterations_used,
                                    state.ik_state.solve_time_ms,
                                    state.ik_state.final_residual * 1000.0,
@@ -242,9 +274,10 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                         double dx =  (double)io.MouseDelta.x / (double)vp_h;
                         double dy = -(double)io.MouseDelta.y / (double)vp_h;
 
-                        // Left-drag to orbit
+                        // Left-drag to orbit (negate dy for Blender-style:
+                        // drag down = camera orbits above, looking down)
                         if (ImGui::IsMouseDragging(ImGuiMouseButton_Left))
-                            mjv_moveCamera(mj.model, mjMOUSE_ROTATE_V, dx, dy,
+                            mjv_moveCamera(mj.model, mjMOUSE_ROTATE_V, dx, -dy,
                                            &mj.scene, &state.mjcam);
 
                         // Right-drag to pan
@@ -280,5 +313,6 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                 ImGuiFileDialog::Instance()->Close();
             }
         },
-        ImVec2(600, 700));
+        ImVec2(600, 700),
+        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 }
