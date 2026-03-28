@@ -12,6 +12,10 @@
 #include "gui/bbox_tool.h"
 #include "gui/obb_tool.h"
 #include "gui/sam_tool.h"
+#ifdef RED_HAS_MUJOCO
+#include "mujoco_context.h"
+#include "gui/body_model_window.h"
+#endif
 #include "jarvis_inference.h"
 #ifdef __APPLE__
 #include "jarvis_coreml.h"
@@ -315,6 +319,9 @@ int main(int argc, char **argv) {
     // Inference engine states (not window states — kept separate)
     SamState sam_state;
     JarvisState jarvis_state;
+#ifdef RED_HAS_MUJOCO
+    MujocoContext mujoco_ctx;
+#endif
 #ifdef __APPLE__
     JarvisCoreMLState jarvis_coreml_state;
 #elif defined(_WIN32)
@@ -495,6 +502,9 @@ int main(int argc, char **argv) {
         // Nuke inference engines (different project may use different models)
         sam_state = SamState{};
         jarvis_state = JarvisState{};
+#ifdef RED_HAS_MUJOCO
+        mujoco_ctx.unload();
+#endif
 #ifdef __APPLE__
         jarvis_coreml_state = JarvisCoreMLState{};
 #elif defined(_WIN32)
@@ -556,6 +566,11 @@ int main(int argc, char **argv) {
     panels.add({"SAM Assist",
                 [&]() { DrawSamToolWindow(win.sam_tool, sam_state, ctx); },
                 nullptr});
+#ifdef RED_HAS_MUJOCO
+    panels.add({"Body Model",
+                [&]() { DrawBodyModelWindow(win.body_model, mujoco_ctx, ctx); },
+                nullptr});
+#endif
     panels.add({"Welcome",
                 [&]() { DrawWelcomeWindow(ctx, win); },
                 [&]() { return pm.project_path.empty() && !ps.video_loaded &&
@@ -678,6 +693,9 @@ int main(int argc, char **argv) {
                               [&]() {
                                   sam_state = SamState{};
                                   jarvis_state = JarvisState{};
+#ifdef RED_HAS_MUJOCO
+                                  mujoco_ctx.unload();
+#endif
 #ifdef __APPLE__
                                   jarvis_coreml_state = JarvisCoreMLState{};
 #elif defined(_WIN32)
