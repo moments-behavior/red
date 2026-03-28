@@ -25,7 +25,7 @@
 
 struct ExportWindowState {
     bool show = false;
-    int format_idx = 0; // 0=JARVIS, 1=COCO, 2=DLC, 3=YOLO Pose, 4=YOLO Detect
+    int format_idx = 0; // 0=JARVIS, 1=COCO, 2=DLC, 3=YOLO Pose, 4=YOLO Detect, 5=Nerfstudio
     bool include_video_index = false; // JARVIS: include video_index.json
     std::string output_dir;
     float margin = 50.0f;

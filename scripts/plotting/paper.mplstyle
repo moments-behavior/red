@@ -12,8 +12,8 @@ axes.titlesize: 10
 axes.titleweight: bold
 axes.linewidth: 0.8
 axes.facecolor: white
-axes.edgecolor: 333333
-axes.labelcolor: 333333
+axes.edgecolor: #333333
+axes.labelcolor: #333333
 axes.spines.top: False
 axes.spines.right: False
 
@@ -39,7 +39,7 @@ legend.handlelength: 1.5
 # Figure
 figure.facecolor: white
 figure.dpi: 150
-figure.constrained_layout.use: True
+figure.constrained_layout.use: False
 
 # Saving
 savefig.dpi: 300

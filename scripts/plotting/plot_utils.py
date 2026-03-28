@@ -34,14 +34,6 @@ PHASE_COLORS = {
     "In":    "#68A870",
 }
 
-AGENT_COLORS = {
-    "ball":    "#E8A838",   # orange/gold
-    "rat":     "#4878A8",   # steel blue
-    "chase":   "#C86858",   # dusty red
-    "track":   "#68A870",   # sage green
-    "oracle":  "#9878B8",   # muted purple
-}
-
 ANIMAL_COLORS = {
     "captain":     "#4878A8",
     "emilie":      "#E8A838",

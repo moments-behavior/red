@@ -852,6 +852,7 @@ inline bool export_nerfstudio(const ExportConfig &cfg, const AnnotationMap &amap
             entry["k2"] = cp.dist_coeffs(1);
             entry["p1"] = cp.dist_coeffs(2);
             entry["p2"] = cp.dist_coeffs(3);
+            entry["k3"] = cp.dist_coeffs(4);
 
             jframes.push_back(entry);
         }
@@ -869,8 +870,7 @@ inline bool export_nerfstudio(const ExportConfig &cfg, const AnnotationMap &amap
         f << transforms.dump(2);
     }
 
-    // Extract frames (parallel, capped at 4 concurrent HW decode sessions
-    // to avoid exceeding macOS VideoToolbox session limits)
+    // Extract frames in parallel (software decode, no VT session limit)
     if (!cfg.media_folder.empty()) {
         if (status) *status = "Extracting images...";
         std::string img_dir = cfg.output_folder + "/images";
@@ -884,8 +884,8 @@ inline bool export_nerfstudio(const ExportConfig &cfg, const AnnotationMap &amap
                 cam_vids.push_back({cam, video_path});
         }
 
-        // Process in batches of 4 to stay within VT session limits
-        const size_t batch_size = 4;
+        // Process all cameras concurrently (SW decode has no session limit)
+        const size_t batch_size = cam_vids.size();
         for (size_t start = 0; start < cam_vids.size(); start += batch_size) {
             size_t end = std::min(start + batch_size, cam_vids.size());
             std::vector<std::thread> threads;
