@@ -186,6 +186,7 @@ struct PointSourceMetalContext {
     id<MTLBuffer>  maskCountBuf;  // viz path: atomic mask counter
     id<MTLBuffer>  threshBuf;     // viz path: green_threshold param
     id<MTLBuffer>  domBuf;        // viz path: green_dominance param
+    id<MTLBuffer>  reduceBuf;     // fast path: 8 x uint32 atomic results
 };
 
 
@@ -444,18 +445,27 @@ PointSourceMetalSpot pointsource_metal_detect(PointSourceMetalHandle ctx,
             if (rv != kCVReturnSuccess || !cvTex) return result;
             id<MTLTexture> srcTex = CVMetalTextureGetTexture(cvTex);
 
-            MTLTextureDescriptor *desc =
-                [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatR8Uint
-                    width:width height:height mipmapped:NO];
-            desc.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
-            desc.storageMode = MTLStorageModePrivate;
-            id<MTLTexture> maskTex    = [ctx->device newTextureWithDescriptor:desc];
-            id<MTLTexture> erodedTex  = [ctx->device newTextureWithDescriptor:desc];
-            id<MTLTexture> dilatedTex = [ctx->device newTextureWithDescriptor:desc];
-
-            id<MTLBuffer> resultBuf =
-                [ctx->device newBufferWithLength:8 * sizeof(uint32_t)
-                                         options:MTLResourceStorageModeShared];
+            // Reuse pre-allocated textures (reallocate only on size change)
+            if (ctx->alloc_width != width || ctx->alloc_height != height) {
+                MTLTextureDescriptor *desc =
+                    [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatR8Uint
+                        width:width height:height mipmapped:NO];
+                desc.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
+                desc.storageMode = MTLStorageModePrivate;
+                ctx->maskTex    = [ctx->device newTextureWithDescriptor:desc];
+                ctx->erodedTex  = [ctx->device newTextureWithDescriptor:desc];
+                ctx->dilatedTex = [ctx->device newTextureWithDescriptor:desc];
+                ctx->alloc_width = width;
+                ctx->alloc_height = height;
+            }
+            if (!ctx->reduceBuf) {
+                ctx->reduceBuf = [ctx->device newBufferWithLength:8 * sizeof(uint32_t)
+                                                           options:MTLResourceStorageModeShared];
+            }
+            id<MTLTexture> maskTex    = ctx->maskTex;
+            id<MTLTexture> erodedTex  = ctx->erodedTex;
+            id<MTLTexture> dilatedTex = ctx->dilatedTex;
+            id<MTLBuffer> resultBuf   = ctx->reduceBuf;
             uint32_t *vals = (uint32_t *)resultBuf.contents;
             vals[0] = 0; vals[1] = 0; vals[2] = 0; vals[3] = 0;
             vals[4] = 0xFFFFFFFF; vals[5] = 0xFFFFFFFF; vals[6] = 0; vals[7] = 0;

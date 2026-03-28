@@ -12,9 +12,11 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Polygon
 import numpy as np
 from dataclasses import dataclass
-from typing import Optional
 
-from .plot_utils import apply_style, clean_axes
+try:
+    from .plot_utils import apply_style, clean_axes
+except ImportError:
+    from plot_utils import apply_style, clean_axes
 
 # ── Constants ──
 INTERCEPT_RADIUS = 157.7  # mm, COM-to-ball interception threshold
@@ -262,8 +264,3 @@ def plot_pn_trial(ax, df, N, tau, R2, title=None, config=None):
 
 # ── Convenience: multi-panel grid ──
 
-def plot_trial_grid(trials, ncols=3, figsize=None, show_agents=True, **kwargs):
-    """Plot multiple agent-comparison trials in a grid. Legacy compatibility wrapper."""
-    # This is kept for backward compat but the new preferred API
-    # is plot_agent_comparison() called per-axes.
-    pass

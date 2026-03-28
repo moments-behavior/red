@@ -61,8 +61,8 @@ def extract_frame(video_path: str, frame_number: int, fps: float,
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     cmd = [
         "ffmpeg", "-y",
-        "-ss", f"{timestamp:.6f}",
         "-i", video_path,
+        "-ss", f"{timestamp:.6f}",
         "-frames:v", "1",
         "-qscale:v", "1",
         output_path,
@@ -196,8 +196,11 @@ def main():
         fx, fy = K[0, 0], K[1, 1]
         cx, cy = K[0, 2], K[1, 2]
 
-        w = intr.get("image_width", 3208)
-        h = intr.get("image_height", 2200)
+        if "image_width" not in intr or "image_height" not in intr:
+            print(f"WARNING: No image dimensions for camera {cam_id} in intrinsics.json, skipping")
+            continue
+        w = intr["image_width"]
+        h = intr["image_height"]
 
         c2w = opencv_to_opengl_c2w(R, t)
 
@@ -212,10 +215,11 @@ def main():
                 "cy": cy,
                 "w": w,
                 "h": h,
-                "k1": dist[0],
-                "k2": dist[1],
-                "p1": dist[2],
-                "p2": dist[3],
+                "k1": dist[0] if len(dist) > 0 else 0.0,
+                "k2": dist[1] if len(dist) > 1 else 0.0,
+                "p1": dist[2] if len(dist) > 2 else 0.0,
+                "p2": dist[3] if len(dist) > 3 else 0.0,
+                "k3": dist[4] if len(dist) > 4 else 0.0,
             }
             frames_list.append(entry)
 

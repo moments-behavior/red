@@ -74,7 +74,6 @@ def compute_default_bbox(cameras, padding=100.0, height=300.0):
     # Z: cameras look down, arena floor is likely near the lowest camera Z
     # or significantly below camera mean Z
     z_min_cam = positions[:, 2].min()
-    z_mean = positions[:, 2].mean()
 
     # Arena floor is typically well below cameras
     z_floor = z_min_cam - 200.0
@@ -169,28 +168,45 @@ def load_masks(masks_dir, frame_num, camera_ids):
     return masks
 
 
-def project_points(P, points_3d):
-    """Project Nx3 world points using 3x4 projection matrix P.
+def project_points(K, R, t, dist, points_3d):
+    """Project Nx3 world points with full Brown-Conrady distortion model.
 
-    Returns Nx2 pixel coordinates.
+    Matches red_math.h::projectPoints() — no OpenCV dependency.
+    dist = [k1, k2, p1, p2, k3] (5 elements, OpenCV ordering).
+
+    Returns u, v pixel arrays and "in front of camera" boolean mask.
     """
     N = points_3d.shape[0]
-    # Homogeneous: Nx4
-    ones = np.ones((N, 1), dtype=np.float64)
-    pts_h = np.hstack([points_3d, ones])
+    # Transform to camera frame: cam = R @ pt + t
+    cam = (R @ points_3d.T + t).T  # Nx3
 
-    # Project: (3x4) @ (4xN) -> 3xN
-    projected = P @ pts_h.T  # 3 x N
-
-    # Normalize
-    z = projected[2, :]
+    z = cam[:, 2]
     valid = np.abs(z) > 1e-8
-    u = np.full(N, -1.0)
-    v = np.full(N, -1.0)
-    u[valid] = projected[0, valid] / z[valid]
-    v[valid] = projected[1, valid] / z[valid]
+    xp = np.zeros(N)
+    yp = np.zeros(N)
+    xp[valid] = cam[valid, 0] / z[valid]
+    yp[valid] = cam[valid, 1] / z[valid]
 
-    return u, v, z > 0  # return "in front of camera" flag
+    # Brown-Conrady distortion (matches red_math.h lines 166-171)
+    k1 = dist[0] if len(dist) > 0 else 0.0
+    k2 = dist[1] if len(dist) > 1 else 0.0
+    p1 = dist[2] if len(dist) > 2 else 0.0
+    p2 = dist[3] if len(dist) > 3 else 0.0
+    k3 = dist[4] if len(dist) > 4 else 0.0
+
+    r2 = xp * xp + yp * yp
+    r4 = r2 * r2
+    r6 = r4 * r2
+    radial = 1.0 + k1 * r2 + k2 * r4 + k3 * r6
+    xpp = xp * radial + 2.0 * p1 * xp * yp + p2 * (r2 + 2.0 * xp * xp)
+    ypp = yp * radial + p1 * (r2 + 2.0 * yp * yp) + 2.0 * p2 * xp * yp
+
+    fx, fy = K[0, 0], K[1, 1]
+    cx, cy = K[0, 2], K[1, 2]
+    u = np.where(valid, xpp * fx + cx, -1.0)
+    v = np.where(valid, ypp * fy + cy, -1.0)
+
+    return u, v, z > 0
 
 
 def voxel_carving(cameras, masks, bbox, voxel_size, min_cameras):
@@ -237,11 +253,12 @@ def voxel_carving(cameras, masks, bbox, voxel_size, min_cameras):
 
     for cam_id in cam_ids:
         t0 = time.time()
-        P = cameras[cam_id]["P"]
+        cam = cameras[cam_id]
         mask = masks[cam_id]
         H, W = mask.shape
 
-        u, v, in_front = project_points(P, voxel_centers)
+        dist = cam["dist"] if cam["dist"] is not None else np.zeros(5)
+        u, v, in_front = project_points(cam["K"], cam["R"], cam["t"], dist, voxel_centers)
 
         # Check which projections land inside the mask
         ui = np.round(u).astype(np.int64)
@@ -279,19 +296,15 @@ def save_ply(path, points):
         f.write("property float y\n")
         f.write("property float z\n")
         f.write("end_header\n")
-        for i in range(N):
-            f.write(f"{points[i, 0]:.3f} {points[i, 1]:.3f} {points[i, 2]:.3f}\n")
+        np.savetxt(f, points, fmt="%.3f")
 
 
 def save_obj(path, vertices, faces):
     """Save mesh as OBJ file."""
     with open(path, "w") as f:
         f.write("# Visual hull mesh\n")
-        for v in vertices:
-            f.write(f"v {v[0]:.6f} {v[1]:.6f} {v[2]:.6f}\n")
-        for face in faces:
-            # OBJ is 1-indexed
-            f.write(f"f {face[0]+1} {face[1]+1} {face[2]+1}\n")
+        np.savetxt(f, vertices, fmt="v %.6f %.6f %.6f")
+        np.savetxt(f, faces + 1, fmt="f %d %d %d")  # OBJ is 1-indexed
 
 
 def laplacian_smooth(vertices, faces, iterations=3, factor=0.3):
@@ -526,7 +539,12 @@ def main():
     # --- Bounding box ---
     if args.bbox:
         bbox = [float(x) for x in args.bbox.split(",")]
-        assert len(bbox) == 6, "bbox must have 6 values: x_min,y_min,z_min,x_max,y_max,z_max"
+        if len(bbox) != 6:
+            print("ERROR: bbox must have 6 values: x_min,y_min,z_min,x_max,y_max,z_max")
+            sys.exit(1)
+        if bbox[0] >= bbox[3] or bbox[1] >= bbox[4] or bbox[2] >= bbox[5]:
+            print("ERROR: bbox min must be < max for all axes")
+            sys.exit(1)
     else:
         bbox = compute_default_bbox(cameras)
 
