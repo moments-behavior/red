@@ -147,17 +147,12 @@ struct MujocoContext {
         for (int i = 0; i < mjNGROUP; i++) opt.sitegroup[i] = 1;
         mjv_makeScene(model, &scene, 2000);
 
-        // Enlarge keypoint sites for visibility (default ~5mm is too small)
+        // Shrink keypoint sites to 50% of default (4mm radius)
         for (int i = 0; i < (int)model->nsite; i++) {
-            float r = 0.008f; // 8mm radius — visible but not overwhelming
+            float r = 0.004f; // 4mm radius
             model->site_size[3 * i + 0] = r;
             model->site_size[3 * i + 1] = r;
             model->site_size[3 * i + 2] = r;
-            // Make sites bright red for easy identification
-            model->site_rgba[4 * i + 0] = 1.0f;
-            model->site_rgba[4 * i + 1] = 0.2f;
-            model->site_rgba[4 * i + 2] = 0.2f;
-            model->site_rgba[4 * i + 3] = 1.0f;
         }
 
         // Build site name -> MuJoCo site index lookup
@@ -239,6 +234,24 @@ struct MujocoContext {
             } else {
                 std::cerr << "[MuJoCo] WARNING: no site for skeleton node '"
                           << node_name << "'" << std::endl;
+            }
+        }
+
+        // Color each mapped site to match the skeleton keypoint color
+        for (int i = 0; i < num_sites; i++) {
+            int node_idx = site_to_skeleton[i];
+            if (node_idx >= 0 && node_idx < (int)skeleton.node_colors.size()) {
+                const ImVec4 &c = skeleton.node_colors[node_idx];
+                model->site_rgba[4 * i + 0] = c.x;
+                model->site_rgba[4 * i + 1] = c.y;
+                model->site_rgba[4 * i + 2] = c.z;
+                model->site_rgba[4 * i + 3] = 1.0f;
+            } else {
+                // Unmapped sites: dim gray
+                model->site_rgba[4 * i + 0] = 0.4f;
+                model->site_rgba[4 * i + 1] = 0.4f;
+                model->site_rgba[4 * i + 2] = 0.4f;
+                model->site_rgba[4 * i + 3] = 0.5f;
             }
         }
 

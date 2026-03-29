@@ -152,7 +152,9 @@ static std::vector<Vertex> make_unit_sphere(int rings, int sectors) {
             float theta = 2.0f * M_PI * s / sectors;
             float sp = sinf(phi), cp = cosf(phi);
             float st = sinf(theta), ct = cosf(theta);
-            simd_float3 n = {sp * ct, cp, sp * st};
+            // Z-up: pole at (0,0,1). Matches capsule winding for consistent
+            // CCW front-face order with MTLWindingCounterClockwise.
+            simd_float3 n = {sp * ct, sp * st, cp};
             verts.push_back({n, n});
         }
     }
@@ -228,12 +230,12 @@ static std::vector<uint32_t> make_capsule_indices(int rings, int sectors) {
     return idx;
 }
 
-// Unit cylinder tube (open ends): radius 1, extends from z=-0.5 to z=+0.5.
-// Used for capsule rendering where hemisphere caps are drawn separately.
+// Unit cylinder tube (open ends): radius 1, extends from z=-1 to z=+1.
+// When scaled by half_len in Z, gives correct extent [-half_len, +half_len].
 static std::vector<Vertex> make_unit_cylinder(int sectors) {
     std::vector<Vertex> verts;
     for (int cap = 0; cap < 2; cap++) {
-        float z = cap ? -0.5f : 0.5f;
+        float z = cap ? -1.0f : 1.0f;
         for (int s = 0; s <= sectors; s++) {
             float theta = 2.0f * M_PI * s / sectors;
             simd_float3 n = {cosf(theta), sinf(theta), 0.0f};
@@ -623,7 +625,10 @@ void mujoco_renderer_render(MujocoRenderer *r, MujocoContext *mj,
                 u.model_mat = model_mat;
                 u.mvp = simd_mul(vp, model_mat);
                 extract_normal_columns(model_mat, u.normal_col0, u.normal_col1, u.normal_col2);
-                u.color = {g.rgba[0], g.rgba[1], g.rgba[2], g.rgba[3]};
+                // Force full opacity for body geoms (mjvScene may set alpha < 1
+                // for certain geom groups, causing see-through artifacts)
+                float alpha = (g.objtype == mjOBJ_SITE) ? g.rgba[3] : 1.0f;
+                u.color = {g.rgba[0], g.rgba[1], g.rgba[2], alpha};
                 [enc setVertexBuffer:vb offset:0 atIndex:0];
                 [enc setVertexBytes:&u length:sizeof(u) atIndex:1];
                 [enc drawIndexedPrimitives:MTLPrimitiveTypeTriangle
@@ -641,34 +646,10 @@ void mujoco_renderer_render(MujocoRenderer *r, MujocoContext *mj,
                     break;
                 }
                 case mjGEOM_CAPSULE: {
-                    // Render as 3 parts: cylinder tube + 2 hemisphere caps.
-                    // This avoids non-uniform Z scaling on the spherical caps.
-                    float rad = g.size[0];
-                    float hl  = g.size[2]; // half cylinder length
-
-                    // 1) Cylinder tube: scale (radius, radius, half_len)
-                    draw_geom(r->cylinder_vb, r->cylinder_ib, r->cylinder_idx_count,
-                              geom_model_matrix(g, rad, rad, hl));
-
-                    // 2) Top sphere cap: translate +half_len along local Z, uniform radius
-                    // Local Z axis = column 2 of geom rotation (mat[6], mat[7], mat[8])
-                    {
-                        mjvGeom gc = g; // copy pos, mat, rgba
-                        gc.pos[0] += hl * g.mat[6];
-                        gc.pos[1] += hl * g.mat[7];
-                        gc.pos[2] += hl * g.mat[8];
-                        draw_geom(r->sphere_vb, r->sphere_ib, r->sphere_idx_count,
-                                  geom_model_matrix(gc, rad, rad, rad));
-                    }
-                    // 3) Bottom sphere cap: translate -half_len along local Z
-                    {
-                        mjvGeom gc = g;
-                        gc.pos[0] -= hl * g.mat[6];
-                        gc.pos[1] -= hl * g.mat[7];
-                        gc.pos[2] -= hl * g.mat[8];
-                        draw_geom(r->sphere_vb, r->sphere_ib, r->sphere_idx_count,
-                                  geom_model_matrix(gc, rad, rad, rad));
-                    }
+                    float radius = g.size[0];
+                    float half_len = g.size[2];
+                    draw_geom(r->capsule_vb, r->capsule_ib, r->capsule_idx_count,
+                              geom_model_matrix(g, radius, radius, half_len));
                     break;
                 }
                 case mjGEOM_CYLINDER: {

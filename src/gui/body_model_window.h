@@ -146,14 +146,15 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
 
             if (!mj.model) return; // Defensive: loaded but model null
 
-            // --- Model info ---
+            // --- Controls (collapsible) ---
+            if (ImGui::CollapsingHeader("Controls", ImGuiTreeNodeFlags_DefaultOpen)) {
+
             ImGui::Text("Model: %s", mj.model_path.c_str());
             ImGui::Text("Sites: %d/%d matched  |  Bodies: %d  |  Joints: %d",
                         mj.mapped_count, ctx.skeleton.num_nodes,
                         (int)mj.model->nbody, (int)mj.model->njnt);
             ImGui::Separator();
 
-            // --- Solver controls ---
             ImGui::Text("IK Solver");
             if (ImGui::SliderFloat("Scale factor", &mj.scale_factor, 0.0f, 3.0f,
                                    mj.scale_factor == 0.0f ? "auto" : "%.4f"))
@@ -213,25 +214,6 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Run %d more iterations from current pose",
                                       state.ik_state.max_iterations);
-            }
-
-            // Auto-solve logic
-            if (state.auto_solve && ctx.current_frame_num != state.last_solved_frame) {
-                state.last_solved_frame = ctx.current_frame_num;
-                auto it = ctx.annotations.find(ctx.current_frame_num);
-                if (it != ctx.annotations.end() && !it->second.kp3d.empty()) {
-                    mujoco_ik_solve(mj, state.ik_state,
-                                    it->second.kp3d.data(),
-                                    ctx.skeleton.num_nodes,
-                                    ctx.current_frame_num);
-                    // Follow the model
-                    int torso_id = mj_name2id(mj.model, mjOBJ_BODY, "torso");
-                    if (torso_id >= 0) {
-                        state.mjcam.lookat[0] = mj.data->xpos[3*torso_id+0];
-                        state.mjcam.lookat[1] = mj.data->xpos[3*torso_id+1];
-                        state.mjcam.lookat[2] = mj.data->xpos[3*torso_id+2];
-                    }
-                }
             }
 
             // Solver status
@@ -330,7 +312,32 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                 }
             }
 
-            // --- 3D Viewport ---
+            } // end CollapsingHeader("Controls")
+
+            // Auto-solve runs every frame regardless of header state
+            if (state.auto_solve && ctx.current_frame_num != state.last_solved_frame) {
+                state.last_solved_frame = ctx.current_frame_num;
+                auto it = ctx.annotations.find(ctx.current_frame_num);
+                if (it != ctx.annotations.end() && !it->second.kp3d.empty()) {
+                    mujoco_ik_solve(mj, state.ik_state,
+                                    it->second.kp3d.data(),
+                                    ctx.skeleton.num_nodes,
+                                    ctx.current_frame_num);
+                    int torso_id = mj_name2id(mj.model, mjOBJ_BODY, "torso");
+                    if (torso_id >= 0) {
+                        state.mjcam.lookat[0] = mj.data->xpos[3*torso_id+0];
+                        state.mjcam.lookat[1] = mj.data->xpos[3*torso_id+1];
+                        state.mjcam.lookat[2] = mj.data->xpos[3*torso_id+2];
+                    }
+                }
+            }
+
+            // --- Unload button (always visible, before viewport) ---
+            if (ImGui::Button("Unload Model")) {
+                state.unload_requested = true;
+            }
+
+            // --- 3D Viewport (fills remaining space) ---
             ImVec2 avail = ImGui::GetContentRegionAvail();
             float vp_w = avail.x > 100 ? avail.x : 400;
             float vp_h = avail.y > 100 ? avail.y : 400;
@@ -388,10 +395,6 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                 }
             }
 
-            // --- Unload (deferred to next frame to avoid mid-render teardown) ---
-            if (ImGui::Button("Unload Model")) {
-                state.unload_requested = true;
-            }
 #endif // RED_HAS_MUJOCO
         },
         [&]() {
