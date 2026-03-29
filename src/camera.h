@@ -18,6 +18,8 @@ struct CameraParams {
     Eigen::Vector3d tvec = Eigen::Vector3d::Zero();
     Eigen::Matrix<double, 3, 4> projection_mat = Eigen::Matrix<double, 3, 4>::Zero();
     bool telecentric = false;
+    int image_width = 0;
+    int image_height = 0;
 };
 
 inline bool camera_load_params_from_yaml(const std::string &calibration_file,
@@ -60,6 +62,12 @@ inline bool camera_load_params_from_yaml(const std::string &calibration_file,
             for (int i = 0; i < n; i++)
                 camera_params.dist_coeffs(i) = D_raw.data()[i];
         }
+
+        // Image dimensions
+        if (yaml.hasKey("image_width"))
+            camera_params.image_width = yaml.getInt("image_width");
+        if (yaml.hasKey("image_height"))
+            camera_params.image_height = yaml.getInt("image_height");
 
     } catch (const std::exception &e) {
         error_message = "Error reading " + calibration_file + ": " + e.what();

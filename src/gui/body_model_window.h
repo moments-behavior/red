@@ -103,6 +103,8 @@ struct BodyModelState {
 
     // Calibration camera view: -1 = free camera, 0..N-1 = calibration camera index
     int selected_camera = -1;
+    ViewOverride calib_view_override;
+    float calib_aspect = 0.0f; // camera aspect ratio (0 = use viewport)
 
     // Renderer handle + native MuJoCo camera
 #ifdef RED_HAS_MUJOCO
@@ -885,40 +887,64 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                     ImGui::EndCombo();
                 }
 
-                // Apply calibration camera pose to mjvCamera
+                // Build direct view/projection override from calibration extrinsics.
+                // This preserves the full rotation (including roll) that spherical
+                // coordinates would lose.
                 if (state.selected_camera >= 0 &&
                     state.selected_camera < (int)ctx.pm.camera_params.size()) {
+                    // Stored in BodyModelState for the render call below
+                    state.calib_view_override.active = true;
+
                     const CameraParams &cp = ctx.pm.camera_params[state.selected_camera];
-
-                    // Camera position in world: eye = -R^T * t
-                    Eigen::Vector3d eye_world = -cp.r.transpose() * cp.tvec;
-
-                    // Scale from calibration units (mm) to model units (m)
                     double sf = (double)mj.scale_factor;
-                    if (sf <= 0.0) sf = 0.001; // auto: assume mm→m
-                    eye_world *= sf;
+                    if (sf <= 0.0) sf = 0.001;
 
-                    // Camera forward direction in world: R^T * [0,0,1]
-                    // (OpenCV camera looks along +Z in camera frame)
-                    Eigen::Vector3d fwd = cp.r.transpose() * Eigen::Vector3d(0, 0, 1);
-                    fwd.normalize();
+                    // Eye position in world (scaled to model units)
+                    Eigen::Vector3d eye_w = -cp.r.transpose() * cp.tvec * sf;
 
-                    // Set lookat to a point along the forward direction,
-                    // at the distance from camera to world origin
-                    double dist_to_origin = eye_world.norm();
-                    double lookat_dist = std::max(dist_to_origin * 0.8, 0.1);
+                    // Camera axes in world frame:
+                    //   OpenCV: X-right, Y-down, Z-forward
+                    //   We need: forward, up, right for look_at
+                    Eigen::Vector3d cam_fwd = cp.r.transpose() * Eigen::Vector3d(0, 0, 1);
+                    Eigen::Vector3d cam_up  = cp.r.transpose() * Eigen::Vector3d(0, -1, 0); // -Y = up
+                    Eigen::Vector3d lookat_pt = eye_w + cam_fwd.normalized();
 
-                    Eigen::Vector3d lookat = eye_world + lookat_dist * fwd;
+                    // Build view matrix (same as renderer's look_at but via Eigen)
+                    Eigen::Vector3d f = (lookat_pt - eye_w).normalized();
+                    Eigen::Vector3d s = f.cross(cam_up).normalized();
+                    Eigen::Vector3d u = s.cross(f);
+                    Eigen::Matrix4f V = Eigen::Matrix4f::Zero();
+                    V(0,0) = s.x();  V(0,1) = s.y();  V(0,2) = s.z();  V(0,3) = -s.dot(eye_w);
+                    V(1,0) = u.x();  V(1,1) = u.y();  V(1,2) = u.z();  V(1,3) = -u.dot(eye_w);
+                    V(2,0) = -f.x(); V(2,1) = -f.y(); V(2,2) = -f.z(); V(2,3) = f.dot(eye_w);
+                    V(3,3) = 1.0f;
 
-                    state.mjcam.lookat[0] = lookat.x();
-                    state.mjcam.lookat[1] = lookat.y();
-                    state.mjcam.lookat[2] = lookat.z();
-                    state.mjcam.distance = lookat_dist;
+                    // Projection from camera intrinsics (Metal NDC: Z in [0,1])
+                    double fx = cp.k(0,0), fy = cp.k(1,1);
+                    double cx = cp.k(0,2), cy = cp.k(1,2);
+                    double img_w = cp.image_width  > 0 ? cp.image_width  : 3208.0;
+                    double img_h = cp.image_height > 0 ? cp.image_height : 2200.0;
+                    double near_z = 0.001, far_z = 100.0;
+                    Eigen::Matrix4f P = Eigen::Matrix4f::Zero();
+                    P(0,0) = 2.0f * fx / img_w;
+                    P(0,2) = 1.0f - 2.0f * cx / img_w;
+                    P(1,1) = 2.0f * fy / img_h;
+                    P(1,2) = 2.0f * cy / img_h - 1.0f;
+                    P(2,2) = far_z / (near_z - far_z);
+                    P(2,3) = far_z * near_z / (near_z - far_z);
+                    P(3,2) = -1.0f;
 
-                    // MuJoCo: forward = { ce*ca, ce*sa, se }
-                    state.mjcam.azimuth = atan2(fwd.y(), fwd.x()) * 180.0 / M_PI;
-                    state.mjcam.elevation = asin(std::clamp(fwd.z(), -1.0, 1.0))
-                                            * 180.0 / M_PI;
+                    // Store as column-major for Metal (Eigen is column-major by default)
+                    memcpy(state.calib_view_override.view, V.data(), 16 * sizeof(float));
+                    memcpy(state.calib_view_override.proj, P.data(), 16 * sizeof(float));
+                    state.calib_view_override.eye[0] = (float)eye_w.x();
+                    state.calib_view_override.eye[1] = (float)eye_w.y();
+                    state.calib_view_override.eye[2] = (float)eye_w.z();
+
+                    // Store aspect ratio for viewport sizing
+                    state.calib_aspect = (float)(img_w / img_h);
+                } else {
+                    state.calib_view_override.active = false;
                 }
             }
 
@@ -960,6 +986,15 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
             ImVec2 avail = ImGui::GetContentRegionAvail();
             float vp_w = avail.x > 100 ? avail.x : 400;
             float vp_h = avail.y > 100 ? avail.y : 400;
+
+            // When a calibration camera is selected, match its aspect ratio
+            if (state.calib_view_override.active && state.calib_aspect > 0.0f) {
+                float fit_h = vp_w / state.calib_aspect;
+                float fit_w = vp_h * state.calib_aspect;
+                if (fit_h <= vp_h) vp_h = fit_h; // width-limited
+                else               vp_w = fit_w; // height-limited
+            }
+
             uint32_t w = (uint32_t)vp_w, h = (uint32_t)vp_h;
 
             // Create or resize renderer
@@ -973,9 +1008,11 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
             }
 
             if (state.renderer) {
+                const ViewOverride *vo = state.calib_view_override.active
+                    ? &state.calib_view_override : nullptr;
                 mujoco_renderer_render(state.renderer, &mj, &state.mjcam,
                                        state.show_skin, state.show_bodies,
-                                       state.show_site_markers, state.show_arena);
+                                       state.show_site_markers, state.show_arena, vo);
                 ImTextureID tex = mujoco_renderer_get_texture(state.renderer);
                 if (tex) {
                     ImVec2 img_pos = ImGui::GetCursorScreenPos();
