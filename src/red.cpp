@@ -19,6 +19,7 @@
 #include "jarvis_inference.h"
 #ifdef __APPLE__
 #include "jarvis_coreml.h"
+#include <CoreGraphics/CoreGraphics.h>
 #endif
 #include "gui/jarvis_predict_window.h"
 #include "gui/annotation_dialog.h"
@@ -622,6 +623,7 @@ int main(int argc, char **argv) {
         ImGui_ImplOpenGL3_NewFrame();
 #endif
         ImGui_ImplGlfw_NewFrame();
+
         ImGui::NewFrame();
 
         // Flush deferred callbacks (runs before any rendering to avoid

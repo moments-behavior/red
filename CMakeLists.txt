@@ -70,7 +70,7 @@ if(APPLE)
 
     file(GLOB IMGUI_SRC
         ${DIR_IMGUI}/*.cpp
-        ${DIR_IMGUI}/backends/imgui_impl_glfw.cpp
+        ${CMAKE_SOURCE_DIR}/src/imgui_impl_glfw_patched.cpp  # patched: macOS modifier key fix
         ${DIR_IMGUI}/backends/imgui_impl_metal.mm
         ${DIR_IMGUI}/misc/cpp/imgui_stdlib.cpp
         ${DIR_FILEBROWSER}/ImGuiFileDialog.cpp
@@ -1344,7 +1344,7 @@ else()
     file(GLOB SRC_FILES src/*.cpp)
     file(GLOB IMGUI_SRC
         ${DIR_IMGUI}/*.cpp
-        ${DIR_IMGUI}/backends/imgui_impl_glfw.cpp
+        ${CMAKE_SOURCE_DIR}/src/imgui_impl_glfw_patched.cpp  # patched: macOS modifier key fix
         ${DIR_IMGUI}/backends/imgui_impl_opengl3.cpp
         ${DIR_IMGUI}/misc/cpp/imgui_stdlib.cpp
         ${DIR_FILEBROWSER}/ImGuiFileDialog.cpp
