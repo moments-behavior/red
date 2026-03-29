@@ -1017,8 +1017,38 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                 }
 
                 if (!state.alignment_mode) {
-                    ImGui::TextWrapped("Label the 4 arena corners to align the "
-                        "calibration coordinate system with the MuJoCo arena.");
+                    // Quick axis flip: 180° rotation around Z (flips X and Y)
+                    // This is the most common mismatch between calibration and MuJoCo frames.
+                    {
+                        bool flip = false;
+                        if (!state.arena_align.valid) {
+                            // Check if R is approximately diag(-1,-1,1)
+                            flip = false;
+                        } else {
+                            flip = (state.arena_align.R(0,0) < -0.9 && state.arena_align.R(1,1) < -0.9);
+                        }
+                        if (ImGui::Checkbox("Flip X/Y (180° around Z)", &flip)) {
+                            if (flip) {
+                                state.arena_align.valid = true;
+                                state.arena_align.R = Eigen::Matrix3d::Identity();
+                                state.arena_align.R(0,0) = -1.0;
+                                state.arena_align.R(1,1) = -1.0;
+                                state.arena_align.t = Eigen::Vector3d::Zero();
+                                state.arena_align.scale = 0.001; // mm → m
+                                state.arena_align.residual_mm = 0.0;
+                                state.arena_align.corners_set = false;
+                            } else {
+                                state.arena_align = ArenaAlignment{};
+                            }
+                            mujoco_ik_reset(state.ik_state);
+                            state.last_solved_frame = -1;
+                        }
+                        if (ImGui::IsItemHovered())
+                            ImGui::SetTooltip("Common fix: calibration X/Y axes point opposite\n"
+                                "to MuJoCo. Applies R=diag(-1,-1,1) with mm->m scaling.");
+                    }
+
+                    ImGui::TextWrapped("Or label the 4 arena corners for full alignment:");
 
                     // Load Previous: reuse saved corners without re-labeling
                     if (ctx.user_settings.arena_corners.size() == 12) {
