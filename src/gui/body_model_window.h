@@ -245,6 +245,12 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
             ImGui::SameLine();
             ImGui::Checkbox("Arena", &state.show_arena);
 
+            if (state.show_skin && mj.model->nskin > 0) {
+                ImGui::SetNextItemWidth(200);
+                ImGui::SliderFloat("Skin inflate", &mj.model->skin_inflate[0],
+                                   0.0f, 0.01f, "%.4f m");
+            }
+
             // --- Initialize MuJoCo camera on first use ---
             if (!state.cam_initialized) {
                 mjv_defaultCamera(&state.mjcam);
