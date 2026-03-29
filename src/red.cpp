@@ -19,6 +19,7 @@
 #include "jarvis_inference.h"
 #ifdef __APPLE__
 #include "jarvis_coreml.h"
+#include <CoreGraphics/CoreGraphics.h>
 #elif defined(_WIN32)
 #include "jarvis_tensorrt.h"
 #endif
@@ -646,6 +647,7 @@ int main(int argc, char **argv) {
         ImGui_ImplOpenGL3_NewFrame();
 #endif
         ImGui_ImplGlfw_NewFrame();
+
         ImGui::NewFrame();
 
         // Flush deferred callbacks (runs before any rendering to avoid
