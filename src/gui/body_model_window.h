@@ -25,6 +25,23 @@
 
 enum IKMethod { IK_DM_CONTROL = 0, IK_STAC = 1 };
 
+// A saved calibration result (default, STAC, STAC symmetric, etc.)
+struct CalibrationEntry {
+    std::string name;
+    bool   symmetric      = false;
+    int    n_iters        = 0;
+    int    n_samples      = 0;
+    int    m_max_iters    = 0;
+    double m_lr           = 0;
+    double m_reg_coef     = 0;
+    double pre_residual   = 0;   // mm
+    double post_residual  = 0;   // mm
+    double time_s         = 0;
+    std::vector<double> site_offsets;       // 3*nsite (delta from original)
+    std::vector<std::string> site_names;    // nsite
+    std::vector<double> displacement_mm;    // per-site |offset| in mm
+};
+
 // Per-frame result for parallel export
 struct QposResult {
     int frame_num;
@@ -58,8 +75,15 @@ struct BodyModelState {
     StacState stac_state;
     bool stac_calibrating = false;
 
+    // Calibration history: entry 0 is always "Default" (zero offsets)
+    std::vector<CalibrationEntry> calib_history;
+    int active_calibration = 0; // index into calib_history
+
     // Export state
     MujocoExportState export_state;
+
+    // Controls section height (user can drag splitter)
+    float controls_height = 300.0f;
 
     // Display options
     bool auto_solve = false;
@@ -464,7 +488,11 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
 
             if (!mj.model) return; // Defensive: loaded but model null
 
-            // --- Controls (collapsible) ---
+            // --- Scrollable controls region ---
+            float min_ctrl_h = 60.0f, max_ctrl_h = ImGui::GetContentRegionAvail().y - 150.0f;
+            state.controls_height = std::clamp(state.controls_height, min_ctrl_h, max_ctrl_h);
+            ImGui::BeginChild("##BodyModelControls", ImVec2(0, state.controls_height), true);
+
             if (ImGui::CollapsingHeader("Controls", ImGuiTreeNodeFlags_DefaultOpen)) {
 
             ImGui::Text("Model: %s", mj.model_path.c_str());
@@ -591,8 +619,25 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
             // --- STAC calibration controls ---
             if (state.ik_method == IK_STAC) {
                 ImGui::Separator();
+
+                // Initialize default entry if history is empty
+                if (state.calib_history.empty()) {
+                    CalibrationEntry def;
+                    def.name = "Default (XML)";
+                    int ns = (int)mj.model->nsite;
+                    def.site_offsets.assign(3 * ns, 0.0);
+                    def.displacement_mm.assign(ns, 0.0);
+                    def.site_names.resize(ns);
+                    for (int i = 0; i < ns; i++) {
+                        const char *n = mj_id2name(mj.model, mjOBJ_SITE, i);
+                        def.site_names[i] = n ? n : "";
+                    }
+                    state.calib_history.push_back(std::move(def));
+                    state.active_calibration = 0;
+                }
+
+                // --- Progress display during calibration ---
                 if (state.stac_calibrating) {
-                    // Live progress display
                     int round = state.stac_state.current_round.load(std::memory_order_relaxed);
                     int total_rounds = state.stac_state.total_rounds.load(std::memory_order_relaxed);
                     int phase = state.stac_state.phase.load(std::memory_order_relaxed);
@@ -604,57 +649,188 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                                            : (phase == 2) ? "M-phase (offset SGD)"
                                            : (phase == 3) ? "Final Q-phase"
                                            : "Starting...";
-
                     ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.3f, 1.0f),
                         "STAC Calibrating — Round %d/%d", round, total_rounds);
                     ImGui::Text("%s", phase_name);
-
                     if (phase == 1 || phase == 3) {
                         float frac = frames_total > 0 ? (float)frames_done / frames_total : 0.0f;
-                        char buf[64];
-                        snprintf(buf, sizeof(buf), "%d / %d frames", frames_done, frames_total);
+                        char buf[64]; snprintf(buf, sizeof(buf), "%d / %d frames", frames_done, frames_total);
                         ImGui::ProgressBar(frac, ImVec2(-1, 0), buf);
                     } else if (phase == 2) {
                         float frac = state.stac_state.m_max_iters > 0
                             ? (float)m_done / state.stac_state.m_max_iters : 0.0f;
-                        char buf[64];
-                        snprintf(buf, sizeof(buf), "%d / %d SGD iters", m_done, state.stac_state.m_max_iters);
+                        char buf[64]; snprintf(buf, sizeof(buf), "%d / %d SGD iters", m_done, state.stac_state.m_max_iters);
                         ImGui::ProgressBar(frac, ImVec2(-1, 0), buf);
                     }
 
-                    // Check if calibration finished (phase went back to 0)
+                    // Check if calibration finished
                     if (state.stac_state.calibrated) {
                         state.stac_calibrating = false;
                         mujoco_ik_reset(state.ik_state);
                         state.last_solved_frame = -1;
-                        ctx.toasts.push("STAC calibration: " +
+
+                        // Build calibration entry from completed STAC
+                        CalibrationEntry entry;
+                        entry.name = state.stac_state.symmetric ? "STAC Symmetric" : "STAC";
+                        entry.symmetric = state.stac_state.symmetric;
+                        entry.n_iters = state.stac_state.n_iters;
+                        entry.n_samples = state.stac_state.frames_used;
+                        entry.m_max_iters = state.stac_state.m_max_iters;
+                        entry.m_lr = state.stac_state.m_lr;
+                        entry.m_reg_coef = state.stac_state.m_reg_coef;
+                        entry.pre_residual = state.stac_state.pre_residual;
+                        entry.post_residual = state.stac_state.post_residual;
+                        entry.time_s = state.stac_state.calibration_time_s;
+                        entry.site_offsets = state.stac_state.site_offsets;
+                        int ns = (int)entry.site_offsets.size() / 3;
+                        entry.site_names.resize(ns);
+                        entry.displacement_mm.resize(ns);
+                        for (int i = 0; i < ns; i++) {
+                            const char *n = mj_id2name(mj.model, mjOBJ_SITE, i);
+                            entry.site_names[i] = n ? n : "";
+                            double ox = entry.site_offsets[3*i], oy = entry.site_offsets[3*i+1], oz = entry.site_offsets[3*i+2];
+                            entry.displacement_mm[i] = std::sqrt(ox*ox + oy*oy + oz*oz) * 1000.0;
+                        }
+                        state.calib_history.push_back(std::move(entry));
+                        state.active_calibration = (int)state.calib_history.size() - 1;
+                        ctx.toasts.push("STAC: " +
                             std::to_string((int)state.stac_state.pre_residual) + " mm -> " +
                             std::to_string((int)state.stac_state.post_residual) + " mm");
                     }
-                } else if (state.stac_state.calibrated) {
-                    ImGui::TextColored(ImVec4(0.2f, 0.9f, 0.2f, 1.0f),
-                        "STAC calibrated: %.1f mm -> %.1f mm (%d frames, %.1fs)",
-                        state.stac_state.pre_residual,
-                        state.stac_state.post_residual,
-                        state.stac_state.frames_used,
-                        state.stac_state.calibration_time_s);
-                    if (ImGui::Button("Reset Offsets")) {
-                        stac_reset(mj, state.stac_state);
-                        mujoco_ik_reset(state.ik_state);
-                        state.last_solved_frame = -1;
-                    }
-                } else {
-                    ImGui::TextWrapped("STAC calibrates keypoint site positions on "
-                        "the body model using multiple labeled frames.");
+                }
+
+                // --- New calibration controls ---
+                if (!state.stac_calibrating) {
                     ImGui::SliderInt("Alternating rounds", &state.stac_state.n_iters, 1, 10);
                     ImGui::SliderInt("Sample frames", &state.stac_state.n_sample_frames, 50, 500);
+                    ImGui::Checkbox("Symmetric KP Sites", &state.stac_state.symmetric);
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Force bilateral symmetry: midline sites stay on "
+                            "midline,\nL/R pairs get mirrored offsets (Y-axis reflection)");
                     if (ImGui::Button("Calibrate Offsets")) {
                         state.stac_calibrating = true;
-                        // Launch calibration in background thread
+                        // Reset to default offsets before calibrating
+                        stac_reset(mj, state.stac_state);
                         std::thread([&mj, &state, &ctx]() {
                             stac_calibrate(mj, state.stac_state, state.ik_state,
-                                           ctx.annotations, ctx.skeleton.num_nodes);
+                                           ctx.annotations, ctx.skeleton.num_nodes,
+                                           &ctx.skeleton.node_names);
                         }).detach();
+                    }
+                }
+
+                // --- Calibration history table ---
+                if (state.calib_history.size() > 1) {
+                    ImGui::Separator();
+                    ImGui::Text("Site Placements");
+
+                    if (ImGui::BeginTable("##CalibHistory", 5,
+                            ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+                            ImGuiTableFlags_SizingFixedFit)) {
+                        ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 20);
+                        ImGui::TableSetupColumn("Name");
+                        ImGui::TableSetupColumn("Residual");
+                        ImGui::TableSetupColumn("Settings");
+                        ImGui::TableSetupColumn("Time");
+                        ImGui::TableHeadersRow();
+
+                        for (int ci = 0; ci < (int)state.calib_history.size(); ci++) {
+                            auto &c = state.calib_history[ci];
+                            ImGui::TableNextRow();
+                            bool is_active = (ci == state.active_calibration);
+
+                            // Radio button
+                            ImGui::TableSetColumnIndex(0);
+                            char radio_id[32]; snprintf(radio_id, sizeof(radio_id), "##cr%d", ci);
+                            if (ImGui::RadioButton(radio_id, is_active) && !is_active) {
+                                // Switch to this calibration
+                                state.active_calibration = ci;
+                                if (ci == 0) {
+                                    stac_reset(mj, state.stac_state);
+                                } else {
+                                    // Apply these offsets
+                                    if (state.stac_state.original_site_pos.empty()) {
+                                        int ns = (int)mj.model->nsite;
+                                        state.stac_state.original_site_pos.assign(
+                                            mj.model->site_pos, mj.model->site_pos + 3*ns);
+                                    }
+                                    state.stac_state.site_offsets = c.site_offsets;
+                                    stac_apply_offsets(mj, state.stac_state);
+                                    state.stac_state.calibrated = true;
+                                }
+                                mujoco_ik_reset(state.ik_state);
+                                state.last_solved_frame = -1;
+                            }
+
+                            // Name
+                            ImGui::TableSetColumnIndex(1);
+                            if (is_active)
+                                ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.3f, 1.0f), "%s", c.name.c_str());
+                            else
+                                ImGui::Text("%s", c.name.c_str());
+
+                            // Residual
+                            ImGui::TableSetColumnIndex(2);
+                            if (ci == 0)
+                                ImGui::TextDisabled("—");
+                            else
+                                ImGui::Text("%.1f -> %.1f mm", c.pre_residual, c.post_residual);
+
+                            // Settings
+                            ImGui::TableSetColumnIndex(3);
+                            if (ci == 0)
+                                ImGui::TextDisabled("—");
+                            else
+                                ImGui::Text("%dr %ds %s", c.n_iters, c.n_samples,
+                                    c.symmetric ? "sym" : "");
+
+                            // Time
+                            ImGui::TableSetColumnIndex(4);
+                            if (ci == 0)
+                                ImGui::TextDisabled("—");
+                            else
+                                ImGui::Text("%.1fs", c.time_s);
+                        }
+                        ImGui::EndTable();
+                    }
+
+                    // Per-site displacement details for active calibration
+                    auto &active = state.calib_history[state.active_calibration];
+                    if (state.active_calibration > 0 && !active.displacement_mm.empty()) {
+                        if (ImGui::TreeNode("Per-site displacements")) {
+                            if (ImGui::BeginTable("##SiteDisp", 5,
+                                    ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+                                    ImGuiTableFlags_Sortable | ImGuiTableFlags_SizingFixedFit)) {
+                                ImGui::TableSetupColumn("Site");
+                                ImGui::TableSetupColumn("dx (mm)", ImGuiTableColumnFlags_DefaultSort);
+                                ImGui::TableSetupColumn("dy (mm)");
+                                ImGui::TableSetupColumn("dz (mm)");
+                                ImGui::TableSetupColumn("|d| (mm)");
+                                ImGui::TableHeadersRow();
+
+                                int ns = (int)active.displacement_mm.size();
+                                for (int i = 0; i < ns; i++) {
+                                    if (active.displacement_mm[i] < 0.01) continue; // skip unchanged
+                                    ImGui::TableNextRow();
+                                    ImGui::TableSetColumnIndex(0);
+                                    ImGui::Text("%s", active.site_names[i].c_str());
+                                    ImGui::TableSetColumnIndex(1);
+                                    ImGui::Text("%.1f", active.site_offsets[3*i+0] * 1000.0);
+                                    ImGui::TableSetColumnIndex(2);
+                                    ImGui::Text("%.1f", active.site_offsets[3*i+1] * 1000.0);
+                                    ImGui::TableSetColumnIndex(3);
+                                    ImGui::Text("%.1f", active.site_offsets[3*i+2] * 1000.0);
+                                    ImGui::TableSetColumnIndex(4);
+                                    float mag = (float)active.displacement_mm[i];
+                                    ImVec4 color = (mag > 20.0f) ? ImVec4(1,0.3f,0.3f,1)
+                                                 : (mag > 10.0f) ? ImVec4(1,0.7f,0.2f,1)
+                                                 : ImVec4(0.8f,0.8f,0.8f,1);
+                                    ImGui::TextColored(color, "%.1f", mag);
+                                }
+                                ImGui::EndTable();
+                            }
+                            ImGui::TreePop();
+                        }
                     }
                 }
             }
@@ -766,10 +942,19 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                 }
             }
 
-            // --- Unload button (always visible, before viewport) ---
-            if (ImGui::Button("Unload Model")) {
-                state.unload_requested = true;
+            ImGui::EndChild(); // ##BodyModelControls
+
+            // --- Draggable splitter ---
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.3f, 0.3f, 0.3f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.5f, 0.5f, 0.5f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.6f, 0.6f, 0.6f, 1.0f));
+            ImGui::Button("##splitter", ImVec2(-1, 4));
+            ImGui::PopStyleColor(3);
+            if (ImGui::IsItemActive()) {
+                state.controls_height += ImGui::GetIO().MouseDelta.y;
             }
+            if (ImGui::IsItemHovered())
+                ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
 
             // --- 3D Viewport (fills remaining space) ---
             ImVec2 avail = ImGui::GetContentRegionAvail();
@@ -793,7 +978,17 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                                        state.show_site_markers, state.show_arena);
                 ImTextureID tex = mujoco_renderer_get_texture(state.renderer);
                 if (tex) {
+                    ImVec2 img_pos = ImGui::GetCursorScreenPos();
                     ImGui::Image(tex, ImVec2(vp_w, vp_h));
+
+                    // Overlay "Unload" button in top-left corner of viewport
+                    ImVec2 saved_cursor = ImGui::GetCursorScreenPos();
+                    ImGui::SetCursorScreenPos(ImVec2(img_pos.x + 4, img_pos.y + 4));
+                    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.7f);
+                    if (ImGui::SmallButton("Unload"))
+                        state.unload_requested = true;
+                    ImGui::PopStyleVar();
+                    ImGui::SetCursorScreenPos(saved_cursor);
 
                     // Mouse controls (matches MuJoCo simulate.cc):
                     //   Left-drag:   orbit (rotate)
