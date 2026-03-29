@@ -21,7 +21,8 @@ std::map<std::string, SkeletonPrimitive> skeleton_get_all() {
         {"Rat20Target", Rat20Target},
         {"Rat24Target", Rat24Target},
         {"Fly50", Fly50},
-        {"Box4", Box4}};
+        {"Box4", Box4},
+        {"ArenaCorners4", ArenaCorners4}};
     return skeleton_all;
 }
 
@@ -320,6 +321,22 @@ void skeleton_initialize(std::string name, SkeletonContext *skeleton,
         for (int i = 0; i < skeleton->num_nodes; i++)
             skeleton->node_colors.push_back(
                 (ImVec4)ImColor::HSV(i / (float)skeleton->num_nodes, 1.0f, 1.0f));
+        break;
+
+    case ArenaCorners4:
+        skeleton->name = name;
+        skeleton->num_nodes = 4;
+        skeleton->num_edges = 4;
+        skeleton->node_names = {"Corner_A", "Corner_B", "Corner_C", "Corner_D"};
+        // Distinctive colors: red, green, blue, yellow
+        skeleton->node_colors = {
+            ImVec4(1.0f, 0.2f, 0.2f, 1.0f),  // A: red
+            ImVec4(0.2f, 0.9f, 0.2f, 1.0f),  // B: green
+            ImVec4(0.3f, 0.5f, 1.0f, 1.0f),  // C: blue
+            ImVec4(1.0f, 0.9f, 0.1f, 1.0f),  // D: yellow
+        };
+        // Edges form a square: A-B, B-C, C-D, D-A
+        skeleton->edges = {{0, 1}, {1, 2}, {2, 3}, {3, 0}};
         break;
     }
 }

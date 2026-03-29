@@ -567,7 +567,8 @@ void mujoco_renderer_render(MujocoRenderer *r, MujocoContext *mj,
                             mjvCamera *cam,
                             bool show_skin, bool show_bodies,
                             bool show_sites, bool show_arena,
-                            const ViewOverride *view_override) {
+                            const ViewOverride *view_override,
+                            bool show_arena_corners) {
     if (!r || !mj || !mj->loaded || !cam) return;
 
     @autoreleasepool {
@@ -780,6 +781,46 @@ void mujoco_renderer_render(MujocoRenderer *r, MujocoContext *mj,
 
             // Switch back to main pipeline for subsequent draws
             [enc setRenderPipelineState:r->pipeline];
+        }
+
+        // --- Render arena corner markers during alignment mode ---
+        if (show_arena_corners) {
+            float half = 0.914f;
+            float corner_pos[4][3] = {
+                { half,  half, 0.005f},
+                {-half,  half, 0.005f},
+                {-half, -half, 0.005f},
+                { half, -half, 0.005f},
+            };
+            // Colors matching ArenaCorners4 skeleton: red, green, blue, yellow
+            float corner_colors[4][4] = {
+                {1.0f, 0.2f, 0.2f, 1.0f},
+                {0.2f, 0.9f, 0.2f, 1.0f},
+                {0.3f, 0.5f, 1.0f, 1.0f},
+                {1.0f, 0.9f, 0.1f, 1.0f},
+            };
+            float corner_r = 0.025f; // 25mm radius spheres
+
+            for (int ci = 0; ci < 4; ci++) {
+                simd_float4x4 model_mat;
+                model_mat.columns[0] = {corner_r, 0, 0, 0};
+                model_mat.columns[1] = {0, corner_r, 0, 0};
+                model_mat.columns[2] = {0, 0, corner_r, 0};
+                model_mat.columns[3] = {corner_pos[ci][0], corner_pos[ci][1], corner_pos[ci][2], 1};
+
+                Uniforms u;
+                u.model_mat = model_mat;
+                u.mvp = simd_mul(vp, model_mat);
+                extract_normal_columns(model_mat, u.normal_col0, u.normal_col1, u.normal_col2);
+                u.color = {corner_colors[ci][0], corner_colors[ci][1],
+                           corner_colors[ci][2], corner_colors[ci][3]};
+
+                [enc setVertexBuffer:r->sphere_vb offset:0 atIndex:0];
+                [enc setVertexBytes:&u length:sizeof(u) atIndex:1];
+                [enc drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+                                indexCount:r->sphere_idx_count indexType:MTLIndexTypeUInt32
+                               indexBuffer:r->sphere_ib indexBufferOffset:0];
+            }
         }
 
         [enc endEncoding];

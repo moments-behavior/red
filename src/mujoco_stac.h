@@ -13,6 +13,7 @@
 #include "mujoco_context.h"
 #include "mujoco_ik.h"
 #include "annotation.h"
+#include "arena_alignment.h"
 #include <Eigen/Core>
 #include <chrono>
 #include <algorithm>
@@ -208,7 +209,8 @@ inline double stac_mean_residual(MujocoContext &mj,
 // Collects frames from the annotation map and runs the full pipeline.
 inline bool stac_calibrate(MujocoContext &mj, StacState &stac, MujocoIKState &ik,
                            const AnnotationMap &annotations, int num_nodes,
-                           const std::vector<std::string> *node_names = nullptr) {
+                           const std::vector<std::string> *node_names = nullptr,
+                           const ArenaAlignment *arena_align = nullptr) {
     if (!mj.loaded || !mj.model || !mj.data) return false;
 
     auto t_start = std::chrono::high_resolution_clock::now();
@@ -220,19 +222,41 @@ inline bool stac_calibrate(MujocoContext &mj, StacState &stac, MujocoIKState &ik
     if (sf <= 0.0) sf = 0.001; // mm -> m
 
     // --- Collect frames with 3D keypoints ---
-    struct FrameData { int frame_num; const Keypoint3D *kp3d; };
+    // Deep-copy and transform keypoints if arena alignment is active.
+    // When aligned, sf should be 1.0 (transform handles scaling).
+    bool use_arena = (arena_align && arena_align->valid);
+    if (use_arena) sf = 1.0;
+
+    struct FrameData {
+        int frame_num;
+        std::vector<Keypoint3D> kp3d_owned; // transformed copy
+        const Keypoint3D *kp3d = nullptr;   // set after collection (avoids dangling)
+    };
     std::vector<FrameData> frames;
     for (const auto &[fnum, fa] : annotations) {
         if (!fa.kp3d.empty()) {
-            // Check at least some sites are triangulated
             int active = 0;
             for (int n = 0; n < num_nodes && n < (int)fa.kp3d.size(); n++)
                 if (fa.kp3d[n].triangulated) active++;
-            if (active >= 4) // need at least 4 sites for meaningful IK
-                frames.push_back({(int)fnum, fa.kp3d.data()});
+            if (active >= 4) {
+                FrameData fd;
+                fd.frame_num = (int)fnum;
+                fd.kp3d_owned = fa.kp3d; // deep copy
+                if (use_arena) {
+                    for (auto &kp : fd.kp3d_owned) {
+                        if (!kp.triangulated) continue;
+                        Eigen::Vector3d p = arena_align->transform(
+                            Eigen::Vector3d(kp.x, kp.y, kp.z));
+                        kp.x = p.x(); kp.y = p.y(); kp.z = p.z();
+                    }
+                }
+                frames.push_back(std::move(fd));
+            }
         }
     }
     if (frames.empty()) return false;
+    // Set kp3d pointers after vector is fully built (no more reallocs)
+    for (auto &fd : frames) fd.kp3d = fd.kp3d_owned.data();
 
     // Sort by frame number for warm-starting
     std::sort(frames.begin(), frames.end(),
@@ -425,6 +449,7 @@ inline void stac_apply_offsets(MujocoContext &, const StacState &) {}
 inline void stac_reset(MujocoContext &, StacState &) {}
 inline bool stac_calibrate(MujocoContext &, StacState &, MujocoIKState &,
                            const AnnotationMap &, int,
-                           const std::vector<std::string> * = nullptr) { return false; }
+                           const std::vector<std::string> * = nullptr,
+                           const ArenaAlignment * = nullptr) { return false; }
 
 #endif // RED_HAS_MUJOCO
