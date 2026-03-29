@@ -24,7 +24,7 @@
 #include "mujoco_metal_renderer.h"
 #endif
 
-enum IKMethod { IK_DM_CONTROL = 0, IK_STAC = 1 };
+enum SitePlacement { SITES_DEFAULT = 0, SITES_STAC = 1 };
 
 // A saved calibration result (default, STAC, STAC symmetric, etc.)
 struct CalibrationEntry {
@@ -67,7 +67,7 @@ struct BodyModelState {
     bool show = false;
 
     // IK method selection
-    int ik_method = IK_DM_CONTROL;
+    int site_placement = SITES_DEFAULT;
 
     // IK solver state (owns warm-start)
     MujocoIKState ik_state;
@@ -157,7 +157,7 @@ struct BodyModelState {
             nlohmann::json j;
             j["version"] = 1;
             j["model_path"] = model_path;
-            j["ik_method"] = ik_method;
+            j["site_placement"] = site_placement;
 
             // IK settings
             j["ik"] = {{"max_iterations", ik_state.max_iterations},
@@ -231,7 +231,7 @@ struct BodyModelState {
             if (!j.contains("version")) return false;
 
             model_path = j.value("model_path", model_path);
-            ik_method = j.value("ik_method", ik_method);
+            site_placement = j.value("site_placement", site_placement);
 
             if (j.contains("ik")) {
                 auto &ik = j["ik"];
@@ -368,7 +368,7 @@ inline void SolveChunk(mjModel *model, const std::vector<std::pair<int, std::vec
 // Launch parallel batch export in a background thread.
 inline void LaunchExport(MujocoContext &mj, MujocoIKState &ik_template,
                          const AnnotationMap &annotations, int num_nodes,
-                         int ik_method, const StacState &stac,
+                         int site_placement, const StacState &stac,
                          const std::vector<std::string> &node_names,
                          const ArenaAlignment &arena_align,
                          MujocoExportState &es) {
@@ -426,7 +426,7 @@ inline void LaunchExport(MujocoContext &mj, MujocoIKState &ik_template,
     std::vector<int> skel_to_site = mj.skeleton_to_site;
     float sf = mj.scale_factor;
     std::string model_path = mj.model_path;
-    int method = ik_method;
+    int method = site_placement;
 
     // Snapshot STAC state for metadata
     bool stac_calibrated = stac.calibrated;
@@ -518,7 +518,8 @@ inline void LaunchExport(MujocoContext &mj, MujocoIKState &ik_template,
         out << "# nq: " << nq << "\n";
         out << "# nv: " << (all_results.empty() ? 0 : nq) << "\n"; // nv not easily available, omit or compute
         out << "# threads: " << n_threads << "\n";
-        out << "# ik_method: " << (method == IK_STAC ? "IK_STAC" : "IK_dm_control") << "\n";
+        out << "# site_placement: " << (method == SITES_STAC ? "STAC_calibrated" : "default_xml") << "\n";
+        out << "# ik_algorithm: IK_dm_control\n";
         out << "# scale_factor: " << std::setprecision(6) << sf
             << (sf <= 0.0f ? " (auto)" : "") << "\n";
         out << "# max_iterations: " << ik_settings.max_iterations << "\n";
@@ -536,7 +537,7 @@ inline void LaunchExport(MujocoContext &mj, MujocoIKState &ik_template,
         out << "\n";
 
         // STAC metadata
-        if (method == IK_STAC) {
+        if (method == SITES_STAC) {
             out << "# stac_calibrated: " << (stac_calibrated ? "true" : "false") << "\n";
             if (stac_calibrated) {
                 out << "# stac_n_iters: " << stac_n_iters << "\n";
@@ -626,14 +627,39 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
 
             // --- Model loading ---
             if (!mj.loaded) {
-                ImGui::TextWrapped("Load a MuJoCo XML body model to enable "
-                                   "inverse kinematics and body model visualization.");
+                ImGui::TextWrapped("Body Model — IK_dm_control inverse kinematics "
+                    "with MuJoCo body models, STAC site calibration, and arena alignment.");
                 ImGui::Spacing();
 
+                // One-click restore: load previous model + session
+                bool has_session = !ctx.pm.project_path.empty() &&
+                    std::filesystem::exists(ctx.pm.project_path + "/mujoco_session.json");
+                bool has_prev_model = !ctx.user_settings.last_mujoco_model.empty() &&
+                    std::filesystem::exists(ctx.user_settings.last_mujoco_model);
+
+                if (has_prev_model && has_session) {
+                    if (ImGui::Button("Restore Previous Session")) {
+                        state.model_path = ctx.user_settings.last_mujoco_model;
+                        if (mj.load(state.model_path, ctx.skeleton)) {
+                            std::string sp = ctx.pm.project_path + "/mujoco_session.json";
+                            if (state.load_session(sp))
+                                state.apply_loaded_calibration(mj);
+                            ctx.toasts.push("MuJoCo model + session restored");
+                        } else {
+                            ctx.toasts.push("Failed: " + mj.load_error, Toast::Error);
+                        }
+                    }
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("(%s)",
+                        std::filesystem::path(ctx.user_settings.last_mujoco_model)
+                            .filename().string().c_str());
+                    ImGui::Spacing();
+                    ImGui::Separator();
+                    ImGui::Spacing();
+                }
+
                 if (state.model_path.empty()) {
-                    // Try last-used path from settings, then default
-                    if (!ctx.user_settings.last_mujoco_model.empty() &&
-                        std::filesystem::exists(ctx.user_settings.last_mujoco_model))
+                    if (has_prev_model)
                         state.model_path = ctx.user_settings.last_mujoco_model;
                     else {
                         std::string default_path = "models/rodent/rodent_no_collision.xml";
@@ -770,35 +796,40 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                         }
                     }
                 }
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Unload Model"))
+                    state.unload_requested = true;
             }
 
             ImGui::Separator();
 
-            // IK method selector
-            const char *ik_methods[] = {"IK_dm_control", "IK_STAC"};
-            ImGui::SetNextItemWidth(200);
-            ImGui::Combo("IK Method", &state.ik_method, ik_methods, 2);
-
-            if (ImGui::SliderFloat("Scale factor", &mj.scale_factor, 0.0f, 3.0f,
-                                   mj.scale_factor == 0.0f ? "auto" : "%.4f"))
-                mujoco_ik_reset(state.ik_state); // reset warm-start on scale change
-            if (mj.scale_factor == 0.0f)
-                ImGui::SameLine(), ImGui::TextDisabled("(auto-detect from data)");
-
-            ImGui::SliderInt("Max iterations", &state.ik_state.max_iterations, 100, 20000,
-                            "%d", ImGuiSliderFlags_Logarithmic);
-            float reg_log = (state.ik_state.reg_strength > 0)
-                                ? log10f((float)state.ik_state.reg_strength) : -6.0f;
-            if (ImGui::SliderFloat("Regularization (log10)", &reg_log, -6.0f, 0.0f, "%.1f"))
-                state.ik_state.reg_strength = pow(10.0, reg_log);
-            ImGui::Checkbox("Auto-solve on frame change", &state.auto_solve);
-            if (state.auto_solve) {
-                ImGui::SameLine();
-                float budget = (float)state.ik_state.time_budget_ms;
-                ImGui::SetNextItemWidth(120);
-                if (ImGui::SliderFloat("Budget (ms)", &budget, 0.0f, 100.0f,
-                                       budget == 0.0f ? "unlimited" : "%.0f ms"))
-                    state.ik_state.time_budget_ms = (double)budget;
+            if (ImGui::TreeNode("Solver Settings")) {
+                if (!state.arena_align.valid) {
+                    ImGui::SetNextItemWidth(200);
+                    if (ImGui::SliderFloat("Scale factor", &mj.scale_factor, 0.0f, 3.0f,
+                                           mj.scale_factor == 0.0f ? "auto" : "%.4f"))
+                        mujoco_ik_reset(state.ik_state);
+                    if (mj.scale_factor == 0.0f)
+                        ImGui::SameLine(), ImGui::TextDisabled("(auto)");
+                }
+                ImGui::SetNextItemWidth(200);
+                ImGui::SliderInt("Max iterations", &state.ik_state.max_iterations, 100, 20000,
+                                "%d", ImGuiSliderFlags_Logarithmic);
+                ImGui::SetNextItemWidth(200);
+                float reg_log = (state.ik_state.reg_strength > 0)
+                                    ? log10f((float)state.ik_state.reg_strength) : -6.0f;
+                if (ImGui::SliderFloat("Regularization (log10)", &reg_log, -6.0f, 0.0f, "%.1f"))
+                    state.ik_state.reg_strength = pow(10.0, reg_log);
+                ImGui::Checkbox("Auto-solve on frame change", &state.auto_solve);
+                if (state.auto_solve) {
+                    ImGui::SameLine();
+                    float budget = (float)state.ik_state.time_budget_ms;
+                    ImGui::SetNextItemWidth(120);
+                    if (ImGui::SliderFloat("Budget (ms)", &budget, 0.0f, 100.0f,
+                                           budget == 0.0f ? "unlimited" : "%.0f ms"))
+                        state.ik_state.time_budget_ms = (double)budget;
+                }
+                ImGui::TreePop();
             }
 
             if (ImGui::Button("Solve Frame")) {
@@ -841,7 +872,8 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                                       state.ik_state.max_iterations);
             }
 
-            // Export button / progress
+            // Export button (same line as Solve Frame)
+            ImGui::SameLine();
             if (state.export_state.running) {
                 int done = state.export_state.frames_done.load(std::memory_order_relaxed);
                 int total = state.export_state.frames_total;
@@ -864,7 +896,7 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                         ctx.pm.project_path + "/qpos_export.csv";
                     state.export_state.running = true;
                     LaunchExport(mj, state.ik_state, ctx.annotations,
-                                 ctx.skeleton.num_nodes, state.ik_method,
+                                 ctx.skeleton.num_nodes, state.site_placement,
                                  state.stac_state, ctx.skeleton.node_names,
                                  state.arena_align, state.export_state);
                 }
@@ -891,8 +923,42 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                                    state.ik_state.active_sites);
             }
 
-            // --- STAC calibration controls ---
-            if (state.ik_method == IK_STAC) {
+            // --- Site Placement ---
+            ImGui::Separator();
+            const char *placement_labels[] = {"Default (XML)", "STAC Calibrated"};
+            ImGui::SetNextItemWidth(200);
+            int prev_placement = state.site_placement;
+            ImGui::Combo("Site Placement", &state.site_placement, placement_labels, 2);
+
+            // Apply/remove STAC offsets when user switches
+            if (state.site_placement != prev_placement) {
+                if (state.site_placement == SITES_DEFAULT) {
+                    // Switch to default: remove offsets
+                    if (state.stac_state.calibrated)
+                        stac_reset(mj, state.stac_state);
+                } else if (state.site_placement == SITES_STAC) {
+                    // Switch to STAC: apply active calibration offsets
+                    if (state.active_calibration > 0 &&
+                        state.active_calibration < (int)state.calib_history.size()) {
+                        auto &c = state.calib_history[state.active_calibration];
+                        if (!c.site_offsets.empty() &&
+                            (int)c.site_offsets.size() == 3 * (int)mj.model->nsite) {
+                            if (state.stac_state.original_site_pos.empty()) {
+                                int ns = (int)mj.model->nsite;
+                                state.stac_state.original_site_pos.assign(
+                                    mj.model->site_pos, mj.model->site_pos + 3 * ns);
+                            }
+                            state.stac_state.site_offsets = c.site_offsets;
+                            state.stac_state.calibrated = true;
+                            stac_apply_offsets(mj, state.stac_state);
+                        }
+                    }
+                }
+                mujoco_ik_reset(state.ik_state);
+                state.last_solved_frame = -1;
+            }
+
+            if (state.site_placement == SITES_STAC) {
                 ImGui::Separator();
 
                 // Initialize default entry if history is empty
@@ -1023,6 +1089,7 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                                 state.active_calibration = ci;
                                 if (ci == 0) {
                                     stac_reset(mj, state.stac_state);
+                                    state.site_placement = SITES_DEFAULT;
                                 } else {
                                     // Apply these offsets
                                     if (state.stac_state.original_site_pos.empty()) {
@@ -1174,6 +1241,14 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                         ImGui::SetNextItemWidth(120);
                         ImGui::SliderFloat("Opacity", &state.scene_opacity, 0.0f, 1.0f, "%.2f");
                     }
+                    if (state.calib_cam_user_override) {
+                        ImGui::SameLine();
+                        if (ImGui::SmallButton("Reset View")) {
+                            state.calib_cam_user_override = false;
+                            state.cam_zoom = 1.0f;
+                            state.cam_pan[0] = state.cam_pan[1] = 0;
+                        }
+                    }
                 }
 
                 // Build direct view/projection override from calibration extrinsics.
@@ -1274,9 +1349,16 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
             // --- Arena Alignment ---
             if (ImGui::CollapsingHeader("Arena Alignment")) {
                 if (state.arena_align.valid) {
+                    // Human-readable rotation description
+                    const auto &R = state.arena_align.R;
+                    const char *rot_desc = "custom rotation";
+                    if (R.isApprox(Eigen::Matrix3d::Identity(), 0.01)) rot_desc = "identity (no rotation)";
+                    else if (R(0,0) < -0.9 && R(1,1) < -0.9 && R(2,2) > 0.9) rot_desc = "180° around Z (flip X/Y)";
+                    else if (R(0,0) < -0.9 && R(2,2) < -0.9 && R(1,1) > 0.9) rot_desc = "180° around Y (flip X/Z)";
+                    else if (R(1,1) < -0.9 && R(2,2) < -0.9 && R(0,0) > 0.9) rot_desc = "180° around X (flip Y/Z)";
                     ImGui::TextColored(ImVec4(0.2f, 0.9f, 0.2f, 1.0f),
-                        "Aligned: scale=%.6f, residual=%.2f mm",
-                        state.arena_align.scale, state.arena_align.residual_mm);
+                        "Aligned: %s, residual=%.2f mm",
+                        rot_desc, state.arena_align.residual_mm);
                     // Z offset: fine-tune vertical position (compensates for
                     // labeling corners slightly above/below the arena surface)
                     float z_off_mm = (float)(state.arena_align.t.z() * 1000.0);
@@ -1358,6 +1440,8 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                         }
                     }
 
+                    if (ctx.user_settings.arena_corners.size() == 12)
+                        ImGui::SameLine();
                     if (ImGui::Button("Enter Alignment Mode")) {
                         // Save current skeleton and annotations
                         state.saved_skeleton = ctx.skeleton;
@@ -1526,14 +1610,6 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                     bool vp_hovered = ImGui::IsItemHovered();
                     bool vp_active  = ImGui::IsItemActive();
 
-                    // Overlay "Unload" button in top-left corner
-                    ImVec2 saved_cursor = ImGui::GetCursorScreenPos();
-                    ImGui::SetCursorScreenPos(ImVec2(img_pos.x + 4, img_pos.y + 4));
-                    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.7f);
-                    if (ImGui::SmallButton("Unload"))
-                        state.unload_requested = true;
-                    ImGui::PopStyleVar();
-                    ImGui::SetCursorScreenPos(saved_cursor);
 
                     // Mouse controls on the viewport
                     if (vp_hovered || vp_active) {
