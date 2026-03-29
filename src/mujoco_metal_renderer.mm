@@ -566,35 +566,49 @@ struct FloorUniforms {
 void mujoco_renderer_render(MujocoRenderer *r, MujocoContext *mj,
                             mjvCamera *cam,
                             bool show_skin, bool show_bodies,
-                            bool show_sites, bool show_arena) {
+                            bool show_sites, bool show_arena,
+                            const ViewOverride *view_override) {
     if (!r || !mj || !mj->loaded || !cam) return;
 
     @autoreleasepool {
         // Update abstract scene using the MuJoCo camera
         mjv_updateScene(mj->model, mj->data, &mj->opt, nullptr, cam, mjCAT_ALL, &mj->scene);
 
-        // Build view/projection from mjvCamera spherical coordinates.
-        // Matches MuJoCo's mjv_cameraFrame (engine_vis_visualize.c):
-        //   forward = { ce*ca, ce*sa, se }
-        //   up      = { -se*ca, -se*sa, ce }
-        //   eye     = lookat - distance * forward
-        float az = (float)cam->azimuth * M_PI / 180.0f;
-        float el = (float)cam->elevation * M_PI / 180.0f;
-        float ca = cosf(az), sa = sinf(az);
-        float ce = cosf(el), se = sinf(el);
-        float dist = (float)cam->distance;
-        simd_float3 center = {(float)cam->lookat[0], (float)cam->lookat[1], (float)cam->lookat[2]};
-        simd_float3 eye = {
-            center.x - dist * ce * ca,
-            center.y - dist * ce * sa,
-            center.z - dist * se
-        };
-        simd_float3 up = {-se * ca, -se * sa, ce};
+        // Build view/projection matrices
+        simd_float4x4 vp;
+        simd_float3 eye;
 
-        float aspect = (float)r->width / (float)r->height;
-        simd_float4x4 view = look_at(eye, center, up);
-        simd_float4x4 proj = perspective(45.0f * M_PI / 180.0f, aspect, 0.001f, 100.0f);
-        simd_float4x4 vp = simd_mul(proj, view);
+        if (view_override && view_override->active) {
+            // Direct view/projection from calibration camera extrinsics
+            simd_float4x4 view, proj;
+            memcpy(&view, view_override->view, sizeof(view));
+            memcpy(&proj, view_override->proj, sizeof(proj));
+            vp = simd_mul(proj, view);
+            eye = {view_override->eye[0], view_override->eye[1], view_override->eye[2]};
+        } else {
+            // Derive from mjvCamera spherical coordinates
+            // Matches MuJoCo's mjv_cameraFrame (engine_vis_visualize.c):
+            //   forward = { ce*ca, ce*sa, se }
+            //   up      = { -se*ca, -se*sa, ce }
+            //   eye     = lookat - distance * forward
+            float az = (float)cam->azimuth * M_PI / 180.0f;
+            float el = (float)cam->elevation * M_PI / 180.0f;
+            float ca_ = cosf(az), sa_ = sinf(az);
+            float ce_ = cosf(el), se_ = sinf(el);
+            float dist = (float)cam->distance;
+            simd_float3 center = {(float)cam->lookat[0], (float)cam->lookat[1], (float)cam->lookat[2]};
+            eye = {
+                center.x - dist * ce_ * ca_,
+                center.y - dist * ce_ * sa_,
+                center.z - dist * se_
+            };
+            simd_float3 up = {-se_ * ca_, -se_ * sa_, ce_};
+
+            float aspect = (float)r->width / (float)r->height;
+            simd_float4x4 view = look_at(eye, center, up);
+            simd_float4x4 proj = perspective(45.0f * M_PI / 180.0f, aspect, 0.001f, 100.0f);
+            vp = simd_mul(proj, view);
+        }
 
         SceneUniforms su;
         su.view_proj = vp;

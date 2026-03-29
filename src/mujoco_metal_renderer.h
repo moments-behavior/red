@@ -17,21 +17,29 @@ struct MujocoContext;
 // Opaque handle — implementation in .mm file
 struct MujocoRenderer;
 
+// Optional direct view/projection override (bypasses mjvCamera spherical coords).
+// Used for calibration camera views where roll angle matters.
+struct ViewOverride {
+    bool active = false;
+    float view[16];  // 4x4 column-major view matrix
+    float proj[16];  // 4x4 column-major projection matrix
+    float eye[3];    // eye position (for lighting)
+};
+
 // Create/destroy the renderer. Uses the system default MTLDevice.
 MujocoRenderer *mujoco_renderer_create(uint32_t width, uint32_t height);
 void            mujoco_renderer_destroy(MujocoRenderer *r);
 void            mujoco_renderer_resize(MujocoRenderer *r, uint32_t width, uint32_t height);
 
 // Render the current MuJoCo scene to the offscreen texture.
-// Call after mj_forward() has been called (site positions are up to date).
-// camera_lookat/distance/azimuth/elevation control the viewpoint.
-// Render using a MuJoCo camera (pass the mjvCamera directly).
+// If view_override is active, uses its view/proj matrices instead of deriving from cam.
 void mujoco_renderer_render(MujocoRenderer *r, MujocoContext *mj,
                             mjvCamera *cam,
                             bool show_skin = true,
                             bool show_bodies = true,
                             bool show_sites = true,
-                            bool show_arena = true);
+                            bool show_arena = true,
+                            const ViewOverride *view_override = nullptr);
 
 // Get the rendered texture as an ImGui texture ID.
 ImTextureID mujoco_renderer_get_texture(MujocoRenderer *r);
