@@ -12,13 +12,38 @@
 #include "mujoco_ik.h"
 #include "mujoco_stac.h"
 #include <ImGuiFileDialog.h>
+#include <fstream>
+#include <iomanip>
 #include <string>
+#include <thread>
+#include <atomic>
+#include <mutex>
 
 #ifdef RED_HAS_MUJOCO
 #include "mujoco_metal_renderer.h"
 #endif
 
 enum IKMethod { IK_DM_CONTROL = 0, IK_STAC = 1 };
+
+// Per-frame result for parallel export
+struct QposResult {
+    int frame_num;
+    std::vector<double> qpos;
+    double residual_mm;
+    int iterations;
+    bool converged;
+};
+
+// Export state for background thread progress
+struct MujocoExportState {
+    std::atomic<bool> running{false};
+    std::atomic<int>  frames_done{0};
+    int               frames_total = 0;
+    int               num_threads = 0;
+    std::string       output_path;
+    std::string       result_msg;
+    bool              result_ok = false;
+};
 
 struct BodyModelState {
     bool show = false;
@@ -31,7 +56,10 @@ struct BodyModelState {
 
     // STAC calibration state
     StacState stac_state;
-    bool stac_calibrating = false; // true while calibration is running
+    bool stac_calibrating = false;
+
+    // Export state
+    MujocoExportState export_state;
 
     // Display options
     bool auto_solve = false;
@@ -61,6 +89,196 @@ struct BodyModelState {
     // Model path for file dialog
     std::string model_path;
 };
+
+#ifdef RED_HAS_MUJOCO
+
+// Solve a chunk of frames on a dedicated model/data copy.
+// Each thread gets its own mjModel + mjData + IKState for full isolation.
+inline void SolveChunk(mjModel *model, const std::vector<std::pair<int, std::vector<Keypoint3D>>> &frames,
+                       const MujocoIKState &ik_template,
+                       const std::vector<int> &skeleton_to_site,
+                       int num_nodes, float scale_factor,
+                       std::vector<QposResult> &results,
+                       std::atomic<int> &progress) {
+    mjData *data = mj_makeData(model);
+    int nq = model->nq;
+
+    // Fresh IK state per thread
+    MujocoIKState ik;
+    ik.max_iterations = ik_template.max_iterations;
+    ik.lr = ik_template.lr;
+    ik.beta = ik_template.beta;
+    ik.reg_strength = ik_template.reg_strength;
+
+    // Temporary MujocoContext wrapper for mujoco_ik_solve
+    MujocoContext thread_mj;
+    thread_mj.model = model;
+    thread_mj.data = data;
+    thread_mj.loaded = true;
+    thread_mj.scale_factor = scale_factor;
+    thread_mj.skeleton_to_site = skeleton_to_site;
+    thread_mj.mapped_count = (int)skeleton_to_site.size();
+
+    results.resize(frames.size());
+    for (int i = 0; i < (int)frames.size(); i++) {
+        const auto &[fnum, kp3d] = frames[i];
+        mujoco_ik_solve(thread_mj, ik, kp3d.data(), num_nodes, fnum);
+
+        results[i].frame_num = fnum;
+        results[i].qpos.assign(data->qpos, data->qpos + nq);
+        results[i].residual_mm = ik.final_residual * 1000.0;
+        results[i].iterations = ik.iterations_used;
+        results[i].converged = ik.converged;
+
+        progress.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    // Don't free model (shared across threads via mj_copyModel, caller frees)
+    // But DO free data (per-thread)
+    thread_mj.model = nullptr; // prevent MujocoContext destructor from freeing
+    thread_mj.data = nullptr;
+    thread_mj.loaded = false;
+    mj_deleteData(data);
+}
+
+// Launch parallel batch export in a background thread.
+inline void LaunchExport(MujocoContext &mj, MujocoIKState &ik_template,
+                         const AnnotationMap &annotations, int num_nodes,
+                         MujocoExportState &es) {
+    int nq = (int)mj.model->nq;
+
+    // Collect frames with 3D data, sorted by frame number
+    struct FrameRef { int frame_num; const Keypoint3D *kp3d; int kp3d_size; };
+    std::vector<FrameRef> frame_refs;
+    for (const auto &[fnum, fa] : annotations) {
+        if (!fa.kp3d.empty()) {
+            int active = 0;
+            for (int n = 0; n < num_nodes && n < (int)fa.kp3d.size(); n++)
+                if (fa.kp3d[n].triangulated) active++;
+            if (active >= 4)
+                frame_refs.push_back({(int)fnum, fa.kp3d.data(), (int)fa.kp3d.size()});
+        }
+    }
+    std::sort(frame_refs.begin(), frame_refs.end(),
+              [](const FrameRef &a, const FrameRef &b) { return a.frame_num < b.frame_num; });
+
+    if (frame_refs.empty()) {
+        es.result_msg = "No frames with 3D keypoints";
+        es.result_ok = false;
+        es.running = false;
+        return;
+    }
+
+    // Deep-copy keypoint data (annotations may be modified on main thread)
+    std::vector<std::pair<int, std::vector<Keypoint3D>>> all_frames;
+    all_frames.reserve(frame_refs.size());
+    for (const auto &fr : frame_refs)
+        all_frames.push_back({fr.frame_num, std::vector<Keypoint3D>(fr.kp3d, fr.kp3d + fr.kp3d_size)});
+
+    int N = (int)all_frames.size();
+    int n_threads = std::max(1, (int)std::thread::hardware_concurrency());
+    // Cap at reasonable number and ensure at least ~20 frames per thread
+    n_threads = std::min(n_threads, std::max(1, N / 20));
+    n_threads = std::min(n_threads, 16);
+
+    es.frames_total = N;
+    es.frames_done = 0;
+    es.num_threads = n_threads;
+
+    // Capture what we need for the background thread
+    std::string path = es.output_path;
+    MujocoIKState ik_settings = ik_template;
+    std::vector<int> skel_to_site = mj.skeleton_to_site;
+    float sf = mj.scale_factor;
+    std::string model_path = mj.model_path;
+
+    // Copy the model N_threads times (each thread needs its own)
+    // Do this on the main thread before launching
+    std::vector<mjModel *> thread_models(n_threads);
+    for (int t = 0; t < n_threads; t++)
+        thread_models[t] = mj_copyModel(nullptr, mj.model);
+
+    // Launch background thread that coordinates the workers
+    std::thread([=, &es, thread_models = std::move(thread_models),
+                 all_frames = std::move(all_frames)]() mutable {
+        // Split frames into contiguous chunks (not round-robin) for warm-start benefit
+        int total = (int)all_frames.size();
+        std::vector<std::vector<std::pair<int, std::vector<Keypoint3D>>>> chunks(n_threads);
+        for (int t = 0; t < n_threads; t++) {
+            int start = (int64_t)t * total / n_threads;
+            int end   = (int64_t)(t + 1) * total / n_threads;
+            for (int i = start; i < end; i++)
+                chunks[t].push_back(std::move(all_frames[i]));
+        }
+
+        // Launch worker threads
+        std::vector<std::vector<QposResult>> thread_results(n_threads);
+        std::vector<std::thread> workers;
+        for (int t = 0; t < n_threads; t++) {
+            workers.emplace_back(SolveChunk,
+                thread_models[t], std::cref(chunks[t]),
+                std::cref(ik_settings), std::cref(skel_to_site),
+                num_nodes, sf,
+                std::ref(thread_results[t]),
+                std::ref(es.frames_done));
+        }
+
+        // Wait for all workers
+        for (auto &w : workers) w.join();
+
+        // Free model copies
+        for (auto *m : thread_models) mj_deleteModel(m);
+
+        // Merge and sort results
+        std::vector<QposResult> all_results;
+        for (auto &tr : thread_results)
+            all_results.insert(all_results.end(),
+                std::make_move_iterator(tr.begin()),
+                std::make_move_iterator(tr.end()));
+        std::sort(all_results.begin(), all_results.end(),
+                  [](const QposResult &a, const QposResult &b) {
+                      return a.frame_num < b.frame_num;
+                  });
+
+        // Write CSV
+        int nq = all_results.empty() ? 0 : (int)all_results[0].qpos.size();
+        std::ofstream out(path);
+        if (!out.is_open()) {
+            es.result_msg = "Failed to write " + path;
+            es.result_ok = false;
+            es.running = false;
+            return;
+        }
+
+        out << "frame";
+        for (int j = 0; j < nq; j++) out << ",qpos_" << j;
+        out << ",residual_mm,iterations,converged\n";
+
+        out << "# nq=" << nq << " model=" << model_path
+            << " threads=" << n_threads << "\n";
+
+        double total_res = 0.0;
+        for (const auto &r : all_results) {
+            out << r.frame_num;
+            for (int j = 0; j < nq; j++)
+                out << "," << std::setprecision(8) << r.qpos[j];
+            out << "," << std::setprecision(4) << r.residual_mm
+                << "," << r.iterations
+                << "," << (r.converged ? 1 : 0) << "\n";
+            total_res += r.residual_mm;
+        }
+        out.close();
+
+        double mean_res = total_res / all_results.size();
+        es.result_msg = std::to_string((int)all_results.size()) + " frames exported ("
+            + std::to_string(n_threads) + " threads, mean "
+            + std::to_string((int)mean_res) + " mm)";
+        es.result_ok = true;
+        es.running = false;
+    }).detach();
+}
+
+#endif
 
 inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                                 AppContext &ctx) {
@@ -229,6 +447,37 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Run %d more iterations from current pose",
                                       state.ik_state.max_iterations);
+            }
+
+            // Export button / progress
+            if (state.export_state.running) {
+                int done = state.export_state.frames_done.load(std::memory_order_relaxed);
+                int total = state.export_state.frames_total;
+                float frac = total > 0 ? (float)done / total : 0.0f;
+                char buf[64];
+                snprintf(buf, sizeof(buf), "%d / %d frames (%d threads)",
+                         done, total, state.export_state.num_threads);
+                ImGui::ProgressBar(frac, ImVec2(-1, 0), buf);
+            } else {
+                // Check if export just finished
+                if (!state.export_state.result_msg.empty()) {
+                    if (state.export_state.result_ok)
+                        ctx.toasts.push(state.export_state.result_msg);
+                    else
+                        ctx.toasts.push(state.export_state.result_msg, Toast::Error);
+                    state.export_state.result_msg.clear();
+                }
+                if (ImGui::Button("Solve All & Export")) {
+                    state.export_state.output_path =
+                        ctx.pm.project_path + "/qpos_export.csv";
+                    state.export_state.running = true;
+                    LaunchExport(mj, state.ik_state, ctx.annotations,
+                                 ctx.skeleton.num_nodes, state.export_state);
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Solve IK on all labeled frames in parallel\n"
+                                      "and save qpos to %s/qpos_export.csv",
+                                      ctx.pm.project_path.c_str());
             }
 
             // Solver status

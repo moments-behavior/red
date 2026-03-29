@@ -308,6 +308,7 @@ struct MujocoRenderer {
     int box_idx_count;
     id<MTLBuffer> cylinder_vb, cylinder_ib;
     int cylinder_idx_count;
+    id<MTLBuffer> floor_vb, floor_ib;
 
     // Dynamic skin buffers (rebuilt each frame from mjvScene skin data)
     id<MTLBuffer> skin_vb;
@@ -430,6 +431,18 @@ MujocoRenderer *mujoco_renderer_create(uint32_t width, uint32_t height) {
     r->cylinder_ib = make_buffer(r->device, cyi.data(), cyi.size() * sizeof(uint32_t));
     r->cylinder_idx_count = (int)cyi.size();
 
+    // Pre-allocate floor quad (arena: 1828mm x 1828mm centered at origin)
+    float half = 0.914f;
+    Vertex floor_verts[4] = {
+        {{-half, -half, 0}, {0, 0, 1}},
+        {{ half, -half, 0}, {0, 0, 1}},
+        {{ half,  half, 0}, {0, 0, 1}},
+        {{-half,  half, 0}, {0, 0, 1}},
+    };
+    uint32_t floor_idx[6] = {0, 1, 2, 0, 2, 3};
+    r->floor_vb = make_buffer(r->device, floor_verts, sizeof(floor_verts));
+    r->floor_ib = make_buffer(r->device, floor_idx, sizeof(floor_idx));
+
     // Skin buffers initialized lazily on first render
     r->skin_vb = nil;
     r->skin_ib = nil;
@@ -456,6 +469,7 @@ void mujoco_renderer_destroy(MujocoRenderer *r) {
         r->capsule_vb = nil; r->capsule_ib = nil;
         r->box_vb = nil;     r->box_ib = nil;
         r->cylinder_vb = nil; r->cylinder_ib = nil;
+        r->floor_vb = nil;    r->floor_ib = nil;
         r->skin_vb = nil;    r->skin_ib = nil;
         r->pipeline = nil;
         r->floor_pipeline = nil;
@@ -508,14 +522,16 @@ static simd_float4x4 look_at(simd_float3 eye, simd_float3 center, simd_float3 up
     return m;
 }
 
+// Metal NDC: Z maps to [0, 1] (not [-1, 1] like OpenGL).
+// This gives full depth buffer precision.
 static simd_float4x4 perspective(float fov_y, float aspect, float near, float far) {
     float f = 1.0f / tanf(fov_y * 0.5f);
     simd_float4x4 m = {};
     m.columns[0].x = f / aspect;
     m.columns[1].y = f;
-    m.columns[2].z = (far + near) / (near - far);
+    m.columns[2].z = far / (near - far);
     m.columns[2].w = -1.0f;
-    m.columns[3].z = 2.0f * far * near / (near - far);
+    m.columns[3].z = far * near / (near - far);
     return m;
 }
 
@@ -656,7 +672,7 @@ void mujoco_renderer_render(MujocoRenderer *r, MujocoContext *mj,
                 case mjGEOM_CYLINDER: {
                     float radius = g.size[0];
                     float half_len = g.size[2];
-                    draw_geom(r->capsule_vb, r->capsule_ib, r->capsule_idx_count,
+                    draw_geom(r->cylinder_vb, r->cylinder_ib, r->cylinder_idx_count,
                               geom_model_matrix(g, radius, radius, half_len));
                     break;
                 }
@@ -722,24 +738,9 @@ void mujoco_renderer_render(MujocoRenderer *r, MujocoContext *mj,
                      indexBufferOffset:0];
         }
 
-        // --- Render arena (checkerboard floor + ramp) ---
+        // --- Render arena (checkerboard floor) ---
         if (show_arena) {
-            // Arena: 1828mm x 1828mm centered at origin, Z=0
             float half = 0.914f; // 1828mm / 2 in meters
-
-            // Floor quad (two triangles)
-            Vertex floor_verts[4] = {
-                {{-half, -half, 0}, {0, 0, 1}},
-                {{ half, -half, 0}, {0, 0, 1}},
-                {{ half,  half, 0}, {0, 0, 1}},
-                {{-half,  half, 0}, {0, 0, 1}},
-            };
-            uint32_t floor_idx[6] = {0, 1, 2, 0, 2, 3};
-
-            id<MTLBuffer> fvb = [r->device newBufferWithBytes:floor_verts
-                                 length:sizeof(floor_verts) options:MTLResourceStorageModeShared];
-            id<MTLBuffer> fib = [r->device newBufferWithBytes:floor_idx
-                                 length:sizeof(floor_idx) options:MTLResourceStorageModeShared];
 
             // Use floor pipeline for checkerboard effect
             [enc setRenderPipelineState:r->floor_pipeline];
@@ -757,11 +758,11 @@ void mujoco_renderer_render(MujocoRenderer *r, MujocoContext *mj,
             ffu.half_size = half;
             ffu.grid_divs = 4; // 4x4 tiles
 
-            [enc setVertexBuffer:fvb offset:0 atIndex:0];
+            [enc setVertexBuffer:r->floor_vb offset:0 atIndex:0];
             [enc setVertexBytes:&fu length:sizeof(fu) atIndex:1];
             [enc setFragmentBytes:&ffu length:sizeof(ffu) atIndex:3];
             [enc drawIndexedPrimitives:MTLPrimitiveTypeTriangle indexCount:6
-                             indexType:MTLIndexTypeUInt32 indexBuffer:fib indexBufferOffset:0];
+                             indexType:MTLIndexTypeUInt32 indexBuffer:r->floor_ib indexBufferOffset:0];
 
             // Switch back to main pipeline for subsequent draws
             [enc setRenderPipelineState:r->pipeline];

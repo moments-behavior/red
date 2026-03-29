@@ -83,7 +83,6 @@ inline double stac_mean_residual(MujocoContext &mj,
                                  int num_nodes, double scale_factor) {
     double total_err = 0.0;
     int total_sites = 0;
-    int nq = (int)mj.model->nq;
 
     for (int fi : frame_indices) {
         std::copy(all_qpos[fi].begin(), all_qpos[fi].end(), mj.data->qpos);
@@ -225,8 +224,9 @@ inline bool stac_calibrate(MujocoContext &mj, StacState &stac, MujocoIKState &ik
             }
         }
 
+        std::vector<double> grad(3 * nsite);
         for (int m_iter = 0; m_iter < stac.m_max_iters; m_iter++) {
-            std::vector<double> grad(3 * nsite, 0.0);
+            std::fill(grad.begin(), grad.end(), 0.0);
 
             for (int i = 0; i < N; i++) {
                 const double *xpos = cached_xpos[i].data();
