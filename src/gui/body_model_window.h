@@ -26,6 +26,7 @@ struct BodyModelState {
     // Display options
     bool auto_solve = false;
     bool show_skin = true;
+    bool show_bodies = true;
     bool show_site_markers = true;
 
     // Deferred unload (processed at start of next frame)
@@ -238,6 +239,8 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
             // --- Display options ---
             ImGui::Checkbox("Skin", &state.show_skin);
             ImGui::SameLine();
+            ImGui::Checkbox("Bodies", &state.show_bodies);
+            ImGui::SameLine();
             ImGui::Checkbox("Sites", &state.show_site_markers);
             ImGui::SameLine();
             ImGui::Checkbox("Arena", &state.show_arena);
@@ -355,8 +358,8 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
 
             if (state.renderer) {
                 mujoco_renderer_render(state.renderer, &mj, &state.mjcam,
-                                       state.show_skin, state.show_site_markers,
-                                       state.show_arena);
+                                       state.show_skin, state.show_bodies,
+                                       state.show_site_markers, state.show_arena);
                 ImTextureID tex = mujoco_renderer_get_texture(state.renderer);
                 if (tex) {
                     ImGui::Image(tex, ImVec2(vp_w, vp_h));

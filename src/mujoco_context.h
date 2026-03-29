@@ -123,8 +123,57 @@ struct MujocoContext {
             std::cout << "[MuJoCo] All " << sites_skipped
                       << " keypoint sites already present in model" << std::endl;
 
+        // Try to load skin mesh if present (e.g., rodent_walker_skin.skn)
+        // Only add if the model doesn't already have one.
+        {
+            namespace fs = std::filesystem;
+            fs::path xml_dir = fs::path(xml_path).parent_path();
+            fs::path skin_path = xml_dir / "rodent_walker_skin.skn";
+            bool has_skin = (mjs_findElement(spec, mjOBJ_SKIN, "skin") != nullptr);
+            if (fs::exists(skin_path) && !has_skin) {
+                mjsSkin *skin = mjs_addSkin(spec);
+                if (skin) {
+                    // Use just the filename — MuJoCo resolves relative to XML dir
+                    mjs_setString(skin->file, "rodent_walker_skin.skn");
+                    mjs_setName(skin->element, "skin");
+                    skin->rgba[0] = 0.45f; skin->rgba[1] = 0.75f;
+                    skin->rgba[2] = 0.85f; skin->rgba[3] = 0.85f;
+                    std::cout << "[MuJoCo] Added skin mesh: "
+                              << skin_path.string() << std::endl;
+                }
+            }
+        }
+
         // Compile the edited spec into mjModel
         model = mj_compile(spec, nullptr);
+        if (!model) {
+            // If compile failed, it might be due to the skin — retry without it
+            std::cerr << "[MuJoCo] mj_compile failed, retrying without skin..."
+                      << std::endl;
+            // Re-parse and apply only free joint + sites (no skin)
+            mj_deleteSpec(spec);
+            spec = mj_parseXML(xml_path.c_str(), nullptr, error_buf, sizeof(error_buf));
+            if (spec) {
+                mjsBody *t = mjs_findBody(spec, "torso");
+                if (t) { mjs_addFreeJoint(t); has_free_joint = true; }
+                // Re-inject sites (same loop as above)
+                for (const auto &sd : kp_sites) {
+                    if (mjs_findElement(spec, mjOBJ_SITE, sd.name) ||
+                        mjs_findElement(spec, mjOBJ_SITE, sd.kpsite)) continue;
+                    mjsBody *body = mjs_findBody(spec, sd.body);
+                    if (body) {
+                        mjsSite *site = mjs_addSite(body, nullptr);
+                        if (site) {
+                            mjs_setName(site->element, sd.name);
+                            site->pos[0] = sd.pos[0];
+                            site->pos[1] = sd.pos[1];
+                            site->pos[2] = sd.pos[2];
+                        }
+                    }
+                }
+                model = mj_compile(spec, nullptr);
+            }
+        }
         mj_deleteSpec(spec);
         if (!model) {
             load_error = "mj_compile failed (check XML validity)";

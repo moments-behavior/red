@@ -549,8 +549,8 @@ struct FloorUniforms {
 
 void mujoco_renderer_render(MujocoRenderer *r, MujocoContext *mj,
                             mjvCamera *cam,
-                            bool show_skin, bool show_sites,
-                            bool show_arena) {
+                            bool show_skin, bool show_bodies,
+                            bool show_sites, bool show_arena) {
     if (!r || !mj || !mj->loaded || !cam) return;
 
     @autoreleasepool {
@@ -612,7 +612,8 @@ void mujoco_renderer_render(MujocoRenderer *r, MujocoContext *mj,
         for (int i = 0; i < mj->scene.ngeom; i++) {
             const mjvGeom &g = mj->scene.geoms[i];
             if (g.rgba[3] < 0.01f) continue; // invisible
-            if (!show_sites && g.objtype == mjOBJ_SITE) continue; // hide sites
+            if (!show_sites && g.objtype == mjOBJ_SITE) continue;
+            if (!show_bodies && g.objtype != mjOBJ_SITE) continue;
 
             id<MTLBuffer> vb = nil, ib = nil;
             int idx_count = 0;
