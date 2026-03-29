@@ -30,6 +30,9 @@ struct UserSettings {
     // MuJoCo
     std::string last_mujoco_model;
 
+    // Arena alignment corners (4 corners x 3 coords, in calibration mm)
+    std::vector<double> arena_corners; // 12 values, empty if not set
+
     // Recent projects (most recent first, max 10)
     std::vector<std::string> recent_projects;
 
@@ -62,6 +65,7 @@ inline void to_json(nlohmann::json &j, const UserSettings &s) {
         {"jarvis_seed", s.jarvis_seed},
         {"jarvis_jpeg_quality", s.jarvis_jpeg_quality},
         {"last_mujoco_model", s.last_mujoco_model},
+        {"arena_corners", s.arena_corners},
         {"recent_projects", s.recent_projects}};
 }
 
@@ -81,6 +85,7 @@ inline void from_json(const nlohmann::json &j, UserSettings &s) {
     s.jarvis_seed = j.value("jarvis_seed", 42);
     s.jarvis_jpeg_quality = j.value("jarvis_jpeg_quality", 95);
     s.last_mujoco_model = j.value("last_mujoco_model", std::string{});
+    s.arena_corners = j.value("arena_corners", std::vector<double>{});
     s.recent_projects = j.value("recent_projects", std::vector<std::string>{});
 }
 

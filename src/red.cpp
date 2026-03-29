@@ -19,7 +19,6 @@
 #include "jarvis_inference.h"
 #ifdef __APPLE__
 #include "jarvis_coreml.h"
-#include <CoreGraphics/CoreGraphics.h>
 #endif
 #include "gui/jarvis_predict_window.h"
 #include "gui/annotation_dialog.h"

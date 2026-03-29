@@ -11,6 +11,7 @@
 #include "mujoco_context.h"
 #include "mujoco_ik.h"
 #include "mujoco_stac.h"
+#include "arena_alignment.h"
 #include <ImGuiFileDialog.h>
 #include <fstream>
 #include <iomanip>
@@ -81,6 +82,13 @@ struct BodyModelState {
 
     // Export state
     MujocoExportState export_state;
+
+    // Arena alignment (calibration → MuJoCo transform)
+    ArenaAlignment arena_align;
+    bool alignment_mode = false;
+    // Saved state during alignment mode
+    SkeletonContext saved_skeleton;
+    AnnotationMap saved_annotations;
 
     // Controls section height (user can drag splitter)
     float controls_height = 300.0f;
@@ -172,6 +180,7 @@ inline void LaunchExport(MujocoContext &mj, MujocoIKState &ik_template,
                          const AnnotationMap &annotations, int num_nodes,
                          int ik_method, const StacState &stac,
                          const std::vector<std::string> &node_names,
+                         const ArenaAlignment &arena_align,
                          MujocoExportState &es) {
     int nq = (int)mj.model->nq;
 
@@ -197,11 +206,20 @@ inline void LaunchExport(MujocoContext &mj, MujocoIKState &ik_template,
         return;
     }
 
-    // Deep-copy keypoint data (annotations may be modified on main thread)
+    // Deep-copy keypoint data and apply arena alignment if active
     std::vector<std::pair<int, std::vector<Keypoint3D>>> all_frames;
     all_frames.reserve(frame_refs.size());
-    for (const auto &fr : frame_refs)
-        all_frames.push_back({fr.frame_num, std::vector<Keypoint3D>(fr.kp3d, fr.kp3d + fr.kp3d_size)});
+    for (const auto &fr : frame_refs) {
+        std::vector<Keypoint3D> kp(fr.kp3d, fr.kp3d + fr.kp3d_size);
+        if (arena_align.valid) {
+            for (auto &k : kp) {
+                if (!k.triangulated) continue;
+                Eigen::Vector3d p = arena_align.transform(Eigen::Vector3d(k.x, k.y, k.z));
+                k.x = p.x(); k.y = p.y(); k.z = p.z();
+            }
+        }
+        all_frames.push_back({fr.frame_num, std::move(kp)});
+    }
 
     int N = (int)all_frames.size();
     int n_threads = std::max(1, (int)std::thread::hardware_concurrency());
@@ -490,6 +508,31 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
 
             if (!mj.model) return; // Defensive: loaded but model null
 
+            // Helper: get kp3d pointer for IK, applying arena transform if active.
+            // When not aligned, returns the original data directly (zero overhead).
+            std::vector<Keypoint3D> transformed_kp3d_buf; // reusable buffer
+            auto get_kp3d = [&](const std::vector<Keypoint3D> &src) -> const Keypoint3D * {
+                if (!state.arena_align.valid) return src.data();
+                transformed_kp3d_buf = src;
+                for (auto &kp : transformed_kp3d_buf) {
+                    if (!kp.triangulated) continue;
+                    Eigen::Vector3d p = state.arena_align.transform(
+                        Eigen::Vector3d(kp.x, kp.y, kp.z));
+                    kp.x = p.x(); kp.y = p.y(); kp.z = p.z();
+                }
+                return transformed_kp3d_buf.data();
+            };
+            // When arena alignment is active, the transform handles mm→m scaling,
+            // so disable IK's internal scaling by setting scale_factor=1.0.
+            // Save/restore the user's original value so the slider still works.
+            static float saved_scale = 0.0f;
+            if (state.arena_align.valid && mj.scale_factor != 1.0f) {
+                saved_scale = mj.scale_factor;
+                mj.scale_factor = 1.0f;
+            } else if (!state.arena_align.valid && mj.scale_factor == 1.0f && saved_scale != 1.0f) {
+                mj.scale_factor = saved_scale;
+            }
+
             // --- Scrollable controls region ---
             float min_ctrl_h = 60.0f, max_ctrl_h = ImGui::GetContentRegionAvail().y - 150.0f;
             state.controls_height = std::clamp(state.controls_height, min_ctrl_h, max_ctrl_h);
@@ -533,10 +576,11 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
             if (ImGui::Button("Solve Frame")) {
                 auto it = ctx.annotations.find(ctx.current_frame_num);
                 if (it != ctx.annotations.end() && !it->second.kp3d.empty()) {
+                    const Keypoint3D *kp = get_kp3d(it->second.kp3d);
                     double saved_budget = state.ik_state.time_budget_ms;
-                    state.ik_state.time_budget_ms = 0.0; // no time limit for manual solve
+                    state.ik_state.time_budget_ms = 0.0;
                     mujoco_ik_solve(mj, state.ik_state,
-                                    it->second.kp3d.data(),
+                                    kp,
                                     ctx.skeleton.num_nodes,
                                     ctx.current_frame_num);
                     state.ik_state.time_budget_ms = saved_budget;
@@ -556,8 +600,9 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                 if (ImGui::Button("Continue")) {
                     auto it = ctx.annotations.find(ctx.current_frame_num);
                     if (it != ctx.annotations.end() && !it->second.kp3d.empty()) {
+                        const Keypoint3D *kp = get_kp3d(it->second.kp3d);
                         mujoco_ik_continue(mj, state.ik_state,
-                                           it->second.kp3d.data(),
+                                           kp,
                                            ctx.skeleton.num_nodes,
                                            ctx.current_frame_num,
                                            state.ik_state.max_iterations);
@@ -593,7 +638,7 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                     LaunchExport(mj, state.ik_state, ctx.annotations,
                                  ctx.skeleton.num_nodes, state.ik_method,
                                  state.stac_state, ctx.skeleton.node_names,
-                                 state.export_state);
+                                 state.arena_align, state.export_state);
                 }
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Solve IK on all labeled frames in parallel\n"
@@ -716,7 +761,8 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                         std::thread([&mj, &state, &ctx]() {
                             stac_calibrate(mj, state.stac_state, state.ik_state,
                                            ctx.annotations, ctx.skeleton.num_nodes,
-                                           &ctx.skeleton.node_names);
+                                           &ctx.skeleton.node_names,
+                                           state.arena_align.valid ? &state.arena_align : nullptr);
                         }).detach();
                     }
                 }
@@ -948,6 +994,137 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                 }
             }
 
+            // --- Arena Alignment ---
+            if (ImGui::CollapsingHeader("Arena Alignment")) {
+                if (state.arena_align.valid) {
+                    ImGui::TextColored(ImVec4(0.2f, 0.9f, 0.2f, 1.0f),
+                        "Aligned: scale=%.6f, residual=%.2f mm",
+                        state.arena_align.scale, state.arena_align.residual_mm);
+                    // Z offset: fine-tune vertical position (compensates for
+                    // labeling corners slightly above/below the arena surface)
+                    float z_off_mm = (float)(state.arena_align.t.z() * 1000.0);
+                    ImGui::SetNextItemWidth(200);
+                    if (ImGui::SliderFloat("Z offset (mm)", &z_off_mm, -50.0f, 50.0f, "%.1f")) {
+                        state.arena_align.t.z() = z_off_mm / 1000.0;
+                        mujoco_ik_reset(state.ik_state);
+                        state.last_solved_frame = -1;
+                    }
+                    if (ImGui::Button("Clear Alignment")) {
+                        state.arena_align = ArenaAlignment{};
+                        mujoco_ik_reset(state.ik_state);
+                        state.last_solved_frame = -1;
+                    }
+                }
+
+                if (!state.alignment_mode) {
+                    ImGui::TextWrapped("Label the 4 arena corners to align the "
+                        "calibration coordinate system with the MuJoCo arena.");
+
+                    // Load Previous: reuse saved corners without re-labeling
+                    if (ctx.user_settings.arena_corners.size() == 12) {
+                        if (ImGui::Button("Load Previous Corners")) {
+                            for (int i = 0; i < 4; i++) {
+                                state.arena_align.calib_corners[i] = Eigen::Vector3d(
+                                    ctx.user_settings.arena_corners[3*i+0],
+                                    ctx.user_settings.arena_corners[3*i+1],
+                                    ctx.user_settings.arena_corners[3*i+2]);
+                            }
+                            state.arena_align.corners_set = true;
+                            compute_arena_alignment(state.arena_align);
+                            if (state.arena_align.valid) {
+                                mujoco_ik_reset(state.ik_state);
+                                state.last_solved_frame = -1;
+                                ctx.toasts.push("Arena aligned from saved corners: " +
+                                    std::to_string(state.arena_align.residual_mm).substr(0, 5) +
+                                    " mm residual");
+                            }
+                        }
+                        if (ImGui::IsItemHovered()) {
+                            ImGui::SetTooltip("(%.0f, %.0f, %.0f), (%.0f, %.0f, %.0f),\n"
+                                "(%.0f, %.0f, %.0f), (%.0f, %.0f, %.0f)",
+                                ctx.user_settings.arena_corners[0], ctx.user_settings.arena_corners[1],
+                                ctx.user_settings.arena_corners[2], ctx.user_settings.arena_corners[3],
+                                ctx.user_settings.arena_corners[4], ctx.user_settings.arena_corners[5],
+                                ctx.user_settings.arena_corners[6], ctx.user_settings.arena_corners[7],
+                                ctx.user_settings.arena_corners[8], ctx.user_settings.arena_corners[9],
+                                ctx.user_settings.arena_corners[10], ctx.user_settings.arena_corners[11]);
+                        }
+                    }
+
+                    if (ImGui::Button("Enter Alignment Mode")) {
+                        // Save current skeleton and annotations
+                        state.saved_skeleton = ctx.skeleton;
+                        state.saved_annotations = ctx.annotations;
+                        // Switch to ArenaCorners4 skeleton
+                        ctx.skeleton.node_colors.clear();
+                        ctx.skeleton.edges.clear();
+                        ctx.skeleton.node_names.clear();
+                        skeleton_initialize("ArenaCorners4", &ctx.skeleton, ArenaCorners4);
+                        ctx.skeleton.has_skeleton = true;
+                        // Clear annotations for alignment labeling
+                        ctx.annotations.clear();
+                        state.alignment_mode = true;
+                        state.last_solved_frame = -1;
+                        ctx.toasts.push("Alignment mode: label 4 arena corners, then triangulate");
+                    }
+                } else {
+                    ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.3f, 1.0f),
+                        "ALIGNMENT MODE ACTIVE");
+                    ImGui::TextWrapped("Label the 4 arena corners (A=red, B=green, "
+                        "C=blue, D=yellow) in at least 2 camera views each, "
+                        "then triangulate. The corners form a square (A-B-C-D).");
+
+                    // Check if we have triangulated 3D for all 4 corners
+                    int n_triangulated = 0;
+                    for (auto &[fnum, fa] : ctx.annotations) {
+                        if (fa.kp3d.empty()) continue;
+                        for (int i = 0; i < 4 && i < (int)fa.kp3d.size(); i++)
+                            if (fa.kp3d[i].triangulated) n_triangulated++;
+                        break; // only need one frame
+                    }
+
+                    ImGui::Text("Triangulated corners: %d / 4", n_triangulated);
+
+                    if (n_triangulated >= 4 && ImGui::Button("Compute Alignment")) {
+                        // Extract the 4 corner 3D positions
+                        for (auto &[fnum, fa] : ctx.annotations) {
+                            if (fa.kp3d.empty()) continue;
+                            for (int i = 0; i < 4 && i < (int)fa.kp3d.size(); i++) {
+                                if (fa.kp3d[i].triangulated) {
+                                    state.arena_align.calib_corners[i] = Eigen::Vector3d(
+                                        fa.kp3d[i].x, fa.kp3d[i].y, fa.kp3d[i].z);
+                                }
+                            }
+                            break;
+                        }
+                        state.arena_align.corners_set = true;
+                        compute_arena_alignment(state.arena_align);
+                        if (state.arena_align.valid) {
+                            // Save corners to settings for "Load Previous"
+                            ctx.user_settings.arena_corners.resize(12);
+                            for (int i = 0; i < 4; i++) {
+                                ctx.user_settings.arena_corners[3*i+0] = state.arena_align.calib_corners[i].x();
+                                ctx.user_settings.arena_corners[3*i+1] = state.arena_align.calib_corners[i].y();
+                                ctx.user_settings.arena_corners[3*i+2] = state.arena_align.calib_corners[i].z();
+                            }
+                            save_user_settings(ctx.user_settings);
+                            ctx.toasts.push("Arena aligned: " +
+                                std::to_string(state.arena_align.residual_mm).substr(0, 5) +
+                                " mm residual");
+                        }
+                    }
+
+                    if (ImGui::Button("Exit Alignment Mode")) {
+                        // Restore original skeleton and annotations
+                        ctx.skeleton = state.saved_skeleton;
+                        ctx.annotations = std::move(state.saved_annotations);
+                        state.alignment_mode = false;
+                        mujoco_ik_reset(state.ik_state);
+                        state.last_solved_frame = -1;
+                    }
+                }
+            }
+
             } // end CollapsingHeader("Controls")
 
             // Auto-solve runs every frame regardless of header state
@@ -955,8 +1132,9 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                 state.last_solved_frame = ctx.current_frame_num;
                 auto it = ctx.annotations.find(ctx.current_frame_num);
                 if (it != ctx.annotations.end() && !it->second.kp3d.empty()) {
+                    const Keypoint3D *kp = get_kp3d(it->second.kp3d);
                     mujoco_ik_solve(mj, state.ik_state,
-                                    it->second.kp3d.data(),
+                                    kp,
                                     ctx.skeleton.num_nodes,
                                     ctx.current_frame_num);
                     int torso_id = mj_name2id(mj.model, mjOBJ_BODY, "torso");
@@ -1012,7 +1190,8 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                     ? &state.calib_view_override : nullptr;
                 mujoco_renderer_render(state.renderer, &mj, &state.mjcam,
                                        state.show_skin, state.show_bodies,
-                                       state.show_site_markers, state.show_arena, vo);
+                                       state.show_site_markers, state.show_arena, vo,
+                                       state.alignment_mode);
                 ImTextureID tex = mujoco_renderer_get_texture(state.renderer);
                 if (tex) {
                     ImVec2 img_pos = ImGui::GetCursorScreenPos();

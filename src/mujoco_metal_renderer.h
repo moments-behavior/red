@@ -39,7 +39,8 @@ void mujoco_renderer_render(MujocoRenderer *r, MujocoContext *mj,
                             bool show_bodies = true,
                             bool show_sites = true,
                             bool show_arena = true,
-                            const ViewOverride *view_override = nullptr);
+                            const ViewOverride *view_override = nullptr,
+                            bool show_arena_corners = false);
 
 // Get the rendered texture as an ImGui texture ID.
 ImTextureID mujoco_renderer_get_texture(MujocoRenderer *r);
