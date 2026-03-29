@@ -19,6 +19,16 @@
 #include <numeric>
 #include <random>
 
+// Symmetry constraint: maps skeleton node pairs for bilateral symmetry.
+// Y is the bilateral axis in the rodent MuJoCo model.
+struct SymmetryTable {
+    // Midline site indices (Y offset forced to 0)
+    std::vector<int> midline;
+    // L/R paired site indices
+    struct Pair { int left; int right; };
+    std::vector<Pair> pairs;
+};
+
 struct StacState {
     // Calibration parameters
     int    n_iters         = 3;      // alternating Q/M rounds
@@ -27,7 +37,8 @@ struct StacState {
     double m_momentum      = 0.9;    // offset SGD momentum
     double m_reg_coef      = 0.1;    // L2 regularization on offsets
     int    m_max_iters     = 500;    // M-phase SGD iterations per round
-    int    q_max_iters     = 300;    // IK iterations during calibration (faster than full solve)
+    int    q_max_iters     = 300;    // IK iterations during calibration
+    bool   symmetric       = true;   // enforce bilateral symmetry on offsets
 
     // State
     bool   calibrated      = false;
@@ -64,6 +75,89 @@ inline void stac_apply_offsets(MujocoContext &mj, const StacState &stac) {
 }
 
 // Reset offsets to zero and restore original site positions.
+// Build symmetry table from skeleton node names.
+// Identifies midline sites (Y offset = 0) and L/R pairs (mirrored Y).
+inline SymmetryTable build_symmetry_table(const MujocoContext &mj,
+                                           const std::vector<std::string> *node_names,
+                                           int num_nodes) {
+    SymmetryTable sym;
+    if (!node_names || num_nodes == 0) return sym;
+
+    // Known L/R skeleton name pairs
+    static const std::pair<std::string, std::string> kPairs[] = {
+        {"EarL",      "EarR"},
+        {"ShoulderL", "ShoulderR"},
+        {"ElbowL",    "ElbowR"},
+        {"WristL",    "WristR"},
+        {"HandL",     "HandR"},
+        {"KneeL",     "KneeR"},
+        {"AnkleL",    "AnkleR"},
+        {"FootL",     "FootR"},
+    };
+    // Known midline skeleton names
+    static const std::string kMidline[] = {
+        "Snout", "Neck", "SpineL", "TailBase",
+        "TailTip", "TailMid", "Tail1Q", "Tail3Q",
+    };
+
+    // Build node name → site index lookup
+    auto node_to_site = [&](const std::string &name) -> int {
+        for (int n = 0; n < num_nodes; n++) {
+            if ((*node_names)[n] == name) {
+                return (n < (int)mj.skeleton_to_site.size()) ? mj.skeleton_to_site[n] : -1;
+            }
+        }
+        return -1;
+    };
+
+    for (const auto &m : kMidline) {
+        int si = node_to_site(m);
+        if (si >= 0) sym.midline.push_back(si);
+    }
+    for (const auto &[l, r] : kPairs) {
+        int si_l = node_to_site(l), si_r = node_to_site(r);
+        if (si_l >= 0 && si_r >= 0) sym.pairs.push_back({si_l, si_r});
+    }
+    return sym;
+}
+
+// Enforce symmetry on gradient vector (in-place).
+// Midline: zero Y gradient. L/R pairs: average X/Z, mirror Y.
+inline void enforce_symmetry_gradient(std::vector<double> &grad,
+                                       const SymmetryTable &sym) {
+    for (int si : sym.midline)
+        grad[3*si + 1] = 0.0; // Y gradient = 0
+
+    for (const auto &p : sym.pairs) {
+        int L = p.left, R = p.right;
+        // Average X and Z gradients from both sides
+        double avg_x = (grad[3*L + 0] + grad[3*R + 0]) * 0.5;
+        double avg_z = (grad[3*L + 2] + grad[3*R + 2]) * 0.5;
+        // Mirror Y: L and R Y gradients should be opposite
+        double avg_y = (grad[3*L + 1] - grad[3*R + 1]) * 0.5;
+
+        grad[3*L + 0] = avg_x;  grad[3*L + 1] = avg_y;   grad[3*L + 2] = avg_z;
+        grad[3*R + 0] = avg_x;  grad[3*R + 1] = -avg_y;  grad[3*R + 2] = avg_z;
+    }
+}
+
+// Enforce symmetry on offset vector (in-place).
+inline void enforce_symmetry_offsets(std::vector<double> &offsets,
+                                      const SymmetryTable &sym) {
+    for (int si : sym.midline)
+        offsets[3*si + 1] = 0.0; // Y offset = 0
+
+    for (const auto &p : sym.pairs) {
+        int L = p.left, R = p.right;
+        double avg_x = (offsets[3*L + 0] + offsets[3*R + 0]) * 0.5;
+        double avg_z = (offsets[3*L + 2] + offsets[3*R + 2]) * 0.5;
+        double avg_y = (offsets[3*L + 1] - offsets[3*R + 1]) * 0.5;
+
+        offsets[3*L + 0] = avg_x;  offsets[3*L + 1] = avg_y;   offsets[3*L + 2] = avg_z;
+        offsets[3*R + 0] = avg_x;  offsets[3*R + 1] = -avg_y;  offsets[3*R + 2] = avg_z;
+    }
+}
+
 inline void stac_reset(MujocoContext &mj, StacState &stac) {
     if (!stac.original_site_pos.empty()) {
         int nsite = (int)mj.model->nsite;
@@ -113,7 +207,8 @@ inline double stac_mean_residual(MujocoContext &mj,
 // Run STAC calibration: alternating Q-phase (IK) and M-phase (offset SGD).
 // Collects frames from the annotation map and runs the full pipeline.
 inline bool stac_calibrate(MujocoContext &mj, StacState &stac, MujocoIKState &ik,
-                           const AnnotationMap &annotations, int num_nodes) {
+                           const AnnotationMap &annotations, int num_nodes,
+                           const std::vector<std::string> *node_names = nullptr) {
     if (!mj.loaded || !mj.model || !mj.data) return false;
 
     auto t_start = std::chrono::high_resolution_clock::now();
@@ -173,6 +268,11 @@ inline bool stac_calibrate(MujocoContext &mj, StacState &stac, MujocoIKState &ik
     // Save IK settings, use faster settings for calibration
     int saved_max_iters = ik.max_iterations;
     ik.max_iterations = stac.q_max_iters;
+
+    // Build symmetry table if enabled
+    SymmetryTable sym;
+    if (stac.symmetric && node_names)
+        sym = build_symmetry_table(mj, node_names, num_nodes);
 
     // Frame index list for residual computation
     std::vector<int> all_idx(N);
@@ -267,11 +367,19 @@ inline bool stac_calibrate(MujocoContext &mj, StacState &stac, MujocoIKState &ik
                 grad[i] = grad[i] * inv_N + 2.0 * stac.m_reg_coef * stac.site_offsets[i];
             }
 
+            // Enforce bilateral symmetry on gradients
+            if (stac.symmetric && !sym.midline.empty())
+                enforce_symmetry_gradient(grad, sym);
+
             // SGD with momentum
             for (int i = 0; i < 3 * nsite; i++) {
                 stac.m_velocity[i] = stac.m_momentum * stac.m_velocity[i] + grad[i];
                 stac.site_offsets[i] -= stac.m_lr * stac.m_velocity[i];
             }
+
+            // Enforce bilateral symmetry on offsets (belt + suspenders)
+            if (stac.symmetric && !sym.midline.empty())
+                enforce_symmetry_offsets(stac.site_offsets, sym);
 
             // Apply offsets to model
             stac_apply_offsets(mj, stac);
@@ -316,6 +424,7 @@ inline bool stac_calibrate(MujocoContext &mj, StacState &stac, MujocoIKState &ik
 inline void stac_apply_offsets(MujocoContext &, const StacState &) {}
 inline void stac_reset(MujocoContext &, StacState &) {}
 inline bool stac_calibrate(MujocoContext &, StacState &, MujocoIKState &,
-                           const AnnotationMap &, int) { return false; }
+                           const AnnotationMap &, int,
+                           const std::vector<std::string> * = nullptr) { return false; }
 
 #endif // RED_HAS_MUJOCO
