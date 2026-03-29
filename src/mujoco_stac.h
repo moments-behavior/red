@@ -43,9 +43,13 @@ struct StacState {
     // M-phase momentum buffer
     std::vector<double> m_velocity;       // 3 * nsite
 
-    // Progress callback (called during calibration for UI updates)
-    // args: (current_step, total_steps, current_residual_mm)
-    std::function<void(int, int, double)> progress_fn;
+    // Live progress (atomic for thread-safe UI reading)
+    std::atomic<int> current_round{0};   // 1-based alternating round
+    std::atomic<int> total_rounds{0};
+    std::atomic<int> round_frames_done{0};
+    std::atomic<int> round_frames_total{0};
+    std::atomic<int> phase{0};           // 0=idle, 1=Q-phase, 2=M-phase, 3=final Q
+    std::atomic<int> m_iter_done{0};
 };
 
 #ifdef RED_HAS_MUJOCO
@@ -170,26 +174,27 @@ inline bool stac_calibrate(MujocoContext &mj, StacState &stac, MujocoIKState &ik
     int saved_max_iters = ik.max_iterations;
     ik.max_iterations = stac.q_max_iters;
 
-    int total_steps = stac.n_iters * (N + stac.m_max_iters);
-    int current_step = 0;
-
     // Frame index list for residual computation
     std::vector<int> all_idx(N);
     std::iota(all_idx.begin(), all_idx.end(), 0);
 
+    // Initialize progress
+    stac.total_rounds = stac.n_iters;
+    stac.round_frames_total = N;
+
     // --- Alternating optimization ---
     for (int iter = 0; iter < stac.n_iters; iter++) {
+        stac.current_round = iter + 1;
 
         // === Q-phase: IK solve for each sampled frame ===
+        stac.phase = 1;
+        stac.round_frames_done = 0;
         mujoco_ik_reset(ik); // cold start for first frame of each round
         for (int i = 0; i < N; i++) {
             int fi = sample_indices[i];
             mujoco_ik_solve(mj, ik, frames[fi].kp3d, num_nodes, frames[fi].frame_num);
             all_qpos[i].assign(mj.data->qpos, mj.data->qpos + nq);
-
-            current_step++;
-            if (stac.progress_fn && (i % 20 == 0))
-                stac.progress_fn(current_step, total_steps, ik.final_residual * 1000.0);
+            stac.round_frames_done.fetch_add(1, std::memory_order_relaxed);
         }
 
         // Compute residual before M-phase on first iteration
@@ -224,6 +229,8 @@ inline bool stac_calibrate(MujocoContext &mj, StacState &stac, MujocoIKState &ik
             }
         }
 
+        stac.phase = 2;
+        stac.m_iter_done = 0;
         std::vector<double> grad(3 * nsite);
         for (int m_iter = 0; m_iter < stac.m_max_iters; m_iter++) {
             std::fill(grad.begin(), grad.end(), 0.0);
@@ -268,19 +275,19 @@ inline bool stac_calibrate(MujocoContext &mj, StacState &stac, MujocoIKState &ik
 
             // Apply offsets to model
             stac_apply_offsets(mj, stac);
-
-            current_step++;
-            if (stac.progress_fn && (m_iter % 100 == 0))
-                stac.progress_fn(current_step, total_steps, 0.0);
+            stac.m_iter_done.store(m_iter + 1, std::memory_order_relaxed);
         }
     }
 
     // --- Final Q-phase with calibrated offsets ---
+    stac.phase = 3;
+    stac.round_frames_done = 0;
     mujoco_ik_reset(ik);
     for (int i = 0; i < N; i++) {
         int fi = sample_indices[i];
         mujoco_ik_solve(mj, ik, frames[fi].kp3d, num_nodes, frames[fi].frame_num);
         all_qpos[i].assign(mj.data->qpos, mj.data->qpos + nq);
+        stac.round_frames_done.fetch_add(1, std::memory_order_relaxed);
     }
 
     // Compute final residual
@@ -291,6 +298,7 @@ inline bool stac_calibrate(MujocoContext &mj, StacState &stac, MujocoIKState &ik
     ik.max_iterations = saved_max_iters;
 
     stac.calibrated = true;
+    stac.phase = 0;
     auto t_end = std::chrono::high_resolution_clock::now();
     stac.calibration_time_s = std::chrono::duration<double>(t_end - t_start).count();
 

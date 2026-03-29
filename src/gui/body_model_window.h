@@ -144,6 +144,8 @@ inline void SolveChunk(mjModel *model, const std::vector<std::pair<int, std::vec
 // Launch parallel batch export in a background thread.
 inline void LaunchExport(MujocoContext &mj, MujocoIKState &ik_template,
                          const AnnotationMap &annotations, int num_nodes,
+                         int ik_method, const StacState &stac,
+                         const std::vector<std::string> &node_names,
                          MujocoExportState &es) {
     int nq = (int)mj.model->nq;
 
@@ -177,7 +179,6 @@ inline void LaunchExport(MujocoContext &mj, MujocoIKState &ik_template,
 
     int N = (int)all_frames.size();
     int n_threads = std::max(1, (int)std::thread::hardware_concurrency());
-    // Cap at reasonable number and ensure at least ~20 frames per thread
     n_threads = std::min(n_threads, std::max(1, N / 20));
     n_threads = std::min(n_threads, 16);
 
@@ -185,12 +186,39 @@ inline void LaunchExport(MujocoContext &mj, MujocoIKState &ik_template,
     es.frames_done = 0;
     es.num_threads = n_threads;
 
-    // Capture what we need for the background thread
+    // Capture all metadata for the background thread (snapshot at launch time)
     std::string path = es.output_path;
     MujocoIKState ik_settings = ik_template;
     std::vector<int> skel_to_site = mj.skeleton_to_site;
     float sf = mj.scale_factor;
     std::string model_path = mj.model_path;
+    int method = ik_method;
+
+    // Snapshot STAC state for metadata
+    bool stac_calibrated = stac.calibrated;
+    int stac_n_iters = stac.n_iters;
+    int stac_n_samples = stac.n_sample_frames;
+    int stac_m_iters = stac.m_max_iters;
+    double stac_m_lr = stac.m_lr;
+    double stac_m_momentum = stac.m_momentum;
+    double stac_m_reg = stac.m_reg_coef;
+    double stac_pre_res = stac.pre_residual;
+    double stac_post_res = stac.post_residual;
+    std::vector<double> stac_offsets = stac.site_offsets;
+    std::vector<double> stac_orig_sites = stac.original_site_pos;
+
+    // Snapshot site positions (includes STAC offsets if calibrated)
+    int nsite = (int)mj.model->nsite;
+    std::vector<double> site_pos(mj.model->site_pos, mj.model->site_pos + 3 * nsite);
+    std::vector<int> site_bodyid(mj.model->site_bodyid, mj.model->site_bodyid + nsite);
+
+    // Site names and node names for header
+    std::vector<std::string> site_names(nsite);
+    for (int i = 0; i < nsite; i++) {
+        const char *name = mj_id2name(mj.model, mjOBJ_SITE, i);
+        site_names[i] = name ? name : "";
+    }
+    std::vector<std::string> kp_names = node_names;
 
     // Copy the model N_threads times (each thread needs its own)
     // Do this on the main thread before launching
@@ -250,12 +278,73 @@ inline void LaunchExport(MujocoContext &mj, MujocoIKState &ik_template,
             return;
         }
 
+        // --- Metadata header (comment lines for reproducibility) ---
+        out << "# RED qpos export\n";
+        out << "# model: " << model_path << "\n";
+        out << "# nq: " << nq << "\n";
+        out << "# nv: " << (all_results.empty() ? 0 : nq) << "\n"; // nv not easily available, omit or compute
+        out << "# threads: " << n_threads << "\n";
+        out << "# ik_method: " << (method == IK_STAC ? "IK_STAC" : "IK_dm_control") << "\n";
+        out << "# scale_factor: " << std::setprecision(6) << sf
+            << (sf <= 0.0f ? " (auto)" : "") << "\n";
+        out << "# max_iterations: " << ik_settings.max_iterations << "\n";
+        out << "# lr: " << std::setprecision(6) << ik_settings.lr << "\n";
+        out << "# beta: " << ik_settings.beta << "\n";
+        out << "# reg_strength: " << std::setprecision(8) << ik_settings.reg_strength << "\n";
+        out << "# progress_thresh: " << ik_settings.progress_thresh << "\n";
+        out << "# check_every: " << ik_settings.check_every << "\n";
+
+        // Joint names
+        // (not easily available from thread — use model copy if needed)
+        // We captured site_names and kp_names instead
+        out << "# keypoint_names:";
+        for (const auto &n : kp_names) out << " " << n;
+        out << "\n";
+
+        // STAC metadata
+        if (method == IK_STAC) {
+            out << "# stac_calibrated: " << (stac_calibrated ? "true" : "false") << "\n";
+            if (stac_calibrated) {
+                out << "# stac_n_iters: " << stac_n_iters << "\n";
+                out << "# stac_n_sample_frames: " << stac_n_samples << "\n";
+                out << "# stac_m_max_iters: " << stac_m_iters << "\n";
+                out << "# stac_m_lr: " << std::setprecision(6) << stac_m_lr << "\n";
+                out << "# stac_m_momentum: " << stac_m_momentum << "\n";
+                out << "# stac_m_reg_coef: " << stac_m_reg << "\n";
+                out << "# stac_pre_residual_mm: " << std::setprecision(4) << stac_pre_res << "\n";
+                out << "# stac_post_residual_mm: " << stac_post_res << "\n";
+
+                // Site offsets (the calibrated delta from original positions)
+                out << "# stac_site_offsets (site_name, body_id, dx, dy, dz):\n";
+                int n_off = (int)stac_offsets.size() / 3;
+                for (int i = 0; i < n_off && i < (int)site_names.size(); i++) {
+                    double ox = stac_offsets[3*i], oy = stac_offsets[3*i+1], oz = stac_offsets[3*i+2];
+                    if (std::abs(ox) > 1e-10 || std::abs(oy) > 1e-10 || std::abs(oz) > 1e-10) {
+                        out << "#   " << site_names[i] << ", body=" << site_bodyid[i]
+                            << ", " << std::setprecision(8)
+                            << ox << ", " << oy << ", " << oz << "\n";
+                    }
+                }
+
+                // Final site positions (original + offset)
+                out << "# final_site_positions (site_name, x, y, z in model coords):\n";
+                for (int i = 0; i < (int)site_pos.size() / 3 && i < (int)site_names.size(); i++) {
+                    if (!site_names[i].empty()) {
+                        out << "#   " << site_names[i] << ", "
+                            << std::setprecision(8)
+                            << site_pos[3*i] << ", " << site_pos[3*i+1]
+                            << ", " << site_pos[3*i+2] << "\n";
+                    }
+                }
+            }
+        }
+
+        out << "#\n"; // blank comment line before data
+
+        // Column header
         out << "frame";
         for (int j = 0; j < nq; j++) out << ",qpos_" << j;
         out << ",residual_mm,iterations,converged\n";
-
-        out << "# nq=" << nq << " model=" << model_path
-            << " threads=" << n_threads << "\n";
 
         double total_res = 0.0;
         for (const auto &r : all_results) {
@@ -472,7 +561,9 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                         ctx.pm.project_path + "/qpos_export.csv";
                     state.export_state.running = true;
                     LaunchExport(mj, state.ik_state, ctx.annotations,
-                                 ctx.skeleton.num_nodes, state.export_state);
+                                 ctx.skeleton.num_nodes, state.ik_method,
+                                 state.stac_state, ctx.skeleton.node_names,
+                                 state.export_state);
                 }
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Solve IK on all labeled frames in parallel\n"
@@ -500,7 +591,47 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
             // --- STAC calibration controls ---
             if (state.ik_method == IK_STAC) {
                 ImGui::Separator();
-                if (state.stac_state.calibrated) {
+                if (state.stac_calibrating) {
+                    // Live progress display
+                    int round = state.stac_state.current_round.load(std::memory_order_relaxed);
+                    int total_rounds = state.stac_state.total_rounds.load(std::memory_order_relaxed);
+                    int phase = state.stac_state.phase.load(std::memory_order_relaxed);
+                    int frames_done = state.stac_state.round_frames_done.load(std::memory_order_relaxed);
+                    int frames_total = state.stac_state.round_frames_total.load(std::memory_order_relaxed);
+                    int m_done = state.stac_state.m_iter_done.load(std::memory_order_relaxed);
+
+                    const char *phase_name = (phase == 1) ? "Q-phase (IK solve)"
+                                           : (phase == 2) ? "M-phase (offset SGD)"
+                                           : (phase == 3) ? "Final Q-phase"
+                                           : "Starting...";
+
+                    ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.3f, 1.0f),
+                        "STAC Calibrating — Round %d/%d", round, total_rounds);
+                    ImGui::Text("%s", phase_name);
+
+                    if (phase == 1 || phase == 3) {
+                        float frac = frames_total > 0 ? (float)frames_done / frames_total : 0.0f;
+                        char buf[64];
+                        snprintf(buf, sizeof(buf), "%d / %d frames", frames_done, frames_total);
+                        ImGui::ProgressBar(frac, ImVec2(-1, 0), buf);
+                    } else if (phase == 2) {
+                        float frac = state.stac_state.m_max_iters > 0
+                            ? (float)m_done / state.stac_state.m_max_iters : 0.0f;
+                        char buf[64];
+                        snprintf(buf, sizeof(buf), "%d / %d SGD iters", m_done, state.stac_state.m_max_iters);
+                        ImGui::ProgressBar(frac, ImVec2(-1, 0), buf);
+                    }
+
+                    // Check if calibration finished (phase went back to 0)
+                    if (state.stac_state.calibrated) {
+                        state.stac_calibrating = false;
+                        mujoco_ik_reset(state.ik_state);
+                        state.last_solved_frame = -1;
+                        ctx.toasts.push("STAC calibration: " +
+                            std::to_string((int)state.stac_state.pre_residual) + " mm -> " +
+                            std::to_string((int)state.stac_state.post_residual) + " mm");
+                    }
+                } else if (state.stac_state.calibrated) {
                     ImGui::TextColored(ImVec4(0.2f, 0.9f, 0.2f, 1.0f),
                         "STAC calibrated: %.1f mm -> %.1f mm (%d frames, %.1fs)",
                         state.stac_state.pre_residual,
@@ -517,20 +648,14 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                         "the body model using multiple labeled frames.");
                     ImGui::SliderInt("Alternating rounds", &state.stac_state.n_iters, 1, 10);
                     ImGui::SliderInt("Sample frames", &state.stac_state.n_sample_frames, 50, 500);
-                    if (ImGui::Button("Calibrate Offsets") && !state.stac_calibrating) {
+                    if (ImGui::Button("Calibrate Offsets")) {
                         state.stac_calibrating = true;
-                        // Run synchronously for now (TODO: background thread)
-                        stac_calibrate(mj, state.stac_state, state.ik_state,
-                                       ctx.annotations, ctx.skeleton.num_nodes);
-                        state.stac_calibrating = false;
-                        mujoco_ik_reset(state.ik_state);
-                        state.last_solved_frame = -1;
-                        ctx.toasts.push("STAC calibration: " +
-                            std::to_string((int)state.stac_state.pre_residual) + " mm -> " +
-                            std::to_string((int)state.stac_state.post_residual) + " mm");
+                        // Launch calibration in background thread
+                        std::thread([&mj, &state, &ctx]() {
+                            stac_calibrate(mj, state.stac_state, state.ik_state,
+                                           ctx.annotations, ctx.skeleton.num_nodes);
+                        }).detach();
                     }
-                    if (state.stac_calibrating)
-                        ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), "Calibrating...");
                 }
             }
 
