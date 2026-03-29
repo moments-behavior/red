@@ -29,6 +29,7 @@ void            mujoco_renderer_resize(MujocoRenderer *r, uint32_t width, uint32
 void mujoco_renderer_render(MujocoRenderer *r, MujocoContext *mj,
                             mjvCamera *cam,
                             bool show_skin = true,
+                            bool show_bodies = true,
                             bool show_sites = true,
                             bool show_arena = true);
 
