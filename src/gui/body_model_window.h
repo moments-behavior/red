@@ -112,7 +112,12 @@ struct BodyModelState {
     // Calibration camera view: -1 = free camera, 0..N-1 = calibration camera index
     int selected_camera = -1;
     ViewOverride calib_view_override;
-    float calib_aspect = 0.0f; // camera aspect ratio (0 = use viewport)
+    float calib_aspect = 0.0f;
+    bool show_video_bg = false;
+    float scene_opacity = 1.0f;
+    bool calib_cam_user_override = false;
+    float cam_zoom = 1.0f;       // zoom on calibration camera view
+    float cam_pan[2] = {0, 0};   // pan offset (normalized image coords)
 
     // Renderer handle + native MuJoCo camera
 #ifdef RED_HAS_MUJOCO
@@ -921,39 +926,68 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                     : ctx.pm.camera_names[state.selected_camera].c_str();
                 ImGui::SetNextItemWidth(-1);
                 if (ImGui::BeginCombo("##CameraSelect", preview)) {
-                    if (ImGui::Selectable("Free Camera", state.selected_camera < 0))
+                    if (ImGui::Selectable("Free Camera", state.selected_camera < 0)) {
                         state.selected_camera = -1;
+                        state.calib_cam_user_override = false;
+                        state.cam_zoom = 1.0f; state.cam_pan[0] = state.cam_pan[1] = 0;
+                    }
                     for (int i = 0; i < (int)ctx.pm.camera_names.size(); i++) {
                         if (i >= (int)ctx.pm.camera_params.size()) break;
                         if (ctx.pm.camera_params[i].telecentric) continue;
                         bool selected = (state.selected_camera == i);
-                        if (ImGui::Selectable(ctx.pm.camera_names[i].c_str(), selected))
+                        if (ImGui::Selectable(ctx.pm.camera_names[i].c_str(), selected)) {
                             state.selected_camera = i;
+                            state.calib_cam_user_override = false;
+                            state.cam_zoom = 1.0f; state.cam_pan[0] = state.cam_pan[1] = 0;
+                        }
                     }
                     ImGui::EndCombo();
                 }
 
+                if (state.selected_camera >= 0) {
+                    ImGui::Checkbox("Video Background", &state.show_video_bg);
+                    if (state.show_video_bg) {
+                        ImGui::SameLine();
+                        ImGui::SetNextItemWidth(120);
+                        ImGui::SliderFloat("Opacity", &state.scene_opacity, 0.0f, 1.0f, "%.2f");
+                    }
+                }
+
                 // Build direct view/projection override from calibration extrinsics.
-                // This preserves the full rotation (including roll) that spherical
-                // coordinates would lose.
+                // Skip if user has manually overridden (dragged/scrolled).
                 if (state.selected_camera >= 0 &&
-                    state.selected_camera < (int)ctx.pm.camera_params.size()) {
+                    state.selected_camera < (int)ctx.pm.camera_params.size() &&
+                    !state.calib_cam_user_override) {
                     // Stored in BodyModelState for the render call below
                     state.calib_view_override.active = true;
 
                     const CameraParams &cp = ctx.pm.camera_params[state.selected_camera];
-                    double sf = (double)mj.scale_factor;
-                    if (sf <= 0.0) sf = 0.001;
 
-                    // Eye position in world (scaled to model units)
-                    Eigen::Vector3d eye_w = -cp.r.transpose() * cp.tvec * sf;
+                    // Eye position in calibration frame (mm)
+                    Eigen::Vector3d eye_calib = -cp.r.transpose() * cp.tvec;
 
-                    // Camera axes in world frame:
-                    //   OpenCV: X-right, Y-down, Z-forward
-                    //   We need: forward, up, right for look_at
-                    Eigen::Vector3d cam_fwd = cp.r.transpose() * Eigen::Vector3d(0, 0, 1);
-                    Eigen::Vector3d cam_up  = cp.r.transpose() * Eigen::Vector3d(0, -1, 0); // -Y = up
-                    Eigen::Vector3d lookat_pt = eye_w + cam_fwd.normalized();
+                    // Camera axes in calibration frame
+                    Eigen::Vector3d cam_fwd_calib = cp.r.transpose() * Eigen::Vector3d(0, 0, 1);
+                    Eigen::Vector3d cam_up_calib  = cp.r.transpose() * Eigen::Vector3d(0, -1, 0);
+
+                    // Transform to MuJoCo frame: use arena alignment if active,
+                    // otherwise just scale mm → m
+                    Eigen::Vector3d eye_w, cam_fwd, cam_up;
+                    if (state.arena_align.valid) {
+                        eye_w   = state.arena_align.transform(eye_calib);
+                        // Rotate direction vectors (no translation, just scale*R)
+                        cam_fwd = state.arena_align.scale * state.arena_align.R * cam_fwd_calib;
+                        cam_up  = state.arena_align.scale * state.arena_align.R * cam_up_calib;
+                    } else {
+                        double sf = (double)mj.scale_factor;
+                        if (sf <= 0.0) sf = 0.001;
+                        eye_w   = eye_calib * sf;
+                        cam_fwd = cam_fwd_calib; // direction, no scaling needed
+                        cam_up  = cam_up_calib;
+                    }
+                    cam_fwd.normalize();
+                    cam_up.normalize();
+                    Eigen::Vector3d lookat_pt = eye_w + cam_fwd;
 
                     // Build view matrix (same as renderer's look_at but via Eigen)
                     Eigen::Vector3d f = (lookat_pt - eye_w).normalized();
@@ -980,12 +1014,32 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                     P(2,3) = far_z * near_z / (near_z - far_z);
                     P(3,2) = -1.0f;
 
-                    // Store as column-major for Metal (Eigen is column-major by default)
+                    // Apply zoom/pan as a post-projection NDC transform.
+                    // This matches the blit UV transform exactly at all zoom levels:
+                    //   NDC_new = (NDC_old - 2*pan) / zoom
+                    float iz = 1.0f / state.cam_zoom;
+                    Eigen::Matrix4f S = Eigen::Matrix4f::Identity();
+                    S(0,0) = iz;
+                    S(1,1) = iz;
+                    S(0,3) = -2.0f * state.cam_pan[0] * iz;
+                    S(1,3) =  2.0f * state.cam_pan[1] * iz; // opposite sign: blit flips Y
+                    P = S * P;
+
                     memcpy(state.calib_view_override.view, V.data(), 16 * sizeof(float));
                     memcpy(state.calib_view_override.proj, P.data(), 16 * sizeof(float));
                     state.calib_view_override.eye[0] = (float)eye_w.x();
                     state.calib_view_override.eye[1] = (float)eye_w.y();
                     state.calib_view_override.eye[2] = (float)eye_w.z();
+
+                    // Also set mjvCamera from calibration pose so the transition
+                    // is smooth when the user starts dragging (disables override)
+                    Eigen::Vector3d lookat_far = eye_w + cam_fwd * eye_w.norm() * 0.8;
+                    state.mjcam.lookat[0] = lookat_far.x();
+                    state.mjcam.lookat[1] = lookat_far.y();
+                    state.mjcam.lookat[2] = lookat_far.z();
+                    state.mjcam.distance = (eye_w - lookat_far).norm();
+                    state.mjcam.azimuth = atan2(cam_fwd.y(), cam_fwd.x()) * 180.0 / M_PI;
+                    state.mjcam.elevation = asin(std::clamp(cam_fwd.z(), -1.0, 1.0)) * 180.0 / M_PI;
 
                     // Store aspect ratio for viewport sizing
                     state.calib_aspect = (float)(img_w / img_h);
@@ -1218,10 +1272,24 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
             if (state.renderer) {
                 const ViewOverride *vo = state.calib_view_override.active
                     ? &state.calib_view_override : nullptr;
+                // Get video background texture if enabled
+                void *bg_tex = nullptr;
+                if (state.show_video_bg && state.selected_camera >= 0 &&
+                    state.selected_camera < (int)ctx.pm.camera_names.size() &&
+                    ctx.scene) {
+                    // selected_camera indexes ctx.pm.camera_names which matches
+                    // the scene camera order
+                    int cam_idx = state.selected_camera;
+                    if (cam_idx < (int)ctx.scene->num_cams &&
+                        ctx.scene->image_descriptor[cam_idx])
+                        bg_tex = (void *)ctx.scene->image_descriptor[cam_idx];
+                }
+                float opacity = (state.show_video_bg && bg_tex) ? state.scene_opacity : 1.0f;
                 mujoco_renderer_render(state.renderer, &mj, &state.mjcam,
                                        state.show_skin, state.show_bodies,
                                        state.show_site_markers, state.show_arena, vo,
-                                       state.alignment_mode);
+                                       state.alignment_mode, bg_tex, opacity,
+                                       state.cam_zoom, state.cam_pan);
                 ImTextureID tex = mujoco_renderer_get_texture(state.renderer);
                 if (tex) {
                     ImVec2 img_pos = ImGui::GetCursorScreenPos();
@@ -1250,26 +1318,45 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                         double dx =  (double)io.MouseDelta.x / (double)vp_h;
                         double dy = -(double)io.MouseDelta.y / (double)vp_h;
 
-                        // Left-drag to orbit (Blender-style)
-                        if (ImGui::IsMouseDragging(ImGuiMouseButton_Left))
-                            mjv_moveCamera(mj.model, mjMOUSE_ROTATE_V, dx, -dy,
-                                           &mj.scene, &state.mjcam);
+                        bool any_drag = ImGui::IsMouseDragging(ImGuiMouseButton_Left) ||
+                                        ImGui::IsMouseDragging(ImGuiMouseButton_Right) ||
+                                        ImGui::IsMouseDragging(ImGuiMouseButton_Middle);
+                        bool any_scroll = (vp_hovered && io.MouseWheel != 0.0f);
 
-                        // Right-drag to pan
-                        if (ImGui::IsMouseDragging(ImGuiMouseButton_Right))
-                            mjv_moveCamera(mj.model, mjMOUSE_MOVE_V, dx, -dy,
-                                           &mj.scene, &state.mjcam);
+                        // Double-click to reset to calibration camera view
+                        if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) &&
+                            state.selected_camera >= 0) {
+                            state.calib_cam_user_override = false;
+                            state.cam_zoom = 1.0f;
+                            state.cam_pan[0] = state.cam_pan[1] = 0;
+                        }
 
-                        // Middle-drag to zoom
-                        if (ImGui::IsMouseDragging(ImGuiMouseButton_Middle))
-                            mjv_moveCamera(mj.model, mjMOUSE_ZOOM, dx, dy,
-                                           &mj.scene, &state.mjcam);
-
-                        // Scroll to zoom
-                        if (vp_hovered && io.MouseWheel != 0.0f)
-                            mjv_moveCamera(mj.model, mjMOUSE_ZOOM, 0,
-                                           -0.05 * io.MouseWheel,
-                                           &mj.scene, &state.mjcam);
+                        if (state.calib_view_override.active && state.selected_camera >= 0) {
+                            // Calibration camera: zoom/pan in image space (video stays aligned)
+                            if (ImGui::IsMouseDragging(ImGuiMouseButton_Right)) {
+                                state.cam_pan[0] += (float)dx * state.cam_zoom;
+                                state.cam_pan[1] -= (float)dy * state.cam_zoom; // match dy sign
+                            }
+                            if (vp_hovered && io.MouseWheel != 0.0f) {
+                                float zf = 1.0f + io.MouseWheel * 0.1f;
+                                state.cam_zoom = std::clamp(state.cam_zoom / zf, 0.1f, 20.0f);
+                            }
+                        } else {
+                            // Free camera: orbit/pan/zoom via MuJoCo
+                            if (ImGui::IsMouseDragging(ImGuiMouseButton_Left))
+                                mjv_moveCamera(mj.model, mjMOUSE_ROTATE_V, dx, -dy,
+                                               &mj.scene, &state.mjcam);
+                            if (ImGui::IsMouseDragging(ImGuiMouseButton_Right))
+                                mjv_moveCamera(mj.model, mjMOUSE_MOVE_V, dx, -dy,
+                                               &mj.scene, &state.mjcam);
+                            if (ImGui::IsMouseDragging(ImGuiMouseButton_Middle))
+                                mjv_moveCamera(mj.model, mjMOUSE_ZOOM, dx, dy,
+                                               &mj.scene, &state.mjcam);
+                            if (vp_hovered && io.MouseWheel != 0.0f)
+                                mjv_moveCamera(mj.model, mjMOUSE_ZOOM, 0,
+                                               -0.05 * io.MouseWheel,
+                                               &mj.scene, &state.mjcam);
+                        }
                     }
                 }
             }
