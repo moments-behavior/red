@@ -1016,9 +1016,17 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                 ImTextureID tex = mujoco_renderer_get_texture(state.renderer);
                 if (tex) {
                     ImVec2 img_pos = ImGui::GetCursorScreenPos();
-                    ImGui::Image(tex, ImVec2(vp_w, vp_h));
+                    // Draw the image as background
+                    ImGui::GetWindowDrawList()->AddImage(
+                        tex, img_pos, ImVec2(img_pos.x + vp_w, img_pos.y + vp_h));
 
-                    // Overlay "Unload" button in top-left corner of viewport
+                    // InvisibleButton captures mouse focus properly (unlike Image
+                    // which is passive and can lose hover during screen recording)
+                    ImGui::InvisibleButton("##mj_viewport", ImVec2(vp_w, vp_h));
+                    bool vp_hovered = ImGui::IsItemHovered();
+                    bool vp_active  = ImGui::IsItemActive();
+
+                    // Overlay "Unload" button in top-left corner
                     ImVec2 saved_cursor = ImGui::GetCursorScreenPos();
                     ImGui::SetCursorScreenPos(ImVec2(img_pos.x + 4, img_pos.y + 4));
                     ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 0.7f);
@@ -1027,22 +1035,18 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                     ImGui::PopStyleVar();
                     ImGui::SetCursorScreenPos(saved_cursor);
 
-                    // Mouse controls (matches MuJoCo simulate.cc):
-                    //   Left-drag:   orbit (rotate)
-                    //   Right-drag:  pan (translate lookat)
-                    //   Scroll:      zoom (distance)
-                    if (ImGui::IsItemHovered()) {
+                    // Mouse controls on the viewport
+                    if (vp_hovered || vp_active) {
                         ImGuiIO &io = ImGui::GetIO();
                         double dx =  (double)io.MouseDelta.x / (double)vp_h;
                         double dy = -(double)io.MouseDelta.y / (double)vp_h;
 
-                        // Left-drag to orbit (negate dy for Blender-style:
-                        // drag down = camera orbits above, looking down)
+                        // Left-drag to orbit (Blender-style)
                         if (ImGui::IsMouseDragging(ImGuiMouseButton_Left))
                             mjv_moveCamera(mj.model, mjMOUSE_ROTATE_V, dx, -dy,
                                            &mj.scene, &state.mjcam);
 
-                        // Right-drag to pan (negate dy so drag-up pans up)
+                        // Right-drag to pan
                         if (ImGui::IsMouseDragging(ImGuiMouseButton_Right))
                             mjv_moveCamera(mj.model, mjMOUSE_MOVE_V, dx, -dy,
                                            &mj.scene, &state.mjcam);
@@ -1053,7 +1057,7 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                                            &mj.scene, &state.mjcam);
 
                         // Scroll to zoom
-                        if (io.MouseWheel != 0.0f)
+                        if (vp_hovered && io.MouseWheel != 0.0f)
                             mjv_moveCamera(mj.model, mjMOUSE_ZOOM, 0,
                                            -0.05 * io.MouseWheel,
                                            &mj.scene, &state.mjcam);
