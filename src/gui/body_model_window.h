@@ -10,6 +10,7 @@
 #include "gui/panel.h"
 #include "mujoco_context.h"
 #include "mujoco_ik.h"
+#include "mujoco_stac.h"
 #include <ImGuiFileDialog.h>
 #include <string>
 
@@ -17,11 +18,20 @@
 #include "mujoco_metal_renderer.h"
 #endif
 
+enum IKMethod { IK_DM_CONTROL = 0, IK_STAC = 1 };
+
 struct BodyModelState {
     bool show = false;
 
+    // IK method selection
+    int ik_method = IK_DM_CONTROL;
+
     // IK solver state (owns warm-start)
     MujocoIKState ik_state;
+
+    // STAC calibration state
+    StacState stac_state;
+    bool stac_calibrating = false; // true while calibration is running
 
     // Display options
     bool auto_solve = false;
@@ -156,7 +166,11 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                         (int)mj.model->nbody, (int)mj.model->njnt);
             ImGui::Separator();
 
-            ImGui::Text("IK Solver");
+            // IK method selector
+            const char *ik_methods[] = {"IK_dm_control", "IK_STAC"};
+            ImGui::SetNextItemWidth(200);
+            ImGui::Combo("IK Method", &state.ik_method, ik_methods, 2);
+
             if (ImGui::SliderFloat("Scale factor", &mj.scale_factor, 0.0f, 3.0f,
                                    mj.scale_factor == 0.0f ? "auto" : "%.4f"))
                 mujoco_ik_reset(state.ik_state); // reset warm-start on scale change
@@ -232,6 +246,43 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                                    state.ik_state.solve_time_ms,
                                    state.ik_state.final_residual * 1000.0,
                                    state.ik_state.active_sites);
+            }
+
+            // --- STAC calibration controls ---
+            if (state.ik_method == IK_STAC) {
+                ImGui::Separator();
+                if (state.stac_state.calibrated) {
+                    ImGui::TextColored(ImVec4(0.2f, 0.9f, 0.2f, 1.0f),
+                        "STAC calibrated: %.1f mm -> %.1f mm (%d frames, %.1fs)",
+                        state.stac_state.pre_residual,
+                        state.stac_state.post_residual,
+                        state.stac_state.frames_used,
+                        state.stac_state.calibration_time_s);
+                    if (ImGui::Button("Reset Offsets")) {
+                        stac_reset(mj, state.stac_state);
+                        mujoco_ik_reset(state.ik_state);
+                        state.last_solved_frame = -1;
+                    }
+                } else {
+                    ImGui::TextWrapped("STAC calibrates keypoint site positions on "
+                        "the body model using multiple labeled frames.");
+                    ImGui::SliderInt("Alternating rounds", &state.stac_state.n_iters, 1, 10);
+                    ImGui::SliderInt("Sample frames", &state.stac_state.n_sample_frames, 50, 500);
+                    if (ImGui::Button("Calibrate Offsets") && !state.stac_calibrating) {
+                        state.stac_calibrating = true;
+                        // Run synchronously for now (TODO: background thread)
+                        stac_calibrate(mj, state.stac_state, state.ik_state,
+                                       ctx.annotations, ctx.skeleton.num_nodes);
+                        state.stac_calibrating = false;
+                        mujoco_ik_reset(state.ik_state);
+                        state.last_solved_frame = -1;
+                        ctx.toasts.push("STAC calibration: " +
+                            std::to_string((int)state.stac_state.pre_residual) + " mm -> " +
+                            std::to_string((int)state.stac_state.post_residual) + " mm");
+                    }
+                    if (state.stac_calibrating)
+                        ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), "Calibrating...");
+                }
             }
 
             ImGui::Separator();

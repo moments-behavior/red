@@ -489,6 +489,39 @@ if(APPLE)
             CXX_STANDARD_REQUIRED ON
             BUILD_RPATH "${CMAKE_SOURCE_DIR}/lib"
         )
+
+        # STAC comparison test: IK_dm_control vs IK+STAC
+        add_executable(test_stac_comparison
+            tests/test_stac_comparison.cpp
+            src/skeleton.cpp
+            ${DIR_IMGUI}/imgui.cpp
+            ${DIR_IMGUI}/imgui_draw.cpp
+            ${DIR_IMGUI}/imgui_tables.cpp
+            ${DIR_IMGUI}/imgui_widgets.cpp
+        )
+        target_include_directories(test_stac_comparison PRIVATE
+            src
+            ${DIR_IMGUI}
+            ${DIR_IMGUI}/backends
+            ${DIR_IMPLOT}
+            ${DIR_IMPLOT3D}
+            lib/nvcodec
+            lib/IconFontCppHeaders
+            ${HOMEBREW_PREFIX}/include
+            ${HOMEBREW_PREFIX}/include/eigen3
+            ${FFMPEG_INCLUDE_DIRS}
+            "${MUJOCO_FRAMEWORK_DIR}/Headers"
+        )
+        target_link_libraries(test_stac_comparison PRIVATE
+            Eigen3::Eigen
+            "${MUJOCO_DYLIB}"
+        )
+        target_compile_definitions(test_stac_comparison PRIVATE RED_HAS_MUJOCO)
+        set_target_properties(test_stac_comparison PROPERTIES
+            CXX_STANDARD 17
+            CXX_STANDARD_REQUIRED ON
+            BUILD_RPATH "${CMAKE_SOURCE_DIR}/lib"
+        )
     endif()
 
     # Full pipeline test: runs all 7 steps, validates reproj error
