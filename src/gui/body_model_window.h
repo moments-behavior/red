@@ -127,6 +127,191 @@ struct BodyModelState {
 
     // Model path for file dialog
     std::string model_path;
+
+    // Apply loaded calibration offsets to the model after session load.
+    // Handles double-offset protection (resets to original first).
+    void apply_loaded_calibration(MujocoContext &mj) {
+        // Reset any existing offsets first to avoid double-application
+        if (stac_state.calibrated)
+            stac_reset(mj, stac_state);
+        if (active_calibration > 0 &&
+            active_calibration < (int)calib_history.size()) {
+            auto &c = calib_history[active_calibration];
+            if (!c.site_offsets.empty() &&
+                (int)c.site_offsets.size() == 3 * (int)mj.model->nsite) {
+                int ns = (int)mj.model->nsite;
+                stac_state.original_site_pos.assign(
+                    mj.model->site_pos, mj.model->site_pos + 3 * ns);
+                stac_state.site_offsets = c.site_offsets;
+                stac_state.calibrated = true;
+                stac_apply_offsets(mj, stac_state);
+            }
+        }
+        mujoco_ik_reset(ik_state);
+        last_solved_frame = -1;
+    }
+
+    // Save session to JSON
+    bool save_session(const std::string &path) const {
+        try {
+            nlohmann::json j;
+            j["version"] = 1;
+            j["model_path"] = model_path;
+            j["ik_method"] = ik_method;
+
+            // IK settings
+            j["ik"] = {{"max_iterations", ik_state.max_iterations},
+                       {"lr", ik_state.lr}, {"beta", ik_state.beta},
+                       {"reg_strength", ik_state.reg_strength}};
+
+            // Arena alignment
+            if (arena_align.valid) {
+                std::vector<double> R_flat(9), t_vec(3), corners_flat(12);
+                for (int i = 0; i < 9; i++) R_flat[i] = arena_align.R.data()[i];
+                for (int i = 0; i < 3; i++) t_vec[i] = arena_align.t[i];
+                for (int i = 0; i < 4; i++)
+                    for (int c = 0; c < 3; c++)
+                        corners_flat[3*i+c] = arena_align.calib_corners[i][c];
+                j["arena"] = {{"valid", true}, {"scale", arena_align.scale},
+                              {"R", R_flat}, {"t", t_vec},
+                              {"corners", corners_flat},
+                              {"residual_mm", arena_align.residual_mm}};
+            }
+
+            // STAC settings
+            j["stac"] = {{"symmetric", stac_state.symmetric},
+                         {"n_iters", stac_state.n_iters},
+                         {"n_sample_frames", stac_state.n_sample_frames},
+                         {"m_max_iters", stac_state.m_max_iters},
+                         {"m_lr", stac_state.m_lr},
+                         {"m_momentum", stac_state.m_momentum},
+                         {"m_reg_coef", stac_state.m_reg_coef}};
+
+            // Calibration history
+            nlohmann::json hist = nlohmann::json::array();
+            for (const auto &c : calib_history) {
+                nlohmann::json entry;
+                entry["name"] = c.name;
+                entry["symmetric"] = c.symmetric;
+                entry["n_iters"] = c.n_iters;
+                entry["n_samples"] = c.n_samples;
+                entry["m_max_iters"] = c.m_max_iters;
+                entry["m_lr"] = c.m_lr;
+                entry["m_reg_coef"] = c.m_reg_coef;
+                entry["pre_residual"] = c.pre_residual;
+                entry["post_residual"] = c.post_residual;
+                entry["time_s"] = c.time_s;
+                entry["site_offsets"] = c.site_offsets;
+                entry["displacement_mm"] = c.displacement_mm;
+                entry["site_names"] = c.site_names;
+                hist.push_back(entry);
+            }
+            j["calibration_history"] = hist;
+            j["active_calibration"] = active_calibration;
+
+            // Display
+            j["display"] = {{"show_skin", show_skin}, {"show_bodies", show_bodies},
+                            {"show_sites", show_site_markers}, {"show_arena", show_arena}};
+
+            std::ofstream f(path);
+            if (!f) return false;
+            f << j.dump(2);
+            return true;
+        } catch (...) { return false; }
+    }
+
+    // Load session from JSON. Returns true on success.
+    // Call AFTER model is loaded (needs nsite for offset application).
+    bool load_session(const std::string &path) {
+        try {
+            std::ifstream f(path);
+            if (!f) return false;
+            nlohmann::json j;
+            f >> j;
+            if (!j.contains("version")) return false;
+
+            model_path = j.value("model_path", model_path);
+            ik_method = j.value("ik_method", ik_method);
+
+            if (j.contains("ik")) {
+                auto &ik = j["ik"];
+                ik_state.max_iterations = ik.value("max_iterations", ik_state.max_iterations);
+                ik_state.lr = ik.value("lr", ik_state.lr);
+                ik_state.beta = ik.value("beta", ik_state.beta);
+                ik_state.reg_strength = ik.value("reg_strength", ik_state.reg_strength);
+            }
+
+            if (j.contains("arena")) {
+                auto &a = j["arena"];
+                arena_align.valid = a.value("valid", false);
+                arena_align.scale = a.value("scale", 0.001);
+                arena_align.residual_mm = a.value("residual_mm", 0.0);
+                if (a.contains("R")) {
+                    auto R = a["R"].get<std::vector<double>>();
+                    if (R.size() == 9)
+                        arena_align.R = Eigen::Map<Eigen::Matrix3d>(R.data());
+                }
+                if (a.contains("t")) {
+                    auto t = a["t"].get<std::vector<double>>();
+                    if (t.size() == 3)
+                        arena_align.t = Eigen::Map<Eigen::Vector3d>(t.data());
+                }
+                if (a.contains("corners")) {
+                    auto c = a["corners"].get<std::vector<double>>();
+                    if (c.size() == 12) {
+                        for (int i = 0; i < 4; i++)
+                            arena_align.calib_corners[i] = Eigen::Vector3d(c[3*i], c[3*i+1], c[3*i+2]);
+                        arena_align.corners_set = true;
+                    }
+                }
+            }
+
+            if (j.contains("stac")) {
+                auto &s = j["stac"];
+                stac_state.symmetric = s.value("symmetric", true);
+                stac_state.n_iters = s.value("n_iters", 3);
+                stac_state.n_sample_frames = s.value("n_sample_frames", 100);
+                stac_state.m_max_iters = s.value("m_max_iters", 500);
+                stac_state.m_lr = s.value("m_lr", 5e-4);
+                stac_state.m_momentum = s.value("m_momentum", 0.9);
+                stac_state.m_reg_coef = s.value("m_reg_coef", 0.1);
+            }
+
+            if (j.contains("calibration_history")) {
+                calib_history.clear();
+                for (auto &entry : j["calibration_history"]) {
+                    CalibrationEntry c;
+                    c.name = entry.value("name", "");
+                    c.symmetric = entry.value("symmetric", false);
+                    c.n_iters = entry.value("n_iters", 0);
+                    c.n_samples = entry.value("n_samples", 0);
+                    c.m_max_iters = entry.value("m_max_iters", 0);
+                    c.m_lr = entry.value("m_lr", 0.0);
+                    c.m_reg_coef = entry.value("m_reg_coef", 0.0);
+                    c.pre_residual = entry.value("pre_residual", 0.0);
+                    c.post_residual = entry.value("post_residual", 0.0);
+                    c.time_s = entry.value("time_s", 0.0);
+                    c.site_offsets = entry.value("site_offsets", std::vector<double>{});
+                    c.displacement_mm = entry.value("displacement_mm", std::vector<double>{});
+                    c.site_names = entry.value("site_names", std::vector<std::string>{});
+                    calib_history.push_back(std::move(c));
+                }
+                active_calibration = j.value("active_calibration", 0);
+                if (!calib_history.empty())
+                    active_calibration = std::clamp(active_calibration, 0, (int)calib_history.size() - 1);
+            }
+
+            if (j.contains("display")) {
+                auto &d = j["display"];
+                show_skin = d.value("show_skin", true);
+                show_bodies = d.value("show_bodies", true);
+                show_site_markers = d.value("show_sites", true);
+                show_arena = d.value("show_arena", true);
+            }
+
+            return true;
+        } catch (...) { return false; }
+    }
 };
 
 #ifdef RED_HAS_MUJOCO
@@ -476,10 +661,18 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                     if (mj.load(state.model_path, ctx.skeleton)) {
                         ctx.user_settings.last_mujoco_model = state.model_path;
                         save_user_settings(ctx.user_settings);
-                        ctx.toasts.push("MuJoCo model loaded: " +
-                                        std::to_string(mj.mapped_count) + "/" +
-                                        std::to_string(ctx.skeleton.num_nodes) +
-                                        " sites matched");
+                        // Auto-load session if it exists
+                        std::string sp = ctx.pm.project_path + "/mujoco_session.json";
+                        if (!ctx.pm.project_path.empty() &&
+                            std::filesystem::exists(sp) && state.load_session(sp)) {
+                            state.apply_loaded_calibration(mj);
+                            ctx.toasts.push("MuJoCo model + session loaded");
+                        } else {
+                            ctx.toasts.push("MuJoCo model loaded: " +
+                                std::to_string(mj.mapped_count) + "/" +
+                                std::to_string(ctx.skeleton.num_nodes) +
+                                " sites matched");
+                        }
                     } else {
                         ctx.toasts.push("Failed: " + mj.load_error, Toast::Error);
                     }
@@ -492,10 +685,17 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                     if (ImGui::Button("Load Previous")) {
                         state.model_path = ctx.user_settings.last_mujoco_model;
                         if (mj.load(state.model_path, ctx.skeleton)) {
-                            ctx.toasts.push("MuJoCo model loaded: " +
-                                            std::to_string(mj.mapped_count) + "/" +
-                                            std::to_string(ctx.skeleton.num_nodes) +
-                                            " sites matched");
+                            std::string sp = ctx.pm.project_path + "/mujoco_session.json";
+                            if (!ctx.pm.project_path.empty() &&
+                                std::filesystem::exists(sp) && state.load_session(sp)) {
+                                state.apply_loaded_calibration(mj);
+                                ctx.toasts.push("MuJoCo model + session loaded");
+                            } else {
+                                ctx.toasts.push("MuJoCo model loaded: " +
+                                    std::to_string(mj.mapped_count) + "/" +
+                                    std::to_string(ctx.skeleton.num_nodes) +
+                                    " sites matched");
+                            }
                         } else {
                             ctx.toasts.push("Failed: " + mj.load_error, Toast::Error);
                         }
@@ -549,6 +749,29 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
             ImGui::Text("Sites: %d/%d matched  |  Bodies: %d  |  Joints: %d",
                         mj.mapped_count, ctx.skeleton.num_nodes,
                         (int)mj.model->nbody, (int)mj.model->njnt);
+
+            // Session save/load
+            {
+                std::string session_path = ctx.pm.project_path + "/mujoco_session.json";
+                if (ImGui::SmallButton("Save Session")) {
+                    if (state.save_session(session_path))
+                        ctx.toasts.push("Session saved");
+                    else
+                        ctx.toasts.push("Failed to save session", Toast::Error);
+                }
+                ImGui::SameLine();
+                if (std::filesystem::exists(session_path)) {
+                    if (ImGui::SmallButton("Load Session")) {
+                        if (state.load_session(session_path)) {
+                            state.apply_loaded_calibration(mj);
+                            ctx.toasts.push("Session loaded");
+                        } else {
+                            ctx.toasts.push("Failed to load session", Toast::Error);
+                        }
+                    }
+                }
+            }
+
             ImGui::Separator();
 
             // IK method selector
