@@ -33,6 +33,8 @@ void            mujoco_renderer_resize(MujocoRenderer *r, uint32_t width, uint32
 
 // Render the current MuJoCo scene to the offscreen texture.
 // If view_override is active, uses its view/proj matrices instead of deriving from cam.
+// bg_texture: optional video frame to draw as background (pass 0 for none).
+// Must be a Metal texture (id<MTLTexture> cast to void*).
 void mujoco_renderer_render(MujocoRenderer *r, MujocoContext *mj,
                             mjvCamera *cam,
                             bool show_skin = true,
@@ -40,7 +42,11 @@ void mujoco_renderer_render(MujocoRenderer *r, MujocoContext *mj,
                             bool show_sites = true,
                             bool show_arena = true,
                             const ViewOverride *view_override = nullptr,
-                            bool show_arena_corners = false);
+                            bool show_arena_corners = false,
+                            void *bg_texture = nullptr,
+                            float scene_opacity = 1.0f,
+                            float bg_zoom = 1.0f,
+                            const float *bg_pan = nullptr);
 
 // Get the rendered texture as an ImGui texture ID.
 ImTextureID mujoco_renderer_get_texture(MujocoRenderer *r);

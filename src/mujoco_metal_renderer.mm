@@ -131,7 +131,40 @@ fragment float4 fragment_floor(VertexOut in [[stage_in]],
                + pow(max(dot(N, H2), 0.0), 64.0) * 0.15;
 
     float3 color = base_color * (ambient + diffuse) + float3(spec);
-    return float4(color, 1.0);
+    return float4(color, in.color.a);
+}
+
+// --- Fullscreen blit: draws a texture as background ---
+
+struct BlitParams {
+    float2 uv_scale;   // 1/zoom
+    float2 uv_offset;  // pan offset
+};
+
+struct BlitVertexOut {
+    float4 position [[position]];
+    float2 uv;
+};
+
+vertex BlitVertexOut blit_vertex(uint vid [[vertex_id]],
+                                 constant BlitParams &bp [[buffer(0)]]) {
+    BlitVertexOut out;
+    float2 base_uv = float2((vid << 1) & 2, vid & 2);
+    out.position = float4(base_uv * 2.0 - 1.0, 0.0, 1.0);
+    // Apply zoom/pan to UV: zoom around center, then offset
+    float2 uv = base_uv;
+    uv.y = 1.0 - uv.y; // flip Y
+    uv = (uv - 0.5) * bp.uv_scale + 0.5 + bp.uv_offset;
+    out.uv = uv;
+    return out;
+}
+
+fragment float4 blit_fragment(BlitVertexOut in [[stage_in]],
+                              texture2d<float> tex [[texture(0)]]) {
+    if (in.uv.x < 0.0 || in.uv.x > 1.0 || in.uv.y < 0.0 || in.uv.y > 1.0)
+        return float4(0, 0, 0, 1);
+    constexpr sampler s(filter::linear);
+    return tex.sample(s, in.uv);
 }
 )";
 
@@ -294,6 +327,7 @@ struct MujocoRenderer {
     id<MTLCommandQueue>        queue;
     id<MTLRenderPipelineState> pipeline;
     id<MTLRenderPipelineState> floor_pipeline;
+    id<MTLRenderPipelineState> blit_pipeline;
     id<MTLDepthStencilState>   depth_state;
     id<MTLTexture>             color_tex;
     id<MTLTexture>             depth_tex;
@@ -395,6 +429,19 @@ MujocoRenderer *mujoco_renderer_create(uint32_t width, uint32_t height) {
         r->floor_pipeline = r->pipeline;
     }
 
+    // Blit pipeline (fullscreen texture draw, no vertex input, no depth)
+    {
+        MTLRenderPipelineDescriptor *bpd = [[MTLRenderPipelineDescriptor alloc] init];
+        bpd.vertexFunction = [lib newFunctionWithName:@"blit_vertex"];
+        bpd.fragmentFunction = [lib newFunctionWithName:@"blit_fragment"];
+        bpd.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+        bpd.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
+        r->blit_pipeline = [r->device newRenderPipelineStateWithDescriptor:bpd error:&err];
+        if (!r->blit_pipeline)
+            fprintf(stderr, "[MuJoCo Metal] Blit pipeline failed: %s\n",
+                    [[err localizedDescription] UTF8String]);
+    }
+
     // Depth stencil
     MTLDepthStencilDescriptor *dsd = [[MTLDepthStencilDescriptor alloc] init];
     dsd.depthCompareFunction = MTLCompareFunctionLess;
@@ -473,6 +520,7 @@ void mujoco_renderer_destroy(MujocoRenderer *r) {
         r->skin_vb = nil;    r->skin_ib = nil;
         r->pipeline = nil;
         r->floor_pipeline = nil;
+        r->blit_pipeline = nil;
         r->depth_state = nil;
         r->queue = nil;
         r->device = nil;
@@ -568,7 +616,11 @@ void mujoco_renderer_render(MujocoRenderer *r, MujocoContext *mj,
                             bool show_skin, bool show_bodies,
                             bool show_sites, bool show_arena,
                             const ViewOverride *view_override,
-                            bool show_arena_corners) {
+                            bool show_arena_corners,
+                            void *bg_texture,
+                            float scene_opacity,
+                            float bg_zoom,
+                            const float *bg_pan) {
     if (!r || !mj || !mj->loaded || !cam) return;
 
     @autoreleasepool {
@@ -623,13 +675,30 @@ void mujoco_renderer_render(MujocoRenderer *r, MujocoContext *mj,
         rpd.colorAttachments[0].texture = r->color_tex;
         rpd.colorAttachments[0].loadAction = MTLLoadActionClear;
         rpd.colorAttachments[0].storeAction = MTLStoreActionStore;
-        rpd.colorAttachments[0].clearColor = MTLClearColorMake(0.15, 0.15, 0.18, 1.0);
+        rpd.colorAttachments[0].clearColor = bg_texture
+            ? MTLClearColorMake(0, 0, 0, 0)  // transparent: let video show through
+            : MTLClearColorMake(0.15, 0.15, 0.18, 1.0);
         rpd.depthAttachment.texture = r->depth_tex;
         rpd.depthAttachment.loadAction = MTLLoadActionClear;
         rpd.depthAttachment.storeAction = MTLStoreActionDontCare;
         rpd.depthAttachment.clearDepth = 1.0;
 
         id<MTLRenderCommandEncoder> enc = [cmd renderCommandEncoderWithDescriptor:rpd];
+
+        // Draw video background if provided (before 3D scene, no depth write)
+        if (bg_texture && r->blit_pipeline) {
+            id<MTLTexture> bg_tex = (__bridge id<MTLTexture>)(bg_texture);
+            // Pack zoom/pan for the blit shader
+            struct { simd_float2 uv_scale; simd_float2 uv_offset; } blit_params;
+            blit_params.uv_scale = {bg_zoom, bg_zoom};
+            blit_params.uv_offset = bg_pan ? (simd_float2){bg_pan[0], bg_pan[1]}
+                                           : (simd_float2){0, 0};
+            [enc setRenderPipelineState:r->blit_pipeline];
+            [enc setVertexBytes:&blit_params length:sizeof(blit_params) atIndex:0];
+            [enc setFragmentTexture:bg_tex atIndex:0];
+            [enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+        }
+
         [enc setRenderPipelineState:r->pipeline];
         [enc setDepthStencilState:r->depth_state];
         [enc setCullMode:MTLCullModeBack];
@@ -660,7 +729,7 @@ void mujoco_renderer_render(MujocoRenderer *r, MujocoContext *mj,
                 // Force full opacity for body geoms (mjvScene may set alpha < 1
                 // for certain geom groups, causing see-through artifacts)
                 float alpha = (g.objtype == mjOBJ_SITE) ? g.rgba[3] : 1.0f;
-                u.color = {g.rgba[0], g.rgba[1], g.rgba[2], alpha};
+                u.color = {g.rgba[0], g.rgba[1], g.rgba[2], alpha * scene_opacity};
                 [enc setVertexBuffer:vb offset:0 atIndex:0];
                 [enc setVertexBytes:&u length:sizeof(u) atIndex:1];
                 [enc drawIndexedPrimitives:MTLPrimitiveTypeTriangle
@@ -742,7 +811,7 @@ void mujoco_renderer_render(MujocoRenderer *r, MujocoContext *mj,
             u.normal_col0 = {1, 0, 0, 0};
             u.normal_col1 = {0, 1, 0, 0};
             u.normal_col2 = {0, 0, 1, 0};
-            u.color = {0.45f, 0.75f, 0.85f, 0.85f}; // light blue, slightly transparent
+            u.color = {0.45f, 0.75f, 0.85f, 0.85f * scene_opacity};
 
             [enc setVertexBuffer:r->skin_vb offset:0 atIndex:0];
             [enc setVertexBytes:&u length:sizeof(u) atIndex:1];
@@ -765,7 +834,7 @@ void mujoco_renderer_render(MujocoRenderer *r, MujocoContext *mj,
             fu.model_mat = matrix_identity_float4x4;
             fu.mvp = vp;
             fu.normal_col0 = {1,0,0,0}; fu.normal_col1 = {0,1,0,0}; fu.normal_col2 = {0,0,1,0};
-            fu.color = {0.25f, 0.32f, 0.42f, 1.0f};
+            fu.color = {0.25f, 0.32f, 0.42f, scene_opacity};
 
             // Floor-specific uniforms at buffer(3)
             FloorUniforms ffu;
@@ -813,7 +882,7 @@ void mujoco_renderer_render(MujocoRenderer *r, MujocoContext *mj,
                 u.mvp = simd_mul(vp, model_mat);
                 extract_normal_columns(model_mat, u.normal_col0, u.normal_col1, u.normal_col2);
                 u.color = {corner_colors[ci][0], corner_colors[ci][1],
-                           corner_colors[ci][2], corner_colors[ci][3]};
+                           corner_colors[ci][2], corner_colors[ci][3] * scene_opacity};
 
                 [enc setVertexBuffer:r->sphere_vb offset:0 atIndex:0];
                 [enc setVertexBytes:&u length:sizeof(u) atIndex:1];
