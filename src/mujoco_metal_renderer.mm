@@ -622,7 +622,10 @@ void mujoco_renderer_render(MujocoRenderer *r, MujocoContext *mj,
                             void *bg_texture,
                             float scene_opacity,
                             float bg_zoom,
-                            const float *bg_pan) {
+                            const float *bg_pan,
+                            float arena_width,
+                            float arena_depth,
+                            const float *arena_offset) {
     if (!r || !mj || !mj->loaded || !cam) return;
 
     @autoreleasepool {
@@ -880,42 +883,59 @@ void mujoco_renderer_render(MujocoRenderer *r, MujocoContext *mj,
 
         // --- Render arena (checkerboard floor) ---
         if (show_arena) {
-            float half = 0.914f; // 1828mm / 2 in meters
+            float hw = arena_width * 0.5f;
+            float hd = arena_depth * 0.5f;
+            float ox = arena_offset ? arena_offset[0] : 0.0f;
+            float oy = arena_offset ? arena_offset[1] : 0.0f;
+            float oz = arena_offset ? arena_offset[2] : 0.0f;
 
-            // Use floor pipeline for checkerboard effect
+            // Build floor quad centered at arena_offset
+            Vertex floor_verts[4] = {
+                {{ox-hw, oy-hd, oz}, {0, 0, 1}},
+                {{ox+hw, oy-hd, oz}, {0, 0, 1}},
+                {{ox+hw, oy+hd, oz}, {0, 0, 1}},
+                {{ox-hw, oy+hd, oz}, {0, 0, 1}},
+            };
+            uint32_t floor_idx[6] = {0, 1, 2, 0, 2, 3};
+            id<MTLBuffer> fvb = [r->device newBufferWithBytes:floor_verts
+                                 length:sizeof(floor_verts) options:MTLResourceStorageModeShared];
+            id<MTLBuffer> fib = [r->device newBufferWithBytes:floor_idx
+                                 length:sizeof(floor_idx) options:MTLResourceStorageModeShared];
+
             [enc setRenderPipelineState:r->floor_pipeline];
 
-            // Vertex shader still needs Uniforms at buffer(1)
             Uniforms fu;
             fu.model_mat = matrix_identity_float4x4;
             fu.mvp = vp;
             fu.normal_col0 = {1,0,0,0}; fu.normal_col1 = {0,1,0,0}; fu.normal_col2 = {0,0,1,0};
             fu.color = {0.25f, 0.32f, 0.42f, scene_opacity};
 
-            // Floor-specific uniforms at buffer(3)
             FloorUniforms ffu;
             ffu.mvp = vp;
-            ffu.half_size = half;
-            ffu.grid_divs = 4; // 4x4 tiles
+            ffu.half_size = std::max(hw, hd); // used for UV scaling in shader
+            ffu.grid_divs = 4;
 
-            [enc setVertexBuffer:r->floor_vb offset:0 atIndex:0];
+            [enc setVertexBuffer:fvb offset:0 atIndex:0];
             [enc setVertexBytes:&fu length:sizeof(fu) atIndex:1];
             [enc setFragmentBytes:&ffu length:sizeof(ffu) atIndex:3];
             [enc drawIndexedPrimitives:MTLPrimitiveTypeTriangle indexCount:6
-                             indexType:MTLIndexTypeUInt32 indexBuffer:r->floor_ib indexBufferOffset:0];
+                             indexType:MTLIndexTypeUInt32 indexBuffer:fib indexBufferOffset:0];
 
-            // Switch back to main pipeline for subsequent draws
             [enc setRenderPipelineState:r->pipeline];
         }
 
         // --- Render arena corner markers during alignment mode ---
         if (show_arena_corners) {
-            float half = 0.914f;
+            float hw = arena_width * 0.5f;
+            float hd = arena_depth * 0.5f;
+            float ox = arena_offset ? arena_offset[0] : 0.0f;
+            float oy = arena_offset ? arena_offset[1] : 0.0f;
+            float oz = arena_offset ? arena_offset[2] : 0.0f;
             float corner_pos[4][3] = {
-                { half,  half, 0.005f},
-                {-half,  half, 0.005f},
-                {-half, -half, 0.005f},
-                { half, -half, 0.005f},
+                {ox+hw, oy+hd, oz+0.005f},
+                {ox-hw, oy+hd, oz+0.005f},
+                {ox-hw, oy-hd, oz+0.005f},
+                {ox+hw, oy-hd, oz+0.005f},
             };
             // Colors matching ArenaCorners4 skeleton: red, green, blue, yellow
             float corner_colors[4][4] = {
