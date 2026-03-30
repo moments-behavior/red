@@ -1223,7 +1223,6 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                     }
                     for (int i = 0; i < (int)ctx.pm.camera_names.size(); i++) {
                         if (i >= (int)ctx.pm.camera_params.size()) break;
-                        if (ctx.pm.camera_params[i].telecentric) continue;
                         bool selected = (state.selected_camera == i);
                         if (ImGui::Selectable(ctx.pm.camera_names[i].c_str(), selected)) {
                             state.selected_camera = i;
@@ -1260,57 +1259,117 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                     state.calib_view_override.active = true;
 
                     const CameraParams &cp = ctx.pm.camera_params[state.selected_camera];
+                    double img_w = cp.image_width  > 0 ? cp.image_width  : 1024.0;
+                    double img_h = cp.image_height > 0 ? cp.image_height : 1024.0;
 
-                    // Eye position in calibration frame (mm)
-                    Eigen::Vector3d eye_calib = -cp.r.transpose() * cp.tvec;
-
-                    // Camera axes in calibration frame
-                    Eigen::Vector3d cam_fwd_calib = cp.r.transpose() * Eigen::Vector3d(0, 0, 1);
-                    Eigen::Vector3d cam_up_calib  = cp.r.transpose() * Eigen::Vector3d(0, -1, 0);
-
-                    // Transform to MuJoCo frame: use arena alignment if active,
-                    // otherwise just scale mm → m
-                    Eigen::Vector3d eye_w, cam_fwd, cam_up;
-                    if (state.arena_align.valid) {
-                        eye_w   = state.arena_align.transform(eye_calib);
-                        // Rotate direction vectors (no translation, just scale*R)
-                        cam_fwd = state.arena_align.scale * state.arena_align.R * cam_fwd_calib;
-                        cam_up  = state.arena_align.scale * state.arena_align.R * cam_up_calib;
-                    } else {
-                        double sf = (double)mj.scale_factor;
-                        if (sf <= 0.0) sf = 0.001;
-                        eye_w   = eye_calib * sf;
-                        cam_fwd = cam_fwd_calib; // direction, no scaling needed
-                        cam_up  = cam_up_calib;
-                    }
-                    cam_fwd.normalize();
-                    cam_up.normalize();
-                    Eigen::Vector3d lookat_pt = eye_w + cam_fwd;
-
-                    // Build view matrix (same as renderer's look_at but via Eigen)
-                    Eigen::Vector3d f = (lookat_pt - eye_w).normalized();
-                    Eigen::Vector3d s = f.cross(cam_up).normalized();
-                    Eigen::Vector3d u = s.cross(f);
                     Eigen::Matrix4f V = Eigen::Matrix4f::Zero();
-                    V(0,0) = s.x();  V(0,1) = s.y();  V(0,2) = s.z();  V(0,3) = -s.dot(eye_w);
-                    V(1,0) = u.x();  V(1,1) = u.y();  V(1,2) = u.z();  V(1,3) = -u.dot(eye_w);
-                    V(2,0) = -f.x(); V(2,1) = -f.y(); V(2,2) = -f.z(); V(2,3) = f.dot(eye_w);
-                    V(3,3) = 1.0f;
-
-                    // Projection from camera intrinsics (Metal NDC: Z in [0,1])
-                    double fx = cp.k(0,0), fy = cp.k(1,1);
-                    double cx = cp.k(0,2), cy = cp.k(1,2);
-                    double img_w = cp.image_width  > 0 ? cp.image_width  : 3208.0;
-                    double img_h = cp.image_height > 0 ? cp.image_height : 2200.0;
-                    double near_z = 0.001, far_z = 100.0;
                     Eigen::Matrix4f P = Eigen::Matrix4f::Zero();
-                    P(0,0) = 2.0f * fx / img_w;
-                    P(0,2) = 1.0f - 2.0f * cx / img_w;
-                    P(1,1) = 2.0f * fy / img_h;
-                    P(1,2) = 2.0f * cy / img_h - 1.0f;
-                    P(2,2) = far_z / (near_z - far_z);
-                    P(2,3) = far_z * near_z / (near_z - far_z);
-                    P(3,2) = -1.0f;
+                    Eigen::Vector3d eye_w;
+
+                    if (cp.telecentric) {
+                        // Telecentric/orthographic: build combined view+proj from DLT
+                        // The projection_mat is a 3x4 affine matrix [A t; 0 0 0 1]
+                        // that maps 3D world points (mm) to 2D pixel coords directly.
+                        // We need to convert this to NDC for Metal.
+                        double sf = (state.arena_align.valid) ? 1.0 : 0.1; // mm→cm or aligned
+                        Eigen::Matrix<double,3,4> PM = cp.projection_mat;
+
+                        // Build the 4x4 Metal projection:
+                        // NDC_x = (2*u/w - 1), NDC_y = (1 - 2*v/h), NDC_z in [0,1]
+                        // u = PM.row(0) * [X Y Z 1], v = PM.row(1) * [X Y Z 1]
+                        // But we need to account for arena alignment: X_mj = align(X_calib)
+                        // For simplicity, build the combined matrix P*V that maps
+                        // MuJoCo world coords to NDC.
+                        Eigen::Matrix4d M = Eigen::Matrix4d::Zero();
+                        // Row 0: NDC_x = 2*(PM.row(0)*p)/w - 1
+                        for (int c = 0; c < 4; c++)
+                            M(0,c) = 2.0 * PM(0,c) / img_w;
+                        M(0,3) -= 1.0;
+                        // Row 1: NDC_y = -(2*(PM.row(1)*p)/h - 1) = 1 - 2*(PM.row(1)*p)/h
+                        for (int c = 0; c < 4; c++)
+                            M(1,c) = -2.0 * PM(1,c) / img_h;
+                        M(1,3) += 1.0;
+                        // Row 2: depth — map a reasonable Z range to [0,1]
+                        // Use the camera's forward direction (R row 2) for depth
+                        double near_z = -10.0, far_z = 10.0; // generous range in world units
+                        for (int c = 0; c < 3; c++)
+                            M(2,c) = cp.r(2,c) / (far_z - near_z);
+                        M(2,3) = 0.5; // center of depth range
+                        // Row 3: w = 1 (orthographic, no perspective divide)
+                        M(3,3) = 1.0;
+
+                        // If arena alignment is active, compose: M maps calib mm coords.
+                        // We need to map MuJoCo coords. P_final = M * align_inverse.
+                        // But it's simpler: pass V=identity, P=M, and let the IK transform
+                        // handle the calib→MuJoCo mapping. However the renderer operates
+                        // in MuJoCo space. So we need M to map MuJoCo → NDC.
+                        // M currently maps calib_mm → NDC. We need: MuJoCo → calib_mm → NDC.
+                        // calib_mm = (p_mj - t) / (scale * R) ... inverse of arena transform.
+                        if (state.arena_align.valid) {
+                            // Build 4x4 inverse arena transform
+                            Eigen::Matrix4d A_inv = Eigen::Matrix4d::Identity();
+                            double inv_s = 1.0 / state.arena_align.scale;
+                            Eigen::Matrix3d Rt = state.arena_align.R.transpose();
+                            A_inv.block<3,3>(0,0) = Rt * inv_s;
+                            A_inv.block<3,1>(0,3) = -Rt * state.arena_align.t * inv_s;
+                            M = M * A_inv;
+                        } else {
+                            // Scale: MuJoCo is in model units, DLT expects mm
+                            Eigen::Matrix4d Sc = Eigen::Matrix4d::Identity();
+                            Sc(0,0) = 1.0/sf; Sc(1,1) = 1.0/sf; Sc(2,2) = 1.0/sf;
+                            M = M * Sc;
+                        }
+
+                        // Use M as combined view-projection (V=identity)
+                        V = Eigen::Matrix4f::Identity();
+                        P = M.cast<float>();
+                        // Eye position: place along camera's optical axis for lighting
+                        Eigen::Vector3d cam_dir(cp.r(2,0), cp.r(2,1), cp.r(2,2));
+                        if (state.arena_align.valid)
+                            cam_dir = state.arena_align.R * cam_dir;
+                        eye_w = cam_dir.normalized() * 5.0; // arbitrary distance along axis
+
+                    } else {
+                        // Perspective camera (existing code)
+                        Eigen::Vector3d eye_calib = -cp.r.transpose() * cp.tvec;
+                        Eigen::Vector3d cam_fwd_calib = cp.r.transpose() * Eigen::Vector3d(0, 0, 1);
+                        Eigen::Vector3d cam_up_calib  = cp.r.transpose() * Eigen::Vector3d(0, -1, 0);
+
+                        Eigen::Vector3d cam_fwd, cam_up;
+                        if (state.arena_align.valid) {
+                            eye_w   = state.arena_align.transform(eye_calib);
+                            cam_fwd = state.arena_align.scale * state.arena_align.R * cam_fwd_calib;
+                            cam_up  = state.arena_align.scale * state.arena_align.R * cam_up_calib;
+                        } else {
+                            double sf = (double)mj.scale_factor;
+                            if (sf <= 0.0) sf = 0.001;
+                            eye_w   = eye_calib * sf;
+                            cam_fwd = cam_fwd_calib;
+                            cam_up  = cam_up_calib;
+                        }
+                        cam_fwd.normalize();
+                        cam_up.normalize();
+                        Eigen::Vector3d lookat_pt = eye_w + cam_fwd;
+
+                        Eigen::Vector3d f = (lookat_pt - eye_w).normalized();
+                        Eigen::Vector3d s = f.cross(cam_up).normalized();
+                        Eigen::Vector3d u = s.cross(f);
+                        V(0,0) = s.x();  V(0,1) = s.y();  V(0,2) = s.z();  V(0,3) = -s.dot(eye_w);
+                        V(1,0) = u.x();  V(1,1) = u.y();  V(1,2) = u.z();  V(1,3) = -u.dot(eye_w);
+                        V(2,0) = -f.x(); V(2,1) = -f.y(); V(2,2) = -f.z(); V(2,3) = f.dot(eye_w);
+                        V(3,3) = 1.0f;
+
+                        double fx = cp.k(0,0), fy = cp.k(1,1);
+                        double cx = cp.k(0,2), cy = cp.k(1,2);
+                        double near_z = 0.001, far_z = 100.0;
+                        P(0,0) = 2.0f * fx / img_w;
+                        P(0,2) = 1.0f - 2.0f * cx / img_w;
+                        P(1,1) = 2.0f * fy / img_h;
+                        P(1,2) = 2.0f * cy / img_h - 1.0f;
+                        P(2,2) = far_z / (near_z - far_z);
+                        P(2,3) = far_z * near_z / (near_z - far_z);
+                        P(3,2) = -1.0f;
+                    }
 
                     // Apply zoom/pan as a post-projection NDC transform.
                     // This matches the blit UV transform exactly at all zoom levels:
@@ -1329,15 +1388,20 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                     state.calib_view_override.eye[1] = (float)eye_w.y();
                     state.calib_view_override.eye[2] = (float)eye_w.z();
 
-                    // Also set mjvCamera from calibration pose so the transition
-                    // is smooth when the user starts dragging (disables override)
-                    Eigen::Vector3d lookat_far = eye_w + cam_fwd * eye_w.norm() * 0.8;
-                    state.mjcam.lookat[0] = lookat_far.x();
-                    state.mjcam.lookat[1] = lookat_far.y();
-                    state.mjcam.lookat[2] = lookat_far.z();
-                    state.mjcam.distance = (eye_w - lookat_far).norm();
-                    state.mjcam.azimuth = atan2(cam_fwd.y(), cam_fwd.x()) * 180.0 / M_PI;
-                    state.mjcam.elevation = asin(std::clamp(cam_fwd.z(), -1.0, 1.0)) * 180.0 / M_PI;
+                    // Set mjvCamera for smooth transition if user starts dragging
+                    {
+                        Eigen::Vector3d dir(cp.r(2,0), cp.r(2,1), cp.r(2,2)); // camera Z axis
+                        if (state.arena_align.valid)
+                            dir = state.arena_align.R * dir;
+                        dir.normalize();
+                        Eigen::Vector3d lk = eye_w + dir * std::max(eye_w.norm() * 0.8, 0.01);
+                        state.mjcam.lookat[0] = lk.x(); state.mjcam.lookat[1] = lk.y();
+                        state.mjcam.lookat[2] = lk.z();
+                        state.mjcam.distance = (eye_w - lk).norm();
+                        state.mjcam.azimuth = atan2(dir.y(), dir.x()) * 180.0 / M_PI;
+                        state.mjcam.elevation = asin(std::clamp(dir.z(), -1.0, 1.0)) * 180.0 / M_PI;
+                        state.mjcam.orthographic = cp.telecentric ? 1 : 0;
+                    }
 
                     // Store aspect ratio for viewport sizing
                     state.calib_aspect = (float)(img_w / img_h);

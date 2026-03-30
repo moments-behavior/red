@@ -59,28 +59,44 @@ struct MujocoContext {
             return false;
         }
 
-        // Add a free joint to the torso body so the IK solver can
+        // Add a free joint to the root body so the IK solver can
         // optimize root position and orientation (6 extra DOFs).
-        mjsBody *torso = mjs_findBody(spec, "torso");
+        // Rodent models use "torso", fly models use "thorax".
         has_free_joint = false;
-        if (torso) {
-            mjs_addFreeJoint(torso);
-            has_free_joint = true;
-            std::cout << "[MuJoCo] Added free joint to torso body" << std::endl;
-        } else {
-            std::cerr << "[MuJoCo] WARNING: no 'torso' body found — "
+        for (const char *root_name : {"torso", "thorax"}) {
+            mjsBody *root_body = mjs_findBody(spec, root_name);
+            if (root_body) {
+                mjs_addFreeJoint(root_body);
+                has_free_joint = true;
+                std::cout << "[MuJoCo] Added free joint to '" << root_name
+                          << "' body" << std::endl;
+                break;
+            }
+        }
+        if (!has_free_joint) {
+            std::cerr << "[MuJoCo] WARNING: no 'torso' or 'thorax' body found — "
                          "root position will be fixed" << std::endl;
         }
 
         // Add missing keypoint sites for models that lack them.
+        // We detect the model type (rodent vs fly) by checking for
+        // characteristic body names, then inject the appropriate sites.
+        struct SiteDef {
+            const char *name; const char *kpsite; const char *body; double pos[3];
+        };
+
+        // Detect model type: fly models have "thorax" + "head" + "wing_left",
+        // rodent models have "skull" + "torso".
+        bool is_fly_model = (mjs_findBody(spec, "thorax") &&
+                             mjs_findBody(spec, "head") &&
+                             mjs_findBody(spec, "wing_left"));
+
+        // ---- Rodent (rat24) site definitions ----
         // The rodent_no_collision.xml already has all 24 *_kpsite sites;
         // the dm_rodent rodent.xml does not. We check for both the plain
         // name ("nose") and the _kpsite variant ("nose_0_kpsite") before
         // adding, to avoid duplicates.
-        struct SiteDef {
-            const char *name; const char *kpsite; const char *body; double pos[3];
-        };
-        static const SiteDef kp_sites[] = {
+        static const SiteDef rodent_kp_sites[] = {
             {"nose",     "nose_0_kpsite",       "skull",        { 0.043700,  0.000000, -0.004600}},
             {"ear_L",    "ear_L_1_kpsite",      "skull",        {-0.012650,  0.014720,  0.014950}},
             {"ear_R",    "ear_R_2_kpsite",      "skull",        {-0.012650, -0.014720,  0.014950}},
@@ -96,11 +112,146 @@ struct MujocoContext {
             {"tail1Q",   "tail1Q_22_kpsite",    "vertebra_C11", { 0.000000,  0.000000,  0.000000}},
             {"tail3Q",   "tail3Q_23_kpsite",    "vertebra_C23", { 0.000000,  0.000000,  0.000000}},
         };
+
+        // ---- Fruit fly (fly50) site definitions ----
+        // 50 keypoint sites matching the RED Fly50 skeleton, derived from
+        // Mason Kamb's fly-body-tuning add_keypoint_sites() function.
+        // The 6 TaTip sites use the tarsal_claw fromto endpoint positions
+        // extracted from the fruitfly v2.1 XML model.
+        //  idx  RED skeleton name    MuJoCo site name     parent body               local pos (x, y, z)
+        //  ---  ------------------   ------------------   -----------------------   ---------------------
+        //   0   Antenna_Base         Antenna_Base         head                      ( 0.0,      0.038,    0.012   )
+        //   1   EyeL                 EyeL                 head                      (-0.0245,   0.0135,   0.0285  )
+        //   2   EyeR                 EyeR                 head                      ( 0.0245,   0.0135,   0.0285  )
+        //   3   Scutellum            Scutellum            thorax                    (-0.049,    0.0,      0.04    )
+        //   4   Abd_A4               Abd_A4               abdomen_3                 ( 0.0,      0.0335,   0.021   )
+        //   5   Abd_tip              Abd_tip              abdomen_7                 ( 0.0,      0.0395,  -0.001   )
+        //   6   WingL_base           WingL_base           thorax                    (-0.0095,   0.045,    0.0175  )
+        //   7   WingL_V12            WingL_V12            wing_left                 (-0.0072,  -0.2125,   0.0075  )
+        //   8   WingL_V13            WingL_V13            wing_left                 ( 0.0221,  -0.2562,  -0.0253  )
+        //   9   T1L_ThxCx            T1L_ThxCx            coxa_T1_left              ( 0.0,      0.0,      0.0     )
+        //  10   T1L_Tro              T1L_Tro              femur_T1_left             ( 0.0,      0.0,      0.0     )
+        //  11   T1L_FeTi             T1L_FeTi             tibia_T1_left             ( 0.0,      0.0,      0.0     )
+        //  12   T1L_TiTa             T1L_TiTa             tarsus1_T1_left           ( 0.0,      0.0,      0.0     )
+        //  13   T1L_TaT1             T1L_TaT1             tarsus2_T1_left           ( 0.0,      0.0,      0.0     )
+        //  14   T1L_TaT3             T1L_TaT3             tarsus4_T1_left           ( 0.0,      0.0,      0.0     )
+        //  15   T1L_TaTip            T1L_TaTip            tarsal_claw_T1_left       ( 0.0,      0.0105,   0.0006  )
+        //  16   T2L_Tro              T2L_Tro              femur_T2_left             ( 0.0,      0.0,      0.0     )
+        //  17   T2L_FeTi             T2L_FeTi             tibia_T2_left             ( 0.0,      0.0,      0.0     )
+        //  18   T2L_TiTa             T2L_TiTa             tarsus1_T2_left           ( 0.0,      0.0,      0.0     )
+        //  19   T2L_TaT1             T2L_TaT1             tarsus2_T2_left           ( 0.0,      0.0,      0.0     )
+        //  20   T2L_TaT3             T2L_TaT3             tarsus4_T2_left           ( 0.0,      0.0,      0.0     )
+        //  21   T2L_TaTip            T2L_TaTip            tarsal_claw_T2_left       ( 0.0,      0.0122,   0.0006  )
+        //  22   T3L_Tro              T3L_Tro              femur_T3_left             ( 0.0,      0.0,      0.0     )
+        //  23   T3L_FeTi             T3L_FeTi             tibia_T3_left             ( 0.0,      0.0,      0.0     )
+        //  24   T3L_TiTa             T3L_TiTa             tarsus1_T3_left           ( 0.0,      0.0,      0.0     )
+        //  25   T3L_TaT1             T3L_TaT1             tarsus2_T3_left           ( 0.0,      0.0,      0.0     )
+        //  26   T3L_TaT3             T3L_TaT3             tarsus4_T3_left           ( 0.0,      0.0,      0.0     )
+        //  27   T3L_TaTip            T3L_TaTip            tarsal_claw_T3_left       ( 0.0,      0.0111,   0.0008  )
+        //  28   WingR_base           WingR_base           thorax                    (-0.0095,  -0.045,    0.0175  )
+        //  29   WingR_V12            WingR_V12            wing_right                ( 0.0072,   0.2125,  -0.0075  )
+        //  30   WingR_V13            WingR_V13            wing_right                (-0.0221,   0.2562,   0.0253  )
+        //  31   T1R_ThxCx            T1R_ThxCx            coxa_T1_right             ( 0.0,      0.0,      0.0     )
+        //  32   T1R_Tro              T1R_Tro              femur_T1_right            ( 0.0,      0.0,      0.0     )
+        //  33   T1R_FeTi             T1R_FeTi             tibia_T1_right            ( 0.0,      0.0,      0.0     )
+        //  34   T1R_TiTa             T1R_TiTa             tarsus1_T1_right          ( 0.0,      0.0,      0.0     )
+        //  35   T1R_TaT1             T1R_TaT1             tarsus2_T1_right          ( 0.0,      0.0,      0.0     )
+        //  36   T1R_TaT3             T1R_TaT3             tarsus4_T1_right          ( 0.0,      0.0,      0.0     )
+        //  37   T1R_TaTip            T1R_TaTip            tarsal_claw_T1_right      ( 0.0,     -0.0101,  -0.0006  )
+        //  38   T2R_Tro              T2R_Tro              femur_T2_right            ( 0.0,      0.0,      0.0     )
+        //  39   T2R_FeTi             T2R_FeTi             tibia_T2_right            ( 0.0,      0.0,      0.0     )
+        //  40   T2R_TiTa             T2R_TiTa             tarsus1_T2_right          ( 0.0,      0.0,      0.0     )
+        //  41   T2R_TaT1             T2R_TaT1             tarsus2_T2_right          ( 0.0,      0.0,      0.0     )
+        //  42   T2R_TaT3             T2R_TaT3             tarsus4_T2_right          ( 0.0,      0.0,      0.0     )
+        //  43   T2R_TaTip            T2R_TaTip            tarsal_claw_T2_right      ( 0.0,     -0.0118,  -0.0006  )
+        //  44   T3R_Tro              T3R_Tro              femur_T3_right            ( 0.0,      0.0,      0.0     )
+        //  45   T3R_FeTi             T3R_FeTi             tibia_T3_right            ( 0.0,      0.0,      0.0     )
+        //  46   T3R_TiTa             T3R_TiTa             tarsus1_T3_right          ( 0.0,      0.0,      0.0     )
+        //  47   T3R_TaT1             T3R_TaT1             tarsus2_T3_right          ( 0.0,      0.0,      0.0     )
+        //  48   T3R_TaT3             T3R_TaT3             tarsus4_T3_right          ( 0.0,      0.0,      0.0     )
+        //  49   T3R_TaTip            T3R_TaTip            tarsal_claw_T3_right      ( 0.0,     -0.0109,  -0.0008  )
+        static const SiteDef fly50_kp_sites[] = {
+            // --- Head & body ---
+            {"Antenna_Base", nullptr, "head",       { 0.000000,  0.038000,  0.012000}},
+            {"EyeL",         nullptr, "head",       {-0.024500,  0.013500,  0.028500}},
+            {"EyeR",         nullptr, "head",       { 0.024500,  0.013500,  0.028500}},
+            {"Scutellum",    nullptr, "thorax",     {-0.049000,  0.000000,  0.040000}},
+            {"Abd_A4",       nullptr, "abdomen_3",  { 0.000000,  0.033500,  0.021000}},
+            {"Abd_tip",      nullptr, "abdomen_7",  { 0.000000,  0.039500, -0.001000}},
+            // --- Wings ---
+            {"WingL_base",   nullptr, "thorax",     {-0.009500,  0.045000,  0.017500}},
+            {"WingL_V12",    nullptr, "wing_left",  {-0.007200, -0.212500,  0.007500}},
+            {"WingL_V13",    nullptr, "wing_left",  { 0.022100, -0.256200, -0.025300}},
+            {"WingR_base",   nullptr, "thorax",     {-0.009500, -0.045000,  0.017500}},
+            {"WingR_V12",    nullptr, "wing_right", { 0.007200,  0.212500, -0.007500}},
+            {"WingR_V13",    nullptr, "wing_right", {-0.022100,  0.256200,  0.025300}},
+            // --- Left T1 leg ---
+            {"T1L_ThxCx",   nullptr, "coxa_T1_left",         { 0.000000,  0.000000,  0.000000}},
+            {"T1L_Tro",     nullptr, "femur_T1_left",        { 0.000000,  0.000000,  0.000000}},
+            {"T1L_FeTi",    nullptr, "tibia_T1_left",        { 0.000000,  0.000000,  0.000000}},
+            {"T1L_TiTa",    nullptr, "tarsus1_T1_left",      { 0.000000,  0.000000,  0.000000}},
+            {"T1L_TaT1",    nullptr, "tarsus2_T1_left",      { 0.000000,  0.000000,  0.000000}},
+            {"T1L_TaT3",    nullptr, "tarsus4_T1_left",      { 0.000000,  0.000000,  0.000000}},
+            {"T1L_TaTip",   nullptr, "tarsal_claw_T1_left",  { 0.000000,  0.010500,  0.000600}},
+            // --- Left T2 leg ---
+            {"T2L_Tro",     nullptr, "femur_T2_left",        { 0.000000,  0.000000,  0.000000}},
+            {"T2L_FeTi",    nullptr, "tibia_T2_left",        { 0.000000,  0.000000,  0.000000}},
+            {"T2L_TiTa",    nullptr, "tarsus1_T2_left",      { 0.000000,  0.000000,  0.000000}},
+            {"T2L_TaT1",    nullptr, "tarsus2_T2_left",      { 0.000000,  0.000000,  0.000000}},
+            {"T2L_TaT3",    nullptr, "tarsus4_T2_left",      { 0.000000,  0.000000,  0.000000}},
+            {"T2L_TaTip",   nullptr, "tarsal_claw_T2_left",  { 0.000000,  0.012200,  0.000600}},
+            // --- Left T3 leg ---
+            {"T3L_Tro",     nullptr, "femur_T3_left",        { 0.000000,  0.000000,  0.000000}},
+            {"T3L_FeTi",    nullptr, "tibia_T3_left",        { 0.000000,  0.000000,  0.000000}},
+            {"T3L_TiTa",    nullptr, "tarsus1_T3_left",      { 0.000000,  0.000000,  0.000000}},
+            {"T3L_TaT1",    nullptr, "tarsus2_T3_left",      { 0.000000,  0.000000,  0.000000}},
+            {"T3L_TaT3",    nullptr, "tarsus4_T3_left",      { 0.000000,  0.000000,  0.000000}},
+            {"T3L_TaTip",   nullptr, "tarsal_claw_T3_left",  { 0.000000,  0.011100,  0.000800}},
+            // --- Right T1 leg ---
+            {"T1R_ThxCx",   nullptr, "coxa_T1_right",        { 0.000000,  0.000000,  0.000000}},
+            {"T1R_Tro",     nullptr, "femur_T1_right",       { 0.000000,  0.000000,  0.000000}},
+            {"T1R_FeTi",    nullptr, "tibia_T1_right",       { 0.000000,  0.000000,  0.000000}},
+            {"T1R_TiTa",    nullptr, "tarsus1_T1_right",     { 0.000000,  0.000000,  0.000000}},
+            {"T1R_TaT1",    nullptr, "tarsus2_T1_right",     { 0.000000,  0.000000,  0.000000}},
+            {"T1R_TaT3",    nullptr, "tarsus4_T1_right",     { 0.000000,  0.000000,  0.000000}},
+            {"T1R_TaTip",   nullptr, "tarsal_claw_T1_right", { 0.000000, -0.010100, -0.000600}},
+            // --- Right T2 leg ---
+            {"T2R_Tro",     nullptr, "femur_T2_right",       { 0.000000,  0.000000,  0.000000}},
+            {"T2R_FeTi",    nullptr, "tibia_T2_right",       { 0.000000,  0.000000,  0.000000}},
+            {"T2R_TiTa",    nullptr, "tarsus1_T2_right",     { 0.000000,  0.000000,  0.000000}},
+            {"T2R_TaT1",    nullptr, "tarsus2_T2_right",     { 0.000000,  0.000000,  0.000000}},
+            {"T2R_TaT3",    nullptr, "tarsus4_T2_right",     { 0.000000,  0.000000,  0.000000}},
+            {"T2R_TaTip",   nullptr, "tarsal_claw_T2_right", { 0.000000, -0.011800, -0.000600}},
+            // --- Right T3 leg ---
+            {"T3R_Tro",     nullptr, "femur_T3_right",       { 0.000000,  0.000000,  0.000000}},
+            {"T3R_FeTi",    nullptr, "tibia_T3_right",       { 0.000000,  0.000000,  0.000000}},
+            {"T3R_TiTa",    nullptr, "tarsus1_T3_right",     { 0.000000,  0.000000,  0.000000}},
+            {"T3R_TaT1",    nullptr, "tarsus2_T3_right",     { 0.000000,  0.000000,  0.000000}},
+            {"T3R_TaT3",    nullptr, "tarsus4_T3_right",     { 0.000000,  0.000000,  0.000000}},
+            {"T3R_TaTip",   nullptr, "tarsal_claw_T3_right", { 0.000000, -0.010900, -0.000800}},
+        };
+
+        const SiteDef *kp_sites;
+        int kp_sites_count;
+        if (is_fly_model) {
+            kp_sites = fly50_kp_sites;
+            kp_sites_count = (int)(sizeof(fly50_kp_sites) / sizeof(fly50_kp_sites[0]));
+            std::cout << "[MuJoCo] Detected fruit fly model" << std::endl;
+        } else {
+            kp_sites = rodent_kp_sites;
+            kp_sites_count = (int)(sizeof(rodent_kp_sites) / sizeof(rodent_kp_sites[0]));
+            std::cout << "[MuJoCo] Detected rodent model" << std::endl;
+        }
+
         int sites_added = 0, sites_skipped = 0;
-        for (const auto &sd : kp_sites) {
-            // Skip if either the plain name or the _kpsite variant already exists
-            if (mjs_findElement(spec, mjOBJ_SITE, sd.name) ||
-                mjs_findElement(spec, mjOBJ_SITE, sd.kpsite)) {
+        for (int si = 0; si < kp_sites_count; si++) {
+            const auto &sd = kp_sites[si];
+            // Skip if the site already exists (check both name and kpsite variant)
+            if (mjs_findElement(spec, mjOBJ_SITE, sd.name)) {
+                sites_skipped++;
+                continue;
+            }
+            if (sd.kpsite && mjs_findElement(spec, mjOBJ_SITE, sd.kpsite)) {
                 sites_skipped++;
                 continue;
             }
@@ -154,12 +305,23 @@ struct MujocoContext {
             mj_deleteSpec(spec);
             spec = mj_parseXML(xml_path.c_str(), nullptr, error_buf, sizeof(error_buf));
             if (spec) {
-                mjsBody *t = mjs_findBody(spec, "torso");
-                if (t) { mjs_addFreeJoint(t); has_free_joint = true; }
+                for (const char *rn : {"torso", "thorax"}) {
+                    mjsBody *t = mjs_findBody(spec, rn);
+                    if (t) { mjs_addFreeJoint(t); has_free_joint = true; break; }
+                }
                 // Re-inject sites (same loop as above)
-                for (const auto &sd : kp_sites) {
-                    if (mjs_findElement(spec, mjOBJ_SITE, sd.name) ||
-                        mjs_findElement(spec, mjOBJ_SITE, sd.kpsite)) continue;
+                // Re-detect model type for the fresh spec
+                bool is_fly_retry = (mjs_findBody(spec, "thorax") &&
+                                     mjs_findBody(spec, "head") &&
+                                     mjs_findBody(spec, "wing_left"));
+                const SiteDef *retry_sites = is_fly_retry ? fly50_kp_sites : rodent_kp_sites;
+                int retry_count = is_fly_retry
+                    ? (int)(sizeof(fly50_kp_sites) / sizeof(fly50_kp_sites[0]))
+                    : (int)(sizeof(rodent_kp_sites) / sizeof(rodent_kp_sites[0]));
+                for (int ri = 0; ri < retry_count; ri++) {
+                    const auto &sd = retry_sites[ri];
+                    if (mjs_findElement(spec, mjOBJ_SITE, sd.name)) continue;
+                    if (sd.kpsite && mjs_findElement(spec, mjOBJ_SITE, sd.kpsite)) continue;
                     mjsBody *body = mjs_findBody(spec, sd.body);
                     if (body) {
                         mjsSite *site = mjs_addSite(body, nullptr);
@@ -212,12 +374,13 @@ struct MujocoContext {
         }
 
         // Mapping from RED skeleton node names to MuJoCo site names.
-        // Supports both naming conventions:
-        //   - rodent_no_collision.xml: "nose_0_kpsite", "ear_L_1_kpsite", etc.
-        //   - older models: "nose", "ear_L", etc.
         // We try the _kpsite variant first, then fall back to the plain name.
+        // For fly50, the RED skeleton names match site names exactly, so the
+        // fallback exact-match path handles them without an explicit table.
         struct MjNameVariants { std::string kpsite; std::string plain; };
-        static const std::unordered_map<std::string, MjNameVariants> skeleton_to_mj_name = {
+
+        // Rodent mapping: RED uses CamelCase, MuJoCo uses snake_case
+        static const std::unordered_map<std::string, MjNameVariants> rodent_skeleton_to_mj = {
             {"Snout",     {"nose_0_kpsite",       "nose"}},
             {"EarL",      {"ear_L_1_kpsite",      "ear_L"}},
             {"EarR",      {"ear_R_2_kpsite",      "ear_R"}},
@@ -243,6 +406,13 @@ struct MujocoContext {
             {"Tail1Q",    {"tail1Q_22_kpsite",    "tail1Q"}},
             {"Tail3Q",    {"tail3Q_23_kpsite",    "tail3Q"}},
         };
+
+        // Fly50: RED skeleton names are identical to MuJoCo site names
+        // (Antenna_Base, EyeL, T1L_ThxCx, etc.), so no renaming needed.
+        // We use an empty map and rely on the exact-match fallback below.
+        static const std::unordered_map<std::string, MjNameVariants> fly50_skeleton_to_mj = {};
+
+        const auto &skeleton_to_mj_name = is_fly_model ? fly50_skeleton_to_mj : rodent_skeleton_to_mj;
 
         // Build bidirectional mapping
         int num_nodes = skeleton.num_nodes;
