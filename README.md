@@ -367,6 +367,56 @@ Label provenance is tracked per keypoint (`Manual`, `Predicted`, `Imported`).
 
 ---
 
+## Body Model & Inverse Kinematics (MuJoCo)
+
+RED integrates MuJoCo body models for inverse kinematics, allowing you to fit articulated 3D body models to labeled keypoints.
+
+### Supported Models
+
+| Model | Skeleton | Sites | Source |
+|-------|----------|-------|--------|
+| Rodent (dm_control) | `Rat24Target` (24 keypoints) | 24 `_kpsite` markers | Included in `models/rodent/` |
+| Fruitfly v2.1 | `Fly50` (50 keypoints) | 50 joint markers | [janelia-anibody/fruitfly](https://github.com/janelia-anibody/fruitfly) |
+
+### Rodent Model
+
+The rodent model is included in the repository and works out of the box:
+
+- `models/rodent/rodent_no_collision.xml` — IK model with 24 keypoint sites
+- `models/rodent/rodent.xml` — variant with skin mesh for visualization
+- `models/rodent/rodent_walker_skin.skn` — skin mesh (auto-loaded when present)
+
+### Fruitfly Model (Build Required)
+
+The fruitfly model requires a one-time build step because the model uses OBJ mesh files that need the Python MuJoCo decoder:
+
+```bash
+pip install mujoco
+python3 scripts/build_fly_model.py
+```
+
+This script:
+1. Clones [janelia-anibody/fruitfly](https://github.com/janelia-anibody/fruitfly) to `lib/fruitfly/`
+2. Adds 50 keypoint sites matching the `Fly50` skeleton (site definitions from [TuragaLab/fly-body-tuning](https://github.com/TuragaLab/fly-body-tuning))
+3. Compiles and saves to `models/fruitfly/fruitfly_fly50.mjb` (~103 MB)
+
+Load the generated `.mjb` file in the Body Model panel.
+
+### IK Features
+
+- **IK_dm_control** — gradient descent with momentum on analytical site Jacobians, following the `qpos_from_site_xpos` algorithm from dm_control
+- **STAC site calibration** — iteratively adjusts keypoint site positions on the body model to minimize aggregate IK residual across many frames (Wu et al. 2013, talmolab/stac-mjx)
+- **Symmetric KP Sites** — enforces bilateral symmetry during STAC calibration (midline sites stay on midline, L/R pairs get mirrored offsets)
+- **Arena alignment** — SVD Procrustes alignment from labeled arena corners to the MuJoCo arena
+- **Parallel qpos export** — multi-threaded batch IK solve with full metadata for reproducibility
+- **Camera view overlay** — render the MuJoCo scene through calibration camera perspectives with video background for alignment verification
+
+### MuJoCo Dependency
+
+RED requires MuJoCo 3.6.0 as a macOS framework in `lib/mujoco.framework/`. This is an optional dependency — RED compiles and runs without it, but the Body Model panel is disabled.
+
+---
+
 ## Supported Animals and Skeletons
 
 ### Built-in Presets
