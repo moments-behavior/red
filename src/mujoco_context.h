@@ -41,6 +41,63 @@ struct MujocoContext {
     // Whether a free joint was added to the root body
     bool has_free_joint = false;
 
+    // Uniform model scale (1.0 = no scaling). Applied to body positions,
+    // geom sizes, site positions, joint positions, and mesh vertices.
+    // Mass/inertia are recomputed from density (spec path) or scaled
+    // by s^3/s^5 (compiled model path). Set before or after loading.
+    float model_scale = 1.0f;
+
+    // Apply uniform scale to the compiled mjModel.
+    // Matches Mason's scale_body: scales positions, geom sizes, meshes.
+    // Mass scales by s^3, inertia by s^5 (uniform density assumption).
+    void apply_model_scale(float s) {
+#ifdef RED_HAS_MUJOCO
+        if (!model || std::abs(s - 1.0f) < 1e-6f) return;
+        float s3 = s * s * s, s5 = s3 * s * s;
+        for (int i = 0; i < model->nbody; i++) {
+            for (int c = 0; c < 3; c++) {
+                model->body_pos[3*i+c] *= s;
+                model->body_ipos[3*i+c] *= s;
+                model->body_inertia[3*i+c] *= s5;
+            }
+            model->body_mass[i] *= s3;
+        }
+        for (int i = 0; i < model->njnt; i++)
+            for (int c = 0; c < 3; c++)
+                model->jnt_pos[3*i+c] *= s;
+        for (int i = 0; i < model->ngeom; i++) {
+            for (int c = 0; c < 3; c++) {
+                model->geom_pos[3*i+c] *= s;
+                model->geom_size[3*i+c] *= s;
+            }
+            model->geom_rbound[i] *= s;
+            for (int c = 0; c < 6; c++)
+                model->geom_aabb[6*i+c] *= s;
+        }
+        for (int i = 0; i < model->nsite; i++)
+            for (int c = 0; c < 3; c++) {
+                model->site_pos[3*i+c] *= s;
+                model->site_size[3*i+c] *= s;
+            }
+        for (int i = 0; i < model->nmeshvert; i++)
+            for (int c = 0; c < 3; c++)
+                model->mesh_vert[3*i+c] *= s;
+        // Update statistics
+        for (int c = 0; c < 3; c++) model->stat.center[c] *= s;
+        model->stat.extent *= s;
+        model->stat.meansize *= s;
+        model->stat.meanmass *= s3;
+        model->stat.meaninertia *= s5;
+        // Recompute derived constants and forward kinematics
+        if (data) {
+            mj_setConst(model, data);
+            mj_forward(model, data);
+        }
+        model_scale = s;
+        std::cout << "[MuJoCo] Applied model scale: " << s << std::endl;
+#endif
+    }
+
     // Load a MuJoCo XML body model and build the site↔skeleton mapping.
     // Programmatically adds a free joint to the torso via mjSpec so the
     // IK solver can optimize root position and orientation.
