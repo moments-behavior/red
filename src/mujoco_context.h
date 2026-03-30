@@ -63,14 +63,20 @@ struct MujocoContext {
         // optimize root position and orientation (6 extra DOFs).
         // Rodent models use "torso", fly models use "thorax".
         has_free_joint = false;
-        for (const char *root_name : {"torso", "thorax"}) {
-            mjsBody *root_body = mjs_findBody(spec, root_name);
-            if (root_body) {
-                mjs_addFreeJoint(root_body);
-                has_free_joint = true;
-                std::cout << "[MuJoCo] Added free joint to '" << root_name
-                          << "' body" << std::endl;
-                break;
+        // Check if a free joint already exists (e.g., fruitfly v2 has one)
+        if (mjs_findElement(spec, mjOBJ_JOINT, "free")) {
+            has_free_joint = true;
+            std::cout << "[MuJoCo] Model already has free joint" << std::endl;
+        } else {
+            for (const char *root_name : {"torso", "thorax"}) {
+                mjsBody *root_body = mjs_findBody(spec, root_name);
+                if (root_body) {
+                    mjs_addFreeJoint(root_body);
+                    has_free_joint = true;
+                    std::cout << "[MuJoCo] Added free joint to '" << root_name
+                              << "' body" << std::endl;
+                    break;
+                }
             }
         }
         if (!has_free_joint) {
@@ -305,10 +311,12 @@ struct MujocoContext {
             mj_deleteSpec(spec);
             spec = mj_parseXML(xml_path.c_str(), nullptr, error_buf, sizeof(error_buf));
             if (spec) {
-                for (const char *rn : {"torso", "thorax"}) {
-                    mjsBody *t = mjs_findBody(spec, rn);
-                    if (t) { mjs_addFreeJoint(t); has_free_joint = true; break; }
-                }
+                if (!mjs_findElement(spec, mjOBJ_JOINT, "free")) {
+                    for (const char *rn : {"torso", "thorax"}) {
+                        mjsBody *t = mjs_findBody(spec, rn);
+                        if (t) { mjs_addFreeJoint(t); has_free_joint = true; break; }
+                    }
+                } else { has_free_joint = true; }
                 // Re-inject sites (same loop as above)
                 // Re-detect model type for the fresh spec
                 bool is_fly_retry = (mjs_findBody(spec, "thorax") &&
