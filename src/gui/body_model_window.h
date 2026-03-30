@@ -90,8 +90,9 @@ struct BodyModelState {
     SkeletonContext saved_skeleton;
     AnnotationMap saved_annotations;
 
-    // Model scale (saved for session persistence)
+    // Saved for session persistence
     float saved_model_scale = 1.0f;
+    float saved_scale_factor = 0.0f; // 0 = auto
 
     // Arena dimensions (model units: meters for rodent, cm for fly)
     float arena_width = 1.828f;   // X extent (rodent default: 1828mm = 1.828m)
@@ -201,6 +202,9 @@ struct BodyModelState {
     // Apply loaded calibration offsets to the model after session load.
     // Handles double-offset protection (resets to original first).
     void apply_loaded_calibration(MujocoContext &mj) {
+        // Apply saved scale factor
+        if (saved_scale_factor != 0.0f)
+            mj.scale_factor = saved_scale_factor;
         // Apply saved model scale
         if (std::abs(saved_model_scale - 1.0f) > 1e-6f &&
             std::abs(mj.model_scale - saved_model_scale) > 1e-6f) {
@@ -233,6 +237,7 @@ struct BodyModelState {
             nlohmann::json j;
             j["version"] = 1;
             j["model_path"] = model_path;
+            j["scale_factor"] = saved_scale_factor;
             j["site_placement"] = site_placement;
 
             // IK settings
@@ -312,6 +317,7 @@ struct BodyModelState {
             if (!j.contains("version")) return false;
 
             model_path = j.value("model_path", model_path);
+            saved_scale_factor = j.value("scale_factor", 0.0f);
             site_placement = j.value("site_placement", site_placement);
 
             if (j.contains("ik")) {
@@ -875,6 +881,7 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
             {
                 std::string session_path = ctx.pm.project_path + "/mujoco_session.json";
                 if (ImGui::SmallButton("Save Session")) {
+                    state.saved_scale_factor = mj.scale_factor;
                     if (state.save_session(session_path))
                         ctx.toasts.push("Session saved");
                     else
@@ -932,6 +939,10 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                 ImGui::SetNextItemWidth(200);
                 ImGui::SliderInt("Max iterations", &state.ik_state.max_iterations, 100, 50000,
                                 "%d", ImGuiSliderFlags_Logarithmic);
+                ImGui::SetNextItemWidth(100);
+                float lr_f = (float)state.ik_state.lr;
+                if (ImGui::InputFloat("Translation LR", &lr_f, 0, 0, "%.4f"))
+                    state.ik_state.lr = std::max(0.0001, (double)lr_f);
                 ImGui::SetNextItemWidth(200);
                 float reg_log = (state.ik_state.reg_strength > 0)
                                     ? log10f((float)state.ik_state.reg_strength) : -6.0f;

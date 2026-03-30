@@ -279,10 +279,9 @@ inline bool mujoco_ik_solve(MujocoContext &mj, MujocoIKState &state,
         // Forward kinematics to update site positions
         mj_fwdPosition(mj.model, mj.data);
 
-        // Check convergence every check_every iterations (skip iter 0 —
-        // momentum hasn't accumulated yet and can trigger false convergence)
+        // Periodic checks (every check_every iterations, skip iter 0)
         if (state.check_every > 0 && iter > 0 && iter % state.check_every == 0) {
-            // Recompute objective with regularization
+            // Update residual tracking
             double reg_sq = 0.0;
             for (int dof : hinge_dof_indices) {
                 int qa = (int)mj.model->jnt_qposadr[mj.model->dof_jntid[dof]];
@@ -292,14 +291,17 @@ inline bool mujoco_ik_solve(MujocoContext &mj, MujocoIKState &state,
             state.final_objective = obj;
             state.final_residual = std::sqrt(err_sq / N);
 
-            double update_norm = state.lr * update.norm();
-            if (obj > 1e-12 && update_norm / obj < state.progress_thresh) {
-                state.converged = true;
-                break;
+            // Convergence check (disabled with cosine annealing — the decaying
+            // LR makes the criterion too easy to satisfy prematurely)
+            if (!state.cosine_annealing) {
+                double update_norm = state.lr * update.norm();
+                if (obj > 1e-12 && update_norm / obj < state.progress_thresh) {
+                    state.converged = true;
+                    break;
+                }
             }
 
-            // Time budget check (only at convergence check points to minimize
-            // clock overhead — checking every 100 iters is ~0.1% overhead)
+            // Time budget check
             if (state.time_budget_ms > 0.0) {
                 auto now = std::chrono::high_resolution_clock::now();
                 double elapsed = std::chrono::duration<double, std::milli>(now - t0).count();
