@@ -44,14 +44,17 @@ struct ArenaAlignment {
     }
 };
 
-// MuJoCo arena corners: 1828mm x 1828mm square centered at origin, Z=0
-inline std::array<Eigen::Vector3d, 4> mujoco_arena_corners() {
-    double h = 0.914; // half-size in meters
+// MuJoCo arena corners: rectangular, centered at origin, Z=0
+// Default: 1828mm x 1828mm (rodent). Fly: 24mm x 5.6mm (0.024m x 0.0056m).
+inline std::array<Eigen::Vector3d, 4> mujoco_arena_corners(
+        double width = 1.828, double depth = 1.828,
+        double ox = 0, double oy = 0, double oz = 0) {
+    double hw = width * 0.5, hd = depth * 0.5;
     return {{
-        { h,  h, 0}, // front-right
-        {-h,  h, 0}, // back-right
-        {-h, -h, 0}, // back-left
-        { h, -h, 0}, // front-left
+        {ox+hw, oy+hd, oz},
+        {ox-hw, oy+hd, oz},
+        {ox-hw, oy-hd, oz},
+        {ox+hw, oy-hd, oz},
     }};
 }
 
@@ -108,10 +111,15 @@ inline double procrustes_align(const Eigen::Vector3d *src, const Eigen::Vector3d
 
 // Compute arena alignment: tries all 24 permutations of the 4 calibration
 // corners against the MuJoCo corners, picks the one with lowest residual.
-inline void compute_arena_alignment(ArenaAlignment &align) {
+inline void compute_arena_alignment(ArenaAlignment &align,
+                                     double arena_width = 1.828,
+                                     double arena_depth = 1.828,
+                                     double arena_ox = 0, double arena_oy = 0,
+                                     double arena_oz = 0) {
     if (!align.corners_set) { align.valid = false; return; }
 
-    auto mj_corners = mujoco_arena_corners();
+    auto mj_corners = mujoco_arena_corners(arena_width, arena_depth,
+                                              arena_ox, arena_oy, arena_oz);
 
     // All 24 permutations of {0,1,2,3}
     int perm[4] = {0, 1, 2, 3};

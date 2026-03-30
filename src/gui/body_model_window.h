@@ -90,6 +90,11 @@ struct BodyModelState {
     SkeletonContext saved_skeleton;
     AnnotationMap saved_annotations;
 
+    // Arena dimensions (model units: meters for rodent, cm for fly)
+    float arena_width = 1.828f;   // X extent (rodent default: 1828mm = 1.828m)
+    float arena_depth = 1.828f;   // Y extent (rodent default: same, square)
+    float arena_offset[3] = {0, 0, 0}; // arena center offset from origin
+
     // Controls section height (user can drag splitter)
     float controls_height = 300.0f;
 
@@ -127,6 +132,30 @@ struct BodyModelState {
 
     // Model path for file dialog
     std::string model_path;
+
+    // Set arena defaults based on loaded model type
+    void set_arena_defaults_for_model(const MujocoContext &mj) {
+#ifdef RED_HAS_MUJOCO
+        if (!mj.model) return;
+        bool is_fly = (mj_name2id(mj.model, mjOBJ_BODY, "thorax") >= 0 &&
+                       mj_name2id(mj.model, mjOBJ_BODY, "wing_left") >= 0);
+        if (is_fly) {
+            // Fly arena: 24mm x 5.6mm in cm (model units), origin at corner
+            arena_width = 2.4f;   // 24mm in cm
+            arena_depth = 0.56f;  // 5.6mm in cm
+            arena_offset[0] = arena_width * 0.5f;  // center X at 12mm
+            arena_offset[1] = arena_depth * 0.5f;  // center Y at 2.8mm
+            arena_offset[2] = 0.0f;
+        } else {
+            // Rodent arena: 1828mm x 1828mm in meters, centered at origin
+            arena_width = 1.828f;
+            arena_depth = 1.828f;
+            arena_offset[0] = 0.0f;
+            arena_offset[1] = 0.0f;
+            arena_offset[2] = 0.0f;
+        }
+#endif
+    }
 
     // Apply loaded calibration offsets to the model after session load.
     // Handles double-offset protection (resets to original first).
@@ -211,7 +240,9 @@ struct BodyModelState {
 
             // Display
             j["display"] = {{"show_skin", show_skin}, {"show_bodies", show_bodies},
-                            {"show_sites", show_site_markers}, {"show_arena", show_arena}};
+                            {"show_sites", show_site_markers}, {"show_arena", show_arena},
+                            {"arena_width", arena_width}, {"arena_depth", arena_depth},
+                            {"arena_offset", std::vector<float>{arena_offset[0], arena_offset[1], arena_offset[2]}}};
 
             std::ofstream f(path);
             if (!f) return false;
@@ -307,6 +338,14 @@ struct BodyModelState {
                 show_bodies = d.value("show_bodies", true);
                 show_site_markers = d.value("show_sites", true);
                 show_arena = d.value("show_arena", true);
+                arena_width = d.value("arena_width", 1.828f);
+                arena_depth = d.value("arena_depth", 1.828f);
+                if (d.contains("arena_offset")) {
+                    auto ao = d["arena_offset"].get<std::vector<float>>();
+                    if (ao.size() >= 3) {
+                        arena_offset[0] = ao[0]; arena_offset[1] = ao[1]; arena_offset[2] = ao[2];
+                    }
+                }
             }
 
             return true;
@@ -641,6 +680,7 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                     if (ImGui::Button("Restore Previous Session")) {
                         state.model_path = ctx.user_settings.last_mujoco_model;
                         if (mj.load(state.model_path, ctx.skeleton)) {
+                            state.set_arena_defaults_for_model(mj);
                             std::string sp = ctx.pm.project_path + "/mujoco_session.json";
                             if (state.load_session(sp))
                                 state.apply_loaded_calibration(mj);
@@ -687,7 +727,8 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                     if (mj.load(state.model_path, ctx.skeleton)) {
                         ctx.user_settings.last_mujoco_model = state.model_path;
                         save_user_settings(ctx.user_settings);
-                        // Auto-load session if it exists
+                        state.set_arena_defaults_for_model(mj);
+                        // Auto-load session if it exists (overrides defaults)
                         std::string sp = ctx.pm.project_path + "/mujoco_session.json";
                         if (!ctx.pm.project_path.empty() &&
                             std::filesystem::exists(sp) && state.load_session(sp)) {
@@ -711,6 +752,7 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                     if (ImGui::Button("Load Previous")) {
                         state.model_path = ctx.user_settings.last_mujoco_model;
                         if (mj.load(state.model_path, ctx.skeleton)) {
+                            state.set_arena_defaults_for_model(mj);
                             std::string sp = ctx.pm.project_path + "/mujoco_session.json";
                             if (!ctx.pm.project_path.empty() &&
                                 std::filesystem::exists(sp) && state.load_session(sp)) {
@@ -1189,6 +1231,16 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
             ImGui::SameLine();
             ImGui::Checkbox("Arena", &state.show_arena);
 
+            if (state.show_arena) {
+                ImGui::SetNextItemWidth(100);
+                ImGui::InputFloat("Arena W", &state.arena_width, 0, 0, "%.3f");
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(100);
+                ImGui::InputFloat("Arena D", &state.arena_depth, 0, 0, "%.3f");
+                ImGui::SetNextItemWidth(200);
+                ImGui::InputFloat3("Arena offset", state.arena_offset, "%.4f");
+            }
+
             if (state.show_skin && mj.model->nskin > 0) {
                 ImGui::SetNextItemWidth(200);
                 ImGui::SliderFloat("Skin inflate", &mj.model->skin_inflate[0],
@@ -1483,7 +1535,7 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                                     ctx.user_settings.arena_corners[3*i+2]);
                             }
                             state.arena_align.corners_set = true;
-                            compute_arena_alignment(state.arena_align);
+                            compute_arena_alignment(state.arena_align, state.arena_width, state.arena_depth, state.arena_offset[0], state.arena_offset[1], state.arena_offset[2]);
                             if (state.arena_align.valid) {
                                 mujoco_ik_reset(state.ik_state);
                                 state.last_solved_frame = -1;
@@ -1553,7 +1605,7 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                             break;
                         }
                         state.arena_align.corners_set = true;
-                        compute_arena_alignment(state.arena_align);
+                        compute_arena_alignment(state.arena_align, state.arena_width, state.arena_depth, state.arena_offset[0], state.arena_offset[1], state.arena_offset[2]);
                         if (state.arena_align.valid) {
                             // Save corners to settings for "Load Previous"
                             ctx.user_settings.arena_corners.resize(12);
@@ -1660,7 +1712,9 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                                        state.show_skin, state.show_bodies,
                                        state.show_site_markers, state.show_arena, vo,
                                        state.alignment_mode, bg_tex, opacity,
-                                       state.cam_zoom, state.cam_pan);
+                                       state.cam_zoom, state.cam_pan,
+                                       state.arena_width, state.arena_depth,
+                                       state.arena_offset);
                 ImTextureID tex = mujoco_renderer_get_texture(state.renderer);
                 if (tex) {
                     ImVec2 img_pos = ImGui::GetCursorScreenPos();
