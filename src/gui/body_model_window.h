@@ -90,6 +90,9 @@ struct BodyModelState {
     SkeletonContext saved_skeleton;
     AnnotationMap saved_annotations;
 
+    // Model scale (saved for session persistence)
+    float saved_model_scale = 1.0f;
+
     // Arena dimensions (model units: meters for rodent, cm for fly)
     float arena_width = 1.828f;   // X extent (rodent default: 1828mm = 1.828m)
     float arena_depth = 1.828f;   // Y extent (rodent default: same, square)
@@ -160,6 +163,12 @@ struct BodyModelState {
     // Apply loaded calibration offsets to the model after session load.
     // Handles double-offset protection (resets to original first).
     void apply_loaded_calibration(MujocoContext &mj) {
+        // Apply saved model scale
+        if (std::abs(saved_model_scale - 1.0f) > 1e-6f &&
+            std::abs(mj.model_scale - saved_model_scale) > 1e-6f) {
+            float rel = saved_model_scale / mj.model_scale;
+            mj.apply_model_scale(rel);
+        }
         // Reset any existing offsets first to avoid double-application
         if (stac_state.calibrated)
             stac_reset(mj, stac_state);
@@ -242,7 +251,8 @@ struct BodyModelState {
             j["display"] = {{"show_skin", show_skin}, {"show_bodies", show_bodies},
                             {"show_sites", show_site_markers}, {"show_arena", show_arena},
                             {"arena_width", arena_width}, {"arena_depth", arena_depth},
-                            {"arena_offset", std::vector<float>{arena_offset[0], arena_offset[1], arena_offset[2]}}};
+                            {"arena_offset", std::vector<float>{arena_offset[0], arena_offset[1], arena_offset[2]}},
+                            {"model_scale", saved_model_scale}};
 
             std::ofstream f(path);
             if (!f) return false;
@@ -340,6 +350,7 @@ struct BodyModelState {
                 show_arena = d.value("show_arena", true);
                 arena_width = d.value("arena_width", 1.828f);
                 arena_depth = d.value("arena_depth", 1.828f);
+                saved_model_scale = d.value("model_scale", 1.0f);
                 if (d.contains("arena_offset")) {
                     auto ao = d["arena_offset"].get<std::vector<float>>();
                     if (ao.size() >= 3) {
@@ -841,6 +852,25 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                 ImGui::SameLine();
                 if (ImGui::SmallButton("Unload Model"))
                     state.unload_requested = true;
+            }
+
+            // Model scale (uniform, affects physics)
+            {
+                float ms = mj.model_scale;
+                ImGui::SetNextItemWidth(200);
+                if (ImGui::InputFloat("Model Scale", &ms, 0.001f, 0.01f, "%.4f")) {
+                    if (ms > 0.01f && ms < 100.0f && std::abs(ms - mj.model_scale) > 1e-6f) {
+                        // Apply relative scale: new_scale / old_scale
+                        float rel = ms / mj.model_scale;
+                        mj.apply_model_scale(rel);
+                        state.saved_model_scale = mj.model_scale;
+                        mujoco_ik_reset(state.ik_state);
+                        state.last_solved_frame = -1;
+                    }
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Uniformly scale the body model.\n1.0 = original size. "
+                        "Affects mass and inertia for physics.");
             }
 
             ImGui::Separator();
