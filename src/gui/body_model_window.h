@@ -143,29 +143,57 @@ struct BodyModelState {
         bool is_fly = (mj_name2id(mj.model, mjOBJ_BODY, "thorax") >= 0 &&
                        mj_name2id(mj.model, mjOBJ_BODY, "wing_left") >= 0);
         if (is_fly) {
-            // Fly arena: 24mm x 5.6mm in cm (model units), origin at corner
-            arena_width = 2.4f;   // 24mm in cm
-            arena_depth = 0.56f;  // 5.6mm in cm
-            arena_offset[0] = arena_width * 0.5f;  // center X at 12mm
-            arena_offset[1] = arena_depth * 0.5f;  // center Y at 2.8mm
+            // --- Fly (fruitfly v2, CGS units = cm) ---
+            // Arena: 24mm x 5.6mm, origin at corner
+            arena_width = 2.4f;
+            arena_depth = 0.56f;
+            arena_offset[0] = arena_width * 0.5f;
+            arena_offset[1] = arena_depth * 0.5f;
             arena_offset[2] = 0.0f;
-            // Fly: 100 DOF, needs more iterations and separate LR
+            // Model scale: 0.82 optimal (from segment length analysis)
+            saved_model_scale = 0.82f;
+            // IK solver: separate LR (Mason's approach)
+            ik_state.lr = 0.001;
+            ik_state.lr_joint = 1.0;
+            ik_state.beta = 0.9;
+            ik_state.cosine_annealing = true;
+            ik_state.reg_strength = 1e-2;
+            ik_state.max_iterations = 10000;
+            // STAC calibration
+            stac_state.n_iters = 3;
+            stac_state.n_sample_frames = 100;
             stac_state.q_max_iters = 10000;
             stac_state.m_max_iters = 5000;
-            stac_state.m_reg_coef = 0.1f;
-            // Set fly-specific IK defaults
-            ik_state.lr = 0.001;           // translation lr (Mason: 0.001)
-            ik_state.lr_joint = 1.0;       // joint/rotation lr (Mason: 1.0)
-            ik_state.cosine_annealing = true;
-            ik_state.reg_strength = 1e-2;  // higher reg for underdetermined system
-            ik_state.max_iterations = 10000;
+            stac_state.m_lr = 5e-4;
+            stac_state.m_momentum = 0.9;
+            stac_state.m_reg_coef = 0.1;
+            stac_state.symmetric = true;
         } else {
-            // Rodent arena: 1828mm x 1828mm in meters, centered at origin
+            // --- Rodent (dm_control, SI units = meters) ---
+            // Arena: 1828mm x 1828mm, centered at origin
             arena_width = 1.828f;
             arena_depth = 1.828f;
             arena_offset[0] = 0.0f;
             arena_offset[1] = 0.0f;
             arena_offset[2] = 0.0f;
+            // Model scale: 1.0 (no scaling needed)
+            saved_model_scale = 1.0f;
+            // IK solver: single LR (dm_control defaults)
+            ik_state.lr = 0.01;
+            ik_state.lr_joint = 0.0;       // 0 = same as lr
+            ik_state.beta = 0.99;
+            ik_state.cosine_annealing = false;
+            ik_state.reg_strength = 1e-4;
+            ik_state.max_iterations = 5000;
+            // STAC calibration
+            stac_state.n_iters = 3;
+            stac_state.n_sample_frames = 200;
+            stac_state.q_max_iters = 300;
+            stac_state.m_max_iters = 500;
+            stac_state.m_lr = 5e-4;
+            stac_state.m_momentum = 0.9;
+            stac_state.m_reg_coef = 0.1;
+            stac_state.symmetric = true;
         }
 #endif
     }
