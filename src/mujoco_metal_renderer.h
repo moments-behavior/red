@@ -49,7 +49,9 @@ void mujoco_renderer_render(MujocoRenderer *r, MujocoContext *mj,
                             const float *bg_pan = nullptr,
                             float arena_width = 1.828f,
                             float arena_depth = 1.828f,
-                            const float *arena_offset = nullptr);
+                            const float *arena_offset = nullptr,
+                            float brightness = 0.0f,
+                            float contrast = 1.0f);
 
 // Get the rendered texture as an ImGui texture ID.
 ImTextureID mujoco_renderer_get_texture(MujocoRenderer *r);

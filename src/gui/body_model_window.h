@@ -99,6 +99,10 @@ struct BodyModelState {
     float arena_depth = 1.828f;   // Y extent (rodent default: same, square)
     float arena_offset[3] = {0, 0, 0}; // arena center offset from origin
 
+    // 3D view brightness/contrast
+    float mj_brightness = 0.05f;
+    float mj_contrast = 1.2f;
+
     // Controls section height (user can drag splitter)
     float controls_height = 300.0f;
 
@@ -1360,6 +1364,16 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                 ImGui::SliderFloat("Skin inflate", &mj.model->skin_inflate[0],
                                    0.0f, 0.01f, "%.4f m");
             }
+            ImGui::SetNextItemWidth(100);
+            ImGui::SliderFloat("Brightness", &state.mj_brightness, -0.5f, 0.5f, "%.2f");
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(100);
+            ImGui::SliderFloat("Contrast", &state.mj_contrast, 0.5f, 2.0f, "%.2f");
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Reset##bc")) {
+                state.mj_brightness = 0.05f;
+                state.mj_contrast = 1.2f;
+            }
 
             // --- Initialize MuJoCo camera on first use ---
             if (!state.cam_initialized) {
@@ -1828,7 +1842,8 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                                        state.alignment_mode, bg_tex, opacity,
                                        state.cam_zoom, state.cam_pan,
                                        state.arena_width, state.arena_depth,
-                                       state.arena_offset);
+                                       state.arena_offset,
+                                       state.mj_brightness, state.mj_contrast);
                 ImTextureID tex = mujoco_renderer_get_texture(state.renderer);
                 if (tex) {
                     ImVec2 img_pos = ImGui::GetCursorScreenPos();

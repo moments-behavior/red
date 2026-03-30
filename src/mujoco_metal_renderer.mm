@@ -38,7 +38,9 @@ struct SceneUniforms {
     float3   light_dir2;
     float    _pad1;
     float3   eye_pos;
-    float    _pad2;
+    float    brightness;  // added to final color (-1..1)
+    float    contrast;    // multiplied (0.5..2.0), 1.0 = neutral
+    float    _pad3[3];
 };
 
 struct VertexOut {
@@ -74,13 +76,16 @@ fragment float4 fragment_main(VertexOut in [[stage_in]],
     float3 H1 = normalize(L1 + V);
     float3 H2 = normalize(L2 + V);
 
-    float ambient = 0.20;
+    float ambient = 0.35;
     float diffuse = max(dot(N, L1), 0.0) * 0.50
-                  + max(dot(N, L2), 0.0) * 0.25;
-    float spec = pow(max(dot(N, H1), 0.0), 32.0) * 0.25
+                  + max(dot(N, L2), 0.0) * 0.30;
+    float spec = pow(max(dot(N, H1), 0.0), 32.0) * 0.20
                + pow(max(dot(N, H2), 0.0), 32.0) * 0.10;
 
     float3 color = in.color.rgb * (ambient + diffuse) + float3(spec);
+    // Apply brightness and contrast
+    color = (color - 0.5) * su.contrast + 0.5 + su.brightness;
+    color = saturate(color);
     return float4(color, in.color.a);
 }
 
@@ -133,6 +138,8 @@ fragment float4 fragment_floor(VertexOut in [[stage_in]],
                + pow(max(dot(N, H2), 0.0), 64.0) * 0.15;
 
     float3 color = base_color * (ambient + diffuse) + float3(spec);
+    color = (color - 0.5) * su.contrast + 0.5 + su.brightness;
+    color = saturate(color);
     return float4(color, in.color.a);
 }
 
@@ -603,7 +610,9 @@ struct SceneUniforms {
     simd_float3   light_dir2;
     float          _pad1;
     simd_float3   eye_pos;
-    float          _pad2;
+    float          brightness;
+    float          contrast;
+    float          _pad3[3];
 };
 
 struct FloorUniforms {
@@ -625,7 +634,9 @@ void mujoco_renderer_render(MujocoRenderer *r, MujocoContext *mj,
                             const float *bg_pan,
                             float arena_width,
                             float arena_depth,
-                            const float *arena_offset) {
+                            const float *arena_offset,
+                            float brightness,
+                            float contrast) {
     if (!r || !mj || !mj->loaded || !cam) return;
 
     @autoreleasepool {
@@ -673,6 +684,8 @@ void mujoco_renderer_render(MujocoRenderer *r, MujocoContext *mj,
         su.light_dir  = simd_normalize((simd_float3){0.2f, 0.1f, 1.0f});  // key: above
         su.light_dir2 = simd_normalize((simd_float3){0.5f, 0.8f, 0.3f});  // fill: side
         su.eye_pos = eye;
+        su.brightness = brightness;
+        su.contrast = contrast;
 
         // Begin render pass
         id<MTLCommandBuffer> cmd = [r->queue commandBuffer];
