@@ -49,6 +49,33 @@ struct MujocoContext {
 #ifdef RED_HAS_MUJOCO
         unload();
 
+        // Support pre-compiled MJB files (binary, sites already injected)
+        if (xml_path.size() > 4 &&
+            xml_path.substr(xml_path.size() - 4) == ".mjb") {
+            model = mj_loadModel(xml_path.c_str(), nullptr);
+            if (!model) {
+                load_error = "Failed to load MJB: " + xml_path;
+                return false;
+            }
+            has_free_joint = false;
+            for (int j = 0; j < model->njnt; j++) {
+                if (model->jnt_type[j] == mjJNT_FREE) { has_free_joint = true; break; }
+            }
+            data = mj_makeData(model);
+            if (!data) {
+                load_error = "mj_makeData failed";
+                mj_deleteModel(model); model = nullptr;
+                return false;
+            }
+            // Initialize visualization
+            mjv_defaultScene(&scene);
+            mjv_defaultOption(&opt);
+            for (int i = 0; i < mjNGROUP; i++) opt.sitegroup[i] = 1;
+            mjv_makeScene(model, &scene, 2000);
+            // Skip XML path — go directly to mapping
+            return finalize_load(xml_path, skeleton);
+        }
+
         char error_buf[1024] = {0};
 
         // Parse XML into mjSpec for programmatic editing
@@ -271,6 +298,9 @@ struct MujocoContext {
                     site->pos[2] = sd.pos[2];
                     sites_added++;
                 }
+            } else {
+                std::cerr << "[MuJoCo] WARNING: body '" << sd.body
+                          << "' not found for site '" << sd.name << "'" << std::endl;
             }
         }
         if (sites_added > 0)
@@ -304,6 +334,20 @@ struct MujocoContext {
         // Compile the edited spec into mjModel
         model = mj_compile(spec, nullptr);
         if (!model) {
+            // Get error details from MuJoCo's global error string
+            std::cerr << "[MuJoCo] mj_compile failed after adding "
+                      << sites_added << " sites (skipped " << sites_skipped << ")" << std::endl;
+            // Try loading with mj_loadXML for a detailed error message
+            {
+                char err2[1024] = {0};
+                mjModel *test = mj_loadXML(xml_path.c_str(), nullptr, err2, sizeof(err2));
+                if (test) {
+                    std::cerr << "[MuJoCo] Unmodified XML loads OK — issue is in mjSpec modifications" << std::endl;
+                    mj_deleteModel(test);
+                } else if (err2[0]) {
+                    std::cerr << "[MuJoCo] " << err2 << std::endl;
+                }
+            }
             // If compile failed, it might be due to the skin — retry without it
             std::cerr << "[MuJoCo] mj_compile failed, retrying without skin..."
                       << std::endl;
@@ -366,6 +410,15 @@ struct MujocoContext {
         for (int i = 0; i < mjNGROUP; i++) opt.sitegroup[i] = 1;
         mjv_makeScene(model, &scene, 2000);
 
+        return finalize_load(xml_path, skeleton);
+    }
+
+    // Finalize loading: set site sizes/colors, build skeleton mapping.
+    // Called from both XML and MJB loading paths after model/data are ready.
+    bool finalize_load(const std::string &path, const SkeletonContext &skeleton) {
+        bool is_fly = (mj_name2id(model, mjOBJ_BODY, "thorax") >= 0 &&
+                       mj_name2id(model, mjOBJ_BODY, "wing_left") >= 0);
+
         // Shrink keypoint sites to 50% of default (4mm radius)
         for (int i = 0; i < (int)model->nsite; i++) {
             float r = 0.004f; // 4mm radius
@@ -420,7 +473,7 @@ struct MujocoContext {
         // We use an empty map and rely on the exact-match fallback below.
         static const std::unordered_map<std::string, MjNameVariants> fly50_skeleton_to_mj = {};
 
-        const auto &skeleton_to_mj_name = is_fly_model ? fly50_skeleton_to_mj : rodent_skeleton_to_mj;
+        const auto &skeleton_to_mj_name = is_fly ? fly50_skeleton_to_mj : rodent_skeleton_to_mj;
 
         // Build bidirectional mapping
         int num_nodes = skeleton.num_nodes;
@@ -482,7 +535,7 @@ struct MujocoContext {
             }
         }
 
-        std::cout << "[MuJoCo] Loaded " << xml_path << std::endl;
+        std::cout << "[MuJoCo] Loaded " << path << std::endl;
         std::cout << "[MuJoCo] Model: " << (int)model->nbody << " bodies, "
                   << (int)model->njnt << " joints, " << (int)model->nsite << " sites, "
                   << (int)model->nu << " actuators" << std::endl;
@@ -492,16 +545,18 @@ struct MujocoContext {
         // Compute default pose FK so site positions are valid
         mj_forward(model, data);
 
-        model_path = xml_path;
+        model_path = path;
         loaded = true;
         load_error.clear();
         return true;
+    }
 #else
-        (void)xml_path; (void)skeleton;
+    bool load(const std::string &, const SkeletonContext &) {
         load_error = "MuJoCo not available (compile with RED_HAS_MUJOCO)";
         return false;
-#endif
     }
+    bool finalize_load(const std::string &, const SkeletonContext &) { return false; }
+#endif
 
     void unload() {
 #ifdef RED_HAS_MUJOCO
