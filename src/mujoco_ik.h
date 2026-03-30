@@ -18,13 +18,15 @@
 #include <algorithm>
 
 struct MujocoIKState {
-    // Solver configuration (matching Python defaults: max_steps=20000)
+    // Solver configuration
     int    max_iterations   = 5000;
-    double lr               = 0.01;    // learning rate
+    double lr               = 0.01;    // learning rate (translation DOFs)
+    double lr_joint         = 0.0;     // joint/rotation lr (0 = same as lr)
     double beta             = 0.99;    // momentum coefficient
     double reg_strength     = 1e-4;    // L2 regularization on hinge joints
     double progress_thresh  = 0.01;    // convergence: lr*||update||/err < thresh
     int    check_every      = 100;     // convergence check interval
+    bool   cosine_annealing = false;   // decay lr with cosine schedule
 
     // Time budget: 0 = unlimited, >0 = stop after this many ms (for auto-solve)
     double time_budget_ms   = 0.0;
@@ -227,9 +229,36 @@ inline bool mujoco_ik_solve(MujocoContext &mj, MujocoIKState &state,
         Eigen::Map<Eigen::VectorXd> update(state.update_buf.data(), nv);
         update = state.beta * update + grad;
 
-        // Build full step: nv_step = -lr * update
+        // Learning rate (with optional cosine annealing)
+        double lr_t = state.lr;
+        double lr_j = (state.lr_joint > 0) ? state.lr_joint : state.lr;
+        if (state.cosine_annealing && state.max_iterations > 0) {
+            double t = (double)iter / state.max_iterations;
+            double decay = 0.5 * (1.0 + cos(M_PI * t));
+            lr_t *= decay;
+            lr_j *= decay;
+        }
+
+        // Build step with separate learning rates for translation vs joint DOFs
         Eigen::Map<Eigen::VectorXd> step(state.nv_step.data(), nv);
-        step = -state.lr * update;
+        if (std::abs(lr_t - lr_j) > 1e-12) {
+            // Per-DOF learning rate: free joint trans (first 3) use lr_t,
+            // free joint rot (next 3) + all hinge joints use lr_j
+            for (int v = 0; v < nv; v++) {
+                bool is_trans = false;
+                if (mj.has_free_joint) {
+                    // Free joint DOFs are typically the first 6 (3 trans + 3 rot)
+                    int jnt_id = mj.model->dof_jntid[v];
+                    if (mj.model->jnt_type[jnt_id] == mjJNT_FREE) {
+                        int dof_in_jnt = v - mj.model->jnt_dofadr[jnt_id];
+                        is_trans = (dof_in_jnt < 3); // first 3 = translation
+                    }
+                }
+                step[v] = -(is_trans ? lr_t : lr_j) * update[v];
+            }
+        } else {
+            step = -lr_t * update;
+        }
 
         // Integrate qpos (handles quaternion joints correctly)
         mj_integratePos(mj.model, mj.data->qpos, state.nv_step.data(), 1.0);

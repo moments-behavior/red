@@ -149,6 +149,16 @@ struct BodyModelState {
             arena_offset[0] = arena_width * 0.5f;  // center X at 12mm
             arena_offset[1] = arena_depth * 0.5f;  // center Y at 2.8mm
             arena_offset[2] = 0.0f;
+            // Fly: 100 DOF, needs more iterations and separate LR
+            stac_state.q_max_iters = 10000;
+            stac_state.m_max_iters = 5000;
+            stac_state.m_reg_coef = 0.1f;
+            // Set fly-specific IK defaults
+            ik_state.lr = 0.001;           // translation lr (Mason: 0.001)
+            ik_state.lr_joint = 1.0;       // joint/rotation lr (Mason: 1.0)
+            ik_state.cosine_annealing = true;
+            ik_state.reg_strength = 1e-2;  // higher reg for underdetermined system
+            ik_state.max_iterations = 10000;
         } else {
             // Rodent arena: 1828mm x 1828mm in meters, centered at origin
             arena_width = 1.828f;
@@ -199,8 +209,10 @@ struct BodyModelState {
 
             // IK settings
             j["ik"] = {{"max_iterations", ik_state.max_iterations},
-                       {"lr", ik_state.lr}, {"beta", ik_state.beta},
-                       {"reg_strength", ik_state.reg_strength}};
+                       {"lr", ik_state.lr}, {"lr_joint", ik_state.lr_joint},
+                       {"beta", ik_state.beta},
+                       {"reg_strength", ik_state.reg_strength},
+                       {"cosine_annealing", ik_state.cosine_annealing}};
 
             // Arena alignment
             if (arena_align.valid) {
@@ -278,7 +290,9 @@ struct BodyModelState {
                 auto &ik = j["ik"];
                 ik_state.max_iterations = ik.value("max_iterations", ik_state.max_iterations);
                 ik_state.lr = ik.value("lr", ik_state.lr);
+                ik_state.lr_joint = ik.value("lr_joint", ik_state.lr_joint);
                 ik_state.beta = ik.value("beta", ik_state.beta);
+                ik_state.cosine_annealing = ik.value("cosine_annealing", ik_state.cosine_annealing);
                 ik_state.reg_strength = ik.value("reg_strength", ik_state.reg_strength);
             }
 
@@ -888,14 +902,28 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                         ImGui::SameLine(), ImGui::TextDisabled("(auto)");
                 }
                 ImGui::SetNextItemWidth(200);
-                ImGui::SliderInt("Max iterations", &state.ik_state.max_iterations, 100, 20000,
+                ImGui::SliderInt("Max iterations", &state.ik_state.max_iterations, 100, 50000,
                                 "%d", ImGuiSliderFlags_Logarithmic);
                 ImGui::SetNextItemWidth(200);
                 float reg_log = (state.ik_state.reg_strength > 0)
                                     ? log10f((float)state.ik_state.reg_strength) : -6.0f;
                 if (ImGui::SliderFloat("Regularization (log10)", &reg_log, -6.0f, 0.0f, "%.1f"))
                     state.ik_state.reg_strength = pow(10.0, reg_log);
-                ImGui::Checkbox("Auto-solve on frame change", &state.auto_solve);
+                // Separate joint learning rate (0 = same as translation lr)
+                ImGui::SetNextItemWidth(200);
+                float lr_j = (float)state.ik_state.lr_joint;
+                if (ImGui::InputFloat("Joint LR (0=same)", &lr_j, 0, 0, "%.4f"))
+                    state.ik_state.lr_joint = std::max(0.0, (double)lr_j);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Separate learning rate for rotation+hinge DOFs.\n"
+                        "0 = use same lr as translation.\n"
+                        "Fly: try 1.0 (Mason uses 1000x ratio)");
+                ImGui::Checkbox("Cosine annealing", &state.ik_state.cosine_annealing);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Decay learning rate with cosine schedule.\n"
+                        "Helps convergence on complex models.");
+                ImGui::SameLine();
+                ImGui::Checkbox("Auto-solve", &state.auto_solve);
                 if (state.auto_solve) {
                     ImGui::SameLine();
                     float budget = (float)state.ik_state.time_budget_ms;
@@ -1119,6 +1147,20 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                 if (!state.stac_calibrating) {
                     ImGui::SliderInt("Alternating rounds", &state.stac_state.n_iters, 1, 10);
                     ImGui::SliderInt("Sample frames", &state.stac_state.n_sample_frames, 50, 500);
+                    ImGui::SliderInt("IK iters (Q-phase)", &state.stac_state.q_max_iters, 100, 50000,
+                                    "%d", ImGuiSliderFlags_Logarithmic);
+                    ImGui::SliderInt("SGD iters (M-phase)", &state.stac_state.m_max_iters, 100, 50000,
+                                    "%d", ImGuiSliderFlags_Logarithmic);
+                    {
+                        float reg_log = (state.stac_state.m_reg_coef > 0)
+                            ? log10f((float)state.stac_state.m_reg_coef) : -2.0f;
+                        if (ImGui::SliderFloat("Offset reg (log10)", &reg_log, -2.0f, 2.0f, "%.1f"))
+                            state.stac_state.m_reg_coef = pow(10.0, reg_log);
+                        if (ImGui::IsItemHovered())
+                            ImGui::SetTooltip("L2 regularization on site offsets.\n"
+                                "Higher = sites stay closer to original positions.\n"
+                                "Fly default: 1.0, Rodent default: 0.1");
+                    }
                     ImGui::Checkbox("Symmetric KP Sites", &state.stac_state.symmetric);
                     if (ImGui::IsItemHovered())
                         ImGui::SetTooltip("Force bilateral symmetry: midline sites stay on "
