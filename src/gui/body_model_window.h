@@ -854,22 +854,25 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                     state.unload_requested = true;
             }
 
-            // Model scale (uniform, affects physics)
+            // Model scale (uniform, affects physics).
+            // The input shows the TARGET scale (absolute, not relative).
+            // Applied as a relative change when the user presses Enter/Tab.
             {
-                float ms = mj.model_scale;
                 ImGui::SetNextItemWidth(200);
-                if (ImGui::InputFloat("Model Scale", &ms, 0.001f, 0.01f, "%.4f")) {
-                    if (ms > 0.01f && ms < 100.0f && std::abs(ms - mj.model_scale) > 1e-6f) {
-                        // Apply relative scale: new_scale / old_scale
-                        float rel = ms / mj.model_scale;
+                ImGui::InputFloat("Model Scale", &state.saved_model_scale, 0, 0, "%.4f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) {
+                    float target = state.saved_model_scale;
+                    if (target > 0.01f && target < 100.0f &&
+                        std::abs(target - mj.model_scale) > 1e-6f) {
+                        float rel = target / mj.model_scale;
                         mj.apply_model_scale(rel);
-                        state.saved_model_scale = mj.model_scale;
                         mujoco_ik_reset(state.ik_state);
                         state.last_solved_frame = -1;
                     }
                 }
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Uniformly scale the body model.\n1.0 = original size. "
+                    ImGui::SetTooltip("Uniformly scale the body model.\n"
+                        "1.0 = original size. Press Enter or Tab to apply.\n"
                         "Affects mass and inertia for physics.");
             }
 
