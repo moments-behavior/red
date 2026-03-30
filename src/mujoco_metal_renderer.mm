@@ -62,8 +62,10 @@ vertex VertexOut vertex_main(VertexIn in [[stage_in]],
 }
 
 fragment float4 fragment_main(VertexOut in [[stage_in]],
-                              constant SceneUniforms &su [[buffer(2)]]) {
+                              constant SceneUniforms &su [[buffer(2)]],
+                              bool front_facing [[front_facing]]) {
     float3 N = normalize(in.normal);
+    if (!front_facing) N = -N; // two-sided lighting for mesh geoms
     float3 V = normalize(su.eye_pos - in.world_pos);
 
     // Two-light setup: key light (above) + fill light (side)
@@ -763,6 +765,60 @@ void mujoco_renderer_render(MujocoRenderer *r, MujocoContext *mj,
                 case mjGEOM_BOX: {
                     draw_geom(r->box_vb, r->box_ib, r->box_idx_count,
                               geom_model_matrix(g, g.size[0], g.size[1], g.size[2]));
+                    break;
+                }
+                case mjGEOM_MESH: {
+                    // Mesh geom: dataid encodes 2*meshid or 2*meshid+1 (hull)
+                    if (g.dataid < 0) continue;
+                    int meshid = g.dataid / 2;
+                    if (meshid >= mj->model->nmesh) continue;
+
+                    int nface = mj->model->mesh_facenum[meshid];
+                    if (nface == 0) continue;
+
+                    int vertadr = mj->model->mesh_vertadr[meshid];
+                    int normaladr = mj->model->mesh_normaladr[meshid];
+                    int fadr = mj->model->mesh_faceadr[meshid];
+                    int *fv = mj->model->mesh_face + fadr * 3;
+                    int *fn = mj->model->mesh_facenormal + fadr * 3;
+
+                    // Build per-face-vertex buffer (non-indexed), matching MuJoCo's
+                    // native GL upload: vertices and normals use SEPARATE index
+                    // arrays (mesh_face vs mesh_facenormal), so we can't use indexed
+                    // drawing. Each triangle gets 3 unique vertices with correct normals.
+                    int ntri = nface;
+                    size_t vb_size = ntri * 3 * sizeof(Vertex);
+                    id<MTLBuffer> mesh_vb = [r->device newBufferWithLength:vb_size
+                                             options:MTLResourceStorageModeShared];
+                    Vertex *verts = (Vertex *)[mesh_vb contents];
+                    for (int f = 0; f < ntri; f++) {
+                        for (int c = 0; c < 3; c++) {
+                            int vi = fv[3*f + c] + vertadr;
+                            int ni = fn[3*f + c] + normaladr;
+                            verts[3*f + c].position = {
+                                mj->model->mesh_vert[3*vi],
+                                mj->model->mesh_vert[3*vi+1],
+                                mj->model->mesh_vert[3*vi+2]};
+                            verts[3*f + c].normal = {
+                                mj->model->mesh_normal[3*ni],
+                                mj->model->mesh_normal[3*ni+1],
+                                mj->model->mesh_normal[3*ni+2]};
+                        }
+                    }
+
+                    // Draw as non-indexed triangles with backface culling ON
+                    // (same as MuJoCo GL — resolves z-fighting between shells)
+                    Uniforms u;
+                    simd_float4x4 model_mat = geom_model_matrix(g, 1.0f, 1.0f, 1.0f);
+                    u.model_mat = model_mat;
+                    u.mvp = simd_mul(vp, model_mat);
+                    extract_normal_columns(model_mat, u.normal_col0, u.normal_col1, u.normal_col2);
+                    float a = (g.objtype == mjOBJ_SITE) ? g.rgba[3] : 1.0f;
+                    u.color = {g.rgba[0], g.rgba[1], g.rgba[2], a * scene_opacity};
+                    [enc setVertexBuffer:mesh_vb offset:0 atIndex:0];
+                    [enc setVertexBytes:&u length:sizeof(u) atIndex:1];
+                    [enc drawPrimitives:MTLPrimitiveTypeTriangle
+                            vertexStart:0 vertexCount:ntri * 3];
                     break;
                 }
                 default:

@@ -680,7 +680,7 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                             cfg.path = p.parent_path().string();
                     }
                     ImGuiFileDialog::Instance()->OpenDialog(
-                        "ChooseMujocoModel", "Select MuJoCo XML", ".xml", cfg);
+                        "ChooseMujocoModel", "Select MuJoCo Model", ".xml,.mjb", cfg);
                 }
 
                 if (ImGui::Button("Load Model") && !state.model_path.empty()) {
