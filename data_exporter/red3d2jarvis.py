@@ -17,7 +17,7 @@ parser.add_argument(
     "--working_dir",
     type=str,
     required=True,
-    help="labeled_data and project.redproj need to be under this directory.",
+    help="labeled_data and project file (project.json or project.redproj) need to be under this directory.",
 )
 parser.add_argument("-o", "--output_folder", type=str, required=True)
 parser.add_argument(
@@ -42,33 +42,82 @@ parser.add_argument(
     type=int,
     help="Pairs of numbers. Optional for sub selecting indices.",
 )
+parser.add_argument(
+    "-l",
+    "--label_subfolder",
+    type=str,
+    default=None,
+    help="Use this subfolder of labeled_data (e.g. '.' for flat layout, or a datetime folder). If not set, auto-selects most recent datetime subfolder or flat labeled_data.",
+)
 
 args = parser.parse_args()
-working_dir = args.working_dir
+working_dir = os.path.abspath(args.working_dir)
 output_folder = args.output_folder
 select_indices = args.select_indices
 margin_pixel = args.margin
+label_subfolder_arg = args.label_subfolder
 
 label_folder = os.path.join(working_dir, "labeled_data")
-redproj = os.path.join(working_dir, "project.redproj")
-with open(redproj, "r") as f:
+# Support both project.json (new) and project.redproj (old)
+project_file = os.path.join(working_dir, "project.json")
+if not os.path.isfile(project_file):
+    project_file = os.path.join(working_dir, "project.redproj")
+if not os.path.isfile(project_file):
+    raise SystemExit(
+        "No project file found. Expected project.json or project.redproj in: {}".format(working_dir)
+    )
+with open(project_file, "r") as f:
     project = json.load(f)
-calibration_folder = project["calibration_folder"]
-video_folder = project["media_folder"]
+
+# Support older project files: resolve paths relative to working_dir
+calibration_folder = project.get("calibration_folder", "")
+video_folder = project.get("media_folder", "")
+if not calibration_folder:
+    raise SystemExit("Project file missing 'calibration_folder'. Check {}.".format(project_file))
+if not video_folder:
+    raise SystemExit("Project file missing 'media_folder'. Check {}.".format(project_file))
+if not os.path.isabs(calibration_folder):
+    calibration_folder = os.path.normpath(os.path.join(working_dir, calibration_folder))
+if not os.path.isabs(video_folder):
+    video_folder = os.path.normpath(os.path.join(working_dir, video_folder))
 
 datetime_pattern = re.compile(r"^\d{4}_\d{2}_\d{2}_\d{2}_\d{2}_\d{2}$")
 
-matching_folders = [
-    name
-    for name in os.listdir(label_folder)
-    if os.path.isdir(os.path.join(label_folder, name))
-    and datetime_pattern.match(name)
-]
-matching_folders.sort()
-select_folder = matching_folders[-1]
-print("Select most recent label: {}".format(select_folder))
+if label_subfolder_arg is not None:
+    if label_subfolder_arg == "." or label_subfolder_arg == "":
+        select_folder_path = label_folder
+        select_folder = os.path.basename(os.path.normpath(working_dir)) + "_labels"
+    else:
+        select_folder_path = os.path.join(label_folder, label_subfolder_arg)
+        select_folder = label_subfolder_arg
+    if not os.path.isdir(select_folder_path):
+        raise SystemExit("Label subfolder does not exist: {}".format(select_folder_path))
+    print("Using label folder: {}".format(select_folder_path))
+else:
+    matching_folders = [
+        name
+        for name in os.listdir(label_folder)
+        if os.path.isdir(os.path.join(label_folder, name))
+        and datetime_pattern.match(name)
+    ]
+    matching_folders.sort()
+    if matching_folders:
+        select_folder = matching_folders[-1]
+        select_folder_path = os.path.join(label_folder, select_folder)
+        print("Select most recent label: {}".format(select_folder))
+    else:
+        # Older RED: flat labeled_data (no datetime subfolders)
+        flat_kp3d = os.path.join(label_folder, "keypoints3d.csv")
+        if os.path.isfile(flat_kp3d):
+            select_folder_path = label_folder
+            select_folder = os.path.basename(os.path.normpath(working_dir)) + "_labels"
+            print("Using flat labeled_data (no datetime subfolders): {}".format(select_folder_path))
+        else:
+            raise SystemExit(
+                "No datetime subfolders in labeled_data and no keypoints3d.csv in labeled_data. "
+                "Use -l . to use labeled_data as label folder, or -l <subfolder_name>."
+            )
 
-select_folder_path = os.path.join(label_folder, select_folder)
 cameras = get_all_cams_in_labeled_folder(select_folder_path)
 
 # get skeleton name

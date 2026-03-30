@@ -76,7 +76,7 @@ target_link_libraries(red PRIVATE
     -L${DIR_FFMPEG}/lib/ -lavformat -lswscale -lswresample -lavutil -lavcodec
     -lopencv_sfm -lopencv_core -lopencv_bgsegm -lopencv_imgcodecs -lopencv_imgproc -lopencv_video -lopencv_highgui -lopencv_videoio -lopencv_calib3d -lopencv_dnn
     -L${DIR_TENSORRT}/lib/ -lnvinfer -lnvinfer_plugin
-    -L${LIBTORCH_LIB} -ltorch -lc10 -ltorch_cpu
+    -L${LIBTORCH_LIB} -ltorch -lc10 -ltorch_cpu -Wl,--no-as-needed -ltorch_cuda -lc10_cuda -Wl,--as-needed
 )
 
 # Set RPATH so runtime finds libtorch

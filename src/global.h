@@ -3,6 +3,8 @@
 
 #define MAX_VIEWS 20
 
+#include "jarvis_infer.h"
+#include "cotracker_infer.h"
 #include "skeleton.h"
 #include "yolo_torch.h"
 #include <atomic>
@@ -10,6 +12,7 @@
 #include <map>
 #include <mutex>
 #include <set>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -26,4 +29,12 @@ extern std::string yolo_model_path;
 extern std::vector<std::vector<BoundingBox>> yolo_drag_boxes;
 extern std::vector<int> yolo_active_bbox_idx;
 extern std::vector<int> user_active_bbox_idx;
+
+// JARVIS + CoTracker globals
+extern std::string jarvis_center_engine_path;
+extern std::string jarvis_kp_engine_path;
+extern std::string cotracker_model_path;
+extern float jarvis_confidence_threshold;
+extern JarvisInfer *g_jarvis_infer;
+extern CoTrackerInfer *g_cotracker_infer;
 #endif

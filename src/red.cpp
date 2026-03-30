@@ -71,6 +71,18 @@ int main(int argc, char **argv) {
     bool keypoints_find = false;
     std::map<std::string, SkeletonPrimitive> skeleton_map = skeleton_get_all();
 
+    // UI state for JARVIS / CoTracker load dialogs (pre-filled with default paths)
+    static char jarvis_center_buf[512] =
+        "/home/user/src/JARVIS-HybridNet/projects/mouseJan30"
+        "/trt-models/predict2D/centerDetect.engine";
+    static char jarvis_kp_buf[512] =
+        "/home/user/src/JARVIS-HybridNet/projects/mouseJan30"
+        "/trt-models/predict2D/keypointDetect.engine";
+    static char cotracker_buf[512] =
+        "/home/user/src/red/models/cotracker3_offline.pt";
+    static std::string jarvis_status   = "";
+    static std::string cotracker_status = "";
+
     // others
     ImVec4 clear_color = ImVec4(0.0f, 0.0f, 0.0f, 1.00f);
     ImGuiIO &io = ImGui::GetIO();
@@ -2625,6 +2637,329 @@ int main(int argc, char **argv) {
                     ImGui::Text("Please load a skeleton to view keypoints.");
                 }
 
+                // ---- JARVIS + CoTracker ----------------------------------------
+                ImGui::Separator();
+                ImGui::Text("JARVIS 2D Prediction");
+
+                // -- Load JARVIS Models --
+                ImGui::InputText("##center_engine", jarvis_center_buf,
+                                 sizeof(jarvis_center_buf));
+                ImGui::SameLine();
+                if (ImGui::Button("Browse##center")) {
+                    IGFD::FileDialogConfig cfg;
+                    cfg.path  = pm.project_path;
+                    cfg.flags = ImGuiFileDialogFlags_Modal;
+                    ImGuiFileDialog::Instance()->OpenDialog(
+                        "ChooseCenterEngine",
+                        "Select CenterDetect (.engine or .pt)", ".engine,.pt", cfg);
+                }
+                ImGui::SameLine();
+                ImGui::Text("CenterDetect");
+
+                ImGui::InputText("##kp_engine", jarvis_kp_buf,
+                                 sizeof(jarvis_kp_buf));
+                ImGui::SameLine();
+                if (ImGui::Button("Browse##kp")) {
+                    IGFD::FileDialogConfig cfg;
+                    cfg.path  = pm.project_path;
+                    cfg.flags = ImGuiFileDialogFlags_Modal;
+                    ImGuiFileDialog::Instance()->OpenDialog(
+                        "ChooseKpEngine",
+                        "Select KeypointDetect (.engine or .pt)", ".engine,.pt", cfg);
+                }
+                ImGui::SameLine();
+                ImGui::Text("KeypointDetect");
+
+                if (ImGui::Button("Load JARVIS Models")) {
+                    jarvis_status = "";
+                    if (!g_jarvis_infer) g_jarvis_infer = new JarvisInfer();
+                    if (g_jarvis_infer->load(std::string(jarvis_center_buf),
+                                             std::string(jarvis_kp_buf))) {
+                        g_jarvis_infer->setConfThreshold(jarvis_confidence_threshold);
+                        jarvis_status = "JARVIS ready";
+                    } else {
+                        jarvis_status = "Load failed — check paths";
+                    }
+                }
+                if (!jarvis_status.empty()) {
+                    ImGui::SameLine();
+                    ImGui::Text("%s", jarvis_status.c_str());
+                }
+
+                // Confidence threshold slider
+                ImGui::SetNextItemWidth(180.0f);
+                if (ImGui::SliderFloat("Conf threshold", &jarvis_confidence_threshold,
+                                       0.0f, 1.0f, "%.2f")) {
+                    if (g_jarvis_infer && g_jarvis_infer->isLoaded())
+                        g_jarvis_infer->setConfThreshold(jarvis_confidence_threshold);
+                }
+
+                // -- Camera selection for JARVIS --
+                static bool jarvis_cam_enabled[32];
+                static bool jarvis_cam_initialized = false;
+                if (!jarvis_cam_initialized) {
+                    for (int i = 0; i < 32; ++i) jarvis_cam_enabled[i] = true;
+                    jarvis_cam_initialized = true;
+                }
+                ImGui::Text("Cameras:");
+                ImGui::SameLine();
+                if (ImGui::SmallButton("All##jc")) {
+                    for (int i = 0; i < scene->num_cams; ++i) jarvis_cam_enabled[i] = true;
+                }
+                ImGui::SameLine();
+                if (ImGui::SmallButton("None##jc")) {
+                    for (int i = 0; i < scene->num_cams; ++i) jarvis_cam_enabled[i] = false;
+                }
+                float child_h = std::min((int)scene->num_cams, 6) * ImGui::GetFrameHeightWithSpacing() + 4;
+                if (ImGui::BeginChild("##jcams", ImVec2(0, child_h), true)) {
+                    for (int i = 0; i < scene->num_cams; ++i) {
+                        std::string lbl = (i < (int)pm.camera_names.size())
+                            ? pm.camera_names[i] : "cam" + std::to_string(i);
+                        if (lbl.size() > 12) lbl = lbl.substr(lbl.size() - 12);
+                        ImGui::Checkbox(lbl.c_str(), &jarvis_cam_enabled[i]);
+                    }
+                }
+                ImGui::EndChild();
+
+                // -- Run JARVIS on current frame --
+                ImGui::BeginDisabled((!g_jarvis_infer || !g_jarvis_infer->isLoaded()) ||
+                                     !skeleton.has_skeleton);
+                if (ImGui::Button("Run JARVIS \xe2\x80\x94 This Frame")) {
+                    int num_detected = 0;
+                    for (int cam_id = 0; cam_id < scene->num_cams; cam_id++) {
+                        if (!jarvis_cam_enabled[cam_id]) continue;
+                        unsigned char *frame_data =
+                            scene->display_buffer[cam_id][select_corr_head].frame;
+                        if (!frame_data) continue;
+
+                        auto res = g_jarvis_infer->predict(
+                            frame_data, (int)scene->image_width[cam_id],
+                            (int)scene->image_height[cam_id]);
+
+                        if (!res.detected) continue;
+                        ++num_detected;
+                        std::cout << "[JARVIS] cam" << cam_id
+                                  << " image=" << scene->image_width[cam_id]
+                                  << "x" << scene->image_height[cam_id]
+                                  << " center=(" << res.cx << "," << res.cy << ")"
+                                  << " conf=" << res.center_conf << "\n";
+                        std::cout << "  kp[0]=(" << res.kp[0][0] << "," << res.kp[0][1]
+                                  << ") kp[1]=(" << res.kp[1][0] << "," << res.kp[1][1]
+                                  << ") kp[12]=(" << res.kp[12][0] << "," << res.kp[12][1] << ")\n";
+
+                        // Allocate keypoints entry if needed
+                        if (keypoints_map.find(current_frame_num) ==
+                            keypoints_map.end()) {
+                            KeyPoints *kp =
+                                (KeyPoints *)malloc(sizeof(KeyPoints));
+                            allocate_keypoints(kp, scene, &skeleton);
+                            keypoints_map[current_frame_num] = kp;
+                        }
+
+                        // Write predicted keypoints (up to num_nodes)
+                        int n_kp = std::min(skeleton.num_nodes, 24);
+                        double img_h = (double)scene->image_height[cam_id];
+                        for (int k = 0; k < n_kp; ++k) {
+                            auto &kp2d = keypoints_map[current_frame_num]
+                                             ->kp2d[cam_id][k];
+                            kp2d.position.x  = (double)res.kp[k][0];
+                            // RED's ImPlot has Y=0 at bottom; flip from pixel-space
+                            kp2d.position.y  = img_h - (double)res.kp[k][1];
+                            kp2d.confidence  = res.kp[k][2];
+                            kp2d.is_labeled  =
+                                (res.kp[k][2] >= jarvis_confidence_threshold);
+                        }
+                    }
+                    keypoints_find =
+                        keypoints_map.count(current_frame_num) > 0;
+                }
+                ImGui::EndDisabled();
+
+                ImGui::Separator();
+                ImGui::Text("CoTracker3 Propagation");
+
+                // -- Load CoTracker model --
+                ImGui::InputText("##cotracker_path", cotracker_buf,
+                                 sizeof(cotracker_buf));
+                ImGui::SameLine();
+                if (ImGui::Button("Browse##ct")) {
+                    IGFD::FileDialogConfig cfg;
+                    cfg.path  = pm.project_path;
+                    cfg.flags = ImGuiFileDialogFlags_Modal;
+                    ImGuiFileDialog::Instance()->OpenDialog(
+                        "ChooseCoTracker",
+                        "Select CoTracker3 model (.pt)", ".pt", cfg);
+                }
+                ImGui::SameLine();
+                ImGui::Text("CoTracker .pt");
+
+                if (ImGui::Button("Load CoTracker Model")) {
+                    cotracker_status = "";
+                    if (!g_cotracker_infer) g_cotracker_infer = new CoTrackerInfer();
+                    if (g_cotracker_infer->load(std::string(cotracker_buf))) {
+                        cotracker_status = "CoTracker ready";
+                    } else {
+                        cotracker_status = "Load failed — check path";
+                    }
+                }
+                if (!cotracker_status.empty()) {
+                    ImGui::SameLine();
+                    ImGui::Text("%s", cotracker_status.c_str());
+                }
+
+                // -- Run CoTracker to fill gaps --
+                static int cotracker_radius = 200;
+                ImGui::SetNextItemWidth(180.0f);
+                ImGui::SliderInt("Propagate \xc2\xb1 frames", &cotracker_radius, 5,
+                                 (int)scene->size_of_buffer / 2);
+                ImGui::BeginDisabled((!g_cotracker_infer || !g_cotracker_infer->isLoaded()) ||
+                                     !skeleton.has_skeleton);
+                if (ImGui::Button("Run CoTracker \xe2\x80\x94 Fill Gaps")) {
+                    int buf_size = (int)scene->size_of_buffer;
+                    int fn_min   = current_frame_num - cotracker_radius;
+                    int fn_max   = current_frame_num + cotracker_radius;
+
+                    for (int cam_id = 0; cam_id < scene->num_cams; cam_id++) {
+                        // Collect frames within the selected radius from the circular buffer
+                        std::vector<unsigned char *> frames_rgba;
+                        std::vector<int>             frame_nums;
+                        frames_rgba.reserve(buf_size);
+                        frame_nums.reserve(buf_size);
+
+                        for (int b = 0; b < buf_size; ++b) {
+                            unsigned char *f =
+                                scene->display_buffer[cam_id][b].frame;
+                            int fn =
+                                scene->display_buffer[cam_id][b].frame_number;
+                            if (f && fn >= fn_min && fn <= fn_max) {
+                                frames_rgba.push_back(f);
+                                frame_nums.push_back(fn);
+                            }
+                        }
+
+                        if (frames_rgba.empty()) continue;
+
+                        // Sort frames into temporal order — the circular buffer
+                        // stores slots in ring order, not frame-number order.
+                        // CoTracker requires chronologically sorted video.
+                        {
+                            std::vector<int> idx(frame_nums.size());
+                            std::iota(idx.begin(), idx.end(), 0);
+                            std::sort(idx.begin(), idx.end(),
+                                [&](int a, int b){ return frame_nums[a] < frame_nums[b]; });
+                            std::vector<unsigned char *> fr2(frame_nums.size());
+                            std::vector<int>             fn2(frame_nums.size());
+                            for (int i = 0; i < (int)idx.size(); ++i) {
+                                fr2[i] = frames_rgba[idx[i]];
+                                fn2[i] = frame_nums[idx[i]];
+                            }
+                            frames_rgba = std::move(fr2);
+                            frame_nums  = std::move(fn2);
+                        }
+
+                        // img_h needed for ImPlot↔pixel Y-flip (ImPlot Y=0 bottom, pixel Y=0 top)
+                        double img_h_ct = (double)scene->image_height[cam_id];
+
+                        // Build query points from any labeled keypoint in the
+                        // window (one query per labeled node in any frame).
+                        // kp2d positions are in ImPlot space; CoTracker expects pixel space.
+                        std::vector<std::array<float, 3>> query_pts;
+                        for (int bi = 0; bi < (int)frame_nums.size(); ++bi) {
+                            int fn = frame_nums[bi];
+                            if (!keypoints_map.count(fn)) continue;
+                            auto *kp = keypoints_map.at(fn);
+                            int n_kp = std::min(skeleton.num_nodes, 24);
+                            for (int k = 0; k < n_kp; ++k) {
+                                if (kp->kp2d[cam_id][k].is_labeled) {
+                                    query_pts.push_back(
+                                        {(float)bi,
+                                         (float)kp->kp2d[cam_id][k].position.x,
+                                         (float)(img_h_ct - kp->kp2d[cam_id][k].position.y)});
+                                }
+                            }
+                        }
+
+                        if (query_pts.empty()) continue;
+
+                        std::cout << "[CoTracker] cam" << cam_id
+                                  << " T=" << frames_rgba.size()
+                                  << " fn=[" << frame_nums.front() << ".." << frame_nums.back() << "]"
+                                  << " queries=" << query_pts.size()
+                                  << " anchor_bi=" << (int)query_pts[0][0]
+                                  << " anchor_xy=(" << query_pts[0][1] << "," << query_pts[0][2] << ")\n";
+
+                        auto results = g_cotracker_infer->track(
+                            frames_rgba,
+                            (int)scene->image_width[cam_id],
+                            (int)scene->image_height[cam_id],
+                            query_pts);
+
+                        std::cout << "[CoTracker] results=" << results.size()
+                                  << " vis[0][0]=" << (results.empty() ? -1.f : results[0].vis[0])
+                                  << " track[0][0]=(" << (results.empty() ? 0.f : results[0].tracks[0][0])
+                                  << "," << (results.empty() ? 0.f : results[0].tracks[0][1]) << ")\n";
+
+                        // Write tracks back to keypoints_map
+                        // query_pts[q][0] → frame index in frames_rgba vector
+                        // query order matches node order within each labeled frame
+                        // We know how many nodes were queried per frame:
+                        // rebuild a mapping query_idx → (frame_buf_idx, node_id)
+                        int q_idx = 0;
+                        int frames_written = 0;
+                        for (int bi = 0; bi < (int)frame_nums.size(); ++bi) {
+                            int fn = frame_nums[bi];
+                            if (!keypoints_map.count(fn)) continue;
+                            auto *kp = keypoints_map.at(fn);
+                            int n_kp = std::min(skeleton.num_nodes, 24);
+                            for (int k = 0; k < n_kp; ++k) {
+                                if (!kp->kp2d[cam_id][k].is_labeled) continue;
+
+                                // Propagate this query across all buffer frames
+                                for (int t = 0; t < (int)results.size(); ++t) {
+                                    if (results[t].vis[q_idx] < 0.5f) continue;
+                                    int target_fn = frame_nums[t];
+
+                                    // Allocate entry if absent
+                                    if (!keypoints_map.count(target_fn)) {
+                                        KeyPoints *new_kp =
+                                            (KeyPoints *)malloc(sizeof(KeyPoints));
+                                        allocate_keypoints(new_kp, scene, &skeleton);
+                                        keypoints_map[target_fn] = new_kp;
+                                        ++frames_written;
+                                    }
+
+                                    auto &dst =
+                                        keypoints_map[target_fn]->kp2d[cam_id][k];
+                                    // Only write if not already hand-labeled.
+                                    // CoTracker returns pixel-space coords; flip Y to ImPlot space.
+                                    if (!dst.is_labeled) {
+                                        dst.position.x = (double)results[t].tracks[q_idx][0];
+                                        dst.position.y = img_h_ct - (double)results[t].tracks[q_idx][1];
+                                        dst.confidence = results[t].vis[q_idx];
+                                        dst.is_labeled = true;
+                                    }
+                                }
+                                ++q_idx;
+                            }
+                        }
+                        std::cout << "[CoTracker] cam" << cam_id
+                                  << " new frames written=" << frames_written
+                                  << " keypoints_map size=" << keypoints_map.size() << "\n";
+                    } // for cam_id
+
+                    // Triangulate every frame that received propagated keypoints.
+                    if (scene->num_cams > 1) {
+                        for (auto &[fn, kp] : keypoints_map) {
+                            reprojection(kp, &skeleton, pm.camera_params, scene);
+                        }
+                    }
+                    keypoints_find =
+                        keypoints_map.count(current_frame_num) > 0;
+                }
+                ImGui::EndDisabled();
+                ImGui::Separator();
+                // ---- end JARVIS + CoTracker ------------------------------------
+
                 if (ImGui::Button("Update keypoints working directory")) {
                     IGFD::FileDialogConfig config;
                     config.countSelectionMax = 1;
@@ -3143,6 +3478,29 @@ int main(int argc, char **argv) {
                 }
             }
             // close
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        // JARVIS / CoTracker file dialog handlers (top-level, matching RED convention)
+        if (ImGuiFileDialog::Instance()->Display("ChooseCenterEngine")) {
+            if (ImGuiFileDialog::Instance()->IsOk()) {
+                std::string sel = ImGuiFileDialog::Instance()->GetFilePathName();
+                strncpy(jarvis_center_buf, sel.c_str(), sizeof(jarvis_center_buf) - 1);
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+        if (ImGuiFileDialog::Instance()->Display("ChooseKpEngine")) {
+            if (ImGuiFileDialog::Instance()->IsOk()) {
+                std::string sel = ImGuiFileDialog::Instance()->GetFilePathName();
+                strncpy(jarvis_kp_buf, sel.c_str(), sizeof(jarvis_kp_buf) - 1);
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+        if (ImGuiFileDialog::Instance()->Display("ChooseCoTracker")) {
+            if (ImGuiFileDialog::Instance()->IsOk()) {
+                std::string sel = ImGuiFileDialog::Instance()->GetFilePathName();
+                strncpy(cotracker_buf, sel.c_str(), sizeof(cotracker_buf) - 1);
+            }
             ImGuiFileDialog::Instance()->Close();
         }
 
