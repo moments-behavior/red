@@ -106,20 +106,8 @@ inline void gx_imgui_init(gx_context *context) {
 #ifdef __APPLE__
     ImGui_ImplGlfw_InitForOther(context->render_target, true);
     metal_init_imgui();
-
-    // Override GLFW focus callback to prevent macOS screen recording
-    // (Cmd+Shift+5) from corrupting ImGui state. The focus-lost event
-    // leaves modifier keys stuck and widgets unresponsive.
-    {
-        // Save ImGui's focus callback so we can forward focus-gained events
-        static GLFWwindowfocusfun imgui_focus_cb = nullptr;
-        imgui_focus_cb = glfwSetWindowFocusCallback(context->render_target,
-            [](GLFWwindow *w, int focused) {
-                // Always forward focus-gained; silently drop focus-lost
-                if (focused && imgui_focus_cb)
-                    imgui_focus_cb(w, focused);
-            });
-    }
+    // Note: macOS screen recording modifier key fix is in
+    // imgui_impl_glfw_patched.cpp (CoreGraphics hardware key state query).
 #else
     ImGui_ImplGlfw_InitForOpenGL(context->render_target, true);
     ImGui_ImplOpenGL3_Init(context->glsl_version);

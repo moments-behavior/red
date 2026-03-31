@@ -388,11 +388,11 @@ inline bool stac_calibrate(MujocoContext &mj, StacState &stac, MujocoIKState &ik
             // Average gradient and add L2 regularization
             double inv_N = 1.0 / N;
             for (int i = 0; i < 3 * nsite; i++) {
-                grad[i] = grad[i] * inv_N + 2.0 * stac.m_reg_coef * stac.site_offsets[i];
+                grad[i] = (grad[i] + 2.0 * stac.m_reg_coef * stac.site_offsets[i]) * inv_N;
             }
 
             // Enforce bilateral symmetry on gradients
-            if (stac.symmetric && !sym.midline.empty())
+            if (stac.symmetric && (!sym.midline.empty() || !sym.pairs.empty()))
                 enforce_symmetry_gradient(grad, sym);
 
             // SGD with momentum
@@ -402,7 +402,7 @@ inline bool stac_calibrate(MujocoContext &mj, StacState &stac, MujocoIKState &ik
             }
 
             // Enforce bilateral symmetry on offsets (belt + suspenders)
-            if (stac.symmetric && !sym.midline.empty())
+            if (stac.symmetric && (!sym.midline.empty() || !sym.pairs.empty()))
                 enforce_symmetry_offsets(stac.site_offsets, sym);
 
             // Apply offsets to model
