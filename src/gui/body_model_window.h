@@ -1869,12 +1869,23 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                                         ImGui::IsMouseDragging(ImGuiMouseButton_Middle);
                         bool any_scroll = (vp_hovered && io.MouseWheel != 0.0f);
 
-                        // Double-click to reset to calibration camera view
-                        if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) &&
-                            state.selected_camera >= 0) {
-                            state.calib_cam_user_override = false;
-                            state.cam_zoom = 1.0f;
-                            state.cam_pan[0] = state.cam_pan[1] = 0;
+                        // Double-click to reset view
+                        if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                            if (state.selected_camera >= 0) {
+                                // Reset to calibration camera view
+                                state.calib_cam_user_override = false;
+                                state.cam_zoom = 1.0f;
+                                state.cam_pan[0] = state.cam_pan[1] = 0;
+                            } else {
+                                // Reset to default free camera view
+                                mjv_defaultCamera(&state.mjcam);
+                                state.mjcam.lookat[0] = 0.0;
+                                state.mjcam.lookat[1] = 0.0;
+                                state.mjcam.lookat[2] = 0.04;
+                                state.mjcam.distance  = 0.4;
+                                state.mjcam.azimuth   = 160.0;
+                                state.mjcam.elevation = -30.0;
+                            }
                         }
 
                         if (state.calib_view_override.active && state.selected_camera >= 0) {
