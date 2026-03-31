@@ -235,6 +235,26 @@ struct BodyModelState {
         last_solved_frame = -1;
     }
 
+    // Load model and auto-restore session. Used by Load Model, Load Previous,
+    // and Restore Previous Session buttons (eliminates 3x duplicate code).
+    std::string load_model_with_session(MujocoContext &mj,
+                                         const SkeletonContext &skeleton,
+                                         const std::string &project_path,
+                                         UserSettings &settings) {
+        if (!mj.load(model_path, skeleton))
+            return "Failed: " + mj.load_error;
+        settings.last_mujoco_model = model_path;
+        save_user_settings(settings);
+        set_arena_defaults_for_model(mj);
+        std::string sp = project_path + "/mujoco_session.json";
+        if (!project_path.empty() && std::filesystem::exists(sp) && load_session(sp)) {
+            apply_loaded_calibration(mj);
+            return "MuJoCo model + session loaded";
+        }
+        return "MuJoCo model loaded: " + std::to_string(mj.mapped_count) + "/" +
+               std::to_string(skeleton.num_nodes) + " sites matched";
+    }
+
     // Save session to JSON
     bool save_session(const std::string &path) const {
         try {
@@ -269,6 +289,7 @@ struct BodyModelState {
             j["stac"] = {{"symmetric", stac_state.symmetric},
                          {"n_iters", stac_state.n_iters},
                          {"n_sample_frames", stac_state.n_sample_frames},
+                         {"q_max_iters", stac_state.q_max_iters},
                          {"m_max_iters", stac_state.m_max_iters},
                          {"m_lr", stac_state.m_lr},
                          {"m_momentum", stac_state.m_momentum},
@@ -364,6 +385,7 @@ struct BodyModelState {
                 stac_state.symmetric = s.value("symmetric", true);
                 stac_state.n_iters = s.value("n_iters", 3);
                 stac_state.n_sample_frames = s.value("n_sample_frames", 100);
+                stac_state.q_max_iters = s.value("q_max_iters", 300);
                 stac_state.m_max_iters = s.value("m_max_iters", 500);
                 stac_state.m_lr = s.value("m_lr", 5e-4);
                 stac_state.m_momentum = s.value("m_momentum", 0.9);
@@ -742,15 +764,9 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                 if (has_prev_model && has_session) {
                     if (ImGui::Button("Restore Previous Session")) {
                         state.model_path = ctx.user_settings.last_mujoco_model;
-                        if (mj.load(state.model_path, ctx.skeleton)) {
-                            state.set_arena_defaults_for_model(mj);
-                            std::string sp = ctx.pm.project_path + "/mujoco_session.json";
-                            if (state.load_session(sp))
-                                state.apply_loaded_calibration(mj);
-                            ctx.toasts.push("MuJoCo model + session restored");
-                        } else {
-                            ctx.toasts.push("Failed: " + mj.load_error, Toast::Error);
-                        }
+                        auto msg = state.load_model_with_session(mj, ctx.skeleton,
+                            ctx.pm.project_path, ctx.user_settings);
+                        ctx.toasts.push(msg, msg.rfind("Failed", 0) == 0 ? Toast::Error : Toast::Info);
                     }
                     ImGui::SameLine();
                     ImGui::TextDisabled("(%s)",
@@ -787,25 +803,9 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                 }
 
                 if (ImGui::Button("Load Model") && !state.model_path.empty()) {
-                    if (mj.load(state.model_path, ctx.skeleton)) {
-                        ctx.user_settings.last_mujoco_model = state.model_path;
-                        save_user_settings(ctx.user_settings);
-                        state.set_arena_defaults_for_model(mj);
-                        // Auto-load session if it exists (overrides defaults)
-                        std::string sp = ctx.pm.project_path + "/mujoco_session.json";
-                        if (!ctx.pm.project_path.empty() &&
-                            std::filesystem::exists(sp) && state.load_session(sp)) {
-                            state.apply_loaded_calibration(mj);
-                            ctx.toasts.push("MuJoCo model + session loaded");
-                        } else {
-                            ctx.toasts.push("MuJoCo model loaded: " +
-                                std::to_string(mj.mapped_count) + "/" +
-                                std::to_string(ctx.skeleton.num_nodes) +
-                                " sites matched");
-                        }
-                    } else {
-                        ctx.toasts.push("Failed: " + mj.load_error, Toast::Error);
-                    }
+                    auto msg = state.load_model_with_session(mj, ctx.skeleton,
+                        ctx.pm.project_path, ctx.user_settings);
+                    ctx.toasts.push(msg, msg.rfind("Failed", 0) == 0 ? Toast::Error : Toast::Info);
                 }
 
                 // Quick-load the last used model
@@ -814,22 +814,9 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                     ImGui::SameLine();
                     if (ImGui::Button("Load Previous")) {
                         state.model_path = ctx.user_settings.last_mujoco_model;
-                        if (mj.load(state.model_path, ctx.skeleton)) {
-                            state.set_arena_defaults_for_model(mj);
-                            std::string sp = ctx.pm.project_path + "/mujoco_session.json";
-                            if (!ctx.pm.project_path.empty() &&
-                                std::filesystem::exists(sp) && state.load_session(sp)) {
-                                state.apply_loaded_calibration(mj);
-                                ctx.toasts.push("MuJoCo model + session loaded");
-                            } else {
-                                ctx.toasts.push("MuJoCo model loaded: " +
-                                    std::to_string(mj.mapped_count) + "/" +
-                                    std::to_string(ctx.skeleton.num_nodes) +
-                                    " sites matched");
-                            }
-                        } else {
-                            ctx.toasts.push("Failed: " + mj.load_error, Toast::Error);
-                        }
+                        auto msg = state.load_model_with_session(mj, ctx.skeleton,
+                            ctx.pm.project_path, ctx.user_settings);
+                        ctx.toasts.push(msg, msg.rfind("Failed", 0) == 0 ? Toast::Error : Toast::Info);
                     }
                     if (ImGui::IsItemHovered()) {
                         ImGui::SetTooltip("%s",
@@ -861,12 +848,12 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
             // When arena alignment is active, the transform handles mm→m scaling,
             // so disable IK's internal scaling by setting scale_factor=1.0.
             // Save/restore the user's original value so the slider still works.
-            static float saved_scale = 0.0f;
             if (state.arena_align.valid && mj.scale_factor != 1.0f) {
-                saved_scale = mj.scale_factor;
+                state.saved_scale_factor = mj.scale_factor;
                 mj.scale_factor = 1.0f;
-            } else if (!state.arena_align.valid && mj.scale_factor == 1.0f && saved_scale != 1.0f) {
-                mj.scale_factor = saved_scale;
+            } else if (!state.arena_align.valid && mj.scale_factor == 1.0f &&
+                       state.saved_scale_factor > 0.0f) {
+                mj.scale_factor = state.saved_scale_factor;
             }
 
             // --- Scrollable controls region ---

@@ -30,8 +30,8 @@ struct MujocoContext {
 #ifdef RED_HAS_MUJOCO
     mjModel  *model = nullptr;
     mjData   *data  = nullptr;
-    mjvScene  scene;
-    mjvOption opt;
+    mjvScene  scene = {};  // zero-init prevents uninitialized read in destructor
+    mjvOption opt = {};
 #endif
 
     // Global scale factor: scales the target keypoints to match the model.
@@ -93,7 +93,7 @@ struct MujocoContext {
             mj_setConst(model, data);
             mj_forward(model, data);
         }
-        model_scale = s;
+        model_scale *= s;  // cumulative: s is relative, model_scale is absolute
         std::cout << "[MuJoCo] Applied model scale: " << s << std::endl;
 #endif
     }
@@ -474,6 +474,7 @@ struct MujocoContext {
     // Called from both XML and MJB loading paths after model/data are ready.
     bool finalize_load(const std::string &path, const SkeletonContext &skeleton) {
         bool is_fly = (mj_name2id(model, mjOBJ_BODY, "thorax") >= 0 &&
+                       mj_name2id(model, mjOBJ_BODY, "head") >= 0 &&
                        mj_name2id(model, mjOBJ_BODY, "wing_left") >= 0);
 
         // Shrink keypoint sites to 50% of default (4mm radius)
@@ -628,6 +629,7 @@ struct MujocoContext {
         loaded = false;
         has_free_joint = false;
         scale_factor = 0.0f;
+        model_scale = 1.0f;
         model_path.clear();
         load_error.clear();
         site_to_skeleton.clear();

@@ -7,6 +7,7 @@
 #include "mujoco_context.h"
 #include <mujoco.h>
 #include <vector>
+#include <unordered_map>
 #include <cmath>
 
 // ---------------------------------------------------------------------------
@@ -351,7 +352,10 @@ struct MujocoRenderer {
     int box_idx_count;
     id<MTLBuffer> cylinder_vb, cylinder_ib;
     int cylinder_idx_count;
-    id<MTLBuffer> floor_vb, floor_ib;
+
+    // Cached mesh geom buffers (built on first encounter, reused per-frame)
+    std::unordered_map<int, id<MTLBuffer>> mesh_cache; // meshid -> vertex buffer
+    std::unordered_map<int, int> mesh_tri_count;       // meshid -> triangle count
 
     // Dynamic skin buffers (rebuilt each frame from mjvScene skin data)
     id<MTLBuffer> skin_vb;
@@ -487,18 +491,6 @@ MujocoRenderer *mujoco_renderer_create(uint32_t width, uint32_t height) {
     r->cylinder_ib = make_buffer(r->device, cyi.data(), cyi.size() * sizeof(uint32_t));
     r->cylinder_idx_count = (int)cyi.size();
 
-    // Pre-allocate floor quad (arena: 1828mm x 1828mm centered at origin)
-    float half = 0.914f;
-    Vertex floor_verts[4] = {
-        {{-half, -half, 0}, {0, 0, 1}},
-        {{ half, -half, 0}, {0, 0, 1}},
-        {{ half,  half, 0}, {0, 0, 1}},
-        {{-half,  half, 0}, {0, 0, 1}},
-    };
-    uint32_t floor_idx[6] = {0, 1, 2, 0, 2, 3};
-    r->floor_vb = make_buffer(r->device, floor_verts, sizeof(floor_verts));
-    r->floor_ib = make_buffer(r->device, floor_idx, sizeof(floor_idx));
-
     // Skin buffers initialized lazily on first render
     r->skin_vb = nil;
     r->skin_ib = nil;
@@ -525,7 +517,7 @@ void mujoco_renderer_destroy(MujocoRenderer *r) {
         r->capsule_vb = nil; r->capsule_ib = nil;
         r->box_vb = nil;     r->box_ib = nil;
         r->cylinder_vb = nil; r->cylinder_ib = nil;
-        r->floor_vb = nil;    r->floor_ib = nil;
+        r->mesh_cache.clear(); r->mesh_tri_count.clear();
         r->skin_vb = nil;    r->skin_ib = nil;
         r->pipeline = nil;
         r->floor_pipeline = nil;
@@ -792,35 +784,38 @@ void mujoco_renderer_render(MujocoRenderer *r, MujocoContext *mj,
                     int nface = mj->model->mesh_facenum[meshid];
                     if (nface == 0) continue;
 
-                    int vertadr = mj->model->mesh_vertadr[meshid];
-                    int normaladr = mj->model->mesh_normaladr[meshid];
-                    int fadr = mj->model->mesh_faceadr[meshid];
-                    int *fv = mj->model->mesh_face + fadr * 3;
-                    int *fn = mj->model->mesh_facenormal + fadr * 3;
-
-                    // Build per-face-vertex buffer (non-indexed), matching MuJoCo's
-                    // native GL upload: vertices and normals use SEPARATE index
-                    // arrays (mesh_face vs mesh_facenormal), so we can't use indexed
-                    // drawing. Each triangle gets 3 unique vertices with correct normals.
-                    int ntri = nface;
-                    size_t vb_size = ntri * 3 * sizeof(Vertex);
-                    id<MTLBuffer> mesh_vb = [r->device newBufferWithLength:vb_size
-                                             options:MTLResourceStorageModeShared];
-                    Vertex *verts = (Vertex *)[mesh_vb contents];
-                    for (int f = 0; f < ntri; f++) {
-                        for (int c = 0; c < 3; c++) {
-                            int vi = fv[3*f + c] + vertadr;
-                            int ni = fn[3*f + c] + normaladr;
-                            verts[3*f + c].position = {
-                                mj->model->mesh_vert[3*vi],
-                                mj->model->mesh_vert[3*vi+1],
-                                mj->model->mesh_vert[3*vi+2]};
-                            verts[3*f + c].normal = {
-                                mj->model->mesh_normal[3*ni],
-                                mj->model->mesh_normal[3*ni+1],
-                                mj->model->mesh_normal[3*ni+2]};
+                    // Cache mesh vertex buffer (static geometry, build once)
+                    auto cache_it = r->mesh_cache.find(meshid);
+                    if (cache_it == r->mesh_cache.end()) {
+                        int vertadr = mj->model->mesh_vertadr[meshid];
+                        int normaladr = mj->model->mesh_normaladr[meshid];
+                        int fadr = mj->model->mesh_faceadr[meshid];
+                        int *fv = mj->model->mesh_face + fadr * 3;
+                        int *fn = mj->model->mesh_facenormal + fadr * 3;
+                        int ntri = nface;
+                        size_t vb_size = ntri * 3 * sizeof(Vertex);
+                        id<MTLBuffer> mesh_vb = [r->device newBufferWithLength:vb_size
+                                                 options:MTLResourceStorageModeShared];
+                        Vertex *verts = (Vertex *)[mesh_vb contents];
+                        for (int f = 0; f < ntri; f++) {
+                            for (int c = 0; c < 3; c++) {
+                                int vi = fv[3*f + c] + vertadr;
+                                int ni = fn[3*f + c] + normaladr;
+                                verts[3*f + c].position = {
+                                    mj->model->mesh_vert[3*vi],
+                                    mj->model->mesh_vert[3*vi+1],
+                                    mj->model->mesh_vert[3*vi+2]};
+                                verts[3*f + c].normal = {
+                                    mj->model->mesh_normal[3*ni],
+                                    mj->model->mesh_normal[3*ni+1],
+                                    mj->model->mesh_normal[3*ni+2]};
+                            }
                         }
+                        r->mesh_cache[meshid] = mesh_vb;
+                        r->mesh_tri_count[meshid] = ntri;
+                        cache_it = r->mesh_cache.find(meshid);
                     }
+                    int ntri = r->mesh_tri_count[meshid];
 
                     // Draw as non-indexed triangles with backface culling ON
                     // (same as MuJoCo GL — resolves z-fighting between shells)
@@ -831,7 +826,7 @@ void mujoco_renderer_render(MujocoRenderer *r, MujocoContext *mj,
                     extract_normal_columns(model_mat, u.normal_col0, u.normal_col1, u.normal_col2);
                     float a = (g.objtype == mjOBJ_SITE) ? g.rgba[3] : 1.0f;
                     u.color = {g.rgba[0], g.rgba[1], g.rgba[2], a * scene_opacity};
-                    [enc setVertexBuffer:mesh_vb offset:0 atIndex:0];
+                    [enc setVertexBuffer:cache_it->second offset:0 atIndex:0];
                     [enc setVertexBytes:&u length:sizeof(u) atIndex:1];
                     [enc drawPrimitives:MTLPrimitiveTypeTriangle
                             vertexStart:0 vertexCount:ntri * 3];
