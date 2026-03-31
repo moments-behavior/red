@@ -188,6 +188,10 @@ load_images(std::map<std::string, std::string> &selected_files,
         scene->image_width[j] = image.cols;
         scene->image_height[j] = image.rows;
 #endif
+        if (j < pm.camera_params.size() && pm.camera_params[j].image_width == 0) {
+            pm.camera_params[j].image_width = scene->image_width[j];
+            pm.camera_params[j].image_height = scene->image_height[j];
+        }
     }
     if (imgs_names.size() < (size_t)label_buffer_size) {
         label_buffer_size = imgs_names.size();
@@ -291,6 +295,12 @@ load_videos(std::map<std::string, std::string> &selected_files,
     for (u32 j = 0; j < scene->num_cams; j++) {
         scene->image_width[j] = demuxers[j]->GetWidth();
         scene->image_height[j] = demuxers[j]->GetHeight();
+        // Back-propagate video dimensions to CameraParams (needed for
+        // telecentric DLT cameras where the calibration file has no image size)
+        if (j < pm.camera_params.size() && pm.camera_params[j].image_width == 0) {
+            pm.camera_params[j].image_width = scene->image_width[j];
+            pm.camera_params[j].image_height = scene->image_height[j];
+        }
     }
     render_allocate_scene_memory(scene, label_buffer_size);
 
