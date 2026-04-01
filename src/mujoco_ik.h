@@ -291,10 +291,11 @@ inline bool mujoco_ik_solve(MujocoContext &mj, MujocoIKState &state,
             state.final_objective = obj;
             state.final_residual = std::sqrt(err_sq / N);
 
-            // Convergence check (disabled with cosine annealing — the decaying
-            // LR makes the criterion too easy to satisfy prematurely)
-            if (!state.cosine_annealing) {
-                double update_norm = state.lr * update.norm();
+            // Convergence check: use base LR (not decayed) so cosine
+            // annealing doesn't trigger early convergence
+            {
+                double base_lr = (state.lr_joint > 0) ? std::max(state.lr, state.lr_joint) : state.lr;
+                double update_norm = base_lr * update.norm();
                 if (obj > 1e-12 && update_norm / obj < state.progress_thresh) {
                     state.converged = true;
                     break;
