@@ -451,12 +451,16 @@ inline void SolveChunk(mjModel *model, const std::vector<std::pair<int, std::vec
     mjData *data = mj_makeData(model);
     int nq = model->nq;
 
-    // Fresh IK state per thread
+    // Fresh IK state per thread — copy ALL solver settings
     MujocoIKState ik;
-    ik.max_iterations = ik_template.max_iterations;
-    ik.lr = ik_template.lr;
-    ik.beta = ik_template.beta;
-    ik.reg_strength = ik_template.reg_strength;
+    ik.max_iterations   = ik_template.max_iterations;
+    ik.lr               = ik_template.lr;
+    ik.lr_joint         = ik_template.lr_joint;
+    ik.beta             = ik_template.beta;
+    ik.reg_strength     = ik_template.reg_strength;
+    ik.progress_thresh  = ik_template.progress_thresh;
+    ik.check_every      = ik_template.check_every;
+    ik.cosine_annealing = ik_template.cosine_annealing;
 
     // Temporary MujocoContext wrapper for mujoco_ik_solve
     MujocoContext thread_mj;
@@ -466,6 +470,13 @@ inline void SolveChunk(mjModel *model, const std::vector<std::pair<int, std::vec
     thread_mj.scale_factor = scale_factor;
     thread_mj.skeleton_to_site = skeleton_to_site;
     thread_mj.mapped_count = (int)skeleton_to_site.size();
+    // Detect free joint from model (needed for root alignment cold-start)
+    for (int j = 0; j < model->njnt; j++) {
+        if (model->jnt_type[j] == mjJNT_FREE) {
+            thread_mj.has_free_joint = true;
+            break;
+        }
+    }
 
     results.resize(frames.size());
     for (int i = 0; i < (int)frames.size(); i++) {
@@ -1176,7 +1187,7 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                 // --- New calibration controls ---
                 if (!state.stac_calibrating) {
                     ImGui::SliderInt("Alternating rounds", &state.stac_state.n_iters, 1, 10);
-                    ImGui::SliderInt("Sample frames", &state.stac_state.n_sample_frames, 50, 500);
+                    ImGui::SliderInt("Sample frames", &state.stac_state.n_sample_frames, 50, 5000);
                     ImGui::SliderInt("IK iters (Q-phase)", &state.stac_state.q_max_iters, 100, 50000,
                                     "%d", ImGuiSliderFlags_Logarithmic);
                     ImGui::SliderInt("SGD iters (M-phase)", &state.stac_state.m_max_iters, 100, 50000,
