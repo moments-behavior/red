@@ -183,16 +183,18 @@ struct BodyModelState {
             arena_offset[2] = 0.0f;
             // Model scale: 1.0 (no scaling needed)
             saved_model_scale = 1.0f;
-            // IK solver: single LR (dm_control defaults)
-            ik_state.lr = 0.01;
+            // IK solver: cosine annealing with separate LR for best convergence
+            ik_state.lr = 0.001;
             ik_state.lr_joint = 0.0;       // 0 = same as lr
             ik_state.beta = 0.99;
-            ik_state.cosine_annealing = false;
+            ik_state.cosine_annealing = true;
             ik_state.reg_strength = 1e-4;
-            ik_state.max_iterations = 5000;
+            ik_state.max_iterations = 10000;
+            ik_state.progress_thresh = 0.01;
+            ik_state.check_every = 100;
             // STAC calibration
-            stac_state.n_iters = 3;
-            stac_state.n_sample_frames = 200;
+            stac_state.n_iters = 6;
+            stac_state.n_sample_frames = 2000;
             stac_state.q_max_iters = 300;
             stac_state.m_max_iters = 500;
             stac_state.m_lr = 5e-4;
@@ -965,6 +967,14 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                         "Helps convergence on complex models.");
                 ImGui::SameLine();
                 ImGui::Checkbox("Auto-solve", &state.auto_solve);
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Reset Defaults")) {
+                    state.set_arena_defaults_for_model(mj);
+                    mujoco_ik_reset(state.ik_state);
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Reset solver and STAC settings to defaults\n"
+                        "for this model type (rodent or fly).");
                 if (state.auto_solve) {
                     ImGui::SameLine();
                     float budget = (float)state.ik_state.time_budget_ms;
