@@ -12,6 +12,7 @@
 #include "mujoco_ik.h"
 #include "mujoco_stac.h"
 #include "arena_alignment.h"
+#include "learned_ik_coreml.h"
 #include <ImGuiFileDialog.h>
 #include <fstream>
 #include <iomanip>
@@ -63,14 +64,21 @@ struct MujocoExportState {
     bool              result_ok = false;
 };
 
+// IK method: iterative gradient descent or learned neural network
+enum IKMethod { IK_ITERATIVE = 0, IK_LEARNED = 1 };
+
 struct BodyModelState {
     bool show = false;
 
     // IK method selection
     int site_placement = SITES_DEFAULT;
+    int ik_method = IK_ITERATIVE;
 
     // IK solver state (owns warm-start)
     MujocoIKState ik_state;
+
+    // Learned IK model (CoreML)
+    LearnedIKState learned_ik;
 
     // STAC calibration state
     StacState stac_state;
@@ -441,6 +449,82 @@ struct BodyModelState {
 };
 
 #ifdef RED_HAS_MUJOCO
+
+// Solve one frame using the learned IK model (CoreML).
+// IMPORTANT: kp3d must already be in MuJoCo frame (meters) — the caller
+// (get_kp3d / arena transform) handles the coordinate conversion.
+// Returns true on success, sets residual info on the ik_state for display.
+inline bool learned_ik_solve_frame(MujocoContext &mj, MujocoIKState &ik_state,
+                                    LearnedIKState &learned_ik,
+                                    const Keypoint3D *kp3d, int num_nodes) {
+    if (!learned_ik.loaded || !mj.loaded || !mj.model || !mj.data) return false;
+
+    int nkp = std::min(num_nodes, learned_ik.n_keypoints);
+    float kp_mj[24 * 3] = {};
+    float valid[24] = {};
+
+    // Keypoints are already in MuJoCo frame (arena-transformed by get_kp3d)
+    for (int n = 0; n < nkp; n++) {
+        if (!kp3d[n].triangulated) continue;
+        kp_mj[n * 3 + 0] = (float)kp3d[n].x;
+        kp_mj[n * 3 + 1] = (float)kp3d[n].y;
+        kp_mj[n * 3 + 2] = (float)kp3d[n].z;
+        valid[n] = 1.0f;
+    }
+
+    // Run neural network
+    float qpos_out[68] = {};
+    auto t0 = std::chrono::high_resolution_clock::now();
+    bool ok = learned_ik_predict(learned_ik, kp_mj, valid, qpos_out);
+    auto t1 = std::chrono::high_resolution_clock::now();
+
+    if (!ok) return false;
+
+    // Set qpos on MuJoCo model
+    int nq = std::min((int)mj.model->nq, learned_ik.n_qpos);
+    for (int i = 0; i < nq; i++)
+        mj.data->qpos[i] = (double)qpos_out[i];
+
+    // Normalize the quaternion (free joint qpos[3:7])
+    for (int j = 0; j < mj.model->njnt; j++) {
+        if (mj.model->jnt_type[j] == mjJNT_FREE) {
+            int qa = (int)mj.model->jnt_qposadr[j];
+            double w = mj.data->qpos[qa+3], x = mj.data->qpos[qa+4];
+            double y = mj.data->qpos[qa+5], z = mj.data->qpos[qa+6];
+            double norm = std::sqrt(w*w + x*x + y*y + z*z);
+            if (norm > 1e-10) {
+                mj.data->qpos[qa+3] /= norm; mj.data->qpos[qa+4] /= norm;
+                mj.data->qpos[qa+5] /= norm; mj.data->qpos[qa+6] /= norm;
+            }
+            break;
+        }
+    }
+
+    // Run forward kinematics
+    mj_fwdPosition(mj.model, mj.data);
+
+    // Compute residual for display (same as mujoco_ik.h final residual)
+    double err_sq = 0.0;
+    int N = 0;
+    for (int n = 0; n < nkp; n++) {
+        if (valid[n] < 0.5f) continue;
+        int si = (n < (int)mj.skeleton_to_site.size()) ? mj.skeleton_to_site[n] : -1;
+        if (si < 0) continue;
+        for (int c = 0; c < 3; c++) {
+            double d = mj.data->site_xpos[3 * si + c] - (double)kp_mj[n * 3 + c];
+            err_sq += d * d;
+        }
+        N++;
+    }
+
+    ik_state.final_residual = (N > 0) ? std::sqrt(err_sq / N) : 0.0;
+    ik_state.iterations_used = 1;
+    ik_state.converged = true;
+    ik_state.active_sites = N;
+    ik_state.solve_time_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+
+    return true;
+}
 
 // Solve a chunk of frames on a dedicated model/data copy.
 // Each thread gets its own mjModel + mjData + IKState for full isolation.
@@ -986,19 +1070,45 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                 ImGui::TreePop();
             }
 
+            // IK method selector
+            const char *ik_methods[] = {"Iterative (gradient descent)", "Learned (neural network)"};
+            ImGui::SetNextItemWidth(250);
+            ImGui::Combo("IK Method", &state.ik_method, ik_methods, 2);
+            if (state.ik_method == IK_LEARNED && !state.learned_ik.loaded) {
+                ImGui::SameLine();
+                ImGui::TextColored(ImVec4(1, 0.5f, 0, 1), "No model loaded");
+                // Auto-load from models/learned_ik/ relative to executable
+                std::string auto_path = ctx.window->exe_dir + "/../models/learned_ik/learned_ik.mlpackage";
+                if (std::filesystem::exists(auto_path)) {
+                    ImGui::SameLine();
+                    if (ImGui::SmallButton("Load")) {
+                        learned_ik_init(state.learned_ik, auto_path);
+                    }
+                }
+            }
+            if (state.learned_ik.loaded) {
+                ImGui::SameLine();
+                ImGui::TextColored(ImVec4(0.2f, 0.9f, 0.2f, 1), "%.1fms",
+                                   state.learned_ik.last_inference_ms);
+            }
+
             if (ImGui::Button("Solve Frame")) {
                 auto it = ctx.annotations.find(ctx.current_frame_num);
                 if (it != ctx.annotations.end() && !it->second.kp3d.empty()) {
                     const Keypoint3D *kp = get_kp3d(it->second.kp3d);
-                    double saved_budget = state.ik_state.time_budget_ms;
-                    state.ik_state.time_budget_ms = 0.0;
-                    mujoco_ik_solve(mj, state.ik_state,
-                                    kp,
-                                    ctx.skeleton.num_nodes,
-                                    ctx.current_frame_num);
-                    state.ik_state.time_budget_ms = saved_budget;
+                    if (state.ik_method == IK_LEARNED && state.learned_ik.loaded) {
+                        learned_ik_solve_frame(mj, state.ik_state, state.learned_ik,
+                                               kp, ctx.skeleton.num_nodes);
+                    } else {
+                        double saved_budget = state.ik_state.time_budget_ms;
+                        state.ik_state.time_budget_ms = 0.0;
+                        mujoco_ik_solve(mj, state.ik_state,
+                                        kp,
+                                        ctx.skeleton.num_nodes,
+                                        ctx.current_frame_num);
+                        state.ik_state.time_budget_ms = saved_budget;
+                    }
                     state.last_solved_frame = ctx.current_frame_num;
-                    // Auto-center camera on the torso body after solve
                     int torso_id = mj_name2id(mj.model, mjOBJ_BODY, "torso");
                     if (torso_id >= 0) {
                         state.mjcam.lookat[0] = mj.data->xpos[3*torso_id+0];
@@ -1776,10 +1886,15 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                 auto it = ctx.annotations.find(ctx.current_frame_num);
                 if (it != ctx.annotations.end() && !it->second.kp3d.empty()) {
                     const Keypoint3D *kp = get_kp3d(it->second.kp3d);
-                    mujoco_ik_solve(mj, state.ik_state,
-                                    kp,
-                                    ctx.skeleton.num_nodes,
-                                    ctx.current_frame_num);
+                    if (state.ik_method == IK_LEARNED && state.learned_ik.loaded) {
+                        learned_ik_solve_frame(mj, state.ik_state, state.learned_ik,
+                                               kp, ctx.skeleton.num_nodes);
+                    } else {
+                        mujoco_ik_solve(mj, state.ik_state,
+                                        kp,
+                                        ctx.skeleton.num_nodes,
+                                        ctx.current_frame_num);
+                    }
                     int torso_id = mj_name2id(mj.model, mjOBJ_BODY, "torso");
                     if (torso_id >= 0) {
                         state.mjcam.lookat[0] = mj.data->xpos[3*torso_id+0];

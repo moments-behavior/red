@@ -175,8 +175,14 @@ def matrix_to_quaternion(R):
 class LearnedIK(nn.Module):
     """Predict MuJoCo qpos from 3D keypoint positions.
 
-    Network predicts: 3 (translation) + 6 (rotation 6D) + n_hinge (angles) = 70 dims
-    Output converted to: 3 + 4 + 61 = 68 qpos dims
+    Position-invariant design:
+      1. Compute centroid of valid keypoints
+      2. Center-subtract keypoints (network sees relative geometry only)
+      3. Network predicts: root offset (3) + rotation (6D) + hinge angles (61)
+      4. Root position = centroid + predicted offset
+
+    This generalizes across arena positions — a rat in the same pose at
+    different locations produces the same joint angles.
     """
 
     def __init__(self, n_keypoints=24, n_hinge=61, hidden=256, n_layers=4,
@@ -184,7 +190,8 @@ class LearnedIK(nn.Module):
         super().__init__()
         self.n_keypoints = n_keypoints
         self.n_hinge = n_hinge
-        input_dim = n_keypoints * 3 + n_keypoints  # 72 + 24 = 96
+        # Input: centered keypoints (24×3=72) + validity mask (24) = 96
+        input_dim = n_keypoints * 3 + n_keypoints
 
         layers = []
         in_dim = input_dim
@@ -195,6 +202,7 @@ class LearnedIK(nn.Module):
             if dropout > 0:
                 layers.append(nn.Dropout(dropout))
             in_dim = hidden
+        # Output: 3 (root offset from centroid) + 6 (rot6d) + n_hinge (angles)
         layers.append(nn.Linear(in_dim, 3 + 6 + n_hinge))
         self.net = nn.Sequential(*layers)
 
@@ -204,18 +212,33 @@ class LearnedIK(nn.Module):
             kp3d: [B, 24, 3] — keypoints in MuJoCo frame (meters)
             valid_mask: [B, 24] — 1.0 if valid
         Returns:
-            qpos: [B, 68]
+            qpos: [B, 68] — root position (absolute) + quaternion + hinge angles
         """
+        # Compute centroid of valid keypoints
         kp3d_masked = kp3d * valid_mask.unsqueeze(-1)
-        x = torch.cat([kp3d_masked.reshape(-1, self.n_keypoints * 3),
+        n_valid = valid_mask.sum(dim=-1, keepdim=True).clamp(min=1.0)  # [B, 1]
+        centroid = kp3d_masked.sum(dim=1) / n_valid  # [B, 3]
+
+        # Center-subtract: network sees relative geometry only
+        kp_centered = (kp3d - centroid.unsqueeze(1)) * valid_mask.unsqueeze(-1)
+
+        x = torch.cat([kp_centered.reshape(-1, self.n_keypoints * 3),
                         valid_mask], dim=-1)
         out = self.net(x)
-        trans = out[:, :3]
-        rot6d = out[:, 3:9]
-        hinge = out[:, 9:]
+
+        # Decompose output
+        root_offset = out[:, :3]     # offset from centroid
+        rot6d = out[:, 3:9]          # 6D rotation
+        hinge = out[:, 9:]           # hinge joint angles
+
+        # Root position = centroid + learned offset
+        root_pos = centroid + root_offset
+
+        # Convert rotation
         rot_mat = rotation_6d_to_matrix(rot6d)
         quat = matrix_to_quaternion(rot_mat)
-        return torch.cat([trans, quat, hinge], dim=-1)
+
+        return torch.cat([root_pos, quat, hinge], dim=-1)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
