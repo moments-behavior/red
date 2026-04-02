@@ -13,6 +13,7 @@
 #include "mujoco_stac.h"
 #include "arena_alignment.h"
 #include "learned_ik_coreml.h"
+#include "mujoco_body_resize.h"
 #include <ImGuiFileDialog.h>
 #include <fstream>
 #include <iomanip>
@@ -79,6 +80,10 @@ struct BodyModelState {
 
     // Learned IK model (CoreML)
     LearnedIKState learned_ik;
+
+    // Body resize state
+    BodyResizeState body_resize;
+    bool body_resize_running = false;
 
     // STAC calibration state
     StacState stac_state;
@@ -225,9 +230,27 @@ struct BodyModelState {
             float rel = saved_model_scale / mj.model_scale;
             mj.apply_model_scale(rel);
         }
-        // Reset any existing offsets first to avoid double-application
+
+        // Apply body resize (Step 1+2: must happen BEFORE STAC)
+        if (body_resize.calibrated && !body_resize.loaded_scales.empty()) {
+            // Build segments if not already done
+            if (body_resize.segments.empty())
+                body_resize.segments = build_rodent_segments(mj.model);
+            body_resize_backup(mj, body_resize);
+            // Apply loaded scales to segments
+            for (auto &seg : body_resize.segments) {
+                auto it = body_resize.loaded_scales.find(seg.name);
+                if (it != body_resize.loaded_scales.end())
+                    seg.scale = it->second;
+            }
+            body_resize_apply(mj, body_resize);
+            std::cout << "[BodyResize] Applied saved scales from session" << std::endl;
+        }
+
+        // Reset any existing STAC offsets first to avoid double-application
         if (stac_state.calibrated)
             stac_reset(mj, stac_state);
+        // Apply STAC (Step 3: after body resize)
         if (active_calibration > 0 &&
             active_calibration < (int)calib_history.size()) {
             auto &c = calib_history[active_calibration];
@@ -327,6 +350,18 @@ struct BodyModelState {
             j["calibration_history"] = hist;
             j["active_calibration"] = active_calibration;
 
+            // Body resize
+            if (body_resize.calibrated && !body_resize.segments.empty()) {
+                nlohmann::json br;
+                br["pre_residual"] = body_resize.pre_residual;
+                br["post_residual"] = body_resize.post_residual;
+                nlohmann::json seg_scales;
+                for (const auto &seg : body_resize.segments)
+                    seg_scales[seg.name] = seg.scale;
+                br["segment_scales"] = seg_scales;
+                j["body_resize"] = br;
+            }
+
             // Display
             j["display"] = {{"show_skin", show_skin}, {"show_bodies", show_bodies},
                             {"show_sites", show_site_markers}, {"show_arena", show_arena},
@@ -424,6 +459,23 @@ struct BodyModelState {
                 active_calibration = j.value("active_calibration", 0);
                 if (!calib_history.empty())
                     active_calibration = std::clamp(active_calibration, 0, (int)calib_history.size() - 1);
+            }
+
+            if (j.contains("body_resize")) {
+                auto &br = j["body_resize"];
+                body_resize.pre_residual = br.value("pre_residual", 0.0);
+                body_resize.post_residual = br.value("post_residual", 0.0);
+                if (br.contains("segment_scales")) {
+                    // Scales will be applied after model load via apply_loaded_calibration
+                    auto &ss = br["segment_scales"];
+                    for (auto it = ss.begin(); it != ss.end(); ++it) {
+                        std::string seg_name = it.key();
+                        double seg_scale = it.value();
+                        // Store in a temporary map; segments are built after model load
+                        body_resize.loaded_scales[seg_name] = seg_scale;
+                    }
+                    body_resize.calibrated = true;
+                }
             }
 
             if (j.contains("display")) {
@@ -1185,6 +1237,81 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                                    state.ik_state.solve_time_ms,
                                    state.ik_state.final_residual * 1000.0,
                                    state.ik_state.active_sites);
+            }
+
+            // --- Body Resize ---
+            ImGui::Separator();
+            if (ImGui::TreeNode("Body Resize")) {
+                // Initialize segment groups on first use
+                if (state.body_resize.segments.empty()) {
+                    state.body_resize.segments = build_rodent_segments(mj.model);
+                    body_resize_backup(mj, state.body_resize);
+                }
+
+                bool changed = false;
+                for (auto &seg : state.body_resize.segments) {
+                    float s = (float)seg.scale;
+                    ImGui::SetNextItemWidth(180);
+                    if (ImGui::SliderFloat(seg.name.c_str(), &s, 0.5f, 2.0f, "%.3f")) {
+                        seg.scale = (double)s;
+                        changed = true;
+                    }
+                }
+                if (changed) {
+                    body_resize_apply(mj, state.body_resize);
+                    // Reset STAC when body proportions change
+                    if (state.stac_state.calibrated)
+                        stac_reset(mj, state.stac_state);
+                }
+
+                // Optimization controls
+                ImGui::Separator();
+                ImGui::SliderInt("Sample frames##resize", &state.body_resize.n_sample_frames, 50, 2000);
+                ImGui::SliderInt("Rounds##resize", &state.body_resize.n_iters, 1, 20);
+                float reg_log = log10f((float)state.body_resize.m_reg_coef);
+                if (ImGui::SliderFloat("Reg (log10)##resize", &reg_log, -2.0f, 2.0f, "%.1f"))
+                    state.body_resize.m_reg_coef = pow(10.0, reg_log);
+
+                if (state.body_resize_running) {
+                    int phase = state.body_resize.phase.load();
+                    int round = state.body_resize.current_round.load();
+                    int total = state.body_resize.total_rounds.load();
+                    const char *phase_name = (phase == 1) ? "Q-phase (IK)" :
+                                             (phase == 2) ? "M-phase (SGD)" :
+                                             (phase == 3) ? "Final IK" : "...";
+                    int done = state.body_resize.round_frames_done.load();
+                    int ftot = state.body_resize.round_frames_total.load();
+                    char buf[128];
+                    snprintf(buf, sizeof(buf), "Round %d/%d %s (%d/%d)",
+                             round, total, phase_name, done, ftot);
+                    float frac = (ftot > 0) ? (float)done / ftot : 0;
+                    ImGui::ProgressBar(frac, ImVec2(-1, 0), buf);
+                } else {
+                    if (state.body_resize.calibrated) {
+                        ImGui::Text("Residual: %.1f mm -> %.1f mm (%.1fs)",
+                                    state.body_resize.pre_residual,
+                                    state.body_resize.post_residual,
+                                    state.body_resize.calibration_time_s);
+                    }
+
+                    if (ImGui::Button("Fit to Data##resize")) {
+                        state.body_resize_running = true;
+                        std::thread([&]() {
+                            body_resize_calibrate(mj, state.body_resize, state.ik_state,
+                                                  ctx.annotations, ctx.skeleton.num_nodes,
+                                                  &state.arena_align);
+                            state.body_resize_running = false;
+                            // Auto-save session with new scales
+                            if (!ctx.pm.project_path.empty())
+                                state.save_session(ctx.pm.project_path + "/mujoco_session.json");
+                        }).detach();
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button("Reset##resize")) {
+                        body_resize_reset(mj, state.body_resize);
+                    }
+                }
+                ImGui::TreePop();
             }
 
             // --- Site Placement ---
