@@ -23,7 +23,11 @@
 #include <mutex>
 
 #ifdef RED_HAS_MUJOCO
+#ifdef __APPLE__
 #include "mujoco_metal_renderer.h"
+#else
+#include "mujoco_opengl_renderer.h"
+#endif
 #endif
 
 enum SitePlacement { SITES_DEFAULT = 0, SITES_STAC = 1 };
@@ -1753,12 +1757,19 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                         for (int c = 0; c < 4; c++)
                             M(1,c) = -2.0 * PM(1,c) / img_h;
                         M(1,3) += 1.0;
-                        // Row 2: depth — map a reasonable Z range to [0,1]
-                        // Use the camera's forward direction (R row 2) for depth
+                        // Row 2: depth — use camera forward direction for depth ordering
                         double near_z = -10.0, far_z = 10.0; // generous range in world units
                         for (int c = 0; c < 3; c++)
                             M(2,c) = cp.r(2,c) / (far_z - near_z);
-                        M(2,3) = 0.5; // center of depth range
+#ifdef __APPLE__
+                        // Metal NDC: Z in [0, 1]
+                        M(2,3) = 0.5;
+#else
+                        // OpenGL NDC: Z in [-1, 1]
+                        M(2,3) = 0.0;
+                        for (int c = 0; c < 4; c++)
+                            M(2,c) *= 2.0;
+#endif
                         // Row 3: w = 1 (orthographic, no perspective divide)
                         M(3,3) = 1.0;
 
@@ -1830,8 +1841,15 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                         P(0,2) = 1.0f - 2.0f * cx / img_w;
                         P(1,1) = 2.0f * fy / img_h;
                         P(1,2) = 2.0f * cy / img_h - 1.0f;
+#ifdef __APPLE__
+                        // Metal NDC: Z in [0, 1]
                         P(2,2) = far_z / (near_z - far_z);
                         P(2,3) = far_z * near_z / (near_z - far_z);
+#else
+                        // OpenGL NDC: Z in [-1, 1]
+                        P(2,2) = -(far_z + near_z) / (far_z - near_z);
+                        P(2,3) = -2.0 * far_z * near_z / (far_z - near_z);
+#endif
                         P(3,2) = -1.0f;
                     }
 
@@ -2120,9 +2138,15 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                     // selected_camera indexes ctx.pm.camera_names which matches
                     // the scene camera order
                     int cam_idx = state.selected_camera;
-                    if (cam_idx < (int)ctx.scene->num_cams &&
-                        ctx.scene->image_descriptor[cam_idx])
-                        bg_tex = (void *)ctx.scene->image_descriptor[cam_idx];
+                    if (cam_idx < (int)ctx.scene->num_cams) {
+#ifdef __APPLE__
+                        if (ctx.scene->image_descriptor[cam_idx])
+                            bg_tex = (void *)ctx.scene->image_descriptor[cam_idx];
+#else
+                        if (ctx.scene->image_texture[cam_idx])
+                            bg_tex = (void *)(intptr_t)ctx.scene->image_texture[cam_idx];
+#endif
+                    }
                 }
                 float opacity = (state.show_video_bg && bg_tex) ? state.scene_opacity : 1.0f;
                 mujoco_renderer_render(state.renderer, &mj, &state.mjcam,

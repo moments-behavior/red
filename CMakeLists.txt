@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.18...4.2)
+cmake_minimum_required(VERSION 3.18...3.31)
 
 if(APPLE)
     project(red LANGUAGES CXX OBJCXX)
@@ -1382,7 +1382,8 @@ elseif(WIN32)
 
     file(GLOB IMGUI_SRC
         ${DIR_IMGUI}/*.cpp
-        ${DIR_IMGUI}/backends/imgui_impl_glfw.cpp
+        # Use patched GLFW backend from src/ (picked up by SRC_FILES glob)
+        # instead of stock imgui_impl_glfw.cpp — has Windows + macOS fixes
         ${DIR_IMGUI}/backends/imgui_impl_opengl3.cpp
         ${DIR_IMGUI}/misc/cpp/imgui_stdlib.cpp
         ${DIR_FILEBROWSER}/ImGuiFileDialog.cpp
@@ -1418,9 +1419,28 @@ elseif(WIN32)
         message(WARNING "ONNX Runtime not found in lib/onnxruntime/ — JARVIS prediction disabled")
     endif()
 
+    # Optional MuJoCo for body model IK (Windows: DLL release in lib/mujoco/)
+    # Supports both layouts: include/mujoco/mujoco.h (official) and include/mujoco.h (flat)
+    set(MUJOCO_DIR "${CMAKE_SOURCE_DIR}/lib/mujoco")
+    if(EXISTS "${MUJOCO_DIR}/include/mujoco/mujoco.h")
+        set(HAS_MUJOCO TRUE)
+        set(MUJOCO_INCLUDE_DIR "${MUJOCO_DIR}/include/mujoco")
+        message(STATUS "MuJoCo found at ${MUJOCO_DIR} (standard layout)")
+    elseif(EXISTS "${MUJOCO_DIR}/include/mujoco.h")
+        set(HAS_MUJOCO TRUE)
+        set(MUJOCO_INCLUDE_DIR "${MUJOCO_DIR}/include")
+        message(STATUS "MuJoCo found at ${MUJOCO_DIR} (flat layout)")
+    else()
+        set(HAS_MUJOCO FALSE)
+        message(STATUS "MuJoCo not found in lib/mujoco/ — body model IK disabled")
+    endif()
+
     target_compile_definitions(red PRIVATE NOMINMAX _USE_MATH_DEFINES USE_CUDA_POINTSOURCE)
     if(HAS_ONNXRUNTIME)
         target_compile_definitions(red PRIVATE RED_HAS_ONNXRUNTIME)
+    endif()
+    if(HAS_MUJOCO)
+        target_compile_definitions(red PRIVATE RED_HAS_MUJOCO)
     endif()
     target_compile_options(red PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/bigobj /EHsc>)
 
@@ -1445,6 +1465,9 @@ elseif(WIN32)
     endif()
     if(HAS_ONNXRUNTIME)
         target_include_directories(red PRIVATE "${ONNXRUNTIME_DIR}/include")
+    endif()
+    if(HAS_MUJOCO)
+        target_include_directories(red PRIVATE "${MUJOCO_DIR}/include" "${MUJOCO_DIR}/include/mujoco")
     endif()
 
     # Link libraries
@@ -1488,6 +1511,11 @@ elseif(WIN32)
         target_link_libraries(red PRIVATE "${ONNXRUNTIME_DIR}/lib/onnxruntime.lib")
     endif()
 
+    # MuJoCo body model IK
+    if(HAS_MUJOCO)
+        target_link_libraries(red PRIVATE "${MUJOCO_DIR}/lib/mujoco.lib")
+    endif()
+
     # Windows system libraries
     target_link_libraries(red PRIVATE
         shell32
@@ -1508,6 +1536,15 @@ elseif(WIN32)
     if(EXISTS "${CUDNN_DIR}/bin/cudnn64_9.dll")
         file(GLOB CUDNN_DLLS "${CUDNN_DIR}/bin/*.dll")
         foreach(dll ${CUDNN_DLLS})
+            add_custom_command(TARGET red POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different "${dll}" "$<TARGET_FILE_DIR:red>")
+        endforeach()
+    endif()
+
+    # Copy MuJoCo DLL to build directory
+    if(HAS_MUJOCO)
+        file(GLOB MUJOCO_DLLS "${MUJOCO_DIR}/bin/*.dll")
+        foreach(dll ${MUJOCO_DLLS})
             add_custom_command(TARGET red POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different "${dll}" "$<TARGET_FILE_DIR:red>")
         endforeach()
@@ -1582,6 +1619,11 @@ elseif(WIN32)
             target_compile_definitions(${TEST_NAME} PRIVATE RED_HAS_ONNXRUNTIME)
             target_include_directories(${TEST_NAME} PRIVATE "${ONNXRUNTIME_DIR}/include")
             target_link_libraries(${TEST_NAME} PRIVATE "${ONNXRUNTIME_DIR}/lib/onnxruntime.lib")
+        endif()
+        if(HAS_MUJOCO)
+            target_compile_definitions(${TEST_NAME} PRIVATE RED_HAS_MUJOCO)
+            target_include_directories(${TEST_NAME} PRIVATE "${MUJOCO_DIR}/include" "${MUJOCO_DIR}/include/mujoco")
+            target_link_libraries(${TEST_NAME} PRIVATE "${MUJOCO_DIR}/lib/mujoco.lib")
         endif()
         set_target_properties(${TEST_NAME} PROPERTIES
             CXX_STANDARD 17
