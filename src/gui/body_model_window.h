@@ -1220,6 +1220,19 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                     ImGui::SetTooltip("Solve IK on all labeled frames in parallel\n"
                                       "and save qpos to %s/qpos_export.csv",
                                       ctx.pm.project_path.c_str());
+
+                ImGui::SameLine();
+                if (ImGui::Button("Export Model (.mjb)")) {
+                    std::string mjb_path = ctx.pm.project_path + "/body_model.mjb";
+                    mj_saveModel(mj.model, mjb_path.c_str(), nullptr, 0);
+                    ctx.toasts.push("Model saved: " + mjb_path);
+                    std::cout << "[MuJoCo] Exported model to " << mjb_path << std::endl;
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Save current model (with body resize + STAC offsets)\n"
+                                      "as a binary .mjb file that can be loaded later.\n"
+                                      "Saved to %s/body_model.mjb",
+                                      ctx.pm.project_path.c_str());
             }
 
             // Solver status
