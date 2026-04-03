@@ -6,17 +6,155 @@ Developed at the [Johnson Lab](https://www.janelia.org/lab/johnson-lab), HHMI Ja
 
 ---
 
+## Installation (macOS Apple Silicon)
+
+RED runs natively on Apple Silicon Macs (M1 through M5). Choose one of the two installation methods below.
+
+> **Branch note:** RED is actively developed on the `rob_ui_overhaul` branch. Both installation methods below build from this branch. Do **not** use `main` -- it is outdated.
+
+### Option A: Install via Homebrew (recommended)
+
+This is the easiest way to get RED. Homebrew handles all dependencies automatically. The formula builds from the `rob_ui_overhaul` branch.
+
+**Prerequisites:** macOS 12 (Monterey) or later on Apple Silicon.
+
+```bash
+# 1. Install Homebrew (skip if you already have it)
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+# 2. Add the RED tap and install
+brew tap JohnsonLabJanelia/red
+brew install --HEAD JohnsonLabJanelia/red/red
+```
+
+That's it. The install takes 3-5 minutes and builds RED from the latest source with all dependencies (Eigen, FFmpeg, GLFW, Ceres Solver, libjpeg-turbo).
+
+```bash
+# Launch RED
+red /path/to/project.redproj
+```
+
+**Updating to the latest version:**
+
+```bash
+brew reinstall --HEAD JohnsonLabJanelia/red/red
+```
+
+**Troubleshooting:** On first launch, macOS Gatekeeper may show a security warning. Fix it with:
+
+```bash
+xattr -dr com.apple.quarantine "$(brew --prefix)/bin/red"
+```
+
+<details>
+<summary>What gets installed</summary>
+
+| File | Location | Purpose |
+|------|----------|---------|
+| `red` binary | `/opt/homebrew/bin/red` | Main application |
+| Font files (4) | `/opt/homebrew/share/red/fonts/` | UI fonts (Roboto, FontAwesome) |
+| `default_imgui_layout.ini` | `/opt/homebrew/share/red/` | Default window layout |
+| `pth_to_coreml.py` | `/opt/homebrew/share/red/scripts/` | PyTorch-to-CoreML model converter |
+| SuperPoint model | `/opt/homebrew/share/red/models/superpoint/` | Calibration refinement (if present) |
+
+</details>
+
+### Option B: Build from Source
+
+For developers or anyone who wants to modify RED.
+
+**Step 1: Install dependencies**
+
+```bash
+brew install cmake pkg-config eigen ffmpeg glfw jpeg-turbo ceres-solver
+```
+
+**Step 2: Clone and build**
+
+```bash
+git clone --recurse-submodules -b rob_ui_overhaul https://github.com/JohnsonLabJanelia/red.git
+cd red
+cmake -S . -B release -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=/opt/homebrew
+cmake --build release -j$(sysctl -n hw.ncpu)
+```
+
+The `-b rob_ui_overhaul` flag checks out the active development branch. The `--recurse-submodules` flag is required -- RED depends on several bundled libraries (Dear ImGui, ImPlot, ImPlot3D, ImGuiFileDialog, IconFontCppHeaders) that live in `lib/` as Git submodules. If you forgot either flag during clone:
+
+```bash
+git checkout rob_ui_overhaul
+git submodule update --init --recursive
+```
+
+The binary is at `release/red`. Run it directly:
+
+```bash
+./release/red /path/to/project.redproj
+```
+
+**Optional dependencies** (placed in `lib/` -- detected automatically by CMake):
+
+| Dependency | Path | Enables |
+|------------|------|---------|
+| [MuJoCo 3.6.0 framework](https://github.com/google-deepmind/mujoco/releases) | `lib/mujoco.framework/` | Body model IK panel |
+| [ONNX Runtime](https://github.com/microsoft/onnxruntime/releases) | `lib/onnxruntime/` | SAM segmentation + ONNX JARVIS inference |
+
+### Hardware Requirements
+
+| Component | Minimum | Recommended |
+|-----------|---------|-------------|
+| Mac | Apple Silicon (M1+) | M3/M4/M5 with 16+ GB RAM |
+| macOS | 12 (Monterey) | 14 (Sonoma) or later |
+| Storage | SSD | SSD (video playback is I/O bound) |
+| Display | 1920x1080 | 2560x1440 or larger for multi-camera views |
+
+### Linux (Build from Source)
+
+Linux builds require an NVIDIA GPU with NVDEC support.
+
+```bash
+# Ubuntu/Debian system dependencies
+sudo apt install cmake pkg-config libglfw3-dev libglew-dev \
+    libopencv-dev nvidia-cuda-toolkit
+```
+
+Additional dependencies installed manually:
+
+| Dependency    | Location                         |
+|---------------|----------------------------------|
+| FFmpeg        | `~/nvidia/ffmpeg/build`          |
+| TensorRT      | `~/nvidia/TensorRT-8.6.1.6`     |
+| LibTorch      | `lib/libtorch` (in source tree)  |
+| CUDA toolkit  | `/usr/local/cuda`                |
+
+```bash
+git clone --recurse-submodules -b rob_ui_overhaul https://github.com/JohnsonLabJanelia/red.git
+cd red
+cmake -S . -B release -DCMAKE_BUILD_TYPE=Release
+cmake --build release -j$(nproc)
+```
+
+---
+
+## Quick Start
+
+```bash
+red /path/to/project.redproj
+```
+
+1. **File > New Project** -- choose a project directory, name, skeleton preset, and (optionally) a calibration folder.
+2. **File > Load Videos** -- select a folder containing one video file per camera. Camera names are derived from filenames.
+3. **Begin labeling** -- click keypoints in any camera view. When two or more cameras have a labeled keypoint, 3D triangulation runs automatically.
+
+---
+
 ## Table of Contents
 
 - [Key Features](#key-features)
-- [Quick Start](#quick-start)
-- [Installation](#installation)
 - [Calibration](#calibration)
 - [Annotation Workflow](#annotation-workflow)
 - [AI-Assisted Labeling (JARVIS)](#ai-assisted-labeling-jarvis)
 - [Architecture Overview](#architecture-overview)
 - [Supported Animals and Skeletons](#supported-animals-and-skeletons)
-- [Building from Source](#building-from-source)
 - [Project File Format](#project-file-format)
 - [Contributing](#contributing)
 - [License](#license)
@@ -38,152 +176,6 @@ Developed at the [Johnson Lab](https://www.janelia.org/lab/johnson-lab), HHMI Ja
 - **Project management** -- switch between projects without restarting the application; per-project layout persistence
 - **Preset skeletons** -- built-in skeleton definitions for rats (4-24 keypoints), flies (50 keypoints), and calibration targets, plus custom JSON skeleton import
 - **Export to standard formats** -- JARVIS/COCO JSON, YOLO, and DeepLabCut-compatible CSV exports via bundled Python utilities
-
----
-
-## Quick Start
-
-### Install via Homebrew (macOS)
-
-```bash
-brew tap JohnsonLabJanelia/red
-brew install --HEAD JohnsonLabJanelia/red/red
-```
-
-### Launch
-
-```bash
-red /path/to/project.redproj
-```
-
-### Create Your First Project
-
-1. **File > New Project** -- choose a project directory, name, skeleton preset, and (optionally) a calibration folder.
-2. **File > Load Videos** -- select a folder containing one video file per camera. Camera names are derived from filenames.
-3. **Begin labeling** -- click keypoints in any camera view. When two or more cameras have a labeled keypoint, 3D triangulation runs automatically.
-
----
-
-## Installation
-
-### macOS (Homebrew) -- Recommended
-
-Requires macOS 12 (Monterey) or later on Apple Silicon (M1/M2/M3/M4/M5).
-
-**Step 1: Install Homebrew** (skip if already installed)
-
-```bash
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-```
-
-**Step 2: Add the RED tap**
-
-```bash
-# Public repo:
-brew tap JohnsonLabJanelia/red
-
-# Private repo (requires GitHub SSH key):
-brew tap JohnsonLabJanelia/red git@github.com:JohnsonLabJanelia/homebrew-red.git
-```
-
-**Step 3: Install RED**
-
-```bash
-brew install --HEAD JohnsonLabJanelia/red/red
-```
-
-This installs all dependencies (Eigen, FFmpeg, GLFW, Ceres Solver, etc.) and builds from the latest source. Typical install time: 3-5 minutes.
-
-**Step 4: Launch**
-
-```bash
-red                                    # prints usage
-red /path/to/my_project.redproj        # open a project
-```
-
-On first launch, macOS Gatekeeper may show a security warning. If so:
-
-```bash
-xattr -dr com.apple.quarantine "$(brew --prefix)/bin/red"
-```
-
-**Updating to the latest version:**
-
-```bash
-brew uninstall red
-brew install --HEAD JohnsonLabJanelia/red/red
-```
-
-### What Gets Installed
-
-| File | Location | Purpose |
-|------|----------|---------|
-| `red` binary | `/opt/homebrew/bin/red` | Main application |
-| Font files (4) | `/opt/homebrew/share/red/fonts/` | UI fonts (Roboto, FontAwesome) |
-| `default_imgui_layout.ini` | `/opt/homebrew/share/red/` | Default window layout |
-| `pth_to_coreml.py` | `/opt/homebrew/share/red/scripts/` | PyTorch to CoreML model converter |
-
-### macOS (Build from Source)
-
-Install dependencies:
-
-```bash
-brew install eigen ffmpeg glfw jpeg-turbo pkg-config ceres-solver
-```
-
-Build:
-
-```bash
-git clone --recurse-submodules https://github.com/JohnsonLabJanelia/red.git
-cd red
-cmake -S . -B release -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=/opt/homebrew
-cmake --build release -j$(sysctl -n hw.ncpu)
-```
-
-The binary is at `release/red`.
-
-### Linux (Build from Source)
-
-Linux builds require an NVIDIA GPU with NVDEC support.
-
-Install system dependencies:
-
-```bash
-# Ubuntu/Debian
-sudo apt install cmake pkg-config libglfw3-dev libglew-dev \
-    libopencv-dev nvidia-cuda-toolkit
-```
-
-Additional dependencies installed manually:
-
-| Dependency    | Location                         |
-|---------------|----------------------------------|
-| FFmpeg        | `~/nvidia/ffmpeg/build`          |
-| TensorRT      | `~/nvidia/TensorRT-8.6.1.6`     |
-| LibTorch      | `lib/libtorch` (in source tree)  |
-| CUDA toolkit  | `/usr/local/cuda`                |
-
-Build:
-
-```bash
-git clone --recurse-submodules https://github.com/JohnsonLabJanelia/red.git
-cd red
-cmake -S . -B release -DCMAKE_BUILD_TYPE=Release
-cmake --build release -j$(nproc)
-```
-
-### Hardware Requirements
-
-| Component | macOS                                  | Linux                                   |
-|-----------|----------------------------------------|-----------------------------------------|
-| GPU       | Apple Silicon (M1/M2/M3/M4/M5)        | NVIDIA with NVDEC (GTX 1060+)          |
-| RAM       | 16 GB recommended                      | 16 GB recommended                       |
-| Storage   | SSD recommended for video playback      | SSD recommended for video playback      |
-| Display   | 1920x1080 minimum                      | 1920x1080 minimum                       |
-
-### Optional: ONNX Runtime (SAM / JARVIS ONNX inference)
-
-Download the [ONNX Runtime release](https://github.com/microsoft/onnxruntime/releases) and extract it to `lib/onnxruntime/` in the source tree. The build system detects it automatically and enables SAM inference and ONNX-based JARVIS prediction.
 
 ---
 
@@ -461,48 +453,19 @@ Load it in the New Project dialog by selecting "Load from JSON" and pointing to 
 
 ## Building from Source
 
-### Requirements
+See [Installation > Option B](#option-b-build-from-source) at the top of this document for full build instructions.
 
-| Dependency      | macOS (Homebrew)            | Linux                              |
-|-----------------|-----------------------------|------------------------------------|
-| CMake           | `cmake` (>= 3.10)          | `cmake` (>= 3.10)                 |
-| Eigen3          | `brew install eigen`        | `apt install libeigen3-dev`        |
-| FFmpeg          | `brew install ffmpeg`       | Custom build in `~/nvidia/ffmpeg`  |
-| GLFW            | `brew install glfw`         | `apt install libglfw3-dev`         |
-| libjpeg-turbo   | `brew install jpeg-turbo`   | `apt install libturbojpeg0-dev`    |
-| Ceres Solver    | `brew install ceres-solver` | `apt install libceres-dev`         |
-| pkg-config      | `brew install pkg-config`   | `apt install pkg-config`           |
-| GLEW            | Not needed (Metal backend)  | `apt install libglew-dev`          |
-| OpenCV          | Not needed                  | `apt install libopencv-dev`        |
-| CUDA toolkit    | Not needed                  | NVIDIA CUDA toolkit                |
-| TensorRT        | Not needed                  | `~/nvidia/TensorRT-8.6.1.6`       |
+### Bundled Libraries (Git submodules in `lib/`)
 
-### Build Commands
-
-**macOS:**
-
-```bash
-cmake -S . -B release -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=/opt/homebrew
-cmake --build release -j$(sysctl -n hw.ncpu)
-```
-
-**Linux:**
-
-```bash
-cmake -S . -B release -DCMAKE_BUILD_TYPE=Release
-cmake --build release -j$(nproc)
-```
-
-### Bundled Libraries (in `lib/`)
-
-The following are included as Git submodules:
+These are fetched automatically with `git clone --recurse-submodules`:
 
 - [Dear ImGui](https://github.com/ocornut/imgui) -- immediate-mode GUI
 - [ImPlot](https://github.com/epezent/implot) -- 2D plotting
 - [ImPlot3D](https://github.com/brenocq/implot3d) -- 3D plotting (calibration viewer)
 - [ImGuiFileDialog](https://github.com/aiekick/ImGuiFileDialog) -- native file/folder picker
-- [nlohmann/json](https://github.com/nlohmann/json) -- JSON parsing
 - [IconFontCppHeaders](https://github.com/juliettef/IconFontCppHeaders) -- icon fonts
+
+[nlohmann/json](https://github.com/nlohmann/json) is vendored as a single header (`src/json.hpp`).
 
 ---
 

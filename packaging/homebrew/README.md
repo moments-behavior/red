@@ -39,6 +39,14 @@ warning, either:
 
 ## Updating
 
+While RED is installed as a HEAD-only formula (no stable release tag yet), use `reinstall`:
+
+```bash
+brew reinstall --HEAD JohnsonLabJanelia/red/red
+```
+
+Once a stable release is tagged, the standard upgrade path will work:
+
 ```bash
 brew update
 brew upgrade red
