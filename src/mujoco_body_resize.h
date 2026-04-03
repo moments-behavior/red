@@ -71,12 +71,21 @@ struct BodyResizeState {
     // Loaded from session (applied after segments are built)
     std::map<std::string, double> loaded_scales;
 
-    // Live progress
-    std::atomic<int> current_round{0};
+    // Live progress (atomic for thread-safe UI reading)
+    std::atomic<int> phase{0};              // 0=idle, 1=global sweep, 2=per-segment, 3=final eval
+    std::atomic<int> current_round{0};      // pass number in Phase 2
     std::atomic<int> total_rounds{0};
-    std::atomic<int> phase{0};       // 0=idle, 1=Q-phase, 2=M-phase, 3=done
     std::atomic<int> round_frames_done{0};
     std::atomic<int> round_frames_total{0};
+    // Phase 1 progress
+    std::atomic<int> global_done{0};        // how many global scales evaluated
+    std::atomic<int> global_total{0};       // total global scales to evaluate
+    // Phase 2 progress
+    std::atomic<int> seg_current{0};        // which segment (0-based) being evaluated
+    std::atomic<int> seg_total{0};          // total segments
+    std::string seg_current_name;           // name of current segment (not atomic, read-only during display)
+    std::atomic<int> seg_mults_done{0};     // multipliers done for current segment
+    std::atomic<int> seg_mults_total{0};    // total multipliers for current segment
 };
 
 #ifdef RED_HAS_MUJOCO
@@ -397,7 +406,7 @@ inline std::vector<std::pair<double, double>> body_resize_eval_parallel(
                                                    mj.skeleton_to_site, sample_frames,
                                                    num_nodes, sf, has_free);
             results[job] = {trial_scale, res};
-            state.round_frames_done.fetch_add((int)sample_frames.size(), std::memory_order_relaxed);
+            state.seg_mults_done.fetch_add(1, std::memory_order_relaxed);
         }
     };
 
@@ -507,10 +516,9 @@ inline bool body_resize_calibrate(MujocoContext &mj, BodyResizeState &state,
     // Find the single best uniform scale factor for the entire body.
     // =====================================================================
     std::cout << "[BodyResize] Phase 1: Global scale sweep (" << N << " frames, parallel)" << std::endl;
-    state.total_rounds = 2;
-    state.current_round = 1;
     state.phase = 1;
-    state.round_frames_done = 0;
+    state.global_done = 0;
+    state.seg_total = n_seg;
 
     double best_global = 1.0;
     double best_global_res = 1e9;
@@ -520,6 +528,7 @@ inline bool body_resize_calibrate(MujocoContext &mj, BodyResizeState &state,
     {
         std::vector<double> coarse;
         for (double s = 0.80; s <= 1.301; s += 0.05) coarse.push_back(s);
+        state.global_total = (int)coarse.size();
 
         // For global sweep, temporarily set all segments to 1.0 so the
         // parallel eval applies the candidate as the sole scale.
@@ -588,7 +597,7 @@ inline bool body_resize_calibrate(MujocoContext &mj, BodyResizeState &state,
                 double res = body_resize_eval_private(m, datas[tid], ik_t,
                     mj.skeleton_to_site, sample_frames, num_nodes, sf, has_free);
                 results[job] = {s, res};
-                state.round_frames_done.fetch_add(N);
+                state.global_done.fetch_add(1);
             }
         };
 
@@ -645,12 +654,19 @@ inline bool body_resize_calibrate(MujocoContext &mj, BodyResizeState &state,
     // Starting from the best global scale, optimize each segment individually.
     // =====================================================================
     std::cout << "[BodyResize] Phase 2: Per-segment refinement" << std::endl;
-    state.current_round = 2;
+    state.phase = 2;
+    state.current_round = 0;
+    state.total_rounds = state.n_iters;
 
     for (int outer = 0; outer < state.n_iters; outer++) {
+        state.current_round = outer + 1;
         bool any_improved = false;
 
         for (int g = 0; g < n_seg; g++) {
+            state.seg_current = g;
+            state.seg_current_name = state.segments[g].name;
+            state.seg_mults_done = 0;
+
             double base_scale = state.segments[g].scale;
             double best_scale = base_scale;
             double best_res = 1e9;
@@ -665,6 +681,7 @@ inline bool body_resize_calibrate(MujocoContext &mj, BodyResizeState &state,
                     candidates.push_back(trial);
             }
 
+            state.seg_mults_total = (int)candidates.size();
             auto seg_results = body_resize_eval_parallel(
                 mj, state, candidates, g, sample_frames, num_nodes, sf, state.q_max_iters);
 
