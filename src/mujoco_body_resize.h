@@ -673,7 +673,7 @@ inline bool body_resize_calibrate(MujocoContext &mj, BodyResizeState &state,
 
             // Test multipliers in PARALLEL — each gets its own model copy.
             double multipliers[] = {0.80, 0.85, 0.90, 0.95, 1.00,
-                                     1.05, 1.10, 1.15, 1.20, 1.30, 1.40, 1.50};
+                                     1.05, 1.10, 1.15, 1.20};
             std::vector<double> candidates;
             for (double mult : multipliers) {
                 double trial = best_global * mult;
