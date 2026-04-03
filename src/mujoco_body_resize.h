@@ -45,7 +45,7 @@ struct BodyResizeState {
     double m_momentum      = 0.9;    // SGD momentum
     double m_reg_coef      = 1.0;    // L2 penalty on (scale - 1)^2
     int    m_max_iters     = 200;    // M-phase SGD iterations per round
-    int    q_max_iters     = 300;    // IK iterations during Q-phase
+    int    q_max_iters     = 1000;   // IK iterations during Q-phase (needs enough to converge)
 
     // State
     bool   calibrated = false;
@@ -440,27 +440,43 @@ inline bool body_resize_calibrate(MujocoContext &mj, BodyResizeState &state,
             double best_scale = base_scale;
             double best_res = 1e9;
 
-            // Test a wide range of multipliers on this segment independently.
-            // Other segments stay at their current (possibly already adjusted) scales.
-            double multipliers[] = {0.70, 0.80, 0.85, 0.90, 0.95, 1.00,
-                                     1.05, 1.10, 1.15, 1.20, 1.30, 1.50};
+            // Test a range of multipliers on this segment.
+            // Other segments stay at their current scales.
+            // Use NO regularization — the global scale is our anchor.
+            // Accept purely based on IK residual improvement.
+            double multipliers[] = {0.80, 0.85, 0.90, 0.95, 1.00,
+                                     1.05, 1.10, 1.15, 1.20, 1.30, 1.40, 1.50};
+
+            // First, evaluate baseline (current scale for this segment)
+            state.segments[g].scale = base_scale;
+            state.round_frames_done = 0;
+            body_resize_apply(mj, state);
+            best_res = body_resize_eval(mj, ik, sample_frames, num_nodes, sf, all_qpos, state);
+            best_scale = base_scale;
+
+            std::cout << "[BodyResize]   " << state.segments[g].name
+                      << " sweep: base=" << std::fixed << std::setprecision(3)
+                      << base_scale << " (" << std::setprecision(2) << best_res << "mm)";
+
             for (double mult : multipliers) {
                 double trial = best_global * mult;
                 if (trial < 0.5 || trial > 2.0) continue;
+                if (std::abs(trial - base_scale) < 0.001) continue; // skip current
 
                 state.segments[g].scale = trial;
                 state.round_frames_done = 0;
                 body_resize_apply(mj, state);
                 double res = body_resize_eval(mj, ik, sample_frames, num_nodes, sf, all_qpos, state);
 
-                // Accept if better (with regularization toward global optimum)
-                double penalized = res + state.m_reg_coef * std::abs(mult - 1.0) * 1000.0;
-                double penalized_best = best_res + state.m_reg_coef * std::abs(best_scale / best_global - 1.0) * 1000.0;
-                if (penalized < penalized_best || best_res > 1e8) {
+                if (res < best_res) {
                     best_scale = trial;
                     best_res = res;
                 }
             }
+
+            std::cout << " -> best=" << std::setprecision(3) << best_scale
+                      << " (" << std::setprecision(2) << best_res << "mm)"
+                      << std::endl;
 
             if (std::abs(best_scale - base_scale) > 0.001) {
                 any_improved = true;
