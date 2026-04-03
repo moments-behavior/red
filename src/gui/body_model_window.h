@@ -1274,18 +1274,44 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
 
                 if (state.body_resize_running) {
                     int phase = state.body_resize.phase.load();
-                    int round = state.body_resize.current_round.load();
-                    int total = state.body_resize.total_rounds.load();
-                    const char *phase_name = (phase == 1) ? "Q-phase (IK)" :
-                                             (phase == 2) ? "M-phase (SGD)" :
-                                             (phase == 3) ? "Final IK" : "...";
-                    int done = state.body_resize.round_frames_done.load();
-                    int ftot = state.body_resize.round_frames_total.load();
-                    char buf[128];
-                    snprintf(buf, sizeof(buf), "Round %d/%d %s (%d/%d)",
-                             round, total, phase_name, done, ftot);
-                    float frac = (ftot > 0) ? (float)done / ftot : 0;
-                    ImGui::ProgressBar(frac, ImVec2(-1, 0), buf);
+
+                    if (phase == 1) {
+                        // Phase 1: Global scale sweep
+                        int done = state.body_resize.global_done.load();
+                        int total = state.body_resize.global_total.load();
+                        float frac = (total > 0) ? (float)done / total : 0;
+                        char buf[128];
+                        snprintf(buf, sizeof(buf), "Phase 1: Global scale (%d/%d)", done, total);
+                        ImGui::ProgressBar(frac, ImVec2(-1, 0), buf);
+                    } else if (phase == 2) {
+                        // Phase 2: Per-segment refinement
+                        int round = state.body_resize.current_round.load();
+                        int total_rounds = state.body_resize.total_rounds.load();
+                        int seg = state.body_resize.seg_current.load();
+                        int seg_tot = state.body_resize.seg_total.load();
+                        int mults_done = state.body_resize.seg_mults_done.load();
+                        int mults_tot = state.body_resize.seg_mults_total.load();
+
+                        // Overall progress
+                        float overall = (seg_tot > 0)
+                            ? ((float)(round - 1) / total_rounds + (float)seg / (seg_tot * total_rounds))
+                            : 0;
+                        char buf[128];
+                        snprintf(buf, sizeof(buf), "Phase 2: Pass %d/%d — %s (%d/%d scales)",
+                                 round, total_rounds,
+                                 state.body_resize.seg_current_name.c_str(),
+                                 mults_done, mults_tot);
+                        ImGui::ProgressBar(overall, ImVec2(-1, 0), buf);
+
+                        // Per-segment sub-progress
+                        if (mults_tot > 0) {
+                            float seg_frac = (float)mults_done / mults_tot;
+                            ImGui::ProgressBar(seg_frac, ImVec2(-1, 0));
+                        }
+                    } else if (phase == 3) {
+                        ImGui::ProgressBar(-1.0f * (float)ImGui::GetTime(), ImVec2(-1, 0),
+                                           "Final evaluation...");
+                    }
                 } else {
                     if (state.body_resize.calibrated) {
                         ImGui::Text("Residual: %.1f mm -> %.1f mm (%.1fs)",
