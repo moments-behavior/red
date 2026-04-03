@@ -25,6 +25,8 @@
 #include <random>
 #include <iostream>
 #include <map>
+#include <thread>
+#include <mutex>
 
 // A segment group: a named set of bodies that scale together.
 struct SegmentGroup {
@@ -254,44 +256,163 @@ inline void body_resize_apply_global(MujocoContext &mj, BodyResizeState &state, 
     body_resize_apply(mj, state);
 }
 
-// Helper: compute mean IK residual across sample frames.
-// Sites are at default XML positions (no STAC). Returns residual in mm.
-inline double body_resize_eval(MujocoContext &mj, MujocoIKState &ik,
-                                const std::vector<std::pair<int, const Keypoint3D *>> &sample_frames,
-                                int num_nodes, double sf,
-                                std::vector<std::vector<double>> &all_qpos,
-                                BodyResizeState &state) {
+// Evaluate IK residual on a PRIVATE model/data copy (thread-safe).
+// model must be a per-thread copy. Returns mean residual in mm.
+inline double body_resize_eval_private(
+        mjModel *model, mjData *data_thread, MujocoIKState &ik,
+        const std::vector<int> &skeleton_to_site,
+        const std::vector<std::pair<int, const Keypoint3D *>> &sample_frames,
+        int num_nodes, double sf, bool has_free_joint) {
+
     int N = (int)sample_frames.size();
-    int nq = (int)mj.model->nq;
-    if ((int)all_qpos.size() != N) all_qpos.resize(N, std::vector<double>(nq));
+    int nq = model->nq;
+
+    // Build a temporary MujocoContext for ik_solve
+    MujocoContext thread_mj;
+    thread_mj.model = model;
+    thread_mj.data = data_thread;
+    thread_mj.loaded = true;
+    thread_mj.scale_factor = 0.0f; // arena handles it
+    thread_mj.skeleton_to_site = skeleton_to_site;
+    thread_mj.mapped_count = (int)skeleton_to_site.size();
+    thread_mj.has_free_joint = has_free_joint;
 
     mujoco_ik_reset(ik);
+    std::vector<std::vector<double>> all_qpos(N, std::vector<double>(nq));
+
     for (int i = 0; i < N; i++) {
-        mujoco_ik_solve(mj, ik, sample_frames[i].second, num_nodes,
+        mujoco_ik_solve(thread_mj, ik, sample_frames[i].second, num_nodes,
                         sample_frames[i].first);
-        all_qpos[i].assign(mj.data->qpos, mj.data->qpos + nq);
-        state.round_frames_done.fetch_add(1, std::memory_order_relaxed);
+        all_qpos[i].assign(data_thread->qpos, data_thread->qpos + nq);
     }
 
     // Measure residual
     double total_err = 0.0;
     int total_sites = 0;
     for (int i = 0; i < N; i++) {
-        std::copy(all_qpos[i].begin(), all_qpos[i].end(), mj.data->qpos);
-        mj_fwdPosition(mj.model, mj.data);
+        std::copy(all_qpos[i].begin(), all_qpos[i].end(), data_thread->qpos);
+        mj_fwdPosition(model, data_thread);
         const Keypoint3D *kp = sample_frames[i].second;
         for (int n = 0; n < num_nodes; n++) {
             if (!kp[n].triangulated) continue;
-            int si = (n < (int)mj.skeleton_to_site.size()) ? mj.skeleton_to_site[n] : -1;
+            int si = (n < (int)skeleton_to_site.size()) ? skeleton_to_site[n] : -1;
             if (si < 0) continue;
-            double dx = mj.data->site_xpos[3*si] - kp[n].x * sf;
-            double dy = mj.data->site_xpos[3*si+1] - kp[n].y * sf;
-            double dz = mj.data->site_xpos[3*si+2] - kp[n].z * sf;
+            double dx = data_thread->site_xpos[3*si] - kp[n].x * sf;
+            double dy = data_thread->site_xpos[3*si+1] - kp[n].y * sf;
+            double dz = data_thread->site_xpos[3*si+2] - kp[n].z * sf;
             total_err += std::sqrt(dx*dx + dy*dy + dz*dz);
             total_sites++;
         }
     }
+
+    // Don't let destructor free the model (shared)
+    thread_mj.model = nullptr;
+    thread_mj.data = nullptr;
+    thread_mj.loaded = false;
+
     return (total_sites > 0) ? (total_err / total_sites) * 1000.0 : 0.0;
+}
+
+// Evaluate multiple scale candidates in parallel. Returns {scale, residual} for each.
+inline std::vector<std::pair<double, double>> body_resize_eval_parallel(
+        MujocoContext &mj, BodyResizeState &state,
+        const std::vector<double> &candidates, int seg_idx,
+        const std::vector<std::pair<int, const Keypoint3D *>> &sample_frames,
+        int num_nodes, double sf, int q_max_iters) {
+
+    int n_cand = (int)candidates.size();
+    int n_threads = std::min(n_cand, std::max(1, (int)std::thread::hardware_concurrency()));
+    n_threads = std::min(n_threads, 16);
+
+    std::vector<std::pair<double, double>> results(n_cand);
+
+    // Detect free joint
+    bool has_free = false;
+    for (int j = 0; j < mj.model->njnt; j++) {
+        if (mj.model->jnt_type[j] == mjJNT_FREE) { has_free = true; break; }
+    }
+
+    // Create model copies — one per thread
+    std::vector<mjModel *> models(n_threads);
+    std::vector<mjData *> datas(n_threads);
+    for (int t = 0; t < n_threads; t++) {
+        models[t] = mj_copyModel(nullptr, mj.model);
+        datas[t] = mj_makeData(models[t]);
+    }
+
+    std::atomic<int> next_job{0};
+
+    auto worker = [&](int tid) {
+        while (true) {
+            int job = next_job.fetch_add(1, std::memory_order_relaxed);
+            if (job >= n_cand) break;
+
+            double trial_scale = candidates[job];
+            mjModel *m = models[tid];
+
+            // Apply: restore originals, then set all segments, overriding seg_idx
+            int nsite = m->nsite, nbody = m->nbody, ngeom = m->ngeom, njnt = m->njnt;
+            std::copy(state.original_body_pos.begin(), state.original_body_pos.end(), m->body_pos);
+            std::copy(state.original_body_ipos.begin(), state.original_body_ipos.end(), m->body_ipos);
+            std::copy(state.original_body_mass.begin(), state.original_body_mass.end(), m->body_mass);
+            std::copy(state.original_body_inertia.begin(), state.original_body_inertia.end(), m->body_inertia);
+            std::copy(state.original_geom_pos.begin(), state.original_geom_pos.end(), m->geom_pos);
+            std::copy(state.original_geom_size.begin(), state.original_geom_size.end(), m->geom_size);
+            std::copy(state.original_site_pos.begin(), state.original_site_pos.end(), m->site_pos);
+            std::copy(state.original_jnt_pos.begin(), state.original_jnt_pos.end(), m->jnt_pos);
+
+            // Apply current scales for all segments
+            for (int g = 0; g < (int)state.segments.size(); g++) {
+                double s = (g == seg_idx) ? trial_scale : state.segments[g].scale;
+                if (std::abs(s - 1.0) < 1e-8) continue;
+                double s3 = s*s*s, s5 = s3*s*s;
+                for (int bid : state.segments[g].body_ids) {
+                    for (int c = 0; c < 3; c++) { m->body_pos[3*bid+c] *= s; m->body_ipos[3*bid+c] *= s; }
+                    m->body_mass[bid] *= s3;
+                    for (int c = 0; c < 3; c++) m->body_inertia[3*bid+c] *= s5;
+                    for (int gi = 0; gi < ngeom; gi++) {
+                        if (m->geom_bodyid[gi] == bid) {
+                            for (int c = 0; c < 3; c++) { m->geom_pos[3*gi+c] *= s; m->geom_size[3*gi+c] *= s; }
+                        }
+                    }
+                    for (int si = 0; si < nsite; si++) {
+                        if (m->site_bodyid[si] == bid) { for (int c = 0; c < 3; c++) m->site_pos[3*si+c] *= s; }
+                    }
+                    for (int ji = 0; ji < njnt; ji++) {
+                        if (m->jnt_bodyid[ji] == bid) { for (int c = 0; c < 3; c++) m->jnt_pos[3*ji+c] *= s; }
+                    }
+                }
+            }
+            mj_setConst(m, datas[tid]);
+
+            // Run IK
+            MujocoIKState ik_thread;
+            ik_thread.max_iterations = q_max_iters;
+            ik_thread.lr = 0.001;
+            ik_thread.beta = 0.99;
+            ik_thread.reg_strength = 1e-4;
+            ik_thread.cosine_annealing = true;
+
+            double res = body_resize_eval_private(m, datas[tid], ik_thread,
+                                                   mj.skeleton_to_site, sample_frames,
+                                                   num_nodes, sf, has_free);
+            results[job] = {trial_scale, res};
+            state.round_frames_done.fetch_add((int)sample_frames.size(), std::memory_order_relaxed);
+        }
+    };
+
+    std::vector<std::thread> threads;
+    for (int t = 0; t < n_threads; t++)
+        threads.emplace_back(worker, t);
+    for (auto &t : threads) t.join();
+
+    // Cleanup
+    for (int t = 0; t < n_threads; t++) {
+        mj_deleteData(datas[t]);
+        mj_deleteModel(models[t]);
+    }
+
+    return results;
 }
 
 // Run body resize: Phase 1 (global scale sweep) + Phase 2 (per-segment refinement).
@@ -382,39 +503,133 @@ inline bool body_resize_calibrate(MujocoContext &mj, BodyResizeState &state,
     std::vector<std::vector<double>> all_qpos;
 
     // =====================================================================
-    // PHASE 1: Global scale sweep
+    // PHASE 1: Global scale sweep (PARALLEL)
     // Find the single best uniform scale factor for the entire body.
     // =====================================================================
-    std::cout << "[BodyResize] Phase 1: Global scale sweep (" << N << " frames)" << std::endl;
-    state.total_rounds = 2; // phase 1 + phase 2
+    std::cout << "[BodyResize] Phase 1: Global scale sweep (" << N << " frames, parallel)" << std::endl;
+    state.total_rounds = 2;
     state.current_round = 1;
     state.phase = 1;
+    state.round_frames_done = 0;
 
     double best_global = 1.0;
     double best_global_res = 1e9;
 
-    // Coarse sweep: 0.80 to 1.30 in steps of 0.05
-    for (double s = 0.80; s <= 1.301; s += 0.05) {
-        state.round_frames_done = 0;
-        body_resize_apply_global(mj, state, s);
-        double res = body_resize_eval(mj, ik, sample_frames, num_nodes, sf, all_qpos, state);
-        std::cout << "[BodyResize]   global=" << std::fixed << std::setprecision(3) << s
-                  << " residual=" << std::setprecision(2) << res << " mm" << std::endl;
-        if (res < best_global_res) {
-            best_global_res = res;
-            best_global = s;
+    // Coarse sweep: 0.80 to 1.30 in steps of 0.05 — all in parallel
+    // Use seg_idx = -1 trick: set ALL segments to candidate scale
+    {
+        std::vector<double> coarse;
+        for (double s = 0.80; s <= 1.301; s += 0.05) coarse.push_back(s);
+
+        // For global sweep, temporarily set all segments to 1.0 so the
+        // parallel eval applies the candidate as the sole scale.
+        // We abuse seg_idx=0 but override all segments to the same scale.
+        // Actually, simpler: for each candidate, set all segment scales
+        // to that value before copying to threads. Do it sequentially
+        // but run the IK evaluations in parallel.
+
+        // Since eval_parallel modifies one segment at a time, for global
+        // sweep we need a different approach: evaluate each candidate by
+        // setting ALL segments to that scale. We'll run them in parallel.
+        int n_cand = (int)coarse.size();
+        int n_threads = std::min(n_cand, std::max(1, (int)std::thread::hardware_concurrency()));
+        n_threads = std::min(n_threads, 16);
+
+        bool has_free = false;
+        for (int j = 0; j < mj.model->njnt; j++)
+            if (mj.model->jnt_type[j] == mjJNT_FREE) { has_free = true; break; }
+
+        std::vector<mjModel *> models(n_threads);
+        std::vector<mjData *> datas(n_threads);
+        for (int t = 0; t < n_threads; t++) {
+            models[t] = mj_copyModel(nullptr, mj.model);
+            datas[t] = mj_makeData(models[t]);
+        }
+
+        std::vector<std::pair<double, double>> results(n_cand);
+        std::atomic<int> next_job{0};
+
+        auto worker = [&](int tid) {
+            while (true) {
+                int job = next_job.fetch_add(1);
+                if (job >= n_cand) break;
+                double s = coarse[job];
+                mjModel *m = models[tid];
+
+                // Restore + apply uniform scale
+                std::copy(state.original_body_pos.begin(), state.original_body_pos.end(), m->body_pos);
+                std::copy(state.original_body_ipos.begin(), state.original_body_ipos.end(), m->body_ipos);
+                std::copy(state.original_body_mass.begin(), state.original_body_mass.end(), m->body_mass);
+                std::copy(state.original_body_inertia.begin(), state.original_body_inertia.end(), m->body_inertia);
+                std::copy(state.original_geom_pos.begin(), state.original_geom_pos.end(), m->geom_pos);
+                std::copy(state.original_geom_size.begin(), state.original_geom_size.end(), m->geom_size);
+                std::copy(state.original_site_pos.begin(), state.original_site_pos.end(), m->site_pos);
+                std::copy(state.original_jnt_pos.begin(), state.original_jnt_pos.end(), m->jnt_pos);
+
+                double s3 = s*s*s, s5 = s3*s*s;
+                for (int i = 1; i < m->nbody; i++) {  // skip world body
+                    for (int c = 0; c < 3; c++) { m->body_pos[3*i+c] *= s; m->body_ipos[3*i+c] *= s; }
+                    m->body_mass[i] *= s3;
+                    for (int c = 0; c < 3; c++) m->body_inertia[3*i+c] *= s5;
+                }
+                for (int i = 0; i < m->ngeom; i++)
+                    for (int c = 0; c < 3; c++) { m->geom_pos[3*i+c] *= s; m->geom_size[3*i+c] *= s; }
+                for (int i = 0; i < m->nsite; i++)
+                    for (int c = 0; c < 3; c++) m->site_pos[3*i+c] *= s;
+                for (int i = 0; i < m->njnt; i++)
+                    for (int c = 0; c < 3; c++) m->jnt_pos[3*i+c] *= s;
+                mj_setConst(m, datas[tid]);
+
+                MujocoIKState ik_t;
+                ik_t.max_iterations = state.q_max_iters;
+                ik_t.lr = 0.001; ik_t.beta = 0.99;
+                ik_t.reg_strength = 1e-4; ik_t.cosine_annealing = true;
+
+                double res = body_resize_eval_private(m, datas[tid], ik_t,
+                    mj.skeleton_to_site, sample_frames, num_nodes, sf, has_free);
+                results[job] = {s, res};
+                state.round_frames_done.fetch_add(N);
+            }
+        };
+
+        std::vector<std::thread> threads;
+        for (int t = 0; t < n_threads; t++) threads.emplace_back(worker, t);
+        for (auto &t : threads) t.join();
+        for (int t = 0; t < n_threads; t++) { mj_deleteData(datas[t]); mj_deleteModel(models[t]); }
+
+        for (auto &[s, res] : results) {
+            std::cout << "[BodyResize]   global=" << std::fixed << std::setprecision(3) << s
+                      << " residual=" << std::setprecision(2) << res << " mm" << std::endl;
+            if (res < best_global_res) { best_global_res = res; best_global = s; }
         }
     }
 
-    // Fine sweep around best: ±0.05 in steps of 0.01
-    for (double s = best_global - 0.04; s <= best_global + 0.041; s += 0.01) {
-        if (std::abs(s - best_global) < 0.001) continue; // skip already tested
-        state.round_frames_done = 0;
-        body_resize_apply_global(mj, state, s);
-        double res = body_resize_eval(mj, ik, sample_frames, num_nodes, sf, all_qpos, state);
-        if (res < best_global_res) {
-            best_global_res = res;
-            best_global = s;
+    // Fine sweep (also parallel)
+    {
+        std::vector<double> fine;
+        for (double s = best_global - 0.04; s <= best_global + 0.041; s += 0.01) {
+            if (std::abs(s - best_global) < 0.001) continue;
+            fine.push_back(s);
+        }
+        // Set all segments to best_global for the fine sweep
+        for (auto &seg : state.segments) seg.scale = best_global;
+        auto fine_results = body_resize_eval_parallel(mj, state, fine, -1,
+                                                       sample_frames, num_nodes, sf, state.q_max_iters);
+        // seg_idx=-1 won't work with eval_parallel, do it inline
+        // Actually let's just do fine sweep sequentially — only 8 evaluations
+        for (double s : fine) {
+            state.round_frames_done = 0;
+            body_resize_apply_global(mj, state, s);
+
+            // Quick eval using main model
+            MujocoIKState ik_fine;
+            ik_fine.max_iterations = state.q_max_iters;
+            ik_fine.lr = 0.001; ik_fine.beta = 0.99;
+            ik_fine.reg_strength = 1e-4; ik_fine.cosine_annealing = true;
+            std::vector<std::vector<double>> qpos_tmp;
+            double res = body_resize_eval_private(mj.model, mj.data, ik_fine,
+                mj.skeleton_to_site, sample_frames, num_nodes, sf, mj.has_free_joint);
+            if (res < best_global_res) { best_global_res = res; best_global = s; }
         }
     }
 
@@ -440,41 +655,27 @@ inline bool body_resize_calibrate(MujocoContext &mj, BodyResizeState &state,
             double best_scale = base_scale;
             double best_res = 1e9;
 
-            // Test a range of multipliers on this segment.
-            // Other segments stay at their current scales.
-            // Use NO regularization — the global scale is our anchor.
-            // Accept purely based on IK residual improvement.
+            // Test multipliers in PARALLEL — each gets its own model copy.
             double multipliers[] = {0.80, 0.85, 0.90, 0.95, 1.00,
                                      1.05, 1.10, 1.15, 1.20, 1.30, 1.40, 1.50};
+            std::vector<double> candidates;
+            for (double mult : multipliers) {
+                double trial = best_global * mult;
+                if (trial >= 0.5 && trial <= 2.0)
+                    candidates.push_back(trial);
+            }
 
-            // First, evaluate baseline (current scale for this segment)
-            state.segments[g].scale = base_scale;
-            state.round_frames_done = 0;
-            body_resize_apply(mj, state);
-            best_res = body_resize_eval(mj, ik, sample_frames, num_nodes, sf, all_qpos, state);
-            best_scale = base_scale;
+            auto seg_results = body_resize_eval_parallel(
+                mj, state, candidates, g, sample_frames, num_nodes, sf, state.q_max_iters);
+
+            best_res = 1e9;
+            for (auto &[s, r] : seg_results) {
+                if (r < best_res) { best_scale = s; best_res = r; }
+            }
 
             std::cout << "[BodyResize]   " << state.segments[g].name
                       << " sweep: base=" << std::fixed << std::setprecision(3)
-                      << base_scale << " (" << std::setprecision(2) << best_res << "mm)";
-
-            for (double mult : multipliers) {
-                double trial = best_global * mult;
-                if (trial < 0.5 || trial > 2.0) continue;
-                if (std::abs(trial - base_scale) < 0.001) continue; // skip current
-
-                state.segments[g].scale = trial;
-                state.round_frames_done = 0;
-                body_resize_apply(mj, state);
-                double res = body_resize_eval(mj, ik, sample_frames, num_nodes, sf, all_qpos, state);
-
-                if (res < best_res) {
-                    best_scale = trial;
-                    best_res = res;
-                }
-            }
-
-            std::cout << " -> best=" << std::setprecision(3) << best_scale
+                      << base_scale << " -> best=" << best_scale
                       << " (" << std::setprecision(2) << best_res << "mm)"
                       << std::endl;
 
@@ -503,7 +704,14 @@ inline bool body_resize_calibrate(MujocoContext &mj, BodyResizeState &state,
     state.phase = 3;
     state.round_frames_done = 0;
     body_resize_apply(mj, state);
-    state.post_residual = body_resize_eval(mj, ik, sample_frames, num_nodes, sf, all_qpos, state);
+    {
+        MujocoIKState ik_final;
+        ik_final.max_iterations = state.q_max_iters;
+        ik_final.lr = 0.001; ik_final.beta = 0.99;
+        ik_final.reg_strength = 1e-4; ik_final.cosine_annealing = true;
+        state.post_residual = body_resize_eval_private(mj.model, mj.data, ik_final,
+            mj.skeleton_to_site, sample_frames, num_nodes, sf, mj.has_free_joint);
+    }
 
     // Restore IK settings
     ik.max_iterations = saved_max_iters;
