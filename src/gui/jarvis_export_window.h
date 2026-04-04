@@ -17,6 +17,11 @@ struct JarvisExportState {
     float train_ratio = 0.9f;
     int seed = 42;
     int jpeg_quality = 95;
+    int frame_start = -1; // -1 = use all
+    int frame_stop = -1;
+    int frame_step = 1;
+    bool use_frame_range = false;
+    int export_skeleton_idx = 0; // 0 = same as project
     bool in_progress = false;
     std::string status;
 
@@ -97,6 +102,53 @@ inline void DrawJarvisExportWindow(JarvisExportState &state, AppContext &ctx) {
 
         ImGui::Separator();
 
+        // Export skeleton selection — offer compatible subsets
+        {
+            const char *skel_label = skeleton.name.c_str();
+            std::vector<const char*> skel_options;
+            std::vector<int> skel_num_kp;
+            std::vector<std::string> skel_names_storage;
+
+            // Option 0: same as project
+            skel_names_storage.push_back(skeleton.name + " (" +
+                std::to_string(skeleton.num_nodes) + " kp)");
+            skel_options.push_back(skel_names_storage.back().c_str());
+            skel_num_kp.push_back(skeleton.num_nodes);
+
+            // Offer Rat24 if project is Rat24Target (first 24 kp are identical)
+            if (skeleton.name == "Rat24Target") {
+                skel_names_storage.push_back("Rat24 (24 kp)");
+                skel_options.push_back(skel_names_storage.back().c_str());
+                skel_num_kp.push_back(24);
+            }
+            // Offer Rat20Target if project is Rat24Target (first 20 kp subset)
+            // Add more mappings here as needed
+
+            if (skel_options.size() > 1) {
+                ImGui::Combo("Export Skeleton", &state.export_skeleton_idx,
+                             skel_options.data(), (int)skel_options.size());
+            } else {
+                ImGui::Text("Export Skeleton: %s", skel_options[0]);
+            }
+
+            // Clamp index
+            if (state.export_skeleton_idx >= (int)skel_options.size())
+                state.export_skeleton_idx = 0;
+        }
+
+        ImGui::Checkbox("Subsample Frames", &state.use_frame_range);
+        if (state.use_frame_range) {
+            ImGui::InputInt("Start Frame", &state.frame_start);
+            ImGui::SetItemTooltip("-1 = first frame");
+            ImGui::InputInt("Stop Frame", &state.frame_stop);
+            ImGui::SetItemTooltip("-1 = last frame");
+            ImGui::InputInt("Step", &state.frame_step);
+            if (state.frame_step < 1) state.frame_step = 1;
+            ImGui::SetItemTooltip("1 = every frame, 10 = every 10th, etc.");
+        }
+
+        ImGui::Separator();
+
         if (!state.in_progress) {
             std::string validation_error;
             if (ImGui::Button("Start Export")) {
@@ -126,6 +178,18 @@ inline void DrawJarvisExportWindow(JarvisExportState &state, AppContext &ctx) {
                     jcfg.train_ratio = state.train_ratio;
                     jcfg.seed = state.seed;
                     jcfg.jpeg_quality = state.jpeg_quality;
+                    if (state.use_frame_range) {
+                        jcfg.frame_start = state.frame_start;
+                        jcfg.frame_stop = state.frame_stop;
+                        jcfg.frame_step = state.frame_step;
+                    }
+
+                    // Skeleton remapping
+                    if (state.export_skeleton_idx == 1 &&
+                        skeleton.name == "Rat24Target") {
+                        jcfg.export_num_keypoints = 24;
+                        jcfg.export_skeleton_name = "Rat24";
+                    }
 
                     // Copy node names and edges from skeleton
                     jcfg.node_names = skeleton.node_names;

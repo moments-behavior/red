@@ -85,6 +85,11 @@ struct ExportConfig {
     float train_ratio = 0.9f;
     int seed = 42;
     int jpeg_quality = 95;
+    int frame_start = -1; // -1 = first valid frame
+    int frame_stop = -1;  // -1 = last valid frame
+    int frame_step = 1;   // 1 = every frame, 10 = every 10th, etc.
+    int export_num_keypoints = -1; // -1 = all, or truncate to first N keypoints
+    std::string export_skeleton_name; // override skeleton name in output (empty = use source)
 };
 
 // ---------------------------------------------------------------------------
@@ -96,7 +101,7 @@ struct ExportConfig {
 //   v2: #red_csv v2 + #skeleton + column header, then frame,x,y,z,c,x,y,z,c,... (groups of 4)
 // Returns map of frame_id -> Nx3 vector. Frames with any 1e7/empty sentinel are excluded.
 inline std::map<int, std::vector<std::vector<double>>>
-read_csv_3d(const std::string &path) {
+read_csv_3d(const std::string &path, int max_keypoints = -1) {
     std::map<int, std::vector<std::vector<double>>> result;
     std::ifstream file(path);
     if (!file.is_open())
@@ -152,21 +157,24 @@ parse_line:
         // v1: groups of 4 (idx, x, y, z) — skip idx
         // v2: groups of 4 (x, y, z, c) — skip c
         std::vector<std::vector<double>> kps;
-        bool has_invalid = false;
         if (is_v2) {
-            for (size_t i = 0; i + 2 < values.size(); i += 4) {
-                double x = values[i], y = values[i+1], z = values[i+2];
-                // i+3 is confidence (skip)
-                if (x == 1e7 || y == 1e7 || z == 1e7)
-                    has_invalid = true;
-                kps.push_back({x, y, z});
-            }
+            for (size_t i = 0; i + 2 < values.size(); i += 4)
+                kps.push_back({values[i], values[i+1], values[i+2]});
         } else {
-            for (size_t i = 0; i + 3 < values.size(); i += 4) {
-                double x = values[i+1], y = values[i+2], z = values[i+3];
-                if (x == 1e7 || y == 1e7 || z == 1e7)
-                    has_invalid = true;
-                kps.push_back({x, y, z});
+            for (size_t i = 0; i + 3 < values.size(); i += 4)
+                kps.push_back({values[i+1], values[i+2], values[i+3]});
+        }
+
+        // Truncate to max_keypoints if specified
+        if (max_keypoints > 0 && (int)kps.size() > max_keypoints)
+            kps.resize(max_keypoints);
+
+        // Only include frame if all (truncated) keypoints are valid
+        bool has_invalid = false;
+        for (const auto &kp : kps) {
+            if (kp[0] == 1e7 || kp[1] == 1e7 || kp[2] == 1e7) {
+                has_invalid = true;
+                break;
             }
         }
 
@@ -182,7 +190,7 @@ parse_line:
 // Applies Y-flip: y = img_height - y (converts ImPlot bottom-left to image top-left)
 // Returns map of frame_id -> Nx2 vector. Unlabeled sentinels → NaN.
 inline std::map<int, std::vector<std::vector<double>>>
-read_csv_2d(const std::string &path, int img_height) {
+read_csv_2d(const std::string &path, int img_height, int max_keypoints = -1) {
     std::map<int, std::vector<std::vector<double>>> result;
     std::ifstream file(path);
     if (!file.is_open())
@@ -270,6 +278,8 @@ parse_line:
                 kps.push_back({x, y});
             }
         }
+        if (max_keypoints > 0 && (int)kps.size() > max_keypoints)
+            kps.resize(max_keypoints);
         result[frame_id] = std::move(kps);
     }
     return result;
@@ -358,7 +368,7 @@ inline nlohmann::json generate_annotation_json(
 
         std::string csv_path =
             label_folder + "/" + cam + ".csv";
-        auto labels_2d = read_csv_2d(csv_path, img_h);
+        auto labels_2d = read_csv_2d(csv_path, img_h, config.num_keypoints);
 
         for (int frame_num : frame_list) {
             std::string file_name = trial_name + "/" + cam + "/Frame_" +
@@ -866,6 +876,21 @@ inline bool export_jarvis_dataset(const ExportConfig &config_in,
         config.output_folder = config_in.output_folder + "/" + buf;
     }
 
+    // Apply keypoint truncation (e.g. Rat24Target → Rat24)
+    if (config.export_num_keypoints > 0 && config.export_num_keypoints < config.num_keypoints) {
+        config.num_keypoints = config.export_num_keypoints;
+        if ((int)config.node_names.size() > config.num_keypoints)
+            config.node_names.resize(config.num_keypoints);
+        std::vector<std::pair<int,int>> valid_edges;
+        for (const auto &e : config.edges) {
+            if (e.first < config.num_keypoints && e.second < config.num_keypoints)
+                valid_edges.push_back(e);
+        }
+        config.edges = std::move(valid_edges);
+        if (!config.export_skeleton_name.empty())
+            config.skeleton_name = config.export_skeleton_name;
+    }
+
     ExportStats stats;
     stats.output_folder = config.output_folder;
     stats.num_cameras = static_cast<int>(config.camera_names.size());
@@ -882,6 +907,31 @@ inline bool export_jarvis_dataset(const ExportConfig &config_in,
         if (status)
             *status = "Error: No fully-triangulated frames found";
         return false;
+    }
+
+    // Apply start/stop/step subsampling
+    if (config.frame_start >= 0 || config.frame_stop >= 0 || config.frame_step > 1) {
+        int start = (config.frame_start >= 0) ? config.frame_start : valid_frames.front();
+        int stop  = (config.frame_stop >= 0)  ? config.frame_stop  : valid_frames.back();
+        int step  = std::max(1, config.frame_step);
+        std::vector<int> subsampled;
+        for (int f : valid_frames) {
+            if (f < start) continue;
+            if (f > stop) break;
+            subsampled.push_back(f);
+        }
+        if (step > 1) {
+            std::vector<int> stepped;
+            for (size_t i = 0; i < subsampled.size(); i += step)
+                stepped.push_back(subsampled[i]);
+            subsampled = std::move(stepped);
+        }
+        valid_frames = std::move(subsampled);
+        if (valid_frames.empty()) {
+            if (status)
+                *status = "Error: No frames in specified range";
+            return false;
+        }
     }
 
     // 2. Train/val split
@@ -1026,6 +1076,22 @@ inline bool export_jarvis_dataset(const ExportConfig &config_in,
         config.output_folder = config_in.output_folder + "/" + buf;
     }
 
+    // Apply keypoint truncation (e.g. Rat24Target → Rat24: drop last keypoint)
+    if (config.export_num_keypoints > 0 && config.export_num_keypoints < config.num_keypoints) {
+        config.num_keypoints = config.export_num_keypoints;
+        if ((int)config.node_names.size() > config.num_keypoints)
+            config.node_names.resize(config.num_keypoints);
+        // Keep only edges that reference valid keypoint indices
+        std::vector<std::pair<int,int>> valid_edges;
+        for (const auto &e : config.edges) {
+            if (e.first < config.num_keypoints && e.second < config.num_keypoints)
+                valid_edges.push_back(e);
+        }
+        config.edges = std::move(valid_edges);
+        if (!config.export_skeleton_name.empty())
+            config.skeleton_name = config.export_skeleton_name;
+    }
+
     ExportStats stats;
     stats.output_folder = config.output_folder;
     stats.num_cameras = static_cast<int>(config.camera_names.size());
@@ -1033,9 +1099,9 @@ inline bool export_jarvis_dataset(const ExportConfig &config_in,
     if (status)
         *status = "Reading 3D keypoints...";
 
-    // 1. Read 3D CSV to get valid frames
+    // 1. Read 3D CSV to get valid frames (truncated to export_num_keypoints)
     std::string kp3d_path = config.label_folder + "/keypoints3d.csv";
-    auto labels_3d = read_csv_3d(kp3d_path);
+    auto labels_3d = read_csv_3d(kp3d_path, config.num_keypoints);
     if (labels_3d.empty()) {
         if (status)
             *status = "Error: No valid 3D keypoints found in " + kp3d_path;
@@ -1047,6 +1113,32 @@ inline bool export_jarvis_dataset(const ExportConfig &config_in,
     for (const auto &[fid, _] : labels_3d)
         valid_frames.push_back(fid);
     std::sort(valid_frames.begin(), valid_frames.end());
+
+    // Apply start/stop/step subsampling
+    if (config.frame_start >= 0 || config.frame_stop >= 0 || config.frame_step > 1) {
+        int start = (config.frame_start >= 0) ? config.frame_start : valid_frames.front();
+        int stop  = (config.frame_stop >= 0)  ? config.frame_stop  : valid_frames.back();
+        int step  = std::max(1, config.frame_step);
+        std::vector<int> subsampled;
+        for (int f : valid_frames) {
+            if (f < start) continue;
+            if (f > stop) break;
+            subsampled.push_back(f);
+        }
+        if (step > 1) {
+            std::vector<int> stepped;
+            for (size_t i = 0; i < subsampled.size(); i += step)
+                stepped.push_back(subsampled[i]);
+            subsampled = std::move(stepped);
+        }
+        valid_frames = std::move(subsampled);
+    }
+
+    if (valid_frames.empty()) {
+        if (status)
+            *status = "Error: No frames in specified range";
+        return false;
+    }
 
     if (status)
         *status = "Splitting " + std::to_string(valid_frames.size()) +
