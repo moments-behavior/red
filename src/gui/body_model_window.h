@@ -279,8 +279,23 @@ struct BodyModelState {
         settings.last_mujoco_model = model_path;
         save_user_settings(settings);
         set_arena_defaults_for_model(mj);
+
+        // MJB files have scales/offsets baked in — reset body resize to avoid double-scaling
+        bool is_mjb = model_path.size() > 4 &&
+                      model_path.substr(model_path.size() - 4) == ".mjb";
+        if (is_mjb) {
+            for (auto &seg : body_resize.segments) seg.scale = 1.0;
+            body_resize.calibrated = false;
+            body_resize.loaded_scales.clear();
+        }
+
         std::string sp = project_path + "/mujoco_session.json";
         if (!project_path.empty() && std::filesystem::exists(sp) && load_session(sp)) {
+            // For MJB, skip body resize from session (already baked in)
+            if (is_mjb) {
+                body_resize.loaded_scales.clear();
+                body_resize.calibrated = false;
+            }
             apply_loaded_calibration(mj);
             return "MuJoCo model + session loaded";
         }
