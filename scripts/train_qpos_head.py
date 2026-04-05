@@ -268,14 +268,15 @@ class QposHeadD(nn.Module):
 # ═══════════════════════════════════════════════════════════════════════════
 
 class QposLoss(nn.Module):
-    def __init__(self, w_trans=10.0, w_rot=1.0, w_hinge=1.0, w_reg=0.01):
+    def __init__(self, w_trans=10.0, w_rot=1.0, w_hinge=1.0, w_fk=1.0, w_reg=0.01):
         super().__init__()
         self.w_trans = w_trans
         self.w_rot = w_rot
         self.w_hinge = w_hinge
+        self.w_fk = w_fk
         self.w_reg = w_reg
 
-    def forward(self, pred_qpos, gt_qpos):
+    def forward(self, pred_qpos, gt_qpos, fk_sites=None, kp_mj=None):
         l_trans = F.mse_loss(pred_qpos[:, :3], gt_qpos[:, :3])
         q_pred = F.normalize(pred_qpos[:, 3:7], dim=-1)
         q_gt = F.normalize(gt_qpos[:, 3:7], dim=-1)
@@ -283,12 +284,220 @@ class QposLoss(nn.Module):
         l_rot = (1.0 - dot ** 2).mean()
         l_hinge = F.mse_loss(pred_qpos[:, 7:], gt_qpos[:, 7:])
         l_reg = (pred_qpos[:, 7:] ** 2).mean()
+
+        # FK consistency: compare FK(pred_qpos) site positions to predicted keypoints
+        # fk_sites: either from differentiable FK (grad flows to qpos) or pre-computed
+        l_fk = torch.tensor(0.0, device=pred_qpos.device)
+        if fk_sites is not None and kp_mj is not None:
+            l_fk = F.mse_loss(fk_sites, kp_mj)
+
         total = (self.w_trans * l_trans + self.w_rot * l_rot +
-                 self.w_hinge * l_hinge + self.w_reg * l_reg)
+                 self.w_hinge * l_hinge + self.w_fk * l_fk + self.w_reg * l_reg)
         return total, {
             'trans': l_trans.item(), 'rot': l_rot.item(),
-            'hinge': l_hinge.item(), 'reg': l_reg.item(),
+            'hinge': l_hinge.item(), 'fk': l_fk.item(), 'reg': l_reg.item(),
         }
+
+
+class DifferentiableFK(nn.Module):
+    """Differentiable forward kinematics in PyTorch.
+
+    Walks the MuJoCo kinematic tree: free joint (root pos + quat) →
+    hinge joints (single-axis rotations) → site positions.
+    Fully differentiable w.r.t. qpos for backpropagation.
+    """
+
+    def __init__(self, model_path):
+        super().__init__()
+        import mujoco
+        m = mujoco.MjModel.from_binary_path(model_path)
+
+        # Extract kinematic chain as tensors
+        # Body info: parent, local position, local quaternion
+        self.nbody = m.nbody
+        self.register_buffer('body_parent', torch.tensor(
+            [int(m.body_parentid[i]) for i in range(m.nbody)], dtype=torch.long))
+        self.register_buffer('body_pos', torch.tensor(
+            m.body_pos[:m.nbody].copy(), dtype=torch.float32))
+        self.register_buffer('body_quat', torch.tensor(
+            m.body_quat[:m.nbody].copy(), dtype=torch.float32))
+
+        # Joint info: which body, qpos address, axis (for hinge), type, anchor pos
+        body_to_joint = {}  # body_id → joint_info
+        for i in range(m.njnt):
+            jtype = int(m.jnt_type[i])
+            body_to_joint[int(m.jnt_bodyid[i])] = {
+                'type': jtype,
+                'qposadr': int(m.jnt_qposadr[i]),
+                'axis': m.jnt_axis[i].copy(),
+                'pos': m.jnt_pos[i].copy(),  # joint anchor offset in body frame
+            }
+        self.body_to_joint = body_to_joint
+
+        # Pre-compute hinge axes and positions as registered buffers (move with .to())
+        for bid, j in body_to_joint.items():
+            if j['type'] == 3:
+                self.register_buffer(f'_hinge_axis_{bid}',
+                    torch.tensor(j['axis'], dtype=torch.float32))
+                self.register_buffer(f'_jnt_pos_{bid}',
+                    torch.tensor(j['pos'], dtype=torch.float32))
+
+        # Site info: which body, local position
+        site_data = []
+        for i in range(m.nsite):
+            if 'kpsite' in m.site(i).name:
+                site_data.append((int(m.site_bodyid[i]), m.site_pos[i].copy()))
+        self.n_sites = len(site_data)
+        self.register_buffer('site_body', torch.tensor(
+            [s[0] for s in site_data], dtype=torch.long))
+        self.register_buffer('site_pos', torch.tensor(
+            np.array([s[1] for s in site_data]), dtype=torch.float32))
+
+        # Pre-compute body order (topological sort — parents before children)
+        self._body_order = list(range(m.nbody))  # already in order for MuJoCo models
+
+    def _quat_mul(self, q1, q2):
+        """Quaternion multiplication [B, 4] x [B, 4] → [B, 4]. (w, x, y, z)"""
+        w1, x1, y1, z1 = q1.unbind(-1)
+        w2, x2, y2, z2 = q2.unbind(-1)
+        return torch.stack([
+            w1*w2 - x1*x2 - y1*y2 - z1*z2,
+            w1*x2 + x1*w2 + y1*z2 - z1*y2,
+            w1*y2 - x1*z2 + y1*w2 + z1*x2,
+            w1*z2 + x1*y2 - y1*x2 + z1*w2,
+        ], dim=-1)
+
+    def _quat_rotate(self, q, v):
+        """Rotate vector v by quaternion q. q: [B, 4], v: [B, 3] → [B, 3]"""
+        qv = torch.cat([torch.zeros_like(v[..., :1]), v], dim=-1)
+        q_conj = q * torch.tensor([1, -1, -1, -1], device=q.device, dtype=q.dtype)
+        rotated = self._quat_mul(self._quat_mul(q, qv), q_conj)
+        return rotated[..., 1:]
+
+    def _axis_angle_to_quat(self, axis, angle):
+        """Axis-angle to quaternion. axis: [3], angle: [B] → [B, 4]"""
+        half = angle * 0.5
+        s = torch.sin(half)
+        c = torch.cos(half)
+        ax = axis.to(angle.device)
+        return torch.stack([c, s * ax[0], s * ax[1], s * ax[2]], dim=-1)
+
+    def forward(self, qpos):
+        """qpos: [B, 68] → site_positions: [B, n_sites, 3]"""
+        B = qpos.shape[0]
+        device = qpos.device
+
+        # Accumulate world transforms: position + quaternion per body
+        world_pos = torch.zeros(B, self.nbody, 3, device=device)
+        world_quat = torch.zeros(B, self.nbody, 4, device=device)
+        world_quat[:, 0, 0] = 1.0  # identity for world body
+
+        for bid in self._body_order:
+            if bid == 0:
+                continue  # world body
+
+            parent = self.body_parent[bid].item()
+            local_pos = self.body_pos[bid]  # [3]
+            local_quat = self.body_quat[bid]  # [4]
+
+            # Apply joint rotation if this body has a joint
+            if bid in self.body_to_joint:
+                j = self.body_to_joint[bid]
+                if j['type'] == 0:  # free joint
+                    # MuJoCo: free joint sets body pose directly from qpos
+                    # body_pos and body_quat are ignored for free joint bodies
+                    new_pos = qpos[:, 0:3]
+                    new_quat = F.normalize(qpos[:, 3:7], dim=-1)
+                    world_pos = world_pos.clone()
+                    world_quat = world_quat.clone()
+                    world_pos[:, bid] = new_pos
+                    world_quat[:, bid] = new_quat
+                    continue
+                elif j['type'] == 3:  # hinge joint
+                    qa = j['qposadr']
+                    angle = qpos[:, qa]  # [B]
+                    axis = getattr(self, f'_hinge_axis_{bid}')
+                    jnt_pos = getattr(self, f'_jnt_pos_{bid}')
+                    hinge_quat = self._axis_angle_to_quat(axis, angle)  # [B, 4]
+
+                    # MuJoCo FK with joint anchor:
+                    # 1. Orientation: parent * body_quat * hinge_rotation
+                    local_combined = self._quat_mul(
+                        local_quat.unsqueeze(0).expand(B, -1), hinge_quat)
+
+                    # 2. Position: account for joint anchor offset
+                    # anchor_in_parent = body_pos + jnt_pos
+                    # world_anchor = parent_pos + rotate(parent_quat, anchor_in_parent)
+                    # world_pos = world_anchor - rotate(world_quat, jnt_pos)
+                    parent_pos = world_pos[:, parent]
+                    parent_quat = world_quat[:, parent]
+                    anchor_local = (local_pos + jnt_pos).unsqueeze(0).expand(B, -1)
+                    world_anchor = parent_pos + self._quat_rotate(parent_quat, anchor_local)
+                    new_quat = self._quat_mul(parent_quat, local_combined)
+                    new_pos = world_anchor - self._quat_rotate(
+                        new_quat, jnt_pos.unsqueeze(0).expand(B, -1))
+
+                    world_pos = world_pos.clone()
+                    world_quat = world_quat.clone()
+                    world_pos[:, bid] = new_pos
+                    world_quat[:, bid] = new_quat
+                    continue
+                else:
+                    local_combined = local_quat.unsqueeze(0).expand(B, -1)
+            else:
+                local_combined = local_quat.unsqueeze(0).expand(B, -1)
+
+            # World transform for bodies without hinge joints (or with non-hinge joints)
+            parent_pos = world_pos[:, parent]
+            parent_quat = world_quat[:, parent]
+
+            rotated_pos = self._quat_rotate(parent_quat, local_pos.unsqueeze(0).expand(B, -1))
+            new_pos = parent_pos + rotated_pos
+            new_quat = self._quat_mul(parent_quat, local_combined)
+
+            # Avoid inplace ops for autograd
+            world_pos = world_pos.clone()
+            world_quat = world_quat.clone()
+            world_pos[:, bid] = new_pos
+            world_quat[:, bid] = new_quat
+
+        # Compute site positions
+        sites = torch.zeros(B, self.n_sites, 3, device=device)
+        for s in range(self.n_sites):
+            bid = self.site_body[s].item()
+            local_p = self.site_pos[s]  # [3]
+            rotated = self._quat_rotate(world_quat[:, bid],
+                                        local_p.unsqueeze(0).expand(B, -1))
+            sites[:, s] = world_pos[:, bid] + rotated
+
+        return sites
+
+
+class MujocoFK:
+    """Batch FK: qpos → site positions via MuJoCo (CPU, not differentiable)."""
+    def __init__(self, model_path, n_sites=24):
+        import mujoco
+        self.mj_model = mujoco.MjModel.from_binary_path(model_path)
+        self.mj_data = mujoco.MjData(self.mj_model)
+        self.site_ids = []
+        for i in range(self.mj_model.nsite):
+            if 'kpsite' in self.mj_model.site(i).name:
+                self.site_ids.append(i)
+        self.site_ids = self.site_ids[:n_sites]
+        self.n_sites = len(self.site_ids)
+
+    def __call__(self, qpos_batch):
+        """qpos_batch: [B, 68] tensor → [B, n_sites, 3] tensor of site positions."""
+        import mujoco
+        B = qpos_batch.shape[0]
+        sites = torch.zeros(B, self.n_sites, 3)
+        qpos_np = qpos_batch.detach().cpu().numpy()
+        for i in range(B):
+            self.mj_data.qpos[:] = qpos_np[i]
+            mujoco.mj_forward(self.mj_model, self.mj_data)
+            for j, sid in enumerate(self.site_ids):
+                sites[i, j] = torch.tensor(self.mj_data.site_xpos[sid])
+        return sites
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -374,13 +583,19 @@ def cache_features(args):
     qpos_dict = load_qpos_csv(args.qpos_csv, max_residual_mm=args.max_residual)
     print(f"  {len(qpos_dict)} frames with residual <= {args.max_residual}mm")
 
+    # Pre-compute FK sites from GT qpos if MuJoCo model available
+    fk_engine = None
+    if args.mujoco_model:
+        fk_engine = MujocoFK(args.mujoco_model)
+        print(f"  FK engine: {fk_engine.n_sites} sites")
+
     for split in ["train", "val"]:
         print(f"\nCaching {split}...")
         ds = Dataset3D(cfg, set=split)
         loader = DataLoader(ds, batch_size=1, shuffle=False,
                            num_workers=cfg.DATALOADER_NUM_WORKERS, pin_memory=True)
 
-        all_features, all_points3d, all_qpos, all_frames = [], [], [], []
+        all_features, all_points3d, all_qpos, all_fk_sites, all_frames = [], [], [], [], []
         skipped = 0
 
         with torch.no_grad():
@@ -405,7 +620,11 @@ def cache_features(args):
 
                 all_features.append(heatmap_final.cpu())
                 all_points3d.append(points3D.cpu())
-                all_qpos.append(torch.tensor(qpos_dict[frame_num]).unsqueeze(0))
+                qpos_tensor = torch.tensor(qpos_dict[frame_num]).unsqueeze(0)
+                all_qpos.append(qpos_tensor)
+                # Pre-compute FK sites from GT qpos
+                if fk_engine is not None:
+                    all_fk_sites.append(fk_engine(qpos_tensor))
                 all_frames.append(frame_num)
 
                 if (i + 1) % 50 == 0:
@@ -415,12 +634,15 @@ def cache_features(args):
             print(f"  WARNING: No features for {split}!")
             continue
 
-        torch.save({
+        save_dict = {
             'features': torch.cat(all_features, dim=0),
             'points3d': torch.cat(all_points3d, dim=0),
             'qpos': torch.cat(all_qpos, dim=0),
             'frames': all_frames,
-        }, os.path.join(cache_dir, f"{split}_features.pt"))
+        }
+        if all_fk_sites:
+            save_dict['fk_sites'] = torch.cat(all_fk_sites, dim=0)
+        torch.save(save_dict, os.path.join(cache_dir, f"{split}_features.pt"))
         print(f"  Saved: {len(all_features)} frames")
 
 
@@ -434,9 +656,11 @@ class CachedDataset(Dataset):
         self.features = data['features']
         self.points3d = data['points3d']  # [N, 24, 3] in calibration mm
         self.qpos = data['qpos']
+        self.fk_sites = data.get('fk_sites', None)  # [N, 24, 3] in MuJoCo meters
         self.arena_R = arena_R
         self.arena_t = arena_t
         self.arena_scale = arena_scale
+        self.has_fk = self.fk_sites is not None
 
     def __len__(self):
         return len(self.features)
@@ -446,7 +670,8 @@ class CachedDataset(Dataset):
         kp_mm = self.points3d[idx]  # [24, 3]
         kp_mj = self.arena_scale * (kp_mm @ self.arena_R.T) + self.arena_t
         centroid_mj = kp_mj.mean(dim=0)  # [3]
-        return self.features[idx], kp_mj, centroid_mj, self.qpos[idx]
+        fk = self.fk_sites[idx] if self.has_fk else torch.zeros_like(kp_mj)
+        return self.features[idx], kp_mj, centroid_mj, self.qpos[idx], fk
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -498,10 +723,16 @@ def train(args):
     else:
         raise ValueError(f"Unknown mode: {args.mode}")
 
+    # Differentiable FK for consistency loss
+    diff_fk = None
+    if args.mujoco_model:
+        diff_fk = DifferentiableFK(args.mujoco_model).to(device)
+        print(f"Differentiable FK: {diff_fk.n_sites} sites")
+
     n_params = sum(p.numel() for p in model.parameters())
     print(f"Model: {model.__class__.__name__}, {n_params:,} params")
 
-    criterion = QposLoss(w_trans=10.0, w_rot=1.0, w_hinge=1.0, w_reg=0.01)
+    criterion = QposLoss(w_trans=10.0, w_rot=1.0, w_hinge=1.0, w_fk=1.0, w_reg=0.01)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
         optimizer, max_lr=args.lr,
@@ -517,7 +748,7 @@ def train(args):
         model.train()
         train_loss = 0
         train_comp = {}
-        for features, kp_mj, centroid_mj, gt_qpos in train_loader:
+        for features, kp_mj, centroid_mj, gt_qpos, _fk_static in train_loader:
             features = features.to(device)
             kp_mj = kp_mj.to(device)
             centroid_mj = centroid_mj.to(device)
@@ -528,7 +759,9 @@ def train(args):
             else:  # D
                 pred_qpos = model(features, kp_mj)
 
-            loss, comp = criterion(pred_qpos, gt_qpos)
+            # Differentiable FK: pred_qpos → site positions (gradients flow to qpos head)
+            fk_sites = diff_fk(pred_qpos) if diff_fk is not None else None
+            loss, comp = criterion(pred_qpos, gt_qpos, fk_sites, kp_mj)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -547,7 +780,7 @@ def train(args):
         val_loss = 0
         val_comp = {}
         with torch.no_grad():
-            for features, kp_mj, centroid_mj, gt_qpos in val_loader:
+            for features, kp_mj, centroid_mj, gt_qpos, _fk_static in val_loader:
                 features = features.to(device)
                 kp_mj = kp_mj.to(device)
                 centroid_mj = centroid_mj.to(device)
@@ -558,7 +791,8 @@ def train(args):
                 else:
                     pred_qpos = model(features, kp_mj)
 
-                loss, comp = criterion(pred_qpos, gt_qpos)
+                fk_sites = diff_fk(pred_qpos) if diff_fk is not None else None
+                loss, comp = criterion(pred_qpos, gt_qpos, fk_sites, kp_mj)
                 val_loss += loss.item()
                 for k, v in comp.items():
                     val_comp[k] = val_comp.get(k, 0) + v
@@ -583,7 +817,8 @@ def train(args):
               f"train={train_loss:.4f} val={val_loss:.4f}{improved} | "
               f"t={train_comp.get('trans',0):.6f} "
               f"r={train_comp.get('rot',0):.4f} "
-              f"h={train_comp.get('hinge',0):.4f} | "
+              f"h={train_comp.get('hinge',0):.4f} "
+              f"fk={train_comp.get('fk',0):.4f} | "
               f"lr={lr:.6f} | {dt:.1f}s")
 
     print(f"\nDone. Best val: {best_val_loss:.4f}")
