@@ -17,6 +17,8 @@
 #include <ImGuiFileDialog.h>
 #include <fstream>
 #include <iomanip>
+#include <sstream>
+#include <map>
 #include <string>
 #include <thread>
 #include <atomic>
@@ -65,8 +67,17 @@ struct MujocoExportState {
     bool              result_ok = false;
 };
 
-// IK method: iterative gradient descent or learned neural network
-enum IKMethod { IK_ITERATIVE = 0, IK_LEARNED = 1 };
+// IK method: iterative gradient descent, learned neural network, or pre-computed CSV
+enum IKMethod { IK_ITERATIVE = 0, IK_LEARNED = 1, IK_PRECOMPUTED = 2 };
+
+// Pre-computed qpos lookup (loaded from CSV)
+struct QposCache {
+    bool loaded = false;
+    std::string source_path;
+    std::map<int, std::vector<double>> frame_to_qpos; // ordered for prev/next navigation
+    int n_qpos = 0;
+    int n_frames = 0;
+};
 
 struct BodyModelState {
     bool show = false;
@@ -80,6 +91,9 @@ struct BodyModelState {
 
     // Learned IK model (CoreML)
     LearnedIKState learned_ik;
+
+    // Pre-computed qpos cache
+    QposCache qpos_cache;
 
     // Body resize state
     BodyResizeState body_resize;
@@ -515,6 +529,104 @@ struct BodyModelState {
 
 #ifdef RED_HAS_MUJOCO
 
+// ---------------------------------------------------------------------------
+// Pre-computed qpos: load from CSV and apply per frame
+// ---------------------------------------------------------------------------
+
+inline bool load_qpos_csv(QposCache &cache, const std::string &path) {
+    cache = QposCache{};
+    std::ifstream file(path);
+    if (!file.is_open()) return false;
+
+    int nq = -1;
+    std::string line;
+    while (std::getline(file, line)) {
+        if (line.empty()) continue;
+        if (line[0] == '#') {
+            // Parse "# nq: 68"
+            if (line.find("nq:") != std::string::npos) {
+                auto pos = line.find(':');
+                if (pos != std::string::npos)
+                    nq = std::stoi(line.substr(pos + 1));
+            }
+            continue;
+        }
+        if (line.find("frame,") == 0) {
+            // Header — infer nq if not set: count qpos_N columns
+            if (nq < 0) {
+                int commas = 0;
+                for (char c : line) if (c == ',') commas++;
+                nq = commas - 3; // frame + residual + iterations + converged
+            }
+            continue;
+        }
+
+        // Data line
+        std::stringstream ss(line);
+        std::string token;
+        if (!std::getline(ss, token, ',')) continue;
+        int frame;
+        try { frame = std::stoi(token); }
+        catch (...) { continue; }
+
+        if (nq <= 0) nq = 68; // fallback
+
+        std::vector<double> qpos(nq);
+        for (int i = 0; i < nq; i++) {
+            if (!std::getline(ss, token, ',')) break;
+            try { qpos[i] = std::stod(token); }
+            catch (...) { qpos[i] = 0; }
+        }
+
+        cache.frame_to_qpos[frame] = std::move(qpos);
+    }
+
+    cache.n_qpos = nq;
+    cache.n_frames = (int)cache.frame_to_qpos.size();
+    cache.source_path = path;
+    cache.loaded = cache.n_frames > 0;
+    return cache.loaded;
+}
+
+inline bool apply_precomputed_qpos(MujocoContext &mj, MujocoIKState &ik_state,
+                                    QposCache &cache, int frame_num) {
+    if (!cache.loaded || !mj.loaded || !mj.model || !mj.data) return false;
+
+    auto it = cache.frame_to_qpos.find(frame_num);
+    if (it == cache.frame_to_qpos.end()) return false;
+
+    auto t0 = std::chrono::high_resolution_clock::now();
+
+    int nq = std::min((int)mj.model->nq, (int)it->second.size());
+    for (int i = 0; i < nq; i++)
+        mj.data->qpos[i] = it->second[i];
+
+    // Normalize quaternion for free joints
+    for (int j = 0; j < mj.model->njnt; j++) {
+        if (mj.model->jnt_type[j] == mjJNT_FREE) {
+            int qa = (int)mj.model->jnt_qposadr[j];
+            double w = mj.data->qpos[qa+3], x = mj.data->qpos[qa+4];
+            double y = mj.data->qpos[qa+5], z = mj.data->qpos[qa+6];
+            double norm = std::sqrt(w*w + x*x + y*y + z*z);
+            if (norm > 1e-10) {
+                mj.data->qpos[qa+3] /= norm; mj.data->qpos[qa+4] /= norm;
+                mj.data->qpos[qa+5] /= norm; mj.data->qpos[qa+6] /= norm;
+            }
+        }
+    }
+
+    mj_fwdPosition(mj.model, mj.data);
+
+    auto t1 = std::chrono::high_resolution_clock::now();
+    ik_state.solve_time_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+    ik_state.iterations_used = 0;
+    ik_state.converged = true;
+    ik_state.active_sites = 0;
+    ik_state.final_residual = 0;
+    return true;
+}
+
+// ---------------------------------------------------------------------------
 // Solve one frame using the learned IK model (CoreML).
 // IMPORTANT: kp3d must already be in MuJoCo frame (meters) — the caller
 // (get_kp3d / arena transform) handles the coordinate conversion.
@@ -1137,9 +1249,60 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
             }
 
             // IK method selector
-            const char *ik_methods[] = {"Iterative (gradient descent)", "Learned (neural network)"};
+            const char *ik_methods[] = {
+                "Iterative (gradient descent)",
+                "Learned (neural network)",
+                "Pre-computed (from CSV)"
+            };
             ImGui::SetNextItemWidth(250);
-            ImGui::Combo("IK Method", &state.ik_method, ik_methods, 2);
+            ImGui::Combo("IK Method", &state.ik_method, ik_methods, 3);
+            if (state.ik_method == IK_PRECOMPUTED) {
+                if (state.qpos_cache.loaded) {
+                    ImGui::TextColored(ImVec4(0.2f, 0.9f, 0.2f, 1),
+                        "%d frames loaded — scrub video to see poses",
+                        state.qpos_cache.n_frames);
+                    bool has_current = state.qpos_cache.frame_to_qpos.count(
+                        ctx.current_frame_num) > 0;
+                    if (has_current)
+                        ImGui::Text("Frame %d: pose loaded", ctx.current_frame_num);
+                    else
+                        ImGui::TextColored(ImVec4(1, 0.5f, 0, 1),
+                            "Frame %d: no pre-computed pose", ctx.current_frame_num);
+                } else {
+                    ImGui::TextColored(ImVec4(1, 0.5f, 0, 1), "No CSV loaded");
+                }
+                if (ImGui::SmallButton("Load CSV...")) {
+                    IGFD::FileDialogConfig cfg;
+                    cfg.countSelectionMax = 1;
+                    cfg.path = ctx.pm.project_path;
+                    cfg.flags = ImGuiFileDialogFlags_Modal;
+                    ImGuiFileDialog::Instance()->OpenDialog(
+                        "LoadQposCSV", "Load Qpos CSV", ".csv", cfg);
+                }
+                if (state.qpos_cache.loaded) {
+                    ImGui::SameLine();
+                    if (ImGui::SmallButton("Unload")) {
+                        state.qpos_cache = QposCache{};
+                    }
+                    // Prev / Next navigation through pre-computed frames
+                    if (ImGui::SmallButton("< Prev")) {
+                        auto it = state.qpos_cache.frame_to_qpos.lower_bound(ctx.current_frame_num);
+                        if (it != state.qpos_cache.frame_to_qpos.begin()) {
+                            --it;
+                            seek_all_cameras(ctx.scene, it->first,
+                                ctx.dc_context->video_fps, ctx.ps, true);
+                        }
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::SmallButton("Next >")) {
+                        auto it = state.qpos_cache.frame_to_qpos.upper_bound(ctx.current_frame_num);
+                        if (it != state.qpos_cache.frame_to_qpos.end()) {
+                            seek_all_cameras(ctx.scene, it->first,
+                                ctx.dc_context->video_fps, ctx.ps, true);
+                        }
+                    }
+                }
+            }
             if (state.ik_method == IK_LEARNED && !state.learned_ik.loaded) {
                 ImGui::SameLine();
                 ImGui::TextColored(ImVec4(1, 0.5f, 0, 1), "No model loaded");
@@ -1159,21 +1322,29 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
             }
 
             if (ImGui::Button("Solve Frame")) {
-                auto it = ctx.annotations.find(ctx.current_frame_num);
-                if (it != ctx.annotations.end() && !it->second.kp3d.empty()) {
-                    const Keypoint3D *kp = get_kp3d(it->second.kp3d);
-                    if (state.ik_method == IK_LEARNED && state.learned_ik.loaded) {
-                        learned_ik_solve_frame(mj, state.ik_state, state.learned_ik,
-                                               kp, ctx.skeleton.num_nodes);
-                    } else {
-                        double saved_budget = state.ik_state.time_budget_ms;
-                        state.ik_state.time_budget_ms = 0.0;
-                        mujoco_ik_solve(mj, state.ik_state,
-                                        kp,
-                                        ctx.skeleton.num_nodes,
-                                        ctx.current_frame_num);
-                        state.ik_state.time_budget_ms = saved_budget;
+                bool solved = false;
+                if (state.ik_method == IK_PRECOMPUTED && state.qpos_cache.loaded) {
+                    solved = apply_precomputed_qpos(mj, state.ik_state,
+                                state.qpos_cache, ctx.current_frame_num);
+                } else {
+                    auto it = ctx.annotations.find(ctx.current_frame_num);
+                    if (it != ctx.annotations.end() && !it->second.kp3d.empty()) {
+                        const Keypoint3D *kp = get_kp3d(it->second.kp3d);
+                        if (state.ik_method == IK_LEARNED && state.learned_ik.loaded) {
+                            solved = learned_ik_solve_frame(mj, state.ik_state,
+                                        state.learned_ik, kp, ctx.skeleton.num_nodes);
+                        } else {
+                            double saved_budget = state.ik_state.time_budget_ms;
+                            state.ik_state.time_budget_ms = 0.0;
+                            mujoco_ik_solve(mj, state.ik_state, kp,
+                                            ctx.skeleton.num_nodes,
+                                            ctx.current_frame_num);
+                            state.ik_state.time_budget_ms = saved_budget;
+                            solved = true;
+                        }
                     }
+                }
+                if (solved) {
                     state.last_solved_frame = ctx.current_frame_num;
                     int torso_id = mj_name2id(mj.model, mjOBJ_BODY, "torso");
                     if (torso_id >= 0) {
@@ -2071,22 +2242,38 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
             } // end CollapsingHeader("Controls")
 
             // Auto-solve runs every frame regardless of header state
+            // Pre-computed mode always applies (no need for auto_solve checkbox)
             // Skip if background calibration is running (they mutate mj.model/data)
-            if (state.auto_solve && ctx.current_frame_num != state.last_solved_frame
+            bool should_solve = (state.auto_solve ||
+                                 (state.ik_method == IK_PRECOMPUTED && state.qpos_cache.loaded));
+            if (should_solve && ctx.current_frame_num != state.last_solved_frame
                 && !state.body_resize_running && !state.stac_calibrating) {
                 state.last_solved_frame = ctx.current_frame_num;
-                auto it = ctx.annotations.find(ctx.current_frame_num);
-                if (it != ctx.annotations.end() && !it->second.kp3d.empty()) {
-                    const Keypoint3D *kp = get_kp3d(it->second.kp3d);
-                    if (state.ik_method == IK_LEARNED && state.learned_ik.loaded) {
-                        learned_ik_solve_frame(mj, state.ik_state, state.learned_ik,
-                                               kp, ctx.skeleton.num_nodes);
-                    } else {
-                        mujoco_ik_solve(mj, state.ik_state,
-                                        kp,
-                                        ctx.skeleton.num_nodes,
-                                        ctx.current_frame_num);
+                bool solved = false;
+
+                // Pre-computed mode: only needs frame number, no keypoints
+                if (state.ik_method == IK_PRECOMPUTED && state.qpos_cache.loaded) {
+                    solved = apply_precomputed_qpos(mj, state.ik_state,
+                                                     state.qpos_cache,
+                                                     ctx.current_frame_num);
+                } else {
+                    // Learned/Iterative: need 3D keypoints
+                    auto it = ctx.annotations.find(ctx.current_frame_num);
+                    if (it != ctx.annotations.end() && !it->second.kp3d.empty()) {
+                        const Keypoint3D *kp = get_kp3d(it->second.kp3d);
+                        if (state.ik_method == IK_LEARNED && state.learned_ik.loaded) {
+                            solved = learned_ik_solve_frame(mj, state.ik_state,
+                                        state.learned_ik, kp, ctx.skeleton.num_nodes);
+                        } else {
+                            mujoco_ik_solve(mj, state.ik_state, kp,
+                                            ctx.skeleton.num_nodes,
+                                            ctx.current_frame_num);
+                            solved = true;
+                        }
                     }
+                }
+
+                if (solved) {
                     int torso_id = mj_name2id(mj.model, mjOBJ_BODY, "torso");
                     if (torso_id >= 0) {
                         state.mjcam.lookat[0] = mj.data->xpos[3*torso_id+0];
@@ -2236,10 +2423,21 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
 #endif // RED_HAS_MUJOCO
         },
         [&]() {
-            // File dialog (runs every frame regardless of panel visibility)
+            // File dialogs (run every frame regardless of panel visibility)
             if (ImGuiFileDialog::Instance()->Display("ChooseMujocoModel")) {
                 if (ImGuiFileDialog::Instance()->IsOk())
                     state.model_path = ImGuiFileDialog::Instance()->GetFilePathName();
+                ImGuiFileDialog::Instance()->Close();
+            }
+            if (ImGuiFileDialog::Instance()->Display("LoadQposCSV",
+                    ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
+                if (ImGuiFileDialog::Instance()->IsOk()) {
+                    std::string path = ImGuiFileDialog::Instance()->GetFilePathName();
+                    if (load_qpos_csv(state.qpos_cache, path)) {
+                        std::cout << "[QposCache] Loaded " << state.qpos_cache.n_frames
+                                  << " frames from " << path << std::endl;
+                    }
+                }
                 ImGuiFileDialog::Instance()->Close();
             }
         },
