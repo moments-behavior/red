@@ -281,15 +281,23 @@ inline bool mujoco_ik_solve(MujocoContext &mj, MujocoIKState &state,
 
         // Periodic checks (every check_every iterations, skip iter 0)
         if (state.check_every > 0 && iter > 0 && iter % state.check_every == 0) {
-            // Update residual tracking
+            // Recompute error after update (err_sq above was pre-update)
+            double post_err_sq = 0.0;
+            for (int k = 0; k < N; k++) {
+                const double *sp = mj.data->site_xpos + 3 * targets[k].site_idx;
+                for (int c = 0; c < 3; c++) {
+                    double d = sp[c] - targets[k].target[c];
+                    post_err_sq += d * d;
+                }
+            }
             double reg_sq = 0.0;
             for (int dof : hinge_dof_indices) {
                 int qa = (int)mj.model->jnt_qposadr[mj.model->dof_jntid[dof]];
                 reg_sq += mj.data->qpos[qa] * mj.data->qpos[qa];
             }
-            double obj = err_sq + state.reg_strength * reg_sq;
+            double obj = post_err_sq + state.reg_strength * reg_sq;
             state.final_objective = obj;
-            state.final_residual = std::sqrt(err_sq / N);
+            state.final_residual = std::sqrt(post_err_sq / N);
 
             // Convergence check: use base LR (not decayed) so cosine
             // annealing doesn't trigger early convergence

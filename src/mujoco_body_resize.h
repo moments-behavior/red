@@ -83,7 +83,8 @@ struct BodyResizeState {
     // Phase 2 progress
     std::atomic<int> seg_current{0};        // which segment (0-based) being evaluated
     std::atomic<int> seg_total{0};          // total segments
-    std::string seg_current_name;           // name of current segment (not atomic, read-only during display)
+    // seg_current index is used to look up name from UI thread (avoids std::string race)
+    // Use seg_current.load() and index into segments[] from the UI thread
     std::atomic<int> seg_mults_done{0};     // multipliers done for current segment
     std::atomic<int> seg_mults_total{0};    // total multipliers for current segment
 };
@@ -622,10 +623,7 @@ inline bool body_resize_calibrate(MujocoContext &mj, BodyResizeState &state,
         }
         // Set all segments to best_global for the fine sweep
         for (auto &seg : state.segments) seg.scale = best_global;
-        auto fine_results = body_resize_eval_parallel(mj, state, fine, -1,
-                                                       sample_frames, num_nodes, sf, state.q_max_iters);
-        // seg_idx=-1 won't work with eval_parallel, do it inline
-        // Actually let's just do fine sweep sequentially — only 8 evaluations
+        // Fine sweep done sequentially — only 8 evaluations, not worth parallelizing
         for (double s : fine) {
             state.round_frames_done = 0;
             body_resize_apply_global(mj, state, s);
@@ -664,7 +662,7 @@ inline bool body_resize_calibrate(MujocoContext &mj, BodyResizeState &state,
 
         for (int g = 0; g < n_seg; g++) {
             state.seg_current = g;
-            state.seg_current_name = state.segments[g].name;
+            // seg_current is atomic — UI reads index and looks up name from segments[]
             state.seg_mults_done = 0;
 
             double base_scale = state.segments[g].scale;

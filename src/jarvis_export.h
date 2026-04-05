@@ -592,9 +592,15 @@ inline bool write_calibration_yamls(const ExportConfig &config,
 // but frame-based seeking respects the MP4 edit list (frame 0 = PTS 0).
 // This function detects the offset so we can correctly map RED frame numbers.
 inline int detect_negative_pts_offset(const std::string &video_path, double fps) {
+    // Escape single quotes in path to prevent shell injection
+    std::string escaped_path;
+    for (char c : video_path) {
+        if (c == '\'') escaped_path += "'\\''";
+        else escaped_path += c;
+    }
     std::string cmd = "ffprobe -v quiet -select_streams v:0 -show_packets "
-                      "-show_entries packet=pts_time -of csv=p=0 \"" +
-                      video_path + "\" 2>/dev/null | head -1";
+                      "-show_entries packet=pts_time -of csv=p=0 '" +
+                      escaped_path + "' 2>/dev/null | head -1";
     FILE *fp = popen(cmd.c_str(), "r");
     if (!fp) return 0;
     char buf[256];

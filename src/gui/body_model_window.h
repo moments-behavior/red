@@ -525,6 +525,7 @@ inline bool learned_ik_solve_frame(MujocoContext &mj, MujocoIKState &ik_state,
     if (!learned_ik.loaded || !mj.loaded || !mj.model || !mj.data) return false;
 
     int nkp = std::min(num_nodes, learned_ik.n_keypoints);
+    if (nkp > 24 || learned_ik.n_qpos > 68) return false; // safety check
     float kp_mj[24 * 3] = {};
     float valid[24] = {};
 
@@ -879,7 +880,7 @@ inline void LaunchExport(MujocoContext &mj, MujocoIKState &ik_template,
         }
         out.close();
 
-        double mean_res = total_res / all_results.size();
+        double mean_res = all_results.empty() ? 0.0 : total_res / all_results.size();
         es.result_msg = std::to_string((int)all_results.size()) + " frames exported ("
             + std::to_string(n_threads) + " threads, mean "
             + std::to_string((int)mean_res) + " mm)";
@@ -1325,7 +1326,8 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                         char buf[128];
                         snprintf(buf, sizeof(buf), "Phase 2: Pass %d/%d — %s (%d/%d scales)",
                                  round, total_rounds,
-                                 state.body_resize.seg_current_name.c_str(),
+                                 (seg < (int)state.body_resize.segments.size()
+                                     ? state.body_resize.segments[seg].name.c_str() : "?"),
                                  mults_done, mults_tot);
                         ImGui::ProgressBar(overall, ImVec2(-1, 0), buf);
 
@@ -1348,14 +1350,17 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
 
                     if (ImGui::Button("Fit to Data##resize")) {
                         state.body_resize_running = true;
-                        std::thread([&]() {
+                        auto annotations_copy = ctx.annotations; // deep copy for thread safety
+                        int num_nodes = ctx.skeleton.num_nodes;
+                        std::string project_path = ctx.pm.project_path;
+                        std::thread([&mj, &state, annotations_copy, num_nodes, project_path]() {
                             body_resize_calibrate(mj, state.body_resize, state.ik_state,
-                                                  ctx.annotations, ctx.skeleton.num_nodes,
+                                                  annotations_copy, num_nodes,
                                                   &state.arena_align);
                             state.body_resize_running = false;
                             // Auto-save session with new scales
-                            if (!ctx.pm.project_path.empty())
-                                state.save_session(ctx.pm.project_path + "/mujoco_session.json");
+                            if (!project_path.empty())
+                                state.save_session(project_path + "/mujoco_session.json");
                         }).detach();
                     }
                     ImGui::SameLine();
@@ -1509,11 +1514,15 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                         state.stac_calibrating = true;
                         // Reset to default offsets before calibrating
                         stac_reset(mj, state.stac_state);
-                        std::thread([&mj, &state, &ctx]() {
+                        auto annotations_copy = ctx.annotations; // deep copy for thread safety
+                        int num_nodes = ctx.skeleton.num_nodes;
+                        auto node_names = ctx.skeleton.node_names;
+                        bool has_arena = state.arena_align.valid;
+                        std::thread([&mj, &state, annotations_copy, num_nodes, node_names, has_arena]() {
                             stac_calibrate(mj, state.stac_state, state.ik_state,
-                                           ctx.annotations, ctx.skeleton.num_nodes,
-                                           &ctx.skeleton.node_names,
-                                           state.arena_align.valid ? &state.arena_align : nullptr);
+                                           annotations_copy, num_nodes,
+                                           &node_names,
+                                           has_arena ? &state.arena_align : nullptr);
                         }).detach();
                     }
                 }
@@ -1610,6 +1619,8 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
 
                                 int ns = (int)active.displacement_mm.size();
                                 for (int i = 0; i < ns; i++) {
+                                    if (i >= (int)active.site_names.size() ||
+                                        3*i+2 >= (int)active.site_offsets.size()) continue;
                                     if (active.displacement_mm[i] < 0.01) continue; // skip unchanged
                                     ImGui::TableNextRow();
                                     ImGui::TableSetColumnIndex(0);
@@ -2060,7 +2071,9 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
             } // end CollapsingHeader("Controls")
 
             // Auto-solve runs every frame regardless of header state
-            if (state.auto_solve && ctx.current_frame_num != state.last_solved_frame) {
+            // Skip if background calibration is running (they mutate mj.model/data)
+            if (state.auto_solve && ctx.current_frame_num != state.last_solved_frame
+                && !state.body_resize_running && !state.stac_calibrating) {
                 state.last_solved_frame = ctx.current_frame_num;
                 auto it = ctx.annotations.find(ctx.current_frame_num);
                 if (it != ctx.annotations.end() && !it->second.kp3d.empty()) {

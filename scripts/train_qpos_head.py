@@ -73,17 +73,20 @@ def rotation_6d_to_matrix(r6d):
 
 
 def matrix_to_quaternion(R):
+    """Gradient-safe matrix to quaternion. Uses large clamp to avoid NaN gradients
+    from near-zero denominators in non-selected branches."""
     R00, R01, R02 = R[:, 0, 0], R[:, 0, 1], R[:, 0, 2]
     R10, R11, R12 = R[:, 1, 0], R[:, 1, 1], R[:, 1, 2]
     R20, R21, R22 = R[:, 2, 0], R[:, 2, 1], R[:, 2, 2]
     trace = R00 + R11 + R22
-    s1 = torch.sqrt(torch.clamp(trace + 1.0, min=1e-10)) * 2.0
+    # Use larger clamp (1e-6) to keep gradients stable in non-selected branches
+    s1 = torch.sqrt(torch.clamp(trace + 1.0, min=1e-6)) * 2.0
     q1 = torch.stack([0.25*s1, (R21-R12)/s1, (R02-R20)/s1, (R10-R01)/s1], dim=-1)
-    s2 = torch.sqrt(torch.clamp(1.0+R00-R11-R22, min=1e-10)) * 2.0
+    s2 = torch.sqrt(torch.clamp(1.0+R00-R11-R22, min=1e-6)) * 2.0
     q2 = torch.stack([(R21-R12)/s2, 0.25*s2, (R01+R10)/s2, (R02+R20)/s2], dim=-1)
-    s3 = torch.sqrt(torch.clamp(1.0+R11-R00-R22, min=1e-10)) * 2.0
+    s3 = torch.sqrt(torch.clamp(1.0+R11-R00-R22, min=1e-6)) * 2.0
     q3 = torch.stack([(R02-R20)/s3, (R01+R10)/s3, 0.25*s3, (R12+R21)/s3], dim=-1)
-    s4 = torch.sqrt(torch.clamp(1.0+R22-R00-R11, min=1e-10)) * 2.0
+    s4 = torch.sqrt(torch.clamp(1.0+R22-R00-R11, min=1e-6)) * 2.0
     q4 = torch.stack([(R10-R01)/s4, (R02+R20)/s4, (R12+R21)/s4, 0.25*s4], dim=-1)
     quat = torch.where((trace > 0).unsqueeze(-1), q1,
            torch.where(((R00 > R11) & (R00 > R22)).unsqueeze(-1), q2,
@@ -167,16 +170,20 @@ class LearnedIKSimple(nn.Module):
         self.root_rot = nn.Linear(hidden, 6)
         self.hinge_out = nn.Linear(hidden, n_hinge)
 
-    def forward(self, kp3d_mj, jnt_lo, jnt_hi):
+    def forward(self, kp3d_mj, jnt_lo, jnt_hi, return_intermediates=False):
         """kp3d_mj: [B, 24, 3] in MuJoCo meters."""
         centroid = kp3d_mj.mean(dim=1)  # [B, 3]
         kp_centered = (kp3d_mj - centroid.unsqueeze(1)).reshape(kp3d_mj.shape[0], -1)
         feat = self.net(kp_centered)
         root_pos = centroid + self.root_offset(feat)
-        quat = matrix_to_quaternion(rotation_6d_to_matrix(self.root_rot(feat)))
+        rot6d = self.root_rot(feat)
+        quat = matrix_to_quaternion(rotation_6d_to_matrix(rot6d))
         hinge_raw = self.hinge_out(feat)
         hinge = jnt_lo + torch.sigmoid(hinge_raw) * (jnt_hi - jnt_lo)
-        return torch.cat([root_pos, quat, hinge], dim=-1)
+        qpos = torch.cat([root_pos, quat, hinge], dim=-1)
+        if return_intermediates:
+            return qpos, rot6d
+        return qpos
 
 
 class QposHeadD(nn.Module):
@@ -227,18 +234,15 @@ class QposHeadD(nn.Module):
         B = volume_features.shape[0]
 
         # Initial estimate from learned IK (differentiable)
-        init_qpos = self.learned_ik(kp3d_mj, self.jnt_lo, self.jnt_hi)
+        init_qpos, init_rot6d = self.learned_ik(
+            kp3d_mj, self.jnt_lo, self.jnt_hi, return_intermediates=True)
         init_pos = init_qpos[:, :3]
-        init_quat = init_qpos[:, 3:7]
         init_hinge = init_qpos[:, 7:]
 
         # Encode V2VNet features
         vol_feat = self.encoder(volume_features).view(B, -1)
 
         # Encode initial qpos (use 6D rot for continuity, not quaternion)
-        init_rot6d = self.learned_ik.root_rot(
-            self.learned_ik.net(
-                (kp3d_mj - kp3d_mj.mean(dim=1, keepdim=True)).reshape(B, -1)))
         init_encoding = torch.cat([init_pos, init_rot6d, init_hinge], dim=-1)
 
         # Predict residuals
@@ -293,14 +297,26 @@ class QposLoss(nn.Module):
 
 def load_qpos_csv(csv_path, max_residual_mm=20.0):
     qpos_dict = {}
+    nq = None
     with open(csv_path) as f:
         for line in f:
-            if line.startswith('#') or line.startswith('frame,') or not line.strip():
+            line = line.strip()
+            if not line:
                 continue
-            parts = line.strip().split(',')
+            if line.startswith('# nq:'):
+                nq = int(line.split(':')[1].strip())
+                continue
+            if line.startswith('#') or line.startswith('frame,'):
+                continue
+            parts = line.split(',')
+            if nq is None:
+                # Infer: frame, qpos_0..qpos_N, residual, iterations, converged
+                nq = len(parts) - 4  # frame + residual + iterations + converged
+            if len(parts) < nq + 2:  # need at least frame + qpos + residual
+                continue
             frame = int(parts[0])
-            qpos = np.array([float(x) for x in parts[1:69]], dtype=np.float32)
-            residual = float(parts[69])
+            qpos = np.array([float(x) for x in parts[1:1+nq]], dtype=np.float32)
+            residual = float(parts[1+nq])
             if residual <= max_residual_mm:
                 qpos_dict[frame] = qpos
     return qpos_dict
@@ -449,10 +465,16 @@ def train(args):
     print(f"Arena: scale={arena_scale}, R_diag={np.diag(arena.R)}, t={arena.t}")
 
     # Load datasets
-    train_ds = CachedDataset(os.path.join(cache_dir, "train_features.pt"),
-                             arena_R, arena_t, arena_scale)
-    val_ds = CachedDataset(os.path.join(cache_dir, "val_features.pt"),
-                           arena_R, arena_t, arena_scale)
+    train_path = os.path.join(cache_dir, "train_features.pt")
+    val_path = os.path.join(cache_dir, "val_features.pt")
+    if not os.path.exists(train_path) or not os.path.exists(val_path):
+        print("ERROR: Cached features not found. Run without --train-only first.")
+        sys.exit(1)
+    train_ds = CachedDataset(train_path, arena_R, arena_t, arena_scale)
+    val_ds = CachedDataset(val_path, arena_R, arena_t, arena_scale)
+    if len(train_ds) == 0:
+        print("ERROR: No training samples. Check max_residual filter or data.")
+        sys.exit(1)
     print(f"Train: {len(train_ds)}, Val: {len(val_ds)}")
 
     train_loader = DataLoader(train_ds, batch_size=args.batch_size,

@@ -108,6 +108,7 @@ inline void DrawJarvisExportWindow(JarvisExportState &state, AppContext &ctx) {
             std::vector<const char*> skel_options;
             std::vector<int> skel_num_kp;
             std::vector<std::string> skel_names_storage;
+            skel_names_storage.reserve(4); // prevent reallocation invalidating c_str() pointers
 
             // Option 0: same as project
             skel_names_storage.push_back(skeleton.name + " (" +

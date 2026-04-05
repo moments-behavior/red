@@ -46,6 +46,9 @@ bool learned_ik_init(LearnedIKState &s, const std::string &mlpackage_path) {
             return false;
         }
 
+        // Clean up compiled model temp directory
+        [[NSFileManager defaultManager] removeItemAtURL:compiled error:nil];
+
         s.model = (__bridge_retained void *)model;
         s.loaded = true;
         s.status = "Loaded";
