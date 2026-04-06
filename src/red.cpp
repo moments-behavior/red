@@ -489,6 +489,14 @@ int main(int argc, char **argv) {
         jarvis_coreml_state = JarvisCoreMLState{};
 #endif
         pm_ref = new_pm;
+        // Re-initialize skeleton after close_project() cleared it.
+        // (close_project resets ctx.skeleton; we must re-run setup_project
+        // so the skeleton is populated for the new project.)
+        std::string setup_err;
+        if (!setup_project(pm_ref, skeleton, skeleton_map, &setup_err)) {
+            err = setup_err;
+            return false;
+        }
         on_project_loaded(ctx, print_metadata, print_summary);
         return true;
     };
