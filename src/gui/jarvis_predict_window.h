@@ -602,10 +602,26 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
                                  "jarvis_models" / folder_name).string();
                             fs::create_directories(output_dir);
 
+                            // Pass config overrides from .redproj so the
+                            // conversion uses correct input sizes even when
+                            // config.yaml is not present alongside the .pth files.
+                            std::string overrides;
+                            if (ctx.pm.active_jarvis_model >= 0 &&
+                                ctx.pm.active_jarvis_model < (int)ctx.pm.jarvis_models.size()) {
+                                auto &me = ctx.pm.jarvis_models[ctx.pm.active_jarvis_model];
+                                if (me.center_input_size > 0)
+                                    overrides += " --center_input_size " + std::to_string(me.center_input_size);
+                                if (me.keypoint_input_size > 0)
+                                    overrides += " --keypoint_input_size " + std::to_string(me.keypoint_input_size);
+                                if (me.num_joints > 0)
+                                    overrides += " --num_joints " + std::to_string(me.num_joints);
+                            }
+
                             std::string cmd =
                                 "conda run -n coreml python \"" + script +
                                 "\" --jarvis_project \"" + jarvis_project +
-                                "\" --output_dir \"" + output_dir + "\" 2>&1";
+                                "\" --output_dir \"" + output_dir + "\"" +
+                                overrides + " 2>&1";
 
                             auto job = std::make_shared<ConvertJob>();
                             job->running.store(true);
