@@ -278,6 +278,10 @@ def main():
                         help="Path to JARVIS-HybridNet source (default: ~/src/JARVIS-HybridNet)")
     parser.add_argument("--keypoint_input_size", type=int, default=0,
                         help="Override keypoint detect input size (0 = use config.yaml value)")
+    parser.add_argument("--center_input_size", type=int, default=0,
+                        help="Override center detect input size (0 = use config.yaml value)")
+    parser.add_argument("--num_joints", type=int, default=0,
+                        help="Override number of joints (0 = use config.yaml value)")
     args = parser.parse_args()
 
     # Add JARVIS to path
@@ -300,22 +304,37 @@ def main():
     import coremltools as ct
     print(f"coremltools: {ct.__version__}, torch: {torch.__version__}")
 
-    # Resolve paths
-    models_dir = os.path.join(args.jarvis_project, "models")
-    if not os.path.isdir(models_dir):
-        # Maybe jarvis_project already points to the models/ dir
-        if (os.path.isdir(os.path.join(args.jarvis_project, "CenterDetect")) and
-            os.path.isdir(os.path.join(args.jarvis_project, "KeypointDetect"))):
-            models_dir = args.jarvis_project
-        else:
-            print(f"ERROR: Cannot find models directory.")
-            print(f"  Tried: {models_dir}")
-            print(f"  Expected CenterDetect/ and KeypointDetect/ subdirectories.")
-            sys.exit(1)
+    # Resolve paths — support three layouts:
+    #   1. JARVIS project: <dir>/models/CenterDetect/Run_*/*.pth
+    #   2. models subdir:  <dir>/CenterDetect/Run_*/*.pth
+    #   3. flat layout:    <dir>/center_detect.pth + keypoint_detect.pth
+    cd_pth = None
+    kd_pth = None
 
-    # Find checkpoints
-    cd_pth = find_latest_pth(os.path.join(models_dir, "CenterDetect"))
-    kd_pth = find_latest_pth(os.path.join(models_dir, "KeypointDetect"))
+    # Try flat layout first (RED project jarvis_models/<name>/)
+    flat_cd = os.path.join(args.jarvis_project, "center_detect.pth")
+    flat_kd = os.path.join(args.jarvis_project, "keypoint_detect.pth")
+    if os.path.exists(flat_cd) and os.path.exists(flat_kd):
+        cd_pth = flat_cd
+        kd_pth = flat_kd
+        print(f"  Using flat layout: {args.jarvis_project}")
+    else:
+        # Try JARVIS project layout
+        models_dir = os.path.join(args.jarvis_project, "models")
+        if not os.path.isdir(models_dir):
+            if (os.path.isdir(os.path.join(args.jarvis_project, "CenterDetect")) and
+                os.path.isdir(os.path.join(args.jarvis_project, "KeypointDetect"))):
+                models_dir = args.jarvis_project
+            else:
+                print(f"ERROR: Cannot find models directory.")
+                print(f"  Tried: {models_dir}")
+                print(f"  Also tried flat layout: {flat_cd}")
+                print(f"  Expected CenterDetect/ and KeypointDetect/ subdirectories,")
+                print(f"  or center_detect.pth + keypoint_detect.pth files.")
+                sys.exit(1)
+
+        cd_pth = find_latest_pth(os.path.join(models_dir, "CenterDetect"))
+        kd_pth = find_latest_pth(os.path.join(models_dir, "KeypointDetect"))
 
     if not cd_pth:
         print(f"ERROR: No CenterDetect .pth checkpoint found in {models_dir}/CenterDetect/")
@@ -330,10 +349,16 @@ def main():
     # Read config
     config = read_jarvis_config(args.jarvis_project)
 
-    # Override keypoint input size if specified
+    # Override config values if specified on command line
+    if args.center_input_size > 0:
+        print(f"  Overriding center_input_size: {config['center_input_size']} -> {args.center_input_size}")
+        config["center_input_size"] = args.center_input_size
     if args.keypoint_input_size > 0:
         print(f"  Overriding keypoint_input_size: {config['keypoint_input_size']} -> {args.keypoint_input_size}")
         config["keypoint_input_size"] = args.keypoint_input_size
+    if args.num_joints > 0:
+        print(f"  Overriding num_joints: {config['num_joints']} -> {args.num_joints}")
+        config["num_joints"] = args.num_joints
 
     # Create output directory
     os.makedirs(args.output_dir, exist_ok=True)
