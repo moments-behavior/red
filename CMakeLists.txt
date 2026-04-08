@@ -1631,8 +1631,11 @@ elseif(WIN32)
         )
     endforeach()
 
-    # test_annotation needs a larger stack — STB image headers create large
-    # static initializers that overflow the default 1MB MSVC stack
+    # Windows default 1MB stack is too small for MuJoCo XML parsing
+    # (complex rodent/fly models) and STB image static initializers.
+    # Use 64MB stack for all targets.
+    target_link_options(red PRIVATE /STACK:67108864)
+    target_link_options(test_gui PRIVATE /STACK:67108864)
     target_link_options(test_annotation PRIVATE /STACK:67108864)
 
 else()

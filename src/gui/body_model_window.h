@@ -2161,8 +2161,15 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                 if (tex) {
                     ImVec2 img_pos = ImGui::GetCursorScreenPos();
                     // Draw the image as background
+                    // OpenGL FBO origin is bottom-left; flip V to display correctly
+#ifdef __APPLE__
+                    ImVec2 uv0(0, 0), uv1(1, 1);
+#else
+                    ImVec2 uv0(0, 1), uv1(1, 0);
+#endif
                     ImGui::GetWindowDrawList()->AddImage(
-                        tex, img_pos, ImVec2(img_pos.x + vp_w, img_pos.y + vp_h));
+                        tex, img_pos, ImVec2(img_pos.x + vp_w, img_pos.y + vp_h),
+                        uv0, uv1);
 
                     // InvisibleButton captures mouse focus properly (unlike Image
                     // which is passive and can lose hover during screen recording)

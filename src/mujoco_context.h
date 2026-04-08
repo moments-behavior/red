@@ -102,8 +102,19 @@ struct MujocoContext {
     // Programmatically adds a free joint to the torso via mjSpec so the
     // IK solver can optimize root position and orientation.
     // Returns true on success.
-    bool load(const std::string &xml_path, const SkeletonContext &skeleton) {
+    bool load(const std::string &xml_path_in, const SkeletonContext &skeleton) {
 #ifdef RED_HAS_MUJOCO
+        // Convert to absolute path — MuJoCo needs this to resolve
+        // relative asset references (meshes, skins) on all platforms
+        std::string xml_path = xml_path_in;
+        {
+            std::filesystem::path p(xml_path_in);
+            if (p.is_relative()) {
+                auto abs = std::filesystem::absolute(p);
+                if (std::filesystem::exists(abs))
+                    xml_path = abs.string();
+            }
+        }
         unload();
 
         // Support pre-compiled MJB files (binary, sites already injected)
