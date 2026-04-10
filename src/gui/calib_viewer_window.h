@@ -620,9 +620,12 @@ inline void DrawCalibViewerWindow(CalibViewerState &state) {
                 // Board geometry: rectangle from (0,0,0) to (board_w, board_h, 0)
                 // We'll use a small square for each frame's board position
                 for (const auto &[fi, bp] : cs) {
-                    // Board corners in board frame: 4 corners of the ChArUco board
-                    // Approximate: use 240mm x 240mm board (5x5 @ 60mm squares = 4x4 corners over 240mm)
-                    float bw = 240.0f, bh = 240.0f; // approximate board size
+                    // Board corners in PnP board frame: inner corner grid spans
+                    // (0,0) to ((w-2)*sq, (h-2)*sq) in the PnP coordinate system
+                    float bw = state.board_width_mm > 0 ? state.board_width_mm
+                        : 240.0f;
+                    float bh = state.board_height_mm > 0 ? state.board_height_mm
+                        : 240.0f;
                     Eigen::Vector3d bc[4] = {
                         {0, 0, 0}, {bw, 0, 0}, {bw, bh, 0}, {0, bh, 0}
                     };
