@@ -3671,6 +3671,56 @@ inline CalibrationResult run_experimental_pipeline(
             double s=0;for(double e:ce)s+=e;m.mean_reproj=s/ce.size();std::sort(ce.begin(),ce.end());
             m.median_reproj=ce[ce.size()/2];m.max_reproj=ce.back();double v=0;for(double e:ce)v+=(e-m.mean_reproj)*(e-m.mean_reproj);m.std_reproj=std::sqrt(v/ce.size());}}
     result.mean_reproj_error=(to>0)?(te/to):0;result.output_folder=outf;result.cameras=std::move(poses);result.points_3d=std::move(points_3d);result.success=true;
+    // Recompute board poses using post-BA intrinsics (the original PnP board poses
+    // were computed with pre-BA K, which can differ significantly after BA refinement)
+    {
+        int mc = (config.charuco_setup.w - 1) * (config.charuco_setup.h - 1);
+        std::vector<Eigen::Vector3d> bd3(mc);
+        std::vector<Eigen::Vector2d> bd2(mc);
+        for (int y = 0; y < config.charuco_setup.h - 1; y++)
+            for (int x = 0; x < config.charuco_setup.w - 1; x++) {
+                int i = y * (config.charuco_setup.w - 1) + x;
+                double bx = x * config.charuco_setup.square_side_length;
+                double by = y * config.charuco_setup.square_side_length;
+                bd3[i] = Eigen::Vector3d(bx, by, 0);
+                bd2[i] = Eigen::Vector2d(bx, by);
+            }
+        for (int ci = 0; ci < nc; ci++) {
+            const auto &serial = config.cam_ordered[ci];
+            const auto &cam = result.cameras[ci];
+            auto intr_it = intrinsics.find(serial);
+            if (intr_it == intrinsics.end()) continue;
+            auto bp_it = result.db.board_poses.find(serial);
+            if (bp_it == result.db.board_poses.end()) continue;
+            for (auto &[fi, bp] : bp_it->second) {
+                auto c_it = intr_it->second.corners_per_image.find(fi);
+                auto i_it = intr_it->second.ids_per_image.find(fi);
+                if (c_it == intr_it->second.corners_per_image.end() ||
+                    i_it == intr_it->second.ids_per_image.end()) continue;
+                std::vector<Eigen::Vector3d> o3d;
+                std::vector<Eigen::Vector2d> o2d, iund, iraw;
+                for (int j = 0; j < (int)i_it->second.size(); j++) {
+                    int c = i_it->second[j];
+                    if (c < 0 || c >= mc) continue;
+                    o3d.push_back(bd3[c]);
+                    o2d.push_back(bd2[c]);
+                    Eigen::Vector2d px(c_it->second[j].x(), c_it->second[j].y());
+                    iund.push_back(red_math::undistortPoint(px, cam.K, cam.dist));
+                    iraw.push_back(px);
+                }
+                if ((int)o3d.size() < 4) continue;
+                Eigen::Matrix3d Rf; Eigen::Vector3d tf;
+                if (!solvePnPHomography(o2d, iund, cam.K, Rf, tf)) continue;
+                refinePnPPose(o3d, iraw, cam.K, cam.dist, Rf, tf);
+                auto rv = red_math::rotationMatrixToVector(Rf);
+                auto pr = red_math::projectPoints(o3d, rv, tf, cam.K, cam.dist);
+                double es = 0;
+                for (int i = 0; i < (int)pr.size(); i++)
+                    es += (pr[i] - iraw[i]).norm();
+                bp.R = Rf; bp.t = tf; bp.reproj = es / pr.size();
+            }
+        }
+    }
     // Write run info for reproducibility
     { int tvf=0; if(vfr){auto vids=CalibrationTool::discover_aruco_videos(vfr->video_folder,vfr->cam_ordered);
       if(!vids.empty())tvf=get_video_frame_count(vids.begin()->second);}
