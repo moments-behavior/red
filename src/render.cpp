@@ -17,34 +17,52 @@ void render_allocate_scene_memory(RenderScene *scene, u32 size_of_buffer) {
     int num_cams = scene->num_cams;
 
 #ifndef __APPLE__
-    // VRAM budget check: if the requested display buffer would exceed ~70% of
-    // free GPU memory, fall back to CPU-hosted buffers (or shrink the buffer).
-    // Otherwise many cameras × high-res × size_of_buffer (e.g. 16 × 3216×2208
-    // × 64 slots ≈ 29 GB) OOM the GPU and NvDecoder allocations fail later
-    // with opaque "ILLEGAL_ADDRESS" errors.
+    // VRAM budget check: auto-shrink size_of_buffer so it fits in free GPU
+    // memory. With 16 cams at 3216×2208, a 64-slot buffer needs ~28 GB —
+    // enough to OOM a 32 GB card once NvDecoder/ONNX/MuJoCo/etc. are loaded.
+    // Prior behavior (fail with opaque cudaErrorIllegalAddress / decoder
+    // "error 2") was replaced by this check.
+    //
+    // Budget = 50% of currently-free VRAM, reserving the other half for
+    // NvDecoder surfaces (~170 MB × num_cams), PBOs, textures, LibTorch,
+    // ONNX Runtime, JARVIS models, MuJoCo, and inference activations.
     {
         size_t per_frame_bytes = 0;
         for (int j = 0; j < num_cams; j++) {
             per_frame_bytes += (size_t)scene->image_width[j] *
                                scene->image_height[j] * 4;
         }
-        size_t needed = per_frame_bytes * size_of_buffer;
+        if (!scene->use_cpu_buffer && per_frame_bytes > 0) {
+            size_t free_bytes = 0, total_bytes = 0;
+            cudaMemGetInfo(&free_bytes, &total_bytes);
+            size_t budget = (size_t)(free_bytes * 0.50);
 
-        size_t free_bytes = 0, total_bytes = 0;
-        cudaMemGetInfo(&free_bytes, &total_bytes);
-        // Reserve budget for NvDecoder surfaces, PBOs, textures, JARVIS/ONNX,
-        // MuJoCo, etc. Allow at most 70% of currently-free VRAM for the display
-        // buffer allocations below.
-        size_t budget = (size_t)(free_bytes * 0.70);
-
-        if (!scene->use_cpu_buffer && needed > budget) {
-            fprintf(stderr,
-                    "[render] Display buffer would need %.2f GB of VRAM "
-                    "(budget %.2f GB free of %.2f GB total); falling back "
-                    "to CPU-hosted frames. Reduce default_buffer_size in "
-                    "settings to keep frames on GPU.\n",
-                    needed / 1e9, budget / 1e9, total_bytes / 1e9);
-            scene->use_cpu_buffer = true;
+            size_t needed = per_frame_bytes * size_of_buffer;
+            if (needed > budget) {
+                u32 fit_slots = (u32)(budget / per_frame_bytes);
+                // Enforce a reasonable minimum so small GPUs still get a
+                // usable buffer (otherwise playback/CoTracker break).
+                const u32 MIN_GPU_SLOTS = 8;
+                if (fit_slots >= MIN_GPU_SLOTS) {
+                    fprintf(stderr,
+                            "[render] Shrinking display buffer from %u to %u "
+                            "slots to fit in VRAM (%.2f GB free of %.2f GB; "
+                            "budget %.2f GB; per-slot %.2f GB across %d cams).\n",
+                            size_of_buffer, fit_slots,
+                            free_bytes / 1e9, total_bytes / 1e9,
+                            budget / 1e9, per_frame_bytes / 1e9, num_cams);
+                    size_of_buffer = fit_slots;
+                } else {
+                    // Even the minimum doesn't fit on GPU — use CPU frames.
+                    fprintf(stderr,
+                            "[render] Cannot fit even %u buffer slots in VRAM "
+                            "(%.2f GB free, need %.2f GB/slot); falling back "
+                            "to CPU-hosted frames.\n",
+                            MIN_GPU_SLOTS, free_bytes / 1e9,
+                            per_frame_bytes / 1e9);
+                    scene->use_cpu_buffer = true;
+                }
+            }
         }
     }
 #endif
