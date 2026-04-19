@@ -1,6 +1,11 @@
 #ifndef GX_HELPER
 #define GX_HELPER
 
+// On Linux, GLEW must be included before any other GL header (incl. GLFW).
+#ifndef __APPLE__
+#include <GL/glew.h>
+#endif
+
 #include "IconsForkAwesome.h"
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
@@ -9,6 +14,7 @@
 #include "types.h"
 #include <GLFW/glfw3.h>
 #include <cstdio>
+#include <filesystem>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -17,7 +23,6 @@
 // imgui_impl_metal.h is ObjC-only; all Metal ImGui calls go through metal_context.mm
 #else
 #include "imgui_impl_opengl3.h"
-#include <GL/glew.h>
 #include <cuda_gl_interop.h>
 #endif
 

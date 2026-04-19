@@ -25,7 +25,11 @@
 #include <mutex>
 
 #ifdef RED_HAS_MUJOCO
+#ifdef __APPLE__
 #include "mujoco_metal_renderer.h"
+#else
+#include "mujoco_opengl_renderer.h"
+#endif
 #endif
 
 enum SitePlacement { SITES_DEFAULT = 0, SITES_STAC = 1 };
@@ -2333,9 +2337,15 @@ inline void DrawBodyModelWindow(BodyModelState &state, MujocoContext &mj,
                     // selected_camera indexes ctx.pm.camera_names which matches
                     // the scene camera order
                     int cam_idx = state.selected_camera;
-                    if (cam_idx < (int)ctx.scene->num_cams &&
-                        ctx.scene->image_descriptor[cam_idx])
-                        bg_tex = (void *)ctx.scene->image_descriptor[cam_idx];
+                    if (cam_idx < (int)ctx.scene->num_cams) {
+#ifdef __APPLE__
+                        if (ctx.scene->image_descriptor[cam_idx])
+                            bg_tex = (void *)ctx.scene->image_descriptor[cam_idx];
+#else
+                        if (ctx.scene->image_texture[cam_idx])
+                            bg_tex = (void *)(uintptr_t)ctx.scene->image_texture[cam_idx];
+#endif
+                    }
                 }
                 float opacity = (state.show_video_bg && bg_tex) ? state.scene_opacity : 1.0f;
                 mujoco_renderer_render(state.renderer, &mj, &state.mjcam,

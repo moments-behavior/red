@@ -1321,24 +1321,66 @@ else()
     # Linux build with NVIDIA CUDA support
     project(red LANGUAGES CXX CUDA)
 
-    # Set CUDA architecture and options
-    set(CMAKE_CUDA_ARCHITECTURES 80)
+    # CUDA architectures: default to common server/workstation targets.
+    # Override with -DCMAKE_CUDA_ARCHITECTURES=86 (RTX 30xx), 89 (RTX 40xx), etc.
+    if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+        set(CMAKE_CUDA_ARCHITECTURES 80 86 89)
+    endif()
 
     add_compile_options(-msse4.1)
+    set(CMAKE_CXX_STANDARD 17)
+    set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+    # System packages
+    find_package(Eigen3 REQUIRED)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(TURBOJPEG REQUIRED libturbojpeg)
+
+    # Ceres: avoid find_package(Ceres) because its CeresConfig pulls in absl
+    # which demands GTest::gmock (not installed). Link the static lib directly.
+    set(CERES_INCLUDE_DIRS "/usr/local/include")
+    find_library(CERES_LIBRARY ceres PATHS /usr/local/lib REQUIRED)
+    find_library(GLOG_LIBRARY glog REQUIRED)
+    find_library(GFLAGS_LIBRARY gflags)
+    # Ceres depends on abseil (linked as static libs at /usr/local/lib).
+    # Glob all libabsl_*.a — will be wrapped in --start-group at link time to
+    # resolve cross-references.
+    file(GLOB ABSL_LIBS "/usr/local/lib/libabsl_*.a")
 
     # Set Directories
     set(DIR_IMGUI "${CMAKE_SOURCE_DIR}/lib/imgui")
     set(DIR_IMPLOT "${CMAKE_SOURCE_DIR}/lib/implot")
+    set(DIR_IMPLOT3D "${CMAKE_SOURCE_DIR}/lib/implot3d")
     set(DIR_FFMPEG "$ENV{HOME}/nvidia/ffmpeg/build")
     set(DIR_TENSORRT "$ENV{HOME}/nvidia/TensorRT-8.6.1.6")
     set(DIR_FILEBROWSER "${CMAKE_SOURCE_DIR}/lib/ImGuiFileDialog")
     set(DIR_ICONFONT "${CMAKE_SOURCE_DIR}/lib/IconFontCppHeaders")
 
-    # Added for LibTorch
+    # LibTorch
     set(DIR_LIBTORCH "${CMAKE_SOURCE_DIR}/lib/libtorch")
     set(LIBTORCH_INCLUDE "${DIR_LIBTORCH}/include")
     set(LIBTORCH_INCLUDE_API "${DIR_LIBTORCH}/include/torch/csrc/api/include")
     set(LIBTORCH_LIB "${DIR_LIBTORCH}/lib")
+
+    # Optional ONNX Runtime (for SAM inference and JARVIS ONNX path)
+    set(ONNXRUNTIME_DIR "${CMAKE_SOURCE_DIR}/lib/onnxruntime")
+    if(EXISTS "${ONNXRUNTIME_DIR}/include/onnxruntime_cxx_api.h")
+        set(HAS_ONNXRUNTIME TRUE)
+        message(STATUS "ONNX Runtime found at ${ONNXRUNTIME_DIR}")
+    else()
+        set(HAS_ONNXRUNTIME FALSE)
+        message(STATUS "ONNX Runtime not found — SAM/JARVIS-ONNX disabled")
+    endif()
+
+    # Optional MuJoCo (for body model IK, STAC, body resize)
+    set(MUJOCO_DIR "/home/user/build/mujoco-3.3.6" CACHE PATH "MuJoCo install prefix")
+    if(EXISTS "${MUJOCO_DIR}/include/mujoco/mujoco.h")
+        set(HAS_MUJOCO TRUE)
+        message(STATUS "MuJoCo found at ${MUJOCO_DIR}")
+    else()
+        set(HAS_MUJOCO FALSE)
+        message(STATUS "MuJoCo not found at ${MUJOCO_DIR} — body model IK disabled")
+    endif()
 
     # Source Files
     file(GLOB SRC_FILES src/*.cpp)
@@ -1350,6 +1392,7 @@ else()
         ${DIR_FILEBROWSER}/ImGuiFileDialog.cpp
     )
     file(GLOB IMPLOT_SRC ${DIR_IMPLOT}/*.cpp)
+    file(GLOB IMPLOT3D_SRC ${DIR_IMPLOT3D}/*.cpp)
 
     # CUDA Source Files
     set(CUDA_SRC_FILES
@@ -1363,15 +1406,25 @@ else()
         ${SRC_FILES}
         ${IMGUI_SRC}
         ${IMPLOT_SRC}
+        ${IMPLOT3D_SRC}
         ${CUDA_SRC_FILES}
     )
 
+    # Feature defines
+    if(HAS_ONNXRUNTIME)
+        target_compile_definitions(red PRIVATE RED_HAS_ONNXRUNTIME)
+    endif()
+    if(HAS_MUJOCO)
+        target_compile_definitions(red PRIVATE RED_HAS_MUJOCO)
+    endif()
+
     # Include Directories
     target_include_directories(red PRIVATE
-            ${SRC_DIR}
+            ${CMAKE_SOURCE_DIR}/src
             ${DIR_IMGUI}
             ${DIR_IMGUI}/backends
             ${DIR_IMPLOT}
+            ${DIR_IMPLOT3D}
             lib/nvcodec
             lib/IconFontCppHeaders
             lib/ImGuiFileDialog
@@ -1381,7 +1434,16 @@ else()
             /usr/local/cuda/include
             ${LIBTORCH_INCLUDE}
             ${LIBTORCH_INCLUDE_API}
+            ${EIGEN3_INCLUDE_DIRS}
+            ${CERES_INCLUDE_DIRS}
+            ${TURBOJPEG_INCLUDE_DIRS}
     )
+    if(HAS_ONNXRUNTIME)
+        target_include_directories(red PRIVATE ${ONNXRUNTIME_DIR}/include)
+    endif()
+    if(HAS_MUJOCO)
+        target_include_directories(red PRIVATE ${MUJOCO_DIR}/include ${MUJOCO_DIR}/include/mujoco)
+    endif()
 
     # Link Libraries
     target_link_libraries(red PRIVATE
@@ -1392,17 +1454,40 @@ else()
         glfw
         GLEW GLU GL
         pthread
+        Eigen3::Eigen
+        -Wl,--start-group
+        ${CERES_LIBRARY}
+        ${ABSL_LIBS}
+        ${GLOG_LIBRARY}
+        ${GFLAGS_LIBRARY}
+        -lcholmod -lccolamd -lcamd -lcolamd -lamd -lspqr -lsuitesparseconfig
+        -llapack -lblas -lrt
+        -Wl,--end-group
+        ${TURBOJPEG_LIBRARIES}
         -L/usr/local/cuda/lib64/ -lcudart -lcuda -lnvcuvid -lnppicc -lnppidei -lnvidia-encode -lnppc -lnppig -lnppial
-        -L${DIR_FFMPEG}/lib/ -lavformat -lavutil -lavcodec
+        -L${DIR_FFMPEG}/lib/ -lavformat -lavutil -lavcodec -lswscale -lswresample
         -lopencv_sfm -lopencv_core -lopencv_bgsegm -lopencv_imgcodecs -lopencv_imgproc -lopencv_video -lopencv_highgui -lopencv_videoio -lopencv_calib3d -lopencv_dnn
         -L${DIR_TENSORRT}/lib/ -lnvinfer -lnvinfer_plugin
         -L${LIBTORCH_LIB} -ltorch -lc10 -ltorch_cpu
     )
+    if(HAS_ONNXRUNTIME)
+        target_link_libraries(red PRIVATE ${ONNXRUNTIME_DIR}/lib/libonnxruntime.so)
+    endif()
+    if(HAS_MUJOCO)
+        target_link_libraries(red PRIVATE ${MUJOCO_DIR}/lib/libmujoco.so)
+    endif()
 
-    # Set RPATH so runtime finds libtorch
+    # Set RPATH so runtime finds libtorch, onnxruntime, and mujoco
+    set(RED_RPATH "${LIBTORCH_LIB}")
+    if(HAS_ONNXRUNTIME)
+        set(RED_RPATH "${RED_RPATH};${ONNXRUNTIME_DIR}/lib")
+    endif()
+    if(HAS_MUJOCO)
+        set(RED_RPATH "${RED_RPATH};${MUJOCO_DIR}/lib")
+    endif()
     set_target_properties(red PROPERTIES
-        BUILD_RPATH ${LIBTORCH_LIB}
-        INSTALL_RPATH ${LIBTORCH_LIB}
+        BUILD_RPATH "${RED_RPATH}"
+        INSTALL_RPATH "${RED_RPATH}"
     )
 
 endif()

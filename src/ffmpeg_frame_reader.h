@@ -214,6 +214,15 @@ class FrameReader {
     double fps() const { return fps_; }
     bool isOpened() const { return opened_; }
 
+    int frameCount() const {
+        if (!opened_ || video_stream_ < 0) return 0;
+        int64_t nb = fmt_ctx_->streams[video_stream_]->nb_frames;
+        if (nb > 0) return (int)nb;
+        // Estimate from duration and fps
+        double dur = fmt_ctx_->duration / (double)AV_TIME_BASE;
+        return (dur > 0 && fps_ > 0) ? (int)(dur * fps_ + 0.5) : 0;
+    }
+
   private:
     // Try to initialize VideoToolbox hardware decoding
     bool init_hw_decoder(const AVCodec *codec) {

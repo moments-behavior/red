@@ -46,4 +46,29 @@ bool learned_ik_predict(LearnedIKState &s,
 
 void learned_ik_cleanup(LearnedIKState &s);
 
+#else // !__APPLE__
+
+#include <string>
+
+// Windows/Linux stub — learned IK requires CoreML (Apple Neural Engine).
+// The struct exists so body_model_window.h compiles; IK falls back to iterative solver.
+struct LearnedIKState {
+    bool loaded = false;
+    std::string status = "CoreML not available on this platform";
+    std::string model_path;
+    void *model = nullptr;
+    int n_keypoints = 24;
+    int n_qpos = 68;
+    float last_inference_ms = 0.0f;
+};
+
+inline bool learned_ik_init(LearnedIKState &s, const std::string &) {
+    s.status = "CoreML not available on this platform";
+    return false;
+}
+inline bool learned_ik_predict(LearnedIKState &, const float *, const float *, float *) {
+    return false;
+}
+inline void learned_ik_cleanup(LearnedIKState &) {}
+
 #endif // __APPLE__
