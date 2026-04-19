@@ -1394,25 +1394,37 @@ int main(int argc, char **argv) {
                 }
 
                 auto cam_included_lx = [&](int c) -> bool {
+                    if (c >= (int)pm.camera_names.size()) return false;
                     if (win.jarvis_predict.predict_from_all) return true;
-                    if (c < (int)pm.camera_names.size() &&
-                        window_is_visible.count(pm.camera_names[c]) &&
-                        window_is_visible[pm.camera_names[c]]) {
-                        auto &slot = scene->display_buffer[c][mh];
-                        return slot.frame != nullptr &&
-                               slot.frame_number.load() == current_frame_num;
-                    }
-                    return false;
+                    // "Shown" mode: only cameras whose window is the active
+                    // docked tab (ImGui::Begin returned true this frame) AND
+                    // whose decoder buffer actually holds current_frame_num.
+                    auto it = window_is_visible.find(pm.camera_names[c]);
+                    if (it == window_is_visible.end() || !it->second)
+                        return false;
+                    auto &slot = scene->display_buffer[c][mh];
+                    return slot.frame != nullptr &&
+                           slot.frame_number.load() == current_frame_num;
                 };
 
                 std::vector<const uint8_t *> rgb_bufs(scene->num_cams, nullptr);
                 std::vector<std::vector<uint8_t>> rgb_storage(scene->num_cams);
                 std::vector<std::vector<uint8_t>> rgba_scratch(scene->num_cams);
                 int cams_used = 0;
+                std::string included_names, skipped_names;
                 for (int c = 0; c < (int)scene->num_cams; ++c) {
-                    if (!cam_included_lx(c)) continue;
+                    const std::string &nm = pm.camera_names[c];
+                    if (!cam_included_lx(c)) {
+                        if (!skipped_names.empty()) skipped_names += ",";
+                        skipped_names += nm;
+                        continue;
+                    }
                     auto &slot = scene->display_buffer[c][mh];
-                    if (!slot.frame) continue;
+                    if (!slot.frame) {
+                        if (!skipped_names.empty()) skipped_names += ",";
+                        skipped_names += nm + "(nullframe)";
+                        continue;
+                    }
 
                     size_t npix = (size_t)widths[c] * heights[c];
                     const uint8_t *rgba = nullptr;
@@ -1434,7 +1446,30 @@ int main(int argc, char **argv) {
                     }
                     rgb_bufs[c] = dst;
                     cams_used++;
+                    if (!included_names.empty()) included_names += ",";
+                    included_names += nm;
                 }
+
+                // Clear stale Predicted keypoints on cameras we intentionally
+                // skipped this run so they don't bias triangulation or display
+                // as "fresh" results.
+                if (!win.jarvis_predict.predict_from_all &&
+                    annotations.count(current_frame_num)) {
+                    auto &fa = annotations.at(current_frame_num);
+                    for (int c = 0; c < (int)scene->num_cams && c < (int)fa.cameras.size(); ++c) {
+                        if (rgb_bufs[c] != nullptr) continue;
+                        for (auto &kp : fa.cameras[c].keypoints) {
+                            if (kp.source == LabelSource::Predicted) {
+                                kp.labeled = false;
+                                kp.confidence = 0.0f;
+                            }
+                        }
+                    }
+                }
+
+                printf("[JARVIS ONNX] predicting on %d/%d cams: [%s]  (skipped: [%s])\n",
+                       cams_used, (int)scene->num_cams,
+                       included_names.c_str(), skipped_names.c_str());
 
                 jarvis_predict_frame(jarvis_state, annotations,
                     (u32)current_frame_num, rgb_bufs, widths, heights,
@@ -1445,9 +1480,7 @@ int main(int argc, char **argv) {
                     reprojection(annotations.at(current_frame_num),
                                  &skeleton, pm.camera_params, scene);
                 }
-                printf("[JARVIS ONNX] %s (%d/%d cameras)\n",
-                       jarvis_state.status.c_str(),
-                       cams_used, (int)scene->num_cams);
+                printf("[JARVIS ONNX] %s\n", jarvis_state.status.c_str());
 #endif
             }
 
