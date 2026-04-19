@@ -220,23 +220,33 @@ inline jarvis_detail::HeatmapPeak jarvis_detect_center(
     Ort::MemoryInfo mem = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
     std::array<int64_t, 4> shape = {1, 3, input_size, input_size};
 
-    // Get input/output names from model
+    // Get input/output names from model. Number of outputs varies by export:
+    // CoreML ships two heatmaps (low + high res); the generic ONNX export
+    // ships just one. Prefer the highest-index output (higher resolution).
     Ort::AllocatorWithDefaultOptions allocator;
     auto in_name = s.center_session->GetInputNameAllocated(0, allocator);
-    auto out_name_0 = s.center_session->GetOutputNameAllocated(0, allocator);
-    auto out_name_1 = s.center_session->GetOutputNameAllocated(1, allocator);
+    size_t n_outputs = s.center_session->GetOutputCount();
+    std::vector<Ort::AllocatedStringPtr> out_name_holders;
+    std::vector<const char *> output_names;
+    out_name_holders.reserve(n_outputs);
+    output_names.reserve(n_outputs);
+    for (size_t i = 0; i < n_outputs; ++i) {
+        out_name_holders.push_back(s.center_session->GetOutputNameAllocated(i, allocator));
+        output_names.push_back(out_name_holders.back().get());
+    }
 
     const char *input_names[] = {in_name.get()};
-    const char *output_names[] = {out_name_0.get(), out_name_1.get()};
 
     Ort::Value input_val = Ort::Value::CreateTensor<float>(
         mem, input.data(), input.size(), shape.data(), shape.size());
 
     auto outputs = s.center_session->Run(
-        Ort::RunOptions{nullptr}, input_names, &input_val, 1, output_names, 2);
+        Ort::RunOptions{nullptr}, input_names, &input_val, 1,
+        output_names.data(), n_outputs);
 
-    // Use heatmap_high (output index 1) — higher resolution
-    auto &hm = outputs[1];
+    // Pick the highest-index output — that's the high-res heatmap when two
+    // are present, or the only tensor for a single-output export.
+    auto &hm = outputs[n_outputs - 1];
     auto hm_shape = hm.GetTensorTypeAndShapeInfo().GetShape();
     int hm_h = (int)hm_shape[2];
     int hm_w = (int)hm_shape[3];
@@ -277,20 +287,27 @@ inline std::vector<jarvis_detail::HeatmapPeak> jarvis_detect_keypoints(
 
     Ort::AllocatorWithDefaultOptions allocator;
     auto in_name = s.keypoint_session->GetInputNameAllocated(0, allocator);
-    auto out_name_0 = s.keypoint_session->GetOutputNameAllocated(0, allocator);
-    auto out_name_1 = s.keypoint_session->GetOutputNameAllocated(1, allocator);
+    size_t n_outputs = s.keypoint_session->GetOutputCount();
+    std::vector<Ort::AllocatedStringPtr> out_name_holders;
+    std::vector<const char *> output_names;
+    out_name_holders.reserve(n_outputs);
+    output_names.reserve(n_outputs);
+    for (size_t i = 0; i < n_outputs; ++i) {
+        out_name_holders.push_back(s.keypoint_session->GetOutputNameAllocated(i, allocator));
+        output_names.push_back(out_name_holders.back().get());
+    }
 
     const char *input_names[] = {in_name.get()};
-    const char *output_names[] = {out_name_0.get(), out_name_1.get()};
 
     Ort::Value input_val = Ort::Value::CreateTensor<float>(
         mem, input.data(), input.size(), shape.data(), shape.size());
 
     auto outputs = s.keypoint_session->Run(
-        Ort::RunOptions{nullptr}, input_names, &input_val, 1, output_names, 2);
+        Ort::RunOptions{nullptr}, input_names, &input_val, 1,
+        output_names.data(), n_outputs);
 
-    // Use heatmap_high (output index 1)
-    auto &hm = outputs[1];
+    // Pick the highest-index output (high-res heatmap or sole output).
+    auto &hm = outputs[n_outputs - 1];
     auto hm_shape = hm.GetTensorTypeAndShapeInfo().GetShape();
     int n_joints = (int)hm_shape[1];
     int hm_h = (int)hm_shape[2];
