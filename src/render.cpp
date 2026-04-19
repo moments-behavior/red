@@ -1,6 +1,9 @@
 #include "render.h"
 #ifdef __APPLE__
 #include "metal_context.h"
+#else
+#include <cuda_runtime.h>
+#include <cstdio>
 #endif
 
 void render_initialize_target(gx_context *context) {
@@ -12,6 +15,40 @@ void render_initialize_target(gx_context *context) {
 
 void render_allocate_scene_memory(RenderScene *scene, u32 size_of_buffer) {
     int num_cams = scene->num_cams;
+
+#ifndef __APPLE__
+    // VRAM budget check: if the requested display buffer would exceed ~70% of
+    // free GPU memory, fall back to CPU-hosted buffers (or shrink the buffer).
+    // Otherwise many cameras × high-res × size_of_buffer (e.g. 16 × 3216×2208
+    // × 64 slots ≈ 29 GB) OOM the GPU and NvDecoder allocations fail later
+    // with opaque "ILLEGAL_ADDRESS" errors.
+    {
+        size_t per_frame_bytes = 0;
+        for (int j = 0; j < num_cams; j++) {
+            per_frame_bytes += (size_t)scene->image_width[j] *
+                               scene->image_height[j] * 4;
+        }
+        size_t needed = per_frame_bytes * size_of_buffer;
+
+        size_t free_bytes = 0, total_bytes = 0;
+        cudaMemGetInfo(&free_bytes, &total_bytes);
+        // Reserve budget for NvDecoder surfaces, PBOs, textures, JARVIS/ONNX,
+        // MuJoCo, etc. Allow at most 70% of currently-free VRAM for the display
+        // buffer allocations below.
+        size_t budget = (size_t)(free_bytes * 0.70);
+
+        if (!scene->use_cpu_buffer && needed > budget) {
+            fprintf(stderr,
+                    "[render] Display buffer would need %.2f GB of VRAM "
+                    "(budget %.2f GB free of %.2f GB total); falling back "
+                    "to CPU-hosted frames. Reduce default_buffer_size in "
+                    "settings to keep frames on GPU.\n",
+                    needed / 1e9, budget / 1e9, total_bytes / 1e9);
+            scene->use_cpu_buffer = true;
+        }
+    }
+#endif
+
     scene->size_of_buffer = size_of_buffer;
 
     scene->seek_context = (SeekInfo *)malloc(sizeof(SeekInfo) * num_cams);

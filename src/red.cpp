@@ -245,7 +245,10 @@ int main(int argc, char **argv) {
 #endif
 
     render_initialize_target(window);
-    RenderScene *scene = (RenderScene *)malloc(sizeof(RenderScene));
+    // calloc instead of malloc: RenderScene has plain bool/pointer fields that
+    // must start zeroed. Previously `use_cpu_buffer` was read before being
+    // assigned, silently using whatever garbage the heap provided.
+    RenderScene *scene = (RenderScene *)calloc(1, sizeof(RenderScene));
     std::string red_data_dir;
     std::string media_root_dir;
     prepare_application_folders(red_data_dir, media_root_dir);
