@@ -64,33 +64,109 @@ Disable the CoTracker UI for now. It adds complexity without providing value in 
 
 ---
 
-## One-time model export
+## Dependencies — Setting Up on a New Machine
 
-### 1. Export JARVIS → TensorRT engines
+Getting JARVIS running on a fresh PC has proven painful because many dependencies are implicit. This section collects everything you need. Assume Ubuntu 22.04 with an NVIDIA GPU.
+
+### C++ build dependencies (required to build `red` itself)
+
+The base RED build dependencies are in the top-level `README.md`. For JARVIS/CoTracker integration, you additionally need **LibTorch with CUDA** (not the CPU-only build the README mentions).
+
+| Component | Version used in this repo | Notes |
+|-----------|--------------------------|-------|
+| CUDA Toolkit | 12.0 (or 12.1/12.6) | Must match your driver |
+| cuDNN | 8.9.3 | cuDNN headers in `/usr/local/cuda/include` |
+| TensorRT | 8.6.1.6 (or TRT 10 for CUDA 12.2+) | Expected at `~/nvidia/TensorRT/` |
+| FFmpeg (built) | from source | Expected at `~/nvidia/ffmpeg/build/` |
+| OpenCV | 4.8.0 with SFM, CUDA, contrib | Built from source per README |
+| LibTorch | **2.5.1+cu121** (CUDA build) | Expected at `red/lib/libtorch/` |
+| GPU arch (CUDA_ARCHITECTURES) | **80** (A100-class) — hardcoded in `CMakeLists.txt:5` | **Change this to match your GPU** or build will fail at runtime. 86 = RTX 30xx, 89 = RTX 40xx, 90 = H100 |
+
+**LibTorch download:** use the CUDA build that matches your CUDA (e.g. cxx11-ABI + CUDA 12.1 → `libtorch-cxx11-abi-shared-with-deps-2.5.1+cu121.zip`). The CPU-only build from the base README is NOT sufficient for JARVIS — CoTracker and the JARVIS KeypointDetect path use CUDA kernels in libtorch.
+
+**CMakeLists hardcoded paths** (`CMakeLists.txt:12-13`):
+
+```cmake
+set(DIR_FFMPEG    "$ENV{HOME}/nvidia/ffmpeg/build")
+set(DIR_TENSORRT  "$ENV{HOME}/nvidia/TensorRT")
+```
+
+If your FFmpeg or TensorRT lives elsewhere, edit these lines or symlink them.
+
+**run.sh hardcoded path** (`run.sh:2`):
 
 ```bash
-cd /path/to/red
+export LD_LIBRARY_PATH=/home/user/src/red/lib/libtorch/lib:${LD_LIBRARY_PATH}
+```
+
+Replace `/home/user/src/red/` with your repo path, or the binary will fail to find `libtorch_cuda.so` at runtime.
+
+### Python dependencies (required to export JARVIS models)
+
+These are only needed on the machine where you **export** the engine files. You can export on one machine and copy the `.pt` files to another (TRT `.engine` files are NOT portable across GPUs — see below).
+
+1. **JARVIS-HybridNet repo** must be cloned somewhere and importable.
+   - Default search path: `../JARVIS-HybridNet` relative to `red/` (see `tools/export_jarvis_trt.py:22-26`).
+   - Override with `JARVIS_ROOT` env var.
+   - `tools/trace_jarvis_torchscript.py:18-19` has the path **hardcoded** to `/home/user/src/JARVIS-HybridNet` and the project name hardcoded to `mouseJan30` — edit these two lines for your setup.
+
+2. **Python packages** (install into a venv):
+   ```bash
+   pip install torch==2.5.1 torchvision  # must match libtorch version above
+   pip install torch_tensorrt             # only for export_jarvis_trt.py (TRT path)
+   pip install -e /path/to/JARVIS-HybridNet
+   # plus JARVIS's own requirements: efficientnet-pytorch, albumentations, etc.
+   ```
+
+3. **Trained JARVIS weights** must exist under `JARVIS-HybridNet/projects/<project_name>/models/`. The `weights="latest"` lookup (`tools/trace_jarvis_torchscript.py:46`) will fail silently if these are missing.
+
+4. **CoTracker3 weights** are pulled via `torch.hub.load("facebookresearch/co-tracker", "cotracker3_offline")`. Requires internet access the first time (cached to `~/.cache/torch/hub/`).
+
+### Model export workflow
+
+#### 1a. Export JARVIS → TorchScript `.pt` (RECOMMENDED — portable)
+
+```bash
+python3 tools/trace_jarvis_torchscript.py
+```
+
+Edit `JARVIS_ROOT` and `PROJECT_NAME` at the top of the script first. Writes to `$JARVIS_ROOT/projects/<project>/trt-models/predict2D/{centerDetect,keypointDetect}.pt`.
+
+These `.pt` files are portable across machines with the same libtorch version.
+
+#### 1b. Export JARVIS → TensorRT `.engine` (faster but NOT portable)
+
+```bash
 python3 tools/export_jarvis_trt.py \
     --project mouseHybrid24 \
     --output /data/models/jarvis_engines/
 ```
 
 Outputs:
-- `centerDetect.engine`   — CenterDetect TRT engine (input 1×3×320×320)
-- `keypointDetect.engine` — KeypointDetect TRT engine (input 1×3×832×832)
+- `centerDetect.engine`   — input 1×3×320×320
+- `keypointDetect.engine` — input 1×3×832×832
 
-**Alternatively**, if `torch_tensorrt` is unavailable, provide raw TorchScript `.pt`
-files from `JARVIS-HybridNet/projects/<project>/models/`. RED will automatically
-fall back to LibTorch inference when it sees `.pt` extensions.
+**TRT engines are GPU-architecture-specific.** You must re-run this on every machine with a different GPU.
 
-### 2. Export CoTracker3 → TorchScript (currently broken — see above)
+RED auto-detects `.engine` vs `.pt` by file extension and uses the correct backend (`src/jarvis_infer.cpp:48-51`).
+
+#### 2. Export CoTracker3 → TorchScript (currently broken — see CoTracker Issues above)
 
 ```bash
 python3 tools/export_cotracker_torchscript.py \
-    --output /data/models/cotracker3_offline.pt
+    --output /path/to/cotracker3_offline.pt
 ```
 
-This downloads CoTracker3 via `torch.hub` and traces it to a portable `.pt` file.
+Downloads CoTracker3 via `torch.hub` and traces it. Note: the RED C++ side (`cotracker_infer.cpp:7-8`) expects the trace to have been done with `T=200, N=24`, but the default script args are `T=8, N=4`. This mismatch is likely part of why CoTracker doesn't work — see issues section above.
+
+### Troubleshooting first-run on a new PC
+
+- **`libtorch_cuda.so: cannot open shared object`** → `LD_LIBRARY_PATH` in `run.sh` points to wrong path.
+- **CUDA architecture mismatch / kernel launch failure** → change `CMAKE_CUDA_ARCHITECTURES` in `CMakeLists.txt:5` to your GPU.
+- **`cannot find -lnvinfer`** → TensorRT isn't at `~/nvidia/TensorRT/`. Either move it or edit `CMakeLists.txt:13`.
+- **`cannot find -lavcodec`** → FFmpeg isn't at `~/nvidia/ffmpeg/build/`. Edit `CMakeLists.txt:12`.
+- **Python `import jarvis` fails** → set `JARVIS_ROOT` env var or edit the hardcoded path in `tools/trace_jarvis_torchscript.py:18`.
+- **`.pt` loads in RED but inference crashes** → libtorch version mismatch between the Python used to trace and the C++ libtorch in `lib/libtorch/`. Both must be 2.5.1.
 
 ---
 
