@@ -1,13 +1,123 @@
-# Building RED on Ubuntu (rob_ui_overhaul branch)
+# Building RED on Ubuntu (quan_dev_linux branch)
 
-This branch was developed primarily on macOS. The Linux build was brought to parity in April 2026, pulling in the OpenGL MuJoCo renderer from `rob_windows`. This doc lists every dependency, the CMake flags that matter, and which features are still Apple-only.
+This branch was developed primarily on macOS (as `rob_ui_overhaul`). Linux parity was added in April 2026, pulling in the OpenGL MuJoCo renderer from `rob_windows`. This doc lists every dependency, the CMake flags that matter, and which features are still Apple-only.
 
-## Quick build (assuming deps are installed)
+---
+
+## Fresh-machine build (start here)
+
+Run these in order on a clean Ubuntu 22.04 box with an NVIDIA GPU. Each step is standalone. Skip a step only if you're sure it's already done.
+
+### 1. Clone the repo
 
 ```bash
-cmake -S . -B release -DCMAKE_CUDA_ARCHITECTURES=86   # 86=RTX30xx, 89=RTX40xx, 80=A100
+git clone --recursive https://github.com/JohnsonLabJanelia/red.git
+cd red
+git checkout quan_dev_linux
+git submodule update --init --recursive
+```
+
+### 2. Install apt dependencies
+
+```bash
+sudo apt install -y \
+    build-essential cmake pkg-config git curl \
+    libeigen3-dev libturbojpeg0-dev \
+    libcholmod3 libccolamd2 libcamd2 libcolamd2 libamd2 libspqr2 libsuitesparseconfig5 \
+    liblapack-dev libblas-dev \
+    libglew-dev libglfw3-dev libglu1-mesa-dev
+```
+
+### 3. Install NVIDIA stack (if not already)
+
+- **NVIDIA driver** ≥ 525 (`nvidia-smi` should print your GPU)
+- **CUDA Toolkit 12.0 – 12.6** at `/usr/local/cuda/`
+- **cuDNN 8.9.3** copied into `/usr/local/cuda/{include,lib64}/`
+
+Steps for CUDA / cuDNN / TensorRT are in the top-level `README.md`. For this branch, **TensorRT 8.6.1.6 must live at `~/nvidia/TensorRT-8.6.1.6/`** and **FFmpeg must be built at `~/nvidia/ffmpeg/build/`** — the CMake has these paths hardcoded. If you already have them at other locations, symlink them:
+
+```bash
+mkdir -p ~/nvidia
+ln -sf /path/to/your/TensorRT-8.6.1.6 ~/nvidia/TensorRT-8.6.1.6
+ln -sf /path/to/your/ffmpeg-build     ~/nvidia/ffmpeg/build
+```
+
+### 4. Install OpenCV 4.x with SFM + CUDA
+
+Follow the top-level `README.md` OpenCV section. Do **not** install `libopencv-dev` from apt — it doesn't include the SFM module.
+
+### 5. Build and install Ceres Solver from source
+
+The apt `libceres-dev` package doesn't ship the abseil static libs we need. Build from source so you get `libceres.a` + `libabsl_*.a` under `/usr/local/lib/`:
+
+```bash
+cd ~/build   # or anywhere
+git clone --depth 1 https://github.com/ceres-solver/ceres-solver.git
+cd ceres-solver
+mkdir build && cd build
+cmake -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DBUILD_EXAMPLES=OFF ..
+make -j && sudo make install
+```
+
+### 6. Drop in LibTorch (CUDA build)
+
+```bash
+cd /path/to/red
+curl -L -o /tmp/libtorch.zip \
+  https://download.pytorch.org/libtorch/cu121/libtorch-cxx11-abi-shared-with-deps-2.5.1%2Bcu121.zip
+unzip /tmp/libtorch.zip -d lib/
+# results in lib/libtorch/
+```
+
+### 7. Install MuJoCo 3.3.6 (for body model features)
+
+```bash
+curl -L -o /tmp/mujoco.tgz \
+  https://github.com/google-deepmind/mujoco/releases/download/3.3.6/mujoco-3.3.6-linux-x86_64.tar.gz
+tar -xzf /tmp/mujoco.tgz -C ~/build/
+# results in ~/build/mujoco-3.3.6/
+```
+
+### 8. (Optional) Install ONNX Runtime for SAM + JARVIS-ONNX
+
+```bash
+cd /path/to/red
+curl -L -o /tmp/ort.tgz \
+  https://github.com/microsoft/onnxruntime/releases/download/v1.18.1/onnxruntime-linux-x64-gpu-1.18.1.tgz
+tar -xzf /tmp/ort.tgz -C lib/
+mv lib/onnxruntime-linux-x64-gpu-1.18.1 lib/onnxruntime
+```
+
+### 9. Configure + build
+
+Pass the correct CUDA arch for your GPU. Don't guess — check `nvidia-smi --query-gpu=compute_cap --format=csv,noheader` and drop the dot (e.g. `8.6` → `86`).
+
+```bash
+cmake -S . -B release -DCMAKE_CUDA_ARCHITECTURES=86
 cmake --build release -j
+```
+
+If MuJoCo isn't at `/home/user/build/mujoco-3.3.6`, add `-DMUJOCO_DIR=/your/path`.
+
+At configure time you should see:
+
+```
+-- ONNX Runtime found at .../lib/onnxruntime      # if step 8 done
+-- MuJoCo found at .../mujoco-3.3.6               # if step 7 done
+```
+
+### 10. Run
+
+```bash
 ./release/red
+```
+
+---
+
+## One-liner (once all deps are in place)
+
+```bash
+cmake -S . -B release -DCMAKE_CUDA_ARCHITECTURES=86 && cmake --build release -j && ./release/red
 ```
 
 ## Dependencies
