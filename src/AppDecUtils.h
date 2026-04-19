@@ -18,6 +18,7 @@
 #ifndef __APPLE__
 #include <sstream>
 #include <iostream>
+#include <mutex>
 
 static void ShowHelpAndExit(const char *szBadOption, char *szOutputFileName, bool *pbVerbose, int *piD3d, bool *pbForce_zero_latency)
 {
@@ -137,12 +138,21 @@ static void getOutputFormatNames(unsigned short nOutputFormatMask, char *OutputF
 */
 static void createCudaContext(CUcontext* cuContext, int iGpu, unsigned int flags)
 {
+    // Share the device's primary (refcounted) context across all decoder
+    // threads. Creating a fresh cuCtxCreate per thread OOMs the GPU at ~16
+    // cameras since each new context costs ~300-500 MB + per-context NvDecoder
+    // allocations. Primary context retain is a lightweight refcount bump.
+    (void)flags;
     CUdevice cuDevice = 0;
     ck(cuDeviceGet(&cuDevice, iGpu));
-    char szDeviceName[80];
-    ck(cuDeviceGetName(szDeviceName, sizeof(szDeviceName), cuDevice));
-    std::cout << "GPU in use: " << szDeviceName << std::endl;
-    ck(cuCtxCreate(cuContext, flags, cuDevice));
+    static std::once_flag s_name_printed;
+    std::call_once(s_name_printed, [&]() {
+        char szDeviceName[80];
+        ck(cuDeviceGetName(szDeviceName, sizeof(szDeviceName), cuDevice));
+        std::cout << "GPU in use: " << szDeviceName << std::endl;
+    });
+    ck(cuDevicePrimaryCtxRetain(cuContext, cuDevice));
+    ck(cuCtxPushCurrent(*cuContext));
 }
 
 /**
