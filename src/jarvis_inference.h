@@ -118,7 +118,7 @@ inline std::vector<float> preprocess_crop(const uint8_t *rgb, int img_w, int img
     return preprocess(crop.data(), cw, ch, dst_size);
 }
 
-// Argmax on a 2D heatmap → (x, y, confidence)
+// Argmax on a 2D heatmap → (x, y in heatmap coords, confidence)
 struct HeatmapPeak { float x, y, confidence; };
 
 inline HeatmapPeak heatmap_argmax(const float *heatmap, int h, int w) {
@@ -131,8 +131,11 @@ inline HeatmapPeak heatmap_argmax(const float *heatmap, int h, int w) {
         }
     }
     HeatmapPeak peak;
-    peak.x = (float)(max_idx % w) * 2.0f; // 2x scale (heatmap is half resolution)
-    peak.y = (float)(max_idx / w) * 2.0f;
+    // Return coords in the heatmap's own resolution. Callers scale up
+    // using the actual (input_size / heatmap_size) stride — this varies
+    // per export (ONNX keeps stride 4, CoreML/TS ship stride 2 too).
+    peak.x = (float)(max_idx % w);
+    peak.y = (float)(max_idx / w);
     peak.confidence = std::min(max_val, 255.0f) / 255.0f;
     return peak;
 }
@@ -253,9 +256,12 @@ inline jarvis_detail::HeatmapPeak jarvis_detect_center(
     const float *hm_data = hm.GetTensorData<float>();
 
     auto peak = jarvis_detail::heatmap_argmax(hm_data, hm_h, hm_w);
-    // Scale from heatmap coords to original image coords
-    result.x = peak.x * ds_x;
-    result.y = peak.y * ds_y;
+    // Heatmap → input-space stride (4 for stride-4 export, 2 for stride-2).
+    float stride_x = (float)input_size / (float)hm_w;
+    float stride_y = (float)input_size / (float)hm_h;
+    // Heatmap → input-space → original image coords.
+    result.x = peak.x * stride_x * ds_x;
+    result.y = peak.y * stride_y * ds_y;
     result.confidence = peak.confidence;
 #else
     (void)rgb; (void)w; (void)h;
@@ -314,13 +320,17 @@ inline std::vector<jarvis_detail::HeatmapPeak> jarvis_detect_keypoints(
     int hm_w = (int)hm_shape[3];
     const float *hm_data = hm.GetTensorData<float>();
 
+    // Heatmap → crop-space stride (input_size / heatmap_size).
+    float stride_x = (float)input_size / (float)hm_w;
+    float stride_y = (float)input_size / (float)hm_h;
+
     result.resize(n_joints);
     for (int j = 0; j < n_joints; ++j) {
         auto peak = jarvis_detail::heatmap_argmax(
             hm_data + j * hm_h * hm_w, hm_h, hm_w);
-        // Convert from crop-local to full-image coordinates
-        result[j].x = peak.x + (float)(center_x - bbox_hw);
-        result[j].y = peak.y + (float)(center_y - bbox_hw);
+        // Heatmap → crop-space → full-image coordinates.
+        result[j].x = peak.x * stride_x + (float)(center_x - bbox_hw);
+        result[j].y = peak.y * stride_y + (float)(center_y - bbox_hw);
         result[j].confidence = peak.confidence;
     }
 #else
