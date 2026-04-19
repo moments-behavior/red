@@ -15,8 +15,11 @@
 #include "gui/panel.h"
 #include <ImGuiFileDialog.h>
 #include <misc/cpp/imgui_stdlib.h>
+#include <algorithm>
 #include <atomic>
+#include <cstdlib>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <string>
 #include <thread>
@@ -130,6 +133,26 @@ inline JarvisLoadResult jarvis_load_from_dir(
 #endif
     std::string cd = base_dir + "/center_detect.onnx";
     std::string kd = base_dir + "/keypoint_detect.onnx";
+    // If exact snake_case names aren't present, fall back to any *center*.onnx
+    // / *keypoint*.onnx in the directory (covers camelCase and project-named
+    // exports from JARVIS).
+    if (!fs::exists(cd) || !fs::exists(kd)) {
+        std::error_code ec;
+        std::string cd_found, kd_found;
+        for (auto &e : fs::directory_iterator(base_dir, ec)) {
+            if (e.path().extension() != ".onnx") continue;
+            std::string lower = e.path().filename().string();
+            std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+            if (cd_found.empty() && lower.find("center") != std::string::npos)
+                cd_found = e.path().string();
+            else if (kd_found.empty() && lower.find("keypoint") != std::string::npos)
+                kd_found = e.path().string();
+        }
+        if (!cd_found.empty() && !kd_found.empty()) {
+            cd = cd_found;
+            kd = kd_found;
+        }
+    }
     if (fs::exists(cd) && fs::exists(kd)) {
 #ifdef __APPLE__
         jarvis_coreml_cleanup(jarvis_coreml);
@@ -247,6 +270,52 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
         // --- Import New Model ---
         ImGui::SeparatorText("Import Model");
 
+        // Auto-populate the models folder on first view if still empty —
+        // check common JARVIS export locations for ONNX files.
+        if (state.models_folder.empty() && state.cached_models_folder.empty()) {
+            namespace fs = std::filesystem;
+            const char *home = std::getenv("HOME");
+            if (home) {
+                std::vector<fs::path> candidates = {
+                    fs::path(home) / "src/JARVIS-HybridNet/projects",
+                    fs::path(home) / "JARVIS-HybridNet/onnx_models",
+                    fs::path(home) / "JARVIS-HybridNet/projects",
+                };
+                auto dir_has_jarvis_onnx = [](const fs::path &d) {
+                    if (!fs::is_directory(d)) return false;
+                    bool has_c = false, has_k = false;
+                    for (auto &e : fs::directory_iterator(d)) {
+                        if (e.path().extension() != ".onnx") continue;
+                        std::string name = e.path().filename().string();
+                        std::string lower = name;
+                        std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+                        if (lower.find("center") != std::string::npos) has_c = true;
+                        if (lower.find("keypoint") != std::string::npos) has_k = true;
+                    }
+                    return has_c && has_k;
+                };
+                std::function<std::string(const fs::path&, int)> find_first;
+                find_first = [&](const fs::path &root, int depth) -> std::string {
+                    if (depth > 4 || !fs::is_directory(root)) return {};
+                    if (dir_has_jarvis_onnx(root)) return root.string();
+                    std::error_code ec;
+                    for (auto &e : fs::directory_iterator(root, ec)) {
+                        if (!e.is_directory()) continue;
+                        auto hit = find_first(e.path(), depth + 1);
+                        if (!hit.empty()) return hit;
+                    }
+                    return {};
+                };
+                for (auto &c : candidates) {
+                    auto hit = find_first(c, 0);
+                    if (!hit.empty()) {
+                        state.models_folder = hit;
+                        break;
+                    }
+                }
+            }
+        }
+
         ImGui::Text("Models Folder");
         ImGui::SetNextItemWidth(-60);
         ImGui::InputText("##jarvis_models_folder", &state.models_folder);
@@ -315,12 +384,35 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
             std::string center_path, keypoint_path, info_path;
 
             if (!state.models_folder.empty() && fs::is_directory(state.models_folder)) {
+            // Find center/keypoint ONNX files in a directory. Accepts any
+            // filename matching *center*.onnx / *keypoint*.onnx case-insensitive
+            // to support snake_case (center_detect.onnx), camelCase
+            // (centerDetect.onnx), and project-named (center_detection_foo.onnx)
+            // conventions produced by different JARVIS export scripts.
             auto find_onnx_in = [&](const fs::path &dir) {
-                fs::path c = dir / "center_detect.onnx";
-                fs::path k = dir / "keypoint_detect.onnx";
-                if (fs::exists(c) && fs::exists(k)) {
-                    center_path = c.string();
-                    keypoint_path = k.string();
+                if (!fs::is_directory(dir)) return false;
+                std::string c_path, k_path;
+                // Prefer exact matches first.
+                fs::path c_exact = dir / "center_detect.onnx";
+                fs::path k_exact = dir / "keypoint_detect.onnx";
+                if (fs::exists(c_exact)) c_path = c_exact.string();
+                if (fs::exists(k_exact)) k_path = k_exact.string();
+                if (c_path.empty() || k_path.empty()) {
+                    std::error_code ec;
+                    for (auto &e : fs::directory_iterator(dir, ec)) {
+                        if (e.path().extension() != ".onnx") continue;
+                        std::string name = e.path().filename().string();
+                        std::string lower = name;
+                        std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+                        if (c_path.empty() && lower.find("center") != std::string::npos)
+                            c_path = e.path().string();
+                        else if (k_path.empty() && lower.find("keypoint") != std::string::npos)
+                            k_path = e.path().string();
+                    }
+                }
+                if (!c_path.empty() && !k_path.empty()) {
+                    center_path = c_path;
+                    keypoint_path = k_path;
                     fs::path mi = dir / "model_info.json";
                     if (fs::exists(mi)) info_path = mi.string();
                     return true;
