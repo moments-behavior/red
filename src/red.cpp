@@ -1382,6 +1382,72 @@ int main(int argc, char **argv) {
                         win.jarvis_predict.confidence_threshold);
                     printf("[JARVIS ONNX] %s\n", jarvis_state.status.c_str());
                 }
+#else
+                // Linux / non-Apple path: pull RGBA frames (CPU or cudaMalloc'd
+                // GPU) from the display buffer, convert to RGB, run JARVIS
+                // ONNX Runtime inference (CUDA EP if available), triangulate.
+                int mh = ps.play_video ? ps.read_head : select_corr_head;
+                std::vector<int> widths(scene->num_cams), heights(scene->num_cams);
+                for (int c = 0; c < (int)scene->num_cams; ++c) {
+                    widths[c] = (int)scene->image_width[c];
+                    heights[c] = (int)scene->image_height[c];
+                }
+
+                auto cam_included_lx = [&](int c) -> bool {
+                    if (win.jarvis_predict.predict_from_all) return true;
+                    if (c < (int)pm.camera_names.size() &&
+                        window_is_visible.count(pm.camera_names[c]) &&
+                        window_is_visible[pm.camera_names[c]]) {
+                        auto &slot = scene->display_buffer[c][mh];
+                        return slot.frame != nullptr &&
+                               slot.frame_number.load() == current_frame_num;
+                    }
+                    return false;
+                };
+
+                std::vector<const uint8_t *> rgb_bufs(scene->num_cams, nullptr);
+                std::vector<std::vector<uint8_t>> rgb_storage(scene->num_cams);
+                std::vector<std::vector<uint8_t>> rgba_scratch(scene->num_cams);
+                int cams_used = 0;
+                for (int c = 0; c < (int)scene->num_cams; ++c) {
+                    if (!cam_included_lx(c)) continue;
+                    auto &slot = scene->display_buffer[c][mh];
+                    if (!slot.frame) continue;
+
+                    size_t npix = (size_t)widths[c] * heights[c];
+                    const uint8_t *rgba = nullptr;
+                    if (scene->use_cpu_buffer) {
+                        rgba = (const uint8_t *)slot.frame;
+                    } else {
+                        rgba_scratch[c].resize(npix * 4);
+                        cudaMemcpy(rgba_scratch[c].data(), slot.frame,
+                                   npix * 4, cudaMemcpyDeviceToHost);
+                        rgba = rgba_scratch[c].data();
+                    }
+
+                    rgb_storage[c].resize(npix * 3);
+                    uint8_t *dst = rgb_storage[c].data();
+                    for (size_t i = 0; i < npix; ++i) {
+                        dst[i*3+0] = rgba[i*4+0];
+                        dst[i*3+1] = rgba[i*4+1];
+                        dst[i*3+2] = rgba[i*4+2];
+                    }
+                    rgb_bufs[c] = dst;
+                    cams_used++;
+                }
+
+                jarvis_predict_frame(jarvis_state, annotations,
+                    (u32)current_frame_num, rgb_bufs, widths, heights,
+                    skeleton, pm.camera_params, scene,
+                    win.jarvis_predict.confidence_threshold);
+                if (!pm.camera_params.empty() &&
+                    annotations.count(current_frame_num)) {
+                    reprojection(annotations.at(current_frame_num),
+                                 &skeleton, pm.camera_params, scene);
+                }
+                printf("[JARVIS ONNX] %s (%d/%d cameras)\n",
+                       jarvis_state.status.c_str(),
+                       cams_used, (int)scene->num_cams);
 #endif
             }
 

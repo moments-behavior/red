@@ -158,14 +158,32 @@ inline bool jarvis_init(JarvisState &s, const char *center_onnx,
         Ort::SessionOptions opts;
         opts.SetIntraOpNumThreads(4);
         opts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
-        // Use CPU provider (validated faster than CoreML for this model)
+
+        // On Linux with CUDA, attach the CUDA execution provider so inference
+        // runs on the GPU. Falls back silently to CPU if the CUDA EP binary
+        // isn't in lib/onnxruntime/lib (onnxruntime-linux-x64-gpu tarball
+        // required). On macOS we stay on CPU (validated faster than CoreML
+        // for this model).
+        std::string backend = "CPU";
+#ifndef __APPLE__
+        try {
+            OrtCUDAProviderOptions cuda_opts{};
+            cuda_opts.device_id = 0;
+            opts.AppendExecutionProvider_CUDA(cuda_opts);
+            backend = "CUDA";
+        } catch (const Ort::Exception &e) {
+            fprintf(stderr,
+                    "[JARVIS] CUDA EP unavailable, using CPU: %s\n", e.what());
+        }
+#endif
 
         s.center_session = std::make_unique<Ort::Session>(
             *s.env, center_onnx, opts);
         s.keypoint_session = std::make_unique<Ort::Session>(
             *s.env, keypoint_onnx, opts);
 
-        s.status = "JARVIS loaded (" + std::to_string(s.config.num_joints) + " joints)";
+        s.status = "JARVIS loaded (" + std::to_string(s.config.num_joints) +
+                   " joints, " + backend + ")";
         s.loaded = true;
         return true;
     } catch (const Ort::Exception &e) {
