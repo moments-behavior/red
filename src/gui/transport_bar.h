@@ -113,49 +113,34 @@ inline void DrawTransportBar(TransportBarState &state, AppContext &ctx) {
     ImGui::SameLine(0, spacing);
 
     // === Timeline slider / frame input ===
-    // Cmd+click replaces the slider with an InputInt so the user can type
-    // a frame number at their leisure.  Enter = seek, Escape = cancel.
-    if (state.slider_text_editing) {
-        // --- Text input mode: InputInt replaces slider ---
-        ImGui::SetNextItemWidth(200.0f);
-        if (state.focus_input) {
-            ImGui::SetKeyboardFocusHere();
-            state.focus_input = false;
-        }
-        ImGui::InputInt("##timeline_input", &state.edit_buf, 0, 0);
-        if (ImGui::IsItemDeactivatedAfterEdit()) {
-            // Enter — clamp and seek
-            state.edit_buf = std::clamp(state.edit_buf, 0, dc->estimated_num_frames);
-            seek_all_cameras(ctx.scene, state.edit_buf, dc->video_fps, ps, false);
-            state.slider_text_editing = false;
-            ps.slider_text_editing = false;
-        } else if (ImGui::IsItemDeactivated()) {
-            // Escape or click-away — cancel
-            state.slider_text_editing = false;
-            ps.slider_text_editing = false;
-        }
-    } else {
-        // --- Normal mode: slider ---
-        state.edit_buf = ps.slider_frame_number;
-        ImGui::SetNextItemWidth(200.0f);
-        bool changed = ImGui::SliderInt(
-            "##timeline", &state.edit_buf, 0, dc->estimated_num_frames);
+    // Uses ImGui's built-in Ctrl+click behavior on SliderInt: Ctrl+click opens
+    // a TempInput text field on the slider itself. Enter commits, Escape
+    // cancels. We detect the value change (via TempInput edit or slider drag)
+    // and seek all cameras.
+    state.edit_buf = ps.slider_frame_number;
+    ImGui::SetNextItemWidth(200.0f);
+    ImGuiID slider_id = ImGui::GetID("##timeline");
+    bool was_temp_input = ImGui::TempInputIsActive(slider_id);
+    bool changed = ImGui::SliderInt(
+        "##timeline", &state.edit_buf, 0, dc->estimated_num_frames);
+    bool is_temp_input = ImGui::TempInputIsActive(slider_id);
 
-        if (ImGui::TempInputIsActive(ImGui::GetItemID())) {
-            // Cmd+click detected — pause and switch to InputInt next frame
-            if (ps.play_video) {
-                ps.play_video = false;
-                ps.pause_selected = 0;
-            }
-            state.slider_text_editing = true;
-            ps.slider_text_editing = true;
-            state.focus_input = true;
-        } else if (changed) {
-            ps.slider_frame_number = state.edit_buf;
-            ps.slider_just_changed = true;
-            seek_all_cameras(ctx.scene, state.edit_buf, dc->video_fps, ps, false);
-        }
+    // Pause playback as soon as the user Ctrl+clicks into text edit mode.
+    if (is_temp_input && !was_temp_input && ps.play_video) {
+        ps.play_video = false;
+        ps.pause_selected = 0;
     }
+
+    // Commit on slider drag OR on text-input confirm. SliderInt returns
+    // `changed` for both cases; clamp to valid range and seek.
+    if (changed) {
+        state.edit_buf = std::clamp(state.edit_buf, 0, dc->estimated_num_frames);
+        ps.slider_frame_number = state.edit_buf;
+        ps.slider_just_changed = true;
+        seek_all_cameras(ctx.scene, state.edit_buf, dc->video_fps, ps, false);
+    }
+    // Keep the old flag tracked for anyone else watching it.
+    ps.slider_text_editing = is_temp_input;
 
     ImGui::SameLine(0, spacing);
     float current_time_sec = state.edit_buf / dc->video_fps;
