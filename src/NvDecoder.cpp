@@ -533,24 +533,29 @@ int NvDecoder::HandlePictureDecode(CUVIDPICPARAMS *pPicParams) {
 *  0: fail, >=1: succeeded
 */
 int NvDecoder::HandlePictureDisplay(CUVIDPARSERDISPINFO *pDispInfo) {
+    // Declared outside the try so the catch block can unmap + pop without
+    // re-throwing. Leaking either of these on exception used to exhaust the
+    // decoder's surface pool (17 surfaces; 17 failures then cuvidMapVideoFrame
+    // keeps returning MAP_FAILED/OOM forever).
+    CUdeviceptr dpSrcFrame = 0;
+    bool frame_mapped = false;
+    bool ctx_pushed = false;
+
   try {
+    CUVIDPROCPARAMS videoProcessingParameters = {};
+    videoProcessingParameters.progressive_frame = pDispInfo->progressive_frame;
+    videoProcessingParameters.second_field = pDispInfo->repeat_first_field + 1;
+    videoProcessingParameters.top_field_first = pDispInfo->top_field_first;
+    videoProcessingParameters.unpaired_field = pDispInfo->repeat_first_field < 0;
+    videoProcessingParameters.output_stream = m_cuvidStream;
+
     // Seek suppression: while the main decoder thread is in the middle of a
     // seek, NVDEC may deliver display events for frames that were in-flight
-    // when the seek began. Those frames' backing surfaces are in a
-    // transitional state — cuvidMapVideoFrame may return a pointer that's
-    // technically "valid" but whose memory gets reused during the async
-    // copy, tripping CUDA_ERROR_ILLEGAL_ADDRESS at the next synchronize.
-    // Drop these frames cleanly: map + unmap to acknowledge to NVDEC, do
-    // NOT issue any memcpy, and return 0 so the slot is skipped.
+    // when the seek began. Those surfaces are in a transitional state — the
+    // async memcpy would read stale memory and trip
+    // CUDA_ERROR_ILLEGAL_ADDRESS at the next cuStreamSynchronize. Map+unmap
+    // so NVDEC knows we consumed the event, then return 0.
     if (m_bSuppressDisplay.load(std::memory_order_acquire)) {
-        CUVIDPROCPARAMS videoProcessingParameters = {};
-        videoProcessingParameters.progressive_frame = pDispInfo->progressive_frame;
-        videoProcessingParameters.second_field = pDispInfo->repeat_first_field + 1;
-        videoProcessingParameters.top_field_first = pDispInfo->top_field_first;
-        videoProcessingParameters.unpaired_field = pDispInfo->repeat_first_field < 0;
-        videoProcessingParameters.output_stream = m_cuvidStream;
-
-        CUdeviceptr dpSrcFrame = 0;
         unsigned int nSrcPitch = 0;
         CUresult r1 = cuvidMapVideoFrame(m_hDecoder, pDispInfo->picture_index,
                                          &dpSrcFrame, &nSrcPitch,
@@ -559,18 +564,12 @@ int NvDecoder::HandlePictureDisplay(CUVIDPARSERDISPINFO *pDispInfo) {
         return 0;
     }
 
-    CUVIDPROCPARAMS videoProcessingParameters = {};
-    videoProcessingParameters.progressive_frame = pDispInfo->progressive_frame;
-    videoProcessingParameters.second_field = pDispInfo->repeat_first_field + 1;
-    videoProcessingParameters.top_field_first = pDispInfo->top_field_first;
-    videoProcessingParameters.unpaired_field = pDispInfo->repeat_first_field < 0;
-    videoProcessingParameters.output_stream = m_cuvidStream;
-
-    CUdeviceptr dpSrcFrame = 0;
     unsigned int nSrcPitch = 0;
     CUDA_DRVAPI_CALL(cuCtxPushCurrent(m_cuContext));
+    ctx_pushed = true;
     NVDEC_API_CALL(cuvidMapVideoFrame(m_hDecoder, pDispInfo->picture_index, &dpSrcFrame,
         &nSrcPitch, &videoProcessingParameters));
+    frame_mapped = true;
 
     CUVIDGETDECODESTATUS DecodeStatus;
     memset(&DecodeStatus, 0, sizeof(DecodeStatus));
@@ -643,18 +642,21 @@ int NvDecoder::HandlePictureDisplay(CUVIDPARSERDISPINFO *pDispInfo) {
     m_vTimestamp[m_nDecodedFrame - 1] = pDispInfo->timestamp;
 
     NVDEC_API_CALL(cuvidUnmapVideoFrame(m_hDecoder, dpSrcFrame));
+    frame_mapped = false;
     return 1;
   } catch (const std::exception &e) {
-    // A single bad display callback (typically after a seek where the
-    // NVDEC parser produces a stale display event for a destroyed surface)
-    // used to propagate out of dec.Decode() and kill the whole decoder
-    // thread. Swallow the error, pop any context we pushed, and return 0
-    // so NVDEC treats this callback as "frame not consumed". The next
-    // valid display event will proceed normally.
+    // Recover: always unmap the NVDEC surface and pop the context, so a
+    // failure here doesn't leak a surface (exhausts the 17-entry pool
+    // after a handful of errors and stalls the decoder with MAP_FAILED).
+    if (frame_mapped) {
+        cuvidUnmapVideoFrame(m_hDecoder, dpSrcFrame);
+    }
+    if (ctx_pushed) {
+        CUcontext popped = nullptr;
+        cuCtxPopCurrent(&popped);
+    }
     fprintf(stderr, "[NvDecoder] HandlePictureDisplay soft failure: %s\n",
             e.what());
-    CUcontext popped = nullptr;
-    cuCtxPopCurrent(&popped);  // no-op if nothing was pushed
     return 0;
   }
 }
