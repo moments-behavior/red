@@ -398,11 +398,13 @@ inline bool jarvis_predict_frame(
     auto t3 = std::chrono::steady_clock::now();
     s.last_keypoint_ms = std::chrono::duration<float, std::milli>(t3 - t2).count();
 
-    // Phase 3: Triangulate using RED's DLT
-    reprojection(fa, const_cast<SkeletonContext *>(&skeleton),
-                 camera_params, scene);
+    // NOTE: triangulation (reprojection to 3D + back onto all cams) is NOT
+    // run here. The caller — typically the "Triangulate" button in the UI —
+    // invokes reprojection() separately so the user can edit predicted 2D
+    // keypoints before committing to 3D.
+    (void)camera_params; (void)scene;
     auto t4 = std::chrono::steady_clock::now();
-    s.last_triangulate_ms = std::chrono::duration<float, std::milli>(t4 - t3).count();
+    s.last_triangulate_ms = 0;
     s.last_total_ms = std::chrono::duration<float, std::milli>(t4 - t0).count();
 
     s.status = "Predicted " + std::to_string(num_joints) + " joints on " +

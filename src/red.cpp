@@ -1475,20 +1475,32 @@ int main(int argc, char **argv) {
                     (u32)current_frame_num, rgb_bufs, widths, heights,
                     skeleton, pm.camera_params, scene,
                     win.jarvis_predict.confidence_threshold);
+                // NOTE: deliberately NOT calling reprojection() here.
+                // Prediction is a 2D-only step on the visible cameras; the
+                // user triggers 3D triangulation separately via the
+                // Triangulate button (handled below). This lets them edit the
+                // 2D predictions before committing to triangulation.
+
+                printf("[JARVIS ONNX] %s\n", jarvis_state.status.c_str());
+#endif
+            }
+
+            // --- Triangulate button ---
+            // Takes whatever 2D keypoints currently exist on this frame
+            // (manual edits, Predicted, YOLO, etc.) and runs DLT
+            // triangulation + reprojection onto all cameras. Separate from
+            // Predict so the user can edit 2D before committing to 3D.
+            if (win.jarvis_predict.triangulate_requested) {
+                win.jarvis_predict.triangulate_requested = false;
                 if (!pm.camera_params.empty() &&
                     annotations.count(current_frame_num)) {
                     reprojection(annotations.at(current_frame_num),
                                  &skeleton, pm.camera_params, scene);
+                    printf("[Triangulate] frame %d\n", current_frame_num);
+                } else {
+                    printf("[Triangulate] skipped (no camera_params or no "
+                           "annotations for frame %d)\n", current_frame_num);
                 }
-                // NOTE: reprojection() intentionally writes 2D keypoints onto
-                // every camera by triangulating from the inferred cams and
-                // projecting the 3D point back. The hidden cams end up with
-                // reprojected labels — that's desired: it gives you starter
-                // 2D on cams you haven't opened yet, based on the cams you
-                // did see.
-
-                printf("[JARVIS ONNX] %s\n", jarvis_state.status.c_str());
-#endif
             }
 
             // --- Batch prediction (non-blocking state machine) ---

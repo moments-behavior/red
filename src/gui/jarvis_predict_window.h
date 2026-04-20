@@ -43,6 +43,11 @@ struct JarvisPredictState {
     // Set by "Predict Current Frame" button; consumed by main loop
     bool predict_requested = false;
 
+    // Set by "Triangulate" button; consumed by main loop. Triangulates the
+    // current-frame 2D keypoints (wherever they came from — manual edit,
+    // Predict, etc.) into 3D and reprojects onto every camera.
+    bool triangulate_requested = false;
+
     // Predict from: false = Shown (visible cameras only), true = All cameras
     bool predict_from_all = false;
 
@@ -841,7 +846,15 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
         if (!can_predict) ImGui::EndDisabled();
 
         ImGui::SameLine();
-        ImGui::TextDisabled("Press 6 to predict (hotkey)");
+        if (ImGui::Button("Triangulate")) {
+            state.triangulate_requested = true;
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Triangulate current-frame 2D keypoints into 3D\n"
+                              "and project back onto all cameras.");
+
+        ImGui::SameLine();
+        ImGui::TextDisabled("(6=predict)");
 
         // --- Batch Prediction ---
         ImGui::Separator();
