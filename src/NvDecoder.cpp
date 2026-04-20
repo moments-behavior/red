@@ -534,6 +534,31 @@ int NvDecoder::HandlePictureDecode(CUVIDPICPARAMS *pPicParams) {
 */
 int NvDecoder::HandlePictureDisplay(CUVIDPARSERDISPINFO *pDispInfo) {
   try {
+    // Seek suppression: while the main decoder thread is in the middle of a
+    // seek, NVDEC may deliver display events for frames that were in-flight
+    // when the seek began. Those frames' backing surfaces are in a
+    // transitional state — cuvidMapVideoFrame may return a pointer that's
+    // technically "valid" but whose memory gets reused during the async
+    // copy, tripping CUDA_ERROR_ILLEGAL_ADDRESS at the next synchronize.
+    // Drop these frames cleanly: map + unmap to acknowledge to NVDEC, do
+    // NOT issue any memcpy, and return 0 so the slot is skipped.
+    if (m_bSuppressDisplay.load(std::memory_order_acquire)) {
+        CUVIDPROCPARAMS videoProcessingParameters = {};
+        videoProcessingParameters.progressive_frame = pDispInfo->progressive_frame;
+        videoProcessingParameters.second_field = pDispInfo->repeat_first_field + 1;
+        videoProcessingParameters.top_field_first = pDispInfo->top_field_first;
+        videoProcessingParameters.unpaired_field = pDispInfo->repeat_first_field < 0;
+        videoProcessingParameters.output_stream = m_cuvidStream;
+
+        CUdeviceptr dpSrcFrame = 0;
+        unsigned int nSrcPitch = 0;
+        CUresult r1 = cuvidMapVideoFrame(m_hDecoder, pDispInfo->picture_index,
+                                         &dpSrcFrame, &nSrcPitch,
+                                         &videoProcessingParameters);
+        if (r1 == CUDA_SUCCESS) cuvidUnmapVideoFrame(m_hDecoder, dpSrcFrame);
+        return 0;
+    }
+
     CUVIDPROCPARAMS videoProcessingParameters = {};
     videoProcessingParameters.progressive_frame = pDispInfo->progressive_frame;
     videoProcessingParameters.second_field = pDispInfo->repeat_first_field + 1;

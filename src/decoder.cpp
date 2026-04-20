@@ -116,6 +116,12 @@ void decoder_process(DecoderContext *dc_context, FFmpegDemuxer *demuxer,
                 continue;
             }
 
+            // Tell NvDecoder to drop any display callbacks that fire for
+            // frames in-flight from before the seek. Those frames' surfaces
+            // transition during the DISCONTINUITY flush and their async
+            // memcpy otherwise hits CUDA_ERROR_ILLEGAL_ADDRESS.
+            dec.SetSuppressDisplay(true);
+
             nFrameReturned = dec.Decode(NULL, 0, CUVID_PKT_DISCONTINUITY);
 
             for (int i = 0; i < nFrameReturned; i++) {
@@ -123,6 +129,10 @@ void decoder_process(DecoderContext *dc_context, FFmpegDemuxer *demuxer,
             }
 
             auto temp_nFrameReturned = dec.Decode(pVideo, nVideoBytes);
+
+            // Allow display callbacks again for frames produced from the
+            // post-seek keyframe onward.
+            dec.SetSuppressDisplay(false);
 
             if (seek_info->seek_accurate) {
                 uint64_t curr_frame = key_frame_num - 1;

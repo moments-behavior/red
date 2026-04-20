@@ -12,6 +12,7 @@
 #pragma once
 
 #include <assert.h>
+#include <atomic>
 #include <stdint.h>
 #include <mutex>
 #include <vector>
@@ -236,6 +237,15 @@ public:
     static void addDecoderSessionOverHead(int sessionID, int64_t duration) { sessionOverHead[sessionID] += duration; }
     static int64_t getDecoderSessionOverHead(int sessionID) { return sessionOverHead[sessionID]; }
 
+    // --- Seek helpers ---------------------------------------------------
+    // While true, HandlePictureDisplay unmaps any incoming surface and
+    // returns without issuing a memcpy. Used by the main decoder thread
+    // to discard the display callbacks that NVDEC produces for frames
+    // in-flight at the moment a seek is issued (their backing surfaces
+    // are in a transitional state and the async memcpy would surface
+    // CUDA_ERROR_ILLEGAL_ADDRESS at the next cuStreamSynchronize).
+    void SetSuppressDisplay(bool v) { m_bSuppressDisplay = v; }
+
 private:
     int decoderSessionID; // Decoder session identifier. Used to gather session level stats.
     static std::map<int, int64_t> sessionOverHead; // Records session overhead of initialization+deinitialization time. Format is (thread id, duration)
@@ -335,4 +345,8 @@ private:
     // latency for All-Intra and IPPP sequences, the below flag will enable
     // the display callback immediately after the decode callback.
     bool m_bForce_zero_latency = false;
+
+    // Set true while the main thread is seeking. HandlePictureDisplay
+    // checks this atomically and skips the memcpy when set.
+    std::atomic<bool> m_bSuppressDisplay{false};
 };
