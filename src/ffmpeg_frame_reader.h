@@ -52,8 +52,6 @@ class FrameReader {
         fmt_ctx_->max_analyze_duration = 5 * AV_TIME_BASE;
 
         if (avformat_open_input(&fmt_ctx_, path.c_str(), nullptr, nullptr) < 0) {
-            // avformat_open_input sets fmt_ctx_ to NULL on failure and frees
-            // the alloc'd context itself, so no cleanup needed here.
             fmt_ctx_ = nullptr;
             return false;
         }
@@ -87,7 +85,6 @@ class FrameReader {
         codec_ctx_ = avcodec_alloc_context3(codec);
         avcodec_parameters_to_context(codec_ctx_, par);
 
-        // Try VideoToolbox hardware acceleration (skip if not requested)
         if (use_hw_accel && init_hw_decoder(codec))
             hw_enabled_ = true;
 
@@ -114,13 +111,21 @@ class FrameReader {
         rgb_frame_ = av_frame_alloc();
         pkt_ = av_packet_alloc();
 
-        // Allocate RGB buffer
+        // Allocate RGB buffer via av_malloc (32-byte aligned + padded for
+        // sws_scale's SIMD tail writes). std::vector<uint8_t> is only ~16
+        // byte aligned with no padding — sws_scale wrote past the end and
+        // corrupted the adjacent heap block, producing "double free or
+        // corruption (!prev)" on the next free().
         int rgb_size =
-            av_image_get_buffer_size(AV_PIX_FMT_RGB24, width_, height_, 1);
-        rgb_buffer_.resize(rgb_size);
+            av_image_get_buffer_size(AV_PIX_FMT_RGB24, width_, height_, 32);
+        rgb_buffer_ = (uint8_t *)av_malloc(rgb_size + AV_INPUT_BUFFER_PADDING_SIZE);
+        if (!rgb_buffer_) {
+            close();
+            return false;
+        }
         av_image_fill_arrays(rgb_frame_->data, rgb_frame_->linesize,
-                             rgb_buffer_.data(), AV_PIX_FMT_RGB24, width_,
-                             height_, 1);
+                             rgb_buffer_, AV_PIX_FMT_RGB24, width_,
+                             height_, 32);
 
         opened_ = true;
         return true;
@@ -159,7 +164,10 @@ class FrameReader {
             av_buffer_unref(&hw_device_ctx_);
             hw_device_ctx_ = nullptr;
         }
-        rgb_buffer_.clear();
+        if (rgb_buffer_) {
+            av_free(rgb_buffer_);
+            rgb_buffer_ = nullptr;
+        }
         opened_ = false;
         hw_enabled_ = false;
         current_frame_ = -1;
@@ -175,12 +183,10 @@ class FrameReader {
     // decoding forward without seeking. This avoids the costly seek + flush
     // + re-decode-from-keyframe overhead that dominated JARVIS export time.
     const uint8_t *readFrame(int frame_num) {
-        if (!opened_)
-            return nullptr;
+        if (!opened_) return nullptr;
 
         AVStream *st = fmt_ctx_->streams[video_stream_];
 
-        // Decide whether we need to seek or can just decode forward.
         bool need_seek = (current_frame_ < 0) ||
                          (frame_num < current_frame_) ||
                          (frame_num - current_frame_ > 300);
@@ -195,11 +201,9 @@ class FrameReader {
             current_frame_ = -1;
         }
 
-        // Decode frames until we reach the target frame number
         while (true) {
             int ret = av_read_frame(fmt_ctx_, pkt_);
-            if (ret < 0)
-                return nullptr;
+            if (ret < 0) return nullptr;
             if (pkt_->stream_index != video_stream_) {
                 av_packet_unref(pkt_);
                 continue;
@@ -207,17 +211,13 @@ class FrameReader {
 
             ret = avcodec_send_packet(codec_ctx_, pkt_);
             av_packet_unref(pkt_);
-            if (ret < 0)
-                return nullptr;
+            if (ret < 0) return nullptr;
 
             while (true) {
                 ret = avcodec_receive_frame(codec_ctx_, frame_);
-                if (ret == AVERROR(EAGAIN))
-                    break;
-                if (ret < 0)
-                    return nullptr;
+                if (ret == AVERROR(EAGAIN)) break;
+                if (ret < 0) return nullptr;
 
-                // Compute frame number from PTS
                 int64_t pts = frame_->pts;
                 if (pts == AV_NOPTS_VALUE)
                     pts = frame_->best_effort_timestamp;
@@ -225,10 +225,9 @@ class FrameReader {
                     (int)(pts * av_q2d(st->time_base) * fps_ + 0.5);
 
                 if (decoded_frame >= frame_num) {
-                    if (!convertToRGB())
-                        return nullptr;
+                    if (!convertToRGB()) return nullptr;
                     current_frame_ = decoded_frame;
-                    return rgb_buffer_.data();
+                    return rgb_buffer_;
                 }
             }
         }
@@ -313,7 +312,7 @@ class FrameReader {
     AVFrame *sw_frame_ = nullptr; // for HW→CPU transfer
     AVFrame *rgb_frame_ = nullptr;
     AVPacket *pkt_ = nullptr;
-    std::vector<uint8_t> rgb_buffer_;
+    uint8_t *rgb_buffer_ = nullptr;   // av_malloc'd, aligned+padded for sws_scale
     int video_stream_ = -1;
     int width_ = 0, height_ = 0;
     double fps_ = 0.0;
