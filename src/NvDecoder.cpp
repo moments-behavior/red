@@ -533,6 +533,7 @@ int NvDecoder::HandlePictureDecode(CUVIDPICPARAMS *pPicParams) {
 *  0: fail, >=1: succeeded
 */
 int NvDecoder::HandlePictureDisplay(CUVIDPARSERDISPINFO *pDispInfo) {
+  try {
     CUVIDPROCPARAMS videoProcessingParameters = {};
     videoProcessingParameters.progressive_frame = pDispInfo->progressive_frame;
     videoProcessingParameters.second_field = pDispInfo->repeat_first_field + 1;
@@ -618,6 +619,19 @@ int NvDecoder::HandlePictureDisplay(CUVIDPARSERDISPINFO *pDispInfo) {
 
     NVDEC_API_CALL(cuvidUnmapVideoFrame(m_hDecoder, dpSrcFrame));
     return 1;
+  } catch (const std::exception &e) {
+    // A single bad display callback (typically after a seek where the
+    // NVDEC parser produces a stale display event for a destroyed surface)
+    // used to propagate out of dec.Decode() and kill the whole decoder
+    // thread. Swallow the error, pop any context we pushed, and return 0
+    // so NVDEC treats this callback as "frame not consumed". The next
+    // valid display event will proceed normally.
+    fprintf(stderr, "[NvDecoder] HandlePictureDisplay soft failure: %s\n",
+            e.what());
+    CUcontext popped = nullptr;
+    cuCtxPopCurrent(&popped);  // no-op if nothing was pushed
+    return 0;
+  }
 }
 
 NvDecoder::NvDecoder(CUcontext cuContext, bool bUseDeviceFrame, cudaVideoCodec eCodec, bool bLowLatency, 
