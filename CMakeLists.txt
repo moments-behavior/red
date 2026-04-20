@@ -49,6 +49,19 @@ if(APPLE)
         message(STATUS "MuJoCo not found — body model IK disabled")
     endif()
 
+    # DuckDB for bout inspector (amalgamation — no external install needed)
+    # First build compiles duckdb.cpp (~3-4 min); subsequent builds are cached.
+    include(FetchContent)
+    FetchContent_Declare(duckdb_src
+        URL https://github.com/duckdb/duckdb/releases/download/v1.2.2/libduckdb-src.zip
+    )
+    FetchContent_MakeAvailable(duckdb_src)
+    add_library(duckdb_lib STATIC ${duckdb_src_SOURCE_DIR}/duckdb.cpp)
+    target_include_directories(duckdb_lib PUBLIC ${duckdb_src_SOURCE_DIR})
+    target_compile_options(duckdb_lib PRIVATE -w)
+    set_target_properties(duckdb_lib PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+    message(STATUS "DuckDB enabled for bout inspector")
+
     set(DIR_IMGUI "${CMAKE_SOURCE_DIR}/lib/imgui")
     set(DIR_IMPLOT "${CMAKE_SOURCE_DIR}/lib/implot")
     set(DIR_IMPLOT3D "${CMAKE_SOURCE_DIR}/lib/implot3d")
@@ -138,6 +151,9 @@ if(APPLE)
         # Set rpath so the binary finds the MuJoCo dylib at runtime
         set_target_properties(red PROPERTIES BUILD_RPATH "${CMAKE_SOURCE_DIR}/lib")
     endif()
+
+    # DuckDB for bout inspector
+    target_link_libraries(red PRIVATE duckdb_lib)
 
     # Enable ARC for all Objective-C++ translation units
     set_source_files_properties(

@@ -6,6 +6,8 @@
 #include "gui/toast.h"
 #include "annotation.h"
 #include "annotation_csv.h"
+#include "bout_inspector.h"
+#include "traj_reader.h"
 #include "media_loader.h"
 #include "project.h"
 #include "render.h"
@@ -76,6 +78,10 @@ struct AppContext {
     std::string &project_ini_path;
     bool &main_loop_running;
 
+    // Bout inspector
+    BoutInspectorState &bout_state;
+    BoutDatabase &bout_db;
+    PredictionReader &bout_preds;
 
 #ifdef __APPLE__
     std::vector<int> &mac_last_uploaded_frame;
@@ -279,6 +285,11 @@ inline void close_project(AppContext &ctx) {
 
     // 10. Clear deferred queue
     ctx.deferred.flush();
+
+    // 11. Close bout inspector
+    ctx.bout_db.close();
+    ctx.bout_preds.close();
+    ctx.bout_state = BoutInspectorState{};
 }
 
 // Post-project-load sequence: switch ini, load videos, load labels.
@@ -343,6 +354,20 @@ inline void on_project_loaded(AppContext &ctx,
         }
     }
     if (print_summary_fn) print_summary_fn(most_recent_folder);
+
+    // Load bout inspector if .redproj specifies paths
+    ctx.bout_db.close();
+    ctx.bout_preds.close();
+    ctx.bout_state = BoutInspectorState{};
+    if (!ctx.pm.bout_db_path.empty() && !ctx.pm.bout_predictions_path.empty() &&
+        std::filesystem::exists(ctx.pm.bout_db_path) &&
+        std::filesystem::exists(ctx.pm.bout_predictions_path)) {
+        if (ctx.bout_db.open(ctx.pm.bout_db_path)) {
+            ctx.bout_preds.open(ctx.pm.bout_predictions_path);
+            ctx.bout_state.active = true;
+            ctx.bout_state.filters.dirty = true;
+        }
+    }
 
     // Track in recent projects
     if (!ctx.pm.project_path.empty()) {

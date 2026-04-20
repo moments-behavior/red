@@ -60,6 +60,10 @@ struct ProjectManager {
     };
     std::vector<JarvisModelEntry> jarvis_models;
     int active_jarvis_model = -1;  // index into jarvis_models, -1 = none
+
+    // Bout inspector database (optional — empty = not configured)
+    std::string bout_db_path;          // path to .duckdb file
+    std::string bout_predictions_path; // path to sparse predictions .bin
 };
 
 inline void to_json(nlohmann::json &j, const ProjectManager::JarvisModelEntry &m) {
@@ -91,6 +95,10 @@ inline void to_json(nlohmann::json &j, const ProjectManager &p) {
                        {"annotation_config", p.annotation_config},
                        {"jarvis_models", p.jarvis_models},
                        {"active_jarvis_model", p.active_jarvis_model}};
+    if (!p.bout_db_path.empty())
+        j["bout_db_path"] = p.bout_db_path;
+    if (!p.bout_predictions_path.empty())
+        j["bout_predictions_path"] = p.bout_predictions_path;
 }
 
 inline void from_json(const nlohmann::json &j, ProjectManager &p) {
@@ -111,6 +119,8 @@ inline void from_json(const nlohmann::json &j, ProjectManager &p) {
     if (j.contains("jarvis_models"))
         p.jarvis_models = j["jarvis_models"].get<std::vector<ProjectManager::JarvisModelEntry>>();
     p.active_jarvis_model = j.value("active_jarvis_model", -1);
+    p.bout_db_path = j.value("bout_db_path", std::string{});
+    p.bout_predictions_path = j.value("bout_predictions_path", std::string{});
 }
 
 inline bool save_project_manager_json(const ProjectManager &p,

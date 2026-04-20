@@ -135,6 +135,12 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
             win.body_model.show = true;
         }
 #endif
+        ImGui::Separator();
+        if (ImGui::MenuItem("Bout Inspector")) {
+            ctx.bout_state.active = !ctx.bout_state.active;
+            if (ctx.bout_state.active)
+                ctx.bout_state.filters.dirty = true;
+        }
         ImGui::EndMenu();
     }
 

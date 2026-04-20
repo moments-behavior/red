@@ -16,6 +16,10 @@
 #include "mujoco_context.h"
 #include "gui/body_model_window.h"
 #endif
+#include "bout_inspector.h"
+#include "traj_reader.h"
+#include "gui/bout_table.h"
+#include "gui/bout_pose_overlay.h"
 #include "jarvis_inference.h"
 #ifdef __APPLE__
 #include "jarvis_coreml.h"
@@ -272,6 +276,11 @@ int main(int argc, char **argv) {
     // Annotation model
     AnnotationMap annotations;
 
+    // Bout inspector (DuckDB + sparse predictions)
+    BoutInspectorState bout_state;
+    BoutDatabase bout_db;
+    PredictionReader bout_preds;
+
     // others
     ImVec4 clear_color = ImVec4(0.0f, 0.0f, 0.0f, 1.00f);
     ImGuiIO &io = ImGui::GetIO();
@@ -393,7 +402,8 @@ int main(int argc, char **argv) {
         imgs_names, demuxers, decoder_threads,
         is_view_focused, window_was_decoding,
         input_is_imgs, label_buffer_size, current_frame_num,
-        display, window, save_requested, project_ini_path, main_loop_running
+        display, window, save_requested, project_ini_path, main_loop_running,
+        bout_state, bout_db, bout_preds
 #ifdef __APPLE__
         , mac_last_uploaded_frame
 #endif
@@ -569,6 +579,9 @@ int main(int argc, char **argv) {
 #endif
                                                  ctx); },
                 nullptr});
+    panels.add({"Bout Inspector",
+                [&]() { DrawBoutTable(ctx); },
+                [&]() { return bout_state.active; }});
 
     // Helper: find the first visible camera index (for frame-buffer display).
     auto find_visible_cam = [&]() -> int {
@@ -675,7 +688,7 @@ int main(int argc, char **argv) {
         // Handle main menu file dialogs
         HandleMainMenuDialogs(ctx, win, media_root_dir,
                               print_metadata, print_summary,
-                              [&]() {
+                              [&]() {  // nuke_inference_fn
                                   sam_state = SamState{};
                                   jarvis_state = JarvisState{};
 #ifdef RED_HAS_MUJOCO
@@ -1241,6 +1254,15 @@ int main(int argc, char **argv) {
                             ImGui::Checkbox("Masks / Contours", &display.show_masks);
                             ImGui::Checkbox("Bounding Boxes", &display.show_bboxes);
                             ImGui::EndPopup();
+                        }
+
+                        // Bout inspector: draw prediction overlay on camera view
+                        if (bout_state.active && bout_preds.is_open()) {
+                            const float *pred = bout_preds.frame(
+                                static_cast<uint32_t>(current_frame_num));
+                            if (pred) {
+                                DrawPredictionOverlay(pred, j, ctx);
+                            }
                         }
 
                         ImPlot::EndPlot();
