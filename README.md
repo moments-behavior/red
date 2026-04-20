@@ -10,8 +10,6 @@ Developed at the [Johnson Lab](https://www.janelia.org/lab/johnson-lab), HHMI Ja
 
 RED runs natively on Apple Silicon Macs (M1 through M5). Choose one of the two installation methods below.
 
-> **Branch note:** RED is actively developed on the `rob_ui_overhaul` branch. Both installation methods below build from this branch. Do **not** use `main` -- it is outdated.
-
 ### Option A: Install via Homebrew (recommended)
 
 This is the easiest way to get RED. Homebrew handles all dependencies automatically. The formula builds from the `rob_ui_overhaul` branch.
