@@ -171,7 +171,7 @@ Currently we are saving labeled keypoints simply as a plain csv file. We provide
 ```bibtex
 @software{red,
   author = {Yan, Jinyao and Chen, Wilson and Deb, Diptodip and Othayoth, Ratan and Johnson, Rob},
-  title = {Moments-Behavior: red},
+  title = {Moments-Behavior:red},
   url = {https://github.com/moments-behavior/red},
   date = {2026-04-20}
 }
