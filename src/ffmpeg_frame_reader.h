@@ -111,21 +111,28 @@ class FrameReader {
         rgb_frame_ = av_frame_alloc();
         pkt_ = av_packet_alloc();
 
-        // Allocate RGB buffer via av_malloc (32-byte aligned + padded for
-        // sws_scale's SIMD tail writes). std::vector<uint8_t> is only ~16
-        // byte aligned with no padding — sws_scale wrote past the end and
-        // corrupted the adjacent heap block, producing "double free or
-        // corruption (!prev)" on the next free().
+        // Allocate the RGB buffer with:
+        //   - align=1 so rows are tightly packed (linesize == 3*width). The
+        //     caller reads rgb[i*3+c] assuming tight packing, so using a
+        //     larger alignment (which rounds linesize up with padding) would
+        //     misalign every row past the first — produced garbage calib
+        //     with reprojection errors in the billions of pixels.
+        //   - allocated via av_malloc so the pointer itself is 32-byte
+        //     aligned (satisfies sws_scale's SIMD load alignment).
+        //   - with 1 KiB of extra slack past the end for sws_scale's SIMD
+        //     tail stores, which otherwise corrupted the neighbouring
+        //     glibc malloc chunk and tripped "double free or corruption"
+        //     on the next free().
         int rgb_size =
-            av_image_get_buffer_size(AV_PIX_FMT_RGB24, width_, height_, 32);
-        rgb_buffer_ = (uint8_t *)av_malloc(rgb_size + AV_INPUT_BUFFER_PADDING_SIZE);
+            av_image_get_buffer_size(AV_PIX_FMT_RGB24, width_, height_, 1);
+        rgb_buffer_ = (uint8_t *)av_malloc(rgb_size + 1024);
         if (!rgb_buffer_) {
             close();
             return false;
         }
         av_image_fill_arrays(rgb_frame_->data, rgb_frame_->linesize,
                              rgb_buffer_, AV_PIX_FMT_RGB24, width_,
-                             height_, 32);
+                             height_, 1);
 
         opened_ = true;
         return true;
