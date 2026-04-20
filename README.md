@@ -1,8 +1,6 @@
 # Red Labeling App
 3D labeling tool for multiple cameras in C++
 
-Contact [Jinyao Yan](yanj11@janelia.hhmi.org) if you have questions about the software 
-
 ![gui](images/gui.png)
 
 ## Video demo
@@ -166,6 +164,20 @@ Example config file:
 
 ## Format data for Deep Learning
 Currently we are saving labeled keypoints simply as a plain csv file. We provide python scripts for formating data as [COCO format](https://docs.aws.amazon.com/rekognition/latest/customlabels-dg/md-coco-overview.html), which is used by [JARVIS](https://github.com/JARVIS-MoCap/JARVIS-HybridNet). Please refer to [data_exporter](https://github.com/JohnsonLabJanelia/red/tree/main/data_exporter).
+
+## Citation
+Red is devloped by Jinyao Yan, with contributionos from Wilson Chen, Diptodip Deb, Ratan Othayoth and Rob Johnson. If you use **Red**, please cite the software 
+
+```bibtex
+@software{red,
+  author = {Yan, Jinyao and Chen, Wilson and Deb, Diptodip and Othayoth, Ratan and Johnson, Rob},
+  title = {Moments-Behavior: red},
+  url = {https://github.com/moments-behavior/red},
+  date = {2026-04-20}
+}
+```
+
+Contact [Jinyao Yan](yanj11@janelia.hhmi.org) if you have questions about the software 
 
 ## Contribute
 
