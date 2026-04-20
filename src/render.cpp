@@ -23,9 +23,13 @@ void render_allocate_scene_memory(RenderScene *scene, u32 size_of_buffer) {
     // Prior behavior (fail with opaque cudaErrorIllegalAddress / decoder
     // "error 2") was replaced by this check.
     //
-    // Budget = 50% of currently-free VRAM, reserving the other half for
-    // NvDecoder surfaces (~170 MB × num_cams), PBOs, textures, LibTorch,
-    // ONNX Runtime, JARVIS models, MuJoCo, and inference activations.
+    // Budget = 40% of currently-free VRAM. The remaining 60% has to cover:
+    //   - 16 per-decoder CUDA contexts (~300-500 MB each)
+    //   - NvDecoder surfaces (~170 MB × num_cams)
+    //   - PBOs, textures, LibTorch, ONNX Runtime, JARVIS models, MuJoCo
+    //   - Inference activations at runtime
+    // We used 50% when all decoders shared one primary context, but per-
+    // decoder contexts cost more up front so shrink the budget a bit.
     {
         size_t per_frame_bytes = 0;
         for (int j = 0; j < num_cams; j++) {
@@ -35,7 +39,7 @@ void render_allocate_scene_memory(RenderScene *scene, u32 size_of_buffer) {
         if (!scene->use_cpu_buffer && per_frame_bytes > 0) {
             size_t free_bytes = 0, total_bytes = 0;
             cudaMemGetInfo(&free_bytes, &total_bytes);
-            size_t budget = (size_t)(free_bytes * 0.50);
+            size_t budget = (size_t)(free_bytes * 0.40);
 
             size_t needed = per_frame_bytes * size_of_buffer;
             if (needed > budget) {

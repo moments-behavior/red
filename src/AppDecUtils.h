@@ -138,11 +138,13 @@ static void getOutputFormatNames(unsigned short nOutputFormatMask, char *OutputF
 */
 static void createCudaContext(CUcontext* cuContext, int iGpu, unsigned int flags)
 {
-    // Share the device's primary (refcounted) context across all decoder
-    // threads. Creating a fresh cuCtxCreate per thread OOMs the GPU at ~16
-    // cameras since each new context costs ~300-500 MB + per-context NvDecoder
-    // allocations. Primary context retain is a lightweight refcount bump.
-    (void)flags;
+    // Give each decoder thread its own CUDA context. NvDecoder's per-instance
+    // state (cuvidCreateDecoder, cuvidMapVideoFrame, async memcpys) races
+    // internally when 16 parallel decoders share a single primary context —
+    // observed as CUDA_ERROR_ILLEGAL_ADDRESS in HandlePictureDisplay. The
+    // earlier OOM concern is now handled upstream: render.cpp auto-shrinks
+    // the display buffer to fit in VRAM, leaving enough headroom for the
+    // per-thread contexts (~300-500 MB each).
     CUdevice cuDevice = 0;
     ck(cuDeviceGet(&cuDevice, iGpu));
     static std::once_flag s_name_printed;
@@ -151,8 +153,7 @@ static void createCudaContext(CUcontext* cuContext, int iGpu, unsigned int flags
         ck(cuDeviceGetName(szDeviceName, sizeof(szDeviceName), cuDevice));
         std::cout << "GPU in use: " << szDeviceName << std::endl;
     });
-    ck(cuDevicePrimaryCtxRetain(cuContext, cuDevice));
-    ck(cuCtxPushCurrent(*cuContext));
+    ck(cuCtxCreate(cuContext, flags, cuDevice));
 }
 
 /**
