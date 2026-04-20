@@ -1623,10 +1623,16 @@ inline bool detect_global_reg_board(
     fprintf(stderr, "[GlobalReg] Detecting board in %s (%s)...\n",
             global_reg_folder.c_str(), global_reg_type.c_str());
 
-    // Detect board in each camera (parallel)
+    // Detect board in each camera.
+    // On macOS we parallelize via VideoToolbox (each decoder is a separate
+    // VT session on ANE); on Linux we run serially — FFmpeg's format/codec
+    // setup shares internal state that corrupted heap memory under 16-way
+    // parallel opens ("double free or corruption (!prev)"), and decoding
+    // just one frame per camera is fast enough that the serial loop adds
+    // only a few seconds to calibration.
     std::vector<std::future<void>> futures;
     for (int ci = 0; ci < (int)cam_names.size(); ci++) {
-        futures.push_back(std::async(std::launch::async, [&, ci]() {
+        auto work = [&, ci]() {
             const std::string &serial = cam_names[ci];
             auto &det = cam_dets[ci];
             int w = 0, h = 0;
@@ -1763,7 +1769,12 @@ inline bool detect_global_reg_board(
             det.valid = true;
             fprintf(stderr, "[GlobalReg]   %s: %d corners detected\n",
                     serial.c_str(), (int)charuco.ids.size());
-        }));
+        };
+#ifdef __APPLE__
+        futures.push_back(std::async(std::launch::async, work));
+#else
+        work();
+#endif
     }
     for (auto &f : futures) f.get();
 
