@@ -47,6 +47,14 @@ inline void DrawFrameBufferWindow(AppContext &ctx, int select_corr_head) {
                               ImGuiWindowFlags_NoScrollbar);
             ImDrawList *dl = ImGui::GetWindowDrawList();
 
+            // Auto-scroll to keep the highlighted slot visible. Only trigger
+            // when the selection changes so the user can still freely wheel-
+            // scroll to a different region without being yanked back.
+            static int s_last_selected = -1;
+            bool want_scroll_to_selected =
+                (ps.pause_selected != s_last_selected);
+            s_last_selected = ps.pause_selected;
+
             for (u32 i = 0; i < scene.size_of_buffer; i++) {
                 int buf_idx =
                     (i + ps.read_head) % scene.size_of_buffer;
@@ -69,6 +77,10 @@ inline void DrawFrameBufferWindow(AppContext &ctx, int select_corr_head) {
                     if (!is_selected) {
                         ps.pause_selected = (int)i;
                     }
+                }
+                // Scroll so the highlighted slot stays in view (centered).
+                if (is_selected && want_scroll_to_selected) {
+                    ImGui::SetScrollHereY(0.5f);
                 }
 
                 // Color code the text: green = fully labeled + triangulated,
