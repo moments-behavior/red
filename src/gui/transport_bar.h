@@ -133,11 +133,20 @@ inline void DrawTransportBar(TransportBarState &state, AppContext &ctx) {
 
     // Commit on slider drag OR on text-input confirm. SliderInt returns
     // `changed` for both cases; clamp to valid range and seek.
+    //
+    // Use seek_accurate=true when the change came from the text-input commit
+    // (was_temp_input just transitioned to false) — the user typed a specific
+    // frame and expects to land there exactly. Without accurate seek, the
+    // decoder snaps to the nearest keyframe BEFORE the target (e.g. typing
+    // 100 with a 180-frame GOP lands you at frame 0). Slider drags stay
+    // inaccurate for a responsive feel.
+    bool just_committed_text = was_temp_input && !is_temp_input;
     if (changed) {
         state.edit_buf = std::clamp(state.edit_buf, 0, dc->estimated_num_frames);
         ps.slider_frame_number = state.edit_buf;
         ps.slider_just_changed = true;
-        seek_all_cameras(ctx.scene, state.edit_buf, dc->video_fps, ps, false);
+        seek_all_cameras(ctx.scene, state.edit_buf, dc->video_fps, ps,
+                         just_committed_text);
     }
     // Keep the old flag tracked for anyone else watching it.
     ps.slider_text_editing = is_temp_input;
