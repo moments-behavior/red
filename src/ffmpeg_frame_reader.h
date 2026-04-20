@@ -12,10 +12,22 @@ extern "C" {
 }
 
 #include <cstdint>
+#include <mutex>
 #include <string>
 #include <vector>
 
 namespace ffmpeg_reader {
+
+// FFmpeg's format/codec initialization (avformat_open_input,
+// avformat_find_stream_info, avcodec_open2) touches shared internal tables
+// that aren't thread-safe across simultaneous opens. On Linux this shows up
+// as "double free or corruption (!prev)" when 16 parallel threads open
+// video files at once during calibration. Serializing just the open() step
+// is cheap and avoids the races — decoding itself stays fully parallel.
+inline std::mutex &ffmpeg_open_mutex() {
+    static std::mutex m;
+    return m;
+}
 
 // ---------------------------------------------------------------------------
 // FrameReader — open a video, seek to frames, decode to RGB24
@@ -32,14 +44,22 @@ class FrameReader {
     bool open(const std::string &path, bool use_hw_accel = true) {
         close();
 
+        // Serialize FFmpeg format/codec setup. See ffmpeg_open_mutex() above.
+        std::lock_guard<std::mutex> lk(ffmpeg_open_mutex());
+
         fmt_ctx_ = avformat_alloc_context();
         if (!fmt_ctx_) return false;
         fmt_ctx_->max_analyze_duration = 5 * AV_TIME_BASE;
 
-        if (avformat_open_input(&fmt_ctx_, path.c_str(), nullptr, nullptr) < 0)
+        if (avformat_open_input(&fmt_ctx_, path.c_str(), nullptr, nullptr) < 0) {
+            // avformat_open_input sets fmt_ctx_ to NULL on failure and frees
+            // the alloc'd context itself, so no cleanup needed here.
+            fmt_ctx_ = nullptr;
             return false;
+        }
         if (avformat_find_stream_info(fmt_ctx_, nullptr) < 0) {
-            close();
+            avformat_close_input(&fmt_ctx_);
+            fmt_ctx_ = nullptr;
             return false;
         }
 
@@ -51,14 +71,16 @@ class FrameReader {
             }
         }
         if (video_stream_ < 0) {
-            close();
+            avformat_close_input(&fmt_ctx_);
+            fmt_ctx_ = nullptr;
             return false;
         }
 
         AVCodecParameters *par = fmt_ctx_->streams[video_stream_]->codecpar;
         const AVCodec *codec = avcodec_find_decoder(par->codec_id);
         if (!codec) {
-            close();
+            avformat_close_input(&fmt_ctx_);
+            fmt_ctx_ = nullptr;
             return false;
         }
 
@@ -70,7 +92,10 @@ class FrameReader {
             hw_enabled_ = true;
 
         if (avcodec_open2(codec_ctx_, codec, nullptr) < 0) {
-            close();
+            avcodec_free_context(&codec_ctx_);
+            avformat_close_input(&fmt_ctx_);
+            codec_ctx_ = nullptr;
+            fmt_ctx_ = nullptr;
             return false;
         }
 
