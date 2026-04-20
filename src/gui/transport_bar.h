@@ -115,8 +115,14 @@ inline void DrawTransportBar(TransportBarState &state, AppContext &ctx) {
     // === Timeline slider / frame input ===
     // Uses ImGui's built-in Ctrl+click behavior on SliderInt: Ctrl+click opens
     // a TempInput text field on the slider itself. Enter commits, Escape
-    // cancels. We detect the value change (via TempInput edit or slider drag)
-    // and seek all cameras.
+    // cancels. While the user is typing, SliderInt returns changed=true on
+    // every keystroke (ImGui writes the parsed value to the bound variable
+    // as they type). Seeking on every keystroke caused 16 decoders to spawn
+    // overlapping seeks for each digit typed, exhausting NVDEC surface
+    // pools and eventually corrupting display_buffer reads from the main
+    // thread. We now only seek when:
+    //   - slider is dragged (changed && !is_temp_input), OR
+    //   - text input is just committed (was_temp_input && !is_temp_input).
     state.edit_buf = ps.slider_frame_number;
     ImGui::SetNextItemWidth(200.0f);
     ImGuiID slider_id = ImGui::GetID("##timeline");
@@ -131,24 +137,18 @@ inline void DrawTransportBar(TransportBarState &state, AppContext &ctx) {
         ps.pause_selected = 0;
     }
 
-    // Commit on slider drag OR on text-input confirm. SliderInt returns
-    // `changed` for both cases; clamp to valid range and seek.
-    //
-    // Use seek_accurate=true when the change came from the text-input commit
-    // (was_temp_input just transitioned to false) — the user typed a specific
-    // frame and expects to land there exactly. Without accurate seek, the
-    // decoder snaps to the nearest keyframe BEFORE the target (e.g. typing
-    // 100 with a 180-frame GOP lands you at frame 0). Slider drags stay
-    // inaccurate for a responsive feel.
     bool just_committed_text = was_temp_input && !is_temp_input;
-    if (changed) {
+    bool is_drag_change = changed && !is_temp_input && !was_temp_input;
+    // Seek ONLY on slider drag or text commit. Never mid-typing.
+    if (is_drag_change || just_committed_text) {
         state.edit_buf = std::clamp(state.edit_buf, 0, dc->estimated_num_frames);
         ps.slider_frame_number = state.edit_buf;
         ps.slider_just_changed = true;
+        // Accurate seek for typed-in frames (user wants the exact frame);
+        // keyframe-granular for drag (interactive scrub).
         seek_all_cameras(ctx.scene, state.edit_buf, dc->video_fps, ps,
                          just_committed_text);
     }
-    // Keep the old flag tracked for anyone else watching it.
     ps.slider_text_editing = is_temp_input;
 
     ImGui::SameLine(0, spacing);
