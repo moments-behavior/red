@@ -1480,27 +1480,12 @@ int main(int argc, char **argv) {
                     reprojection(annotations.at(current_frame_num),
                                  &skeleton, pm.camera_params, scene);
                 }
-
-                // reprojection() writes 2D keypoints onto every camera by
-                // triangulating the predictions from the included cams and
-                // projecting the 3D point back. In Shown mode we don't want
-                // those reprojected points to appear on hidden cameras — wipe
-                // Predicted-source keypoints on skipped cams here so only the
-                // cameras actually inferred on show the JARVIS result.
-                if (!win.jarvis_predict.predict_from_all &&
-                    annotations.count(current_frame_num)) {
-                    auto &fa = annotations.at(current_frame_num);
-                    for (int c = 0; c < (int)scene->num_cams &&
-                                    c < (int)fa.cameras.size(); ++c) {
-                        if (rgb_bufs[c] != nullptr) continue;
-                        for (auto &kp : fa.cameras[c].keypoints) {
-                            if (kp.source == LabelSource::Predicted) {
-                                kp.labeled = false;
-                                kp.confidence = 0.0f;
-                            }
-                        }
-                    }
-                }
+                // NOTE: reprojection() intentionally writes 2D keypoints onto
+                // every camera by triangulating from the inferred cams and
+                // projecting the 3D point back. The hidden cams end up with
+                // reprojected labels — that's desired: it gives you starter
+                // 2D on cams you haven't opened yet, based on the cams you
+                // did see.
 
                 printf("[JARVIS ONNX] %s\n", jarvis_state.status.c_str());
 #endif
