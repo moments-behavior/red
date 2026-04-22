@@ -5,6 +5,7 @@
 #include "pointsource_calibration.h"
 #include "superpoint_refinement.h"
 #include "telecentric_dlt.h"
+#include "reprojection_diagnostics.h"
 #include "calib_viewer_window.h"
 #include "tele_viewer_window.h"
 #include "pointsource_metal.h"
@@ -132,6 +133,12 @@ struct CalibrationToolState {
     std::vector<TelecentricDLT::DLTResult> tele_run_history;
     // Deferred label import (waits N frames for dock layout to stabilize)
     int tele_deferred_label_frames = 0;
+
+    // Reprojection diagnostics (triangulate-and-reproject, read-only)
+    bool reproj_diag_done = false;
+    std::string reproj_diag_status;
+    ReprojectionDiagnostics::Diagnostics reproj_diag;
+    int reproj_diag_mode = 0;  // 0 = Triangulate, 1 = Known 3D
 
     // PointSource refinement
     bool pointsource_ready = false;

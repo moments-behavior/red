@@ -2,7 +2,11 @@
 #include "calib_tool_state.h"
 #include "app_context.h"
 #include "telecentric_dlt.h"
+#include "reprojection_diagnostics.h"
 #include "imgui.h"
+#include "implot.h"
+#include <algorithm>
+#include <filesystem>
 #include <string>
 
 // Draw the Telecentric DLT Calibration section inside the Calibration Tool window.
@@ -531,4 +535,213 @@ inline void DrawCalibTeleSection(CalibrationToolState &state, AppContext &ctx,
 
                 ImGui::Unindent();
             }
+
+    // ─── Reprojection Diagnostics ─────────────────────────────────────────
+    // Triangulate-and-reproject diagnostic. Uses saved DLT coefficients +
+    // exported 2D labels. Pure: does not modify AnnotationMap or any fit.
+    if (ImGui::CollapsingHeader("Reprojection Diagnostics")) {
+        ImGui::Indent();
+        ImGui::TextWrapped(
+            "For each landmark, reproject its 3D position into every camera "
+            "that labeled it, and report ||reproj - observed||. Read-only -- "
+            "labels are not modified. Two modes:");
+        ImGui::BulletText("Triangulate: 3D is computed from multi-view observations "
+                          "(tests camera agreement).");
+        ImGui::BulletText("Known 3D: 3D is read from landmarks_3d_file "
+                          "(matches DLT fit RMSE convention).");
+
+        ImGui::Spacing();
+
+        // Mode selection
+        const char *mode_items[] = {
+            "Triangulate -> reproject",
+            "Known 3D -> reproject"
+        };
+        ImGui::Combo("Mode##reproj_diag", &state.reproj_diag_mode,
+                     mode_items, 2);
+
+        // Pick DLT folder: prefer project's tele_output_folder (last-run dir);
+        // otherwise match the currently selected method suffix.
+        const char *method_suffix[] = {"dlt_linear", "dlt_k1", "dlt_k1k2"};
+        std::string dlt_folder = state.project.tele_output_folder;
+        if (dlt_folder.empty()) {
+            dlt_folder = state.project.project_path + "/" +
+                         method_suffix[state.tele_method];
+        }
+        std::string labels_folder =
+            state.project.effective_labels_folder();
+        std::string known_3d_file = (state.reproj_diag_mode == 1)
+            ? state.project.landmarks_3d_file : std::string{};
+
+        ImGui::Text("DLT folder:    %s", dlt_folder.c_str());
+        ImGui::Text("Labels folder: %s", labels_folder.c_str());
+        if (state.reproj_diag_mode == 1) {
+            ImGui::Text("3D landmarks:  %s", known_3d_file.c_str());
+        }
+
+        int image_height = (ctx.scene && ctx.scene->num_cams > 0)
+            ? ctx.scene->image_height[0] : 0;
+        ImGui::Text("Image height:  %d px (from loaded videos)",
+                    image_height);
+
+        bool can_run = !state.project.camera_names.empty() &&
+                       !dlt_folder.empty() &&
+                       std::filesystem::is_directory(dlt_folder) &&
+                       !labels_folder.empty() &&
+                       std::filesystem::is_directory(labels_folder) &&
+                       image_height > 0;
+        if (state.reproj_diag_mode == 1) {
+            can_run = can_run && !known_3d_file.empty() &&
+                      std::filesystem::is_regular_file(known_3d_file);
+        }
+
+        ImGui::BeginDisabled(!can_run);
+        if (ImGui::Button("Compute Reprojection Diagnostics")) {
+            state.reproj_diag = ReprojectionDiagnostics::compute_from_disk(
+                state.project.camera_names,
+                dlt_folder,
+                labels_folder,
+                image_height,
+                state.tele_flip_y,
+                known_3d_file);
+            state.reproj_diag_done = state.reproj_diag.success;
+            if (state.reproj_diag.success) {
+                char buf[256];
+                snprintf(buf, sizeof(buf),
+                    "%s: %d/%d points, %d residuals, overall RMSE %.4f px",
+                    ReprojectionDiagnostics::mode_label(state.reproj_diag.mode),
+                    state.reproj_diag.n_points_triangulated,
+                    state.reproj_diag.n_points_total,
+                    (int)state.reproj_diag.residuals.size(),
+                    state.reproj_diag.overall_rmse);
+                state.reproj_diag_status = buf;
+            } else {
+                state.reproj_diag_status =
+                    "Error: " + state.reproj_diag.error;
+            }
+        }
+        ImGui::EndDisabled();
+        if (!can_run) {
+            ImGui::SameLine();
+            if (state.reproj_diag_mode == 1 &&
+                (known_3d_file.empty() ||
+                 !std::filesystem::is_regular_file(known_3d_file))) {
+                ImGui::TextDisabled("(3D landmarks file missing)");
+            } else {
+                ImGui::TextDisabled("(load videos and run DLT first)");
+            }
+        }
+
+        if (!state.reproj_diag_status.empty()) {
+            ImGui::Spacing();
+            ImGui::TextWrapped("%s", state.reproj_diag_status.c_str());
+        }
+
+        if (state.reproj_diag_done && state.reproj_diag.success) {
+            const auto &rd = state.reproj_diag;
+
+            ImGui::Spacing();
+            ImGui::Separator();
+
+            // ── Overall stats strip ──
+            ImGui::Text("Mode: %s",
+                ReprojectionDiagnostics::mode_label(rd.mode));
+            ImGui::Text("Overall (%d residuals across %d points, %d skipped):",
+                (int)rd.residuals.size(),
+                rd.n_points_triangulated,
+                rd.n_points_skipped);
+            ImGui::Indent();
+            ImGui::Text("Mean +- s.d.  %.4f +- %.4f px",
+                        rd.overall_mean, rd.overall_std);
+            ImGui::Text("Median        %.4f px", rd.overall_median);
+            ImGui::SameLine(260);
+            ImGui::Text("P95    %.4f px", rd.overall_p95);
+            ImGui::Text("Max           %.4f px", rd.overall_max);
+            ImGui::SameLine(260);
+            ImGui::Text("RMSE   %.4f px", rd.overall_rmse);
+            ImGui::Unindent();
+
+            // ── Histogram ──
+            if (!rd.residuals.empty()) {
+                double hist_max = std::max(rd.overall_p95 * 1.25,
+                                           rd.overall_max);
+                hist_max = std::max(hist_max, 1.0);
+                const int num_bins = 50;
+                double bin_width = hist_max / num_bins;
+                std::vector<double> bins(num_bins, 0);
+                std::vector<double> centers(num_bins);
+                for (int i = 0; i < num_bins; i++)
+                    centers[i] = (i + 0.5) * bin_width;
+                for (const auto &r : rd.residuals) {
+                    int b = std::clamp((int)(r.error_px / bin_width),
+                                       0, num_bins - 1);
+                    bins[b]++;
+                }
+                if (ImPlot::BeginPlot("Reprojection Error Distribution",
+                                      ImVec2(-1, 200))) {
+                    ImPlot::SetupAxes("Error (px)", "Count");
+                    ImPlot::PlotBars("residuals",
+                                     centers.data(), bins.data(),
+                                     num_bins, bin_width);
+                    ImPlot::EndPlot();
+                }
+            }
+
+            // ── Per-camera table ──
+            if (ImGui::BeginTable("##reproj_diag_per_cam", 8,
+                    ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+                ImGui::TableSetupColumn("Camera");
+                ImGui::TableSetupColumn("N");
+                ImGui::TableSetupColumn("Mean");
+                ImGui::TableSetupColumn("s.d.");
+                ImGui::TableSetupColumn("Median");
+                ImGui::TableSetupColumn("P95");
+                ImGui::TableSetupColumn("Max");
+                ImGui::TableSetupColumn("RMSE");
+                ImGui::TableHeadersRow();
+                for (const auto &pc : rd.per_camera) {
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn();
+                    ImGui::Text("%s", pc.name.c_str());
+                    ImGui::TableNextColumn();
+                    ImGui::Text("%d", pc.n_obs);
+                    ImGui::TableNextColumn();
+                    ImGui::Text("%.4f", pc.mean);
+                    ImGui::TableNextColumn();
+                    ImGui::Text("%.4f", pc.std);
+                    ImGui::TableNextColumn();
+                    ImGui::Text("%.4f", pc.median);
+                    ImGui::TableNextColumn();
+                    ImGui::Text("%.4f", pc.p95);
+                    ImGui::TableNextColumn();
+                    ImGui::Text("%.4f", pc.max);
+                    ImGui::TableNextColumn();
+                    ImGui::Text("%.4f", pc.rmse);
+                }
+                ImGui::EndTable();
+            }
+
+            // ── Export CSV ──
+            ImGui::Spacing();
+            const char *csv_name = (rd.mode ==
+                ReprojectionDiagnostics::Mode::Known3D)
+                ? "/reprojection_errors_known3d.csv"
+                : "/reprojection_errors_triangulated.csv";
+            if (ImGui::Button("Export CSV##reproj_diag")) {
+                std::string out_path = dlt_folder + csv_name;
+                if (ReprojectionDiagnostics::save_csv(rd, out_path)) {
+                    state.reproj_diag_status =
+                        "Wrote " + std::to_string(rd.residuals.size()) +
+                        " residuals to " + out_path;
+                } else {
+                    state.reproj_diag_status =
+                        "Failed to write " + out_path;
+                }
+            }
+            ImGui::SameLine();
+            ImGui::TextDisabled("-> %s%s", dlt_folder.c_str(), csv_name);
+        }
+
+        ImGui::Unindent();
+    }
 }
