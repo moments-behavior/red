@@ -1,6 +1,8 @@
 # Red Labeling App
 3D labeling tool for multiple cameras in C++
 
+[![DOI](https://zenodo.org/badge/544234536.svg)](https://doi.org/10.5281/zenodo.19688189)
+
 ![gui](images/gui.png)
 
 ## Video demo
@@ -173,7 +175,9 @@ Currently we are saving labeled keypoints simply as a plain csv file. We provide
   author = {Yan, Jinyao and Chen, Wilson and Deb, Diptodip and Othayoth, Ratan and Johnson, Rob},
   title = {Moments-Behavior:red},
   url = {https://github.com/moments-behavior/red},
-  date = {2026-04-20}
+  date = {2026-04-20},
+  publisher    = {Zenodo},
+  doi          = {10.5281/zenodo.19688190},
 }
 ```
 
