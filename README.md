@@ -171,13 +171,19 @@ Currently we are saving labeled keypoints simply as a plain csv file. We provide
 **Red** is devloped by Jinyao Yan, with contributions from Wilson Chen, Diptodip Deb, Ratan Othayoth and Rob Johnson. If you use **Red**, please cite the software 
 
 ```bibtex
-@software{red,
-  author = {Yan, Jinyao and Chen, Wilson and Deb, Diptodip and Othayoth, Ratan and Johnson, Rob},
-  title = {Moments-Behavior:red},
-  url = {https://github.com/moments-behavior/red},
-  date = {2026-04-20},
+@software{moments_behavior_red_2026,
+  author       = {Yan, Jinyao and
+                  Deb, Diptodip and
+                  Chen, Wilson and
+                  Othayoth, Ratan and
+                  Johnson, Rob},
+  title        = {moments-behavior/red: v1.1.0},
+  month        = apr,
+  year         = 2026,
   publisher    = {Zenodo},
+  version      = {v1.1.0},
   doi          = {10.5281/zenodo.19688190},
+  url          = {https://doi.org/10.5281/zenodo.19688190},
 }
 ```
 
