@@ -552,6 +552,10 @@ int main(int argc, char **argv) {
     panels.add({"SAM Assist",
                 [&]() { DrawSamToolWindow(win.sam_tool, sam_state, ctx); },
                 nullptr});
+    panels.add({"Triangulation Diagnostics",
+                [&]() { DrawTriangulationDiagnosticsWindow(
+                            win.triangulation_diag, ctx); },
+                nullptr});
 #ifdef RED_HAS_MUJOCO
     panels.add({"Body Model",
                 [&]() { DrawBodyModelWindow(win.body_model, mujoco_ctx, ctx); },

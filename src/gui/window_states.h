@@ -11,6 +11,7 @@
 #include "gui/bbox_tool.h"
 #include "gui/obb_tool.h"
 #include "gui/sam_tool.h"
+#include "gui/triangulation_diagnostics_window.h"
 #ifdef RED_HAS_MUJOCO
 #include "gui/body_model_window.h"
 #endif
@@ -31,6 +32,7 @@ struct WindowStates {
     BBoxToolState bbox;
     OBBToolState obb;
     SamToolState sam_tool;
+    TriangulationDiagnosticsState triangulation_diag;
 #ifdef RED_HAS_MUJOCO
     BodyModelState body_model;
 #endif
@@ -198,6 +200,7 @@ struct WindowStates {
         sam_tool.model_idx = 0;
         sam_tool.encoder_path = "models/mobilesam/mobile_sam_encoder.onnx";
         sam_tool.decoder_path = "models/mobilesam/mobile_sam_decoder.onnx";
+        triangulation_diag = TriangulationDiagnosticsState{};
         show_help = false;
     }
 };

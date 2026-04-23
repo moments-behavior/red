@@ -15,6 +15,7 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
     auto &obb_state        = win.obb;
     auto &sam_tool_state   = win.sam_tool;
     auto &jarvis_predict_state = win.jarvis_predict;
+    auto &triangulation_diag_state = win.triangulation_diag;
     auto &show_help_window = win.show_help;
     auto &pm = ctx.pm;
     auto &ps = ctx.ps;
@@ -128,6 +129,10 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
         }
         if (ImGui::MenuItem("JARVIS Predict")) {
             jarvis_predict_state.show = true;
+        }
+        ImGui::Separator();
+        if (ImGui::MenuItem("Triangulation Diagnostics")) {
+            triangulation_diag_state.show = true;
         }
 #ifdef RED_HAS_MUJOCO
         ImGui::Separator();
