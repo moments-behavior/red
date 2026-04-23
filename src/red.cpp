@@ -1503,6 +1503,23 @@ int main(int argc, char **argv) {
                 }
             }
 
+            // --- Refine 3D button ---
+            // Per-node Levenberg-Marquardt BA with a Cauchy robust loss.
+            // Unlike Triangulate (closed-form DLT), this down-weights a
+            // single outlier 2D label when computing the 3D — useful after
+            // JARVIS prediction where one view may have a bad keypoint.
+            if (win.jarvis_predict.refine_requested) {
+                win.jarvis_predict.refine_requested = false;
+                if (!pm.camera_params.empty() &&
+                    annotations.count(current_frame_num)) {
+                    refine_3d_ba(annotations.at(current_frame_num),
+                                 &skeleton, pm.camera_params, scene);
+                } else {
+                    printf("[Refine3D] skipped (no camera_params or no "
+                           "annotations for frame %d)\n", current_frame_num);
+                }
+            }
+
             // --- Batch prediction (non-blocking state machine) ---
             // Processes one frame per render iteration so the UI stays
             // responsive and camera viewports update live.

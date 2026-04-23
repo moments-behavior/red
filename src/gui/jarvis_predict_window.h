@@ -48,6 +48,12 @@ struct JarvisPredictState {
     // Predict, etc.) into 3D and reprojects onto every camera.
     bool triangulate_requested = false;
 
+    // Set by "Refine 3D" button; consumed by main loop. Runs per-node
+    // Levenberg-Marquardt bundle adjustment with a Cauchy robust loss
+    // over the current frame's 2D observations and writes refined 3D
+    // back into the annotation, then reprojects onto every camera.
+    bool refine_requested = false;
+
     // Predict from: false = Shown (visible cameras only), true = All cameras
     bool predict_from_all = false;
 
@@ -851,7 +857,19 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
         }
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Triangulate current-frame 2D keypoints into 3D\n"
-                              "and project back onto all cameras.");
+                              "(closed-form DLT) and project back onto all\n"
+                              "cameras. Same as labeling tool's Triangulate.");
+
+        ImGui::SameLine();
+        if (ImGui::Button("Refine 3D")) {
+            state.refine_requested = true;
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Per-node bundle adjustment with a Cauchy robust\n"
+                              "loss: iteratively refines each 3D keypoint so a\n"
+                              "single noisy 2D label pulls the result less.\n"
+                              "Best run AFTER Triangulate; good for cleaning up\n"
+                              "noisy JARVIS predictions before committing.");
 
         ImGui::SameLine();
         ImGui::TextDisabled("(6=predict)");
