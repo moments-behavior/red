@@ -1,8 +1,6 @@
 # Red Labeling App
 3D labeling tool for multiple cameras in C++
 
-[![DOI](https://zenodo.org/badge/544234536.svg)](https://doi.org/10.5281/zenodo.19688189)
-
 ![gui](images/gui.png)
 
 ## Video demo
