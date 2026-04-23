@@ -1,4 +1,4 @@
-# Red Labeling App
+# red labeling 📍
 3D labeling tool for multiple cameras in C++
 
 ![gui](images/gui.png)
