@@ -30,6 +30,7 @@
 #include <cstring>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 #ifdef RED_HAS_ONNXRUNTIME
@@ -85,7 +86,8 @@ struct PosetailChunkResult {
 // Initialization / cleanup
 // ─────────────────────────────────────────────────────────────────────────────
 
-inline bool posetail_init(PosetailState &s, const std::string &onnx_path) {
+inline bool posetail_init(PosetailState &s, const std::string &onnx_path,
+                          bool force_cpu = false) {
     s.loaded = false;
     s.model_path = onnx_path;
     s.backend = "none";
@@ -99,20 +101,25 @@ inline bool posetail_init(PosetailState &s, const std::string &onnx_path) {
 
         Ort::SessionOptions opts;
         opts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
-        opts.SetIntraOpNumThreads(4);
+        opts.SetIntraOpNumThreads(std::max(1u,
+            std::thread::hardware_concurrency()));
 
         s.backend = "CPU";
 #ifndef __APPLE__
-        try {
-            OrtCUDAProviderOptions cuda_opts{};
-            cuda_opts.device_id = 0;
-            opts.AppendExecutionProvider_CUDA(cuda_opts);
-            s.backend = "CUDA";
-        } catch (const Ort::Exception &e) {
-            fprintf(stderr,
-                    "[PoseTail] CUDA EP unavailable, using CPU: %s\n",
-                    e.what());
+        if (!force_cpu) {
+            try {
+                OrtCUDAProviderOptions cuda_opts{};
+                cuda_opts.device_id = 0;
+                opts.AppendExecutionProvider_CUDA(cuda_opts);
+                s.backend = "CUDA";
+            } catch (const Ort::Exception &e) {
+                fprintf(stderr,
+                        "[PoseTail] CUDA EP unavailable, using CPU: %s\n",
+                        e.what());
+            }
         }
+#else
+        (void)force_cpu;
 #endif
         s.session =
             std::make_unique<Ort::Session>(*s.env, onnx_path.c_str(), opts);
@@ -129,7 +136,7 @@ inline bool posetail_init(PosetailState &s, const std::string &onnx_path) {
         return false;
     }
 #else
-    (void)onnx_path;
+    (void)onnx_path; (void)force_cpu;
     s.status = "ONNX Runtime not available";
     return false;
 #endif

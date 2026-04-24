@@ -54,10 +54,11 @@ struct JarvisPredictState {
     // back into the annotation, then reprojects onto every camera.
     bool refine_requested = false;
 
-    // PoseTail temporal tracker (separate ONNX model, all 16 cams together).
+    // PoseTail temporal tracker (separate ONNX model, all cams together).
     std::string posetail_path;
     bool posetail_load_requested = false;
     bool posetail_forward_requested = false;
+    bool posetail_use_cpu = true;  // default CPU — GPU OOMs at 16 cams
     int posetail_n_forward = 20;
     std::string posetail_status;
 
@@ -929,6 +930,19 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
         if (ImGui::Button("Load##posetail")) {
             state.posetail_load_requested = true;
         }
+
+        // Backend toggle. 16 cams × 16 frames × 256×256 exceeds typical GPU
+        // VRAM budgets (the attention layer alone wants multi-GB), so CPU is
+        // the default safe choice.
+        ImGui::Checkbox("Use CPU (recommended for 16 cams)",
+                        &state.posetail_use_cpu);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip(
+                "PoseTail's attention is O(cams^2) — running on GPU with\n"
+                "16 cams × 16 frames tries to allocate several GB for a\n"
+                "single MatMul and usually OOMs. CPU is slower (~few sec\n"
+                "per 16-frame chunk) but always fits.");
+
         if (!state.posetail_status.empty()) {
             ImGui::TextDisabled("%s", state.posetail_status.c_str());
         }
@@ -942,9 +956,9 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
             ImGui::SetTooltip(
                 "Seed from current frame's 3D keypoints and predict forward "
                 "N frames\n"
-                "using PoseTail. Writes 3D + reprojected 2D into annotations\n"
-                "for frames [current+1 .. current+N]. Uses all cameras at "
-                "once\n(requires all cams to have frames in the buffer).");
+                "using PoseTail across ALL cameras. Writes 3D + reprojected 2D\n"
+                "into annotations for frames [current+1 .. current+N].\n"
+                "Requires all cameras to have frames in the display buffer.");
 
         // --- Batch Prediction ---
         ImGui::Separator();
