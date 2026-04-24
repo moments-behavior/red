@@ -565,17 +565,25 @@ PosetailForwardResult posetail_forward(
     out.vis.reserve(n_forward);
     out.conf.reserve(n_forward);
 
-    // Frame index relative to "current". The seed sits at offset 0; the chunk
-    // covers [chunk_start, chunk_start + T_CHUNK). On chain, the first
-    // n_overlap frames of the new chunk are the last n_overlap frames of the
-    // previous chunk, so we discard them on output.
+    // Frame index relative to "current". We use DISJOINT chunks: chunk k
+    // covers frame offsets [k*T .. k*T + T - 1], the seed for chunk k+1 is
+    // the previous chunk's last predicted 3D (frame offset k*T + T - 1),
+    // and seed_t is always 0.
+    //
+    // The Python reference uses a 2-frame overlap with seed_t = n_overlap-1
+    // on subsequent chunks, but the exported tracker_encoder.onnx has a
+    // graph bug that produces a garbage Reshape shape whenever qtimes != 0
+    // (Reshape node "node_view_341" sees float bits reinterpreted as int64).
+    // Disjoint chunks always call the model with qtimes = 0, which is the
+    // only code path the export seems to handle cleanly. Downside: a tiny
+    // discontinuity at chunk boundaries because we drop the 2-frame overlap
+    // that smoothed transitions; acceptable for short +N predictions.
+    (void)n_overlap;
     int chunk_start = 0;
     int produced = 0;
     std::vector<Eigen::Vector3d> seed = seed_3d_at_current;
-    int seed_t = 0;  // first chunk: seed observation lives at t=0
 
     while (produced < n_forward) {
-        // Build the cams×T frame buffer. Frame offset = chunk_start + t.
         std::vector<const uint8_t *> frames(num_cams * T_CHUNK, nullptr);
         for (int c = 0; c < num_cams; ++c) {
             for (int t = 0; t < T_CHUNK; ++t) {
@@ -584,15 +592,15 @@ PosetailForwardResult posetail_forward(
         }
 
         PosetailChunkResult chunk = posetail_predict_chunk(
-            s, frames, cam_widths, cam_heights, cams, seed, seed_t);
+            s, frames, cam_widths, cam_heights, cams, seed, /*seed_t=*/0);
         if (!chunk.ok) {
             out.error = chunk.error;
             return out;
         }
 
-        // First chunk: write t=1..T-1 (skip t=0 which is the seed itself).
-        // Subsequent chunks: write t=n_overlap..T-1 (skip the overlap).
-        int t_begin = (chunk_start == 0) ? 1 : n_overlap;
+        // First chunk: skip t=0 (the seed itself); write t=1..T-1.
+        // Subsequent chunks: write t=0..T-1 (no overlap to discard).
+        int t_begin = (chunk_start == 0) ? 1 : 0;
         for (int t = t_begin; t < T_CHUNK && produced < n_forward; ++t) {
             out.kp3d.push_back(chunk.kp3d[t]);
             out.vis.push_back(chunk.vis[t]);
@@ -601,12 +609,8 @@ PosetailForwardResult posetail_forward(
         }
         if (produced >= n_forward) break;
 
-        // Reseed: use the last frame of this chunk as the next chunk's
-        // anchor. The next chunk starts (T_CHUNK - n_overlap) frames later
-        // and the seed lives at t = n_overlap - 1.
         seed = chunk.kp3d[T_CHUNK - 1];
-        chunk_start += (T_CHUNK - n_overlap);
-        seed_t = n_overlap - 1;
+        chunk_start += T_CHUNK;  // disjoint: no overlap
     }
 
     out.ok = true;
