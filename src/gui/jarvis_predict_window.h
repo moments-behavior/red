@@ -54,6 +54,13 @@ struct JarvisPredictState {
     // back into the annotation, then reprojects onto every camera.
     bool refine_requested = false;
 
+    // PoseTail temporal tracker (separate ONNX model, all 16 cams together).
+    std::string posetail_path;
+    bool posetail_load_requested = false;
+    bool posetail_forward_requested = false;
+    int posetail_n_forward = 20;
+    std::string posetail_status;
+
     // Predict from: false = Shown (visible cameras only), true = All cameras
     bool predict_from_all = false;
 
@@ -873,6 +880,71 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
 
         ImGui::SameLine();
         ImGui::TextDisabled("(6=predict)");
+
+        // --- PoseTail Forward Tracking ---
+        ImGui::Separator();
+        ImGui::SeparatorText("PoseTail (forward temporal tracker)");
+
+        // Auto-populate default path on first open.
+        if (state.posetail_path.empty()) {
+            namespace fs = std::filesystem;
+            const char *home = std::getenv("HOME");
+            if (home) {
+                std::vector<fs::path> candidates = {
+                    fs::path(home) / "src/posetail-onnx",
+                    fs::path(home) / "posetail-onnx",
+                };
+                std::function<std::string(const fs::path &, int)> find_onnx;
+                find_onnx = [&](const fs::path &root, int depth) -> std::string {
+                    if (depth > 3 || !fs::is_directory(root)) return {};
+                    std::error_code ec;
+                    for (auto &e : fs::directory_iterator(root, ec)) {
+                        if (e.is_regular_file() &&
+                            e.path().extension() == ".onnx" &&
+                            e.path().filename().string().find("tracker") !=
+                                std::string::npos)
+                            return e.path().string();
+                    }
+                    for (auto &e : fs::directory_iterator(root, ec)) {
+                        if (!e.is_directory()) continue;
+                        auto hit = find_onnx(e.path(), depth + 1);
+                        if (!hit.empty()) return hit;
+                    }
+                    return {};
+                };
+                for (auto &c : candidates) {
+                    auto hit = find_onnx(c, 0);
+                    if (!hit.empty()) {
+                        state.posetail_path = hit;
+                        break;
+                    }
+                }
+            }
+        }
+
+        ImGui::Text("ONNX");
+        ImGui::SetNextItemWidth(-160);
+        ImGui::InputText("##posetail_path", &state.posetail_path);
+        ImGui::SameLine();
+        if (ImGui::Button("Load##posetail")) {
+            state.posetail_load_requested = true;
+        }
+        if (!state.posetail_status.empty()) {
+            ImGui::TextDisabled("%s", state.posetail_status.c_str());
+        }
+
+        ImGui::SetNextItemWidth(120);
+        ImGui::SliderInt("N forward frames", &state.posetail_n_forward, 1, 200);
+        if (ImGui::Button("PoseTail Forward +N")) {
+            state.posetail_forward_requested = true;
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip(
+                "Seed from current frame's 3D keypoints and predict forward "
+                "N frames\n"
+                "using PoseTail. Writes 3D + reprojected 2D into annotations\n"
+                "for frames [current+1 .. current+N]. Uses all cameras at "
+                "once\n(requires all cams to have frames in the buffer).");
 
         // --- Batch Prediction ---
         ImGui::Separator();

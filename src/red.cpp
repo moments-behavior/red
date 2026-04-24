@@ -17,6 +17,7 @@
 #include "gui/body_model_window.h"
 #endif
 #include "jarvis_inference.h"
+#include "posetail_infer.h"
 #ifdef __APPLE__
 #include "jarvis_coreml.h"
 #endif
@@ -60,6 +61,7 @@
 #include <ImGuiFileDialog.h>
 #include <algorithm>
 #include <cstddef>
+#include <deque>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -305,6 +307,7 @@ int main(int argc, char **argv) {
     // Inference engine states (not window states — kept separate)
     SamState sam_state;
     JarvisState jarvis_state;
+    PosetailState posetail_state;
 #ifdef RED_HAS_MUJOCO
     MujocoContext mujoco_ctx;
 #endif
@@ -1517,6 +1520,127 @@ int main(int argc, char **argv) {
                 } else {
                     printf("[Refine3D] skipped (no camera_params or no "
                            "annotations for frame %d)\n", current_frame_num);
+                }
+            }
+
+            // --- PoseTail: Load model ---
+            if (win.jarvis_predict.posetail_load_requested) {
+                win.jarvis_predict.posetail_load_requested = false;
+                if (!win.jarvis_predict.posetail_path.empty()) {
+                    posetail_init(posetail_state,
+                                  win.jarvis_predict.posetail_path);
+                    win.jarvis_predict.posetail_status = posetail_state.status;
+                    printf("[PoseTail] %s\n", posetail_state.status.c_str());
+                } else {
+                    win.jarvis_predict.posetail_status = "No ONNX path set";
+                }
+            }
+
+            // --- PoseTail: Forward predict +N frames ---
+            if (win.jarvis_predict.posetail_forward_requested) {
+                win.jarvis_predict.posetail_forward_requested = false;
+                int n_fwd = win.jarvis_predict.posetail_n_forward;
+                if (!posetail_state.loaded) {
+                    printf("[PoseTail] Not loaded; click Load first\n");
+                } else if (!annotations.count(current_frame_num)) {
+                    printf("[PoseTail] Current frame has no annotation — run "
+                           "Predict + Triangulate first\n");
+                } else if (pm.camera_params.empty()) {
+                    printf("[PoseTail] No camera_params loaded\n");
+                } else {
+                    // Build seed 3D from current frame's triangulated kp3d.
+                    auto &fa_cur = annotations.at(current_frame_num);
+                    std::vector<Eigen::Vector3d> seed;
+                    std::vector<int> seed_node_idx;
+                    for (int k = 0; k < (int)fa_cur.kp3d.size() &&
+                                    k < skeleton.num_nodes;
+                         ++k) {
+                        if (!fa_cur.kp3d[k].triangulated) continue;
+                        seed.emplace_back(fa_cur.kp3d[k].x, fa_cur.kp3d[k].y,
+                                          fa_cur.kp3d[k].z);
+                        seed_node_idx.push_back(k);
+                    }
+                    if (seed.empty()) {
+                        printf("[PoseTail] No triangulated keypoints on current "
+                               "frame — run Triangulate first\n");
+                    } else {
+                        std::vector<int> widths(scene->num_cams),
+                            heights(scene->num_cams);
+                        for (int c = 0; c < (int)scene->num_cams; ++c) {
+                            widths[c] = (int)scene->image_width[c];
+                            heights[c] = (int)scene->image_height[c];
+                        }
+                        // Scratch buffers for GPU→host RGBA copies (one per
+                        // camera per chunk time index). Kept alive across
+                        // the forward call via a deque of vectors.
+                        std::deque<std::vector<uint8_t>> rgba_scratch;
+                        auto pull_frame = [&](int cam_idx,
+                                              int frame_off) -> const uint8_t * {
+                            int buf_size = (int)scene->size_of_buffer;
+                            int slot = (ps.read_head + ps.pause_selected +
+                                        frame_off) % buf_size;
+                            if (cam_idx < 0 ||
+                                cam_idx >= (int)scene->num_cams)
+                                return nullptr;
+                            auto &s = scene->display_buffer[cam_idx][slot];
+                            if (!s.frame) return nullptr;
+                            if (scene->use_cpu_buffer)
+                                return (const uint8_t *)s.frame;
+                            size_t npix = (size_t)widths[cam_idx] *
+                                          heights[cam_idx];
+                            rgba_scratch.emplace_back(npix * 4);
+                            cudaMemcpy(rgba_scratch.back().data(), s.frame,
+                                       npix * 4, cudaMemcpyDeviceToHost);
+                            return rgba_scratch.back().data();
+                        };
+
+                        auto t_start = std::chrono::steady_clock::now();
+                        auto fwd = posetail_forward(
+                            posetail_state, widths, heights, pm.camera_params,
+                            seed, n_fwd, pull_frame, 2);
+                        auto t_end = std::chrono::steady_clock::now();
+                        float ms = std::chrono::duration<float, std::milli>(
+                                       t_end - t_start)
+                                       .count();
+
+                        if (!fwd.ok) {
+                            printf("[PoseTail] Forward failed: %s\n",
+                                   fwd.error.c_str());
+                        } else {
+                            // Write results into future annotations.
+                            int num_cams = (int)scene->num_cams;
+                            int produced = (int)fwd.kp3d.size();
+                            int joints_total = skeleton.num_nodes;
+                            for (int i = 0; i < produced; ++i) {
+                                u32 fn = (u32)(current_frame_num + 1 + i);
+                                auto &fa = get_or_create_frame(
+                                    annotations, fn,
+                                    std::min((int)fwd.kp3d[i].size(),
+                                             joints_total),
+                                    num_cams);
+                                for (int q = 0;
+                                     q < (int)seed_node_idx.size() &&
+                                     q < (int)fwd.kp3d[i].size();
+                                     ++q) {
+                                    int k = seed_node_idx[q];
+                                    if (k >= (int)fa.kp3d.size()) continue;
+                                    fa.kp3d[k].x = fwd.kp3d[i][q](0);
+                                    fa.kp3d[k].y = fwd.kp3d[i][q](1);
+                                    fa.kp3d[k].z = fwd.kp3d[i][q](2);
+                                    fa.kp3d[k].triangulated = true;
+                                }
+                                // Reproject to every camera's 2D so the
+                                // overlay populates naturally. Uses same
+                                // mechanism as Triangulate button.
+                                reprojection(fa, &skeleton, pm.camera_params,
+                                             scene);
+                            }
+                            printf("[PoseTail] Predicted %d frames × %d "
+                                   "keypoints in %.0f ms (%.1f ms/frame)\n",
+                                   produced, (int)seed.size(), ms,
+                                   produced > 0 ? ms / produced : 0.0f);
+                        }
+                    }
                 }
             }
 
