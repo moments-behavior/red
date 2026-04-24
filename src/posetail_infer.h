@@ -428,6 +428,52 @@ inline PosetailChunkResult posetail_predict_chunk(
     // We only need: coords_pred (idx 0), vis_pred (idx 8), conf_pred (idx 9).
     const char *output_names[] = {"coords_pred", "vis_pred", "conf_pred"};
 
+    // --- Debug dump of the inputs we're about to send ---
+    {
+        auto finite_all = [&](const std::vector<float> &v, const char *nm) {
+            bool ok = true;
+            float mn = std::numeric_limits<float>::max();
+            float mx = std::numeric_limits<float>::lowest();
+            for (float x : v) {
+                if (!std::isfinite(x)) {
+                    ok = false;
+                    break;
+                }
+                if (x < mn) mn = x;
+                if (x > mx) mx = x;
+            }
+            fprintf(stderr, "[PoseTail]   %s: size=%zu finite=%d range=[%g,%g]\n",
+                    nm, v.size(), (int)ok, ok ? mn : 0.0, ok ? mx : 0.0);
+            return ok;
+        };
+        fprintf(stderr,
+                "[PoseTail] feed: cams=%d T=%d N=%d seed_t=%d CROP=%d\n",
+                num_cams, T_CHUNK, N, seed_t, CROP_SIZE);
+        finite_all(views, "views");
+        finite_all(coords, "coords");
+        fprintf(stderr, "[PoseTail]   qtimes[0..%d]=[", std::min(N, 5));
+        for (int i = 0; i < std::min(N, 5); ++i)
+            fprintf(stderr, "%lld%s", (long long)qtimes[i],
+                    i + 1 < std::min(N, 5) ? "," : "");
+        fprintf(stderr, "]\n");
+        finite_all(ext, "cam_ext");
+        finite_all(mat, "cam_mat");
+        finite_all(dist, "cam_dist");
+        finite_all(offset, "cam_offset");
+        // Print first crop box and first cam's K+ext to eyeball
+        fprintf(stderr, "[PoseTail]   cam[0] box=[%d,%d,%d,%d]\n",
+                boxes[0].x0, boxes[0].y0, boxes[0].w, boxes[0].h);
+        fprintf(stderr, "[PoseTail]   cam[0] K_scaled=[[%g,%g,%g],[%g,%g,%g]]\n",
+                mat[0], mat[1], mat[2], mat[3], mat[4], mat[5]);
+        fprintf(stderr, "[PoseTail]   cam[0] ext[0..12]=[%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g,%g]\n",
+                ext[0], ext[1], ext[2], ext[3], ext[4], ext[5],
+                ext[6], ext[7], ext[8], ext[9], ext[10], ext[11]);
+        fprintf(stderr, "[PoseTail]   seed[0]=(%g,%g,%g) seed[N-1]=(%g,%g,%g)\n",
+                coords[0], coords[1], coords[2],
+                coords[(N - 1) * 3 + 0], coords[(N - 1) * 3 + 1],
+                coords[(N - 1) * 3 + 2]);
+    }
+
     auto t1 = std::chrono::steady_clock::now();
     std::vector<Ort::Value> out;
     try {
