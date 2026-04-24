@@ -1564,30 +1564,62 @@ int main(int argc, char **argv) {
                         printf("[PoseTail] No triangulated keypoints on current "
                                "frame — run Triangulate first\n");
                     } else {
-                        std::vector<int> widths(scene->num_cams),
-                            heights(scene->num_cams);
+                        // Build the camera SUBSET PoseTail will use. Attention
+                        // cost is O(cams^2), so feeding all 16 exhausts VRAM.
+                        // Use only visible (Begin-returned-true) cameras, same
+                        // convention as JARVIS "Shown" mode.
+                        std::vector<int> sel_cam_idx;
                         for (int c = 0; c < (int)scene->num_cams; ++c) {
-                            widths[c] = (int)scene->image_width[c];
-                            heights[c] = (int)scene->image_height[c];
+                            if (c >= (int)pm.camera_names.size()) continue;
+                            auto it = window_is_visible.find(pm.camera_names[c]);
+                            if (it != window_is_visible.end() && it->second)
+                                sel_cam_idx.push_back(c);
                         }
+                        if (sel_cam_idx.empty()) {
+                            // No cams visible — fall back to first 4 so the
+                            // user gets a result instead of silence.
+                            int fallback_n = std::min(4, (int)scene->num_cams);
+                            for (int c = 0; c < fallback_n; ++c)
+                                sel_cam_idx.push_back(c);
+                            printf("[PoseTail] No visible cameras — "
+                                   "falling back to first %d\n",
+                                   fallback_n);
+                        }
+                        std::vector<int> widths, heights;
+                        std::vector<CameraParams> cams_sel;
+                        widths.reserve(sel_cam_idx.size());
+                        heights.reserve(sel_cam_idx.size());
+                        cams_sel.reserve(sel_cam_idx.size());
+                        std::string cams_str;
+                        for (int c : sel_cam_idx) {
+                            widths.push_back((int)scene->image_width[c]);
+                            heights.push_back((int)scene->image_height[c]);
+                            cams_sel.push_back(pm.camera_params[c]);
+                            if (!cams_str.empty()) cams_str += ",";
+                            cams_str += pm.camera_names[c];
+                        }
+                        printf("[PoseTail] Using %d camera(s): [%s]\n",
+                               (int)sel_cam_idx.size(), cams_str.c_str());
+
                         // Scratch buffers for GPU→host RGBA copies (one per
                         // camera per chunk time index). Kept alive across
                         // the forward call via a deque of vectors.
                         std::deque<std::vector<uint8_t>> rgba_scratch;
-                        auto pull_frame = [&](int cam_idx,
+                        auto pull_frame = [&](int sel_c,
                                               int frame_off) -> const uint8_t * {
                             int buf_size = (int)scene->size_of_buffer;
                             int slot = (ps.read_head + ps.pause_selected +
                                         frame_off) % buf_size;
-                            if (cam_idx < 0 ||
-                                cam_idx >= (int)scene->num_cams)
+                            if (sel_c < 0 ||
+                                sel_c >= (int)sel_cam_idx.size())
                                 return nullptr;
+                            int cam_idx = sel_cam_idx[sel_c];
                             auto &s = scene->display_buffer[cam_idx][slot];
                             if (!s.frame) return nullptr;
                             if (scene->use_cpu_buffer)
                                 return (const uint8_t *)s.frame;
-                            size_t npix = (size_t)widths[cam_idx] *
-                                          heights[cam_idx];
+                            size_t npix =
+                                (size_t)widths[sel_c] * heights[sel_c];
                             rgba_scratch.emplace_back(npix * 4);
                             cudaMemcpy(rgba_scratch.back().data(), s.frame,
                                        npix * 4, cudaMemcpyDeviceToHost);
@@ -1596,8 +1628,8 @@ int main(int argc, char **argv) {
 
                         auto t_start = std::chrono::steady_clock::now();
                         auto fwd = posetail_forward(
-                            posetail_state, widths, heights, pm.camera_params,
-                            seed, n_fwd, pull_frame, 2);
+                            posetail_state, widths, heights, cams_sel, seed,
+                            n_fwd, pull_frame, 2);
                         auto t_end = std::chrono::steady_clock::now();
                         float ms = std::chrono::duration<float, std::milli>(
                                        t_end - t_start)
