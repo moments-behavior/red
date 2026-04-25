@@ -100,7 +100,10 @@ inline bool posetail_init(PosetailState &s, const std::string &onnx_path,
         }
 
         Ort::SessionOptions opts;
-        opts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+        // Disable graph optimization. Some Reshape ops in this ONNX export
+        // produce garbage int64 shape tensors after the optimizer fuses
+        // them — keeping the graph as-emitted-by-the-exporter is safer.
+        opts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_DISABLE_ALL);
         opts.SetIntraOpNumThreads(std::max(1u,
             std::thread::hardware_concurrency()));
 
