@@ -100,20 +100,22 @@ inline bool posetail_init(PosetailState &s, const std::string &onnx_path,
         }
 
         Ort::SessionOptions opts;
-        // ORT_ENABLE_ALL turns on every fusion + the most aggressive memory
-        // planner. Critical for fitting this 16-camera transformer on GPU:
-        // its peak intermediate footprint is ~25 GB without buffer reuse.
-        // We previously dropped to ORT_DISABLE_ALL because Reshape fusion
-        // produced garbage int64 shape tensors — but only on the
-        // query_times != 0 code path, and posetail_forward now always pins
-        // qtimes=0, so the buggy branch is never reached.
-        opts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+        // The exported tracker_encoder.onnx has a Reshape fusion bug: ORT's
+        // optimizer rewrites a Reshape sequence whose shape input ends up as
+        // garbage int64 (float bits reinterpreted), producing astronomical
+        // shape values on chunks past the first. Attempts to dodge this via
+        // qtimes=0 / disjoint chunks didn't help — the bug fires whenever
+        // graph optimization is enabled. Drop all the way to DISABLE_ALL.
+        //
+        // Tradeoff: peak memory is higher because ORT can't reuse buffers
+        // across the model's many big intermediates. For 16 cams × 16 T ×
+        // 256² × 24 queries this puts us above the 32 GB on a single GPU,
+        // so PoseTail is currently CPU-bound (slow but functional). The
+        // proper fix is to re-export the ONNX without the buggy Reshape
+        // pattern, ideally in FP16 to halve memory.
+        opts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_DISABLE_ALL);
         opts.SetIntraOpNumThreads(std::max(1u,
             std::thread::hardware_concurrency()));
-        // Plan memory ahead of time so the arena reuses buffers between
-        // matching tensors instead of accumulating peak allocations.
-        opts.EnableMemPattern();
-        opts.EnableCpuMemArena();
 
         s.backend = "CPU";
 #ifndef __APPLE__
