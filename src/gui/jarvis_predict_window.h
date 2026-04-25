@@ -58,7 +58,7 @@ struct JarvisPredictState {
     std::string posetail_path;
     bool posetail_load_requested = false;
     bool posetail_forward_requested = false;
-    bool posetail_use_cpu = true;  // default CPU — GPU OOMs at 16 cams
+    bool posetail_use_cpu = false;  // default GPU; toggle if VRAM-constrained
     int posetail_n_forward = 20;
     std::string posetail_status;
 
@@ -931,17 +931,15 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
             state.posetail_load_requested = true;
         }
 
-        // Backend toggle. 16 cams × 16 frames × 256×256 exceeds typical GPU
-        // VRAM budgets (the attention layer alone wants multi-GB), so CPU is
-        // the default safe choice.
-        ImGui::Checkbox("Use CPU (recommended for 16 cams)",
+        // Backend toggle. Default GPU; tick this if the GPU runs out of VRAM.
+        ImGui::Checkbox("Use CPU (slower, falls back if GPU OOMs)",
                         &state.posetail_use_cpu);
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip(
-                "PoseTail's attention is O(cams^2) — running on GPU with\n"
-                "16 cams × 16 frames tries to allocate several GB for a\n"
-                "single MatMul and usually OOMs. CPU is slower (~few sec\n"
-                "per 16-frame chunk) but always fits.");
+                "GPU is much faster (~30 ms/frame) but uses ~6-8 GB VRAM\n"
+                "for 16 cams × 16 frames × 256×256. If VRAM is already\n"
+                "tight from the display buffer + NvDecoder + libtorch,\n"
+                "switch to CPU (~3 sec/frame) which always fits.");
 
         if (!state.posetail_status.empty()) {
             ImGui::TextDisabled("%s", state.posetail_status.c_str());

@@ -113,6 +113,15 @@ inline bool posetail_init(PosetailState &s, const std::string &onnx_path,
             try {
                 OrtCUDAProviderOptions cuda_opts{};
                 cuda_opts.device_id = 0;
+                // Conservative memory settings — the rest of red has the GPU
+                // packed (display buffer, NvDecoder, libtorch, MuJoCo). Cap
+                // the arena and avoid pre-grabbing huge chunks.
+                cuda_opts.arena_extend_strategy = 1;  // kSameAsRequested
+                cuda_opts.gpu_mem_limit =
+                    static_cast<size_t>(8ull * 1024 * 1024 * 1024);  // 8 GB
+                cuda_opts.cudnn_conv_algo_search =
+                    OrtCudnnConvAlgoSearchHeuristic;
+                cuda_opts.do_copy_in_default_stream = 1;
                 opts.AppendExecutionProvider_CUDA(cuda_opts);
                 s.backend = "CUDA";
             } catch (const Ort::Exception &e) {

@@ -39,7 +39,7 @@ void render_allocate_scene_memory(RenderScene *scene, u32 size_of_buffer) {
         if (!scene->use_cpu_buffer && per_frame_bytes > 0) {
             size_t free_bytes = 0, total_bytes = 0;
             cudaMemGetInfo(&free_bytes, &total_bytes);
-            size_t budget = (size_t)(free_bytes * 0.40);
+            size_t budget = (size_t)(free_bytes * 0.30);
 
             size_t needed = per_frame_bytes * size_of_buffer;
             if (needed > budget) {
