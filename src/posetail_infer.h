@@ -112,14 +112,15 @@ inline bool posetail_init(PosetailState &s, const std::string &onnx_path,
         if (!force_cpu) {
             try {
                 OrtCUDAProviderOptions cuda_opts{};
-                // Let the caller pick which GPU. Default 0 matches the main
-                // render context; for multi-GPU workstations the user can
-                // direct PoseTail to an idle card (e.g. GPU 1) where the
+                // Let the caller pick which GPU. On multi-GPU workstations
+                // route PoseTail to an idle card (e.g. GPU 1) where the
                 // display buffer and NvDecoder aren't competing for VRAM.
                 cuda_opts.device_id = gpu_id;
-                cuda_opts.arena_extend_strategy = 1;  // kSameAsRequested
-                // No hard gpu_mem_limit — let the arena grow to the model's
-                // actual need (attention MatMul wants ~4 GB for this setup).
+                // Use ORT defaults for the arena on a dedicated GPU:
+                //   arena_extend_strategy = kNextPowerOfTwo (0)
+                //     so the arena grabs big chunks up-front and single
+                //     ~10 GB ops don't fragment out.
+                //   gpu_mem_limit = SIZE_MAX (uncapped).
                 cuda_opts.cudnn_conv_algo_search =
                     OrtCudnnConvAlgoSearchHeuristic;
                 cuda_opts.do_copy_in_default_stream = 1;
