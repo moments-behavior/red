@@ -1638,11 +1638,56 @@ int main(int argc, char **argv) {
                                     fa.kp3d[k].z = fwd.kp3d[i][q](2);
                                     fa.kp3d[k].triangulated = true;
                                 }
-                                // Reproject to every camera's 2D so the
-                                // overlay populates naturally. Uses same
-                                // mechanism as Triangulate button.
-                                reprojection(fa, &skeleton, pm.camera_params,
-                                             scene);
+                                // Project kp3d → 2D on every camera. We can
+                                // NOT use reprojection() here because it
+                                // requires ≥2 cameras to already have labeled
+                                // 2D (it triangulates from those, then
+                                // reprojects). Future-frame annotations are
+                                // brand new with no labeled 2D, so we project
+                                // each kp3d directly with projectPointR +
+                                // OpenCV-distortion math.
+                                for (int q = 0;
+                                     q < (int)seed_node_idx.size() &&
+                                     q < (int)fwd.kp3d[i].size();
+                                     ++q) {
+                                    int k = seed_node_idx[q];
+                                    if (k >= (int)fa.kp3d.size()) continue;
+                                    Eigen::Vector3d X(fwd.kp3d[i][q](0),
+                                                       fwd.kp3d[i][q](1),
+                                                       fwd.kp3d[i][q](2));
+                                    for (int v = 0; v < num_cams; ++v) {
+                                        if (v >= (int)fa.cameras.size())
+                                            continue;
+                                        if (k >= (int)fa.cameras[v]
+                                                     .keypoints.size())
+                                            continue;
+                                        Eigen::Vector2d p =
+                                            red_math::projectPointR(
+                                                X, pm.camera_params[v].r,
+                                                pm.camera_params[v].tvec,
+                                                pm.camera_params[v].k,
+                                                pm.camera_params[v]
+                                                    .dist_coeffs);
+                                        double xp = p(0);
+                                        double yp =
+                                            (double)scene->image_height[v] -
+                                            p(1);
+                                        if (xp > 0 &&
+                                            xp < scene->image_width[v] &&
+                                            yp > 0 &&
+                                            yp < scene->image_height[v]) {
+                                            fa.cameras[v].keypoints[k].x = xp;
+                                            fa.cameras[v].keypoints[k].y = yp;
+                                            fa.cameras[v]
+                                                .keypoints[k]
+                                                .labeled = true;
+                                            fa.cameras[v]
+                                                .keypoints[k]
+                                                .source =
+                                                LabelSource::Predicted;
+                                        }
+                                    }
+                                }
                             }
                             printf("[PoseTail] Predicted %d frames × %d "
                                    "keypoints in %.0f ms (%.1f ms/frame)\n",
