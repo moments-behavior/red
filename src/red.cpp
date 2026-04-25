@@ -1527,9 +1527,10 @@ int main(int argc, char **argv) {
             if (win.jarvis_predict.posetail_load_requested) {
                 win.jarvis_predict.posetail_load_requested = false;
                 if (!win.jarvis_predict.posetail_path.empty()) {
-                    posetail_init(posetail_state,
-                                  win.jarvis_predict.posetail_path,
-                                  /*force_cpu=*/win.jarvis_predict.posetail_use_cpu);
+                    posetail_init(
+                        posetail_state, win.jarvis_predict.posetail_path,
+                        /*force_cpu=*/win.jarvis_predict.posetail_use_cpu,
+                        /*gpu_id=*/win.jarvis_predict.posetail_gpu_id);
                     win.jarvis_predict.posetail_status = posetail_state.status;
                     printf("[PoseTail] %s\n", posetail_state.status.c_str());
                 } else {

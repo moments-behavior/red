@@ -59,6 +59,7 @@ struct JarvisPredictState {
     bool posetail_load_requested = false;
     bool posetail_forward_requested = false;
     bool posetail_use_cpu = false;  // default GPU; toggle if VRAM-constrained
+    int posetail_gpu_id = 1;        // default GPU 1 (assumes the idle/bigger one)
     int posetail_n_forward = 20;
     std::string posetail_status;
 
@@ -940,6 +941,18 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
                 "for 16 cams × 16 frames × 256×256. If VRAM is already\n"
                 "tight from the display buffer + NvDecoder + libtorch,\n"
                 "switch to CPU (~3 sec/frame) which always fits.");
+
+        if (!state.posetail_use_cpu) {
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(80);
+            ImGui::InputInt("GPU id", &state.posetail_gpu_id, 0, 0);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip(
+                    "CUDA device id for PoseTail inference.\n"
+                    "Workstations with 2+ GPUs: pick the idle one\n"
+                    "(red's display buffer + NvDecoder live on GPU 0).\n"
+                    "Check `nvidia-smi` to see which card is free.");
+        }
 
         if (!state.posetail_status.empty()) {
             ImGui::TextDisabled("%s", state.posetail_status.c_str());

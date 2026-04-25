@@ -87,7 +87,7 @@ struct PosetailChunkResult {
 // ─────────────────────────────────────────────────────────────────────────────
 
 inline bool posetail_init(PosetailState &s, const std::string &onnx_path,
-                          bool force_cpu = false) {
+                          bool force_cpu = false, int gpu_id = 0) {
     s.loaded = false;
     s.model_path = onnx_path;
     s.backend = "none";
@@ -112,18 +112,19 @@ inline bool posetail_init(PosetailState &s, const std::string &onnx_path,
         if (!force_cpu) {
             try {
                 OrtCUDAProviderOptions cuda_opts{};
-                cuda_opts.device_id = 0;
-                // Conservative memory settings — the rest of red has the GPU
-                // packed (display buffer, NvDecoder, libtorch, MuJoCo). Cap
-                // the arena and avoid pre-grabbing huge chunks.
+                // Let the caller pick which GPU. Default 0 matches the main
+                // render context; for multi-GPU workstations the user can
+                // direct PoseTail to an idle card (e.g. GPU 1) where the
+                // display buffer and NvDecoder aren't competing for VRAM.
+                cuda_opts.device_id = gpu_id;
                 cuda_opts.arena_extend_strategy = 1;  // kSameAsRequested
-                cuda_opts.gpu_mem_limit =
-                    static_cast<size_t>(8ull * 1024 * 1024 * 1024);  // 8 GB
+                // No hard gpu_mem_limit — let the arena grow to the model's
+                // actual need (attention MatMul wants ~4 GB for this setup).
                 cuda_opts.cudnn_conv_algo_search =
                     OrtCudnnConvAlgoSearchHeuristic;
                 cuda_opts.do_copy_in_default_stream = 1;
                 opts.AppendExecutionProvider_CUDA(cuda_opts);
-                s.backend = "CUDA";
+                s.backend = "CUDA:" + std::to_string(gpu_id);
             } catch (const Ort::Exception &e) {
                 fprintf(stderr,
                         "[PoseTail] CUDA EP unavailable, using CPU: %s\n",
@@ -131,7 +132,7 @@ inline bool posetail_init(PosetailState &s, const std::string &onnx_path,
             }
         }
 #else
-        (void)force_cpu;
+        (void)force_cpu; (void)gpu_id;
 #endif
         s.session =
             std::make_unique<Ort::Session>(*s.env, onnx_path.c_str(), opts);
