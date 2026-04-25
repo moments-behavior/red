@@ -100,12 +100,14 @@ inline bool posetail_init(PosetailState &s, const std::string &onnx_path,
         }
 
         Ort::SessionOptions opts;
-        // ORT_ENABLE_BASIC fuses simple op patterns and runs the memory
-        // planner. ORT_ENABLE_ALL would fuse Reshape sequences too — that
-        // path produced garbage int64 shape tensors when query_times != 0;
-        // since we now pin qtimes=0 in posetail_forward, basic-level fusion
-        // is safe and cuts peak memory by reusing intermediate buffers.
-        opts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_BASIC);
+        // ORT_ENABLE_ALL turns on every fusion + the most aggressive memory
+        // planner. Critical for fitting this 16-camera transformer on GPU:
+        // its peak intermediate footprint is ~25 GB without buffer reuse.
+        // We previously dropped to ORT_DISABLE_ALL because Reshape fusion
+        // produced garbage int64 shape tensors — but only on the
+        // query_times != 0 code path, and posetail_forward now always pins
+        // qtimes=0, so the buggy branch is never reached.
+        opts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
         opts.SetIntraOpNumThreads(std::max(1u,
             std::thread::hardware_concurrency()));
         // Plan memory ahead of time so the arena reuses buffers between
