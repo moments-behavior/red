@@ -1551,18 +1551,26 @@ int main(int argc, char **argv) {
                             cudaSetDevice(g);
                             size_t f = 0, t = 0;
                             cudaMemGetInfo(&f, &t);
+                            cudaDeviceProp prop{};
+                            cudaGetDeviceProperties(&prop, g);
                             if (f > best_free) {
                                 best_free = f;
                                 best = g;
                             }
+                            // NB: CUDA device ids are NOT the same as
+                            // nvidia-smi ids unless CUDA_DEVICE_ORDER=
+                            // PCI_BUS_ID is set; CUDA orders by performance
+                            // (FASTEST_FIRST) by default. Print the name so
+                            // the user can disambiguate.
                             fprintf(stderr,
-                                    "[PoseTail] GPU %d: %.2f / %.2f GB free\n",
-                                    g, f / 1e9, t / 1e9);
+                                    "[PoseTail] CUDA device %d (%s): "
+                                    "%.2f / %.2f GB free\n",
+                                    g, prop.name, f / 1e9, t / 1e9);
                         }
                         cudaSetDevice(0);  // restore main thread default
                         if (best != win.jarvis_predict.posetail_gpu_id) {
                             fprintf(stderr,
-                                    "[PoseTail] Auto-picking GPU %d "
+                                    "[PoseTail] Auto-picking CUDA device %d "
                                     "(largest free VRAM)\n", best);
                             win.jarvis_predict.posetail_gpu_id = best;
                         }
