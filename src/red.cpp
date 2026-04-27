@@ -1025,6 +1025,12 @@ int main(int argc, char **argv) {
                             display.contrast, (float)display.brightness,
                             display.pivot_midgray, 0);
                     }
+                    // Wait for the memcpy + brightness/contrast kernel to
+                    // complete before letting OpenGL read the PBO. Without
+                    // this, GL sometimes reads the PBO mid-kernel and the
+                    // displayed frame alternates between adjusted and raw,
+                    // visible as a flicker when sliders are moved.
+                    cudaStreamSynchronize(0);
                     bind_pbo(&scene->pbo_cuda[j].pbo);
                     bind_texture(&scene->image_texture[j]);
                     upload_image_pbo_to_texture(scene->image_width[j],
