@@ -561,6 +561,16 @@ inline PosetailChunkResult posetail_predict_chunk(
                 gpu_free_before, gpu_total_before, gpu_free_now, gpu_total_now);
         }
         r.error = std::string("PoseTail forward failed: ") + e.what();
+        // Drop the session so dead arena chunks (and the loaded weights)
+        // are returned to the driver before the next attempt. The user
+        // will need to click Load again, but starting from a clean
+        // arena gives the best chance of fitting next time.
+        s.session.reset();
+        s.loaded = false;
+        s.status = "PoseTail unloaded after OOM — click Load to retry";
+        fprintf(stderr,
+                "[PoseTail] Session released to free GPU memory; click Load "
+                "again before re-running.\n");
         return r;
     }
     double rss_after = posetail_detail::read_self_rss_mb();
