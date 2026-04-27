@@ -17,6 +17,22 @@ void render_allocate_scene_memory(RenderScene *scene, u32 size_of_buffer) {
     int num_cams = scene->num_cams;
 
 #ifndef __APPLE__
+    // Pin to GPU 0 before any cudaMemGetInfo/cudaMalloc here. ORT or
+    // libtorch may have switched the current device to GPU 1 during model
+    // loading, and we want the display buffer + VRAM budget query firmly
+    // on the same device that holds NvDecoder contexts and PBOs (= 0).
+    cudaSetDevice(0);
+    {
+        int dev = -1;
+        cudaGetDevice(&dev);
+        size_t f = 0, t = 0;
+        cudaMemGetInfo(&f, &t);
+        fprintf(stderr,
+                "[render] display buffer alloc on CUDA device %d "
+                "(%.2f GB free of %.2f GB)\n",
+                dev, f / 1e9, t / 1e9);
+    }
+
     // VRAM budget check: auto-shrink size_of_buffer so it fits in free GPU
     // memory. With 16 cams at 3216×2208, a 64-slot buffer needs ~28 GB —
     // enough to OOM a 32 GB card once NvDecoder/ONNX/MuJoCo/etc. are loaded.
