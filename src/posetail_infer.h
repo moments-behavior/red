@@ -141,16 +141,14 @@ inline bool posetail_init(PosetailState &s, const std::string &onnx_path,
         // shape values on chunks past the first. Attempts to dodge this via
         // qtimes=0 / disjoint chunks didn't help — the bug fires whenever
         // graph optimization is enabled. Drop all the way to DISABLE_ALL.
-        //
-        // Tradeoff: peak memory is higher because ORT can't reuse buffers
-        // across the model's many big intermediates. For 16 cams × 16 T ×
-        // 256² × 24 queries this puts us above the 32 GB on a single GPU,
-        // so PoseTail is currently CPU-bound (slow but functional). The
-        // proper fix is to re-export the ONNX without the buggy Reshape
-        // pattern, ideally in FP16 to halve memory.
         opts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_DISABLE_ALL);
         opts.SetIntraOpNumThreads(std::max(1u,
             std::thread::hardware_concurrency()));
+        // Memory pattern planning is independent of graph optimization and
+        // helps the BFC arena reuse buffer slots across ops with disjoint
+        // live ranges. Keeps peak memory lower without retriggering the
+        // Reshape fusion bug.
+        opts.EnableMemPattern();
 
         s.backend = "CPU";
 #ifndef __APPLE__
