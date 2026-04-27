@@ -994,6 +994,13 @@ int main(int argc, char **argv) {
                                     4,
                                 cudaMemcpyDeviceToDevice));
                         }
+                        // Apply brightness/contrast in-place on the PBO,
+                        // regardless of where the source frame lived.
+                        apply_contrast_brightness_rgba(
+                            scene->pbo_cuda[j].cuda_buffer,
+                            scene->image_width[j], scene->image_height[j],
+                            display.contrast, (float)display.brightness,
+                            display.pivot_midgray, 0);
                     } else {
                         if (scene->use_cpu_buffer) {
                             ck(cudaMemcpy(
@@ -1003,15 +1010,6 @@ int main(int argc, char **argv) {
                                 scene->image_width[j] * scene->image_height[j] *
                                     4,
                                 cudaMemcpyHostToDevice));
-
-                            apply_contrast_brightness_rgba(
-                                scene->pbo_cuda[j].cuda_buffer,
-                                scene->image_width[j], scene->image_height[j],
-                                display.contrast,
-                                (float)display.brightness,
-                                display.pivot_midgray,
-                                0);
-
                         } else {
                             ck(cudaMemcpy(
                                 scene->pbo_cuda[j].cuda_buffer,
@@ -1021,6 +1019,11 @@ int main(int argc, char **argv) {
                                     4,
                                 cudaMemcpyDeviceToDevice));
                         }
+                        apply_contrast_brightness_rgba(
+                            scene->pbo_cuda[j].cuda_buffer,
+                            scene->image_width[j], scene->image_height[j],
+                            display.contrast, (float)display.brightness,
+                            display.pivot_midgray, 0);
                     }
                     bind_pbo(&scene->pbo_cuda[j].pbo);
                     bind_texture(&scene->image_texture[j]);
