@@ -1765,6 +1765,24 @@ int main(int argc, char **argv) {
                                        ? ms / produced_min
                                        : 0.0f);
                         }
+
+                        // Always drop the session after a Run, success or
+                        // not. Reusing the same session across multiple
+                        // Forward clicks led to slightly different (and
+                        // generally drifting) predictions — likely a cuDNN
+                        // workspace / algorithm cache effect inside ORT's
+                        // CUDA EP that's not reset between runs. Reloading
+                        // the model on each click is ~1 sec on GPU, much
+                        // less than running PoseTail itself, and gives the
+                        // user the "freshly opened red" behavior they want.
+                        posetail_cleanup(posetail_state);
+                        // Trigger an automatic reload on the next render
+                        // tick so the user doesn't have to click Load
+                        // manually. Reload happens above before the next
+                        // forward request would fire.
+                        win.jarvis_predict.posetail_load_requested = true;
+                        win.jarvis_predict.posetail_status =
+                            "Reloading PoseTail for fresh state…";
                     }
                 }
             }

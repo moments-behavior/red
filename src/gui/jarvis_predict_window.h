@@ -60,11 +60,11 @@ struct JarvisPredictState {
     bool posetail_forward_requested = false;
     bool posetail_use_cpu = false;  // default GPU; toggle if VRAM-constrained
     int posetail_gpu_id = 1;        // default GPU 1 (assumes the idle/bigger one)
-    int posetail_n_forward = 20;
-    // Max query points per session.Run(). Splitting big keypoint sets into
-    // sub-batches keeps single tensor allocations under the GPU's per-alloc
-    // ceiling. 12 fits a 24-keypoint skeleton in two passes on a 24 GB card.
-    int posetail_max_queries = 12;
+    int posetail_n_forward = 7;     // default short horizon; user reports
+                                    // longer runs drift fast on this model
+    // Max query points per session.Run(). Default 24 = no splitting.
+    // Lower this if a single Run OOMs; the handler will issue more passes.
+    int posetail_max_queries = 24;
     std::string posetail_status;
 
     // Predict from: false = Shown (visible cameras only), true = All cameras
