@@ -1025,18 +1025,26 @@ int main(int argc, char **argv) {
                             display.contrast, (float)display.brightness,
                             display.pivot_midgray, 0);
                     }
-                    // Wait for the memcpy + brightness/contrast kernel to
-                    // complete before letting OpenGL read the PBO. Without
-                    // this, GL sometimes reads the PBO mid-kernel and the
-                    // displayed frame alternates between adjusted and raw,
-                    // visible as a flicker when sliders are moved.
+                    // Hand off the PBO from CUDA to GL. The resource was
+                    // mapped to CUDA at scene init and left mapped for the
+                    // process lifetime — GL access during that time is UB
+                    // per the CUDA-GL interop spec, which manifested as the
+                    // brightness/contrast slider flickering once a kernel
+                    // started writing to the PBO. Proper handshake:
+                    //   sync CUDA → unmap → GL upload → remap → re-fetch ptr.
                     cudaStreamSynchronize(0);
+                    unmap_cuda_resource(&scene->pbo_cuda[j].cuda_resource);
                     bind_pbo(&scene->pbo_cuda[j].pbo);
                     bind_texture(&scene->image_texture[j]);
                     upload_image_pbo_to_texture(scene->image_width[j],
                                                 scene->image_height[j]);
                     unbind_pbo();
                     unbind_texture();
+                    map_cuda_resource(&scene->pbo_cuda[j].cuda_resource);
+                    cuda_pointer_from_resource(
+                        &scene->pbo_cuda[j].cuda_buffer,
+                        &scene->pbo_cuda[j].cuda_pbo_storage_buffer_size,
+                        &scene->pbo_cuda[j].cuda_resource);
 #endif // __APPLE__
 
                     std::string scene_name = "scene view" + std::to_string(j);
