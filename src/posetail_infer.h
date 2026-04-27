@@ -180,8 +180,30 @@ inline bool posetail_init(PosetailState &s, const std::string &onnx_path,
 #else
         (void)force_cpu; (void)gpu_id;
 #endif
+#ifndef __APPLE__
+        double gpu_free_pre = 0, gpu_total_pre = 0;
+        bool have_before = false;
+        if (s.backend.rfind("CUDA:", 0) == 0) {
+            int dev = std::atoi(s.backend.c_str() + 5);
+            have_before = posetail_detail::read_gpu_mem_mb(
+                dev, gpu_free_pre, gpu_total_pre);
+        }
+#endif
         s.session =
             std::make_unique<Ort::Session>(*s.env, onnx_path.c_str(), opts);
+#ifndef __APPLE__
+        if (have_before) {
+            double gpu_free_post = 0, gpu_total_post = 0;
+            int dev = std::atoi(s.backend.c_str() + 5);
+            posetail_detail::read_gpu_mem_mb(
+                dev, gpu_free_post, gpu_total_post);
+            fprintf(stderr,
+                "[PoseTail] GPU mem: %.0f/%.0f free before session create → "
+                "%.0f free after  (Δ %+.0f MB used)\n",
+                gpu_free_pre, gpu_total_pre, gpu_free_post,
+                gpu_free_pre - gpu_free_post);
+        }
+#endif
         s.loaded = true;
         s.status = "PoseTail loaded (" + s.backend + ")";
         return true;
