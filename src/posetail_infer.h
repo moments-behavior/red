@@ -28,6 +28,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <fstream>
 #include <memory>
 #include <string>
 #include <thread>
@@ -42,6 +43,22 @@ namespace posetail_detail {
 static constexpr int T_CHUNK = 16;     // frames per chunk
 static constexpr int CROP_SIZE = 256;  // model input H == W
 static constexpr int CROP_PAD = 20;    // bbox pad before expanding to CROP_SIZE
+
+// Read this process's RSS (resident set size) in megabytes from
+// /proc/self/status. Returns 0 if the file isn't readable (non-Linux).
+inline double read_self_rss_mb() {
+    std::ifstream f("/proc/self/status");
+    std::string key;
+    while (f >> key) {
+        if (key == "VmRSS:") {
+            long kb = 0;
+            f >> kb;
+            return (double)kb / 1024.0;
+        }
+        f.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+    }
+    return 0.0;
+}
 }  // namespace posetail_detail
 
 struct PosetailState {
@@ -498,15 +515,24 @@ inline PosetailChunkResult posetail_predict_chunk(
                 coords[(N - 1) * 3 + 2]);
     }
 
+    double rss_before = posetail_detail::read_self_rss_mb();
     auto t1 = std::chrono::steady_clock::now();
     std::vector<Ort::Value> out;
     try {
         out = s.session->Run(Ort::RunOptions{nullptr}, input_names, inputs, 7,
                               output_names, 3);
     } catch (const Ort::Exception &e) {
+        double rss_at_fail = posetail_detail::read_self_rss_mb();
+        fprintf(stderr,
+                "[PoseTail] RSS at failure: %.1f MB (was %.1f MB before Run)\n",
+                rss_at_fail, rss_before);
         r.error = std::string("PoseTail forward failed: ") + e.what();
         return r;
     }
+    double rss_after = posetail_detail::read_self_rss_mb();
+    fprintf(stderr,
+            "[PoseTail] RSS: %.1f MB before Run → %.1f MB after  (Δ %+.1f MB)\n",
+            rss_before, rss_after, rss_after - rss_before);
     auto t2 = std::chrono::steady_clock::now();
     s.last_inference_ms =
         std::chrono::duration<float, std::milli>(t2 - t1).count();
