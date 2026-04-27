@@ -1537,6 +1537,37 @@ int main(int argc, char **argv) {
             if (win.jarvis_predict.posetail_load_requested) {
                 win.jarvis_predict.posetail_load_requested = false;
                 if (!win.jarvis_predict.posetail_path.empty()) {
+#ifndef __APPLE__
+                    // Auto-pick the GPU with the most free VRAM right now
+                    // (= the one NOT currently rendering OpenGL / holding
+                    // the display buffer). Honors the user's UI value if
+                    // they set something other than -1.
+                    if (!win.jarvis_predict.posetail_use_cpu) {
+                        int n_gpus = 0;
+                        cudaGetDeviceCount(&n_gpus);
+                        int best = win.jarvis_predict.posetail_gpu_id;
+                        size_t best_free = 0;
+                        for (int g = 0; g < n_gpus; ++g) {
+                            cudaSetDevice(g);
+                            size_t f = 0, t = 0;
+                            cudaMemGetInfo(&f, &t);
+                            if (f > best_free) {
+                                best_free = f;
+                                best = g;
+                            }
+                            fprintf(stderr,
+                                    "[PoseTail] GPU %d: %.2f / %.2f GB free\n",
+                                    g, f / 1e9, t / 1e9);
+                        }
+                        cudaSetDevice(0);  // restore main thread default
+                        if (best != win.jarvis_predict.posetail_gpu_id) {
+                            fprintf(stderr,
+                                    "[PoseTail] Auto-picking GPU %d "
+                                    "(largest free VRAM)\n", best);
+                            win.jarvis_predict.posetail_gpu_id = best;
+                        }
+                    }
+#endif
                     posetail_init(
                         posetail_state, win.jarvis_predict.posetail_path,
                         /*force_cpu=*/win.jarvis_predict.posetail_use_cpu,
@@ -1544,10 +1575,6 @@ int main(int argc, char **argv) {
                     win.jarvis_predict.posetail_status = posetail_state.status;
                     printf("[PoseTail] %s\n", posetail_state.status.c_str());
 #ifndef __APPLE__
-                    // ORT's CUDA EP set device N current during session
-                    // creation; restore device 0 so red's main render
-                    // thread doesn't accidentally allocate display-buffer /
-                    // libtorch state on the PoseTail GPU.
                     cudaSetDevice(0);
 #endif
                 } else {
