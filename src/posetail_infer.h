@@ -38,6 +38,10 @@
 #include <onnxruntime_cxx_api.h>
 #endif
 
+#ifndef __APPLE__
+#include <cuda_runtime.h>
+#endif
+
 // ── Fixed model dimensions (from ONNX_INTERFACE.md) ──
 namespace posetail_detail {
 static constexpr int T_CHUNK = 16;     // frames per chunk
@@ -60,23 +64,30 @@ inline double read_self_rss_mb() {
     return 0.0;
 }
 
-// Query free/total VRAM in MB for the given device by shelling out to
-// nvidia-smi. Returns false if it can't be parsed.
-inline bool read_gpu_mem_mb(int device_id, double &free_mb, double &total_mb) {
-    char cmd[256];
-    std::snprintf(cmd, sizeof(cmd),
-        "nvidia-smi --query-gpu=memory.free,memory.total "
-        "--format=csv,nounits,noheader -i %d 2>/dev/null", device_id);
-    FILE *fp = popen(cmd, "r");
-    if (!fp) return false;
-    long free_v = 0, total_v = 0;
-    int n = fscanf(fp, "%ld , %ld", &free_v, &total_v);
-    pclose(fp);
-    if (n != 2) return false;
-    free_mb = (double)free_v;
-    total_mb = (double)total_v;
+// Query free/total VRAM in MB for the given CUDA device id (NOT the
+// nvidia-smi id — they differ when CUDA_DEVICE_ORDER is unset; CUDA uses
+// FASTEST_FIRST while nvidia-smi uses PCI bus order). Briefly sets the
+// device current to read the info, then restores device 0.
+#ifndef __APPLE__
+inline bool read_gpu_mem_mb(int cuda_device_id, double &free_mb,
+                             double &total_mb) {
+    int prev_dev = 0;
+    cudaGetDevice(&prev_dev);
+    if (cudaSetDevice(cuda_device_id) != cudaSuccess) {
+        cudaSetDevice(prev_dev);
+        return false;
+    }
+    size_t f = 0, t = 0;
+    cudaError_t e = cudaMemGetInfo(&f, &t);
+    cudaSetDevice(prev_dev);
+    if (e != cudaSuccess) return false;
+    free_mb = (double)f / (1024.0 * 1024.0);
+    total_mb = (double)t / (1024.0 * 1024.0);
     return true;
 }
+#else
+inline bool read_gpu_mem_mb(int, double &, double &) { return false; }
+#endif
 }  // namespace posetail_detail
 
 struct PosetailState {
