@@ -59,6 +59,24 @@ inline double read_self_rss_mb() {
     }
     return 0.0;
 }
+
+// Query free/total VRAM in MB for the given device by shelling out to
+// nvidia-smi. Returns false if it can't be parsed.
+inline bool read_gpu_mem_mb(int device_id, double &free_mb, double &total_mb) {
+    char cmd[256];
+    std::snprintf(cmd, sizeof(cmd),
+        "nvidia-smi --query-gpu=memory.free,memory.total "
+        "--format=csv,nounits,noheader -i %d 2>/dev/null", device_id);
+    FILE *fp = popen(cmd, "r");
+    if (!fp) return false;
+    long free_v = 0, total_v = 0;
+    int n = fscanf(fp, "%ld , %ld", &free_v, &total_v);
+    pclose(fp);
+    if (n != 2) return false;
+    free_mb = (double)free_v;
+    total_mb = (double)total_v;
+    return true;
+}
 }  // namespace posetail_detail
 
 struct PosetailState {
@@ -516,6 +534,13 @@ inline PosetailChunkResult posetail_predict_chunk(
     }
 
     double rss_before = posetail_detail::read_self_rss_mb();
+    double gpu_free_before = 0, gpu_total_before = 0;
+    bool have_gpu_info = false;
+    if (s.backend.rfind("CUDA:", 0) == 0) {
+        int dev = std::atoi(s.backend.c_str() + 5);
+        have_gpu_info = posetail_detail::read_gpu_mem_mb(
+            dev, gpu_free_before, gpu_total_before);
+    }
     auto t1 = std::chrono::steady_clock::now();
     std::vector<Ort::Value> out;
     try {
@@ -526,6 +551,15 @@ inline PosetailChunkResult posetail_predict_chunk(
         fprintf(stderr,
                 "[PoseTail] RSS at failure: %.1f MB (was %.1f MB before Run)\n",
                 rss_at_fail, rss_before);
+        if (have_gpu_info) {
+            double gpu_free_now = 0, gpu_total_now = 0;
+            posetail_detail::read_gpu_mem_mb(
+                std::atoi(s.backend.c_str() + 5), gpu_free_now, gpu_total_now);
+            fprintf(stderr,
+                "[PoseTail] GPU mem: %.0f/%.0f MB free before Run → "
+                "%.0f/%.0f MB free at failure\n",
+                gpu_free_before, gpu_total_before, gpu_free_now, gpu_total_now);
+        }
         r.error = std::string("PoseTail forward failed: ") + e.what();
         return r;
     }
@@ -533,6 +567,16 @@ inline PosetailChunkResult posetail_predict_chunk(
     fprintf(stderr,
             "[PoseTail] RSS: %.1f MB before Run → %.1f MB after  (Δ %+.1f MB)\n",
             rss_before, rss_after, rss_after - rss_before);
+    if (have_gpu_info) {
+        double gpu_free_after = 0, gpu_total_after = 0;
+        posetail_detail::read_gpu_mem_mb(
+            std::atoi(s.backend.c_str() + 5), gpu_free_after, gpu_total_after);
+        fprintf(stderr,
+            "[PoseTail] GPU mem: %.0f/%.0f MB free before Run → "
+            "%.0f MB free after  (Δ %+.0f MB used)\n",
+            gpu_free_before, gpu_total_before, gpu_free_after,
+            gpu_free_before - gpu_free_after);
+    }
     auto t2 = std::chrono::steady_clock::now();
     s.last_inference_ms =
         std::chrono::duration<float, std::milli>(t2 - t1).count();
