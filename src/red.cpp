@@ -1618,23 +1618,27 @@ int main(int argc, char **argv) {
                         printf("[PoseTail] No triangulated keypoints on current "
                                "frame — run Triangulate first\n");
                     } else {
-                        // Use ALL cameras. User explicitly wants 16-view
-                        // tracking; the CPU backend (see Use CPU toggle) is
-                        // what keeps the attention cost from OOMing. GPU
-                        // remains an option for smaller camera counts.
+                        // Use ALL cameras.
                         std::vector<int> widths(scene->num_cams),
                             heights(scene->num_cams);
                         for (int c = 0; c < (int)scene->num_cams; ++c) {
                             widths[c] = (int)scene->image_width[c];
                             heights[c] = (int)scene->image_height[c];
                         }
-                        printf("[PoseTail] Using all %d cameras (backend=%s)\n",
-                               (int)scene->num_cams,
-                               posetail_state.backend.c_str());
+                        // Cap queries per Run() so single-tensor allocations
+                        // stay below the GPU per-alloc ceiling. 24 keypoints
+                        // → 2 passes of 12 by default.
+                        int max_q = std::max(1,
+                            win.jarvis_predict.posetail_max_queries);
+                        int n_total = (int)seed.size();
+                        int n_passes = (n_total + max_q - 1) / max_q;
+                        printf("[PoseTail] Using all %d cameras, %d keypoints "
+                               "in %d pass(es) of up to %d each (backend=%s)\n",
+                               (int)scene->num_cams, n_total, n_passes,
+                               max_q, posetail_state.backend.c_str());
 
-                        // Scratch buffers for GPU→host RGBA copies (one per
-                        // camera per chunk time index). Kept alive across
-                        // the forward call via a deque of vectors.
+                        // Frame staging (RGBA host scratch). Cleared between
+                        // passes so we don't accumulate copies.
                         std::deque<std::vector<uint8_t>> rgba_scratch;
                         auto pull_frame = [&](int cam_idx,
                                               int frame_off) -> const uint8_t * {
@@ -1657,61 +1661,55 @@ int main(int argc, char **argv) {
                         };
 
                         auto t_start = std::chrono::steady_clock::now();
-                        auto fwd = posetail_forward(
-                            posetail_state, widths, heights, pm.camera_params,
-                            seed, n_fwd, pull_frame, 2);
-                        auto t_end = std::chrono::steady_clock::now();
-#ifndef __APPLE__
-                        // ORT may have left device N current after Run().
-                        // Restore device 0 so the main render loop's CUDA
-                        // calls (display buffer, PBOs, etc.) don't drift
-                        // onto the PoseTail GPU.
-                        cudaSetDevice(0);
-#endif
-                        float ms = std::chrono::duration<float, std::milli>(
-                                       t_end - t_start)
-                                       .count();
+                        bool any_failed = false;
+                        std::string fail_msg;
+                        int produced_min = INT_MAX;
+                        int num_cams = (int)scene->num_cams;
+                        int joints_total = skeleton.num_nodes;
 
-                        if (!fwd.ok) {
-                            printf("[PoseTail] Forward failed: %s\n",
-                                   fwd.error.c_str());
-                        } else {
-                            // Write results into future annotations.
-                            int num_cams = (int)scene->num_cams;
+                        for (int p = 0; p < n_passes && !any_failed; ++p) {
+                            int q0 = p * max_q;
+                            int q1 = std::min(n_total, q0 + max_q);
+                            std::vector<Eigen::Vector3d> sub_seed(
+                                seed.begin() + q0, seed.begin() + q1);
+                            std::vector<int> sub_idx(
+                                seed_node_idx.begin() + q0,
+                                seed_node_idx.begin() + q1);
+
+                            rgba_scratch.clear();
+                            auto fwd = posetail_forward(
+                                posetail_state, widths, heights,
+                                pm.camera_params, sub_seed, n_fwd, pull_frame,
+                                2);
+#ifndef __APPLE__
+                            cudaSetDevice(0);
+#endif
+                            if (!fwd.ok) {
+                                any_failed = true;
+                                fail_msg = fwd.error;
+                                printf("[PoseTail] Pass %d/%d failed: %s\n",
+                                       p + 1, n_passes, fwd.error.c_str());
+                                break;
+                            }
                             int produced = (int)fwd.kp3d.size();
-                            int joints_total = skeleton.num_nodes;
+                            produced_min = std::min(produced_min, produced);
+                            // Write this pass's keypoints into the future
+                            // frame annotations.
                             for (int i = 0; i < produced; ++i) {
                                 u32 fn = (u32)(current_frame_num + 1 + i);
                                 auto &fa = get_or_create_frame(
                                     annotations, fn,
-                                    std::min((int)fwd.kp3d[i].size(),
-                                             joints_total),
-                                    num_cams);
+                                    joints_total, num_cams);
                                 for (int q = 0;
-                                     q < (int)seed_node_idx.size() &&
+                                     q < (int)sub_idx.size() &&
                                      q < (int)fwd.kp3d[i].size();
                                      ++q) {
-                                    int k = seed_node_idx[q];
+                                    int k = sub_idx[q];
                                     if (k >= (int)fa.kp3d.size()) continue;
                                     fa.kp3d[k].x = fwd.kp3d[i][q](0);
                                     fa.kp3d[k].y = fwd.kp3d[i][q](1);
                                     fa.kp3d[k].z = fwd.kp3d[i][q](2);
                                     fa.kp3d[k].triangulated = true;
-                                }
-                                // Project kp3d → 2D on every camera. We can
-                                // NOT use reprojection() here because it
-                                // requires ≥2 cameras to already have labeled
-                                // 2D (it triangulates from those, then
-                                // reprojects). Future-frame annotations are
-                                // brand new with no labeled 2D, so we project
-                                // each kp3d directly with projectPointR +
-                                // OpenCV-distortion math.
-                                for (int q = 0;
-                                     q < (int)seed_node_idx.size() &&
-                                     q < (int)fwd.kp3d[i].size();
-                                     ++q) {
-                                    int k = seed_node_idx[q];
-                                    if (k >= (int)fa.kp3d.size()) continue;
                                     Eigen::Vector3d X(fwd.kp3d[i][q](0),
                                                        fwd.kp3d[i][q](1),
                                                        fwd.kp3d[i][q](2));
@@ -1721,17 +1719,17 @@ int main(int argc, char **argv) {
                                         if (k >= (int)fa.cameras[v]
                                                      .keypoints.size())
                                             continue;
-                                        Eigen::Vector2d p =
+                                        Eigen::Vector2d ppx =
                                             red_math::projectPointR(
                                                 X, pm.camera_params[v].r,
                                                 pm.camera_params[v].tvec,
                                                 pm.camera_params[v].k,
                                                 pm.camera_params[v]
                                                     .dist_coeffs);
-                                        double xp = p(0);
+                                        double xp = ppx(0);
                                         double yp =
                                             (double)scene->image_height[v] -
-                                            p(1);
+                                            ppx(1);
                                         if (xp > 0 &&
                                             xp < scene->image_width[v] &&
                                             yp > 0 &&
@@ -1749,10 +1747,23 @@ int main(int argc, char **argv) {
                                     }
                                 }
                             }
+                            printf("[PoseTail] Pass %d/%d: %d queries, "
+                                   "%d frames produced\n",
+                                   p + 1, n_passes, (int)sub_seed.size(),
+                                   produced);
+                        }
+                        auto t_end = std::chrono::steady_clock::now();
+                        float ms = std::chrono::duration<float, std::milli>(
+                                       t_end - t_start)
+                                       .count();
+                        if (!any_failed) {
                             printf("[PoseTail] Predicted %d frames × %d "
                                    "keypoints in %.0f ms (%.1f ms/frame)\n",
-                                   produced, (int)seed.size(), ms,
-                                   produced > 0 ? ms / produced : 0.0f);
+                                   produced_min == INT_MAX ? 0 : produced_min,
+                                   n_total, ms,
+                                   (produced_min > 0 && produced_min != INT_MAX)
+                                       ? ms / produced_min
+                                       : 0.0f);
                         }
                     }
                 }

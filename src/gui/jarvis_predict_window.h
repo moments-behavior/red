@@ -61,6 +61,10 @@ struct JarvisPredictState {
     bool posetail_use_cpu = false;  // default GPU; toggle if VRAM-constrained
     int posetail_gpu_id = 1;        // default GPU 1 (assumes the idle/bigger one)
     int posetail_n_forward = 20;
+    // Max query points per session.Run(). Splitting big keypoint sets into
+    // sub-batches keeps single tensor allocations under the GPU's per-alloc
+    // ceiling. 12 fits a 24-keypoint skeleton in two passes on a 24 GB card.
+    int posetail_max_queries = 12;
     std::string posetail_status;
 
     // Predict from: false = Shown (visible cameras only), true = All cameras
@@ -960,6 +964,15 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
 
         ImGui::SetNextItemWidth(120);
         ImGui::SliderInt("N forward frames", &state.posetail_n_forward, 1, 200);
+        ImGui::SetNextItemWidth(120);
+        ImGui::SliderInt("Queries per pass", &state.posetail_max_queries, 1, 32);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip(
+                "Max keypoints fed to one ONNX Run. Some GPU drivers can't\n"
+                "grant a single >4 GB allocation, so feeding all 24 keypoints\n"
+                "at once OOMs even on a 24 GB card. Splitting into batches\n"
+                "of 12 doubles inference calls but halves peak per-call memory\n"
+                "and lets the GPU path work end-to-end.");
         if (ImGui::Button("PoseTail Forward +N")) {
             state.posetail_forward_requested = true;
         }
