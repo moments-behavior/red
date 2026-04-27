@@ -220,6 +220,16 @@ static void print_project_summary(const ProjectManager &pm,
 }
 
 int main(int argc, char **argv) {
+#ifndef __APPLE__
+    // Pin the main thread's CUDA device to 0 from the start. Most of red's
+    // CUDA state (NvDecoder contexts, OpenGL-CUDA interop PBOs, the display
+    // buffer's cudaMalloc, libtorch's caching allocator) lives on whichever
+    // device is current at allocation time. ONNX Runtime's CUDA EP sets the
+    // requested device current internally and may not restore it, so without
+    // this pin a later PoseTail Load on device 1 silently drags subsequent
+    // libtorch / display-buffer allocations onto device 1 too.
+    cudaSetDevice(0);
+#endif
     // Use new (not malloc) because gx_context contains a std::string member,
     // which cannot be default-initialized via malloc()'s raw memory.
     gx_context *window = new gx_context{};
@@ -1533,6 +1543,13 @@ int main(int argc, char **argv) {
                         /*gpu_id=*/win.jarvis_predict.posetail_gpu_id);
                     win.jarvis_predict.posetail_status = posetail_state.status;
                     printf("[PoseTail] %s\n", posetail_state.status.c_str());
+#ifndef __APPLE__
+                    // ORT's CUDA EP set device N current during session
+                    // creation; restore device 0 so red's main render
+                    // thread doesn't accidentally allocate display-buffer /
+                    // libtorch state on the PoseTail GPU.
+                    cudaSetDevice(0);
+#endif
                 } else {
                     win.jarvis_predict.posetail_status = "No ONNX path set";
                 }
@@ -1609,6 +1626,13 @@ int main(int argc, char **argv) {
                             posetail_state, widths, heights, pm.camera_params,
                             seed, n_fwd, pull_frame, 2);
                         auto t_end = std::chrono::steady_clock::now();
+#ifndef __APPLE__
+                        // ORT may have left device N current after Run().
+                        // Restore device 0 so the main render loop's CUDA
+                        // calls (display buffer, PBOs, etc.) don't drift
+                        // onto the PoseTail GPU.
+                        cudaSetDevice(0);
+#endif
                         float ms = std::chrono::duration<float, std::milli>(
                                        t_end - t_start)
                                        .count();
