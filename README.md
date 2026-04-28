@@ -1,6 +1,6 @@
 # red labeling 📍
 
-A 3D multi-camera labeling tool for fast review and triangulation across many synchronized video streams. Built in C++.
+A 3D multi-camera labeling tool for fast review and triangulation across many synchronized video streams.
 
 ![gui](images/gui.png)
 
