@@ -1169,7 +1169,7 @@ int main(int argc, char **argv) {
                             // labeling
                             if (ImPlot::IsPlotHovered()) {
                                 is_view_focused[j] = true;
-                                if (ImGui::IsKeyPressed(ImGuiKey_B, false) &&
+                                if (ImGui::IsKeyPressed(ImGuiKey_C, false) &&
                                     !io.WantTextInput) {
                                     // create keypoints
                                     if (!keypoints_find) {
@@ -2499,14 +2499,14 @@ int main(int argc, char **argv) {
             }
 
             // Bounding box ID switching keybinds within current class
-            if (ImGui::IsKeyPressed(ImGuiKey_C, false) && !io.WantTextInput) {
+            if (ImGui::IsKeyPressed(ImGuiKey_V, false) && !io.WantTextInput) {
                 // Decrease bbox ID, stop at 0
                 if (current_bbox_id > 0) {
                     current_bbox_id--;
                 }
             }
 
-            if (ImGui::IsKeyPressed(ImGuiKey_V, false) && !io.WantTextInput) {
+            if (ImGui::IsKeyPressed(ImGuiKey_B, false) && !io.WantTextInput) {
                 // Increment bbox ID (no wrap around)
                 current_bbox_id++;
             }
@@ -3210,7 +3210,7 @@ int main(int argc, char **argv) {
                 ImGui::Text("<.>: next image in buffer");
 
                 ImGui::SeparatorText("While hovering image");
-                ImGui::Text("<b>: create keypoints on frame");
+                ImGui::Text("<c>: create keypoints on frame");
                 ImGui::Text("<w>: drop active keypoint");
                 ImGui::Text("<a>: active keypoint-- ");
                 ImGui::Text("<d>: active keypoint++");
@@ -3230,8 +3230,8 @@ int main(int argc, char **argv) {
                 ImGui::Text("<x>: switch to next bbox class (creates new "
                             "class if at end)");
                 ImGui::Text("<n>: create new bbox class");
-                ImGui::Text("<c>: bbox id--");
-                ImGui::Text("<v>: bbox id++");
+                ImGui::Text("<v>: bbox id--");
+                ImGui::Text("<b>: bbox id++");
 
                 ImGui::SeparatorText("While hovering keypoints");
                 ImGui::Text("<r>: delete active keypoint");
