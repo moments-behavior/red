@@ -325,6 +325,47 @@ def rat24():
     return keypoint_names, skeleton, 24
 
 
+def rat22():
+    # Rat24 minus HandL and HandR; remaining keypoints renumbered 0-21.
+    keypoint_names = [
+        "Snout", "EarL", "EarR", "Neck",
+        "SpineL", "TailBase", "ShoulderL", "ElbowL",
+        "WristL", "ShoulderR", "ElbowR", "WristR",
+        "KneeL", "AnkleL", "FootL", "KneeR",
+        "AnkleR", "FootR", "TailTip", "TailMid",
+        "Tail1Q", "Tail3Q",
+    ]
+    edges = [
+        ("Snout", "EarL"),
+        ("Snout", "EarR"),
+        ("EarL", "Neck"),
+        ("EarR", "Neck"),
+        ("Neck", "SpineL"),
+        ("SpineL", "TailBase"),
+        ("Neck", "ShoulderL"),
+        ("ShoulderL", "ElbowL"),
+        ("ElbowL", "WristL"),
+        ("Neck", "ShoulderR"),
+        ("ShoulderR", "ElbowR"),
+        ("ElbowR", "WristR"),
+        ("SpineL", "KneeL"),
+        ("KneeL", "AnkleL"),
+        ("AnkleL", "FootL"),
+        ("SpineL", "KneeR"),
+        ("KneeR", "AnkleR"),
+        ("AnkleR", "FootR"),
+        ("TailBase", "Tail1Q"),
+        ("Tail1Q", "TailMid"),
+        ("TailMid", "Tail3Q"),
+        ("Tail3Q", "TailTip"),
+    ]
+    skeleton = [
+        {"keypointA": a, "keypointB": b, "length": 0.0, "name": f"Joint {i + 1}"}
+        for i, (a, b) in enumerate(edges)
+    ]
+    return keypoint_names, skeleton, 22
+
+
 def rat6():
     keypoint_names = ["Snout", "EarL", "EarR", "Neck", "SpineL", "TailBase"]
     skeleton = [
@@ -474,6 +515,7 @@ skeleton_selector = {
     "Rat4": rat4,
     "Rat6": rat6,
     "Rat20": rat20,
+    "Rat22": rat22,
     "Rat24": rat24,
     "Target": ball_only,
 }
