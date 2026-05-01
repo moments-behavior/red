@@ -123,9 +123,14 @@ for name, value in world_labels.items():
 labels_frames = np.asarray(list(world_labels_filterd.keys()))
 total_num_labels = len(labels_frames)
 
-# Report 3D-extent stats so the user can pick HYBRIDNET.ROI_CUBE_SIZE.
-# JARVIS silently drops any frame whose 3D extent exceeds ROI_CUBE_SIZE,
-# so under-sizing the cube is a quiet way to lose training data.
+# ---------------------------------------------------------------------------
+# JARVIS training-config suggestions (HybridNet)
+# ---------------------------------------------------------------------------
+# Print stats from the labeled keypoints so the user can pick
+# HYBRIDNET.ROI_CUBE_SIZE, GT_SIGMA_MM, and GRID_SPACING during JARVIS
+# config setup. JARVIS silently drops any frame whose 3D extent exceeds
+# ROI_CUBE_SIZE, so under-sizing the cube is a quiet way to lose training
+# data.
 spans = []
 for kps in world_labels_filterd.values():
     if kps.shape[0] >= 2:
@@ -341,35 +346,21 @@ print("Prepared dataset at {}.".format(output_folder))
 # We report the bbox's largest stretched dimension (max of the two) and
 # flag based on the smallest such value across all annotations.
 if train_bbox_axis_ratios:
-    print(
-        "\nCenterDetect bbox-size check (animal at CenterDetect input, "
-        "computed from train annotations; JARVIS uses non-uniform "
-        "stretch resize):"
+    # Per annotation: bbox's "characteristic size" at CD input is
+    # max(rw * IMAGE_SIZE, rh * IMAGE_SIZE). The smallest of these across
+    # the dataset determines reliability. We want smallest >= 32 px.
+    smallest_max_ratio = min(
+        max(rw, rh) for rw, rh in train_bbox_axis_ratios
     )
-    for img_size in (256, 320, 384, 448):
-        sizes_at_cd = [
-            max(rw * img_size, rh * img_size)
-            for rw, rh in train_bbox_axis_ratios
-        ]
-        smallest = min(sizes_at_cd)
-        median = sorted(sizes_at_cd)[len(sizes_at_cd) // 2]
-        if smallest >= 32:
-            flag = "ok"
-        elif smallest >= 16:
-            flag = "borderline (smallest < 32 px)"
-        else:
-            flag = "WARN: smallest < 16 px (CenterDetect likely fails)"
-        print(
-            f"  CENTERDETECT.IMAGE_SIZE={img_size}: "
-            f"smallest={smallest:.0f}px, median={median:.0f}px  [{flag}]"
-        )
+    # Required IMAGE_SIZE: 32 / smallest_max_ratio, rounded up to multiple of 64.
+    required = 32.0 / smallest_max_ratio if smallest_max_ratio > 0 else 0
+    suggested_image_size = max(64, ((int(required) + 63) // 64) * 64)
+    smallest_at_suggested = smallest_max_ratio * suggested_image_size
     print(
-        "Rule of thumb: >= 32px reliable, 16-24px borderline, "
-        "< 16px likely fails."
-    )
-    print(
-        "Note: this is about CenterDetect's animal localization. "
-        "KEYPOINTDETECT.BOUNDING_BOX_SIZE is independent."
+        f"\nSuggested CENTERDETECT.IMAGE_SIZE: {suggested_image_size}  "
+        f"(smallest animal at CD input = {smallest_at_suggested:.0f} px; "
+        "must be >= 32 px for reliable centroid detection. JARVIS uses "
+        "non-uniform stretch resize, so this checks the worst-squashed axis.)"
     )
 
 
