@@ -93,7 +93,7 @@ cd data_exporter
 ```
 
 ```
-python red3d2jarvis.py -p project_path -o output_folder -m margin for bounding box estimate [-s subset of keypoints index] [-e new skeleton edges if use subset of keypoints]
+python red3d2jarvis.py -p project_path -o output_folder -m margin_for_bounding_box_in_pixels [-s subset of keypoints index] [-e new skeleton edges if use subset of keypoints]
 ```
 Note, `project_path` is the `red` project folder — it should contain `labeled_data` and `project.redproj`.
 
