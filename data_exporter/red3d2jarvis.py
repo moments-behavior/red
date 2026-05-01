@@ -13,8 +13,8 @@ import os
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
-    "-w",
-    "--working_dir",
+    "-p",
+    "--project_dir",
     type=str,
     required=True,
     help="labeled_data and project.redproj need to be under this directory.",
@@ -44,13 +44,13 @@ parser.add_argument(
 )
 
 args = parser.parse_args()
-working_dir = args.working_dir
+project_dir = args.project_dir
 output_folder = args.output_folder
 select_indices = args.select_indices
 margin_pixel = args.margin
 
-label_folder = os.path.join(working_dir, "labeled_data")
-redproj = os.path.join(working_dir, "project.redproj")
+label_folder = os.path.join(project_dir, "labeled_data")
+redproj = os.path.join(project_dir, "project.redproj")
 with open(redproj, "r") as f:
     project = json.load(f)
 calibration_folder = project["calibration_folder"]

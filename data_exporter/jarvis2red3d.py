@@ -8,19 +8,15 @@ import yaml
 import json
 
 parser = argparse.ArgumentParser()
-parser.add_argument("-i", "--input_jarvis_folder", type=str, required=True)
-parser.add_argument(
-    "-s", "--skeleton", type=str, required=True, help="Name of the skeleton."
-)
+parser.add_argument("-j", "--input_jarvis_folder", type=str, required=True)
+parser.add_argument("-p", "--project_dir", type=str, required=True)
 parser.add_argument("-f", "--filter", type=int, default=1)
 parser.add_argument("-t", "--threshold", type=float, default=0.6)
-parser.add_argument("-p", "--project_dir", type=str)
 
 
 args = parser.parse_args()
 threshold = args.threshold
 input_jarvis_folder = args.input_jarvis_folder
-skeleton = args.skeleton
 use_filter = args.filter
 project_dir = args.project_dir
 
@@ -51,9 +47,11 @@ with open(redproj, "r") as f:
     project = json.load(f)
 calibration_folder = project["calibration_folder"]
 
-output_folder = os.path.join(project_dir + "predictions")
+output_folder = os.path.join(project_dir, "predictions")
 if not os.path.exists(output_folder):
     os.makedirs(output_folder)
+
+skeleton = project["skeleton_name"]
 
 # project to 2d using calibrations, save 2d points
 cam_names = []
