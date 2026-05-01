@@ -21,6 +21,7 @@ std::map<std::string, SkeletonPrimitive> skeleton_get_all() {
         {"Rat20", Rat20},
         {"Rat24", Rat24},
         {"Rat20Target", Rat20Target},
+        {"Rat22Target", Rat22Target},
         {"Rat24Target", Rat24Target},
         {"BoundingBox", SP_BBOX},
         {"OrientedBoundingBox", SP_OBB},
@@ -377,14 +378,16 @@ void skeleton_initialize(std::string name, SkeletonContext *skeleton,
         break;
 
     case Rat22:
+        // Rat24 minus HandL and HandR; remaining keypoints renumbered to 0-21.
         skeleton->name = name;
         skeleton->num_nodes = 22;
         skeleton->num_edges = 22;
-        skeleton->node_names = {
-            "Snout",     "EarL",   "EarR",   "Neck",  "SpineL",    "TailBase",
-            "ShoulderL", "ElbowL", "WristL", "HandL", "ShoulderR", "ElbowR",
-            "WristR",    "HandR",  "HipL",   "KneeL", "AnkleL",    "FootL",
-            "HipR",      "KneeR",  "AnkleR", "FootR"};
+        skeleton->node_names = {"Snout",     "EarL",     "EarR",      "Neck",
+                                "SpineL",    "TailBase", "ShoulderL", "ElbowL",
+                                "WristL",    "ShoulderR", "ElbowR",   "WristR",
+                                "KneeL",     "AnkleL",   "FootL",     "KneeR",
+                                "AnkleR",    "FootR",    "TailTip",   "TailMid",
+                                "Tail1Q",    "Tail3Q"};
 
         for (int i = 0; i < skeleton->num_nodes; i++) {
             ImVec4 color = (ImVec4)ImColor::HSV(i / (float)skeleton->num_nodes,
@@ -393,10 +396,37 @@ void skeleton_initialize(std::string name, SkeletonContext *skeleton,
         }
 
         skeleton->edges = {{0, 1},   {0, 2},   {1, 3},   {2, 3},   {3, 4},
-                           {4, 5},   {3, 6},   {6, 7},   {7, 8},   {8, 9},
-                           {3, 10},  {10, 11}, {11, 12}, {12, 13}, {4, 14},
-                           {14, 15}, {15, 16}, {16, 17}, {4, 18},  {18, 19},
-                           {19, 20}, {20, 21}};
+                           {4, 5},   {3, 6},   {6, 7},   {7, 8},
+                           {3, 9},   {9, 10},  {10, 11},
+                           {4, 12},  {12, 13}, {13, 14},
+                           {4, 15},  {15, 16}, {16, 17},
+                           {5, 20},  {20, 19}, {19, 21}, {21, 18}};
+        break;
+
+    case Rat22Target:
+        // Rat22 with an extra free-floating "Target" node (no edge).
+        skeleton->name = name;
+        skeleton->num_nodes = 23;
+        skeleton->num_edges = 22;
+        skeleton->node_names = {"Snout",     "EarL",     "EarR",      "Neck",
+                                "SpineL",    "TailBase", "ShoulderL", "ElbowL",
+                                "WristL",    "ShoulderR", "ElbowR",   "WristR",
+                                "KneeL",     "AnkleL",   "FootL",     "KneeR",
+                                "AnkleR",    "FootR",    "TailTip",   "TailMid",
+                                "Tail1Q",    "Tail3Q",   "Target"};
+
+        for (int i = 0; i < skeleton->num_nodes; i++) {
+            ImVec4 color = (ImVec4)ImColor::HSV(i / (float)skeleton->num_nodes,
+                                                1.0f, 1.0f);
+            skeleton->node_colors.push_back(color);
+        }
+
+        skeleton->edges = {{0, 1},   {0, 2},   {1, 3},   {2, 3},   {3, 4},
+                           {4, 5},   {3, 6},   {6, 7},   {7, 8},
+                           {3, 9},   {9, 10},  {10, 11},
+                           {4, 12},  {12, 13}, {13, 14},
+                           {4, 15},  {15, 16}, {16, 17},
+                           {5, 20},  {20, 19}, {19, 21}, {21, 18}};
         break;
 
     case SP_BBOX:

@@ -98,6 +98,7 @@ enum SkeletonPrimitive {
     Rat20,
     Rat24,
     Rat20Target,
+    Rat22Target,
     Rat24Target,
     SP_BBOX,
     SP_OBB,
