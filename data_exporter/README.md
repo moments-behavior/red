@@ -93,9 +93,9 @@ cd data_exporter
 ```
 
 ```
-python red3d2jarvis.py -w working_dir -o output_folder -m margin for bounding box estimate [-s subset of keypoints index] [-e new skeleton edges if use subset of keypoints]
+python red3d2jarvis.py -p project_path -o output_folder -m margin for bounding box estimate [-s subset of keypoints index] [-e new skeleton edges if use subset of keypoints]
 ```
-Note, working dir should contain the labeled_data and project.redproj.
+Note, `project_path` is the `red` project folder — it should contain `labeled_data` and `project.redproj`.
 
 You should check your dataset to ensure it is properly exported,
 
@@ -108,12 +108,15 @@ If the skeleton is not in the `keypoints.py`, please add your skeleton manually.
 
 ### Load predictions in RED
 
-We provide script to convert JARVIS prediction back to RED format for visualizing in RED. 
+We provide a script to convert JARVIS predictions back to RED format for visualizing in RED.
 
 ```
-python jarvis2red3d.py -i /path/to/predictions_3D_folder/ -s [skeleton name] -o [output_folder]
+python jarvis2red3d.py -i /path/to/predictions_3D_folder/ -p /path/to/red_project
 ```
-Note, there is a filter applied to filter out predictions with confidence score less than 0.7, and z > 500mm (since rats are not that tall). The fiter could be disabled by `--filter=0`. 
+
+The converted predictions land in `<project>/predictions/`. Open the project in RED and use **Load From Selected** to load the predictions, then scrub through the predicted poses across all views.
+
+A confidence filter is applied by default (drops predictions below 0.7 confidence and z > 500mm, since rats are not that tall). Disable with `--filter=0`.
 
 
 
