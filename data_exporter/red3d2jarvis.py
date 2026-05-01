@@ -261,6 +261,34 @@ if pair_dists and n_frames_collected:
         f"HYBRIDNET.GRID_SPACING: {suggested_grid} mm  "
         "(sigma / 2; finer = better localization, ~8x memory per halving)"
     )
+    # Practicality check: grid < ~3 mm explodes memory on most GPUs.
+    # 480 mm cube at grid 1 mm = 110M voxels per frame; at grid 3 mm = 4M.
+    if suggested_grid < 3:
+        practical_grid = 3
+        practical_sigma = max(suggested_sigma, practical_grid * 2)
+        print(
+            f"\n  WARN: the suggested values are derived literally but are "
+            "impractical."
+        )
+        print(
+            f"  Closely-spaced keypoints ({name_i} and {name_j} are only "
+            f"{closest:.1f} mm apart) force a sub-mm voxel grid that won't "
+            "fit on most GPUs."
+        )
+        print("  Three honest choices:")
+        print(
+            f"    A) Use practical values (sigma={practical_sigma}, "
+            f"grid={practical_grid}) and accept some confusion between this "
+            "pair; post-process if needed."
+        )
+        print(
+            f"    B) Drop or merge one of '{name_i}'/'{name_j}' from your "
+            "labels — for many rigs they're functionally redundant."
+        )
+        print(
+            "    C) Try the literal values and see if HybridNet OOMs "
+            "(probably will at batch >= 1)."
+        )
 
 # CenterDetect: IMAGE_SIZE from smallest worst-axis bbox at CD input.
 if train_bbox_axis_ratios:
