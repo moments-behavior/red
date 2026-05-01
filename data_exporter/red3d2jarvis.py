@@ -294,7 +294,7 @@ if pair_dists and n_frames_collected:
             "voxel grid — that's tens of millions of voxels in a 480 mm "
             "cube, which won't fit on most GPUs."
         )
-        print("  Three honest choices:")
+        print("  Three choices:")
         print(
             f"    A) Use practical values "
             f"(sigma={practical_sigma}{_mm_to_px(practical_sigma)}, "
