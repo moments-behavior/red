@@ -107,7 +107,7 @@ else:
 
 world_labels_all = csv_reader_red3d(selected_kp_3d)
 
-if select_indices is None:
+if not select_indices:  # None or empty list (the argparse default)
     world_labels = world_labels_all
 else:
     world_labels = {}
