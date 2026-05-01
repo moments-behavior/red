@@ -290,8 +290,9 @@ if pair_dists and n_frames_collected:
         )
         print(
             f"  Closely-spaced keypoints ({_name(ki)} and {_name(kj)} are "
-            f"only {closest:.1f} mm apart) force a sub-mm voxel grid that "
-            "won't fit on most GPUs."
+            f"only {closest:.1f} mm apart) force a {suggested_grid} mm "
+            "voxel grid — that's tens of millions of voxels in a 480 mm "
+            "cube, which won't fit on most GPUs."
         )
         print("  Three honest choices:")
         print(
