@@ -398,7 +398,6 @@ for cam in cameras:
     s.write("R", R)
     s.write("T", T)
     s.release()
-    print(output_filename)
 
 
 # save jpeg images

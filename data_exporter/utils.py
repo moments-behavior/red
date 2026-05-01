@@ -340,8 +340,6 @@ def multiprocess_save_jpegs_opencv(input_args):
         dir_name = os.path.join(save_folder, "test", file_dir)
         os.makedirs(dir_name, exist_ok=True)
 
-    print(all_image_frames)
-
     video_file = os.path.join(video_folder_name, "{}.mp4".format(cam_name))
     cap = cv.VideoCapture(video_file)
     cap.set(cv.CAP_PROP_POS_FRAMES, all_image_frames[0])
