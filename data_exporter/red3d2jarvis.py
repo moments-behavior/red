@@ -173,6 +173,7 @@ annotations, images, frame_set_one = process_one_session(
 # Train alone is representative because val/test see the same cameras.
 img_dims_by_id = {im["id"]: (im["width"], im["height"]) for im in images}
 train_bbox_axis_ratios = []  # list of (w/img_w, h/img_h)
+train_bbox_max_pixels = []   # list of max(w, h) in raw pixels
 for ann in annotations:
     if "bbox" not in ann:
         continue
@@ -181,6 +182,7 @@ for ann in annotations:
     if dims and (w > 0 or h > 0):
         img_w, img_h = dims
         train_bbox_axis_ratios.append((w / img_w, h / img_h))
+        train_bbox_max_pixels.append(max(w, h))
 
 # ---------------------------------------------------------------------------
 # JARVIS training-config suggestions
@@ -241,24 +243,40 @@ if pair_dists and n_frames_collected:
         dists.sort()
         structural.append((dists[len(dists) // 2], i, j))
     structural.sort()
+
+    def _name(k):
+        return keypoints_names[k] if k < len(keypoints_names) else f"kp{k}"
+
+    # Approximate pixels-per-mm at typical animal scale, using the median
+    # bbox size in pixels divided by the median 3D extent in mm.
+    px_per_mm = None
+    if train_bbox_max_pixels and spans:
+        median_bbox_px = sorted(train_bbox_max_pixels)[
+            len(train_bbox_max_pixels) // 2
+        ]
+        median_extent_mm = spans[len(spans) // 2]
+        if median_extent_mm > 0:
+            px_per_mm = median_bbox_px / median_extent_mm
+
+    def _mm_to_px(mm):
+        return f", ~{mm * px_per_mm:.1f}px" if px_per_mm else ""
+
+    print(f"\nClosest-pair distribution (median across frames):")
+    for rank, (dist, i, j) in enumerate(structural[:5], start=1):
+        print(
+            f"  #{rank}: {dist:5.1f} mm  ({_name(i)} <-> {_name(j)})"
+        )
+
     closest, ki, kj = structural[0]
     suggested_sigma = max(1, int(round(closest / 2)))
     suggested_grid = max(1, int(round(suggested_sigma / 2)))
-    name_i = (
-        keypoints_names[ki] if ki < len(keypoints_names) else f"kp{ki}"
-    )
-    name_j = (
-        keypoints_names[kj] if kj < len(keypoints_names) else f"kp{kj}"
+    print(
+        f"HYBRIDNET.GT_SIGMA_MM:  {suggested_sigma} mm"
+        f"{_mm_to_px(suggested_sigma)}  (closest-pair / 2)"
     )
     print(
-        f"Closest-pair structural distance (median across frames): "
-        f"{closest:.1f} mm (pair: {name_i} <-> {name_j})"
-    )
-    print(
-        f"HYBRIDNET.GT_SIGMA_MM:  {suggested_sigma} mm  (closest-pair / 2)"
-    )
-    print(
-        f"HYBRIDNET.GRID_SPACING: {suggested_grid} mm  "
+        f"HYBRIDNET.GRID_SPACING: {suggested_grid} mm"
+        f"{_mm_to_px(suggested_grid)}  "
         "(sigma / 2; finer = better localization, ~8x memory per halving)"
     )
     # Practicality check: grid < ~3 mm explodes memory on most GPUs.
@@ -271,19 +289,22 @@ if pair_dists and n_frames_collected:
             "impractical."
         )
         print(
-            f"  Closely-spaced keypoints ({name_i} and {name_j} are only "
-            f"{closest:.1f} mm apart) force a sub-mm voxel grid that won't "
-            "fit on most GPUs."
+            f"  Closely-spaced keypoints ({_name(ki)} and {_name(kj)} are "
+            f"only {closest:.1f} mm apart) force a sub-mm voxel grid that "
+            "won't fit on most GPUs."
         )
         print("  Three honest choices:")
         print(
-            f"    A) Use practical values (sigma={practical_sigma}, "
-            f"grid={practical_grid}) and accept some confusion between this "
-            "pair; post-process if needed."
+            f"    A) Use practical values "
+            f"(sigma={practical_sigma}{_mm_to_px(practical_sigma)}, "
+            f"grid={practical_grid}{_mm_to_px(practical_grid)}) and accept "
+            "some confusion between this pair; post-process if needed."
         )
         print(
-            f"    B) Drop or merge one of '{name_i}'/'{name_j}' from your "
-            "labels — for many rigs they're functionally redundant."
+            f"    B) Drop or merge one of '{_name(ki)}'/'{_name(kj)}' from "
+            "your labels — for many rigs they're functionally redundant. "
+            "Look at the distribution above to see what the next-closest "
+            "pairs would force."
         )
         print(
             "    C) Try the literal values and see if HybridNet OOMs "
