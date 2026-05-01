@@ -214,24 +214,45 @@ if spans:
         suggested = ((target + divisor - 1) // divisor) * divisor
         print(f"  for GRID_SPACING={gs}: {suggested} mm")
 
-# HybridNet: GT_SIGMA_MM and GRID_SPACING from closest-pair distance.
-min_dists = []
+# HybridNet: GT_SIGMA_MM and GRID_SPACING from the *structurally* closest
+# pair of keypoints. For each pair (i, j), compute the median distance
+# across frames; then take the minimum of those medians. This is robust
+# to transient overlaps (two keypoints occasionally touching) — only
+# pairs that are usually close get picked.
+n_frames_collected = 0
+n_kps_seen = None
+pair_dists = {}  # (i, j) -> list of distances
 for kps in world_labels_filterd.values():
     if kps.shape[0] < 2:
         continue
-    pair_dists = [
-        float(np.linalg.norm(kps[i] - kps[j]))
-        for i, j in itertools.combinations(range(kps.shape[0]), 2)
-    ]
-    if pair_dists:
-        min_dists.append(min(pair_dists))
-if min_dists:
-    min_dists.sort()
-    closest = min_dists[len(min_dists) // 2]
+    if n_kps_seen is None:
+        n_kps_seen = kps.shape[0]
+        for i, j in itertools.combinations(range(n_kps_seen), 2):
+            pair_dists[(i, j)] = []
+    if kps.shape[0] != n_kps_seen:
+        continue  # skip frames with different keypoint counts
+    for i, j in itertools.combinations(range(n_kps_seen), 2):
+        pair_dists[(i, j)].append(float(np.linalg.norm(kps[i] - kps[j])))
+    n_frames_collected += 1
+
+if pair_dists and n_frames_collected:
+    structural = []
+    for (i, j), dists in pair_dists.items():
+        dists.sort()
+        structural.append((dists[len(dists) // 2], i, j))
+    structural.sort()
+    closest, ki, kj = structural[0]
     suggested_sigma = max(1, int(round(closest / 2)))
     suggested_grid = max(1, int(round(suggested_sigma / 2)))
+    name_i = (
+        keypoints_names[ki] if ki < len(keypoints_names) else f"kp{ki}"
+    )
+    name_j = (
+        keypoints_names[kj] if kj < len(keypoints_names) else f"kp{kj}"
+    )
     print(
-        f"Closest-pair 3D distance (median min across frames): {closest:.1f} mm"
+        f"Closest-pair structural distance (median across frames): "
+        f"{closest:.1f} mm (pair: {name_i} <-> {name_j})"
     )
     print(
         f"HYBRIDNET.GT_SIGMA_MM:  {suggested_sigma} mm  (closest-pair / 2)"
