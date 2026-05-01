@@ -149,6 +149,37 @@ if spans:
         suggested = ((target + divisor - 1) // divisor) * divisor
         print(f"  for GRID_SPACING={gs}: {suggested} mm")
 
+# Closest-pair distance per frame → suggests GT sigma and grid spacing.
+# Sigma should be ~half the smallest distance the model needs to resolve.
+import itertools
+min_dists = []
+for kps in world_labels_filterd.values():
+    if kps.shape[0] < 2:
+        continue
+    pair_dists = [
+        float(np.linalg.norm(kps[i] - kps[j]))
+        for i, j in itertools.combinations(range(kps.shape[0]), 2)
+    ]
+    if pair_dists:
+        min_dists.append(min(pair_dists))
+if min_dists:
+    min_dists.sort()
+    closest = min_dists[len(min_dists) // 2]  # median across frames
+    suggested_sigma = max(1, int(round(closest / 2)))
+    suggested_grid = max(1, int(round(suggested_sigma / 2)))
+    print(
+        "Closest-pair 3D distance (median min across frames): "
+        f"{closest:.1f} mm"
+    )
+    print(
+        f"Suggested HYBRIDNET.GT_SIGMA_MM:    {suggested_sigma} mm  "
+        "(closest-pair / 2)"
+    )
+    print(
+        f"Suggested HYBRIDNET.GRID_SPACING:   {suggested_grid} mm  "
+        "(sigma / 2; finer = better localization, ~8x memory per halving)"
+    )
+
 id_shuffled = np.arange(total_num_labels)
 rng = np.random.default_rng(seed=args.seed)
 rng.shuffle(id_shuffled)
