@@ -1,6 +1,7 @@
 import argparse
 import cv2
 import os
+import re
 import json
 from collections import defaultdict
 import numpy as np
@@ -80,19 +81,16 @@ colors, line_idxs = get_skeleton(skeleton, keypoint_names)
 
 
 def _parse_camera_frame(file_name):
-    """Extract (camera, frame) from a JARVIS image path like 'CamXXXX/0.jpg'
-    or 'CamXXXX_0.jpg'. Falls back to the raw filename if it can't be parsed."""
+    """Extract (camera, frame) from a JARVIS image path like
+    '<session>/Cam<id>/Frame_<n>.jpg' or 'Cam<id>_<n>.jpg'.
+    Camera = the last directory component (e.g. 'Cam2002491').
+    Frame  = the trailing integer in the basename (e.g. 215 from 'Frame_215')."""
     base = os.path.splitext(file_name)[0]
-    if "/" in base:
-        camera, frame = base.rsplit("/", 1)
-    elif "_" in base:
-        camera, frame = base.rsplit("_", 1)
-    else:
-        return file_name, 0
-    try:
-        frame = int(frame)
-    except ValueError:
-        frame = 0
+    parts = base.split("/")
+    leaf = parts[-1]
+    camera = parts[-2] if len(parts) >= 2 else leaf
+    m = re.search(r"(\d+)$", leaf)
+    frame = int(m.group(1)) if m else 0
     return camera, frame
 
 
