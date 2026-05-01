@@ -77,8 +77,32 @@ def load_annotations(image_index, dataset_annotations):
 
 
 colors, line_idxs = get_skeleton(skeleton, keypoint_names)
-image_index = 0
-for image_index in range(len(imgs)):
+
+
+def _parse_camera_frame(file_name):
+    """Extract (camera, frame) from a JARVIS image path like 'CamXXXX/0.jpg'
+    or 'CamXXXX_0.jpg'. Falls back to the raw filename if it can't be parsed."""
+    base = os.path.splitext(file_name)[0]
+    if "/" in base:
+        camera, frame = base.rsplit("/", 1)
+    elif "_" in base:
+        camera, frame = base.rsplit("_", 1)
+    else:
+        return file_name, 0
+    try:
+        frame = int(frame)
+    except ValueError:
+        frame = 0
+    return camera, frame
+
+
+# Iterate frame-major: show frame 0 from every camera, then frame 1, etc.
+parsed = {i: _parse_camera_frame(imgs[i]["file_name"]) for i in range(len(imgs))}
+sorted_image_indices = sorted(
+    range(len(imgs)), key=lambda i: (parsed[i][1], parsed[i][0])
+)
+
+for image_index in sorted_image_indices:
     file_name = imgs[image_index]["file_name"]
     path = os.path.join(root_dir, set_name, file_name)
     img = cv2.imread(path)
