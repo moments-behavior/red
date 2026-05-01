@@ -123,6 +123,32 @@ for name, value in world_labels.items():
 labels_frames = np.asarray(list(world_labels_filterd.keys()))
 total_num_labels = len(labels_frames)
 
+# Report 3D-extent stats so the user can pick HYBRIDNET.ROI_CUBE_SIZE.
+# JARVIS silently drops any frame whose 3D extent exceeds ROI_CUBE_SIZE,
+# so under-sizing the cube is a quiet way to lose training data.
+spans = []
+for kps in world_labels_filterd.values():
+    if kps.shape[0] >= 2:
+        spans.append(float(np.max(np.ptp(kps, axis=0))))
+spans.sort()
+if spans:
+    n = len(spans)
+    p95 = spans[int(0.95 * (n - 1))]
+    p99 = spans[int(0.99 * (n - 1))]
+    max_e = spans[-1]
+    print(
+        "3D label extent (max axis span per frame, mm): "
+        f"median={spans[n // 2]:.0f}, p95={p95:.0f}, p99={p99:.0f}, max={max_e:.0f}"
+    )
+    # JARVIS requires ROI_CUBE_SIZE % (4 * GRID_SPACING) == 0.
+    # Round up (max + 20% margin) to the right multiple for each common spacing.
+    target = int(max_e * 1.20)
+    print("Suggested HYBRIDNET.ROI_CUBE_SIZE (20% margin over max):")
+    for gs in (4, 6, 8):
+        divisor = 4 * gs
+        suggested = ((target + divisor - 1) // divisor) * divisor
+        print(f"  for GRID_SPACING={gs}: {suggested} mm")
+
 id_shuffled = np.arange(total_num_labels)
 rng = np.random.default_rng(seed=args.seed)
 rng.shuffle(id_shuffled)
@@ -167,6 +193,20 @@ annotations, images, frame_set_one = process_one_session(
     select_keypoints_idx=select_indices,
     margin_pixel=margin_pixel,
 )
+# Collect per-axis bbox/image ratios per annotation for the CenterDetect
+# bbox-size check at the end. JARVIS does a non-uniform stretch resize
+# to (IMAGE_SIZE, IMAGE_SIZE), so we have to track both axes independently.
+# Train alone is representative because val/test see the same cameras.
+img_dims_by_id = {im["id"]: (im["width"], im["height"]) for im in images}
+train_bbox_axis_ratios = []  # list of (w/img_w, h/img_h)
+for ann in annotations:
+    if "bbox" not in ann:
+        continue
+    _, _, w, h = ann["bbox"]
+    dims = img_dims_by_id.get(ann["image_id"])
+    if dims and (w > 0 or h > 0):
+        img_w, img_h = dims
+        train_bbox_axis_ratios.append((w / img_w, h / img_h))
 set_of_frames = {trial_name: frame_set_one}
 if select_indices:
     keypoints_names_selected = [keypoints_names[i] for i in select_indices]
@@ -263,6 +303,43 @@ if num_test > 0:
         )
 
 print("Prepared dataset at {}.".format(output_folder))
+
+# CenterDetect bbox-size check: how many pixels does the animal occupy
+# at the CenterDetect input resolution? JARVIS does a non-uniform stretch
+# to (IMAGE_SIZE, IMAGE_SIZE) — so each axis is squashed independently.
+# We report the bbox's largest stretched dimension (max of the two) and
+# flag based on the smallest such value across all annotations.
+if train_bbox_axis_ratios:
+    print(
+        "\nCenterDetect bbox-size check (animal at CenterDetect input, "
+        "computed from train annotations; JARVIS uses non-uniform "
+        "stretch resize):"
+    )
+    for img_size in (256, 320, 384, 448):
+        sizes_at_cd = [
+            max(rw * img_size, rh * img_size)
+            for rw, rh in train_bbox_axis_ratios
+        ]
+        smallest = min(sizes_at_cd)
+        median = sorted(sizes_at_cd)[len(sizes_at_cd) // 2]
+        if smallest >= 32:
+            flag = "ok"
+        elif smallest >= 16:
+            flag = "borderline (smallest < 32 px)"
+        else:
+            flag = "WARN: smallest < 16 px (CenterDetect likely fails)"
+        print(
+            f"  CENTERDETECT.IMAGE_SIZE={img_size}: "
+            f"smallest={smallest:.0f}px, median={median:.0f}px  [{flag}]"
+        )
+    print(
+        "Rule of thumb: >= 32px reliable, 16-24px borderline, "
+        "< 16px likely fails."
+    )
+    print(
+        "Note: this is about CenterDetect's animal localization. "
+        "KEYPOINTDETECT.BOUNDING_BOX_SIZE is independent."
+    )
 
 
 # save calibration
