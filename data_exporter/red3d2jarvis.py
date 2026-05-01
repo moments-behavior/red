@@ -123,68 +123,6 @@ for name, value in world_labels.items():
 labels_frames = np.asarray(list(world_labels_filterd.keys()))
 total_num_labels = len(labels_frames)
 
-# ---------------------------------------------------------------------------
-# JARVIS training-config suggestions (HybridNet)
-# ---------------------------------------------------------------------------
-# Print stats from the labeled keypoints so the user can pick
-# HYBRIDNET.ROI_CUBE_SIZE, GT_SIGMA_MM, and GRID_SPACING during JARVIS
-# config setup. JARVIS silently drops any frame whose 3D extent exceeds
-# ROI_CUBE_SIZE, so under-sizing the cube is a quiet way to lose training
-# data.
-spans = []
-for kps in world_labels_filterd.values():
-    if kps.shape[0] >= 2:
-        spans.append(float(np.max(np.ptp(kps, axis=0))))
-spans.sort()
-if spans:
-    n = len(spans)
-    p95 = spans[int(0.95 * (n - 1))]
-    p99 = spans[int(0.99 * (n - 1))]
-    max_e = spans[-1]
-    print(
-        "3D label extent (max axis span per frame, mm): "
-        f"median={spans[n // 2]:.0f}, p95={p95:.0f}, p99={p99:.0f}, max={max_e:.0f}"
-    )
-    # JARVIS requires ROI_CUBE_SIZE % (4 * GRID_SPACING) == 0.
-    # Round up (max + 20% margin) to the right multiple for each common spacing.
-    target = int(max_e * 1.20)
-    print("Suggested HYBRIDNET.ROI_CUBE_SIZE (20% margin over max):")
-    for gs in (4, 6, 8):
-        divisor = 4 * gs
-        suggested = ((target + divisor - 1) // divisor) * divisor
-        print(f"  for GRID_SPACING={gs}: {suggested} mm")
-
-# Closest-pair distance per frame → suggests GT sigma and grid spacing.
-# Sigma should be ~half the smallest distance the model needs to resolve.
-import itertools
-min_dists = []
-for kps in world_labels_filterd.values():
-    if kps.shape[0] < 2:
-        continue
-    pair_dists = [
-        float(np.linalg.norm(kps[i] - kps[j]))
-        for i, j in itertools.combinations(range(kps.shape[0]), 2)
-    ]
-    if pair_dists:
-        min_dists.append(min(pair_dists))
-if min_dists:
-    min_dists.sort()
-    closest = min_dists[len(min_dists) // 2]  # median across frames
-    suggested_sigma = max(1, int(round(closest / 2)))
-    suggested_grid = max(1, int(round(suggested_sigma / 2)))
-    print(
-        "Closest-pair 3D distance (median min across frames): "
-        f"{closest:.1f} mm"
-    )
-    print(
-        f"Suggested HYBRIDNET.GT_SIGMA_MM:    {suggested_sigma} mm  "
-        "(closest-pair / 2)"
-    )
-    print(
-        f"Suggested HYBRIDNET.GRID_SPACING:   {suggested_grid} mm  "
-        "(sigma / 2; finer = better localization, ~8x memory per halving)"
-    )
-
 id_shuffled = np.arange(total_num_labels)
 rng = np.random.default_rng(seed=args.seed)
 rng.shuffle(id_shuffled)
@@ -243,6 +181,81 @@ for ann in annotations:
     if dims and (w > 0 or h > 0):
         img_w, img_h = dims
         train_bbox_axis_ratios.append((w / img_w, h / img_h))
+
+# ---------------------------------------------------------------------------
+# JARVIS training-config suggestions
+# ---------------------------------------------------------------------------
+# All in one place so the user sees them as a coherent block during config.
+import itertools
+
+print("\n=== JARVIS training-config suggestions ===")
+
+# HybridNet: ROI_CUBE_SIZE from per-frame 3D extent.
+# JARVIS silently drops any frame whose 3D extent exceeds ROI_CUBE_SIZE.
+spans = []
+for kps in world_labels_filterd.values():
+    if kps.shape[0] >= 2:
+        spans.append(float(np.max(np.ptp(kps, axis=0))))
+spans.sort()
+if spans:
+    n = len(spans)
+    p95 = spans[int(0.95 * (n - 1))]
+    p99 = spans[int(0.99 * (n - 1))]
+    max_e = spans[-1]
+    print(
+        f"3D label extent (max axis span per frame, mm): "
+        f"median={spans[n // 2]:.0f}, p95={p95:.0f}, p99={p99:.0f}, "
+        f"max={max_e:.0f}"
+    )
+    target = int(max_e * 1.20)
+    print("HYBRIDNET.ROI_CUBE_SIZE (20% margin over max):")
+    for gs in (4, 6, 8):
+        divisor = 4 * gs
+        suggested = ((target + divisor - 1) // divisor) * divisor
+        print(f"  for GRID_SPACING={gs}: {suggested} mm")
+
+# HybridNet: GT_SIGMA_MM and GRID_SPACING from closest-pair distance.
+min_dists = []
+for kps in world_labels_filterd.values():
+    if kps.shape[0] < 2:
+        continue
+    pair_dists = [
+        float(np.linalg.norm(kps[i] - kps[j]))
+        for i, j in itertools.combinations(range(kps.shape[0]), 2)
+    ]
+    if pair_dists:
+        min_dists.append(min(pair_dists))
+if min_dists:
+    min_dists.sort()
+    closest = min_dists[len(min_dists) // 2]
+    suggested_sigma = max(1, int(round(closest / 2)))
+    suggested_grid = max(1, int(round(suggested_sigma / 2)))
+    print(
+        f"Closest-pair 3D distance (median min across frames): {closest:.1f} mm"
+    )
+    print(
+        f"HYBRIDNET.GT_SIGMA_MM:  {suggested_sigma} mm  (closest-pair / 2)"
+    )
+    print(
+        f"HYBRIDNET.GRID_SPACING: {suggested_grid} mm  "
+        "(sigma / 2; finer = better localization, ~8x memory per halving)"
+    )
+
+# CenterDetect: IMAGE_SIZE from smallest worst-axis bbox at CD input.
+if train_bbox_axis_ratios:
+    smallest_max_ratio = min(
+        max(rw, rh) for rw, rh in train_bbox_axis_ratios
+    )
+    required = 32.0 / smallest_max_ratio if smallest_max_ratio > 0 else 0
+    suggested_image_size = max(64, ((int(required) + 63) // 64) * 64)
+    smallest_at_suggested = smallest_max_ratio * suggested_image_size
+    print(
+        f"CENTERDETECT.IMAGE_SIZE: {suggested_image_size}  "
+        f"(smallest animal at CD input = {smallest_at_suggested:.0f} px; "
+        ">= 32 px reliable. JARVIS uses non-uniform stretch resize, so "
+        "this checks the worst-squashed axis.)"
+    )
+
 set_of_frames = {trial_name: frame_set_one}
 if select_indices:
     keypoints_names_selected = [keypoints_names[i] for i in select_indices]
@@ -339,30 +352,6 @@ if num_test > 0:
         )
 
 print("Prepared dataset at {}.".format(output_folder))
-
-# CenterDetect bbox-size check: how many pixels does the animal occupy
-# at the CenterDetect input resolution? JARVIS does a non-uniform stretch
-# to (IMAGE_SIZE, IMAGE_SIZE) — so each axis is squashed independently.
-# We report the bbox's largest stretched dimension (max of the two) and
-# flag based on the smallest such value across all annotations.
-if train_bbox_axis_ratios:
-    # Per annotation: bbox's "characteristic size" at CD input is
-    # max(rw * IMAGE_SIZE, rh * IMAGE_SIZE). The smallest of these across
-    # the dataset determines reliability. We want smallest >= 32 px.
-    smallest_max_ratio = min(
-        max(rw, rh) for rw, rh in train_bbox_axis_ratios
-    )
-    # Required IMAGE_SIZE: 32 / smallest_max_ratio, rounded up to multiple of 64.
-    required = 32.0 / smallest_max_ratio if smallest_max_ratio > 0 else 0
-    suggested_image_size = max(64, ((int(required) + 63) // 64) * 64)
-    smallest_at_suggested = smallest_max_ratio * suggested_image_size
-    print(
-        f"\nSuggested CENTERDETECT.IMAGE_SIZE: {suggested_image_size}  "
-        f"(smallest animal at CD input = {smallest_at_suggested:.0f} px; "
-        "must be >= 32 px for reliable centroid detection. JARVIS uses "
-        "non-uniform stretch resize, so this checks the worst-squashed axis.)"
-    )
-
 
 # save calibration
 save_calib_folder = os.path.join(output_folder, "calib_params", trial_name)
