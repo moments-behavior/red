@@ -351,7 +351,7 @@ if num_test > 0:
             indent=2,
         )
 
-print("Prepared dataset at {}.".format(output_folder))
+print("\n=== Prepared dataset at {}. ===".format(output_folder))
 
 # save calibration
 save_calib_folder = os.path.join(output_folder, "calib_params", trial_name)
