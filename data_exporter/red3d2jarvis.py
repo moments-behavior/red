@@ -42,6 +42,25 @@ parser.add_argument(
     type=int,
     help="Pairs of numbers. Optional for sub selecting indices.",
 )
+parser.add_argument(
+    "--train_ratio",
+    type=float,
+    default=0.8,
+    help="Fraction of (non-test) data used for training. Rest goes to validation. Default 0.8.",
+)
+parser.add_argument(
+    "-t",
+    "--test_ratio",
+    type=float,
+    default=0.0,
+    help="Fraction held out as test set (excluded from JARVIS training/val). Default 0.0 means no test set.",
+)
+parser.add_argument(
+    "--seed",
+    type=int,
+    default=42,
+    help="Random seed for the train/val/test shuffle.",
+)
 
 args = parser.parse_args()
 project_dir = args.project_dir
@@ -105,21 +124,25 @@ labels_frames = np.asarray(list(world_labels_filterd.keys()))
 total_num_labels = len(labels_frames)
 
 id_shuffled = np.arange(total_num_labels)
-rng = np.random.default_rng(seed=42)
-np.random.shuffle(id_shuffled)
-num_train = int(np.floor(total_num_labels * 0.9))
+rng = np.random.default_rng(seed=args.seed)
+rng.shuffle(id_shuffled)
+
+num_test = int(np.floor(total_num_labels * args.test_ratio))
+num_remaining = total_num_labels - num_test
+num_train = int(np.floor(num_remaining * args.train_ratio))
+num_val = num_remaining - num_train
 print(
-    "Train set: {}, validation set: {}.".format(
-        num_train, total_num_labels - num_train
+    "Train: {}, Val: {}, Test: {} (out of {} labeled frames).".format(
+        num_train, num_val, num_test, total_num_labels
     )
 )
-train_ids = id_shuffled[:num_train]
-train_ids = np.sort(train_ids)
-val_ids = id_shuffled[num_train:]
-val_ids = np.sort(val_ids)
-# split frames to train and val
+test_ids = np.sort(id_shuffled[:num_test])
+train_ids = np.sort(id_shuffled[num_test : num_test + num_train])
+val_ids = np.sort(id_shuffled[num_test + num_train :])
+# split frames to train, val, test
 train_image_frames = labels_frames[train_ids]
 val_image_frames = labels_frames[val_ids]
+test_image_frames = labels_frames[test_ids]
 
 trial_name = select_folder
 
@@ -203,6 +226,42 @@ with open(annotation_path + "instances_train.json", "w") as f:
 with open(annotation_path + "instances_val.json", "w") as f:
     json.dump(annotation_json_val, f)
 
+if num_test > 0:
+    annotations, images, frame_set_one = process_one_session(
+        trial_name,
+        select_folder_path,
+        num_keypoints,
+        test_image_frames,
+        cameras,
+        image_width,
+        image_height,
+        select_keypoints_idx=select_indices,
+        margin_pixel=margin_pixel,
+    )
+    set_of_frames = {trial_name: frame_set_one}
+    annotation_json_test = generate_annotation_file(
+        trial_name,
+        keypoints_names_selected,
+        skeleton_names,
+        annotation_num_kps,
+        cameras,
+        annotations,
+        images,
+        set_of_frames,
+    )
+    with open(annotation_path + "instances_test.json", "w") as f:
+        json.dump(annotation_json_test, f)
+    # Save just the held-out frame indices for downstream evaluation.
+    with open(os.path.join(output_folder, "test_frames.json"), "w") as f:
+        json.dump(
+            {
+                "trial_name": trial_name,
+                "frames": [int(x) for x in test_image_frames.tolist()],
+            },
+            f,
+            indent=2,
+        )
+
 print("Prepared dataset at {}.".format(output_folder))
 
 
@@ -245,6 +304,11 @@ for img in train_image_frames:
 for img in val_image_frames:
     map_frame_to_mode[img] = "val"
     all_image_frames.append(img)
+
+if num_test > 0:
+    for img in test_image_frames:
+        map_frame_to_mode[img] = "test"
+        all_image_frames.append(img)
 
 all_image_frames = np.asarray(all_image_frames)
 all_image_frames = np.sort(all_image_frames)

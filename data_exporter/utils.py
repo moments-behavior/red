@@ -331,11 +331,14 @@ def multiprocess_save_jpegs_opencv(input_args):
     print("Saving jpeg for {} ...".format(cam_name))
     file_dir = trial_name + "/{}/".format(cam_name)
 
-    # make directories for images
+    # make directories for images (test only created if any frame is mapped to it)
     dir_name = os.path.join(save_folder, "train", file_dir)
     os.makedirs(dir_name, exist_ok=True)
     dir_name = os.path.join(save_folder, "val", file_dir)
     os.makedirs(dir_name, exist_ok=True)
+    if "test" in set(map_frame_to_mode.values()):
+        dir_name = os.path.join(save_folder, "test", file_dir)
+        os.makedirs(dir_name, exist_ok=True)
 
     print(all_image_frames)
 
