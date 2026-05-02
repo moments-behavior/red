@@ -189,6 +189,19 @@ import itertools
 
 print("\n=== JARVIS training-config suggestions ===")
 
+# CenterDetect: IMAGE_SIZE from smallest worst-axis bbox at CD input.
+if train_bbox_axis_ratios:
+    smallest_max_ratio = min(max(rw, rh) for rw, rh in train_bbox_axis_ratios)
+    required = 32.0 / smallest_max_ratio if smallest_max_ratio > 0 else 0
+    suggested_image_size = max(64, ((int(required) + 63) // 64) * 64)
+    smallest_at_suggested = smallest_max_ratio * suggested_image_size
+    print(
+        f"CENTERDETECT.IMAGE_SIZE: {suggested_image_size}  "
+        f"(smallest animal at CD input = {smallest_at_suggested:.0f} px; "
+        ">= 32 px reliable. JARVIS uses non-uniform stretch resize, so "
+        "this checks the worst-squashed axis.)"
+    )
+
 # HybridNet: ROI_CUBE_SIZE from per-frame max-axis-span. Conservative —
 # uses max across frames so no frame ever exceeds the cube. JARVIS would
 # silently drop any frame that does (or warn, with our patched JARVIS).
@@ -298,7 +311,7 @@ if pair_dists and n_frames_collected:
         practical_grid = 3
         practical_sigma = max(suggested_sigma, practical_grid * 2)
         print(
-            f"\n  WARN: the suggested values are derived literally but are "
+            f"\n  WARN: the suggested values are derived literally but might be "
             "impractical."
         )
         print(
@@ -325,18 +338,6 @@ if pair_dists and n_frames_collected:
             "(probably will at batch >= 1)."
         )
 
-# CenterDetect: IMAGE_SIZE from smallest worst-axis bbox at CD input.
-if train_bbox_axis_ratios:
-    smallest_max_ratio = min(max(rw, rh) for rw, rh in train_bbox_axis_ratios)
-    required = 32.0 / smallest_max_ratio if smallest_max_ratio > 0 else 0
-    suggested_image_size = max(64, ((int(required) + 63) // 64) * 64)
-    smallest_at_suggested = smallest_max_ratio * suggested_image_size
-    print(
-        f"CENTERDETECT.IMAGE_SIZE: {suggested_image_size}  "
-        f"(smallest animal at CD input = {smallest_at_suggested:.0f} px; "
-        ">= 32 px reliable. JARVIS uses non-uniform stretch resize, so "
-        "this checks the worst-squashed axis.)"
-    )
 
 set_of_frames = {trial_name: frame_set_one}
 if select_indices:
