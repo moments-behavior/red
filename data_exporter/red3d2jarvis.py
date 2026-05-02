@@ -277,7 +277,7 @@ if pair_dists and n_frames_collected:
         return f", ~{mm * px_per_mm:.1f}px" if px_per_mm else ""
 
     print(f"\nClosest-pair distribution (median across frames):")
-    for rank, (dist, i, j) in enumerate(structural[:5], start=1):
+    for rank, (dist, i, j) in enumerate(structural[:10], start=1):
         print(f"  #{rank}: {dist:5.1f} mm  ({_name(i)} <-> {_name(j)})")
 
     closest, ki, kj = structural[0]
