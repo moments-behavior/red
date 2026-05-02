@@ -192,29 +192,37 @@ import itertools
 
 print("\n=== JARVIS training-config suggestions ===")
 
-# HybridNet: ROI_CUBE_SIZE from per-frame 3D extent.
-# JARVIS silently drops any frame whose 3D extent exceeds ROI_CUBE_SIZE.
-spans = []
+# HybridNet: ROI_CUBE_SIZE — match JARVIS's own formula in
+# Dataset3D.get_dataset_config: per-axis p95 of per-frame extent across
+# frames, take max across axes, multiply by 1.25, round up to a multiple
+# of 4 * grid_spacing.
+per_axis_extents = []
 for kps in world_labels_filterd.values():
     if kps.shape[0] >= 2:
-        spans.append(float(np.max(np.ptp(kps, axis=0))))
-spans.sort()
-if spans:
-    n = len(spans)
-    p95 = spans[int(0.95 * (n - 1))]
-    p99 = spans[int(0.99 * (n - 1))]
-    max_e = spans[-1]
+        per_axis_extents.append(np.ptp(kps, axis=0))
+if per_axis_extents:
+    per_axis_extents = np.asarray(per_axis_extents)  # shape (N_frames, 3)
+    p95_per_axis = np.percentile(per_axis_extents, 95, axis=0)
+    min_cube_size = float(np.max(p95_per_axis))
+    rough = min_cube_size * 1.25
+    overall_max = float(np.max(per_axis_extents))
     print(
-        f"3D label extent (max axis span per frame, mm): "
-        f"median={spans[n // 2]:.0f}, p95={p95:.0f}, p99={p99:.0f}, "
-        f"max={max_e:.0f}"
+        f"3D label extent (mm): per-axis p95 across frames = "
+        f"x={p95_per_axis[0]:.0f}, y={p95_per_axis[1]:.0f}, "
+        f"z={p95_per_axis[2]:.0f}; min_cube_size = {min_cube_size:.0f}; "
+        f"largest single-axis span across all frames = {overall_max:.0f}"
     )
-    target = int(max_e * 1.20)
-    print("HYBRIDNET.ROI_CUBE_SIZE (20% margin over max):")
+    print("HYBRIDNET.ROI_CUBE_SIZE (1.25 x min_cube_size, matches JARVIS):")
+    target = int(np.ceil(rough))
     for gs in (4, 6, 8):
         divisor = 4 * gs
         suggested = ((target + divisor - 1) // divisor) * divisor
-        print(f"  for GRID_SPACING={gs}: {suggested} mm")
+        warn = (
+            "  WARN: < largest span; some frames will be dropped"
+            if suggested < overall_max
+            else ""
+        )
+        print(f"  for GRID_SPACING={gs}: {suggested} mm{warn}")
 
 # HybridNet: GT_SIGMA_MM and GRID_SPACING from the *structurally* closest
 # pair of keypoints. For each pair (i, j), compute the median distance
