@@ -192,24 +192,15 @@ import itertools
 
 print("\n=== JARVIS training-config suggestions ===")
 
-# HybridNet: ROI_CUBE_SIZE — match JARVIS's own formula in
-# Dataset3D.get_dataset_config: per-axis p95 of per-frame extent across
-# frames, take max across axes, multiply by 1.25, round up to a multiple
-# of 4 * grid_spacing.
-per_axis_extents = []
-spans = []  # per-frame max-axis-span, used downstream for px/mm scale
+# HybridNet: ROI_CUBE_SIZE from per-frame max-axis-span. Conservative —
+# uses max across frames so no frame ever exceeds the cube. JARVIS would
+# silently drop any frame that does (or warn, with our patched JARVIS).
+spans = []  # per-frame max-axis-span; reused downstream for px/mm scale
 for kps in world_labels_filterd.values():
     if kps.shape[0] >= 2:
-        ext = np.ptp(kps, axis=0)
-        per_axis_extents.append(ext)
-        spans.append(float(np.max(ext)))
+        spans.append(float(np.max(np.ptp(kps, axis=0))))
 spans.sort()
-if per_axis_extents:
-    per_axis_extents = np.asarray(per_axis_extents)  # shape (N_frames, 3)
-    p95_per_axis = np.percentile(per_axis_extents, 95, axis=0)
-    min_cube_size = float(np.max(p95_per_axis))
-    rough = min_cube_size * 1.25
-    overall_max = float(np.max(per_axis_extents))
+if spans:
     n = len(spans)
     p95 = spans[int(0.95 * (n - 1))]
     p99 = spans[int(0.99 * (n - 1))]
