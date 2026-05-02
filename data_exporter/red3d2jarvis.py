@@ -197,9 +197,13 @@ print("\n=== JARVIS training-config suggestions ===")
 # frames, take max across axes, multiply by 1.25, round up to a multiple
 # of 4 * grid_spacing.
 per_axis_extents = []
+spans = []  # per-frame max-axis-span, used downstream for px/mm scale
 for kps in world_labels_filterd.values():
     if kps.shape[0] >= 2:
-        per_axis_extents.append(np.ptp(kps, axis=0))
+        ext = np.ptp(kps, axis=0)
+        per_axis_extents.append(ext)
+        spans.append(float(np.max(ext)))
+spans.sort()
 if per_axis_extents:
     per_axis_extents = np.asarray(per_axis_extents)  # shape (N_frames, 3)
     p95_per_axis = np.percentile(per_axis_extents, 95, axis=0)
