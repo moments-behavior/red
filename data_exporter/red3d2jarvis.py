@@ -90,21 +90,18 @@ print("Select most recent label: {}".format(select_folder))
 select_folder_path = os.path.join(label_folder, select_folder)
 cameras = get_all_cams_in_labeled_folder(select_folder_path)
 
-# get skeleton name
-selected_kp_3d = os.path.join(select_folder_path, "keypoints3d.csv")
-skeleton = get_skeleton_name(selected_kp_3d)
-print("Skeleton:", skeleton)
-
-if skeleton.endswith("json"):
+if project["load_skeleton_from_json"]:
+    skeleton = project["skeleton_file"]
     keypoints_names, skeleton_names, num_keypoints = (
         load_skeleton_json_format_for_jarvis(skeleton)
     )
 else:
+    skeleton = project["skeleton_name"]
     keypoints_names, skeleton_names, num_keypoints = skeleton_selector[
         skeleton
     ]()
 
-
+selected_kp_3d = os.path.join(select_folder_path, "keypoints3d.csv")
 world_labels_all = csv_reader_red3d(selected_kp_3d)
 
 if not select_indices:  # None or empty list (the argparse default)
@@ -173,7 +170,7 @@ annotations, images, frame_set_one = process_one_session(
 # Train alone is representative because val/test see the same cameras.
 img_dims_by_id = {im["id"]: (im["width"], im["height"]) for im in images}
 train_bbox_axis_ratios = []  # list of (w/img_w, h/img_h)
-train_bbox_max_pixels = []   # list of max(w, h) in raw pixels
+train_bbox_max_pixels = []  # list of max(w, h) in raw pixels
 for ann in annotations:
     if "bbox" not in ann:
         continue
@@ -266,9 +263,7 @@ if pair_dists and n_frames_collected:
 
     print(f"\nClosest-pair distribution (median across frames):")
     for rank, (dist, i, j) in enumerate(structural[:5], start=1):
-        print(
-            f"  #{rank}: {dist:5.1f} mm  ({_name(i)} <-> {_name(j)})"
-        )
+        print(f"  #{rank}: {dist:5.1f} mm  ({_name(i)} <-> {_name(j)})")
 
     closest, ki, kj = structural[0]
     suggested_sigma = max(1, int(round(closest / 2)))
@@ -317,9 +312,7 @@ if pair_dists and n_frames_collected:
 
 # CenterDetect: IMAGE_SIZE from smallest worst-axis bbox at CD input.
 if train_bbox_axis_ratios:
-    smallest_max_ratio = min(
-        max(rw, rh) for rw, rh in train_bbox_axis_ratios
-    )
+    smallest_max_ratio = min(max(rw, rh) for rw, rh in train_bbox_axis_ratios)
     required = 32.0 / smallest_max_ratio if smallest_max_ratio > 0 else 0
     suggested_image_size = max(64, ((int(required) + 63) // 64) * 64)
     smallest_at_suggested = smallest_max_ratio * suggested_image_size
