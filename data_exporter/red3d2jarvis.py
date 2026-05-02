@@ -210,23 +210,23 @@ if per_axis_extents:
     min_cube_size = float(np.max(p95_per_axis))
     rough = min_cube_size * 1.25
     overall_max = float(np.max(per_axis_extents))
+    n = len(spans)
+    p95 = spans[int(0.95 * (n - 1))]
+    p99 = spans[int(0.99 * (n - 1))]
+    max_e = spans[-1]
     print(
-        f"3D label extent (mm): per-axis p95 across frames = "
-        f"x={p95_per_axis[0]:.0f}, y={p95_per_axis[1]:.0f}, "
-        f"z={p95_per_axis[2]:.0f}; min_cube_size = {min_cube_size:.0f}; "
-        f"largest single-axis span across all frames = {overall_max:.0f}"
+        f"3D label extent (max axis span per frame, mm): "
+        f"median={spans[n // 2]:.0f}, p95={p95:.0f}, p99={p99:.0f}, "
+        f"max={max_e:.0f}"
     )
-    print("HYBRIDNET.ROI_CUBE_SIZE (1.25 x min_cube_size, matches JARVIS):")
-    target = int(np.ceil(rough))
+    # Conservative: round up (max × 1.20) to a multiple of 4 * grid_spacing,
+    # so every frame fits with 20% safety margin (no silent drops).
+    target = max_e * 1.20
+    print("HYBRIDNET.ROI_CUBE_SIZE (1.20 x max axis span, no dropped frames):")
     for gs in (4, 6, 8):
         divisor = 4 * gs
-        suggested = ((target + divisor - 1) // divisor) * divisor
-        warn = (
-            "  WARN: < largest span; some frames will be dropped"
-            if suggested < overall_max
-            else ""
-        )
-        print(f"  for GRID_SPACING={gs}: {suggested} mm{warn}")
+        suggested = int(np.ceil(target / divisor)) * divisor
+        print(f"  for GRID_SPACING={gs}: {suggested} mm")
 
 # HybridNet: GT_SIGMA_MM and GRID_SPACING from the *structurally* closest
 # pair of keypoints. For each pair (i, j), compute the median distance
