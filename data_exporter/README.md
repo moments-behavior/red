@@ -85,7 +85,7 @@ Both export scripts require:
 - PyNvVideoCodec for GPU-accelerated video decoding (optional, falls back to OpenCV)
 
 ## Jarvis
-### Generate training data 
+### Generate training data
 
 ```
 conda activate red_exporter
@@ -93,17 +93,27 @@ cd data_exporter
 ```
 
 ```
-python red3d2jarvis.py -p project_path -o output_folder -m margin_for_bounding_box_in_pixels [-s subset of keypoints index] [-e new skeleton edges if use subset of keypoints]
-```
-Note, `project_path` is the `red` project folder — it should contain `labeled_data` and `project.redproj`.
-
-You should check your dataset to ensure it is properly exported,
-
-```
-python check_jarvis_dataset.py -i jarvis_dataset [-s train/valid]
+python red3d2jarvis.py -p project_path -o output_folder -m margin_for_bounding_box_in_pixels [--train_ratio 0.8] [--test_ratio 0.0] [--seed 42] [-s subset of keypoints index] [-e new skeleton edges if use subset of keypoints]
 ```
 
-If the skeleton is not in the `keypoints.py`, please add your skeleton manually. We will provide utils for generating from skeleton json file soon.  
+| Arg                | Description                                                                |
+| ------------------ | -------------------------------------------------------------------------- |
+| `-p, --project_dir` | `red` project folder — must contain `labeled_data` and `project.redproj`. |
+| `-o, --output_folder` | Where the JARVIS dataset goes.                                         |
+| `-m, --margin`     | Bounding-box margin in pixels added on each side of the projected keypoints. |
+| `--train_ratio`    | Fraction of (non-test) data used for training. Default `0.8`. Rest goes to val. |
+| `-t, --test_ratio` | Fraction held out as a test set. Default `0.0` (no test set). When `> 0`, produces `instances_test.json` + `test_frames.json` in the output folder. |
+| `--seed`           | Random seed for the train/val/test shuffle. Default `42`.                  |
+| `-s, --select_indices` | Optional list of keypoint indices to keep (e.g. `-s 0 1 2 3`).        |
+| `-e, --edges`      | Optional new edge pairs when subsetting keypoints.                         |
+
+After export, the script prints a **training-config suggestions** block — recommended values for `HYBRIDNET.ROI_CUBE_SIZE`, `GT_SIGMA_MM`, `GRID_SPACING`, and `CENTERDETECT.IMAGE_SIZE`, plus the closest-pair keypoint distribution.
+
+Verify the dataset visually:
+
+```
+python check_jarvis_dataset.py -i jarvis_dataset [-s train/val/test]
+```
 
 
 ### Load predictions in RED
