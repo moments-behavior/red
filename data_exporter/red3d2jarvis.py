@@ -197,6 +197,21 @@ for kps in world_labels_filterd.values():
     if kps.shape[0] >= 2:
         spans.append(float(np.max(np.ptp(kps, axis=0))))
 spans.sort()
+# Detect single-keypoint datasets — pairwise stats and per-frame extent
+# are both undefined. Print a one-line note and let the user fall back to
+# JARVIS's prompted defaults.
+n_kps_per_frame = next(
+    (kps.shape[0] for kps in world_labels_filterd.values() if kps.shape[0] > 0),
+    0,
+)
+if n_kps_per_frame < 2:
+    print(
+        f"Only {n_kps_per_frame} keypoint per frame — HybridNet "
+        "ROI_CUBE_SIZE / sigma / grid suggestions are skipped (per-frame "
+        "extent and closest-pair distance are undefined). Use JARVIS's "
+        "prompted defaults during config; pick sigma based on the size of "
+        "the tracked object."
+    )
 if spans:
     n = len(spans)
     p95 = spans[int(0.95 * (n - 1))]
