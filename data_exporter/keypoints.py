@@ -517,5 +517,6 @@ skeleton_selector = {
     "Rat20": rat20,
     "Rat22": rat22,
     "Rat24": rat24,
+    "Rat24Target": rat24,
     "Target": ball_only,
 }
