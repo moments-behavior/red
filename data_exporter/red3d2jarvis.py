@@ -45,8 +45,8 @@ parser.add_argument(
 parser.add_argument(
     "--train_ratio",
     type=float,
-    default=0.8,
-    help="Fraction of (non-test) data used for training. Rest goes to validation. Default 0.8.",
+    default=0.9,
+    help="Fraction of (non-test) data used for training. Rest goes to validation. Default 0.9.",
 )
 parser.add_argument(
     "-t",

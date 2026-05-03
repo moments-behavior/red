@@ -44,14 +44,20 @@ for dset in input_datasets:
                         output_calib_dir, dirs_exist_ok=True)
 
 
-IMG_EXTS = {".jpg", ".jpeg", ".png"}
-
-
-def count_images(path):
+def count_framesets(path):
+    """Count framesets in a JARVIS split folder. Layout is
+    <split>/<trial>/<frame_idx>/<Cam*>.jpg, so framesets are dirs at
+    depth 2 (relative to <split>)."""
+    if not os.path.isdir(path):
+        return 0
     n = 0
-    for _, _, files in os.walk(path):
-        n += sum(1 for f in files
-                 if os.path.splitext(f)[1].lower() in IMG_EXTS)
+    for trial in os.listdir(path):
+        trial_dir = os.path.join(path, trial)
+        if not os.path.isdir(trial_dir):
+            continue
+        for entry in os.listdir(trial_dir):
+            if os.path.isdir(os.path.join(trial_dir, entry)):
+                n += 1
     return n
 
 
@@ -70,7 +76,7 @@ for image_set in ["train", "val", "test"]:
         chosen = all_imagesets[-1]
         shutil.copytree(os.path.dirname(chosen), output_img_dir,
                         dirs_exist_ok=True)
-    split_image_counts[image_set] = count_images(output_img_dir)
+    split_image_counts[image_set] = count_framesets(output_img_dir)
 
 
 # merge annotations
@@ -98,6 +104,6 @@ for image_set in ["train", "val", "test"]:
 print(f"\nOutput: {output_dataset}")
 for sp in ["train", "val", "test"]:
     if sp in split_image_counts or sp in split_ann_counts:
-        imgs = split_image_counts.get(sp, 0)
+        framesets = split_image_counts.get(sp, 0)
         anns = split_ann_counts.get(sp, 0)
-        print(f"  {sp}: {imgs} images, {anns} annotations")
+        print(f"  {sp}: {framesets} framesets, {anns} annotations")
