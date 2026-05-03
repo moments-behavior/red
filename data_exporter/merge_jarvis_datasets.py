@@ -26,100 +26,70 @@ if not os.path.exists(output_dataset):
     os.makedirs(output_dataset)
 
 # get the list of datasets in the source directory
-input_datasets = [o for o in os.listdir(src_dir) if os.path.isdir(os.path.join(src_dir, o))]
-print(input_datasets)
+input_datasets = sorted(
+    o for o in os.listdir(src_dir)
+    if os.path.isdir(os.path.join(src_dir, o))
+)
+print(f"Merging {len(input_datasets)} source datasets")
 
 
-####################################
 # copy calibration files
-####################################
-
-# create parent output directory for calibration files
 output_calib_dir = os.path.join(output_dataset, "calib_params")
-if not os.path.exists(output_calib_dir):
-    os.makedirs(output_calib_dir)
-    
-# loop over all datasets    
+os.makedirs(output_calib_dir, exist_ok=True)
 for dset in input_datasets:
-    
-    src_calib_dir = os.path.join(src_dir, dset, "calib_params")
-    all_calibs = glob.glob(src_calib_dir + "/*")
-    all_calibs.sort()
-    select_most_recent_calib = all_calibs[-1]
-    print("Select most recent label: {}".format(select_most_recent_calib))
-    src_calib_dir = select_most_recent_calib
-    
-    
-    # create output directory for dataset and copy calibration files
-    shutil.copytree(os.path.dirname(src_calib_dir), output_calib_dir, dirs_exist_ok=True)
-    print(f"will copy all from {os.path.dirname(src_calib_dir)} to {output_calib_dir}")
+    all_calibs = sorted(glob.glob(os.path.join(src_dir, dset,
+                                               "calib_params") + "/*"))
+    if all_calibs:
+        shutil.copytree(os.path.dirname(all_calibs[-1]),
+                        output_calib_dir, dirs_exist_ok=True)
 
 
-####################################
 # copy train/val/test images
-####################################
-# Test is optional — only datasets exported with --test_ratio > 0 have it.
-
+split_image_counts = {}
 for image_set in ["train", "val", "test"]:
-
-    # create the output directory for this split
     output_img_dir = os.path.join(output_dataset, image_set)
-    if not os.path.exists(output_img_dir):
-        os.makedirs(output_img_dir)
-
-    # loop over all datasets
+    os.makedirs(output_img_dir, exist_ok=True)
+    total = 0
     for dset in input_datasets:
-
-        # find the most recent image dataset
         src_image_dir = os.path.join(src_dir, dset, image_set)
         if not os.path.isdir(src_image_dir):
-            print(f"  skip {image_set} for {dset} (no {src_image_dir})")
             continue
-        all_imagesets = glob.glob(src_image_dir + "/*")
+        all_imagesets = sorted(glob.glob(src_image_dir + "/*"))
         if not all_imagesets:
-            print(f"  skip {image_set} for {dset} (empty {src_image_dir})")
             continue
-        all_imagesets.sort()
-        select_most_recent_imageset = all_imagesets[-1]
-        src_image_dir = select_most_recent_imageset
+        chosen = all_imagesets[-1]
+        total += len([f for f in os.listdir(chosen)
+                      if os.path.isfile(os.path.join(chosen, f))])
+        shutil.copytree(os.path.dirname(chosen), output_img_dir,
+                        dirs_exist_ok=True)
+    split_image_counts[image_set] = total
 
 
-        print(f"will copy all from {os.path.dirname(src_image_dir)} to {output_img_dir}")
-        shutil.copytree(os.path.dirname(src_image_dir), output_img_dir, dirs_exist_ok=True)
-
-
-####################################
-# copy and merge annotations
-####################################
-
-# create annotations directory in the parent folder
+# merge annotations
 output_annot_dir = os.path.join(output_dataset, "annotations")
-if not os.path.exists(output_annot_dir):
-    os.makedirs(output_annot_dir)
-
-# for train, val, and (optionally) test
+os.makedirs(output_annot_dir, exist_ok=True)
+split_ann_counts = {}
 for image_set in ["train", "val", "test"]:
-
     json_data = []
-    # loop over all datasets
     for dset in input_datasets:
-
-        src_json_file = os.path.join(src_dir, dset, "annotations", f"instances_{image_set}.json")
-        if not os.path.isfile(src_json_file):
-            print(f"  skip {image_set} annotations for {dset} (no {src_json_file})")
-            continue
-        with open(src_json_file, 'r') as file:
-            json_data.append(json.load(file))
-
+        src_json_file = os.path.join(src_dir, dset, "annotations",
+                                     f"instances_{image_set}.json")
+        if os.path.isfile(src_json_file):
+            with open(src_json_file, 'r') as file:
+                json_data.append(json.load(file))
     if not json_data:
-        # test split absent across all source datasets; skip writing it
         continue
-
     merged_json = merge_json_annotations(json_data)
-
-    output_json_file = os.path.join(output_dataset, "annotations", f"instances_{image_set}.json")
-    with open(output_json_file, 'w') as file:
+    with open(os.path.join(output_dataset, "annotations",
+                           f"instances_{image_set}.json"), 'w') as file:
         json.dump(merged_json, file, indent=4)
-    
-    
-print("Merged dataset created at: {}".format(output_dataset))
+    split_ann_counts[image_set] = len(merged_json.get("annotations", []))
+
+
+# summary
+print(f"\nOutput: {output_dataset}")
+for sp in ["train", "val", "test"]:
+    if sp in split_image_counts or sp in split_ann_counts:
+        imgs = split_image_counts.get(sp, 0)
+        anns = split_ann_counts.get(sp, 0)
+        print(f"  {sp}: {imgs} images, {anns} annotations")
