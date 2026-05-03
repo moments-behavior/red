@@ -61,6 +61,14 @@ parser.add_argument(
     default=42,
     help="Random seed for the train/val/test shuffle.",
 )
+parser.add_argument(
+    "--label_subdir",
+    type=str,
+    default="labeled_data",
+    help="Subfolder under project_dir holding the timestamped label "
+    "snapshots. Defaults to 'labeled_data'. Use e.g. 'active_learning' "
+    "to point at a separate active-learning subset.",
+)
 
 args = parser.parse_args()
 project_dir = args.project_dir
@@ -68,7 +76,7 @@ output_folder = args.output_folder
 select_indices = args.select_indices
 margin_pixel = args.margin
 
-label_folder = os.path.join(project_dir, "labeled_data")
+label_folder = os.path.join(project_dir, args.label_subdir)
 redproj = os.path.join(project_dir, "project.redproj")
 with open(redproj, "r") as f:
     project = json.load(f)
