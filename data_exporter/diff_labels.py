@@ -95,9 +95,21 @@ def main():
     common = old_frames & new_frames
 
     diffs = []  # (fid, max_diff_mm, nan_changed)
+    # per-keypoint accumulator: list of euclidean shifts (mm) per kp,
+    # only over (frame, kp) pairs where both old & new are non-NaN.
+    per_kp_shifts = None
     for fid in sorted(common):
-        d, nc = _frame_max_diff(old_labels[fid], new_labels[fid])
+        old = old_labels[fid]
+        new = new_labels[fid]
+        if per_kp_shifts is None and old.shape == new.shape:
+            per_kp_shifts = [[] for _ in range(old.shape[0])]
+        d, nc = _frame_max_diff(old, new)
         diffs.append((fid, d, nc))
+        if old.shape == new.shape and per_kp_shifts is not None:
+            valid = ~(np.isnan(old).any(axis=1) | np.isnan(new).any(axis=1))
+            shift = np.linalg.norm(new - old, axis=1)
+            for k in np.where(valid)[0]:
+                per_kp_shifts[k].append(float(shift[k]))
 
     modified = [fid for fid, d, nc in diffs
                 if nc or d > args.tolerance_mm]
@@ -116,6 +128,23 @@ def main():
           f"(threshold > {args.tolerance_mm} mm)")
     print(f"  removed:  {len(removed):4d} frames")
     print(f"  unchanged:{len(common) - len(modified):4d} frames")
+
+    if per_kp_shifts:
+        # mean shift per keypoint, restricted to frames where the
+        # keypoint actually moved by more than the tolerance (so noise
+        # doesn't dilute the average).
+        rows = []
+        for k, shifts in enumerate(per_kp_shifts):
+            real_shifts = [s for s in shifts if s > args.tolerance_mm]
+            if real_shifts:
+                rows.append((k, len(real_shifts),
+                             float(np.mean(real_shifts)),
+                             float(np.max(real_shifts))))
+        rows.sort(key=lambda r: r[2], reverse=True)
+        print("\nPer-keypoint change (frames above threshold only):")
+        print(f"  {'kp':>4}  {'n':>6}  {'mean (mm)':>10}  {'max (mm)':>10}")
+        for k, n, mean_mm, max_mm in rows:
+            print(f"  {k:>4d}  {n:>6d}  {mean_mm:>10.2f}  {max_mm:>10.2f}")
 
     if added:
         print(f"\nAdded frame ids (first 20): {added[:20]}")
