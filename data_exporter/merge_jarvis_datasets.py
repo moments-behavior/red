@@ -44,12 +44,22 @@ for dset in input_datasets:
                         output_calib_dir, dirs_exist_ok=True)
 
 
+IMG_EXTS = {".jpg", ".jpeg", ".png"}
+
+
+def count_images(path):
+    n = 0
+    for _, _, files in os.walk(path):
+        n += sum(1 for f in files
+                 if os.path.splitext(f)[1].lower() in IMG_EXTS)
+    return n
+
+
 # copy train/val/test images
 split_image_counts = {}
 for image_set in ["train", "val", "test"]:
     output_img_dir = os.path.join(output_dataset, image_set)
     os.makedirs(output_img_dir, exist_ok=True)
-    total = 0
     for dset in input_datasets:
         src_image_dir = os.path.join(src_dir, dset, image_set)
         if not os.path.isdir(src_image_dir):
@@ -58,11 +68,9 @@ for image_set in ["train", "val", "test"]:
         if not all_imagesets:
             continue
         chosen = all_imagesets[-1]
-        total += len([f for f in os.listdir(chosen)
-                      if os.path.isfile(os.path.join(chosen, f))])
         shutil.copytree(os.path.dirname(chosen), output_img_dir,
                         dirs_exist_ok=True)
-    split_image_counts[image_set] = total
+    split_image_counts[image_set] = count_images(output_img_dir)
 
 
 # merge annotations
