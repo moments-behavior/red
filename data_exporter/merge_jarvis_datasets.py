@@ -46,8 +46,9 @@ for dset in input_datasets:
 
 def count_framesets(path):
     """Count framesets in a JARVIS split folder. Layout is
-    <split>/<trial>/<frame_idx>/<Cam*>.jpg, so framesets are dirs at
-    depth 2 (relative to <split>)."""
+    <split>/<trial>/<cam>/Frame_<N>.jpg — every camera holds the same
+    frames for a given trial, so framesets-per-trial = files in any one
+    camera dir; sum across trials."""
     if not os.path.isdir(path):
         return 0
     n = 0
@@ -55,9 +56,12 @@ def count_framesets(path):
         trial_dir = os.path.join(path, trial)
         if not os.path.isdir(trial_dir):
             continue
-        for entry in os.listdir(trial_dir):
-            if os.path.isdir(os.path.join(trial_dir, entry)):
-                n += 1
+        cam_dirs = [d for d in os.listdir(trial_dir)
+                    if os.path.isdir(os.path.join(trial_dir, d))]
+        if not cam_dirs:
+            continue
+        first_cam = os.path.join(trial_dir, cam_dirs[0])
+        n += sum(1 for f in os.listdir(first_cam) if f.endswith(".jpg"))
     return n
 
 
