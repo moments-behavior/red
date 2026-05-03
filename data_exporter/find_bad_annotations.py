@@ -1,6 +1,7 @@
 """Scan a parent folder of JARVIS-exported datasets and report
-annotations whose 2D keypoints are all (0, 0) — these triangulate to
-(0, 0, 0) in 3D and crash JARVIS's get_dataset_config.
+framesets that would crash JARVIS's get_dataset_config — those where
+every keypoint has non-zero 2D in fewer than 2 cameras (so JARVIS can't
+triangulate any keypoint, and self.keypoints3D ends up all-zero).
 
 Usage:
     python find_bad_annotations.py /path/to/parent_folder
@@ -12,13 +13,13 @@ import sys
 from collections import defaultdict
 
 
-def all_keypoints_zero(kps_flat):
+def per_keypoint_visible_cams(kps_flat):
     """JARVIS keypoints are flat: [x0, y0, v0, x1, y1, v1, ...].
-    Return True if every (x, y) is (0, 0)."""
+    Return a list of bools, one per keypoint, True if (x, y) != (0, 0)."""
+    out = []
     for i in range(0, len(kps_flat), 3):
-        if kps_flat[i] != 0 or kps_flat[i + 1] != 0:
-            return False
-    return True
+        out.append(kps_flat[i] != 0 or kps_flat[i + 1] != 0)
+    return out
 
 
 def main():
@@ -43,32 +44,32 @@ def main():
             with open(path) as f:
                 data = json.load(f)
 
-            # Build image_id -> file_name lookup so we can name bad framesets.
-            img_lookup = {im["id"]: im["file_name"] for im in data.get("images", [])}
+            img_lookup = {im["id"]: im["file_name"]
+                          for im in data.get("images", [])}
 
-            # For each frame (logical group: file path before /Cam/), count
-            # how many annotations are "all-zero" vs total.
-            per_frame_total = defaultdict(int)
-            per_frame_zero = defaultdict(int)
+            # For each frame (trial + Frame_N.jpg), tally per-keypoint
+            # how many cameras saw it (non-zero 2D).
+            per_frame_kp_views = defaultdict(lambda: None)
             for ann in data.get("annotations", []):
                 fn = img_lookup.get(ann["image_id"], f"id={ann['image_id']}")
-                # file name: <trial>/<cam>/Frame_<N>.jpg
                 parts = fn.split("/")
-                if len(parts) >= 3:
-                    frame_key = (parts[0], parts[-1])  # (trial, Frame_N.jpg)
-                else:
-                    frame_key = (fn,)
-                per_frame_total[frame_key] += 1
-                if all_keypoints_zero(ann["keypoints"]):
-                    per_frame_zero[frame_key] += 1
+                frame_key = (parts[0], parts[-1]) if len(parts) >= 3 else (fn,)
+                visible = per_keypoint_visible_cams(ann["keypoints"])
+                if per_frame_kp_views[frame_key] is None:
+                    per_frame_kp_views[frame_key] = [0] * len(visible)
+                for i, v in enumerate(visible):
+                    if v:
+                        per_frame_kp_views[frame_key][i] += 1
 
-            bad = [k for k, n in per_frame_zero.items()
-                   if n == per_frame_total[k]]
+            # A frameset is "bad" if no keypoint has >= 2 cameras seeing it.
+            bad = [k for k, counts in per_frame_kp_views.items()
+                   if max(counts) < 2]
             if bad:
-                print(f"\n[{src}/{split}] {len(bad)} fully-zero framesets "
-                      f"(every camera all-zero):")
+                print(f"\n[{src}/{split}] {len(bad)} untriangulatable "
+                      f"frameset(s) (no keypoint has >= 2 cameras):")
                 for k in bad[:10]:
-                    print(f"    {k}")
+                    print(f"    {k}  cam-views per kp: "
+                          f"{per_frame_kp_views[k]}")
                 if len(bad) > 10:
                     print(f"    ... and {len(bad) - 10} more")
 
