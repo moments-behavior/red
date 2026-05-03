@@ -34,22 +34,18 @@ import numpy as np
 from utils import csv_reader_red3d
 
 
-TOLERANCE_MM = 1e-3
-
-
-def _frame_changed(a, b):
-    """True if two (n_kp, 3) arrays differ in NaN pattern or in value
-    beyond TOLERANCE_MM."""
+def _frame_max_diff(a, b):
+    """Returns (max_abs_diff_mm, nan_pattern_changed). max diff is np.inf
+    when shapes differ; 0.0 when both fully NaN."""
     if a.shape != b.shape:
-        return True
+        return float("inf"), True
     nan_a = np.isnan(a)
     nan_b = np.isnan(b)
-    if not np.array_equal(nan_a, nan_b):
-        return True
-    valid = ~nan_a
+    nan_changed = not np.array_equal(nan_a, nan_b)
+    valid = ~(nan_a | nan_b)
     if not np.any(valid):
-        return False
-    return bool(np.max(np.abs(a[valid] - b[valid])) > TOLERANCE_MM)
+        return 0.0, nan_changed
+    return float(np.max(np.abs(a[valid] - b[valid]))), nan_changed
 
 
 def _filter_csv(src_csv, dst_csv, frame_ids):
@@ -74,6 +70,12 @@ def main():
     parser.add_argument("-o", "--output_dir", default=None,
                         help="If set, write a new folder at this path "
                              "containing only the changed frames.")
+    parser.add_argument("--tolerance_mm", type=float, default=1.0,
+                        help="A frame counts as 'modified' only if some "
+                             "keypoint moved by more than this many mm or "
+                             "its NaN-status changed. Default 1.0 mm "
+                             "(below this is usually FP noise from red "
+                             "re-saving unchanged frames).")
     args = parser.parse_args()
 
     for d, label in [(args.old_dir, "old"), (args.new_dir, "new")]:
@@ -92,13 +94,26 @@ def main():
     removed = sorted(old_frames - new_frames)
     common = old_frames & new_frames
 
-    modified = []
+    diffs = []  # (fid, max_diff_mm, nan_changed)
     for fid in sorted(common):
-        if _frame_changed(old_labels[fid], new_labels[fid]):
-            modified.append(fid)
+        d, nc = _frame_max_diff(old_labels[fid], new_labels[fid])
+        diffs.append((fid, d, nc))
+
+    modified = [fid for fid, d, nc in diffs
+                if nc or d > args.tolerance_mm]
+
+    finite_diffs = np.array([d for _, d, _ in diffs if np.isfinite(d)])
+    if finite_diffs.size:
+        print("\nMax keypoint shift per common frame (mm) — distribution:")
+        for q, label in [(50, "p50"), (90, "p90"), (99, "p99"),
+                         (100, "max")]:
+            print(f"  {label}: {np.percentile(finite_diffs, q):8.4f} mm")
+        print(f"  frames with shift > {args.tolerance_mm} mm: "
+              f"{int((finite_diffs > args.tolerance_mm).sum())}")
 
     print(f"\n  added:    {len(added):4d} frames")
-    print(f"  modified: {len(modified):4d} frames")
+    print(f"  modified: {len(modified):4d} frames "
+          f"(threshold > {args.tolerance_mm} mm)")
     print(f"  removed:  {len(removed):4d} frames")
     print(f"  unchanged:{len(common) - len(modified):4d} frames")
 
