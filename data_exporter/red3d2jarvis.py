@@ -1,4 +1,5 @@
 from keypoints import *
+import csv
 import re
 import argparse
 import numpy as np
@@ -118,6 +119,52 @@ else:
     world_labels = {}
     for key, value in world_labels_all.items():
         world_labels[key] = value[select_indices]
+
+# Invalidate "stale" 3D values: per frame, if a keypoint has fewer than
+# 2 cameras with non-NaN 2D, its 3D can't have come from a fresh
+# triangulation — most likely a leftover from a prior labeling session
+# or a loaded prediction. Mark those 3D entries NaN so the existing
+# all-keypoints-must-be-valid filter below drops the affected frames.
+per_cam_2d = {}  # cam -> {frame_id: (n_kp_full, 2) array, NaN where unlabeled}
+for cam in cameras:
+    cam_csv = os.path.join(select_folder_path, f"{cam}.csv")
+    if not os.path.isfile(cam_csv):
+        continue
+    rows = {}
+    with open(cam_csv) as f:
+        reader = csv.reader(f)
+        next(reader, None)  # skip header
+        for row in reader:
+            if not row:
+                continue
+            fid = int(row[0])
+            vals = [float(x) for x in row[1:]]
+            arr = np.asarray(vals).reshape(-1, 3)[:, 1:]  # drop visibility col
+            arr[arr == 1e7] = np.nan
+            rows[fid] = arr
+    per_cam_2d[cam] = rows
+
+n_invalidated = 0
+for fid, kps3d in world_labels.items():
+    cam_count = np.zeros(kps3d.shape[0], dtype=int)
+    for cam, rows in per_cam_2d.items():
+        if fid not in rows:
+            continue
+        if select_indices:
+            cam_kps = rows[fid][select_indices]
+        else:
+            cam_kps = rows[fid]
+        if cam_kps.shape[0] != kps3d.shape[0]:
+            continue
+        cam_count += (~np.any(np.isnan(cam_kps), axis=1)).astype(int)
+    insufficient = cam_count < 2
+    if np.any(insufficient & ~np.isnan(kps3d).any(axis=1)):
+        n_invalidated += int(np.sum(insufficient
+                                     & ~np.isnan(kps3d).any(axis=1)))
+        kps3d[insufficient] = np.nan
+if n_invalidated:
+    print(f"Invalidated {n_invalidated} stale 3D keypoint(s) "
+          "(< 2 cameras with 2D); affected frames will drop below.")
 
 # filter out invalid lables
 world_labels_filterd = {}
