@@ -63,6 +63,12 @@ parser.add_argument(
     help="Random seed for the train/val/test shuffle.",
 )
 parser.add_argument(
+    "--debug",
+    action="store_true",
+    help="Debug mode: only export the first 5 labeled frames for a quick "
+    "end-to-end check.",
+)
+parser.add_argument(
     "--label_subdir",
     type=str,
     default="labeled_data",
@@ -173,6 +179,10 @@ for name, value in world_labels.items():
         world_labels_filterd[name] = value
 
 labels_frames = np.asarray(list(world_labels_filterd.keys()))
+if args.debug:
+    labels_frames = labels_frames[:5]
+    world_labels_filterd = {k: world_labels_filterd[k] for k in labels_frames}
+    print(f"DEBUG mode: limiting export to {len(labels_frames)} frames.")
 total_num_labels = len(labels_frames)
 
 id_shuffled = np.arange(total_num_labels)
