@@ -4,27 +4,31 @@ import glob
 import cv2 as cv
 
 parser = argparse.ArgumentParser()
-parser.add_argument('-i', '--root_dir', type=str, required=True)
+parser.add_argument('-i', '--input', type=str, required=True,
+                    help="Directory of .mp4 files OR a single .mp4 file.")
 parser.add_argument('-o', '--output_dir', type=str, default="test")
 parser.add_argument('-s', '--frame_start', type=int, required=True)
 parser.add_argument('-e', '--frame_end', type=int, required=True)
 
-# list all cameras, and then load videos, and then save out 
+# list all cameras, and then load videos, and then save out
 args = parser.parse_args()
-root_dir = args.root_dir
+input_path = args.input
 output_dir = args.output_dir
-save_dir = os.path.join(root_dir, output_dir)
 frame_start = args.frame_start
 frame_end = args.frame_end
 
-os.makedirs(save_dir, exist_ok=True)   
+if os.path.isfile(input_path):
+    root_dir = os.path.dirname(input_path) or "."
+    cam_names = [os.path.splitext(os.path.basename(input_path))[0]]
+else:
+    root_dir = input_path
+    cam_names = sorted(
+        os.path.splitext(os.path.basename(f))[0]
+        for f in glob.glob(os.path.join(root_dir, "*.mp4"))
+    )
 
-# list all camera videos
-cam_names = []
-for file in glob.glob(root_dir + "/*.mp4"):
-    file_name = file.split("/")
-    cam_names.append(file_name[-1][:-4])
-cam_names.sort() 
+save_dir = os.path.join(root_dir, output_dir)
+os.makedirs(save_dir, exist_ok=True)
 
 for i, cam in enumerate(cam_names):
     print(i)
