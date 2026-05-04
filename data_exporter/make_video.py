@@ -35,6 +35,11 @@ parser.add_argument("--video_folder", type=str, default=None,
                     help="Override the media_folder from project.redproj.")
 parser.add_argument("--point_radius", type=int, default=4)
 parser.add_argument("--line_thickness", type=int, default=2)
+parser.add_argument("--alpha", type=float, default=1.0,
+                    help="Contrast multiplier (1.0 = unchanged, 1.5 = brighter+punchier).")
+parser.add_argument("--beta", type=float, default=0.0,
+                    help="Brightness offset added to every pixel "
+                    "(0 = unchanged, ~20 for slight lift).")
 args = parser.parse_args()
 
 
@@ -120,6 +125,8 @@ for cam in cams:
         ret, frame = cap.read()
         if not ret or frame is None:
             break
+        if args.alpha != 1.0 or args.beta != 0.0:
+            frame = cv.convertScaleAbs(frame, alpha=args.alpha, beta=args.beta)
         kps = labels.get(frame_number)
         if kps is not None:
             for i, pt in enumerate(kps):
