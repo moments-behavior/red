@@ -35,6 +35,9 @@ parser.add_argument("--video_folder", type=str, default=None,
                     help="Override the media_folder from project.redproj.")
 parser.add_argument("--point_radius", type=int, default=4)
 parser.add_argument("--line_thickness", type=int, default=2)
+parser.add_argument("--slowdown", type=float, default=1.0,
+                    help="Playback slowdown factor. 3 = 3x slower (output fps "
+                    "= source fps / 3). Same frames written, just at lower fps.")
 parser.add_argument("--alpha", type=float, default=1.0,
                     help="Contrast multiplier (1.0 = unchanged, 1.5 = brighter+punchier).")
 parser.add_argument("--beta", type=float, default=0.0,
@@ -115,8 +118,9 @@ for cam in cams:
     end = total - 1 if args.frame_end < 0 else args.frame_end
     start = max(0, args.frame_start)
     out_path = os.path.join(out_dir, f"{cam}_f{start}-{end}_overlay.mp4")
+    out_fps = fps / args.slowdown
     writer = cv.VideoWriter(
-        out_path, cv.VideoWriter_fourcc(*"avc1"), fps, (w, h)
+        out_path, cv.VideoWriter_fourcc(*"avc1"), out_fps, (w, h)
     )
 
     cap.set(cv.CAP_PROP_POS_FRAMES, start)
