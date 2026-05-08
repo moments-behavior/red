@@ -3,8 +3,8 @@
 #if !defined(__APPLE__)
 #include "AppDecUtils.h"
 #endif
+#include "../lib/ImGuiFileDialog/stb/stb_image.h"  // all platforms: PNG/non-JPEG fallback
 #if defined(__APPLE__) || defined(_WIN32)
-#include "../lib/ImGuiFileDialog/stb/stb_image.h"
 #include <turbojpeg.h>
 #endif
 

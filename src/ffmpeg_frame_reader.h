@@ -12,10 +12,19 @@ extern "C" {
 }
 
 #include <cstdint>
+#include <mutex>
 #include <string>
-#include <vector>
 
 namespace ffmpeg_reader {
+
+// Serializes avformat_open_input / find_stream_info / avcodec_open2 across
+// threads. Some FFmpeg builds (notably the custom NVDEC build at
+// $HOME/nvidia/ffmpeg) can race during these calls; the cost is microseconds
+// per video open, well worth the hedge.
+inline std::mutex &ffmpeg_open_mutex() {
+    static std::mutex m;
+    return m;
+}
 
 // ---------------------------------------------------------------------------
 // FrameReader — open a video, seek to frames, decode to RGB24
@@ -31,6 +40,8 @@ class FrameReader {
 
     bool open(const std::string &path, bool use_hw_accel = true) {
         close();
+
+        std::lock_guard<std::mutex> open_lock(ffmpeg_open_mutex());
 
         fmt_ctx_ = avformat_alloc_context();
         if (!fmt_ctx_) return false;
@@ -89,12 +100,23 @@ class FrameReader {
         rgb_frame_ = av_frame_alloc();
         pkt_ = av_packet_alloc();
 
-        // Allocate RGB buffer
+        // Allocate RGB buffer via av_malloc (32-byte aligned base, matches
+        // sws_scale's AVX2 expectations). Keep rows contiguous (align=1) so
+        // callers can index the buffer as a flat width*height*3 array.
+        // sws_scale in some FFmpeg builds (notably the custom NVDEC build at
+        // $HOME/nvidia/ffmpeg) writes a few SIMD-sized bytes past the last
+        // row; the +1024-byte tail keeps the overflow inside our allocation
+        // instead of clobbering the next heap block's metadata.
+        const int kTailPad = 1024;
         int rgb_size =
             av_image_get_buffer_size(AV_PIX_FMT_RGB24, width_, height_, 1);
-        rgb_buffer_.resize(rgb_size);
+        rgb_buffer_ = (uint8_t *)av_malloc(rgb_size + kTailPad);
+        if (!rgb_buffer_) {
+            close();
+            return false;
+        }
         av_image_fill_arrays(rgb_frame_->data, rgb_frame_->linesize,
-                             rgb_buffer_.data(), AV_PIX_FMT_RGB24, width_,
+                             rgb_buffer_, AV_PIX_FMT_RGB24, width_,
                              height_, 1);
 
         opened_ = true;
@@ -134,12 +156,16 @@ class FrameReader {
             av_buffer_unref(&hw_device_ctx_);
             hw_device_ctx_ = nullptr;
         }
-        rgb_buffer_.clear();
+        if (rgb_buffer_) {
+            av_free(rgb_buffer_);
+            rgb_buffer_ = nullptr;
+        }
         opened_ = false;
         hw_enabled_ = false;
         current_frame_ = -1;
         sws_src_fmt_ = AV_PIX_FMT_NONE;
     }
+
 
     // Seek to a specific frame number and decode it.
     // Returns pointer to RGB24 data (width * height * 3), or nullptr on failure.
@@ -203,7 +229,7 @@ class FrameReader {
                     if (!convertToRGB())
                         return nullptr;
                     current_frame_ = decoded_frame;
-                    return rgb_buffer_.data();
+                    return rgb_buffer_;
                 }
             }
         }
@@ -288,7 +314,7 @@ class FrameReader {
     AVFrame *sw_frame_ = nullptr; // for HW→CPU transfer
     AVFrame *rgb_frame_ = nullptr;
     AVPacket *pkt_ = nullptr;
-    std::vector<uint8_t> rgb_buffer_;
+    uint8_t *rgb_buffer_ = nullptr;
     int video_stream_ = -1;
     int width_ = 0, height_ = 0;
     double fps_ = 0.0;

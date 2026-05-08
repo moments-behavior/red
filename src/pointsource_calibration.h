@@ -15,8 +15,8 @@
 #include <CoreVideo/CoreVideo.h>
 #else
 #include "ffmpeg_frame_reader.h"  // FFmpeg + swscale fallback (Linux/Windows)
-#if defined(_WIN32) && defined(USE_CUDA_POINTSOURCE)
-#include "pointsource_cuda.h"    // GPU-accelerated light spot detection (Windows)
+#if (defined(_WIN32) || defined(__linux__)) && defined(USE_CUDA_POINTSOURCE)
+#include "pointsource_cuda.h"    // GPU-accelerated light spot detection (Windows/Linux)
 #endif
 #endif
 

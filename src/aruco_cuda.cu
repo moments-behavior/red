@@ -1,4 +1,4 @@
-#ifdef _WIN32
+#if defined(_WIN32) || defined(__linux__)
 
 #include "aruco_cuda.h"
 #include <cuda_runtime.h>
@@ -325,4 +325,4 @@ void aruco_cuda_destroy(ArucoCudaHandle ctx) {
     delete ctx;
 }
 
-#endif // _WIN32
+#endif // _WIN32 || __linux__

@@ -20,6 +20,9 @@
 #include <turbojpeg.h>
 #include "ffmpeg_frame_reader.h"
 #include "aruco_cuda.h"
+#elif defined(__linux__)
+#include "ffmpeg_frame_reader.h"
+#include "aruco_cuda.h"
 #else
 #include "ffmpeg_frame_reader.h"
 #endif

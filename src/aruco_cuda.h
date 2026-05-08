@@ -1,5 +1,5 @@
 #pragma once
-#ifdef _WIN32
+#if defined(_WIN32) || defined(__linux__)
 
 #include <cstdint>
 #include <cstdio>
@@ -36,4 +36,4 @@ void aruco_cuda_threshold_batch(
 // Destroy CUDA state and free all GPU resources.
 void aruco_cuda_destroy(ArucoCudaHandle ctx);
 
-#endif // _WIN32
+#endif // _WIN32 || __linux__
