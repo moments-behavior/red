@@ -157,8 +157,17 @@ inline void DrawCalibArucoSection(CalibrationToolState &state, AppContext &ctx,
                                         pm.camera_names.push_back("Cam" + cn);
                                     cb.load_videos();
                                     cb.print_metadata();
-                                    state.aruco_total_frames =
-                                        dc_context->estimated_num_frames;
+                                    // Only fall back to the decoder-thread
+                                    // estimate if get_video_frame_count (set
+                                    // earlier in the auto-detect block) didn't
+                                    // resolve a count. estimated_num_frames is
+                                    // populated asynchronously inside the
+                                    // NVDEC Run() loop, so it is often 0 here
+                                    // — clobbering the FFmpeg-direct count
+                                    // would zero out progress-bar denominators.
+                                    int est = dc_context->estimated_num_frames;
+                                    if (est > 0 && state.aruco_total_frames <= 0)
+                                        state.aruco_total_frames = est;
                                     state.aruco_media_loaded = true;
                                     state.status =
                                         "Loaded " +
