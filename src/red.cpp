@@ -64,7 +64,7 @@
 #ifdef __APPLE__
 #include "aruco_metal.h"
 #include "pointsource_metal.h"
-#elif defined(_WIN32)
+#elif defined(_WIN32) || defined(__linux__)
 #include "aruco_cuda.h"
 #if defined(USE_CUDA_POINTSOURCE)
 #include "pointsource_cuda.h"
@@ -876,8 +876,8 @@ int main(int argc, char **argv) {
                         });
                 }
             }
-#elif defined(_WIN32) && defined(USE_CUDA_POINTSOURCE)
-            // --- Windows: Laser detection viz dispatch (CUDA) ---
+#elif (defined(_WIN32) || defined(__linux__)) && defined(USE_CUDA_POINTSOURCE)
+            // --- Windows/Linux: Laser detection viz dispatch (CUDA) ---
             if (win.calibration.pointsource_show_detection && win.calibration.pointsource_ready) {
                 auto &lv = win.calibration.pointsource_viz;
                 auto &lc = win.calibration.pointsource_config;
@@ -1456,6 +1456,7 @@ int main(int argc, char **argv) {
 #elif defined(_WIN32)
             jarvis_any_loaded = jarvis_any_loaded || jarvis_trt_state.loaded;
 #endif
+            // Linux: only jarvis_state (ONNX Runtime) — already counted
             if (jarvis_predict_trigger && !ps.play_video &&
                 jarvis_any_loaded && scene->num_cams > 0) {
 #ifdef __APPLE__
@@ -1555,8 +1556,9 @@ int main(int argc, char **argv) {
                         win.jarvis_predict.confidence_threshold);
                     printf("[JARVIS ONNX] %s\n", jarvis_state.status.c_str());
                 }
-#elif defined(_WIN32)
-                // Windows: TensorRT (GPU) preferred, ONNX (CPU) fallback
+#elif defined(_WIN32) || defined(__linux__)
+                // Windows: TensorRT (GPU) preferred, ONNX (GPU/CPU) fallback
+                // Linux: ONNX Runtime only (TensorRT isolated to orange toolchain)
                 int mh = ps.play_video ? ps.read_head : select_corr_head;
                 std::vector<int> widths(scene->num_cams), heights(scene->num_cams);
                 for (int c = 0; c < (int)scene->num_cams; ++c) {
@@ -1596,6 +1598,7 @@ int main(int argc, char **argv) {
                     rgb_bufs[c] = rgb_storage[c].data();
                 }
 
+#ifdef _WIN32
                 if (jarvis_trt_state.loaded) {
                     jarvis_tensorrt_predict_frame(jarvis_trt_state, annotations,
                         (u32)current_frame_num, rgb_bufs, widths, heights,
@@ -1605,7 +1608,9 @@ int main(int argc, char **argv) {
                         reprojection(annotations.at(current_frame_num),
                                      &skeleton, pm.camera_params, scene);
                     printf("[JARVIS TensorRT] %s\n", jarvis_trt_state.status.c_str());
-                } else if (jarvis_state.loaded) {
+                } else
+#endif
+                if (jarvis_state.loaded) {
                     jarvis_predict_frame(jarvis_state, annotations,
                         (u32)current_frame_num, rgb_bufs, widths, heights,
                         skeleton, pm.camera_params, scene,
@@ -1703,7 +1708,7 @@ int main(int argc, char **argv) {
                         // Process all target frames in this chunk in a tight
                         // loop (no Metal render between them). This avoids
                         // IOSurface lock contention from Metal viewport blits.
-#if defined(__APPLE__) || defined(_WIN32)
+#if defined(__APPLE__) || defined(_WIN32) || defined(__linux__)
                         int nc_pred = (int)scene->num_cams;
                         std::vector<int> w_b(nc_pred), h_b(nc_pred);
                         for (int c = 0; c < nc_pred; ++c) {
@@ -1761,8 +1766,14 @@ int main(int argc, char **argv) {
                                 printf("[Batch] Frame %u (slot %d): %.0f ms  [%d/%d]\n",
                                        frame, slot, jarvis_coreml_state.last_total_ms,
                                        bp.batch_completed, bp.batch_total);
-#elif defined(_WIN32)
-                                if (jarvis_trt_state.loaded || jarvis_state.loaded) {
+#elif defined(_WIN32) || defined(__linux__)
+                                {
+#ifdef _WIN32
+                                    const bool trt_loaded = jarvis_trt_state.loaded;
+#else
+                                    const bool trt_loaded = false;
+#endif
+                                if (trt_loaded || jarvis_state.loaded) {
                                     auto tp0 = std::chrono::steady_clock::now();
                                     // Extract RGB from RGBA GPU frame buffers
                                     std::vector<const uint8_t *> rgb_bufs(nc_pred, nullptr);
@@ -1781,11 +1792,14 @@ int main(int argc, char **argv) {
                                         }
                                         rgb_bufs[c] = rgb_storage[c].data();
                                     }
-                                    if (jarvis_trt_state.loaded) {
+#ifdef _WIN32
+                                    if (trt_loaded) {
                                         jarvis_tensorrt_predict_frame(jarvis_trt_state,
                                             annotations, frame, rgb_bufs, w_b, h_b,
                                             skeleton, nc_pred, bp.confidence_threshold);
-                                    } else {
+                                    } else
+#endif
+                                    {
                                         jarvis_predict_frame(jarvis_state, annotations,
                                             frame, rgb_bufs, w_b, h_b,
                                             skeleton, pm.camera_params, scene,
@@ -1797,11 +1811,16 @@ int main(int argc, char **argv) {
                                     auto tp1 = std::chrono::steady_clock::now();
                                     bp.batch_predict_ms += std::chrono::duration<float, std::milli>(tp1 - tp0).count();
                                     bp.batch_completed++;
-                                    float last_ms = jarvis_trt_state.loaded ?
+#ifdef _WIN32
+                                    float last_ms = trt_loaded ?
                                         jarvis_trt_state.last_total_ms : jarvis_state.last_total_ms;
+#else
+                                    float last_ms = jarvis_state.last_total_ms;
+#endif
                                     printf("[Batch] Frame %u (slot %d): %.0f ms  [%d/%d]\n",
                                            frame, slot, last_ms,
                                            bp.batch_completed, bp.batch_total);
+                                }
                                 }
 #else
                                 bp.batch_completed++;

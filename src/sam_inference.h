@@ -319,7 +319,7 @@ inline bool sam_init(SamState &s, SamModel model_type,
         } catch (...) {
             s.status = "CoreML unavailable, using CPU...";
         }
-#elif defined(_WIN32)
+#elif defined(_WIN32) || defined(__linux__)
         // Try CUDA EP for GPU acceleration, fall back to CPU
         try {
             OrtCUDAProviderOptions cuda_opts{};

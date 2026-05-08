@@ -4,7 +4,7 @@
 #include "calibration_pipeline.h"
 #ifdef __APPLE__
 #include "aruco_metal.h"
-#elif defined(_WIN32)
+#elif defined(_WIN32) || defined(__linux__)
 #include "aruco_cuda.h"
 #endif
 #include "imgui.h"
@@ -418,7 +418,7 @@ inline void DrawCalibArucoSection(CalibrationToolState &state, AppContext &ctx,
                                     &vfr, gfn, am, prog.get());
                                 aruco_metal_destroy(am);
                                 return r;
-#elif defined(_WIN32)
+#elif defined(_WIN32) || defined(__linux__)
                                 auto ac = aruco_cuda_create();
                                 aruco_detect::GpuThresholdFunc gfn =
                                     ac ? aruco_cuda_threshold_batch : nullptr;
@@ -448,7 +448,7 @@ inline void DrawCalibArucoSection(CalibrationToolState &state, AppContext &ctx,
                                     nullptr, gfn, am, prog.get());
                                 aruco_metal_destroy(am);
                                 return r;
-#elif defined(_WIN32)
+#elif defined(_WIN32) || defined(__linux__)
                                 auto ac = aruco_cuda_create();
                                 aruco_detect::GpuThresholdFunc gfn =
                                     ac ? aruco_cuda_threshold_batch : nullptr;

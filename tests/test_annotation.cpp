@@ -48,7 +48,7 @@ static std::string test_tmp_prefix() {
     if (!tmp.empty() && tmp.back() != '/') tmp += '/';
     return tmp;
 #else
-    return test_tmp_prefix() + "";
+    return "/tmp/";
 #endif
 }
 

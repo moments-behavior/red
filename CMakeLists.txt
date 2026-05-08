@@ -1639,92 +1639,259 @@ elseif(WIN32)
     target_link_options(test_annotation PRIVATE /STACK:67108864)
 
 else()
-    # Linux build with NVIDIA CUDA support
+    # ────────────────────────────────────────────────────────────────────────
+    # Linux build with NVIDIA CUDA + NVDEC
+    #
+    # Coexists with the orange app (same machine): uses the same CUDA 12.2
+    # at /usr/local/cuda, the same custom FFmpeg at $HOME/nvidia/ffmpeg, and
+    # the same driver 535.x. Orange's toolchain is UNTOUCHED — red just
+    # links read-only against those shared installs. ML inference libs
+    # (ONNX Runtime, cuDNN) are bundled in red/lib/ with RPATH isolation so
+    # they cannot collide with orange's TensorRT 8.6 / cuDNN 8.9.
+    # No OpenCV, no LibTorch, no TensorRT.
+    # ────────────────────────────────────────────────────────────────────────
     project(red LANGUAGES CXX CUDA)
 
-    # Set CUDA architecture and options
-    set(CMAKE_CUDA_ARCHITECTURES 80)
+    # CUDA arch: 86 = A16 (Ampere), 89 = RTX 4000 Ada. Override with
+    # -DCMAKE_CUDA_ARCHITECTURES=... on the cmake command line if needed.
+    if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+        set(CMAKE_CUDA_ARCHITECTURES 86 89)
+    endif()
+    set(CMAKE_CXX_STANDARD 17)
+    set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-    add_compile_options(-msse4.1)
+    # System packages (apt / distro)
+    find_package(Eigen3 REQUIRED)
+    # Find the GTest install that ships GMock (/usr/local) before Ceres —
+    # Ceres → absl's config requires the GTest::gmock imported target.
+    # The apt libgtest-dev at /usr/lib/x86_64-linux-gnu ships gtest only.
+    find_package(GTest REQUIRED CONFIG
+        HINTS /usr/local/lib/cmake/GTest
+        NO_CMAKE_SYSTEM_PATH)
+    find_package(Ceres REQUIRED)
+    find_package(OpenGL REQUIRED)
+    find_package(glfw3 REQUIRED)
+    find_package(GLEW REQUIRED)
+    find_package(Threads REQUIRED)
+    find_package(CUDAToolkit REQUIRED)
+    find_package(PkgConfig REQUIRED)
 
-    # Set Directories
+    # FFmpeg via pkg-config — prefer the custom CUDA-enabled build at
+    # $HOME/nvidia/ffmpeg (shared with orange) over any system FFmpeg.
+    set(RED_FFMPEG_PKGCONFIG "$ENV{HOME}/nvidia/ffmpeg/build/lib/pkgconfig")
+    if(EXISTS "${RED_FFMPEG_PKGCONFIG}")
+        set(ENV{PKG_CONFIG_PATH} "${RED_FFMPEG_PKGCONFIG}:$ENV{PKG_CONFIG_PATH}")
+        message(STATUS "Using custom FFmpeg from ${RED_FFMPEG_PKGCONFIG}")
+    endif()
+    pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET
+        libavcodec libavformat libavutil libswscale)
+
+    # Bundled third-party sources
     set(DIR_IMGUI "${CMAKE_SOURCE_DIR}/lib/imgui")
     set(DIR_IMPLOT "${CMAKE_SOURCE_DIR}/lib/implot")
-    set(DIR_FFMPEG "$ENV{HOME}/nvidia/ffmpeg/build")
-    set(DIR_TENSORRT "$ENV{HOME}/nvidia/TensorRT-8.6.1.6")
+    set(DIR_IMPLOT3D "${CMAKE_SOURCE_DIR}/lib/implot3d")
     set(DIR_FILEBROWSER "${CMAKE_SOURCE_DIR}/lib/ImGuiFileDialog")
     set(DIR_ICONFONT "${CMAKE_SOURCE_DIR}/lib/IconFontCppHeaders")
+    set(DIR_NVCODEC "${CMAKE_SOURCE_DIR}/lib/nvcodec")
 
-    # Added for LibTorch
-    set(DIR_LIBTORCH "${CMAKE_SOURCE_DIR}/lib/libtorch")
-    set(LIBTORCH_INCLUDE "${DIR_LIBTORCH}/include")
-    set(LIBTORCH_INCLUDE_API "${DIR_LIBTORCH}/include/torch/csrc/api/include")
-    set(LIBTORCH_LIB "${DIR_LIBTORCH}/lib")
-
-    # Source Files
+    # Source files (mirrors Windows — uses patched GLFW backend from src/)
     file(GLOB SRC_FILES src/*.cpp)
+
     file(GLOB IMGUI_SRC
         ${DIR_IMGUI}/*.cpp
-        ${CMAKE_SOURCE_DIR}/src/imgui_impl_glfw_patched.cpp  # patched: macOS modifier key fix
+        # Patched GLFW backend picked up via src/*.cpp glob
         ${DIR_IMGUI}/backends/imgui_impl_opengl3.cpp
         ${DIR_IMGUI}/misc/cpp/imgui_stdlib.cpp
         ${DIR_FILEBROWSER}/ImGuiFileDialog.cpp
     )
     file(GLOB IMPLOT_SRC ${DIR_IMPLOT}/*.cpp)
+    file(GLOB IMPLOT3D_SRC ${DIR_IMPLOT3D}/*.cpp)
+    list(REMOVE_ITEM IMPLOT3D_SRC "${DIR_IMPLOT3D}/implot3d_demo.cpp")
 
-    # CUDA Source Files
     set(CUDA_SRC_FILES
         src/create_image_cuda.cu
         src/ColorSpace.cu
         src/kernel.cu
+        src/aruco_cuda.cu
+        src/pointsource_cuda.cu
     )
 
-    # Main Executable
     add_executable(red
         ${SRC_FILES}
         ${IMGUI_SRC}
         ${IMPLOT_SRC}
+        ${IMPLOT3D_SRC}
         ${CUDA_SRC_FILES}
     )
 
-    # Include Directories
+    # Optional ONNX Runtime (GPU, CUDA EP) bundled at lib/onnxruntime/
+    set(ONNXRUNTIME_DIR "${CMAKE_SOURCE_DIR}/lib/onnxruntime")
+    if(EXISTS "${ONNXRUNTIME_DIR}/include/onnxruntime_cxx_api.h")
+        set(HAS_ONNXRUNTIME TRUE)
+        message(STATUS "ONNX Runtime found at ${ONNXRUNTIME_DIR}")
+    else()
+        set(HAS_ONNXRUNTIME FALSE)
+        message(STATUS "ONNX Runtime not found in lib/onnxruntime/ — JARVIS prediction disabled")
+    endif()
+
+    # Optional MuJoCo for body-model IK (bundled at lib/mujoco/)
+    set(MUJOCO_DIR "${CMAKE_SOURCE_DIR}/lib/mujoco")
+    if(EXISTS "${MUJOCO_DIR}/include/mujoco/mujoco.h")
+        set(HAS_MUJOCO TRUE)
+        set(MUJOCO_INCLUDE_DIR "${MUJOCO_DIR}/include/mujoco")
+        message(STATUS "MuJoCo found at ${MUJOCO_DIR} (standard layout)")
+    elseif(EXISTS "${MUJOCO_DIR}/include/mujoco.h")
+        set(HAS_MUJOCO TRUE)
+        set(MUJOCO_INCLUDE_DIR "${MUJOCO_DIR}/include")
+        message(STATUS "MuJoCo found at ${MUJOCO_DIR} (flat layout)")
+    else()
+        set(HAS_MUJOCO FALSE)
+        message(STATUS "MuJoCo not found in lib/mujoco/ — body model IK disabled")
+    endif()
+
+    target_compile_definitions(red PRIVATE USE_CUDA_POINTSOURCE)
+    if(HAS_ONNXRUNTIME)
+        target_compile_definitions(red PRIVATE RED_HAS_ONNXRUNTIME)
+    endif()
+    if(HAS_MUJOCO)
+        target_compile_definitions(red PRIVATE RED_HAS_MUJOCO)
+    endif()
+
     target_include_directories(red PRIVATE
-            ${SRC_DIR}
+        ${CMAKE_SOURCE_DIR}/src
+        ${DIR_IMGUI}
+        ${DIR_IMGUI}/backends
+        ${DIR_IMPLOT}
+        ${DIR_IMPLOT3D}
+        ${DIR_FILEBROWSER}
+        ${DIR_ICONFONT}
+        ${DIR_NVCODEC}
+    )
+    if(HAS_ONNXRUNTIME)
+        target_include_directories(red PRIVATE "${ONNXRUNTIME_DIR}/include")
+    endif()
+    if(HAS_MUJOCO)
+        target_include_directories(red PRIVATE "${MUJOCO_DIR}/include" "${MUJOCO_DIR}/include/mujoco")
+    endif()
+
+    # Link libraries
+    target_link_libraries(red PRIVATE
+        Eigen3::Eigen
+        Ceres::ceres
+        glfw
+        GLEW::GLEW
+        OpenGL::GL
+        PkgConfig::FFMPEG
+        # CUDA runtime + NPP (imaging primitives)
+        CUDA::cudart
+        CUDA::cuda_driver
+        CUDA::nppc
+        CUDA::nppicc
+        CUDA::nppidei
+        CUDA::nppig
+        CUDA::nppial
+        # NVDEC (driver-provided: libnvcuvid.so from /usr/lib/x86_64-linux-gnu)
+        nvcuvid
+        # cblas: used by descriptor_matcher.h on non-Windows/non-Mac
+        cblas
+        Threads::Threads
+        ${CMAKE_DL_LIBS}
+    )
+
+    if(HAS_ONNXRUNTIME)
+        target_link_libraries(red PRIVATE "${ONNXRUNTIME_DIR}/lib/libonnxruntime.so")
+    endif()
+    if(HAS_MUJOCO)
+        target_link_libraries(red PRIVATE "${MUJOCO_DIR}/lib/libmujoco.so")
+    endif()
+
+    # RPATH: isolate bundled ML libs from system / orange's toolchain.
+    # $ORIGIN so the installed binary finds them relative to itself; build
+    # rpath points at the absolute bundle paths for running from build/.
+    set(RED_RPATH_BUILD "")
+    set(RED_RPATH_INSTALL "$ORIGIN")
+    if(HAS_ONNXRUNTIME)
+        list(APPEND RED_RPATH_BUILD "${ONNXRUNTIME_DIR}/lib")
+        list(APPEND RED_RPATH_INSTALL "$ORIGIN/../lib/onnxruntime/lib")
+    endif()
+    # cuDNN 9 for ONNX Runtime CUDA EP (bundled, never system-installed)
+    set(CUDNN_DIR "${CMAKE_SOURCE_DIR}/lib/cudnn")
+    if(EXISTS "${CUDNN_DIR}/lib")
+        list(APPEND RED_RPATH_BUILD "${CUDNN_DIR}/lib")
+        list(APPEND RED_RPATH_INSTALL "$ORIGIN/../lib/cudnn/lib")
+    endif()
+    if(HAS_MUJOCO)
+        list(APPEND RED_RPATH_BUILD "${MUJOCO_DIR}/lib")
+        list(APPEND RED_RPATH_INSTALL "$ORIGIN/../lib/mujoco/lib")
+    endif()
+
+    set_target_properties(red PROPERTIES
+        CXX_STANDARD 17
+        CXX_STANDARD_REQUIRED ON
+        BUILD_RPATH "${RED_RPATH_BUILD}"
+        INSTALL_RPATH "${RED_RPATH_INSTALL}"
+    )
+
+    # ── Test targets (same deps as red, replacing red.cpp) ──────────────────
+    set(TEST_GUI_SRC_FILES ${SRC_FILES})
+    list(REMOVE_ITEM TEST_GUI_SRC_FILES "${CMAKE_SOURCE_DIR}/src/red.cpp")
+
+    foreach(TEST_NAME test_gui test_annotation)
+        add_executable(${TEST_NAME}
+            ${TEST_GUI_SRC_FILES}
+            ${IMGUI_SRC}
+            ${IMPLOT_SRC}
+            ${IMPLOT3D_SRC}
+            ${CUDA_SRC_FILES}
+            tests/${TEST_NAME}.cpp
+        )
+        target_compile_definitions(${TEST_NAME} PRIVATE USE_CUDA_POINTSOURCE)
+        target_include_directories(${TEST_NAME} PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
             ${DIR_IMGUI}
             ${DIR_IMGUI}/backends
             ${DIR_IMPLOT}
-            lib/nvcodec
-            lib/IconFontCppHeaders
-            lib/ImGuiFileDialog
-            /usr/local/include/opencv4
-            ${DIR_FFMPEG}/include
-            ${DIR_TENSORRT}/include
-            /usr/local/cuda/include
-            ${LIBTORCH_INCLUDE}
-            ${LIBTORCH_INCLUDE_API}
-    )
-
-    # Link Libraries
-    target_link_libraries(red PRIVATE
-        ${OpenCV_LIBS}
-        ${CUDA_LIBRARIES}
-        ${CMAKE_THREAD_LIBS_INIT}
-        ${OPENGL_LIBRARIES}
-        glfw
-        GLEW GLU GL
-        pthread
-        -L/usr/local/cuda/lib64/ -lcudart -lcuda -lnvcuvid -lnppicc -lnppidei -lnvidia-encode -lnppc -lnppig -lnppial
-        -L${DIR_FFMPEG}/lib/ -lavformat -lavutil -lavcodec
-        -lopencv_sfm -lopencv_core -lopencv_bgsegm -lopencv_imgcodecs -lopencv_imgproc -lopencv_video -lopencv_highgui -lopencv_videoio -lopencv_calib3d -lopencv_dnn
-        -L${DIR_TENSORRT}/lib/ -lnvinfer -lnvinfer_plugin
-        -L${LIBTORCH_LIB} -ltorch -lc10 -ltorch_cpu
-    )
-
-    # Set RPATH so runtime finds libtorch
-    set_target_properties(red PROPERTIES
-        BUILD_RPATH ${LIBTORCH_LIB}
-        INSTALL_RPATH ${LIBTORCH_LIB}
-    )
+            ${DIR_IMPLOT3D}
+            ${DIR_FILEBROWSER}
+            ${DIR_ICONFONT}
+            ${DIR_NVCODEC}
+        )
+        target_link_libraries(${TEST_NAME} PRIVATE
+            Eigen3::Eigen
+            Ceres::ceres
+            glfw
+            GLEW::GLEW
+            OpenGL::GL
+            PkgConfig::FFMPEG
+            CUDA::cudart
+            CUDA::cuda_driver
+            CUDA::nppc
+            CUDA::nppicc
+            CUDA::nppidei
+            CUDA::nppig
+            CUDA::nppial
+            nvcuvid
+            cblas
+            Threads::Threads
+            ${CMAKE_DL_LIBS}
+        )
+        if(HAS_ONNXRUNTIME)
+            target_compile_definitions(${TEST_NAME} PRIVATE RED_HAS_ONNXRUNTIME)
+            target_include_directories(${TEST_NAME} PRIVATE "${ONNXRUNTIME_DIR}/include")
+            target_link_libraries(${TEST_NAME} PRIVATE "${ONNXRUNTIME_DIR}/lib/libonnxruntime.so")
+        endif()
+        if(HAS_MUJOCO)
+            target_compile_definitions(${TEST_NAME} PRIVATE RED_HAS_MUJOCO)
+            target_include_directories(${TEST_NAME} PRIVATE "${MUJOCO_DIR}/include" "${MUJOCO_DIR}/include/mujoco")
+            target_link_libraries(${TEST_NAME} PRIVATE "${MUJOCO_DIR}/lib/libmujoco.so")
+        endif()
+        set_target_properties(${TEST_NAME} PROPERTIES
+            CXX_STANDARD 17
+            CXX_STANDARD_REQUIRED ON
+            BUILD_RPATH "${RED_RPATH_BUILD}"
+            INSTALL_RPATH "${RED_RPATH_INSTALL}"
+        )
+    endforeach()
 
 endif()
 

@@ -1,5 +1,5 @@
 #pragma once
-#if defined(_WIN32) && defined(USE_CUDA_POINTSOURCE)
+#if (defined(_WIN32) || defined(__linux__)) && defined(USE_CUDA_POINTSOURCE)
 
 #include <cstdint>
 
@@ -53,4 +53,4 @@ PointSourceCudaVizResult pointsource_cuda_detect_viz(
 // Destroy CUDA state and free all GPU allocations.
 void pointsource_cuda_destroy(PointSourceCudaHandle ctx);
 
-#endif // _WIN32 && USE_CUDA_POINTSOURCE
+#endif // (_WIN32 || __linux__) && USE_CUDA_POINTSOURCE

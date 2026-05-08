@@ -161,7 +161,7 @@ inline bool jarvis_init(JarvisState &s, const char *center_onnx,
 
         // Try CUDA execution provider first (GPU), fall back to CPU
         std::string backend = "CPU";
-#ifdef _WIN32
+#if defined(_WIN32) || defined(__linux__)
         try {
             OrtCUDAProviderOptions cuda_opts{};
             cuda_opts.device_id = 0;

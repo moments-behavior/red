@@ -1,4 +1,4 @@
-#if defined(_WIN32) && defined(USE_CUDA_POINTSOURCE)
+#if (defined(_WIN32) || defined(__linux__)) && defined(USE_CUDA_POINTSOURCE)
 
 #include "pointsource_cuda.h"
 #include <cuda_runtime.h>
@@ -620,4 +620,4 @@ void pointsource_cuda_destroy(PointSourceCudaHandle ctx) {
     delete ctx;
 }
 
-#endif // _WIN32 && USE_CUDA_POINTSOURCE
+#endif // (_WIN32 || __linux__) && USE_CUDA_POINTSOURCE
