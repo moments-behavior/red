@@ -175,7 +175,9 @@ int main(int /*argc*/, char ** /*argv*/) {
         std::cout << "  total: " << dt_ms << " ms"
                   << "  (CenterDetect=" << state.last_center_ms
                   << "  effTrack=" << state.last_efftrack_ms
-                  << "  Hybrid3D=" << state.last_hybrid3d_ms << ")\n";
+                  << "  Hybrid3D=" << state.last_hybrid3d_ms << ")"
+                  << "  [center cams used: " << state.last_center_cams_used
+                  << "/" << N << "]\n";
     }
 
     auto it = annotations.find(0u);

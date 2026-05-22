@@ -108,6 +108,9 @@ struct JarvisHybridNetState {
     double last_center_ms = 0.0;
     double last_efftrack_ms = 0.0;
     double last_hybrid3d_ms = 0.0;
+    // Stage-2 diagnostic: number of cameras whose CenterDetect peak passed
+    // the threshold and contributed to the center_3D triangulation.
+    int last_center_cams_used = 0;
 };
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -518,6 +521,7 @@ inline bool jarvis_hybridnet_predict_frame(
         center_2d_undist.push_back(und);
         center_proj_mats.push_back(cp.projection_mat);
     }
+    state.last_center_cams_used = static_cast<int>(center_2d_undist.size());
     if (center_2d_undist.size() < 2) return false;
     Eigen::Vector3d center_3D =
         red_math::triangulatePoints(center_2d_undist, center_proj_mats);
