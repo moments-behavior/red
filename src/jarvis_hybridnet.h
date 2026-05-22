@@ -30,10 +30,12 @@
 #include "json.hpp"
 
 #include <onnxruntime_cxx_api.h>
+#include <cuda_runtime.h>
 
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -442,7 +444,34 @@ inline bool jarvis_hybridnet_predict_frame(
     const int N = state.cfg.num_cameras;
     if ((int)camera_rgb.size() != N || (int)widths.size() != N ||
         (int)heights.size() != N || (int)camera_params.size() != N) {
+        std::fprintf(stderr,
+            "[HybridNet] aborting: expected %d cams, got rgb=%zu widths=%zu heights=%zu params=%zu\n",
+            N, camera_rgb.size(), widths.size(), heights.size(), camera_params.size());
         return false;
+    }
+    // HN requires all N cams to have valid RGB + dims (model's input shape is
+    // fixed). If the caller filtered by visibility (cam_included), nullptr
+    // entries will show up here — refuse rather than crashing later in cuDNN.
+    int n_missing = 0;
+    for (int c = 0; c < N; ++c) {
+        if (!camera_rgb[c] || widths[c] <= 0 || heights[c] <= 0) ++n_missing;
+    }
+    if (n_missing > 0) {
+        std::fprintf(stderr,
+            "[HybridNet] aborting: %d/%d cameras lack valid RGB at this frame "
+            "(check that all camera windows are loaded + visible, or enable "
+            "\"Predict from All\" in the JARVIS panel)\n", n_missing, N);
+        return false;
+    }
+    // Clear any stale CUDA error from red's other GPU work (NVDEC, GL interop).
+    // ORT's CUDA EP otherwise inherits the sticky error and the next kernel
+    // (typically the first Conv) fails with cudaErrorInvalidValue.
+    cudaSetDevice(0);
+    cudaError_t stale = cudaGetLastError();
+    if (stale != cudaSuccess) {
+        std::fprintf(stderr,
+            "[HybridNet] cleared stale CUDA error before inference: %s\n",
+            cudaGetErrorString(stale));
     }
     const int J = state.cfg.num_joints;
     const int C = state.cfg.center_image_size;     // 320
@@ -462,7 +491,7 @@ inline bool jarvis_hybridnet_predict_frame(
             state.center_input.data(), c, C, C,
             state.cfg.dataset_mean, state.cfg.dataset_std);
     }
-    {
+    try {
         std::array<int64_t, 4> in_shape{N, 3, C, C};
         Ort::Value in_tensor = Ort::Value::CreateTensor<float>(
             state.mem_info, state.center_input.data(), state.center_input.size(),
@@ -486,6 +515,9 @@ inline bool jarvis_hybridnet_predict_frame(
                 break;
             }
         }
+    } catch (const std::exception &e) {
+        std::fprintf(stderr, "[HybridNet] CenterDetect ORT Run failed: %s\n", e.what());
+        return false;
     }
     state.last_center_ms = std::chrono::duration<double, std::milli>(clk::now() - t0).count();
 
@@ -553,7 +585,7 @@ inline bool jarvis_hybridnet_predict_frame(
 
     // ── STAGE 4: effTrack 2D heatmaps ────────────────────────────────
     auto t_eff = clk::now();
-    {
+    try {
         std::array<int64_t, 4> in_shape{N, 3, B, B};
         Ort::Value in_tensor = Ort::Value::CreateTensor<float>(
             state.mem_info, state.crop_input.data(), state.crop_input.size(),
@@ -574,6 +606,9 @@ inline bool jarvis_hybridnet_predict_frame(
                 break;
             }
         }
+    } catch (const std::exception &e) {
+        std::fprintf(stderr, "[HybridNet] effTrack ORT Run failed: %s\n", e.what());
+        return false;
     }
     state.last_efftrack_ms = std::chrono::duration<double, std::milli>(clk::now() - t_eff).count();
 
@@ -602,7 +637,7 @@ inline bool jarvis_hybridnet_predict_frame(
 
     // ── STAGE 6: Hybrid3D ─────────────────────────────────────────────
     auto t_h3d = clk::now();
-    {
+    try {
         std::array<int64_t, 5> hm_shape{1, N, J, Hpad, Hpad};
         std::array<int64_t, 3> chm_shape{1, N, 2};
         std::array<int64_t, 2> c3d_shape{1, 3};
@@ -661,6 +696,9 @@ inline bool jarvis_hybridnet_predict_frame(
             }
             (void)shape;
         }
+    } catch (const std::exception &e) {
+        std::fprintf(stderr, "[HybridNet] Hybrid3D ORT Run failed: %s\n", e.what());
+        return false;
     }
     state.last_hybrid3d_ms = std::chrono::duration<double, std::milli>(clk::now() - t_h3d).count();
 

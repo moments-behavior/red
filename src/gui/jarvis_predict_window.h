@@ -80,6 +80,7 @@ struct JarvisPredictState {
     bool cached_has_onnx = false;
     bool cached_has_pth = false;
     bool cached_has_coreml = false;
+    bool cached_has_hybridnet = false;
     std::string cached_center_path, cached_keypoint_path, cached_info_path;
 
     // Relative model path shown in Model Info
@@ -393,6 +394,7 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
             state.cached_has_onnx = false;
             state.cached_has_pth = false;
             state.cached_has_coreml = false;
+            state.cached_has_hybridnet = false;
             state.cached_center_path.clear();
             state.cached_keypoint_path.clear();
             state.cached_info_path.clear();
@@ -467,21 +469,35 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
             state.cached_center_path = center_path;
             state.cached_keypoint_path = keypoint_path;
             state.cached_info_path = info_path;
+
+            // HybridNet 3D: detect presence of hybrid3d.onnx + manifest.json
+            // alongside the 2D ONNXes. Same subdir-or-direct logic as above.
+            auto check_hybridnet = [&](const fs::path &dir) {
+                return fs::exists(dir / "hybrid3d.onnx") &&
+                       fs::exists(dir / "manifest.json");
+            };
+            state.cached_has_hybridnet =
+                check_hybridnet(fs::path(state.models_folder) / "onnx") ||
+                check_hybridnet(fs::path(state.models_folder));
             }
         }
 
         // Use cached detection results
         bool has_pth = state.cached_has_pth;
         bool has_coreml = state.cached_has_coreml;
+        bool has_hybridnet = state.cached_has_hybridnet;
         std::string center_path = state.cached_center_path;
         std::string keypoint_path = state.cached_keypoint_path;
         std::string info_path = state.cached_info_path;
         bool can_load = !center_path.empty() && !keypoint_path.empty();
-        bool can_load_any = can_load || has_coreml;
+        bool can_load_any = can_load || has_coreml || has_hybridnet;
 
         // Show file detection status
         if (!state.models_folder.empty()) {
-            if (can_load && has_coreml) {
+            if (has_hybridnet) {
+                ImGui::TextColored(ImVec4(0.5f, 1, 0.5f, 1),
+                    "Found HybridNet 3D model (CenterDetect + effTrack + Hybrid3D)");
+            } else if (can_load && has_coreml) {
                 ImGui::TextColored(ImVec4(0.5f, 1, 0.5f, 1),
                     "Found ONNX + CoreML models");
             } else if (has_coreml) {

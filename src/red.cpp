@@ -1596,8 +1596,15 @@ int main(int argc, char **argv) {
                     heights[c] = (int)scene->image_height[c];
                 }
 
+                // HybridNet needs all N cams (model has a fixed input shape);
+                // the 2D + DLT path can work on whatever's visible.
+#ifdef RED_HAS_ONNXRUNTIME
+                const bool hn_active = jarvis_hn_state.loaded;
+#else
+                const bool hn_active = false;
+#endif
                 auto cam_included = [&](int c) -> bool {
-                    if (win.jarvis_predict.predict_from_all) return true;
+                    if (hn_active || win.jarvis_predict.predict_from_all) return true;
                     if (c < (int)pm.camera_names.size() &&
                         window_is_visible.count(pm.camera_names[c]) &&
                         window_is_visible[pm.camera_names[c]]) {
