@@ -18,6 +18,7 @@
 #endif
 #include "jarvis_inference.h"
 #include "posetail_infer.h"
+#include "posetail_server_client.h"
 #ifdef __APPLE__
 #include "jarvis_coreml.h"
 #endif
@@ -318,6 +319,7 @@ int main(int argc, char **argv) {
     SamState sam_state;
     JarvisState jarvis_state;
     PosetailState posetail_state;
+    PosetailServerState posetail_server_state;
 #ifdef RED_HAS_MUJOCO
     MujocoContext mujoco_ctx;
 #endif
@@ -1550,6 +1552,31 @@ int main(int argc, char **argv) {
                 }
             }
 
+            // --- PoseTail Server: Probe /info ---
+            // Responds to the "Probe" button in server mode. Updates the
+            // UI-side status string, cached model dims, and a printable
+            // server status.
+            if (win.jarvis_predict.posetail_server_probe_requested) {
+                win.jarvis_predict.posetail_server_probe_requested = false;
+                posetail_server_state.url =
+                    win.jarvis_predict.posetail_server_url;
+                bool ok = posetail_server_probe(posetail_server_state);
+                win.jarvis_predict.posetail_server_status =
+                    posetail_server_state.status;
+                if (ok) {
+                    win.jarvis_predict.posetail_server_n_frames =
+                        posetail_server_state.n_frames;
+                    win.jarvis_predict.posetail_server_image_size =
+                        posetail_server_state.image_size;
+                    win.jarvis_predict.posetail_server_device =
+                        posetail_server_state.device;
+                    win.jarvis_predict.posetail_server_mode_3d =
+                        posetail_server_state.mode_3d;
+                }
+                printf("[PoseTail/server] %s\n",
+                       posetail_server_state.status.c_str());
+            }
+
             // --- PoseTail: Load model ---
             if (win.jarvis_predict.posetail_load_requested) {
                 win.jarvis_predict.posetail_load_requested = false;
@@ -1607,8 +1634,184 @@ int main(int argc, char **argv) {
                 }
             }
 
+            // --- PoseTail Server: Forward predict 1 chunk (16 frames) ---
+            // In server mode: send all cameras × 16 frames over HTTP, write
+            // the 15 future-frame predictions back into the annotation buffer
+            // (frames current+1 .. current+15). Identical bookkeeping to the
+            // local path, just no chunk chaining and no GPU/ONNX.
+            if (win.jarvis_predict.posetail_use_server &&
+                win.jarvis_predict.posetail_forward_requested) {
+                win.jarvis_predict.posetail_forward_requested = false;
+                if (!annotations.count(current_frame_num)) {
+                    printf("[PoseTail/server] Current frame has no annotation "
+                           "— run Predict + Triangulate first\n");
+                } else if (pm.camera_params.empty()) {
+                    printf("[PoseTail/server] No camera_params loaded\n");
+                } else {
+                    posetail_server_state.url =
+                        win.jarvis_predict.posetail_server_url;
+
+                    // Build seed 3D from current frame's triangulated kp3d
+                    // (same logic as local path).
+                    auto &fa_cur = annotations.at(current_frame_num);
+                    std::vector<Eigen::Vector3d> seed;
+                    std::vector<int> seed_node_idx;
+                    for (int k = 0; k < (int)fa_cur.kp3d.size() &&
+                                    k < skeleton.num_nodes; ++k) {
+                        if (!fa_cur.kp3d[k].triangulated) continue;
+                        seed.emplace_back(fa_cur.kp3d[k].x, fa_cur.kp3d[k].y,
+                                          fa_cur.kp3d[k].z);
+                        seed_node_idx.push_back(k);
+                    }
+                    if (seed.empty()) {
+                        printf("[PoseTail/server] No triangulated keypoints "
+                               "on current frame — run Triangulate first\n");
+                    } else {
+                        int num_cams = (int)scene->num_cams;
+                        std::vector<int> widths(num_cams), heights(num_cams);
+                        std::vector<std::string> cam_names(num_cams);
+                        for (int c = 0; c < num_cams; ++c) {
+                            widths[c] = (int)scene->image_width[c];
+                            heights[c] = (int)scene->image_height[c];
+                            cam_names[c] = std::to_string(c);
+                        }
+                        const int T = posetail_detail::T_CHUNK;
+
+                        // Stage the 16-frame window of RGBA per camera once,
+                        // GPU→CPU if necessary.
+                        std::deque<std::vector<uint8_t>> rgba_scratch;
+                        std::vector<const uint8_t *> frames(
+                            (size_t)num_cams * T, nullptr);
+                        int buf_size = (int)scene->size_of_buffer;
+                        for (int c = 0; c < num_cams; ++c) {
+                            for (int t = 0; t < T; ++t) {
+                                int slot =
+                                    (ps.read_head + ps.pause_selected + t) %
+                                    buf_size;
+                                auto &slotbuf = scene->display_buffer[c][slot];
+                                if (!slotbuf.frame) continue;
+                                if (scene->use_cpu_buffer) {
+                                    frames[c * T + t] =
+                                        (const uint8_t *)slotbuf.frame;
+                                } else {
+#ifndef __APPLE__
+                                    size_t npix = (size_t)widths[c] *
+                                                  heights[c];
+                                    rgba_scratch.emplace_back(npix * 4);
+                                    cudaMemcpy(rgba_scratch.back().data(),
+                                               slotbuf.frame, npix * 4,
+                                               cudaMemcpyDeviceToHost);
+                                    frames[c * T + t] =
+                                        rgba_scratch.back().data();
+#endif
+                                }
+                            }
+                        }
+
+                        printf("[PoseTail/server] Sending %d cams × %d frames "
+                               "× %d queries to %s\n",
+                               num_cams, T, (int)seed.size(),
+                               posetail_server_state.url.c_str());
+
+                        auto t_start = std::chrono::steady_clock::now();
+                        PosetailChunkResult chunk =
+                            posetail_server_predict_chunk(
+                                posetail_server_state, frames, widths, heights,
+                                pm.camera_params, seed, /*seed_t=*/0,
+                                cam_names);
+                        auto t_end = std::chrono::steady_clock::now();
+                        float ms =
+                            std::chrono::duration<float, std::milli>(
+                                t_end - t_start).count();
+
+                        win.jarvis_predict.posetail_server_last_total_ms =
+                            posetail_server_state.last_total_ms;
+                        win.jarvis_predict.posetail_server_last_request_ms =
+                            posetail_server_state.last_request_ms;
+                        win.jarvis_predict.posetail_server_last_encode_ms =
+                            posetail_server_state.last_encode_ms;
+                        win.jarvis_predict.posetail_server_last_decode_ms =
+                            posetail_server_state.last_decode_ms;
+
+                        if (!chunk.ok) {
+                            win.jarvis_predict.posetail_server_status =
+                                "Predict failed: " + chunk.error;
+                            printf("[PoseTail/server] FAILED: %s\n",
+                                   chunk.error.c_str());
+                        } else {
+                            // Write predicted 3D into annotations[current+t]
+                            // for t = 1..n_keep, plus reprojected 2D per
+                            // camera. n_keep is the slider; capped at T-1
+                            // since t=0 is the seed.
+                            int n_keep = std::clamp(
+                                win.jarvis_predict.posetail_server_n_keep,
+                                1, T - 1);
+                            int joints_total = skeleton.num_nodes;
+                            for (int t = 1; t <= n_keep; ++t) {
+                                u32 fn = (u32)(current_frame_num + t);
+                                auto &fa = get_or_create_frame(
+                                    annotations, fn, joints_total, num_cams);
+                                for (int q = 0;
+                                     q < (int)seed_node_idx.size() &&
+                                     q < (int)chunk.kp3d[t].size(); ++q) {
+                                    int k = seed_node_idx[q];
+                                    if (k >= (int)fa.kp3d.size()) continue;
+                                    const auto &P = chunk.kp3d[t][q];
+                                    fa.kp3d[k].x = P(0);
+                                    fa.kp3d[k].y = P(1);
+                                    fa.kp3d[k].z = P(2);
+                                    fa.kp3d[k].triangulated = true;
+                                    Eigen::Vector3d X(P(0), P(1), P(2));
+                                    for (int v = 0; v < num_cams; ++v) {
+                                        if (v >= (int)fa.cameras.size())
+                                            continue;
+                                        if (k >= (int)fa.cameras[v]
+                                                     .keypoints.size())
+                                            continue;
+                                        Eigen::Vector2d ppx =
+                                            red_math::projectPointR(
+                                                X, pm.camera_params[v].r,
+                                                pm.camera_params[v].tvec,
+                                                pm.camera_params[v].k,
+                                                pm.camera_params[v].dist_coeffs);
+                                        double xp = ppx(0);
+                                        double yp =
+                                            (double)scene->image_height[v] -
+                                            ppx(1);
+                                        if (xp > 0 &&
+                                            xp < scene->image_width[v] &&
+                                            yp > 0 &&
+                                            yp < scene->image_height[v]) {
+                                            fa.cameras[v].keypoints[k].x = xp;
+                                            fa.cameras[v].keypoints[k].y = yp;
+                                            fa.cameras[v]
+                                                .keypoints[k]
+                                                .labeled = true;
+                                            fa.cameras[v]
+                                                .keypoints[k]
+                                                .source =
+                                                LabelSource::Predicted;
+                                        }
+                                    }
+                                }
+                            }
+                            char buf[256];
+                            std::snprintf(buf, sizeof(buf),
+                                "OK: %d frame%s × %d kp in %.0f ms "
+                                "(server total %.0f ms)",
+                                n_keep, n_keep == 1 ? "" : "s",
+                                (int)seed.size(), ms,
+                                posetail_server_state.last_total_ms);
+                            win.jarvis_predict.posetail_server_status = buf;
+                            printf("[PoseTail/server] %s\n", buf);
+                        }
+                    }
+                }
+            }
+
             // --- PoseTail: Forward predict +N frames ---
-            if (win.jarvis_predict.posetail_forward_requested) {
+            if (!win.jarvis_predict.posetail_use_server &&
+                win.jarvis_predict.posetail_forward_requested) {
                 win.jarvis_predict.posetail_forward_requested = false;
                 int n_fwd = win.jarvis_predict.posetail_n_forward;
                 if (!posetail_state.loaded) {

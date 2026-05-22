@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.10)
 
 if(APPLE)
-    project(red LANGUAGES CXX OBJCXX)
+    project(red LANGUAGES C CXX OBJCXX)
 
     # Homebrew prefix — defaults to /opt/homebrew (Apple Silicon).
     # Override with -DHOMEBREW_PREFIX=/usr/local for Intel Macs, or let
@@ -85,6 +85,7 @@ if(APPLE)
         ${IMGUI_SRC}
         ${IMPLOT_SRC}
         ${IMPLOT3D_SRC}
+        ${CMAKE_SOURCE_DIR}/lib/miniz/miniz.c  # posetail server NPZ decode
     )
 
     target_include_directories(red PRIVATE
@@ -94,6 +95,8 @@ if(APPLE)
         ${DIR_IMPLOT}
         ${DIR_IMPLOT3D}
         ${DIR_FILEBROWSER}
+        ${CMAKE_SOURCE_DIR}/lib/httplib
+        ${CMAKE_SOURCE_DIR}/lib/miniz
         lib/nvcodec
         lib/IconFontCppHeaders
         ${FFMPEG_INCLUDE_DIRS}
@@ -1319,7 +1322,7 @@ if(APPLE)
 
 else()
     # Linux build with NVIDIA CUDA support
-    project(red LANGUAGES CXX CUDA)
+    project(red LANGUAGES C CXX CUDA)
 
     # CUDA architectures: default to common server/workstation targets.
     # Override with -DCMAKE_CUDA_ARCHITECTURES=86 (RTX 30xx), 89 (RTX 40xx), etc.
@@ -1408,6 +1411,7 @@ else()
         ${IMPLOT_SRC}
         ${IMPLOT3D_SRC}
         ${CUDA_SRC_FILES}
+        ${CMAKE_SOURCE_DIR}/lib/miniz/miniz.c  # posetail server NPZ decode
     )
 
     # Feature defines
@@ -1425,6 +1429,8 @@ else()
             ${DIR_IMGUI}/backends
             ${DIR_IMPLOT}
             ${DIR_IMPLOT3D}
+            ${CMAKE_SOURCE_DIR}/lib/httplib
+            ${CMAKE_SOURCE_DIR}/lib/miniz
             lib/nvcodec
             lib/IconFontCppHeaders
             lib/ImGuiFileDialog

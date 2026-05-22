@@ -67,6 +67,28 @@ struct JarvisPredictState {
     int posetail_max_queries = 24;
     std::string posetail_status;
 
+    // PoseTail backend toggle: false = local ONNX, true = HTTP server.
+    // Server mode always runs a single 16-frame chunk per click (no chunk
+    // chaining), since that's what the current server's /predict supports.
+    bool posetail_use_server = true;
+    std::string posetail_server_url = "http://10.102.10.88:8000";
+    bool posetail_server_probe_requested = false;
+    std::string posetail_server_status;
+    // How many of the 15 future frames to keep from a returned chunk.
+    // The chunk has T=16 timepoints; t=0 is the seed (current frame), so
+    // t=1..15 are the available future predictions. Default to all 15.
+    int posetail_server_n_keep = 15;
+    // Server-side info cached after a successful /info probe.
+    int posetail_server_n_frames = 0;
+    int posetail_server_image_size = 0;
+    std::string posetail_server_device;
+    std::string posetail_server_mode_3d;
+    // Last call's wall-clock timings (set by red.cpp after each forward).
+    float posetail_server_last_total_ms = 0.0f;
+    float posetail_server_last_request_ms = 0.0f;
+    float posetail_server_last_encode_ms = 0.0f;
+    float posetail_server_last_decode_ms = 0.0f;
+
     // Predict from: false = Shown (visible cameras only), true = All cameras
     bool predict_from_all = false;
 
@@ -928,6 +950,74 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
             }
         }
 
+        // Backend selector: Local ONNX vs HTTP server. Server mode bypasses
+        // ALL of the local ONNX path (no model load, no GPU, no chunking) and
+        // sends one 16-frame chunk per click to posetail/server/server.py.
+        ImGui::Text("Backend:");
+        ImGui::SameLine();
+        if (ImGui::RadioButton("Local ONNX", !state.posetail_use_server))
+            state.posetail_use_server = false;
+        ImGui::SameLine();
+        if (ImGui::RadioButton("Server (HTTP)", state.posetail_use_server))
+            state.posetail_use_server = true;
+
+        if (state.posetail_use_server) {
+            ImGui::Text("URL");
+            ImGui::SetNextItemWidth(-160);
+            ImGui::InputText("##posetail_server_url",
+                             &state.posetail_server_url);
+            ImGui::SameLine();
+            if (ImGui::Button("Probe##posetail_server")) {
+                state.posetail_server_probe_requested = true;
+            }
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip(
+                    "GET /info on the configured URL to check the server is\n"
+                    "reachable and the model matches red's expected\n"
+                    "16 frames × 256×256 input. Status appears below.");
+
+            if (state.posetail_server_n_frames > 0) {
+                ImGui::TextDisabled("Model: n_frames=%d image_size=%d  "
+                                    "device=%s  mode=%s",
+                                    state.posetail_server_n_frames,
+                                    state.posetail_server_image_size,
+                                    state.posetail_server_device.c_str(),
+                                    state.posetail_server_mode_3d.c_str());
+            }
+            if (!state.posetail_server_status.empty()) {
+                bool warn =
+                    state.posetail_server_status.find("WARNING") != std::string::npos ||
+                    state.posetail_server_status.find("Cannot") != std::string::npos ||
+                    state.posetail_server_status.find("failed") != std::string::npos ||
+                    state.posetail_server_status.find("error") != std::string::npos;
+                ImVec4 col = warn ? ImVec4(1.0f, 0.6f, 0.3f, 1.0f)
+                                  : ImVec4(0.5f, 1.0f, 0.5f, 1.0f);
+                ImGui::TextColored(col, "%s",
+                                   state.posetail_server_status.c_str());
+            }
+            if (state.posetail_server_last_total_ms > 0.0f) {
+                ImGui::TextDisabled(
+                    "Last: total=%.0f ms  (encode=%.0f, request=%.0f, decode=%.0f)",
+                    state.posetail_server_last_total_ms,
+                    state.posetail_server_last_encode_ms,
+                    state.posetail_server_last_request_ms,
+                    state.posetail_server_last_decode_ms);
+            }
+
+            // How many future frames from the 16-frame chunk to write back.
+            // The chunk has T=16 timepoints (t=0 = seed = current frame,
+            // t=1..15 = future). Slider runs 1..15 so the upper bound matches
+            // what the model can actually give us.
+            ImGui::SetNextItemWidth(160);
+            ImGui::SliderInt("N future frames to keep",
+                             &state.posetail_server_n_keep, 1, 15);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip(
+                    "Server returns one 16-frame chunk per click: t=0 is the\n"
+                    "seed (current frame), t=1..15 are future predictions.\n"
+                    "This slider picks how many of those 15 to write into\n"
+                    "annotations for frames [current+1 .. current+N].");
+        } else {
         ImGui::Text("ONNX");
         ImGui::SetNextItemWidth(-160);
         ImGui::InputText("##posetail_path", &state.posetail_path);
@@ -973,16 +1063,38 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
                 "at once OOMs even on a 24 GB card. Splitting into batches\n"
                 "of 12 doubles inference calls but halves peak per-call memory\n"
                 "and lets the GPU path work end-to-end.");
-        if (ImGui::Button("PoseTail Forward +N")) {
+        }  // end of !posetail_use_server (local ONNX) section
+
+        // Forward-predict button. In local mode it chains chunks to produce
+        // N forward frames; in server mode it does a single 16-frame chunk
+        // (= 15 future frames written to annotations).
+        char fwd_label_buf[64];
+        if (state.posetail_use_server) {
+            std::snprintf(fwd_label_buf, sizeof(fwd_label_buf),
+                          "PoseTail Forward (server, +%d)",
+                          state.posetail_server_n_keep);
+        } else {
+            std::snprintf(fwd_label_buf, sizeof(fwd_label_buf),
+                          "PoseTail Forward +N");
+        }
+        if (ImGui::Button(fwd_label_buf)) {
             state.posetail_forward_requested = true;
         }
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip(
-                "Seed from current frame's 3D keypoints and predict forward "
-                "N frames\n"
-                "using PoseTail across ALL cameras. Writes 3D + reprojected 2D\n"
-                "into annotations for frames [current+1 .. current+N].\n"
-                "Requires all cameras to have frames in the display buffer.");
+        if (ImGui::IsItemHovered()) {
+            if (state.posetail_use_server)
+                ImGui::SetTooltip(
+                    "Seed from current frame's 3D keypoints, send all 16\n"
+                    "cameras × 16 frames to the configured server, and write\n"
+                    "the first N future-frame predictions to annotations.\n"
+                    "Requires all cameras to have frames in the display buffer.");
+            else
+                ImGui::SetTooltip(
+                    "Seed from current frame's 3D keypoints and predict forward "
+                    "N frames\n"
+                    "using PoseTail across ALL cameras. Writes 3D + reprojected 2D\n"
+                    "into annotations for frames [current+1 .. current+N].\n"
+                    "Requires all cameras to have frames in the display buffer.");
+        }
 
         // --- Batch Prediction ---
         ImGui::Separator();
