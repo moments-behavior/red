@@ -23,6 +23,9 @@
 #elif defined(_WIN32)
 #include "jarvis_tensorrt.h"
 #endif
+#if defined(__linux__) || defined(_WIN32)
+#include "jarvis_hybridnet.h"
+#endif
 #include "gui/jarvis_predict_window.h"
 #include "gui/annotation_dialog.h"
 #include "gui/calibration_tool_window.h"
@@ -328,6 +331,11 @@ int main(int argc, char **argv) {
 #elif defined(_WIN32)
     JarvisTensorRTState jarvis_trt_state;
 #endif
+#if defined(__linux__) || defined(_WIN32)
+#ifdef RED_HAS_ONNXRUNTIME
+    JarvisHybridNetState jarvis_hn_state;
+#endif
+#endif
 
     // Default SAM model paths: look relative to exe (../models/mobilesam/)
     // and in the source tree. User can override in SAM Assist panel.
@@ -511,6 +519,11 @@ int main(int argc, char **argv) {
 #elif defined(_WIN32)
         jarvis_trt_state = JarvisTensorRTState{};
 #endif
+#if defined(__linux__) || defined(_WIN32)
+#ifdef RED_HAS_ONNXRUNTIME
+        jarvis_hybridnet_unload(jarvis_hn_state);
+#endif
+#endif
         pm_ref = new_pm;
         // Re-initialize skeleton after close_project() cleared it.
         // (close_project resets ctx.skeleton; we must re-run setup_project
@@ -595,6 +608,11 @@ int main(int argc, char **argv) {
                                                  jarvis_coreml_state,
 #elif defined(_WIN32)
                                                  jarvis_trt_state,
+#endif
+#if defined(__linux__) || defined(_WIN32)
+#ifdef RED_HAS_ONNXRUNTIME
+                                                 jarvis_hn_state,
+#endif
 #endif
                                                  ctx); },
                 nullptr});
@@ -1610,6 +1628,25 @@ int main(int argc, char **argv) {
                     rgb_bufs[c] = rgb_storage[c].data();
                 }
 
+#ifdef RED_HAS_ONNXRUNTIME
+                if (jarvis_hn_state.loaded) {
+                    // HybridNet handles the full 3-stage pipeline internally
+                    // (CenterDetect → DLT triangulate → effTrack → Hybrid3D)
+                    // and writes both 3D and per-cam 2D back-projections to
+                    // AnnotationMap. No separate reprojection() call needed.
+                    bool ok = jarvis_hybridnet_predict_frame(
+                        jarvis_hn_state, rgb_bufs, widths, heights,
+                        pm.camera_params, annotations, skeleton,
+                        (u32)current_frame_num);
+                    printf("[JARVIS HybridNet] %s  total=%.0fms  cams=%d/%d\n",
+                           ok ? "ok" : "failed (<2 center cams)",
+                           jarvis_hn_state.last_center_ms +
+                           jarvis_hn_state.last_efftrack_ms +
+                           jarvis_hn_state.last_hybrid3d_ms,
+                           jarvis_hn_state.last_center_cams_used,
+                           (int)scene->num_cams);
+                } else
+#endif
 #ifdef _WIN32
                 if (jarvis_trt_state.loaded) {
                     jarvis_tensorrt_predict_frame(jarvis_trt_state, annotations,
@@ -1785,7 +1822,12 @@ int main(int argc, char **argv) {
 #else
                                     const bool trt_loaded = false;
 #endif
-                                if (trt_loaded || jarvis_state.loaded) {
+#ifdef RED_HAS_ONNXRUNTIME
+                                    const bool hn_loaded = jarvis_hn_state.loaded;
+#else
+                                    const bool hn_loaded = false;
+#endif
+                                if (trt_loaded || jarvis_state.loaded || hn_loaded) {
                                     auto tp0 = std::chrono::steady_clock::now();
                                     // Extract RGB from RGBA GPU frame buffers
                                     std::vector<const uint8_t *> rgb_bufs(nc_pred, nullptr);
@@ -1804,11 +1846,23 @@ int main(int argc, char **argv) {
                                         }
                                         rgb_bufs[c] = rgb_storage[c].data();
                                     }
+#ifdef RED_HAS_ONNXRUNTIME
+                                    if (hn_loaded) {
+                                        // HybridNet handles 3D + per-cam 2D internally;
+                                        // skip the separate reprojection() call.
+                                        jarvis_hybridnet_predict_frame(jarvis_hn_state,
+                                            rgb_bufs, w_b, h_b, pm.camera_params,
+                                            annotations, skeleton, frame);
+                                    } else
+#endif
 #ifdef _WIN32
                                     if (trt_loaded) {
                                         jarvis_tensorrt_predict_frame(jarvis_trt_state,
                                             annotations, frame, rgb_bufs, w_b, h_b,
                                             skeleton, nc_pred, bp.confidence_threshold);
+                                        if (!pm.camera_params.empty())
+                                            reprojection(annotations.at(frame),
+                                                         &skeleton, pm.camera_params, scene);
                                     } else
 #endif
                                     {
@@ -1816,10 +1870,10 @@ int main(int argc, char **argv) {
                                             frame, rgb_bufs, w_b, h_b,
                                             skeleton, pm.camera_params, scene,
                                             bp.confidence_threshold);
+                                        if (!pm.camera_params.empty())
+                                            reprojection(annotations.at(frame),
+                                                         &skeleton, pm.camera_params, scene);
                                     }
-                                    if (!pm.camera_params.empty())
-                                        reprojection(annotations.at(frame),
-                                                     &skeleton, pm.camera_params, scene);
                                     auto tp1 = std::chrono::steady_clock::now();
                                     bp.batch_predict_ms += std::chrono::duration<float, std::milli>(tp1 - tp0).count();
                                     bp.batch_completed++;

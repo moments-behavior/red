@@ -114,7 +114,12 @@ struct JarvisLoadResult {
     JarvisModelConfig config;
 };
 
-// Load JARVIS model from a directory: try CoreML first, fall back to ONNX.
+// Load JARVIS model from a directory.
+// Detection order (each falls through if the dir doesn't have its file set):
+//   1. HybridNet 3D (hybrid3d.onnx + manifest.json) — Linux/Win only
+//   2. CoreML (.mlpackage) — Mac
+//   3. TensorRT (.engine) — Windows
+//   4. ONNX Runtime 2-stage (center_detect.onnx + keypoint_detect.onnx)
 inline JarvisLoadResult jarvis_load_from_dir(
     const std::string &base_dir,
     JarvisState &jarvis
@@ -123,11 +128,35 @@ inline JarvisLoadResult jarvis_load_from_dir(
 #elif defined(_WIN32)
     , JarvisTensorRTState &jarvis_trt
 #endif
+#if defined(__linux__) || defined(_WIN32)
+#ifdef RED_HAS_ONNXRUNTIME
+    , JarvisHybridNetState &jarvis_hn
+#endif
+#endif
 ) {
     namespace fs = std::filesystem;
     JarvisLoadResult r;
     fs::path mi = fs::path(base_dir) / "model_info.json";
     r.config = parse_jarvis_model_info(fs::exists(mi) ? mi.string().c_str() : nullptr);
+
+#if defined(__linux__) || defined(_WIN32)
+#ifdef RED_HAS_ONNXRUNTIME
+    // HybridNet 3D mode: presence of hybrid3d.onnx + manifest.json triggers
+    // the full 3-stage pipeline. Replaces the 2D+triangulate shortcut.
+    if (jarvis_hybridnet_dir_is_valid(base_dir)) {
+        jarvis_cleanup(jarvis);
+        if (jarvis_hybridnet_load(jarvis_hn, base_dir)) {
+            r.loaded = true;
+            r.num_joints = jarvis_hn.cfg.num_joints;
+            r.center_input_size = jarvis_hn.cfg.center_image_size;
+            r.keypoint_input_size = jarvis_hn.cfg.keypoint_bbox_size;
+            return r;
+        }
+    } else {
+        jarvis_hybridnet_unload(jarvis_hn);
+    }
+#endif
+#endif
 
 #ifdef __APPLE__
     if (fs::exists(fs::path(base_dir) / "center_detect.mlpackage") &&
@@ -207,6 +236,11 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
 #elif defined(_WIN32)
                                      JarvisTensorRTState &jarvis_trt,
 #endif
+#if defined(__linux__) || defined(_WIN32)
+#ifdef RED_HAS_ONNXRUNTIME
+                                     JarvisHybridNetState &jarvis_hn,
+#endif
+#endif
                                      AppContext &ctx) {
     DrawPanel("JARVIS Predict", state.show,
         [&]() {
@@ -224,7 +258,9 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
 #ifdef __APPLE__
         bool any_loaded = jarvis.loaded || jarvis_coreml.loaded;
 #elif defined(_WIN32)
-        bool any_loaded = jarvis.loaded || jarvis_trt.loaded;
+        bool any_loaded = jarvis.loaded || jarvis_trt.loaded || jarvis_hn.loaded;
+#elif defined(__linux__) && defined(RED_HAS_ONNXRUNTIME)
+        bool any_loaded = jarvis.loaded || jarvis_hn.loaded;
 #else
         bool any_loaded = jarvis.loaded;
 #endif
@@ -237,6 +273,11 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
                 , jarvis_coreml
 #elif defined(_WIN32)
                 , jarvis_trt
+#endif
+#if defined(__linux__) || defined(_WIN32)
+#ifdef RED_HAS_ONNXRUNTIME
+                , jarvis_hn
+#endif
 #endif
             );
             state.model_dir_display = m.relative_path;
@@ -261,6 +302,11 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
                             , jarvis_coreml
 #elif defined(_WIN32)
                             , jarvis_trt
+#endif
+#if defined(__linux__) || defined(_WIN32)
+#ifdef RED_HAS_ONNXRUNTIME
+                            , jarvis_hn
+#endif
 #endif
                         );
                         state.model_dir_display = m.relative_path;
@@ -311,6 +357,11 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
                     , jarvis_coreml
 #elif defined(_WIN32)
                     , jarvis_trt
+#endif
+#if defined(__linux__) || defined(_WIN32)
+#ifdef RED_HAS_ONNXRUNTIME
+                    , jarvis_hn
+#endif
 #endif
                 );
                 if (lr.loaded && !pm.project_path.empty()) {
@@ -469,6 +520,11 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
                 , jarvis_coreml
 #elif defined(_WIN32)
                 , jarvis_trt
+#endif
+#if defined(__linux__) || defined(_WIN32)
+#ifdef RED_HAS_ONNXRUNTIME
+                , jarvis_hn
+#endif
 #endif
             );
 
