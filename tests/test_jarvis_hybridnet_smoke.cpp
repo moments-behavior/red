@@ -157,22 +157,26 @@ int main(int /*argc*/, char ** /*argv*/) {
     skel.has_skeleton = true;
 
     AnnotationMap annotations;
-    std::cout << "Running jarvis_hybridnet_predict_frame on frame 0...\n";
-    auto t0 = std::chrono::high_resolution_clock::now();
-    bool ok = jarvis_hybridnet_predict_frame(
-        state, rgbs, widths, heights, cam_params,
-        annotations, skel, 0u);
-    auto t1 = std::chrono::high_resolution_clock::now();
-    double dt_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
-
-    if (!ok) {
-        std::cerr << "predict_frame returned false (likely <2 cams detected center).\n";
-        return 2;
+    bool ok = false;
+    // Run 3x: cold-start, warm, warm. CUDA EP does kernel autotuning + cuDNN
+    // frontend init on first inference; subsequent calls amortize that.
+    for (int iter = 0; iter < 3; ++iter) {
+        std::cout << "Running predict_frame (iter " << iter << ")...\n";
+        auto t0 = std::chrono::high_resolution_clock::now();
+        ok = jarvis_hybridnet_predict_frame(
+            state, rgbs, widths, heights, cam_params,
+            annotations, skel, 0u);
+        auto t1 = std::chrono::high_resolution_clock::now();
+        double dt_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+        if (!ok) {
+            std::cerr << "predict_frame returned false (likely <2 cams detected center).\n";
+            return 2;
+        }
+        std::cout << "  total: " << dt_ms << " ms"
+                  << "  (CenterDetect=" << state.last_center_ms
+                  << "  effTrack=" << state.last_efftrack_ms
+                  << "  Hybrid3D=" << state.last_hybrid3d_ms << ")\n";
     }
-    std::cout << "  total: " << dt_ms << " ms"
-              << "  (CenterDetect=" << state.last_center_ms
-              << "  effTrack=" << state.last_efftrack_ms
-              << "  Hybrid3D=" << state.last_hybrid3d_ms << ")\n";
 
     auto it = annotations.find(0u);
     if (it == annotations.end()) {

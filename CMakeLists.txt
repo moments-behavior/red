@@ -1819,6 +1819,32 @@ else()
     if(EXISTS "${CUDNN_DIR}/lib")
         list(APPEND RED_RPATH_BUILD "${CUDNN_DIR}/lib")
         list(APPEND RED_RPATH_INSTALL "$ORIGIN/../lib/cudnn/lib")
+
+        # ORT's CUDA provider library is dlopen'd at runtime by libonnxruntime.so
+        # and doesn't inherit red's RUNPATH. Without a patched RPATH on the
+        # provider .so itself, libcudnn.so.9 fails to resolve and ORT silently
+        # falls back to CPU EP. Patch idempotently with patchelf if available.
+        set(ORT_CUDA_PROVIDER "${ONNXRUNTIME_DIR}/lib/libonnxruntime_providers_cuda.so")
+        if(HAS_ONNXRUNTIME AND EXISTS "${ORT_CUDA_PROVIDER}")
+            find_program(PATCHELF_EXE patchelf)
+            if(PATCHELF_EXE)
+                execute_process(
+                    COMMAND "${PATCHELF_EXE}" --set-rpath
+                            "\$ORIGIN:\$ORIGIN/../../cudnn/lib:/usr/local/cuda/lib64"
+                            "${ORT_CUDA_PROVIDER}"
+                    RESULT_VARIABLE PATCHELF_RESULT
+                    OUTPUT_QUIET ERROR_QUIET)
+                if(PATCHELF_RESULT EQUAL 0)
+                    message(STATUS "Patched ORT CUDA provider RPATH to find bundled cuDNN")
+                else()
+                    message(WARNING "patchelf on libonnxruntime_providers_cuda.so failed; "
+                                    "set LD_LIBRARY_PATH=${CUDNN_DIR}/lib at runtime")
+                endif()
+            else()
+                message(WARNING "patchelf not found; set LD_LIBRARY_PATH=${CUDNN_DIR}/lib "
+                                "at runtime to enable CUDA EP")
+            endif()
+        endif()
     endif()
     if(HAS_MUJOCO)
         list(APPEND RED_RPATH_BUILD "${MUJOCO_DIR}/lib")
