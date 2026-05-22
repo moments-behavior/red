@@ -37,7 +37,7 @@ inline void gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
                 pt_size, ImPlotDragToolFlags_None, &drag_point_clicked,
                 &drag_point_hovered);
             if (drag_point_modified) {
-                fa.kp3d[node].triangulated = false;
+                fa.kp3d[node].clear();
             }
             if (drag_point_hovered) {
                 if (fa.kp3d[node].triangulated) {
@@ -161,7 +161,21 @@ inline void reprojection(FrameAnnotation &fa, SkeletonContext *skeleton,
             fa.kp3d[node].x = pt3d(0);
             fa.kp3d[node].y = pt3d(1);
             fa.kp3d[node].z = pt3d(2);
-            fa.kp3d[node].triangulated = true;
+            // Reviewed=true iff every contributing 2D label was Manual.
+            // Mixed (manual + predicted) contributions count as un-reviewed
+            // until the user explicitly approves the resulting 3D point.
+            bool all_manual = true;
+            for (u32 view_idx = 0; view_idx < scene->num_cams; view_idx++) {
+                if (view_idx >= (u32)fa.cameras.size()) continue;
+                if (node >= (u32)fa.cameras[view_idx].keypoints.size()) continue;
+                const auto &kp2d = fa.cameras[view_idx].keypoints[node];
+                if (kp2d.labeled && kp2d.source != LabelSource::Manual) {
+                    all_manual = false;
+                    break;
+                }
+            }
+            fa.kp3d[node].set_triangulated();
+            fa.kp3d[node].reviewed = all_manual;
 
             for (u32 view_idx = 0; view_idx < scene->num_cams; view_idx++) {
                 if (view_idx >= (u32)fa.cameras.size()) continue;

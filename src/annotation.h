@@ -35,13 +35,62 @@ struct Keypoint2D {
     LabelSource source = LabelSource::Manual;
 };
 
-// ── Per-keypoint 3D annotation (triangulated) ──
+// ── 3D label provenance ──
+// Tracks where a Keypoint3D's values came from. Combined with `reviewed`,
+// this drives the active-learning loop: predictions need review, approved or
+// edited points become training-quality. See dev_docs / claude_refresher for
+// the state-transition table.
+enum class Kp3DSource : int {
+    None         = 0,  // no 3D values yet
+    Triangulated = 1,  // DLT-solved from 2D labels
+    HybridNet    = 2,  // direct 3D prediction by HybridNet
+    Manual       = 3,  // user placed/edited 3D directly in the viewer
+    Imported     = 4,  // external CSV/JSON import
+};
+
+// ── Per-keypoint 3D annotation ──
 struct Keypoint3D {
     double x = UNLABELED;
     double y = UNLABELED;
     double z = UNLABELED;
-    bool   triangulated = false;
+    bool   triangulated = false;             // legacy presence flag, kept in sync with source != None
+    Kp3DSource source = Kp3DSource::None;    // immediate provenance of the values
+    bool   reviewed = false;                 // user signed off (approved or edited)
     float  confidence   = 0.0f;
+
+    // Setter helpers keep `triangulated` (legacy bool) and `source` in sync.
+    // Migrate new write sites to these; legacy reads of `.triangulated` keep
+    // working unchanged.
+    void set_triangulated(float conf = 1.0f) {
+        source = Kp3DSource::Triangulated;
+        triangulated = true;
+        confidence = conf;
+    }
+    void set_hybridnet(float conf) {
+        source = Kp3DSource::HybridNet;
+        triangulated = true;
+        reviewed = false;  // freshly predicted; awaits user review
+        confidence = conf;
+    }
+    void set_manual() {
+        source = Kp3DSource::Manual;
+        triangulated = true;
+        reviewed = true;   // user-placed = implicitly reviewed
+        confidence = 1.0f;
+    }
+    void set_imported(float conf = 1.0f) {
+        source = Kp3DSource::Imported;
+        triangulated = true;
+        reviewed = false;
+        confidence = conf;
+    }
+    void approve() { reviewed = true; }      // accept current values without changing them
+    void clear() {
+        source = Kp3DSource::None;
+        triangulated = false;
+        reviewed = false;
+        confidence = 0.0f;
+    }
 };
 
 // ── Optional per-camera extras (bbox, OBB, mask) ──

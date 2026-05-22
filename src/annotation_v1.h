@@ -31,8 +31,12 @@ inline FrameAnnotation frame_from_keypoints(const KeyPoints *kp,
             fa.kp3d[k].x = kp->kp3d[k].position.x;
             fa.kp3d[k].y = kp->kp3d[k].position.y;
             fa.kp3d[k].z = kp->kp3d[k].position.z;
-            fa.kp3d[k].triangulated = kp->kp3d[k].is_triangulated;
-            fa.kp3d[k].confidence = kp->kp3d[k].confidence;
+            // V1 had no Kp3DSource; default to Triangulated if present.
+            if (kp->kp3d[k].is_triangulated) {
+                fa.kp3d[k].set_triangulated(kp->kp3d[k].confidence);
+            } else {
+                fa.kp3d[k].clear();
+            }
         }
     }
     if (kp->kp2d) {
@@ -87,8 +91,11 @@ inline void refresh_keypoints_in_amap(AnnotationMap &amap,
                     fa.kp3d[k].x = kp->kp3d[k].position.x;
                     fa.kp3d[k].y = kp->kp3d[k].position.y;
                     fa.kp3d[k].z = kp->kp3d[k].position.z;
-                    fa.kp3d[k].triangulated = kp->kp3d[k].is_triangulated;
-                    fa.kp3d[k].confidence = kp->kp3d[k].confidence;
+                    if (kp->kp3d[k].is_triangulated) {
+                        fa.kp3d[k].set_triangulated(kp->kp3d[k].confidence);
+                    } else {
+                        fa.kp3d[k].clear();
+                    }
                 }
             if (kp->kp2d)
                 for (int c = 0; c < nc; ++c) {

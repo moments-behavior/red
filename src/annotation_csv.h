@@ -256,8 +256,11 @@ inline bool load_3d_csv(const std::string &path, AnnotationMap &amap,
                 fa.kp3d[k].x = x;
                 fa.kp3d[k].y = y;
                 fa.kp3d[k].z = z;
-                fa.kp3d[k].triangulated = true;
-                fa.kp3d[k].confidence = has_c ? (float)c : 0.0f;
+                // CSV v2 has no source column; treat as Triangulated (the
+                // only historical write path) and reviewed=false. The user
+                // can re-approve via the UI if they want it counted as
+                // training-quality.
+                fa.kp3d[k].set_triangulated(has_c ? (float)c : 0.0f);
             }
             // else: stays at default (UNLABELED, triangulated=false)
         }
