@@ -1561,7 +1561,7 @@ elseif(WIN32)
     set(TEST_GUI_SRC_FILES ${SRC_FILES})
     list(REMOVE_ITEM TEST_GUI_SRC_FILES "${CMAKE_SOURCE_DIR}/src/red.cpp")
 
-    foreach(TEST_NAME test_gui test_annotation)
+    foreach(TEST_NAME test_gui test_annotation test_jarvis_hybridnet_smoke)
         add_executable(${TEST_NAME}
             ${TEST_GUI_SRC_FILES}
             ${IMGUI_SRC}
@@ -1836,7 +1836,7 @@ else()
     set(TEST_GUI_SRC_FILES ${SRC_FILES})
     list(REMOVE_ITEM TEST_GUI_SRC_FILES "${CMAKE_SOURCE_DIR}/src/red.cpp")
 
-    foreach(TEST_NAME test_gui test_annotation)
+    foreach(TEST_NAME test_gui test_annotation test_jarvis_hybridnet_smoke)
         add_executable(${TEST_NAME}
             ${TEST_GUI_SRC_FILES}
             ${IMGUI_SRC}

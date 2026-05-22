@@ -16,6 +16,7 @@ build/
 cmake-build-debug/
 CMakeFiles/
 CMakeCache.txt
+_external/
 
 __pycache__
 
