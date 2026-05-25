@@ -2627,7 +2627,7 @@ int main(int argc, char **argv) {
                     // to derive RED-loadable per-view 2D labels without
                     // shipping per-camera CSVs.
                     ImGui::SameLine();
-                    if (ImGui::Button("Project 3D → 2D (all frames)")) {
+                    if (ImGui::Button("Project 3D -> 2D (all frames)")) {
                         for (auto &kv : keypoints_map) {
                             project_3d_to_2d_all_views(
                                 kv.second, &skeleton, pm.camera_params, scene);
