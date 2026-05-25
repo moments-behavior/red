@@ -1067,6 +1067,98 @@ int find_most_recent_labels(std::string root_dir, std::string &most_recent_file,
     return 0;
 }
 
+// Load only a single 3D keypoints CSV (`keypoints3d.csv` produced by an
+// external pipeline, or any file in the same format) into `keypoints_map`.
+// Unlike `load_keypoints`, this skips per-camera 2D CSVs entirely — use it
+// when you only have 3D data and want to derive 2D in RED via the
+// "Project 3D -> 2D" button.
+//
+// Parsing logic mirrors the 3D block in `load_keypoints` so the file format
+// stays in sync.
+int load_keypoints_3d_only(std::string kp_3d_file,
+                           std::map<u32, KeyPoints *> &keypoints_map,
+                           SkeletonContext *skeleton, RenderScene *scene,
+                           std::string &error_message) {
+    if (!skeleton->has_skeleton) {
+        error_message = "Skeleton does not support 3D keypoints.";
+        return 1;
+    }
+    std::ifstream fin(kp_3d_file);
+    if (!fin) {
+        error_message = "Failed to open: " + kp_3d_file;
+        return 1;
+    }
+
+    std::string line;
+    std::string delimeter = ",";
+    size_t pos = 0;
+    std::string token;
+
+    int line_num = 0;
+    while (!fin.eof()) {
+        fin >> line;
+        while ((pos = line.find(delimeter)) != std::string::npos) {
+            token = line.substr(0, pos);
+            if (line_num == 0) {
+                if (token.compare(skeleton->name) != 0) {
+                    error_message = "3D keypoints failed loading, skeleton "
+                                    "doesn't match.";
+                    error_message += skeleton->name + ":" + token;
+                    return 1;
+                }
+                line.erase(0, pos + delimeter.length());
+            } else {
+                uint frame_num = stoul(token);
+                if (keypoints_map.find(frame_num) == keypoints_map.end()) {
+                    KeyPoints *keypoints =
+                        (KeyPoints *)malloc(sizeof(KeyPoints));
+                    allocate_keypoints(keypoints, scene, skeleton);
+                    keypoints_map[frame_num] = keypoints;
+                }
+                line.erase(0, pos + delimeter.length());
+
+                while ((pos = line.find(delimeter)) != std::string::npos) {
+                    token = line.substr(0, pos);
+                    int node = stoi(token);
+                    line.erase(0, pos + delimeter.length());
+
+                    pos = line.find(delimeter);
+                    token = line.substr(0, pos);
+                    double x = stod(token);
+                    line.erase(0, pos + delimeter.length());
+
+                    pos = line.find(delimeter);
+                    token = line.substr(0, pos);
+                    double y = stod(token);
+                    line.erase(0, pos + delimeter.length());
+
+                    pos = line.find(delimeter);
+                    token = line.substr(0, pos);
+                    double z = stod(token);
+                    line.erase(0, pos + delimeter.length());
+
+                    keypoints_map[frame_num]->kp3d[node].position.x = x;
+                    keypoints_map[frame_num]->kp3d[node].position.y = y;
+                    keypoints_map[frame_num]->kp3d[node].position.z = z;
+
+                    if (x == 1E7 || y == 1E7 || z == 1E7) {
+                        keypoints_map[frame_num]
+                            ->kp3d[node]
+                            .is_triangulated = false;
+                    } else {
+                        keypoints_map[frame_num]
+                            ->kp3d[node]
+                            .is_triangulated = true;
+                    }
+                }
+            }
+        }
+        line_num++;
+    }
+    fin.close();
+    return 0;
+}
+
 int load_keypoints(std::string keypoints_folder,
                    std::map<u32, KeyPoints *> &keypoints_map,
                    SkeletonContext *skeleton, RenderScene *scene,

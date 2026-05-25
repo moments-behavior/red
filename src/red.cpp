@@ -2784,6 +2784,17 @@ int main(int argc, char **argv) {
                         "LoadFromSelected", "Load from selected", nullptr,
                         config);
                 }
+                ImGui::SameLine();
+                if (ImGui::Button("Load 3D Only")) {
+                    IGFD::FileDialogConfig config;
+                    config.countSelectionMax = 1;
+                    config.path = pm.keypoints_root_folder;
+                    config.flags = ImGuiFileDialogFlags_Modal;
+                    ImGuiFileDialog::Instance()->OpenDialog(
+                        "Load3DOnly",
+                        "Select keypoints3d.csv (skip per-camera 2D)",
+                        ".csv", config);
+                }
 
                 ImGui::Separator();
 
@@ -3156,6 +3167,20 @@ int main(int argc, char **argv) {
                 }
             }
             // close
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        if (ImGuiFileDialog::Instance()->Display("Load3DOnly")) {
+            if (ImGuiFileDialog::Instance()->IsOk()) {
+                std::string selected_file =
+                    ImGuiFileDialog::Instance()->GetFilePathName();
+                free_all_keypoints(keypoints_map, scene);
+                if (load_keypoints_3d_only(selected_file, keypoints_map,
+                                           &skeleton, scene, error_message)) {
+                    free_all_keypoints(keypoints_map, scene);
+                    show_error = true;
+                }
+            }
             ImGuiFileDialog::Instance()->Close();
         }
 
