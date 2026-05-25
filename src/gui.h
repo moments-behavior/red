@@ -174,6 +174,73 @@ bool is_in_camera_fov(cv::Mat point_world, const cv::Mat &rvec,
     return false;
 }
 
+// Project a frame's triangulated 3D keypoints onto every camera view and
+// overwrite the per-view kp2d. The inverse of `reprojection` (which goes
+// 2D → 3D and then projects back). Use this when the 3D keypoints are
+// already loaded (e.g. from a `keypoints3d.csv` produced by an external
+// pipeline) and you want to derive RED-loadable 2D labels without
+// re-triangulating.
+//
+// For each node:
+//   - If kp3d is not triangulated → all views are cleared (is_labeled = false)
+//   - Otherwise, for each view, project; if the result is inside the camera
+//     FOV (linear projection sanity check + final image-bounds check after
+//     distortion), write [x, image_height - y] and mark labeled.
+//     Out-of-FOV views are cleared.
+//
+// Preserves `last_position` / `last_is_labeled` so RED's "previous frame"
+// machinery still works.
+static void project_3d_to_2d_all_views(KeyPoints *keypoints,
+                                       SkeletonContext *skeleton,
+                                       std::vector<CameraParams> camera_params,
+                                       RenderScene *scene) {
+    for (u32 node = 0; node < skeleton->num_nodes; node++) {
+        for (u32 view_idx = 0; view_idx < scene->num_cams; view_idx++) {
+            keypoints->kp2d[view_idx][node].last_position =
+                keypoints->kp2d[view_idx][node].position;
+            keypoints->kp2d[view_idx][node].last_is_labeled =
+                keypoints->kp2d[view_idx][node].is_labeled;
+            keypoints->kp2d[view_idx][node].is_labeled = false;
+        }
+
+        if (!keypoints->kp3d[node].is_triangulated)
+            continue;
+
+        // Single-point object list — unambiguous shape for cv::projectPoints
+        // (the existing reprojection() passes the cv::Mat output of
+        // cv::sfm::triangulatePoints directly, which we don't have here).
+        std::vector<cv::Point3d> obj_pts = {
+            cv::Point3d(keypoints->kp3d[node].position.x,
+                        keypoints->kp3d[node].position.y,
+                        keypoints->kp3d[node].position.z)};
+        cv::Mat point3d_mat = cv::Mat(obj_pts).reshape(1);  // (1, 3) CV_64F
+
+        for (u32 view_idx = 0; view_idx < scene->num_cams; view_idx++) {
+            if (!is_in_camera_fov(point3d_mat, camera_params[view_idx].rvec,
+                                  camera_params[view_idx].tvec,
+                                  camera_params[view_idx].k,
+                                  scene->image_width[view_idx],
+                                  scene->image_height[view_idx]))
+                continue;
+
+            cv::Mat imagePts;
+            cv::projectPoints(
+                obj_pts, camera_params[view_idx].rvec,
+                camera_params[view_idx].tvec, camera_params[view_idx].k,
+                camera_params[view_idx].dist_coeffs, imagePts);
+            double x = imagePts.at<double>(0, 0);
+            double y = double(scene->image_height[view_idx]) -
+                       imagePts.at<double>(0, 1);
+            if (x > 0 && x < scene->image_width[view_idx] && y > 0 &&
+                y < scene->image_height[view_idx]) {
+                keypoints->kp2d[view_idx][node].position.x = x;
+                keypoints->kp2d[view_idx][node].position.y = y;
+                keypoints->kp2d[view_idx][node].is_labeled = true;
+            }
+        }
+    }
+}
+
 static void reprojection(KeyPoints *keypoints, SkeletonContext *skeleton,
                          std::vector<CameraParams> camera_params,
                          RenderScene *scene) {

@@ -2620,6 +2620,19 @@ int main(int argc, char **argv) {
                                          &skeleton, pm.camera_params, scene);
                         }
                     }
+
+                    // Project 3D → 2D for every loaded frame. Use after
+                    // loading a `keypoints3d.csv` produced by an external
+                    // pipeline (e.g. fetch_analysis_examples/new_pipeline)
+                    // to derive RED-loadable per-view 2D labels without
+                    // shipping per-camera CSVs.
+                    ImGui::SameLine();
+                    if (ImGui::Button("Project 3D → 2D (all frames)")) {
+                        for (auto &kv : keypoints_map) {
+                            project_3d_to_2d_all_views(
+                                kv.second, &skeleton, pm.camera_params, scene);
+                        }
+                    }
                 } else {
                     // Display message when skeleton is not properly loaded
                     ImGui::Text("Please load a skeleton to view keypoints.");
