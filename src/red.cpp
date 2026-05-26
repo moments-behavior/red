@@ -1625,15 +1625,50 @@ int main(int argc, char **argv) {
                 // Extract RGBA→RGB from GPU frame buffers
                 std::vector<const uint8_t *> rgb_bufs(scene->num_cams, nullptr);
                 std::vector<std::vector<uint8_t>> rgb_storage(scene->num_cams);
+                // Per-cam slot index: when HN is active, search each cam's
+                // ring buffer for the slot whose frame_number matches the
+                // target. The display's shared `mh` index works for cams
+                // that happen to be synced, but at a seek target only a
+                // subset of decoders may have caught up to current_frame_num,
+                // and other cams' slot[mh] still holds stale data from when
+                // the ring last wrapped through that index. Without this, HN
+                // tries to fuse multi-view detections from different time
+                // points and produces nonsense 3D.
+                std::vector<int> mh_per_cam(scene->num_cams, mh);
+                bool hn_can_proceed = true;
 #ifdef RED_HAS_ONNXRUNTIME
                 if (hn_active) {
-                    fprintf(stderr, "[HN dispatch] mh=%d frame=%d\n",
-                            mh, (int)current_frame_num);
+                    for (int c = 0; c < (int)scene->num_cams; ++c) {
+                        int found = -1;
+                        for (int s = 0; s < (int)scene->size_of_buffer; ++s) {
+                            auto &cand = scene->display_buffer[c][s];
+                            if (!cand.available_to_write.load() &&
+                                cand.frame_number.load() == (int)current_frame_num) {
+                                found = s; break;
+                            }
+                        }
+                        if (found < 0) {
+                            fprintf(stderr,
+                                "[HN dispatch] cam %d: no slot has frame %d "
+                                "(decoder hasn't caught up yet); skipping predict\n",
+                                c, (int)current_frame_num);
+                            hn_can_proceed = false;
+                            break;
+                        }
+                        mh_per_cam[c] = found;
+                    }
+                    if (hn_can_proceed) {
+                        fprintf(stderr, "[HN dispatch] target frame=%d, mh_per_cam={",
+                                (int)current_frame_num);
+                        for (int c = 0; c < (int)scene->num_cams; ++c)
+                            fprintf(stderr, "%s%d", c ? "," : "", mh_per_cam[c]);
+                        fprintf(stderr, "}\n");
+                    }
                 }
 #endif
                 for (int c = 0; c < (int)scene->num_cams; ++c) {
                     if (!cam_included(c)) continue;
-                    auto &slot = scene->display_buffer[c][mh];
+                    auto &slot = scene->display_buffer[c][mh_per_cam[c]];
                     if (!slot.frame) continue;
                     int w = widths[c], h = heights[c];
                     // slot.frame is RGBA32 in GPU memory — copy to CPU, then strip alpha.
@@ -1683,7 +1718,13 @@ int main(int argc, char **argv) {
                     // destructor unwinding becomes a logged failure here,
                     // not a process abort.
                     bool ok = false;
-                    try {
+                    if (!hn_can_proceed) {
+                        fprintf(stderr,
+                            "[JARVIS HybridNet] skipped: not all cams have frame %d "
+                            "loaded yet (try \"Predict from All\" mode to force "
+                            "decode, or wait/scrub until the 3D viewer shows all "
+                            "cams synced)\n", (int)current_frame_num);
+                    } else try {
                         ok = jarvis_hybridnet_predict_frame(
                             jarvis_hn_state, rgb_bufs, widths, heights,
                             pm.camera_params, annotations, skeleton,
