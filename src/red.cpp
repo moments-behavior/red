@@ -1625,6 +1625,12 @@ int main(int argc, char **argv) {
                 // Extract RGBA→RGB from GPU frame buffers
                 std::vector<const uint8_t *> rgb_bufs(scene->num_cams, nullptr);
                 std::vector<std::vector<uint8_t>> rgb_storage(scene->num_cams);
+#ifdef RED_HAS_ONNXRUNTIME
+                if (hn_active) {
+                    fprintf(stderr, "[HN dispatch] mh=%d frame=%d\n",
+                            mh, (int)current_frame_num);
+                }
+#endif
                 for (int c = 0; c < (int)scene->num_cams; ++c) {
                     if (!cam_included(c)) continue;
                     auto &slot = scene->display_buffer[c][mh];
@@ -1640,6 +1646,21 @@ int main(int argc, char **argv) {
                         rgb_storage[c][i * 3 + 2] = rgba[i * 4 + 2]; // B
                     }
                     rgb_bufs[c] = rgb_storage[c].data();
+#ifdef RED_HAS_ONNXRUNTIME
+                    if (hn_active) {
+                        // Sample mean intensity from sparse stride to detect black frames.
+                        uint64_t sum = 0; size_t n = 0;
+                        for (size_t i = 0; i < rgba.size(); i += 64) { sum += rgba[i]; ++n; }
+                        double mean_byte = n ? (double)sum / n : -1.0;
+                        fprintf(stderr,
+                            "  cam %2d: frame_ptr=%p frame_num=%u avail_to_write=%d "
+                            "wxh=%dx%d mean_byte=%.1f\n",
+                            c, (void*)slot.frame,
+                            (unsigned)slot.frame_number.load(),
+                            (int)slot.available_to_write.load(),
+                            w, h, mean_byte);
+                    }
+#endif
                 }
 
 #ifdef RED_HAS_ONNXRUNTIME
