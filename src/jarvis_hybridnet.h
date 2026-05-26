@@ -796,6 +796,9 @@ inline bool jarvis_hybridnet_predict_frame(
     // Also reproject 3D back into each camera's 2D for overlay display.
     // Use the full pinhole-with-distortion (or telecentric) projection so the
     // overlay points land on the actual image features the user sees.
+    // NOTE: kp.y is stored in ImPlot coords (origin bottom-left), so we
+    // flip from image coords (origin top-left) by subtracting from height.
+    // This matches the existing 2D path in jarvis_inference.h:378.
     for (int c = 0; c < N; ++c) {
         const auto &cp = camera_params[c];
         for (int j = 0; j < J; ++j) {
@@ -805,7 +808,7 @@ inline bool jarvis_hybridnet_predict_frame(
                 : red_math::projectPointR(p3, cp.r, cp.tvec, cp.k, cp.dist_coeffs);
             auto &kp = fa.cameras[c].keypoints[j];
             kp.x = uv[0];
-            kp.y = uv[1];
+            kp.y = static_cast<double>(heights[c]) - uv[1];  // image → ImPlot
             kp.labeled = true;
             kp.source = LabelSource::Predicted;
             kp.confidence = state.confidences_out[j];
