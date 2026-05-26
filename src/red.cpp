@@ -1489,7 +1489,11 @@ int main(int argc, char **argv) {
 #elif defined(_WIN32)
             jarvis_any_loaded = jarvis_any_loaded || jarvis_trt_state.loaded;
 #endif
-            // Linux: only jarvis_state (ONNX Runtime) — already counted
+#if defined(__linux__) || defined(_WIN32)
+#ifdef RED_HAS_ONNXRUNTIME
+            jarvis_any_loaded = jarvis_any_loaded || jarvis_hn_state.loaded;
+#endif
+#endif
             if (jarvis_predict_trigger && !ps.play_video &&
                 jarvis_any_loaded && scene->num_cams > 0) {
 #ifdef __APPLE__
