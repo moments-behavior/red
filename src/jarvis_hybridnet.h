@@ -36,6 +36,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -251,14 +252,24 @@ inline bool jarvis_hybridnet_load(JarvisHybridNetState &state,
 
     Ort::SessionOptions opts;
     opts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
-    // Try CUDA EP; fall back to CPU if unavailable. We don't fail hard on
-    // missing CUDA because the user might be debugging on a CPU-only box.
-    try {
-        OrtCUDAProviderOptions cuda_opts{};
-        cuda_opts.device_id = gpu_device_id;
-        opts.AppendExecutionProvider_CUDA(cuda_opts);
-    } catch (const std::exception &) {
-        // CUDA not available; CPU-only fallback (slow but correct).
+    // CPU-only diagnostic: when RED_HN_CPU_ONLY=1 is set in the environment,
+    // skip CUDA EP entirely. Useful for isolating CUDA state-contamination
+    // issues between red's NVDEC/GL work and ORT — if the in-app pipeline
+    // works on CPU but crashes on GPU, the answer is a dedicated CUDA stream.
+    const char *cpu_only_env = std::getenv("RED_HN_CPU_ONLY");
+    const bool force_cpu = (cpu_only_env && cpu_only_env[0] == '1');
+    if (force_cpu) {
+        std::fprintf(stderr, "[HybridNet] RED_HN_CPU_ONLY=1 — using CPU EP (slow, diagnostic)\n");
+    } else {
+        // Try CUDA EP; fall back to CPU if unavailable. We don't fail hard on
+        // missing CUDA because the user might be debugging on a CPU-only box.
+        try {
+            OrtCUDAProviderOptions cuda_opts{};
+            cuda_opts.device_id = gpu_device_id;
+            opts.AppendExecutionProvider_CUDA(cuda_opts);
+        } catch (const std::exception &) {
+            // CUDA not available; CPU-only fallback (slow but correct).
+        }
     }
 
     try {

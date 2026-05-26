@@ -234,6 +234,9 @@ static void print_project_summary(const ProjectManager &pm,
 }
 
 int main(int argc, char **argv) {
+    // Print build timestamp so the user can verify they're running the latest
+    // rebuild (debugging stale-binary issues during integration work).
+    printf("red built %s %s\n", __DATE__, __TIME__);
     gx_context *window = (gx_context *)malloc(sizeof(gx_context));
     memset(window, 0, sizeof(gx_context));
     window->swap_interval = 1; // use vsync
@@ -1641,12 +1644,25 @@ int main(int argc, char **argv) {
                     // (CenterDetect → DLT triangulate → effTrack → Hybrid3D)
                     // and writes both 3D and per-cam 2D back-projections to
                     // AnnotationMap. No separate reprojection() call needed.
-                    bool ok = jarvis_hybridnet_predict_frame(
-                        jarvis_hn_state, rgb_bufs, widths, heights,
-                        pm.camera_params, annotations, skeleton,
-                        (u32)current_frame_num);
+                    // Outer try/catch in addition to predict_frame's own:
+                    // an exception escaping from an ORT internal thread or
+                    // destructor unwinding becomes a logged failure here,
+                    // not a process abort.
+                    bool ok = false;
+                    try {
+                        ok = jarvis_hybridnet_predict_frame(
+                            jarvis_hn_state, rgb_bufs, widths, heights,
+                            pm.camera_params, annotations, skeleton,
+                            (u32)current_frame_num);
+                    } catch (const std::exception &e) {
+                        fprintf(stderr, "[JARVIS HybridNet] uncaught exception "
+                                "in predict_frame: %s\n", e.what());
+                    } catch (...) {
+                        fprintf(stderr, "[JARVIS HybridNet] uncaught non-std "
+                                "exception in predict_frame\n");
+                    }
                     printf("[JARVIS HybridNet] %s  total=%.0fms  cams=%d/%d\n",
-                           ok ? "ok" : "failed (<2 center cams)",
+                           ok ? "ok" : "failed",
                            jarvis_hn_state.last_center_ms +
                            jarvis_hn_state.last_efftrack_ms +
                            jarvis_hn_state.last_hybrid3d_ms,
@@ -1857,9 +1873,16 @@ int main(int argc, char **argv) {
                                     if (hn_loaded) {
                                         // HybridNet handles 3D + per-cam 2D internally;
                                         // skip the separate reprojection() call.
-                                        jarvis_hybridnet_predict_frame(jarvis_hn_state,
-                                            rgb_bufs, w_b, h_b, pm.camera_params,
-                                            annotations, skeleton, frame);
+                                        try {
+                                            jarvis_hybridnet_predict_frame(jarvis_hn_state,
+                                                rgb_bufs, w_b, h_b, pm.camera_params,
+                                                annotations, skeleton, frame);
+                                        } catch (const std::exception &e) {
+                                            fprintf(stderr, "[Batch HybridNet] frame %u: %s\n",
+                                                    frame, e.what());
+                                        } catch (...) {
+                                            fprintf(stderr, "[Batch HybridNet] frame %u: non-std exception\n", frame);
+                                        }
                                     } else
 #endif
 #ifdef _WIN32
