@@ -399,13 +399,19 @@ inline bool jarvis_hybridnet_load(JarvisHybridNetState &state,
 
     state.loaded = true;
 
-    // Warmup: run each session once with dummy inputs. This forces ORT's
-    // CUDA arena to allocate the working chunks NOW, while red's GPU
-    // footprint is still small (NVDEC ring buffer not yet full). With
-    // arena_extend_strategy=kNextPowerOfTwo the chunks stay cached for
-    // subsequent predicts, so NVDEC can't later grab the memory ORT will
-    // need. If warmup OOMs, load fails clearly instead of the first user
-    // predict crashing.
+    // Warmup (off by default): if RED_HN_WARMUP=1, run each session once
+    // with dummy inputs so the arena allocates its working chunks now.
+    // Off because a warmup OOM corrupts the session's BFC arena state and
+    // any subsequent real Predict produces nonsense shape errors (we saw
+    // an 86 TiB allocation request). Without warmup, the first real
+    // Predict allocates fresh with kNextPowerOfTwo, which keeps the
+    // chunks cached for repeat predicts.
+    const char *warmup_env = std::getenv("RED_HN_WARMUP");
+    const bool do_warmup = (warmup_env && warmup_env[0] == '1');
+    if (!do_warmup) {
+        std::fprintf(stderr, "[HybridNet] load SUCCEEDED (warmup skipped)\n");
+        return true;
+    }
     try {
         // CenterDetect warmup: (N, 3, C, C)
         {
@@ -474,19 +480,19 @@ inline bool jarvis_hybridnet_load(JarvisHybridNetState &state,
         std::fprintf(stderr,
             "[HybridNet]   warmup OK — ORT arena chunks reserved\n");
     } catch (const std::exception &e) {
-        // Warmup failed — most often GPU OOM. Don't unload: the sessions
-        // are still valid, and a real predict click later may succeed if
-        // memory pressure relaxes (or the user reduces buffer size and
-        // reloads). Mark loaded=true so the UI shows the model as available
-        // and the user can try; if predict OOMs too, that's surfaced via
-        // the per-stage error logging.
+        // Warmup OOM corrupts ORT's BFC arena state and any subsequent
+        // real predict produces a nonsense shape error (we observed an
+        // 86 TiB allocation request after a warmup OOM). The session is
+        // unrecoverable; fully unload so the user can re-attempt with
+        // less memory pressure.
         std::fprintf(stderr,
-            "[HybridNet] warmup non-fatal failure: %s\n"
-            "[HybridNet] sessions remain loaded; clicking Predict will retry. "
-            "If predict also OOMs, the GPU is too contended — reduce the "
-            "playback buffer size further (View > Settings > Playback > "
-            "Buffer Size) or load the JARVIS model before loading videos.\n",
+            "[HybridNet] warmup FAILED: %s\n"
+            "[HybridNet] unloading sessions (warmup OOM leaves arena in a "
+            "broken state). Reduce playback buffer size, then re-select "
+            "the JARVIS model in the panel to retry.\n",
             e.what());
+        jarvis_hybridnet_unload(state);
+        return false;
     }
 
     std::fprintf(stderr, "[HybridNet] load SUCCEEDED\n");
