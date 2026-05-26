@@ -297,24 +297,21 @@ inline bool jarvis_hybridnet_load(JarvisHybridNetState &state,
             const OrtApi &api = Ort::GetApi();
             Ort::ThrowOnError(api.CreateCUDAProviderOptions(&cuda_options_v2));
             std::string dev_id_str = std::to_string(gpu_device_id);
-            // ~10 GB ceiling for ORT on this GPU. Hybrid3D's ReduceMean
-            // step needs ~6 GB; the rest covers conv/transpose workspaces +
-            // session activations. kNextPowerOfTwo keeps large chunks
-            // cached across predicts so the 2nd, 3rd, ... predict calls
-            // can reuse the arena instead of having to find contiguous
-            // memory each time (which fragments quickly when NVDEC is also
-            // growing its footprint between predicts).
-            std::string gpu_mem_str = "10737418240";  // 10 GiB
+            // No gpu_mem_limit — let ORT use whatever the GPU has free at
+            // session create / warmup time. (We previously capped at 10 GiB
+            // but the three sessions combined need more than that.)
+            // kNextPowerOfTwo keeps large chunks cached across predicts so
+            // the 2nd, 3rd, ... predict calls reuse the arena instead of
+            // re-allocating each time (which fragments fast when NVDEC is
+            // also growing its footprint between predicts).
             std::vector<const char *> keys = {
                 "device_id",
-                "gpu_mem_limit",
                 "arena_extend_strategy",
                 "cudnn_conv_use_max_workspace",
                 "do_copy_in_default_stream",
             };
             std::vector<const char *> values = {
                 dev_id_str.c_str(),
-                gpu_mem_str.c_str(),
                 "kNextPowerOfTwo",
                 "0",
                 "1",
@@ -326,7 +323,7 @@ inline bool jarvis_hybridnet_load(JarvisHybridNetState &state,
             api.ReleaseCUDAProviderOptions(cuda_options_v2);
             cuda_ep_attached = true;
             std::fprintf(stderr,
-                "[HybridNet]   CUDA EP attached V2 (device %d, mem_limit=10GiB, "
+                "[HybridNet]   CUDA EP attached V2 (device %d, "
                 "arena=kNextPowerOfTwo, cudnn_conv_workspace=min)\n", gpu_device_id);
         } catch (const std::exception &e) {
             std::fprintf(stderr,
@@ -390,6 +387,92 @@ inline bool jarvis_hybridnet_load(JarvisHybridNetState &state,
     state.confidences_out.assign(1 * J, 0.0f);
 
     state.loaded = true;
+
+    // Warmup: run each session once with dummy inputs. This forces ORT's
+    // CUDA arena to allocate the working chunks NOW, while red's GPU
+    // footprint is still small (NVDEC ring buffer not yet full). With
+    // arena_extend_strategy=kNextPowerOfTwo the chunks stay cached for
+    // subsequent predicts, so NVDEC can't later grab the memory ORT will
+    // need. If warmup OOMs, load fails clearly instead of the first user
+    // predict crashing.
+    try {
+        // CenterDetect warmup: (N, 3, C, C)
+        {
+            std::array<int64_t, 4> in_shape{N, 3, C, C};
+            Ort::Value in_tensor = Ort::Value::CreateTensor<float>(
+                state.mem_info, state.center_input.data(), state.center_input.size(),
+                in_shape.data(), in_shape.size());
+            std::vector<const char *> in_names_c, out_names_c;
+            for (auto &s : state.center_input_names)  in_names_c.push_back(s.c_str());
+            for (auto &s : state.center_output_names) out_names_c.push_back(s.c_str());
+            (void)state.center_session->Run(Ort::RunOptions{nullptr},
+                in_names_c.data(), &in_tensor, 1,
+                out_names_c.data(), out_names_c.size());
+        }
+        // effTrack warmup: (N, 3, B, B)
+        {
+            std::array<int64_t, 4> in_shape{N, 3, B, B};
+            Ort::Value in_tensor = Ort::Value::CreateTensor<float>(
+                state.mem_info, state.crop_input.data(), state.crop_input.size(),
+                in_shape.data(), in_shape.size());
+            std::vector<const char *> in_names_c, out_names_c;
+            for (auto &s : state.efftrack_input_names)  in_names_c.push_back(s.c_str());
+            for (auto &s : state.efftrack_output_names) out_names_c.push_back(s.c_str());
+            (void)state.efftrack_session->Run(Ort::RunOptions{nullptr},
+                in_names_c.data(), &in_tensor, 1,
+                out_names_c.data(), out_names_c.size());
+        }
+        // Hybrid3D warmup: 4 inputs at full shape
+        {
+            std::array<int64_t, 5> hm_shape{1, N, J, Hpad, Hpad};
+            std::array<int64_t, 3> chm_shape{1, N, 2};
+            std::array<int64_t, 2> c3d_shape{1, 3};
+            std::array<int64_t, 4> mat_shape{1, N, 4, 3};
+            std::vector<Ort::Value> ins;
+            ins.push_back(Ort::Value::CreateTensor<float>(state.mem_info,
+                state.heatmaps_padded.data(), state.heatmaps_padded.size(),
+                hm_shape.data(), hm_shape.size()));
+            ins.push_back(Ort::Value::CreateTensor<float>(state.mem_info,
+                state.centerHM_input.data(), state.centerHM_input.size(),
+                chm_shape.data(), chm_shape.size()));
+            ins.push_back(Ort::Value::CreateTensor<float>(state.mem_info,
+                state.center3D_input.data(), state.center3D_input.size(),
+                c3d_shape.data(), c3d_shape.size()));
+            ins.push_back(Ort::Value::CreateTensor<float>(state.mem_info,
+                state.camera_matrices.data(), state.camera_matrices.size(),
+                mat_shape.data(), mat_shape.size()));
+            std::vector<const char *> in_names_c, out_names_c;
+            for (auto &s : state.hybrid3d_input_names) in_names_c.push_back(s.c_str());
+            for (auto &s : state.hybrid3d_output_names) out_names_c.push_back(s.c_str());
+            // Reorder to expected input order
+            std::vector<Ort::Value> ins_ordered;
+            ins_ordered.reserve(in_names_c.size());
+            const char *want[] = {"heatmaps_padded", "centerHM", "center3D", "cameraMatrices"};
+            for (size_t i = 0; i < in_names_c.size(); ++i) {
+                for (size_t w = 0; w < 4; ++w) {
+                    if (std::strcmp(in_names_c[i], want[w]) == 0) {
+                        ins_ordered.push_back(std::move(ins[w]));
+                        break;
+                    }
+                }
+            }
+            (void)state.hybrid3d_session->Run(Ort::RunOptions{nullptr},
+                in_names_c.data(), ins_ordered.data(), ins_ordered.size(),
+                out_names_c.data(), out_names_c.size());
+        }
+        std::fprintf(stderr,
+            "[HybridNet]   warmup OK — ORT arena chunks reserved\n");
+    } catch (const std::exception &e) {
+        std::fprintf(stderr,
+            "[HybridNet] warmup FAILED: %s\n"
+            "[HybridNet] The GPU may not have enough free memory for HN "
+            "to coexist with red's NVDEC. Try loading the JARVIS model "
+            "BEFORE loading videos / playing, so NVDEC hasn't grown yet.\n",
+            e.what());
+        jarvis_hybridnet_unload(state);
+        return false;
+    }
+
     std::fprintf(stderr, "[HybridNet] load SUCCEEDED\n");
     return true;
 }
