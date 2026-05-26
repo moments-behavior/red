@@ -81,6 +81,11 @@ struct JarvisPredictState {
     bool cached_has_pth = false;
     bool cached_has_coreml = false;
     bool cached_has_hybridnet = false;
+    // Don't auto-retry load every ImGui frame after a failure (spams logs
+    // and pegs the GPU with cudaMalloc attempts). User can force a fresh
+    // attempt by re-selecting the model in the combo box.
+    std::string auto_load_attempted_path;
+    bool        auto_load_succeeded = false;
     std::string cached_center_path, cached_keypoint_path, cached_info_path;
 
     // Relative model path shown in Model Info
@@ -279,19 +284,28 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
             pm.active_jarvis_model < (int)pm.jarvis_models.size()) {
             auto &m = pm.jarvis_models[pm.active_jarvis_model];
             std::string base = pm.project_path + "/" + m.relative_path;
-            jarvis_load_from_dir(base, jarvis
+            // Skip auto-load if we already tried this exact path and failed:
+            // avoids retrying the load (and re-OOMing) every ImGui frame.
+            // User can force a retry by re-selecting the model in the combo
+            // (which clears auto_load_attempted_path below).
+            if (state.auto_load_attempted_path != base ||
+                state.auto_load_succeeded) {
+                auto lr = jarvis_load_from_dir(base, jarvis
 #ifdef __APPLE__
-                , jarvis_coreml
+                    , jarvis_coreml
 #elif defined(_WIN32)
-                , jarvis_trt
+                    , jarvis_trt
 #endif
 #if defined(__linux__) || defined(_WIN32)
 #ifdef RED_HAS_ONNXRUNTIME
-                , jarvis_hn
+                    , jarvis_hn
 #endif
 #endif
-            );
-            state.model_dir_display = m.relative_path;
+                );
+                state.auto_load_attempted_path = base;
+                state.auto_load_succeeded = lr.loaded;
+                state.model_dir_display = m.relative_path;
+            }
         }
 
         // --- Project Models (previously imported) ---

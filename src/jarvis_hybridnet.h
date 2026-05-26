@@ -244,6 +244,17 @@ inline bool jarvis_hybridnet_load(JarvisHybridNetState &state,
     jarvis_hybridnet_unload(state);  // idempotent reset
     std::fprintf(stderr, "[HybridNet] load: %s\n", model_dir.c_str());
 
+    // Report current GPU memory before any ORT allocations so the user can
+    // see whether red has already saturated the device.
+    {
+        size_t free_b = 0, total_b = 0;
+        if (cudaMemGetInfo(&free_b, &total_b) == cudaSuccess) {
+            std::fprintf(stderr,
+                "[HybridNet]   GPU %d memory: %.2f GiB free / %.2f GiB total\n",
+                gpu_device_id, free_b / 1073741824.0, total_b / 1073741824.0);
+        }
+    }
+
     fs::path dir(model_dir);
     if (!jarvis_hybridnet_load_manifest(state.cfg, (dir / "manifest.json").string())) {
         std::fprintf(stderr, "[HybridNet] load FAILED: could not parse manifest.json at %s\n",
@@ -463,14 +474,19 @@ inline bool jarvis_hybridnet_load(JarvisHybridNetState &state,
         std::fprintf(stderr,
             "[HybridNet]   warmup OK — ORT arena chunks reserved\n");
     } catch (const std::exception &e) {
+        // Warmup failed — most often GPU OOM. Don't unload: the sessions
+        // are still valid, and a real predict click later may succeed if
+        // memory pressure relaxes (or the user reduces buffer size and
+        // reloads). Mark loaded=true so the UI shows the model as available
+        // and the user can try; if predict OOMs too, that's surfaced via
+        // the per-stage error logging.
         std::fprintf(stderr,
-            "[HybridNet] warmup FAILED: %s\n"
-            "[HybridNet] The GPU may not have enough free memory for HN "
-            "to coexist with red's NVDEC. Try loading the JARVIS model "
-            "BEFORE loading videos / playing, so NVDEC hasn't grown yet.\n",
+            "[HybridNet] warmup non-fatal failure: %s\n"
+            "[HybridNet] sessions remain loaded; clicking Predict will retry. "
+            "If predict also OOMs, the GPU is too contended — reduce the "
+            "playback buffer size further (View > Settings > Playback > "
+            "Buffer Size) or load the JARVIS model before loading videos.\n",
             e.what());
-        jarvis_hybridnet_unload(state);
-        return false;
     }
 
     std::fprintf(stderr, "[HybridNet] load SUCCEEDED\n");
