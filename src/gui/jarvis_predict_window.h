@@ -153,6 +153,16 @@ inline JarvisLoadResult jarvis_load_from_dir(
             r.keypoint_input_size = jarvis_hn.cfg.keypoint_bbox_size;
             return r;
         }
+        // HN dir was detected but load failed. Do NOT silently fall through
+        // to the 2-stage ONNX path — that loads a different model (the same
+        // dir has center_detect.onnx + keypoint_detect.onnx). User explicitly
+        // chose an HN model dir; surface the failure instead of switching
+        // models behind their back.
+        std::fprintf(stderr,
+            "[JARVIS] HybridNet dir detected at %s but load failed — "
+            "refusing to silently fall back to 2-stage ONNX. See "
+            "[HybridNet] log lines above for the cause.\n", base_dir.c_str());
+        return r;  // r.loaded == false
     } else {
         jarvis_hybridnet_unload(jarvis_hn);
     }

@@ -242,13 +242,24 @@ inline bool jarvis_hybridnet_load(JarvisHybridNetState &state,
                                    int gpu_device_id) {
     namespace fs = std::filesystem;
     jarvis_hybridnet_unload(state);  // idempotent reset
+    std::fprintf(stderr, "[HybridNet] load: %s\n", model_dir.c_str());
 
     fs::path dir(model_dir);
     if (!jarvis_hybridnet_load_manifest(state.cfg, (dir / "manifest.json").string())) {
+        std::fprintf(stderr, "[HybridNet] load FAILED: could not parse manifest.json at %s\n",
+                     (dir / "manifest.json").string().c_str());
         return false;
     }
+    std::fprintf(stderr, "[HybridNet]   manifest: %d joints, %d cams, bbox=%d, roi=%.1fmm grid=%.1fmm\n",
+                 state.cfg.num_joints, state.cfg.num_cameras, state.cfg.keypoint_bbox_size,
+                 state.cfg.roi_cube_size_mm, state.cfg.grid_spacing_mm);
 
-    state.env = std::make_unique<Ort::Env>(ORT_LOGGING_LEVEL_WARNING, "red_jarvis_hybridnet");
+    try {
+        state.env = std::make_unique<Ort::Env>(ORT_LOGGING_LEVEL_WARNING, "red_jarvis_hybridnet");
+    } catch (const std::exception &e) {
+        std::fprintf(stderr, "[HybridNet] load FAILED: Ort::Env construction threw: %s\n", e.what());
+        return false;
+    }
 
     Ort::SessionOptions opts;
     opts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
@@ -258,28 +269,45 @@ inline bool jarvis_hybridnet_load(JarvisHybridNetState &state,
     // works on CPU but crashes on GPU, the answer is a dedicated CUDA stream.
     const char *cpu_only_env = std::getenv("RED_HN_CPU_ONLY");
     const bool force_cpu = (cpu_only_env && cpu_only_env[0] == '1');
+    bool cuda_ep_attached = false;
     if (force_cpu) {
-        std::fprintf(stderr, "[HybridNet] RED_HN_CPU_ONLY=1 — using CPU EP (slow, diagnostic)\n");
+        std::fprintf(stderr, "[HybridNet]   RED_HN_CPU_ONLY=1 — CPU EP only (slow, diagnostic)\n");
     } else {
-        // Try CUDA EP; fall back to CPU if unavailable. We don't fail hard on
-        // missing CUDA because the user might be debugging on a CPU-only box.
         try {
             OrtCUDAProviderOptions cuda_opts{};
             cuda_opts.device_id = gpu_device_id;
             opts.AppendExecutionProvider_CUDA(cuda_opts);
-        } catch (const std::exception &) {
-            // CUDA not available; CPU-only fallback (slow but correct).
+            cuda_ep_attached = true;
+            std::fprintf(stderr, "[HybridNet]   CUDA EP attached (device %d)\n", gpu_device_id);
+        } catch (const std::exception &e) {
+            std::fprintf(stderr,
+                "[HybridNet]   CUDA EP attach FAILED: %s — falling back to CPU EP\n", e.what());
         }
     }
 
-    try {
-        state.center_session  = std::make_unique<Ort::Session>(*state.env, (dir / "center_detect.onnx").c_str(), opts);
-        state.efftrack_session = std::make_unique<Ort::Session>(*state.env, (dir / "hybridnet_efftrack.onnx").c_str(), opts);
-        state.hybrid3d_session = std::make_unique<Ort::Session>(*state.env, (dir / "hybrid3d.onnx").c_str(), opts);
-    } catch (const std::exception &) {
-        jarvis_hybridnet_unload(state);
-        return false;
+    auto load_session = [&](const fs::path &path,
+                             std::unique_ptr<Ort::Session> &out,
+                             const char *label) -> bool {
+        try {
+            out = std::make_unique<Ort::Session>(*state.env, path.c_str(), opts);
+            std::fprintf(stderr, "[HybridNet]   loaded %s (%s)\n", label, path.filename().string().c_str());
+            return true;
+        } catch (const std::exception &e) {
+            std::fprintf(stderr, "[HybridNet] load FAILED on %s (%s): %s\n",
+                         label, path.string().c_str(), e.what());
+            return false;
+        }
+    };
+    if (!load_session(dir / "center_detect.onnx",      state.center_session,   "CenterDetect")) {
+        jarvis_hybridnet_unload(state); return false;
     }
+    if (!load_session(dir / "hybridnet_efftrack.onnx", state.efftrack_session, "HN-effTrack")) {
+        jarvis_hybridnet_unload(state); return false;
+    }
+    if (!load_session(dir / "hybrid3d.onnx",           state.hybrid3d_session, "Hybrid3D")) {
+        jarvis_hybridnet_unload(state); return false;
+    }
+    (void)cuda_ep_attached;
 
     jarvis_cache_session_io_names(*state.center_session,   state.center_input_names,   state.center_output_names);
     jarvis_cache_session_io_names(*state.efftrack_session, state.efftrack_input_names, state.efftrack_output_names);
@@ -313,6 +341,7 @@ inline bool jarvis_hybridnet_load(JarvisHybridNetState &state,
     state.confidences_out.assign(1 * J, 0.0f);
 
     state.loaded = true;
+    std::fprintf(stderr, "[HybridNet] load SUCCEEDED\n");
     return true;
 }
 
