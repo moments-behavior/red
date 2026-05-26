@@ -610,7 +610,19 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
 #elif defined(_WIN32)
             show_loaded = show_loaded || jarvis_trt.loaded;
 #endif
+#if defined(__linux__) || defined(_WIN32)
+#ifdef RED_HAS_ONNXRUNTIME
+            show_loaded = show_loaded || jarvis_hn.loaded;
+#endif
+#endif
             if (show_loaded) {
+#if defined(__linux__) || defined(_WIN32)
+#ifdef RED_HAS_ONNXRUNTIME
+                if (jarvis_hn.loaded) {
+                    ImGui::TextColored(ImVec4(0, 1, 0, 1), "Loaded (HybridNet 3D)");
+                } else
+#endif
+#endif
                 ImGui::TextColored(ImVec4(0, 1, 0, 1), "Loaded");
             } else if (!jarvis.status.empty()) {
                 ImGui::TextColored(ImVec4(1, 0.3f, 0.3f, 1), "%s", jarvis.status.c_str());
@@ -960,6 +972,21 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
                         jarvis.last_center_ms, jarvis.last_keypoint_ms,
                         jarvis.last_total_ms);
         }
+#if defined(__linux__) || defined(_WIN32)
+#ifdef RED_HAS_ONNXRUNTIME
+        if (jarvis_hn.loaded) {
+            double total = jarvis_hn.last_center_ms + jarvis_hn.last_efftrack_ms +
+                           jarvis_hn.last_hybrid3d_ms;
+            if (total > 0) {
+                ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
+                    "HybridNet 3D: Center %.0f + effTrack %.0f + Hybrid3D %.0f = %.0f ms  [%d/%d cams]",
+                    jarvis_hn.last_center_ms, jarvis_hn.last_efftrack_ms,
+                    jarvis_hn.last_hybrid3d_ms, total,
+                    jarvis_hn.last_center_cams_used, jarvis_hn.cfg.num_cameras);
+            }
+        }
+#endif
+#endif
 
         ImGui::Text("Predict from:");
         ImGui::SameLine();
@@ -970,13 +997,19 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
             state.predict_from_all = true;
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Shown: fast, uses visible cameras only\n"
-                              "All: seeks all cameras to current frame first");
+                              "All: seeks all cameras to current frame first\n"
+                              "(HybridNet ignores this and always uses all cameras)");
 
         bool can_predict = jarvis.loaded;
 #ifdef __APPLE__
         can_predict = can_predict || jarvis_coreml.loaded;
 #elif defined(_WIN32)
         can_predict = can_predict || jarvis_trt.loaded;
+#endif
+#if defined(__linux__) || defined(_WIN32)
+#ifdef RED_HAS_ONNXRUNTIME
+        can_predict = can_predict || jarvis_hn.loaded;
+#endif
 #endif
         if (!can_predict) ImGui::BeginDisabled();
         if (ImGui::Button("Predict Current Frame")) {
