@@ -265,23 +265,48 @@ inline bool jarvis_hybridnet_load(JarvisHybridNetState &state,
     opts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
     // CPU-only diagnostic: when RED_HN_CPU_ONLY=1 is set in the environment,
     // skip CUDA EP entirely. Useful for isolating CUDA state-contamination
-    // issues between red's NVDEC/GL work and ORT — if the in-app pipeline
-    // works on CPU but crashes on GPU, the answer is a dedicated CUDA stream.
+    // issues between red's NVDEC/GL work and ORT.
     const char *cpu_only_env = std::getenv("RED_HN_CPU_ONLY");
     const bool force_cpu = (cpu_only_env && cpu_only_env[0] == '1');
     bool cuda_ep_attached = false;
     if (force_cpu) {
         std::fprintf(stderr, "[HybridNet]   RED_HN_CPU_ONLY=1 — CPU EP only (slow, diagnostic)\n");
     } else {
+        // Use V2 CUDA provider options so we can constrain memory usage. The
+        // Hybrid3D ReduceMean op tries to allocate ~6 GB for the per-voxel
+        // mean across 16 cams × 24 joints × 100³ voxels, which fails when
+        // red's NVDEC + display buffers have already fragmented the device
+        // memory. kSameAsRequested prevents BFC from over-reserving; setting
+        // cudnn_conv_use_max_workspace=0 also lowers conv workspace pressure.
         try {
-            OrtCUDAProviderOptions cuda_opts{};
-            cuda_opts.device_id = gpu_device_id;
-            opts.AppendExecutionProvider_CUDA(cuda_opts);
+            OrtCUDAProviderOptionsV2 *cuda_options_v2 = nullptr;
+            const OrtApi &api = Ort::GetApi();
+            Ort::ThrowOnError(api.CreateCUDAProviderOptions(&cuda_options_v2));
+            std::string dev_id_str = std::to_string(gpu_device_id);
+            std::vector<const char *> keys = {
+                "device_id",
+                "arena_extend_strategy",
+                "cudnn_conv_use_max_workspace",
+                "do_copy_in_default_stream",
+            };
+            std::vector<const char *> values = {
+                dev_id_str.c_str(),
+                "kSameAsRequested",
+                "0",
+                "1",
+            };
+            Ort::ThrowOnError(api.UpdateCUDAProviderOptions(
+                cuda_options_v2, keys.data(), values.data(), keys.size()));
+            Ort::ThrowOnError(api.SessionOptionsAppendExecutionProvider_CUDA_V2(
+                static_cast<OrtSessionOptions *>(opts), cuda_options_v2));
+            api.ReleaseCUDAProviderOptions(cuda_options_v2);
             cuda_ep_attached = true;
-            std::fprintf(stderr, "[HybridNet]   CUDA EP attached (device %d)\n", gpu_device_id);
+            std::fprintf(stderr,
+                "[HybridNet]   CUDA EP attached V2 (device %d, arena=kSameAsRequested, "
+                "cudnn_conv_workspace=min)\n", gpu_device_id);
         } catch (const std::exception &e) {
             std::fprintf(stderr,
-                "[HybridNet]   CUDA EP attach FAILED: %s — falling back to CPU EP\n", e.what());
+                "[HybridNet]   CUDA EP V2 attach FAILED: %s — falling back to CPU EP\n", e.what());
         }
     }
 
