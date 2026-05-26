@@ -268,6 +268,20 @@ inline bool jarvis_hybridnet_load(JarvisHybridNetState &state,
     // issues between red's NVDEC/GL work and ORT.
     const char *cpu_only_env = std::getenv("RED_HN_CPU_ONLY");
     const bool force_cpu = (cpu_only_env && cpu_only_env[0] == '1');
+    // GPU override: RED_HN_GPU=N picks which CUDA device ORT runs on. Default
+    // is gpu_device_id (typically 0). On this 9-GPU box, red's NVDEC + GL
+    // pipeline saturates the RTX 4000 Ada (device 0); ORT's ~6 GB ReduceMean
+    // can't fit alongside. Setting RED_HN_GPU to an idle A16 (e.g. 8) gives
+    // ORT its own device with 14+ GiB free.
+    const char *gpu_env = std::getenv("RED_HN_GPU");
+    if (gpu_env) {
+        try {
+            gpu_device_id = std::stoi(gpu_env);
+            std::fprintf(stderr,
+                "[HybridNet]   RED_HN_GPU=%d — ORT will run on this device\n",
+                gpu_device_id);
+        } catch (...) { /* keep default */ }
+    }
     bool cuda_ep_attached = false;
     if (force_cpu) {
         std::fprintf(stderr, "[HybridNet]   RED_HN_CPU_ONLY=1 — CPU EP only (slow, diagnostic)\n");
@@ -283,15 +297,25 @@ inline bool jarvis_hybridnet_load(JarvisHybridNetState &state,
             const OrtApi &api = Ort::GetApi();
             Ort::ThrowOnError(api.CreateCUDAProviderOptions(&cuda_options_v2));
             std::string dev_id_str = std::to_string(gpu_device_id);
+            // ~10 GB ceiling for ORT on this GPU. Hybrid3D's ReduceMean
+            // step needs ~6 GB; the rest covers conv/transpose workspaces +
+            // session activations. kNextPowerOfTwo keeps large chunks
+            // cached across predicts so the 2nd, 3rd, ... predict calls
+            // can reuse the arena instead of having to find contiguous
+            // memory each time (which fragments quickly when NVDEC is also
+            // growing its footprint between predicts).
+            std::string gpu_mem_str = "10737418240";  // 10 GiB
             std::vector<const char *> keys = {
                 "device_id",
+                "gpu_mem_limit",
                 "arena_extend_strategy",
                 "cudnn_conv_use_max_workspace",
                 "do_copy_in_default_stream",
             };
             std::vector<const char *> values = {
                 dev_id_str.c_str(),
-                "kSameAsRequested",
+                gpu_mem_str.c_str(),
+                "kNextPowerOfTwo",
                 "0",
                 "1",
             };
@@ -302,8 +326,8 @@ inline bool jarvis_hybridnet_load(JarvisHybridNetState &state,
             api.ReleaseCUDAProviderOptions(cuda_options_v2);
             cuda_ep_attached = true;
             std::fprintf(stderr,
-                "[HybridNet]   CUDA EP attached V2 (device %d, arena=kSameAsRequested, "
-                "cudnn_conv_workspace=min)\n", gpu_device_id);
+                "[HybridNet]   CUDA EP attached V2 (device %d, mem_limit=10GiB, "
+                "arena=kNextPowerOfTwo, cudnn_conv_workspace=min)\n", gpu_device_id);
         } catch (const std::exception &e) {
             std::fprintf(stderr,
                 "[HybridNet]   CUDA EP V2 attach FAILED: %s — falling back to CPU EP\n", e.what());
