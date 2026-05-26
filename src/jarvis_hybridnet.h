@@ -308,13 +308,20 @@ inline bool jarvis_hybridnet_load(JarvisHybridNetState &state,
             const OrtApi &api = Ort::GetApi();
             Ort::ThrowOnError(api.CreateCUDAProviderOptions(&cuda_options_v2));
             std::string dev_id_str = std::to_string(gpu_device_id);
-            // No gpu_mem_limit — let ORT use whatever the GPU has free at
-            // session create / warmup time. (We previously capped at 10 GiB
-            // but the three sessions combined need more than that.)
-            // kNextPowerOfTwo keeps large chunks cached across predicts so
-            // the 2nd, 3rd, ... predict calls reuse the arena instead of
-            // re-allocating each time (which fragments fast when NVDEC is
-            // also growing its footprint between predicts).
+            // arena_extend_strategy=kSameAsRequested:
+            //   Each Op's chunk is allocated when needed and released within
+            //   the same Run(). Peak memory per Run() = max of any single
+            //   op (~6 GiB for Hybrid3D's ReduceMean), not the sum.
+            //
+            // kNextPowerOfTwo (the previous setting) cached chunks across
+            // Runs but caused unbounded arena growth WITHIN a single Run:
+            // reproLayer's 6 GiB ReduceMean reserved an 8 GiB chunk, then
+            // V2VNet's first conv tried to extend the arena by another
+            // power-of-two chunk, exceeding free memory.
+            //
+            // kSameAsRequested only works as a sustained strategy when red's
+            // NVDEC doesn't grow memory between predicts — which is true
+            // once playback buffer is set small enough (24 confirmed safe).
             std::vector<const char *> keys = {
                 "device_id",
                 "arena_extend_strategy",
@@ -323,7 +330,7 @@ inline bool jarvis_hybridnet_load(JarvisHybridNetState &state,
             };
             std::vector<const char *> values = {
                 dev_id_str.c_str(),
-                "kNextPowerOfTwo",
+                "kSameAsRequested",
                 "0",
                 "1",
             };
@@ -335,7 +342,7 @@ inline bool jarvis_hybridnet_load(JarvisHybridNetState &state,
             cuda_ep_attached = true;
             std::fprintf(stderr,
                 "[HybridNet]   CUDA EP attached V2 (device %d, "
-                "arena=kNextPowerOfTwo, cudnn_conv_workspace=min)\n", gpu_device_id);
+                "arena=kSameAsRequested, cudnn_conv_workspace=min)\n", gpu_device_id);
         } catch (const std::exception &e) {
             std::fprintf(stderr,
                 "[HybridNet]   CUDA EP V2 attach FAILED: %s — falling back to CPU EP\n", e.what());
@@ -666,6 +673,16 @@ inline bool jarvis_hybridnet_predict_frame(
         std::fprintf(stderr,
             "[HybridNet] cleared stale CUDA error before inference: %s\n",
             cudaGetErrorString(stale));
+    }
+    // Memory diagnostic: useful to see whether free GPU memory has shrunk
+    // since model load (e.g., NVDEC kept decoding while user navigated).
+    {
+        size_t free_b = 0, total_b = 0;
+        if (cudaMemGetInfo(&free_b, &total_b) == cudaSuccess) {
+            std::fprintf(stderr,
+                "[HybridNet] GPU memory at predict time: %.2f GiB free / %.2f GiB total\n",
+                free_b / 1073741824.0, total_b / 1073741824.0);
+        }
     }
     const int J = state.cfg.num_joints;
     const int C = state.cfg.center_image_size;     // 320
