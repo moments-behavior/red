@@ -1636,9 +1636,14 @@ int main(int argc, char **argv) {
                     auto &slot = scene->display_buffer[c][mh];
                     if (!slot.frame) continue;
                     int w = widths[c], h = heights[c];
-                    // slot.frame is RGBA32 in GPU memory — copy to CPU, then strip alpha
+                    // slot.frame is RGBA32 in GPU memory — copy to CPU, then strip alpha.
+                    // Use cudaMemcpyDefault so the runtime resolves the source device
+                    // automatically — slot.frame may have been allocated on a different
+                    // device than the calling thread (multi-GPU box: NVDEC decoders can
+                    // land buffers on whichever GPU they were initialized against).
                     std::vector<uint8_t> rgba(w * h * 4);
-                    cudaMemcpy(rgba.data(), slot.frame, w * h * 4, cudaMemcpyDeviceToHost);
+                    cudaError_t cpyErr = cudaMemcpy(rgba.data(), slot.frame,
+                                                    w * h * 4, cudaMemcpyDefault);
                     rgb_storage[c].resize(w * h * 3);
                     for (int i = 0; i < w * h; ++i) {
                         rgb_storage[c][i * 3 + 0] = rgba[i * 4 + 0]; // R
@@ -1652,13 +1657,17 @@ int main(int argc, char **argv) {
                         uint64_t sum = 0; size_t n = 0;
                         for (size_t i = 0; i < rgba.size(); i += 64) { sum += rgba[i]; ++n; }
                         double mean_byte = n ? (double)sum / n : -1.0;
+                        cudaPointerAttributes attrs{};
+                        cudaError_t aErr = cudaPointerGetAttributes(&attrs, slot.frame);
+                        int dev = (aErr == cudaSuccess) ? attrs.device : -1;
                         fprintf(stderr,
-                            "  cam %2d: frame_ptr=%p frame_num=%u avail_to_write=%d "
-                            "wxh=%dx%d mean_byte=%.1f\n",
-                            c, (void*)slot.frame,
+                            "  cam %2d: frame_ptr=%p dev=%d frame_num=%u avail_to_write=%d "
+                            "wxh=%dx%d mean_byte=%.1f cpy=%s\n",
+                            c, (void*)slot.frame, dev,
                             (unsigned)slot.frame_number.load(),
                             (int)slot.available_to_write.load(),
-                            w, h, mean_byte);
+                            w, h, mean_byte,
+                            cpyErr == cudaSuccess ? "ok" : cudaGetErrorString(cpyErr));
                     }
 #endif
                 }
