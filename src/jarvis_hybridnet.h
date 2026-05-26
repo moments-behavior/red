@@ -580,9 +580,26 @@ inline bool jarvis_hybridnet_predict_frame(
     std::vector<Eigen::Matrix<double, 3, 4>> center_proj_mats;
     constexpr float kCenterDetectThreshold = 50.0f;  // matches JARVIS python
     const size_t cen_plane = static_cast<size_t>(Hcen_hi) * Hcen_hi;
+    // Per-cam diagnostic: peak value, location, plus a sanity check on the
+    // input buffer's mean intensity (detects black/uninitialized frames).
+    std::fprintf(stderr, "[HybridNet] stage 2 per-cam:\n");
     for (int c = 0; c < N; ++c) {
         auto [px, py, v] = jarvis_peak_pick(
             state.center_out_high.data() + c * cen_plane, Hcen_hi, Hcen_hi);
+        // Sample mean intensity of the raw input (cheap: stride over the first
+        // channel of the resized 320x320 input we built earlier).
+        const size_t plane = static_cast<size_t>(C) * C;
+        double accum = 0.0; int n = 0;
+        for (size_t i = 0; i < plane; i += 64) {
+            accum += state.center_input[c * 3 * plane + i];
+            ++n;
+        }
+        double mean_norm = accum / n;  // ImageNet-normalized; ~0 means uniform gray
+        std::fprintf(stderr,
+            "  cam %2d (%s): peak=(%d, %d) val=%.2f  input_mean(norm)=%.3f%s\n",
+            c, widths.size() > (size_t)c ? "" : "?",
+            px, py, v, mean_norm,
+            v < kCenterDetectThreshold ? "  [BELOW THRESHOLD]" : "");
         if (v < kCenterDetectThreshold) continue;
         const double nx = (px + 0.5) * widths[c]  / static_cast<double>(Hcen_hi);
         const double ny = (py + 0.5) * heights[c] / static_cast<double>(Hcen_hi);
