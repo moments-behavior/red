@@ -570,8 +570,16 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
                 try {
                 for (auto &entry : fs::directory_iterator(src_dir)) {
                     auto fname = entry.path().filename().string();
+                    // Include ONNX weights, the legacy model_info.json (old 2-stage
+                    // path), and the HybridNet provenance artifacts manifest.json +
+                    // training_config.yaml. Without manifest.json the HN dir check
+                    // (jarvis_hybridnet_dir_is_valid) fails and the load silently
+                    // falls back to the 2-stage path, which then crashes on its
+                    // own ORT Run.
                     if (fname.find(".onnx") != std::string::npos ||
-                        fname == "model_info.json") {
+                        fname == "model_info.json" ||
+                        fname == "manifest.json" ||
+                        fname == "training_config.yaml") {
                         fs::copy_file(entry.path(), dest / fname,
                                       fs::copy_options::overwrite_existing, ec);
                     }
