@@ -79,6 +79,14 @@ echo
 # fallback path, but compile if present so the user can switch models.
 STEMS=( center_detect hybridnet_efftrack hybrid3d keypoint_detect )
 
+# HN_BATCH: number of cameras the engines run in one shot. red's HN pipeline
+# is hardwired to 16 cams. We build the 2D engines with a single optimization
+# profile pinned at this batch (min=opt=max) so they batch all cams per call
+# instead of looping per-cam — that's the ~3x steady-state speedup.
+# hybrid3d's ONNX bakes batch_size=1 in its leading dim (it's not the cam
+# axis; cams are dim 1, already 16), so no profile flags needed.
+HN_BATCH="${HN_BATCH:-16}"
+
 for stem in "${STEMS[@]}"; do
     onnx="$MODEL_DIR/$stem.onnx"
     engine="$MODEL_DIR/$stem.engine"
@@ -94,11 +102,31 @@ for stem in "${STEMS[@]}"; do
         continue
     fi
 
-    echo "=== Compiling $stem ==="
+    # Per-stem optimization profile. The 2D engines (Center, effTrack,
+    # standalone keypoint_detect) are pinned to HN_BATCH so red's batched
+    # TRT path runs them as one kernel launch. hybrid3d's exported ONNX
+    # already has fixed cam-axis=16, so it takes no shape flags.
+    PROFILE_FLAGS=""
+    case "$stem" in
+        center_detect)
+            shape="${HN_BATCH}x3x320x320"
+            PROFILE_FLAGS="--minShapes=input:${shape} --optShapes=input:${shape} --maxShapes=input:${shape}"
+            ;;
+        hybridnet_efftrack | keypoint_detect)
+            shape="${HN_BATCH}x3x704x704"
+            PROFILE_FLAGS="--minShapes=input:${shape} --optShapes=input:${shape} --maxShapes=input:${shape}"
+            ;;
+        hybrid3d)
+            PROFILE_FLAGS=""
+            ;;
+    esac
+
+    echo "=== Compiling $stem ===${PROFILE_FLAGS:+ (batch=${HN_BATCH})}"
     if "$TRTEXEC" \
         --onnx="$onnx" \
         --saveEngine="$engine" \
         --workspace="$WORKSPACE_MIB" \
+        $PROFILE_FLAGS \
         $FP16_FLAG \
         > "$log" 2>&1
     then

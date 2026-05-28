@@ -192,11 +192,46 @@ inline bool load_engine(Engine &eng, const std::string &engine_path,
     }
 
     const int n = eng.engine->getNbIOTensors();
+
+    // Pin every dynamic input to its profile's MAX shape so downstream output
+    // shapes resolve. Phase 2.1 compiles the 2D engines with min=opt=max=16,
+    // so MAX gives us the batch=16 shape we want; for engines whose inputs
+    // are fully static, the build-time shape has no -1's and setInputShape
+    // is a no-op-equivalent.
+    auto has_dynamic = [](const nvinfer1::Dims &d) {
+        for (int i = 0; i < d.nbDims; ++i) if (d.d[i] < 0) return true;
+        return false;
+    };
+    for (int i = 0; i < n; ++i) {
+        const char *name = eng.engine->getIOTensorName(i);
+        if (eng.engine->getTensorIOMode(name) != nvinfer1::TensorIOMode::kINPUT) continue;
+        auto build_dims = eng.engine->getTensorShape(name);
+        if (!has_dynamic(build_dims)) continue;
+        auto max_dims = eng.engine->getProfileShape(
+            name, 0, nvinfer1::OptProfileSelector::kMAX);
+        if (!eng.context->setInputShape(name, max_dims)) {
+            std::fprintf(stderr,
+                "[HN-TRT] setInputShape failed for %s (engine %s)\n",
+                name, engine_path.c_str());
+            eng.release();
+            return false;
+        }
+    }
+    if (!eng.context->allInputShapesSpecified()) {
+        std::fprintf(stderr,
+            "[HN-TRT] not all input shapes specified after profile pinning (engine %s)\n",
+            engine_path.c_str());
+        eng.release();
+        return false;
+    }
+
+    // Resolve final shapes from the context (handles both static and the
+    // dynamic-with-fixed-profile case) and allocate device memory.
     for (int i = 0; i < n; ++i) {
         const char *name = eng.engine->getIOTensorName(i);
         Binding b;
         b.is_input = (eng.engine->getTensorIOMode(name) == nvinfer1::TensorIOMode::kINPUT);
-        b.dims     = eng.engine->getTensorShape(name);
+        b.dims     = eng.context->getTensorShape(name);
         b.bytes    = dtype_size(eng.engine->getTensorDataType(name)) * volume(b.dims);
         if (b.bytes == 0) {
             std::fprintf(stderr, "[HN-TRT] tensor %s in %s has zero-volume shape\n",
@@ -1006,9 +1041,8 @@ inline bool jarvis_hybridnet_predict_frame(
     }
 #ifdef RED_HAS_TENSORRT_HN
     if (state.use_trt) {
-        // 2D-stage engines were exported with batch=1 (the dummy ONNX export
-        // shape). Run sequentially per camera; the per-cam host scratch slot
-        // matches the engine's expected input bytes.
+        // Single batched call across all N cams. Engines compiled by Phase 2.1
+        // of scripts/compile_tensorrt_engines.sh have input shape [N,3,C,C].
         auto &eng = *state.trt_center;
         jarvis_hn_trt::Binding *in = nullptr;
         jarvis_hn_trt::Binding *out_high = nullptr;
@@ -1021,28 +1055,26 @@ inline bool jarvis_hybridnet_predict_frame(
             std::fprintf(stderr, "[HybridNet] CenterDetect TRT: required bindings missing\n");
             return false;
         }
-        const size_t cam_in_bytes  = static_cast<size_t>(3) * C * C * sizeof(float);
-        const size_t cam_out_bytes = static_cast<size_t>(1) * Hcen_hi * Hcen_hi * sizeof(float);
-        if (in->bytes != cam_in_bytes || out_high->bytes != cam_out_bytes) {
+        const size_t batch_in_bytes  = state.center_input.size()    * sizeof(float);
+        const size_t batch_out_bytes = state.center_out_high.size() * sizeof(float);
+        if (in->bytes != batch_in_bytes || out_high->bytes != batch_out_bytes) {
             std::fprintf(stderr,
                 "[HybridNet] CenterDetect TRT shape mismatch: engine in=%zu out=%zu, "
-                "expected per-cam in=%zu out=%zu\n",
-                in->bytes, out_high->bytes, cam_in_bytes, cam_out_bytes);
+                "expected batched in=%zu out=%zu — recompile engines with "
+                "scripts/compile_tensorrt_engines.sh\n",
+                in->bytes, out_high->bytes, batch_in_bytes, batch_out_bytes);
             return false;
         }
-        for (int c = 0; c < N; ++c) {
-            const float *h_in  = state.center_input.data()    + c * 3 * C * C;
-            float       *h_out = state.center_out_high.data() + c * Hcen_hi * Hcen_hi;
-            if (!jarvis_hn_trt::cuda_ok(cudaMemcpyAsync(in->d_ptr, h_in,
-                    cam_in_bytes, cudaMemcpyHostToDevice, eng.stream), "CD H2D") ||
-                !eng.context->enqueueV3(eng.stream) ||
-                !jarvis_hn_trt::cuda_ok(cudaMemcpyAsync(h_out, out_high->d_ptr,
-                    cam_out_bytes, cudaMemcpyDeviceToHost, eng.stream), "CD D2H")) {
-                return false;
-            }
-        }
-        if (!jarvis_hn_trt::cuda_ok(cudaStreamSynchronize(eng.stream), "CD sync"))
+        if (!jarvis_hn_trt::cuda_ok(cudaMemcpyAsync(in->d_ptr,
+                state.center_input.data(), batch_in_bytes,
+                cudaMemcpyHostToDevice, eng.stream), "CD H2D") ||
+            !eng.context->enqueueV3(eng.stream) ||
+            !jarvis_hn_trt::cuda_ok(cudaMemcpyAsync(state.center_out_high.data(),
+                out_high->d_ptr, batch_out_bytes,
+                cudaMemcpyDeviceToHost, eng.stream), "CD D2H") ||
+            !jarvis_hn_trt::cuda_ok(cudaStreamSynchronize(eng.stream), "CD sync")) {
             return false;
+        }
     } else
 #endif
     try {
@@ -1160,8 +1192,7 @@ inline bool jarvis_hybridnet_predict_frame(
     auto t_eff = clk::now();
 #ifdef RED_HAS_TENSORRT_HN
     if (state.use_trt) {
-        // Per-cam (batch=1) like CenterDetect — engine was exported with the
-        // dummy ONNX shape.
+        // Single batched call across all N cams. Engine input shape [N,3,B,B].
         auto &eng = *state.trt_efftrack;
         jarvis_hn_trt::Binding *in = nullptr;
         jarvis_hn_trt::Binding *out_high = nullptr;
@@ -1174,28 +1205,26 @@ inline bool jarvis_hybridnet_predict_frame(
             std::fprintf(stderr, "[HybridNet] effTrack TRT: required bindings missing\n");
             return false;
         }
-        const size_t cam_in_bytes  = static_cast<size_t>(3) * B * B * sizeof(float);
-        const size_t cam_out_bytes = static_cast<size_t>(J) * Heff_hi * Heff_hi * sizeof(float);
-        if (in->bytes != cam_in_bytes || out_high->bytes != cam_out_bytes) {
+        const size_t batch_in_bytes  = state.crop_input.size()   * sizeof(float);
+        const size_t batch_out_bytes = state.eff_out_high.size() * sizeof(float);
+        if (in->bytes != batch_in_bytes || out_high->bytes != batch_out_bytes) {
             std::fprintf(stderr,
                 "[HybridNet] effTrack TRT shape mismatch: engine in=%zu out=%zu, "
-                "expected per-cam in=%zu out=%zu\n",
-                in->bytes, out_high->bytes, cam_in_bytes, cam_out_bytes);
+                "expected batched in=%zu out=%zu — recompile engines with "
+                "scripts/compile_tensorrt_engines.sh\n",
+                in->bytes, out_high->bytes, batch_in_bytes, batch_out_bytes);
             return false;
         }
-        for (int c = 0; c < N; ++c) {
-            const float *h_in  = state.crop_input.data()   + c * 3 * B * B;
-            float       *h_out = state.eff_out_high.data() + c * J * Heff_hi * Heff_hi;
-            if (!jarvis_hn_trt::cuda_ok(cudaMemcpyAsync(in->d_ptr, h_in,
-                    cam_in_bytes, cudaMemcpyHostToDevice, eng.stream), "ET H2D") ||
-                !eng.context->enqueueV3(eng.stream) ||
-                !jarvis_hn_trt::cuda_ok(cudaMemcpyAsync(h_out, out_high->d_ptr,
-                    cam_out_bytes, cudaMemcpyDeviceToHost, eng.stream), "ET D2H")) {
-                return false;
-            }
-        }
-        if (!jarvis_hn_trt::cuda_ok(cudaStreamSynchronize(eng.stream), "ET sync"))
+        if (!jarvis_hn_trt::cuda_ok(cudaMemcpyAsync(in->d_ptr,
+                state.crop_input.data(), batch_in_bytes,
+                cudaMemcpyHostToDevice, eng.stream), "ET H2D") ||
+            !eng.context->enqueueV3(eng.stream) ||
+            !jarvis_hn_trt::cuda_ok(cudaMemcpyAsync(state.eff_out_high.data(),
+                out_high->d_ptr, batch_out_bytes,
+                cudaMemcpyDeviceToHost, eng.stream), "ET D2H") ||
+            !jarvis_hn_trt::cuda_ok(cudaStreamSynchronize(eng.stream), "ET sync")) {
             return false;
+        }
     } else
 #endif
     try {
