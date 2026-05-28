@@ -1399,6 +1399,7 @@ elseif(WIN32)
         src/kernel.cu
         src/aruco_cuda.cu
         src/pointsource_cuda.cu
+        src/jarvis_hybridnet_cuda.cu
     )
 
     # Main executable
@@ -1716,6 +1717,7 @@ else()
         src/kernel.cu
         src/aruco_cuda.cu
         src/pointsource_cuda.cu
+        src/jarvis_hybridnet_cuda.cu
     )
 
     add_executable(red

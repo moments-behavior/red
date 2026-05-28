@@ -35,6 +35,7 @@
 #ifdef RED_HAS_TENSORRT_HN
 #include <NvInfer.h>
 #include <NvInferPlugin.h>
+#include "jarvis_hybridnet_cuda.h"
 #endif
 
 #include <array>
@@ -1193,6 +1194,8 @@ inline bool jarvis_hybridnet_predict_frame(
 #ifdef RED_HAS_TENSORRT_HN
     if (state.use_trt) {
         // Single batched call across all N cams. Engine input shape [N,3,B,B].
+        // Output stays on device — pad kernel later reads it directly into
+        // Hybrid3D's input buffer. No D2H here.
         auto &eng = *state.trt_efftrack;
         jarvis_hn_trt::Binding *in = nullptr;
         jarvis_hn_trt::Binding *out_high = nullptr;
@@ -1219,9 +1222,6 @@ inline bool jarvis_hybridnet_predict_frame(
                 state.crop_input.data(), batch_in_bytes,
                 cudaMemcpyHostToDevice, eng.stream), "ET H2D") ||
             !eng.context->enqueueV3(eng.stream) ||
-            !jarvis_hn_trt::cuda_ok(cudaMemcpyAsync(state.eff_out_high.data(),
-                out_high->d_ptr, batch_out_bytes,
-                cudaMemcpyDeviceToHost, eng.stream), "ET D2H") ||
             !jarvis_hn_trt::cuda_ok(cudaStreamSynchronize(eng.stream), "ET sync")) {
             return false;
         }
@@ -1255,8 +1255,13 @@ inline bool jarvis_hybridnet_predict_frame(
     state.last_efftrack_ms = std::chrono::duration<double, std::milli>(clk::now() - t_eff).count();
 
     // ── STAGE 5: pad + assemble Hybrid3D inputs ──────────────────────
-    jarvis_pad_heatmaps(state.eff_out_high.data(), N, J, Heff_hi, Heff_hi,
-                        state.heatmaps_padded.data(), Hpad);
+    // Host pad fills state.heatmaps_padded for the ORT path. The TRT path
+    // skips it and runs jarvis_hn_pad_heatmaps_device on the GPU instead
+    // (effTrack's output stayed device-resident).
+    if (!state.use_trt) {
+        jarvis_pad_heatmaps(state.eff_out_high.data(), N, J, Heff_hi, Heff_hi,
+                            state.heatmaps_padded.data(), Hpad);
+    }
     // camera_matrices: (1, N, 4, 3) = transposed projection_mat per cam.
     for (int c = 0; c < N; ++c) {
         const auto &P = camera_params[c].projection_mat;  // (3, 4) col-major Eigen
@@ -1282,6 +1287,34 @@ inline bool jarvis_hybridnet_predict_frame(
 #ifdef RED_HAS_TENSORRT_HN
     if (state.use_trt) {
         auto &eng = *state.trt_hybrid3d;
+        // Run the device-side pad kernel on Hybrid3D's stream. It reads from
+        // effTrack's output device buffer (safe — effTrack stream was synced
+        // at end of Stage 4) and writes into Hybrid3D's heatmaps_padded
+        // binding. Replaces the D2H + CPU pad + H2D triplet from Phase 2.1.
+        {
+            jarvis_hn_trt::Binding *src_b = nullptr;
+            for (auto &kv : state.trt_efftrack->bindings) {
+                if (!kv.second.is_input && kv.second.dims.nbDims == 4 &&
+                    kv.second.dims.d[2] == Heff_hi) {
+                    src_b = &kv.second; break;
+                }
+            }
+            auto *dst_b = eng.get("heatmaps_padded");
+            if (!src_b || !dst_b) {
+                std::fprintf(stderr,
+                    "[HybridNet] pad-on-GPU: missing effTrack output or "
+                    "Hybrid3D heatmaps_padded binding\n");
+                return false;
+            }
+            if (!jarvis_hn_trt::cuda_ok(
+                    jarvis_hn_pad_heatmaps_device(
+                        static_cast<const float *>(src_b->d_ptr),
+                        static_cast<float *>(dst_b->d_ptr),
+                        N, J, Heff_hi, Heff_hi, eng.stream),
+                    "pad heatmaps")) {
+                return false;
+            }
+        }
         auto h2d = [&](const char *name, const void *host, size_t host_bytes) -> bool {
             auto *b = eng.get(name);
             if (!b || !b->is_input) {
@@ -1299,9 +1332,9 @@ inline bool jarvis_hybridnet_predict_frame(
                                 cudaMemcpyHostToDevice, eng.stream),
                 "H3D H2D");
         };
-        if (!h2d("heatmaps_padded", state.heatmaps_padded.data(),
-                 state.heatmaps_padded.size() * sizeof(float)) ||
-            !h2d("centerHM",        state.centerHM_input.data(),
+        // heatmaps_padded was populated on-device by the pad kernel above;
+        // we only H2D the three small CPU-built inputs.
+        if (!h2d("centerHM",        state.centerHM_input.data(),
                  state.centerHM_input.size() * sizeof(float)) ||
             !h2d("center3D",        state.center3D_input.data(),
                  state.center3D_input.size() * sizeof(float)) ||
