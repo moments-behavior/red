@@ -1647,8 +1647,10 @@ else()
     # the same driver 535.x. Orange's toolchain is UNTOUCHED — red just
     # links read-only against those shared installs. ML inference libs
     # (ONNX Runtime, cuDNN) are bundled in red/lib/ with RPATH isolation so
-    # they cannot collide with orange's TensorRT 8.6 / cuDNN 8.9.
-    # No OpenCV, no LibTorch, no TensorRT.
+    # they cannot collide with orange's TensorRT 8.6 / cuDNN 8.9. The JARVIS
+    # HybridNet path links read-only against orange's shared TRT install at
+    # $HOME/nvidia/TensorRT-8.6.1.6 (build-tree RPATH only — never bundled).
+    # No OpenCV, no LibTorch.
     # ────────────────────────────────────────────────────────────────────────
     project(red LANGUAGES CXX CUDA)
 
@@ -1734,6 +1736,21 @@ else()
         message(STATUS "ONNX Runtime not found in lib/onnxruntime/ — JARVIS prediction disabled")
     endif()
 
+    # Optional TensorRT 8.6 for JARVIS HybridNet direct-runtime inference.
+    # Read-only orange-shared install — never bundled, never modified.
+    # Engine files for the loaded JARVIS model are compiled offline via
+    # scripts/compile_tensorrt_engines.sh. At runtime, jarvis_hybridnet.h
+    # uses TRT when .engine files are present and falls back to the ORT CUDA EP.
+    set(TENSORRT_DIR "$ENV{HOME}/nvidia/TensorRT-8.6.1.6")
+    if(EXISTS "${TENSORRT_DIR}/include/NvInfer.h" AND
+       EXISTS "${TENSORRT_DIR}/lib/libnvinfer.so")
+        set(HAS_TENSORRT_HN TRUE)
+        message(STATUS "TensorRT found at ${TENSORRT_DIR} (HybridNet direct runtime enabled)")
+    else()
+        set(HAS_TENSORRT_HN FALSE)
+        message(STATUS "TensorRT not found at ${TENSORRT_DIR} — JARVIS HybridNet will use ORT CUDA EP only")
+    endif()
+
     # Optional MuJoCo for body-model IK (bundled at lib/mujoco/)
     set(MUJOCO_DIR "${CMAKE_SOURCE_DIR}/lib/mujoco")
     if(EXISTS "${MUJOCO_DIR}/include/mujoco/mujoco.h")
@@ -1753,6 +1770,9 @@ else()
     if(HAS_ONNXRUNTIME)
         target_compile_definitions(red PRIVATE RED_HAS_ONNXRUNTIME)
     endif()
+    if(HAS_TENSORRT_HN)
+        target_compile_definitions(red PRIVATE RED_HAS_TENSORRT_HN)
+    endif()
     if(HAS_MUJOCO)
         target_compile_definitions(red PRIVATE RED_HAS_MUJOCO)
     endif()
@@ -1769,6 +1789,9 @@ else()
     )
     if(HAS_ONNXRUNTIME)
         target_include_directories(red PRIVATE "${ONNXRUNTIME_DIR}/include")
+    endif()
+    if(HAS_TENSORRT_HN)
+        target_include_directories(red PRIVATE "${TENSORRT_DIR}/include")
     endif()
     if(HAS_MUJOCO)
         target_include_directories(red PRIVATE "${MUJOCO_DIR}/include" "${MUJOCO_DIR}/include/mujoco")
@@ -1800,6 +1823,19 @@ else()
 
     if(HAS_ONNXRUNTIME)
         target_link_libraries(red PRIVATE "${ONNXRUNTIME_DIR}/lib/libonnxruntime.so")
+    endif()
+    if(HAS_TENSORRT_HN)
+        # libnvinfer_plugin.so is wrapped in --no-as-needed because red has no
+        # direct symbol references to it — initLibNvInferPlugins is called via
+        # an inline helper in jarvis_hybridnet.h, which is reachable but the
+        # linker's default --as-needed drops the DT_NEEDED entry. Without the
+        # plugin lib loaded, hybrid3d.engine deserialization fails with
+        # "getPluginCreator could not find plugin: InstanceNormalization_TRT".
+        target_link_libraries(red PRIVATE
+            "${TENSORRT_DIR}/lib/libnvinfer.so"
+            "-Wl,--no-as-needed"
+            "${TENSORRT_DIR}/lib/libnvinfer_plugin.so"
+            "-Wl,--as-needed")
     endif()
     if(HAS_MUJOCO)
         target_link_libraries(red PRIVATE "${MUJOCO_DIR}/lib/libmujoco.so")
@@ -1849,6 +1885,13 @@ else()
     if(HAS_MUJOCO)
         list(APPEND RED_RPATH_BUILD "${MUJOCO_DIR}/lib")
         list(APPEND RED_RPATH_INSTALL "$ORIGIN/../lib/mujoco/lib")
+    endif()
+    # TensorRT: build-tree RPATH only — read-only orange-shared install.
+    # Users running `cmake --install` should set LD_LIBRARY_PATH at runtime
+    # (or symlink the install to a fixed location) since the absolute path
+    # under $HOME is not portable.
+    if(HAS_TENSORRT_HN)
+        list(APPEND RED_RPATH_BUILD "${TENSORRT_DIR}/lib")
     endif()
 
     set_target_properties(red PROPERTIES
@@ -1905,6 +1948,15 @@ else()
             target_compile_definitions(${TEST_NAME} PRIVATE RED_HAS_ONNXRUNTIME)
             target_include_directories(${TEST_NAME} PRIVATE "${ONNXRUNTIME_DIR}/include")
             target_link_libraries(${TEST_NAME} PRIVATE "${ONNXRUNTIME_DIR}/lib/libonnxruntime.so")
+        endif()
+        if(HAS_TENSORRT_HN)
+            target_compile_definitions(${TEST_NAME} PRIVATE RED_HAS_TENSORRT_HN)
+            target_include_directories(${TEST_NAME} PRIVATE "${TENSORRT_DIR}/include")
+            target_link_libraries(${TEST_NAME} PRIVATE
+                "${TENSORRT_DIR}/lib/libnvinfer.so"
+                "-Wl,--no-as-needed"
+                "${TENSORRT_DIR}/lib/libnvinfer_plugin.so"
+                "-Wl,--as-needed")
         endif()
         if(HAS_MUJOCO)
             target_compile_definitions(${TEST_NAME} PRIVATE RED_HAS_MUJOCO)

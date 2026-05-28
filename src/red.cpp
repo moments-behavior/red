@@ -1610,6 +1610,62 @@ int main(int argc, char **argv) {
 #else
                 const bool hn_active = false;
 #endif
+
+#ifdef RED_HAS_ONNXRUNTIME
+                // Force a global seek + decoder-wake when HN predict is about
+                // to fire and some cam doesn't yet have the current frame in
+                // its ring buffer. Mirrors the macOS Predict-from-All path.
+                // Without this, hidden camera tabs keep their decoder threads
+                // paused (window_need_decoding=false) and HN predict bails
+                // with "decoder hasn't caught up yet" — even with All selected.
+                if (hn_active) {
+                    auto has_target_frame = [&](int c) -> bool {
+                        for (int s = 0; s < (int)scene->size_of_buffer; ++s) {
+                            auto &cand = scene->display_buffer[c][s];
+                            if (!cand.available_to_write.load() &&
+                                cand.frame_number.load() == (int)current_frame_num)
+                                return true;
+                        }
+                        return false;
+                    };
+                    bool any_missing = false;
+                    for (int c = 0; c < (int)scene->num_cams; ++c) {
+                        if (!has_target_frame(c)) { any_missing = true; break; }
+                    }
+                    if (any_missing) {
+                        fprintf(stderr,
+                            "[HN dispatch] forcing decode-all to reach frame %d "
+                            "(some cams hidden / decoders paused)\n",
+                            (int)current_frame_num);
+                        seek_all_cameras(scene, current_frame_num,
+                                         dc_context->video_fps, ps, true);
+                        ps.pause_selected = 0;
+                        for (auto &[key, value] : window_need_decoding)
+                            value.store(true);
+                        // Wait up to ~2 s for every cam to land the target
+                        // frame in some slot of its ring buffer.
+                        bool all_ready = false;
+                        for (int wait = 0; wait < 2000; ++wait) {
+                            all_ready = true;
+                            for (int c = 0; c < (int)scene->num_cams; ++c) {
+                                if (!has_target_frame(c)) { all_ready = false; break; }
+                            }
+                            if (all_ready) break;
+                            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                        }
+                        if (!all_ready) {
+                            fprintf(stderr,
+                                "[HN dispatch] decode-all wait timed out (>2s) — "
+                                "some cams still missing frame %d; predict may skip\n",
+                                (int)current_frame_num);
+                        }
+                        // seek_all_cameras resets ring buffers to slot 0.
+                        mh = 0;
+                        select_corr_head = mh;
+                    }
+                }
+#endif
+
                 auto cam_included = [&](int c) -> bool {
                     if (hn_active || win.jarvis_predict.predict_from_all) return true;
                     if (c < (int)pm.camera_names.size() &&
@@ -1638,6 +1694,8 @@ int main(int argc, char **argv) {
                 bool hn_can_proceed = true;
 #ifdef RED_HAS_ONNXRUNTIME
                 if (hn_active) {
+                    const char *hn_verbose_env = std::getenv("RED_HN_VERBOSE");
+                    const bool hn_verbose = (hn_verbose_env && hn_verbose_env[0] == '1');
                     for (int c = 0; c < (int)scene->num_cams; ++c) {
                         int found = -1;
                         for (int s = 0; s < (int)scene->size_of_buffer; ++s) {
@@ -1648,6 +1706,8 @@ int main(int argc, char **argv) {
                             }
                         }
                         if (found < 0) {
+                            // Abort reason — always logged so the user sees why
+                            // predict was skipped (decoders out of sync).
                             fprintf(stderr,
                                 "[HN dispatch] cam %d: no slot has frame %d "
                                 "(decoder hasn't caught up yet); skipping predict\n",
@@ -1657,7 +1717,7 @@ int main(int argc, char **argv) {
                         }
                         mh_per_cam[c] = found;
                     }
-                    if (hn_can_proceed) {
+                    if (hn_can_proceed && hn_verbose) {
                         fprintf(stderr, "[HN dispatch] target frame=%d, mh_per_cam={",
                                 (int)current_frame_num);
                         for (int c = 0; c < (int)scene->num_cams; ++c)

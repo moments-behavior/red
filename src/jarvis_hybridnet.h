@@ -32,16 +32,239 @@
 #include <onnxruntime_cxx_api.h>
 #include <cuda_runtime.h>
 
+#ifdef RED_HAS_TENSORRT_HN
+#include <NvInfer.h>
+#include <NvInferPlugin.h>
+#endif
+
 #include <array>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
+
+// ─────────────────────────────────────────────────────────────────────────
+// TensorRT direct-runtime support (optional, enabled when offline-compiled
+// .engine files are present alongside the .onnx files in model_dir).
+//
+// The engine wrapper is multi-input / multi-output and indexes bindings by
+// tensor name — Hybrid3D has 4 inputs (heatmaps_padded, centerHM, center3D,
+// cameraMatrices) and ≥2 outputs (points3D, confidences). All bindings get
+// device buffers allocated up front from engine shapes; per-predict work is
+// just H↔D memcpy + enqueueV3 + stream sync.
+// ─────────────────────────────────────────────────────────────────────────
+#ifdef RED_HAS_TENSORRT_HN
+namespace jarvis_hn_trt {
+
+class Logger : public nvinfer1::ILogger {
+public:
+    void log(Severity severity, const char *msg) noexcept override {
+        if (severity <= Severity::kWARNING) std::fprintf(stderr, "[HN-TRT] %s\n", msg);
+    }
+};
+
+inline bool cuda_ok(cudaError_t err, const char *where) {
+    if (err == cudaSuccess) return true;
+    std::fprintf(stderr, "[HN-TRT] CUDA error in %s: %s\n", where, cudaGetErrorString(err));
+    return false;
+}
+
+struct Binding {
+    nvinfer1::Dims dims{};
+    size_t bytes = 0;          // element size * volume
+    void *d_ptr = nullptr;     // device buffer
+    bool is_input = false;
+};
+
+struct Engine {
+    nvinfer1::IRuntime *runtime = nullptr;
+    nvinfer1::ICudaEngine *engine = nullptr;
+    nvinfer1::IExecutionContext *context = nullptr;
+    cudaStream_t stream = nullptr;
+    std::unordered_map<std::string, Binding> bindings;  // by tensor name
+    bool loaded = false;
+
+    ~Engine() { release(); }
+
+    void release() {
+        for (auto &kv : bindings) {
+            if (kv.second.d_ptr) cudaFree(kv.second.d_ptr);
+        }
+        bindings.clear();
+        if (stream)  { cudaStreamDestroy(stream); stream = nullptr; }
+        if (context) { delete context; context = nullptr; }
+        if (engine)  { delete engine;  engine = nullptr; }
+        if (runtime) { delete runtime; runtime = nullptr; }
+        loaded = false;
+    }
+
+    Binding *get(const std::string &name) {
+        auto it = bindings.find(name);
+        return it == bindings.end() ? nullptr : &it->second;
+    }
+};
+
+inline size_t dtype_size(nvinfer1::DataType t) {
+    switch (t) {
+        case nvinfer1::DataType::kFLOAT: return 4;
+        case nvinfer1::DataType::kHALF:  return 2;
+        case nvinfer1::DataType::kINT8:  return 1;
+        case nvinfer1::DataType::kINT32: return 4;
+        case nvinfer1::DataType::kBOOL:  return 1;
+        case nvinfer1::DataType::kUINT8: return 1;
+        default:                          return 4;
+    }
+}
+
+inline size_t volume(const nvinfer1::Dims &d) {
+    size_t v = 1;
+    for (int i = 0; i < d.nbDims; ++i) v *= static_cast<size_t>(d.d[i]);
+    return v;
+}
+
+// One-shot plugin registry init. Required for engines built with NMS,
+// reproLayer, or any other op that ships as a TRT plugin — without this
+// deserialization fails with "Cannot deserialize plugin since corresponding
+// IPluginCreator not found in Plugin Registry". Safe to call multiple times.
+inline void ensure_plugins_registered(nvinfer1::ILogger &logger) {
+    static bool initialized = false;
+    if (initialized) return;
+    if (!initLibNvInferPlugins(&logger, "")) {
+        std::fprintf(stderr, "[HN-TRT] WARN: initLibNvInferPlugins returned false "
+                             "(continuing, but plugin-bearing engines may fail to load)\n");
+    }
+    initialized = true;
+}
+
+// Deserialize an .engine file, create an execution context, allocate device
+// memory for every I/O tensor, and bind tensor addresses. On failure logs
+// and returns false; partial state is cleaned up.
+inline bool load_engine(Engine &eng, const std::string &engine_path,
+                        nvinfer1::ILogger &logger) {
+    ensure_plugins_registered(logger);
+    eng.release();
+    namespace fs = std::filesystem;
+    if (!fs::exists(engine_path)) {
+        std::fprintf(stderr, "[HN-TRT] engine not found: %s\n", engine_path.c_str());
+        return false;
+    }
+    std::ifstream f(engine_path, std::ios::binary | std::ios::ate);
+    if (!f.is_open()) {
+        std::fprintf(stderr, "[HN-TRT] cannot open engine: %s\n", engine_path.c_str());
+        return false;
+    }
+    size_t sz = static_cast<size_t>(f.tellg());
+    f.seekg(0, std::ios::beg);
+    std::vector<char> blob(sz);
+    if (!f.read(blob.data(), sz)) {
+        std::fprintf(stderr, "[HN-TRT] failed to read engine: %s\n", engine_path.c_str());
+        return false;
+    }
+    f.close();
+
+    eng.runtime = nvinfer1::createInferRuntime(logger);
+    if (!eng.runtime) {
+        std::fprintf(stderr, "[HN-TRT] createInferRuntime failed for %s\n", engine_path.c_str());
+        return false;
+    }
+    eng.engine = eng.runtime->deserializeCudaEngine(blob.data(), blob.size());
+    if (!eng.engine) {
+        std::fprintf(stderr, "[HN-TRT] deserializeCudaEngine failed for %s\n", engine_path.c_str());
+        eng.release();
+        return false;
+    }
+    eng.context = eng.engine->createExecutionContext();
+    if (!eng.context) {
+        std::fprintf(stderr, "[HN-TRT] createExecutionContext failed for %s\n", engine_path.c_str());
+        eng.release();
+        return false;
+    }
+    if (!cuda_ok(cudaStreamCreate(&eng.stream), "cudaStreamCreate")) {
+        eng.release();
+        return false;
+    }
+
+    const int n = eng.engine->getNbIOTensors();
+    for (int i = 0; i < n; ++i) {
+        const char *name = eng.engine->getIOTensorName(i);
+        Binding b;
+        b.is_input = (eng.engine->getTensorIOMode(name) == nvinfer1::TensorIOMode::kINPUT);
+        b.dims     = eng.engine->getTensorShape(name);
+        b.bytes    = dtype_size(eng.engine->getTensorDataType(name)) * volume(b.dims);
+        if (b.bytes == 0) {
+            std::fprintf(stderr, "[HN-TRT] tensor %s in %s has zero-volume shape\n",
+                         name, engine_path.c_str());
+            eng.release();
+            return false;
+        }
+        if (!cuda_ok(cudaMalloc(&b.d_ptr, b.bytes), "cudaMalloc binding")) {
+            eng.release();
+            return false;
+        }
+        if (!eng.context->setTensorAddress(name, b.d_ptr)) {
+            std::fprintf(stderr, "[HN-TRT] setTensorAddress failed for %s\n", name);
+            eng.release();
+            return false;
+        }
+        eng.bindings.emplace(std::string(name), b);
+    }
+
+    eng.loaded = true;
+    return true;
+}
+
+// Diagnostic helper: log the engine's I/O shapes (called once at load).
+inline void log_engine_io(const Engine &eng, const char *label) {
+    std::fprintf(stderr, "[HN-TRT]   %s bindings:\n", label);
+    for (const auto &kv : eng.bindings) {
+        const auto &d = kv.second.dims;
+        char shape[128] = {0};
+        int off = 0;
+        for (int i = 0; i < d.nbDims && off < (int)sizeof(shape) - 8; ++i) {
+            off += std::snprintf(shape + off, sizeof(shape) - off,
+                                 i == 0 ? "%d" : "x%d", static_cast<int>(d.d[i]));
+        }
+        std::fprintf(stderr, "[HN-TRT]     %-18s %-6s [%s]  %zu B\n",
+                     kv.first.c_str(), kv.second.is_input ? "input" : "output",
+                     shape, kv.second.bytes);
+    }
+}
+
+// Single-input convenience: H→D, enqueue, D→H, sync.
+// `host_in` is the input tensor's host data (bytes match the binding).
+// `host_out` is filled from `out_name`'s device buffer.
+inline bool run_single_io(Engine &eng,
+                          const std::string &in_name, const float *host_in,
+                          const std::string &out_name, float *host_out) {
+    Binding *bi = eng.get(in_name);
+    Binding *bo = eng.get(out_name);
+    if (!bi || !bo) {
+        std::fprintf(stderr, "[HN-TRT] missing binding: %s or %s\n",
+                     in_name.c_str(), out_name.c_str());
+        return false;
+    }
+    if (!cuda_ok(cudaMemcpyAsync(bi->d_ptr, host_in, bi->bytes,
+                                 cudaMemcpyHostToDevice, eng.stream), "H2D"))
+        return false;
+    if (!eng.context->enqueueV3(eng.stream)) {
+        std::fprintf(stderr, "[HN-TRT] enqueueV3 failed\n");
+        return false;
+    }
+    if (!cuda_ok(cudaMemcpyAsync(host_out, bo->d_ptr, bo->bytes,
+                                 cudaMemcpyDeviceToHost, eng.stream), "D2H"))
+        return false;
+    return cuda_ok(cudaStreamSynchronize(eng.stream), "stream sync");
+}
+
+} // namespace jarvis_hn_trt
+#endif // RED_HAS_TENSORRT_HN
 
 // ─────────────────────────────────────────────────────────────────────────
 // Configuration parsed from manifest.json (written by export_jarvis_onnx.py)
@@ -75,7 +298,19 @@ struct JarvisHybridNetState {
     bool loaded = false;
     JarvisHybridNetConfig cfg;
 
-    // ORT environment + sessions
+    // Backend dispatch: when true, the 3 stages run through TRT engines
+    // below and the ORT sessions are unused. Set by jarvis_hybridnet_load
+    // iff all 3 .engine files were found and deserialized.
+    bool use_trt = false;
+
+#ifdef RED_HAS_TENSORRT_HN
+    jarvis_hn_trt::Logger trt_logger;
+    std::unique_ptr<jarvis_hn_trt::Engine> trt_center;     // center_detect.engine
+    std::unique_ptr<jarvis_hn_trt::Engine> trt_efftrack;   // hybridnet_efftrack.engine
+    std::unique_ptr<jarvis_hn_trt::Engine> trt_hybrid3d;   // hybrid3d.engine
+#endif
+
+    // ORT environment + sessions (fallback path)
     std::unique_ptr<Ort::Env> env;
     std::unique_ptr<Ort::Session> center_session;     // center_detect.onnx
     std::unique_ptr<Ort::Session> efftrack_session;   // hybridnet_efftrack.onnx
@@ -265,6 +500,59 @@ inline bool jarvis_hybridnet_load(JarvisHybridNetState &state,
                  state.cfg.num_joints, state.cfg.num_cameras, state.cfg.keypoint_bbox_size,
                  state.cfg.roi_cube_size_mm, state.cfg.grid_spacing_mm);
 
+    // ── TensorRT direct-runtime path ────────────────────────────────────
+    // If .engine files are present alongside the .onnx files, deserialize
+    // them and skip ORT entirely. Engines are GPU-arch + TRT-version
+    // specific — generate via scripts/compile_tensorrt_engines.sh per rig.
+    // Set RED_HN_DISABLE_TRT=1 to force the ORT fallback for diagnostics.
+#ifdef RED_HAS_TENSORRT_HN
+    const char *disable_trt_env = std::getenv("RED_HN_DISABLE_TRT");
+    const bool disable_trt = (disable_trt_env && disable_trt_env[0] == '1');
+    fs::path cd_eng = dir / "center_detect.engine";
+    fs::path et_eng = dir / "hybridnet_efftrack.engine";
+    fs::path h3_eng = dir / "hybrid3d.engine";
+    const bool all_engines_present =
+        fs::exists(cd_eng) && fs::exists(et_eng) && fs::exists(h3_eng);
+    if (disable_trt) {
+        std::fprintf(stderr, "[HybridNet]   RED_HN_DISABLE_TRT=1 — forcing ORT fallback\n");
+    } else if (!all_engines_present) {
+        std::fprintf(stderr,
+            "[HybridNet]   no .engine files in %s — using ORT CUDA EP "
+            "(run scripts/compile_tensorrt_engines.sh to enable TRT)\n",
+            model_dir.c_str());
+    } else {
+        cudaSetDevice(gpu_device_id);
+        auto try_engine = [&](std::unique_ptr<jarvis_hn_trt::Engine> &out,
+                              const fs::path &path, const char *label) -> bool {
+            out = std::make_unique<jarvis_hn_trt::Engine>();
+            if (!jarvis_hn_trt::load_engine(*out, path.string(), state.trt_logger)) {
+                std::fprintf(stderr, "[HybridNet] TRT load FAILED on %s — will retry with ORT\n", label);
+                out.reset();
+                return false;
+            }
+            std::fprintf(stderr, "[HybridNet]   loaded TRT %s (%s)\n",
+                         label, path.filename().string().c_str());
+            jarvis_hn_trt::log_engine_io(*out, label);
+            return true;
+        };
+        bool ok = try_engine(state.trt_center,   cd_eng, "CenterDetect");
+        ok = ok && try_engine(state.trt_efftrack, et_eng, "HN-effTrack");
+        ok = ok && try_engine(state.trt_hybrid3d, h3_eng, "Hybrid3D");
+        if (ok) {
+            state.use_trt = true;
+            std::fprintf(stderr,
+                "[HybridNet]   TRT path active — ORT CUDA EP will be skipped\n");
+        } else {
+            // Tear down any partial TRT state and fall through to ORT init.
+            state.trt_center.reset();
+            state.trt_efftrack.reset();
+            state.trt_hybrid3d.reset();
+        }
+    }
+#endif
+
+    // ── ORT fallback path (used when TRT engines are absent or disabled)
+    if (!state.use_trt) {
     try {
         state.env = std::make_unique<Ort::Env>(ORT_LOGGING_LEVEL_WARNING, "red_jarvis_hybridnet");
     } catch (const std::exception &e) {
@@ -378,6 +666,7 @@ inline bool jarvis_hybridnet_load(JarvisHybridNetState &state,
     jarvis_cache_session_io_names(*state.hybrid3d_session, state.hybrid3d_input_names, state.hybrid3d_output_names);
 
     state.mem_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
+    }  // end if (!state.use_trt) — ORT init block
 
     // Preallocate scratch — sizes derived from cfg.
     const int N = state.cfg.num_cameras;
@@ -405,6 +694,13 @@ inline bool jarvis_hybridnet_load(JarvisHybridNetState &state,
     state.confidences_out.assign(1 * J, 0.0f);
 
     state.loaded = true;
+
+    // TRT engines are statically planned — no warmup needed (engine workspace
+    // was reserved at deserializeCudaEngine time). Return immediately.
+    if (state.use_trt) {
+        std::fprintf(stderr, "[HybridNet] load SUCCEEDED (TRT direct runtime)\n");
+        return true;
+    }
 
     // Warmup (off by default): if RED_HN_WARMUP=1, run each session once
     // with dummy inputs so the arena allocates its working chunks now.
@@ -511,6 +807,12 @@ inline void jarvis_hybridnet_unload(JarvisHybridNetState &state) {
     state.efftrack_session.reset();
     state.center_session.reset();
     state.env.reset();
+#ifdef RED_HAS_TENSORRT_HN
+    state.trt_hybrid3d.reset();
+    state.trt_efftrack.reset();
+    state.trt_center.reset();
+#endif
+    state.use_trt = false;
     state.loaded = false;
 }
 
@@ -702,6 +1004,47 @@ inline bool jarvis_hybridnet_predict_frame(
             state.center_input.data(), c, C, C,
             state.cfg.dataset_mean, state.cfg.dataset_std);
     }
+#ifdef RED_HAS_TENSORRT_HN
+    if (state.use_trt) {
+        // 2D-stage engines were exported with batch=1 (the dummy ONNX export
+        // shape). Run sequentially per camera; the per-cam host scratch slot
+        // matches the engine's expected input bytes.
+        auto &eng = *state.trt_center;
+        jarvis_hn_trt::Binding *in = nullptr;
+        jarvis_hn_trt::Binding *out_high = nullptr;
+        for (auto &kv : eng.bindings) {
+            if (kv.second.is_input) in = &kv.second;
+            else if (kv.second.dims.nbDims == 4 && kv.second.dims.d[2] == Hcen_hi)
+                out_high = &kv.second;
+        }
+        if (!in || !out_high) {
+            std::fprintf(stderr, "[HybridNet] CenterDetect TRT: required bindings missing\n");
+            return false;
+        }
+        const size_t cam_in_bytes  = static_cast<size_t>(3) * C * C * sizeof(float);
+        const size_t cam_out_bytes = static_cast<size_t>(1) * Hcen_hi * Hcen_hi * sizeof(float);
+        if (in->bytes != cam_in_bytes || out_high->bytes != cam_out_bytes) {
+            std::fprintf(stderr,
+                "[HybridNet] CenterDetect TRT shape mismatch: engine in=%zu out=%zu, "
+                "expected per-cam in=%zu out=%zu\n",
+                in->bytes, out_high->bytes, cam_in_bytes, cam_out_bytes);
+            return false;
+        }
+        for (int c = 0; c < N; ++c) {
+            const float *h_in  = state.center_input.data()    + c * 3 * C * C;
+            float       *h_out = state.center_out_high.data() + c * Hcen_hi * Hcen_hi;
+            if (!jarvis_hn_trt::cuda_ok(cudaMemcpyAsync(in->d_ptr, h_in,
+                    cam_in_bytes, cudaMemcpyHostToDevice, eng.stream), "CD H2D") ||
+                !eng.context->enqueueV3(eng.stream) ||
+                !jarvis_hn_trt::cuda_ok(cudaMemcpyAsync(h_out, out_high->d_ptr,
+                    cam_out_bytes, cudaMemcpyDeviceToHost, eng.stream), "CD D2H")) {
+                return false;
+            }
+        }
+        if (!jarvis_hn_trt::cuda_ok(cudaStreamSynchronize(eng.stream), "CD sync"))
+            return false;
+    } else
+#endif
     try {
         std::array<int64_t, 4> in_shape{N, 3, C, C};
         Ort::Value in_tensor = Ort::Value::CreateTensor<float>(
@@ -751,26 +1094,28 @@ inline bool jarvis_hybridnet_predict_frame(
     std::vector<Eigen::Matrix<double, 3, 4>> center_proj_mats;
     constexpr float kCenterDetectThreshold = 50.0f;  // matches JARVIS python
     const size_t cen_plane = static_cast<size_t>(Hcen_hi) * Hcen_hi;
-    // Per-cam diagnostic: peak value, location, plus a sanity check on the
-    // input buffer's mean intensity (detects black/uninitialized frames).
-    std::fprintf(stderr, "[HybridNet] stage 2 per-cam:\n");
+    // Per-cam diagnostic gated behind RED_HN_VERBOSE=1. When enabled, prints
+    // peak value/location and input-buffer mean intensity (sanity check for
+    // black/uninitialized frames) for each of the N cameras.
+    const char *verbose_env = std::getenv("RED_HN_VERBOSE");
+    const bool verbose = (verbose_env && verbose_env[0] == '1');
+    if (verbose) std::fprintf(stderr, "[HybridNet] stage 2 per-cam:\n");
     for (int c = 0; c < N; ++c) {
         auto [px, py, v] = jarvis_peak_pick(
             state.center_out_high.data() + c * cen_plane, Hcen_hi, Hcen_hi);
-        // Sample mean intensity of the raw input (cheap: stride over the first
-        // channel of the resized 320x320 input we built earlier).
-        const size_t plane = static_cast<size_t>(C) * C;
-        double accum = 0.0; int n = 0;
-        for (size_t i = 0; i < plane; i += 64) {
-            accum += state.center_input[c * 3 * plane + i];
-            ++n;
+        if (verbose) {
+            const size_t plane = static_cast<size_t>(C) * C;
+            double accum = 0.0; int n = 0;
+            for (size_t i = 0; i < plane; i += 64) {
+                accum += state.center_input[c * 3 * plane + i];
+                ++n;
+            }
+            double mean_norm = accum / n;
+            std::fprintf(stderr,
+                "  cam %2d: peak=(%d, %d) val=%.2f  input_mean(norm)=%.3f%s\n",
+                c, px, py, v, mean_norm,
+                v < kCenterDetectThreshold ? "  [BELOW THRESHOLD]" : "");
         }
-        double mean_norm = accum / n;  // ImageNet-normalized; ~0 means uniform gray
-        std::fprintf(stderr,
-            "  cam %2d (%s): peak=(%d, %d) val=%.2f  input_mean(norm)=%.3f%s\n",
-            c, widths.size() > (size_t)c ? "" : "?",
-            px, py, v, mean_norm,
-            v < kCenterDetectThreshold ? "  [BELOW THRESHOLD]" : "");
         if (v < kCenterDetectThreshold) continue;
         const double nx = (px + 0.5) * widths[c]  / static_cast<double>(Hcen_hi);
         const double ny = (py + 0.5) * heights[c] / static_cast<double>(Hcen_hi);
@@ -813,6 +1158,46 @@ inline bool jarvis_hybridnet_predict_frame(
 
     // ── STAGE 4: effTrack 2D heatmaps ────────────────────────────────
     auto t_eff = clk::now();
+#ifdef RED_HAS_TENSORRT_HN
+    if (state.use_trt) {
+        // Per-cam (batch=1) like CenterDetect — engine was exported with the
+        // dummy ONNX shape.
+        auto &eng = *state.trt_efftrack;
+        jarvis_hn_trt::Binding *in = nullptr;
+        jarvis_hn_trt::Binding *out_high = nullptr;
+        for (auto &kv : eng.bindings) {
+            if (kv.second.is_input) in = &kv.second;
+            else if (kv.second.dims.nbDims == 4 && kv.second.dims.d[2] == Heff_hi)
+                out_high = &kv.second;
+        }
+        if (!in || !out_high) {
+            std::fprintf(stderr, "[HybridNet] effTrack TRT: required bindings missing\n");
+            return false;
+        }
+        const size_t cam_in_bytes  = static_cast<size_t>(3) * B * B * sizeof(float);
+        const size_t cam_out_bytes = static_cast<size_t>(J) * Heff_hi * Heff_hi * sizeof(float);
+        if (in->bytes != cam_in_bytes || out_high->bytes != cam_out_bytes) {
+            std::fprintf(stderr,
+                "[HybridNet] effTrack TRT shape mismatch: engine in=%zu out=%zu, "
+                "expected per-cam in=%zu out=%zu\n",
+                in->bytes, out_high->bytes, cam_in_bytes, cam_out_bytes);
+            return false;
+        }
+        for (int c = 0; c < N; ++c) {
+            const float *h_in  = state.crop_input.data()   + c * 3 * B * B;
+            float       *h_out = state.eff_out_high.data() + c * J * Heff_hi * Heff_hi;
+            if (!jarvis_hn_trt::cuda_ok(cudaMemcpyAsync(in->d_ptr, h_in,
+                    cam_in_bytes, cudaMemcpyHostToDevice, eng.stream), "ET H2D") ||
+                !eng.context->enqueueV3(eng.stream) ||
+                !jarvis_hn_trt::cuda_ok(cudaMemcpyAsync(h_out, out_high->d_ptr,
+                    cam_out_bytes, cudaMemcpyDeviceToHost, eng.stream), "ET D2H")) {
+                return false;
+            }
+        }
+        if (!jarvis_hn_trt::cuda_ok(cudaStreamSynchronize(eng.stream), "ET sync"))
+            return false;
+    } else
+#endif
     try {
         std::array<int64_t, 4> in_shape{N, 3, B, B};
         Ort::Value in_tensor = Ort::Value::CreateTensor<float>(
@@ -865,6 +1250,66 @@ inline bool jarvis_hybridnet_predict_frame(
 
     // ── STAGE 6: Hybrid3D ─────────────────────────────────────────────
     auto t_h3d = clk::now();
+#ifdef RED_HAS_TENSORRT_HN
+    if (state.use_trt) {
+        auto &eng = *state.trt_hybrid3d;
+        auto h2d = [&](const char *name, const void *host, size_t host_bytes) -> bool {
+            auto *b = eng.get(name);
+            if (!b || !b->is_input) {
+                std::fprintf(stderr, "[HybridNet] Hybrid3D TRT: input %s missing\n", name);
+                return false;
+            }
+            if (b->bytes != host_bytes) {
+                std::fprintf(stderr,
+                    "[HybridNet] Hybrid3D TRT input %s size mismatch: engine=%zu host=%zu\n",
+                    name, b->bytes, host_bytes);
+                return false;
+            }
+            return jarvis_hn_trt::cuda_ok(
+                cudaMemcpyAsync(b->d_ptr, host, b->bytes,
+                                cudaMemcpyHostToDevice, eng.stream),
+                "H3D H2D");
+        };
+        if (!h2d("heatmaps_padded", state.heatmaps_padded.data(),
+                 state.heatmaps_padded.size() * sizeof(float)) ||
+            !h2d("centerHM",        state.centerHM_input.data(),
+                 state.centerHM_input.size() * sizeof(float)) ||
+            !h2d("center3D",        state.center3D_input.data(),
+                 state.center3D_input.size() * sizeof(float)) ||
+            !h2d("cameraMatrices",  state.camera_matrices.data(),
+                 state.camera_matrices.size() * sizeof(float))) {
+            return false;
+        }
+        if (!eng.context->enqueueV3(eng.stream)) {
+            std::fprintf(stderr, "[HybridNet] Hybrid3D TRT enqueueV3 failed\n");
+            return false;
+        }
+        auto d2h = [&](const char *name, void *host, size_t host_bytes) -> bool {
+            auto *b = eng.get(name);
+            if (!b || b->is_input) {
+                std::fprintf(stderr, "[HybridNet] Hybrid3D TRT: output %s missing\n", name);
+                return false;
+            }
+            if (b->bytes != host_bytes) {
+                std::fprintf(stderr,
+                    "[HybridNet] Hybrid3D TRT output %s size mismatch: engine=%zu host=%zu\n",
+                    name, b->bytes, host_bytes);
+                return false;
+            }
+            return jarvis_hn_trt::cuda_ok(
+                cudaMemcpyAsync(host, b->d_ptr, b->bytes,
+                                cudaMemcpyDeviceToHost, eng.stream),
+                "H3D D2H");
+        };
+        if (!d2h("points3D",    state.points3D_out.data(),
+                 state.points3D_out.size() * sizeof(float)) ||
+            !d2h("confidences", state.confidences_out.data(),
+                 state.confidences_out.size() * sizeof(float)) ||
+            !jarvis_hn_trt::cuda_ok(cudaStreamSynchronize(eng.stream), "H3D sync")) {
+            return false;
+        }
+    } else
+#endif
     try {
         std::array<int64_t, 5> hm_shape{1, N, J, Hpad, Hpad};
         std::array<int64_t, 3> chm_shape{1, N, 2};
