@@ -21,6 +21,21 @@ struct UserSettings {
     bool default_realtime_playback = true;
     int default_buffer_size = 64;
 
+    // Hardware (Linux/Windows only — Mac always uses host buffer).
+    // CPU Buffer is the default because the display ring buffer scales
+    // multiplicatively (cams × buffer_size × frame_bytes) and quickly
+    // exceeds GPU memory on multi-cam high-res setups (16 cams × 24
+    // slots × 28 MB ≈ 10 GiB just for display). Under CPU Buffer that
+    // lives on host where 10 GiB of RAM is cheap.
+    //
+    // GPU Buffer is the architecturally faster path (no per-frame H2D
+    // for render, no D2H during decode, enables HN's device-side
+    // preprocessing kernels for ~120 ms savings per predict) but
+    // requires the user to reduce buffer_size to fit the model + frame
+    // ring within GPU memory. Changes take effect on the next launch
+    // (buffers are allocated at startup).
+    bool use_cpu_buffer = true;
+
     // Export defaults
     float jarvis_margin = 50.0f;
     float jarvis_train_ratio = 0.9f;
@@ -60,6 +75,7 @@ inline void to_json(nlohmann::json &j, const UserSettings &s) {
         {"default_playback_speed", s.default_playback_speed},
         {"default_realtime_playback", s.default_realtime_playback},
         {"default_buffer_size", s.default_buffer_size},
+        {"use_cpu_buffer", s.use_cpu_buffer},
         {"jarvis_margin", s.jarvis_margin},
         {"jarvis_train_ratio", s.jarvis_train_ratio},
         {"jarvis_seed", s.jarvis_seed},
@@ -80,6 +96,7 @@ inline void from_json(const nlohmann::json &j, UserSettings &s) {
     s.default_playback_speed = j.value("default_playback_speed", 1.0f);
     s.default_realtime_playback = j.value("default_realtime_playback", true);
     s.default_buffer_size = j.value("default_buffer_size", 64);
+    s.use_cpu_buffer = j.value("use_cpu_buffer", true);
     s.jarvis_margin = j.value("jarvis_margin", 50.0f);
     s.jarvis_train_ratio = j.value("jarvis_train_ratio", 0.9f);
     s.jarvis_seed = j.value("jarvis_seed", 42);

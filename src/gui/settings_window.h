@@ -82,10 +82,31 @@ inline void DrawSettingsWindow(SettingsState &state, AppContext &ctx) {
 #ifndef __APPLE__
         // --- Hardware (Linux only) ---
         if (ImGui::CollapsingHeader("Hardware")) {
+            // Buffer Type drives how display_buffer[].frame is allocated
+            // (cudaMalloc vs malloc). That allocation only happens at
+            // startup, so changing the value at runtime would just lie to
+            // every later code path and crash on the next render. We
+            // persist the new choice to user_settings and tell the user
+            // to restart; the live ctx.scene->use_cpu_buffer is left alone.
             const char *buf_items[] = {"CPU Buffer", "GPU Buffer"};
-            int buf_current = ctx.scene->use_cpu_buffer ? 0 : 1;
-            if (ImGui::Combo("Buffer Type", &buf_current, buf_items, IM_ARRAYSIZE(buf_items)))
-                ctx.scene->use_cpu_buffer = (buf_current == 0);
+            // Combo reflects the PERSISTED setting (what'll apply on next
+            // launch), not the live runtime mode — they may differ after a
+            // pending change.
+            int buf_current = s.use_cpu_buffer ? 0 : 1;
+            if (ImGui::Combo("Buffer Type", &buf_current, buf_items, IM_ARRAYSIZE(buf_items))) {
+                s.use_cpu_buffer = (buf_current == 0);
+                other_changed = true;  // forces save_user_settings below
+                if (s.use_cpu_buffer != ctx.scene->use_cpu_buffer) {
+                    ctx.popups.pushInfo("Restart Required",
+                        "Buffer Type changes take effect after restarting red.\n"
+                        "Your choice has been saved; close and reopen red to apply.");
+                }
+            }
+            if (s.use_cpu_buffer != ctx.scene->use_cpu_buffer) {
+                ImGui::TextDisabled(
+                    "(pending — restart red to apply; currently running in %s)",
+                    ctx.scene->use_cpu_buffer ? "CPU Buffer" : "GPU Buffer");
+            }
         }
 #endif
 

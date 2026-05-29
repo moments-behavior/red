@@ -270,10 +270,18 @@ int main(int argc, char **argv) {
 
     render_initialize_target(window);
     RenderScene *scene = (RenderScene *)malloc(sizeof(RenderScene));
+    // scene is malloc'd uninitialized; explicitly set the bool fields we
+    // read before buffer allocation so behavior is deterministic. Default
+    // CPU Buffer — see UserSettings::use_cpu_buffer for rationale.
+    scene->use_cpu_buffer = true;
     std::string red_data_dir;
     std::string media_root_dir;
     prepare_application_folders(red_data_dir, media_root_dir);
     UserSettings user_settings = load_user_settings();
+    // Honor the persisted buffer mode (default GPU Buffer on first launch).
+    // Frame buffers are allocated later in media_loader::render_allocate_scene_memory
+    // based on this flag, so it must be set before any project is loaded.
+    scene->use_cpu_buffer = user_settings.use_cpu_buffer;
     std::string skeleton_dir = red_data_dir + "/skeleton";
     std::vector<std::thread> decoder_threads;
     std::vector<FFmpegDemuxer *> demuxers;
@@ -1207,6 +1215,18 @@ int main(int argc, char **argv) {
                                         scene->image_width[j] * scene->image_height[j] *
                                             4,
                                         cudaMemcpyDeviceToDevice));
+                                    // Apply contrast/brightness in the paused
+                                    // viewer for GPU Buffer mode too. Mirrors
+                                    // the CPU branch's call; without this the
+                                    // brightness/contrast slider was silently
+                                    // a no-op under GPU Buffer.
+                                    apply_contrast_brightness_rgba(
+                                        scene->pbo_cuda[j].cuda_buffer,
+                                        scene->image_width[j], scene->image_height[j],
+                                        display.contrast,
+                                        (float)display.brightness,
+                                        display.pivot_midgray,
+                                        0);
                                 }
                             }
                         }
@@ -2022,7 +2042,11 @@ int main(int argc, char **argv) {
                                         if (!s.frame) continue;
                                         int w = w_b[c], h = h_b[c];
                                         std::vector<uint8_t> rgba(w * h * 4);
-                                        cudaMemcpy(rgba.data(), s.frame, w * h * 4, cudaMemcpyDeviceToHost);
+                                        // cudaMemcpyDefault so this works whether
+                                        // s.frame is device memory (GPU Buffer) or
+                                        // host memory (CPU Buffer). Previously
+                                        // hardcoded D2H would crash under CPU Buffer.
+                                        cudaMemcpy(rgba.data(), s.frame, w * h * 4, cudaMemcpyDefault);
                                         rgb_storage[c].resize(w * h * 3);
                                         for (int i = 0; i < w * h; ++i) {
                                             rgb_storage[c][i*3+0] = rgba[i*4+0];
