@@ -1808,7 +1808,7 @@ int main(int argc, char **argv) {
                     }
                 }
 #endif
-                // Device-resident RGBA32 pointers for the HN+TRT path (Phase 2.2b).
+                // Device-resident RGBA32 pointers for the HN+TRT device path.
                 // Always collected (zero cost — just pointer copies). The host
                 // RGB extraction below is skipped when we'll use the device path,
                 // saving ~30 ms of cudaMemcpy + alpha-strip per predict.
@@ -1818,14 +1818,14 @@ int main(int argc, char **argv) {
                     auto &slot = scene->display_buffer[c][mh_per_cam[c]];
                     if (slot.frame) rgba_device_bufs[c] = slot.frame;
                 }
-#ifdef RED_HAS_ONNXRUNTIME
-                // Device kernel path is only valid when (a) HN is active, (b) TRT
-                // engines loaded, and (c) the frame buffers are actually device
-                // memory. scene->use_cpu_buffer is a runtime-toggleable flag that
-                // can be out of sync with how the buffers were allocated, so we
-                // probe the actual cam 0 frame and let cudaPointerAttributes be
-                // the authority.
-                bool hn_device_path = hn_active && jarvis_hn_state.use_trt;
+#ifdef RED_HAS_TENSORRT_HN
+                // Device kernel path is only valid when (a) HN is loaded and
+                // (b) the frame buffers are actually device memory.
+                // scene->use_cpu_buffer is a runtime-toggleable flag that can
+                // be out of sync with how the buffers were allocated, so we
+                // probe the actual cam 0 frame and let cudaPointerAttributes
+                // be the authority.
+                bool hn_device_path = hn_active;
                 if (hn_device_path) {
                     // Pick the first valid frame pointer to probe.
                     const uint8_t *probe = nullptr;
@@ -1874,7 +1874,7 @@ int main(int argc, char **argv) {
                     // and writes both 3D and per-cam 2D back-projections to
                     // AnnotationMap. No separate reprojection() call needed.
                     // Outer try/catch in addition to predict_frame's own:
-                    // an exception escaping from an ORT internal thread or
+                    // an exception escaping from a TRT internal thread or
                     // destructor unwinding becomes a logged failure here,
                     // not a process abort.
                     bool ok = false;
@@ -1892,7 +1892,7 @@ int main(int argc, char **argv) {
                                 widths, heights, pm.camera_params,
                                 annotations, skeleton, (u32)current_frame_num);
                         } else {
-                            // ORT, or CPU-buffer mode: host RGB built above.
+                            // CPU-buffer mode: host RGB extracted above.
                             ok = jarvis_hybridnet_predict_frame(
                                 jarvis_hn_state, rgb_bufs, widths, heights,
                                 pm.camera_params, annotations, skeleton,

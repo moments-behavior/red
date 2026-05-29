@@ -31,6 +31,7 @@
 
 #ifdef USE_TENSORRT
 #include <NvInfer.h>
+#include <NvInferPlugin.h>
 #include <cuda_runtime_api.h>
 #endif
 
@@ -230,8 +231,24 @@ inline HeatmapPeak heatmap_argmax(const float *heatmap, int h, int w) {
 //
 // Returns true on success. On failure, prints warning and returns false
 // (caller should fall back to ONNX Runtime).
+// Register all standard TRT plugins (InstanceNormalization_TRT, etc.) once
+// per process. Required because engines that pull in TRT plugin ops (like
+// hybrid3d.engine on Linux) otherwise fail deserialization with
+// "Cannot deserialize plugin since corresponding IPluginCreator not found
+// in Plugin Registry". Safe to call multiple times.
+inline void trt_ensure_plugins_registered(nvinfer1::ILogger &logger) {
+    static bool initialized = false;
+    if (initialized) return;
+    if (!initLibNvInferPlugins(&logger, "")) {
+        fprintf(stderr, "[TensorRT] WARN: initLibNvInferPlugins returned false "
+                        "(plugin-bearing engines may fail to load)\n");
+    }
+    initialized = true;
+}
+
 inline bool trt_load_engine(TRTEngine &eng, const std::string &engine_path,
                              nvinfer1::ILogger &logger) {
+    trt_ensure_plugins_registered(logger);
     eng.release();
 
     if (!std::filesystem::exists(engine_path)) {
