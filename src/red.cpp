@@ -1726,45 +1726,63 @@ int main(int argc, char **argv) {
                     }
                 }
 #endif
+                // Device-resident RGBA32 pointers for the HN+TRT path (Phase 2.2b).
+                // Always collected (zero cost — just pointer copies). The host
+                // RGB extraction below is skipped when we'll use the device path,
+                // saving ~30 ms of cudaMemcpy + alpha-strip per predict.
+                std::vector<const uint8_t *> rgba_device_bufs(scene->num_cams, nullptr);
                 for (int c = 0; c < (int)scene->num_cams; ++c) {
                     if (!cam_included(c)) continue;
                     auto &slot = scene->display_buffer[c][mh_per_cam[c]];
-                    if (!slot.frame) continue;
-                    int w = widths[c], h = heights[c];
-                    // slot.frame is RGBA32 in GPU memory — copy to CPU, then strip alpha.
-                    // Use cudaMemcpyDefault so the runtime resolves the source device
-                    // automatically — slot.frame may have been allocated on a different
-                    // device than the calling thread (multi-GPU box: NVDEC decoders can
-                    // land buffers on whichever GPU they were initialized against).
-                    std::vector<uint8_t> rgba(w * h * 4);
-                    cudaError_t cpyErr = cudaMemcpy(rgba.data(), slot.frame,
-                                                    w * h * 4, cudaMemcpyDefault);
-                    rgb_storage[c].resize(w * h * 3);
-                    for (int i = 0; i < w * h; ++i) {
-                        rgb_storage[c][i * 3 + 0] = rgba[i * 4 + 0]; // R
-                        rgb_storage[c][i * 3 + 1] = rgba[i * 4 + 1]; // G
-                        rgb_storage[c][i * 3 + 2] = rgba[i * 4 + 2]; // B
-                    }
-                    rgb_bufs[c] = rgb_storage[c].data();
+                    if (slot.frame) rgba_device_bufs[c] = slot.frame;
+                }
 #ifdef RED_HAS_ONNXRUNTIME
-                    if (hn_active) {
-                        // Sample mean intensity from sparse stride to detect black frames.
-                        uint64_t sum = 0; size_t n = 0;
-                        for (size_t i = 0; i < rgba.size(); i += 64) { sum += rgba[i]; ++n; }
-                        double mean_byte = n ? (double)sum / n : -1.0;
-                        cudaPointerAttributes attrs{};
-                        cudaError_t aErr = cudaPointerGetAttributes(&attrs, slot.frame);
-                        int dev = (aErr == cudaSuccess) ? attrs.device : -1;
-                        fprintf(stderr,
-                            "  cam %2d: frame_ptr=%p dev=%d frame_num=%u avail_to_write=%d "
-                            "wxh=%dx%d mean_byte=%.1f cpy=%s\n",
-                            c, (void*)slot.frame, dev,
-                            (unsigned)slot.frame_number.load(),
-                            (int)slot.available_to_write.load(),
-                            w, h, mean_byte,
-                            cpyErr == cudaSuccess ? "ok" : cudaGetErrorString(cpyErr));
+                // Device kernel path is only valid when (a) HN is active, (b) TRT
+                // engines loaded, and (c) the frame buffers are actually device
+                // memory. scene->use_cpu_buffer is a runtime-toggleable flag that
+                // can be out of sync with how the buffers were allocated, so we
+                // probe the actual cam 0 frame and let cudaPointerAttributes be
+                // the authority.
+                bool hn_device_path = hn_active && jarvis_hn_state.use_trt;
+                if (hn_device_path) {
+                    // Pick the first valid frame pointer to probe.
+                    const uint8_t *probe = nullptr;
+                    for (int c = 0; c < (int)scene->num_cams; ++c) {
+                        if (rgba_device_bufs[c]) { probe = rgba_device_bufs[c]; break; }
                     }
+                    if (probe) {
+                        cudaPointerAttributes a{};
+                        cudaError_t err = cudaPointerGetAttributes(&a, probe);
+                        if (err != cudaSuccess || a.type != cudaMemoryTypeDevice) {
+                            hn_device_path = false;
+                        }
+                    } else {
+                        hn_device_path = false;
+                    }
+                }
+#else
+                const bool hn_device_path = false;
 #endif
+                if (!hn_device_path) {
+                    for (int c = 0; c < (int)scene->num_cams; ++c) {
+                        if (!cam_included(c)) continue;
+                        auto &slot = scene->display_buffer[c][mh_per_cam[c]];
+                        if (!slot.frame) continue;
+                        int w = widths[c], h = heights[c];
+                        // slot.frame is RGBA32 in GPU memory — copy to CPU, strip α.
+                        // cudaMemcpyDefault lets the runtime resolve the source device
+                        // (NVDEC decoders can land buffers on different devices on
+                        // multi-GPU boxes). Only needed for non-TRT paths now.
+                        std::vector<uint8_t> rgba(w * h * 4);
+                        cudaMemcpy(rgba.data(), slot.frame, w * h * 4, cudaMemcpyDefault);
+                        rgb_storage[c].resize(w * h * 3);
+                        for (int i = 0; i < w * h; ++i) {
+                            rgb_storage[c][i * 3 + 0] = rgba[i * 4 + 0]; // R
+                            rgb_storage[c][i * 3 + 1] = rgba[i * 4 + 1]; // G
+                            rgb_storage[c][i * 3 + 2] = rgba[i * 4 + 2]; // B
+                        }
+                        rgb_bufs[c] = rgb_storage[c].data();
+                    }
                 }
 
 #ifdef RED_HAS_ONNXRUNTIME
@@ -1785,10 +1803,19 @@ int main(int argc, char **argv) {
                             "decode, or wait/scrub until the 3D viewer shows all "
                             "cams synced)\n", (int)current_frame_num);
                     } else try {
-                        ok = jarvis_hybridnet_predict_frame(
-                            jarvis_hn_state, rgb_bufs, widths, heights,
-                            pm.camera_params, annotations, skeleton,
-                            (u32)current_frame_num);
+                        if (hn_device_path) {
+                            // GPU-buffer mode + TRT: kernels do Stages 1+3 on GPU.
+                            ok = jarvis_hybridnet_predict_frame_device(
+                                jarvis_hn_state, rgba_device_bufs,
+                                widths, heights, pm.camera_params,
+                                annotations, skeleton, (u32)current_frame_num);
+                        } else {
+                            // ORT, or CPU-buffer mode: host RGB built above.
+                            ok = jarvis_hybridnet_predict_frame(
+                                jarvis_hn_state, rgb_bufs, widths, heights,
+                                pm.camera_params, annotations, skeleton,
+                                (u32)current_frame_num);
+                        }
                     } catch (const std::exception &e) {
                         fprintf(stderr, "[JARVIS HybridNet] uncaught exception "
                                 "in predict_frame: %s\n", e.what());

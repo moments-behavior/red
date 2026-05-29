@@ -344,6 +344,15 @@ struct JarvisHybridNetState {
     std::unique_ptr<jarvis_hn_trt::Engine> trt_center;     // center_detect.engine
     std::unique_ptr<jarvis_hn_trt::Engine> trt_efftrack;   // hybridnet_efftrack.engine
     std::unique_ptr<jarvis_hn_trt::Engine> trt_hybrid3d;   // hybrid3d.engine
+
+    // Per-frame metadata for GPU preprocessing (Phase 2.2b). Lives on device
+    // so the resize/crop kernels can read it directly. Allocated once in
+    // jarvis_hybridnet_load, freed in jarvis_hybridnet_unload.
+    const uint8_t **d_rgba_ptrs = nullptr;   // N device pointers
+    int *d_widths   = nullptr;               // N ints
+    int *d_heights  = nullptr;               // N ints
+    int *d_cx       = nullptr;               // N ints (crop centers, set per predict)
+    int *d_cy       = nullptr;               // N ints
 #endif
 
     // ORT environment + sessions (fallback path)
@@ -428,6 +437,26 @@ bool jarvis_hybridnet_dir_is_valid(const std::string &model_dir);
 bool jarvis_hybridnet_predict_frame(
     JarvisHybridNetState &state,
     const std::vector<const uint8_t *> &camera_rgb,
+    const std::vector<int> &widths,
+    const std::vector<int> &heights,
+    const std::vector<CameraParams> &camera_params,
+    AnnotationMap &annotations,
+    SkeletonContext &skeleton,
+    u32 frame_idx);
+
+// Device-input variant (Phase 2.2b). Takes the NVDEC-resident RGBA32 device
+// pointers directly, skips host-side cudaMemcpy + alpha-strip + CPU
+// resize/crop. Stage 1 and Stage 3 preprocessing run as CUDA kernels that
+// write straight into the TRT engines' input device buffers; the rest of
+// the pipeline is identical to the host variant's TRT path. TRT-only —
+// returns false (and does NOT fall through to ORT) if state.use_trt is
+// false or the device scratch buffers weren't allocated.
+//
+// camera_rgba_device[c]: device pointer to RGBA32 frame, w*h*4 bytes.
+//                        Must be valid for the lifetime of this call.
+bool jarvis_hybridnet_predict_frame_device(
+    JarvisHybridNetState &state,
+    const std::vector<const uint8_t *> &camera_rgba_device,
     const std::vector<int> &widths,
     const std::vector<int> &heights,
     const std::vector<CameraParams> &camera_params,
@@ -578,6 +607,26 @@ inline bool jarvis_hybridnet_load(JarvisHybridNetState &state,
             state.use_trt = true;
             std::fprintf(stderr,
                 "[HybridNet]   TRT path active — ORT CUDA EP will be skipped\n");
+            // Allocate the small device scratch buffers used by the
+            // GPU-preprocessing entry point. Free in unload. Sized for N cams.
+            const int N_ = state.cfg.num_cameras;
+            cudaError_t cerr = cudaSuccess;
+            cerr = cerr ? cerr : cudaMalloc((void **)&state.d_rgba_ptrs,
+                                            N_ * sizeof(uint8_t *));
+            cerr = cerr ? cerr : cudaMalloc((void **)&state.d_widths,
+                                            N_ * sizeof(int));
+            cerr = cerr ? cerr : cudaMalloc((void **)&state.d_heights,
+                                            N_ * sizeof(int));
+            cerr = cerr ? cerr : cudaMalloc((void **)&state.d_cx,
+                                            N_ * sizeof(int));
+            cerr = cerr ? cerr : cudaMalloc((void **)&state.d_cy,
+                                            N_ * sizeof(int));
+            if (cerr != cudaSuccess) {
+                std::fprintf(stderr,
+                    "[HybridNet] cudaMalloc for device scratch failed: %s — "
+                    "device entry point will be unavailable\n",
+                    cudaGetErrorString(cerr));
+            }
         } else {
             // Tear down any partial TRT state and fall through to ORT init.
             state.trt_center.reset();
@@ -847,6 +896,11 @@ inline void jarvis_hybridnet_unload(JarvisHybridNetState &state) {
     state.trt_hybrid3d.reset();
     state.trt_efftrack.reset();
     state.trt_center.reset();
+    if (state.d_rgba_ptrs) { cudaFree(state.d_rgba_ptrs); state.d_rgba_ptrs = nullptr; }
+    if (state.d_widths)    { cudaFree(state.d_widths);    state.d_widths    = nullptr; }
+    if (state.d_heights)   { cudaFree(state.d_heights);   state.d_heights   = nullptr; }
+    if (state.d_cx)        { cudaFree(state.d_cx);        state.d_cx        = nullptr; }
+    if (state.d_cy)        { cudaFree(state.d_cy);        state.d_cy        = nullptr; }
 #endif
     state.use_trt = false;
     state.loaded = false;
@@ -1469,6 +1523,373 @@ inline bool jarvis_hybridnet_predict_frame(
     }
     return true;
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// Device-input predict (Phase 2.2b). Mirrors the TRT path of predict_frame
+// but runs Stages 1 and 3 preprocessing as CUDA kernels writing into the
+// engines' input device buffers directly. Eliminates ~30 ms of host-side
+// cudaMemcpy + RGBA→RGB strip, ~70 ms of CPU bilinear resize, and ~25 ms
+// of CPU crop+normalize.
+//
+// Refactor candidate later: this duplicates ~200 lines of Stages 2/5/6/7
+// from predict_frame. Today the duplication is intentional — keeps the
+// existing host path's hot-loop semantics unchanged while we validate the
+// device path.
+// ─────────────────────────────────────────────────────────────────────────
+#ifdef RED_HAS_TENSORRT_HN
+inline bool jarvis_hybridnet_predict_frame_device(
+    JarvisHybridNetState &state,
+    const std::vector<const uint8_t *> &camera_rgba_device,
+    const std::vector<int> &widths,
+    const std::vector<int> &heights,
+    const std::vector<CameraParams> &camera_params,
+    AnnotationMap &annotations,
+    SkeletonContext &skeleton,
+    u32 frame_idx) {
+    if (!state.loaded || !state.use_trt) {
+        std::fprintf(stderr,
+            "[HybridNet] predict_frame_device requires use_trt=true "
+            "(no engines loaded or ORT fallback active)\n");
+        return false;
+    }
+    if (!state.d_rgba_ptrs || !state.d_widths || !state.d_heights ||
+        !state.d_cx || !state.d_cy) {
+        std::fprintf(stderr,
+            "[HybridNet] predict_frame_device: device scratch buffers missing\n");
+        return false;
+    }
+    const int N = state.cfg.num_cameras;
+    if ((int)camera_rgba_device.size() != N || (int)widths.size() != N ||
+        (int)heights.size() != N || (int)camera_params.size() != N) {
+        std::fprintf(stderr,
+            "[HybridNet] predict_frame_device: expected %d cams, got "
+            "rgba=%zu widths=%zu heights=%zu params=%zu\n",
+            N, camera_rgba_device.size(), widths.size(), heights.size(),
+            camera_params.size());
+        return false;
+    }
+    int n_missing = 0;
+    for (int c = 0; c < N; ++c) {
+        if (!camera_rgba_device[c] || widths[c] <= 0 || heights[c] <= 0) ++n_missing;
+    }
+    if (n_missing > 0) {
+        std::fprintf(stderr,
+            "[HybridNet] predict_frame_device: %d/%d cameras lack device RGBA\n",
+            n_missing, N);
+        return false;
+    }
+
+    cudaSetDevice(0);
+    cudaError_t stale = cudaGetLastError();
+    if (stale != cudaSuccess) {
+        std::fprintf(stderr,
+            "[HybridNet] cleared stale CUDA error before inference: %s\n",
+            cudaGetErrorString(stale));
+    }
+    // Sync all device work before reading slot.frame from our engine streams.
+    cudaDeviceSynchronize();
+
+    // Defensive: this entry point is only valid when the input frames are
+    // genuinely on the GPU (red's "GPU Buffer" mode). In CPU Buffer mode
+    // slot.frame is plain malloc'd host memory and a device kernel can't
+    // dereference it — checking once on cam 0 catches that mismatch and
+    // lets the caller fall back to predict_frame's host path cleanly.
+    {
+        cudaPointerAttributes a{};
+        cudaError_t aErr = cudaPointerGetAttributes(&a, camera_rgba_device[0]);
+        if (aErr != cudaSuccess || a.type != cudaMemoryTypeDevice) {
+            std::fprintf(stderr,
+                "[HybridNet] predict_frame_device requires device-resident "
+                "RGBA buffers; cam 0 ptr=%p is %s. Caller should use "
+                "predict_frame (host RGB) when red is in CPU Buffer mode.\n",
+                (const void *)camera_rgba_device[0],
+                aErr != cudaSuccess ? "invalid" :
+                (a.type == cudaMemoryTypeUnregistered ? "unregistered host memory" :
+                 a.type == cudaMemoryTypeHost ? "registered host memory" :
+                 a.type == cudaMemoryTypeManaged ? "managed memory" : "unknown"));
+            return false;
+        }
+    }
+    {
+        size_t free_b = 0, total_b = 0;
+        if (cudaMemGetInfo(&free_b, &total_b) == cudaSuccess) {
+            std::fprintf(stderr,
+                "[HybridNet] GPU memory at predict time: %.2f GiB free / %.2f GiB total\n",
+                free_b / 1073741824.0, total_b / 1073741824.0);
+        }
+    }
+
+    const int J = state.cfg.num_joints;
+    const int C = state.cfg.center_image_size;     // 320
+    const int B = state.cfg.keypoint_bbox_size;     // 704
+    const int Hcen_hi = C / 2;                       // 160
+    const int Heff_hi = B / 2;                       // 352
+    const int bbox_hw = B / 2;                        // 352
+    const float inv_std[3] = {
+        1.0f / state.cfg.dataset_std[0],
+        1.0f / state.cfg.dataset_std[1],
+        1.0f / state.cfg.dataset_std[2]};
+
+    using clk = std::chrono::high_resolution_clock;
+
+    // ── STAGE 1: GPU resize_normalize → CenterDetect ─────────────────
+    auto t0 = clk::now();
+    {
+        auto &eng = *state.trt_center;
+        // Upload per-cam metadata to scratch. Pointer / int packs are small
+        // (16x8 + 16x4 + 16x4 = 256 B); H2D is effectively free.
+        if (!jarvis_hn_trt::cuda_ok(cudaMemcpyAsync(state.d_rgba_ptrs,
+                camera_rgba_device.data(), N * sizeof(uint8_t *),
+                cudaMemcpyHostToDevice, eng.stream), "CD ptrs H2D") ||
+            !jarvis_hn_trt::cuda_ok(cudaMemcpyAsync(state.d_widths,
+                widths.data(), N * sizeof(int),
+                cudaMemcpyHostToDevice, eng.stream), "CD widths H2D") ||
+            !jarvis_hn_trt::cuda_ok(cudaMemcpyAsync(state.d_heights,
+                heights.data(), N * sizeof(int),
+                cudaMemcpyHostToDevice, eng.stream), "CD heights H2D")) {
+            return false;
+        }
+
+        // Find CenterDetect's input + high-res output bindings.
+        jarvis_hn_trt::Binding *in = nullptr;
+        jarvis_hn_trt::Binding *out_high = nullptr;
+        for (auto &kv : eng.bindings) {
+            if (kv.second.is_input) in = &kv.second;
+            else if (kv.second.dims.nbDims == 4 && kv.second.dims.d[2] == Hcen_hi)
+                out_high = &kv.second;
+        }
+        if (!in || !out_high) {
+            std::fprintf(stderr,
+                "[HybridNet] CenterDetect TRT bindings missing (device path)\n");
+            return false;
+        }
+
+        if (!jarvis_hn_trt::cuda_ok(
+                jarvis_hn_resize_normalize_device(
+                    state.d_rgba_ptrs, state.d_widths, state.d_heights,
+                    static_cast<float *>(in->d_ptr),
+                    N, C, state.cfg.dataset_mean.data(), inv_std, eng.stream),
+                "CD resize+normalize kernel")) {
+            return false;
+        }
+        if (!eng.context->enqueueV3(eng.stream)) {
+            std::fprintf(stderr, "[HybridNet] CenterDetect TRT enqueueV3 failed (device path)\n");
+            return false;
+        }
+        // D2H high-res heatmap to host — Stage 2 peak-pick still runs on CPU.
+        if (!jarvis_hn_trt::cuda_ok(cudaMemcpyAsync(
+                state.center_out_high.data(), out_high->d_ptr,
+                out_high->bytes, cudaMemcpyDeviceToHost, eng.stream),
+                "CD D2H") ||
+            !jarvis_hn_trt::cuda_ok(cudaStreamSynchronize(eng.stream), "CD sync")) {
+            return false;
+        }
+    }
+    state.last_center_ms = std::chrono::duration<double, std::milli>(clk::now() - t0).count();
+
+    // ── STAGE 2: peak-pick + triangulate center_3D (CPU, unchanged) ──
+    std::vector<Eigen::Vector2d> center_2d_undist;
+    std::vector<Eigen::Matrix<double, 3, 4>> center_proj_mats;
+    constexpr float kCenterDetectThreshold = 50.0f;
+    const size_t cen_plane = static_cast<size_t>(Hcen_hi) * Hcen_hi;
+    const char *verbose_env = std::getenv("RED_HN_VERBOSE");
+    const bool verbose = (verbose_env && verbose_env[0] == '1');
+    if (verbose) std::fprintf(stderr, "[HybridNet] stage 2 per-cam:\n");
+    for (int c = 0; c < N; ++c) {
+        auto [px, py, v] = jarvis_peak_pick(
+            state.center_out_high.data() + c * cen_plane, Hcen_hi, Hcen_hi);
+        if (verbose) {
+            std::fprintf(stderr,
+                "  cam %2d: peak=(%d, %d) val=%.2f%s\n",
+                c, px, py, v,
+                v < kCenterDetectThreshold ? "  [BELOW THRESHOLD]" : "");
+        }
+        if (v < kCenterDetectThreshold) continue;
+        const double nx = (px + 0.5) * widths[c]  / static_cast<double>(Hcen_hi);
+        const double ny = (py + 0.5) * heights[c] / static_cast<double>(Hcen_hi);
+        const auto &cp = camera_params[c];
+        Eigen::Vector2d und = cp.telecentric
+            ? red_math::undistortPointTelecentric(Eigen::Vector2d(nx, ny), cp.k, cp.dist_coeffs)
+            : red_math::undistortPoint(Eigen::Vector2d(nx, ny), cp.k, cp.dist_coeffs);
+        center_2d_undist.push_back(und);
+        center_proj_mats.push_back(cp.projection_mat);
+    }
+    state.last_center_cams_used = static_cast<int>(center_2d_undist.size());
+    if (center_2d_undist.size() < 2) return false;
+    Eigen::Vector3d center_3D =
+        red_math::triangulatePoints(center_2d_undist, center_proj_mats);
+
+    // ── STAGE 3: reproject center_3D → centerHM, GPU crop+normalize ──
+    std::vector<int> centerHM_x(N), centerHM_y(N);
+    for (int c = 0; c < N; ++c) {
+        const auto &cp = camera_params[c];
+        Eigen::Vector2d cHM = cp.telecentric
+            ? red_math::projectPointTelecentric(center_3D, cp.projection_mat, cp.k, cp.dist_coeffs)
+            : red_math::projectPointR(center_3D, cp.r, cp.tvec, cp.k, cp.dist_coeffs);
+        int cx = static_cast<int>(std::round(cHM[0]));
+        int cy = static_cast<int>(std::round(cHM[1]));
+        cx = std::max(bbox_hw, std::min(widths[c]  - bbox_hw, cx));
+        cy = std::max(bbox_hw, std::min(heights[c] - bbox_hw, cy));
+        centerHM_x[c] = cx;
+        centerHM_y[c] = cy;
+    }
+
+    // ── STAGE 4: effTrack via GPU crop kernel + TRT enqueue ──────────
+    auto t_eff = clk::now();
+    {
+        auto &eng = *state.trt_efftrack;
+        if (!jarvis_hn_trt::cuda_ok(cudaMemcpyAsync(state.d_cx,
+                centerHM_x.data(), N * sizeof(int),
+                cudaMemcpyHostToDevice, eng.stream), "ET cx H2D") ||
+            !jarvis_hn_trt::cuda_ok(cudaMemcpyAsync(state.d_cy,
+                centerHM_y.data(), N * sizeof(int),
+                cudaMemcpyHostToDevice, eng.stream), "ET cy H2D")) {
+            return false;
+        }
+        jarvis_hn_trt::Binding *in = nullptr;
+        jarvis_hn_trt::Binding *out_high = nullptr;
+        for (auto &kv : eng.bindings) {
+            if (kv.second.is_input) in = &kv.second;
+            else if (kv.second.dims.nbDims == 4 && kv.second.dims.d[2] == Heff_hi)
+                out_high = &kv.second;
+        }
+        if (!in || !out_high) {
+            std::fprintf(stderr,
+                "[HybridNet] effTrack TRT bindings missing (device path)\n");
+            return false;
+        }
+        if (!jarvis_hn_trt::cuda_ok(
+                jarvis_hn_crop_normalize_device(
+                    state.d_rgba_ptrs, state.d_widths, state.d_heights,
+                    state.d_cx, state.d_cy,
+                    static_cast<float *>(in->d_ptr),
+                    N, B, state.cfg.dataset_mean.data(), inv_std, eng.stream),
+                "ET crop+normalize kernel")) {
+            return false;
+        }
+        if (!eng.context->enqueueV3(eng.stream) ||
+            !jarvis_hn_trt::cuda_ok(cudaStreamSynchronize(eng.stream), "ET sync")) {
+            return false;
+        }
+    }
+    state.last_efftrack_ms = std::chrono::duration<double, std::milli>(clk::now() - t_eff).count();
+
+    // ── STAGE 5: assemble Hybrid3D's small CPU-side inputs ───────────
+    for (int c = 0; c < N; ++c) {
+        const auto &P = camera_params[c].projection_mat;
+        float *out = state.camera_matrices.data() + c * 12;
+        for (int r = 0; r < 4; ++r) {
+            for (int col = 0; col < 3; ++col) {
+                out[r * 3 + col] = static_cast<float>(P(col, r));
+            }
+        }
+    }
+    for (int c = 0; c < N; ++c) {
+        state.centerHM_input[c * 2 + 0] = static_cast<float>(centerHM_x[c]);
+        state.centerHM_input[c * 2 + 1] = static_cast<float>(centerHM_y[c]);
+    }
+    state.center3D_input[0] = static_cast<float>(center_3D[0]);
+    state.center3D_input[1] = static_cast<float>(center_3D[1]);
+    state.center3D_input[2] = static_cast<float>(center_3D[2]);
+
+    // ── STAGE 6: Hybrid3D (pad on GPU + small H2Ds + enqueue) ────────
+    auto t_h3d = clk::now();
+    {
+        auto &eng = *state.trt_hybrid3d;
+        // Pad effTrack output device buffer into Hybrid3D's heatmaps_padded
+        // device buffer (Phase 2.2a). effTrack stream synced above, so its
+        // output is visible.
+        {
+            jarvis_hn_trt::Binding *src_b = nullptr;
+            for (auto &kv : state.trt_efftrack->bindings) {
+                if (!kv.second.is_input && kv.second.dims.nbDims == 4 &&
+                    kv.second.dims.d[2] == Heff_hi) {
+                    src_b = &kv.second; break;
+                }
+            }
+            auto *dst_b = eng.get("heatmaps_padded");
+            if (!src_b || !dst_b) {
+                std::fprintf(stderr,
+                    "[HybridNet] pad-on-GPU bindings missing (device path)\n");
+                return false;
+            }
+            if (!jarvis_hn_trt::cuda_ok(
+                    jarvis_hn_pad_heatmaps_device(
+                        static_cast<const float *>(src_b->d_ptr),
+                        static_cast<float *>(dst_b->d_ptr),
+                        N, J, Heff_hi, Heff_hi, eng.stream),
+                    "pad heatmaps")) {
+                return false;
+            }
+        }
+        auto h2d = [&](const char *name, const void *host, size_t host_bytes) -> bool {
+            auto *b = eng.get(name);
+            if (!b || !b->is_input || b->bytes != host_bytes) return false;
+            return jarvis_hn_trt::cuda_ok(
+                cudaMemcpyAsync(b->d_ptr, host, b->bytes,
+                                cudaMemcpyHostToDevice, eng.stream),
+                "H3D H2D");
+        };
+        if (!h2d("centerHM",       state.centerHM_input.data(),
+                 state.centerHM_input.size() * sizeof(float)) ||
+            !h2d("center3D",       state.center3D_input.data(),
+                 state.center3D_input.size() * sizeof(float)) ||
+            !h2d("cameraMatrices", state.camera_matrices.data(),
+                 state.camera_matrices.size() * sizeof(float))) {
+            std::fprintf(stderr,
+                "[HybridNet] Hybrid3D small-input H2D failed (device path)\n");
+            return false;
+        }
+        if (!eng.context->enqueueV3(eng.stream)) {
+            std::fprintf(stderr,
+                "[HybridNet] Hybrid3D TRT enqueueV3 failed (device path)\n");
+            return false;
+        }
+        auto d2h = [&](const char *name, void *host, size_t host_bytes) -> bool {
+            auto *b = eng.get(name);
+            if (!b || b->is_input || b->bytes != host_bytes) return false;
+            return jarvis_hn_trt::cuda_ok(
+                cudaMemcpyAsync(host, b->d_ptr, b->bytes,
+                                cudaMemcpyDeviceToHost, eng.stream),
+                "H3D D2H");
+        };
+        if (!d2h("points3D",    state.points3D_out.data(),
+                 state.points3D_out.size() * sizeof(float)) ||
+            !d2h("confidences", state.confidences_out.data(),
+                 state.confidences_out.size() * sizeof(float)) ||
+            !jarvis_hn_trt::cuda_ok(cudaStreamSynchronize(eng.stream), "H3D sync")) {
+            return false;
+        }
+    }
+    state.last_hybrid3d_ms = std::chrono::duration<double, std::milli>(clk::now() - t_h3d).count();
+
+    // ── STAGE 7: write into AnnotationMap (unchanged) ────────────────
+    FrameAnnotation &fa = get_or_create_frame(
+        annotations, frame_idx, skeleton.num_nodes, N);
+    for (int j = 0; j < J; ++j) {
+        fa.kp3d[j].x = state.points3D_out[j * 3 + 0];
+        fa.kp3d[j].y = state.points3D_out[j * 3 + 1];
+        fa.kp3d[j].z = state.points3D_out[j * 3 + 2];
+        fa.kp3d[j].set_hybridnet(state.confidences_out[j]);
+    }
+    for (int c = 0; c < N; ++c) {
+        const auto &cp = camera_params[c];
+        for (int j = 0; j < J; ++j) {
+            Eigen::Vector3d p3(fa.kp3d[j].x, fa.kp3d[j].y, fa.kp3d[j].z);
+            Eigen::Vector2d uv = cp.telecentric
+                ? red_math::projectPointTelecentric(p3, cp.projection_mat, cp.k, cp.dist_coeffs)
+                : red_math::projectPointR(p3, cp.r, cp.tvec, cp.k, cp.dist_coeffs);
+            auto &kp = fa.cameras[c].keypoints[j];
+            kp.x = uv[0];
+            kp.y = static_cast<double>(heights[c]) - uv[1];
+            kp.labeled = true;
+            kp.source = LabelSource::Predicted;
+            kp.confidence = state.confidences_out[j];
+        }
+    }
+    return true;
+}
+#endif // RED_HAS_TENSORRT_HN
 
 #endif // RED_HAS_ONNXRUNTIME
 #endif // __linux__ || _WIN32
