@@ -1151,6 +1151,33 @@ int main(int argc, char **argv) {
                     }
 #else
                     {
+                        // CUDA-GL interop sync: only re-map/unmap the PBO
+                        // around CUDA writes WHEN the contrast/brightness
+                        // kernel actually runs. The kernel's mid-stream
+                        // writes are what GL was racing with — visible as
+                        // horizontal stripes. When sliders are at identity
+                        // we skip the kernel AND the map/unmap, restoring
+                        // the per-cam CUDA↔GL overlap that keeps playback
+                        // fast. Pure cudaMemcpy paths (viz upload, frame
+                        // copy at defaults) work without explicit sync
+                        // because they don't change the data structure
+                        // significantly between GL reads.
+                        const bool render_contrast_identity =
+                            display.contrast == 1.0f &&
+                            display.brightness == 0;
+                        const bool needs_pbo_sync = !render_contrast_identity;
+                        if (needs_pbo_sync) {
+                            // Unmap-then-remap establishes a CUDA↔GL barrier
+                            // at the start of CUDA writes (any prior GL op
+                            // on this PBO finishes before CUDA writes begin).
+                            unmap_cuda_resource(&scene->pbo_cuda[j].cuda_resource);
+                            map_cuda_resource(&scene->pbo_cuda[j].cuda_resource);
+                            cuda_pointer_from_resource(
+                                &scene->pbo_cuda[j].cuda_buffer,
+                                &scene->pbo_cuda[j].cuda_pbo_storage_buffer_size,
+                                &scene->pbo_cuda[j].cuda_resource);
+                        }
+
                         bool viz_uploaded = false;
 #ifdef USE_CUDA_POINTSOURCE
                         // Check for PointSource viz overlay data
@@ -1172,6 +1199,13 @@ int main(int argc, char **argv) {
                         }
 #endif
                         if (!viz_uploaded) {
+                            // Shared by play + paused branches below. The
+                            // contrast/brightness kernel is a no-op at
+                            // identity (alpha=1, beta=0); skip when defaults
+                            // to save kernel + sync cost on every render.
+                            const bool contrast_identity =
+                                display.contrast == 1.0f &&
+                                display.brightness == 0;
                             if (ps.play_video) {
                                 current_frame_num = ps.to_display_frame_number;
                                 if (scene->use_cpu_buffer) {
@@ -1181,6 +1215,15 @@ int main(int argc, char **argv) {
                                         scene->image_width[j] * scene->image_height[j] *
                                             4,
                                         cudaMemcpyHostToDevice));
+                                    if (!contrast_identity) {
+                                        apply_contrast_brightness_rgba(
+                                            scene->pbo_cuda[j].cuda_buffer,
+                                            scene->image_width[j], scene->image_height[j],
+                                            display.contrast,
+                                            (float)display.brightness,
+                                            display.pivot_midgray,
+                                            0);
+                                    }
                                 } else {
                                     ck(cudaMemcpy(
                                         scene->pbo_cuda[j].cuda_buffer,
@@ -1188,8 +1231,19 @@ int main(int argc, char **argv) {
                                         scene->image_width[j] * scene->image_height[j] *
                                             4,
                                         cudaMemcpyDeviceToDevice));
+                                    if (!contrast_identity) {
+                                        apply_contrast_brightness_rgba(
+                                            scene->pbo_cuda[j].cuda_buffer,
+                                            scene->image_width[j], scene->image_height[j],
+                                            display.contrast,
+                                            (float)display.brightness,
+                                            display.pivot_midgray,
+                                            0);
+                                    }
                                 }
                             } else {
+                                // contrast_identity already declared above
+                                // for the play branch — reused here.
                                 if (scene->use_cpu_buffer) {
                                     ck(cudaMemcpy(
                                         scene->pbo_cuda[j].cuda_buffer,
@@ -1198,15 +1252,15 @@ int main(int argc, char **argv) {
                                         scene->image_width[j] * scene->image_height[j] *
                                             4,
                                         cudaMemcpyHostToDevice));
-
-                                    apply_contrast_brightness_rgba(
-                                        scene->pbo_cuda[j].cuda_buffer,
-                                        scene->image_width[j], scene->image_height[j],
-                                        display.contrast,
-                                        (float)display.brightness,
-                                        display.pivot_midgray,
-                                        0);
-
+                                    if (!contrast_identity) {
+                                        apply_contrast_brightness_rgba(
+                                            scene->pbo_cuda[j].cuda_buffer,
+                                            scene->image_width[j], scene->image_height[j],
+                                            display.contrast,
+                                            (float)display.brightness,
+                                            display.pivot_midgray,
+                                            0);
+                                    }
                                 } else {
                                     ck(cudaMemcpy(
                                         scene->pbo_cuda[j].cuda_buffer,
@@ -1215,20 +1269,28 @@ int main(int argc, char **argv) {
                                         scene->image_width[j] * scene->image_height[j] *
                                             4,
                                         cudaMemcpyDeviceToDevice));
-                                    // Apply contrast/brightness in the paused
-                                    // viewer for GPU Buffer mode too. Mirrors
-                                    // the CPU branch's call; without this the
-                                    // brightness/contrast slider was silently
-                                    // a no-op under GPU Buffer.
-                                    apply_contrast_brightness_rgba(
-                                        scene->pbo_cuda[j].cuda_buffer,
-                                        scene->image_width[j], scene->image_height[j],
-                                        display.contrast,
-                                        (float)display.brightness,
-                                        display.pivot_midgray,
-                                        0);
+                                    if (!contrast_identity) {
+                                        apply_contrast_brightness_rgba(
+                                            scene->pbo_cuda[j].cuda_buffer,
+                                            scene->image_width[j], scene->image_height[j],
+                                            display.contrast,
+                                            (float)display.brightness,
+                                            display.pivot_midgray,
+                                            0);
+                                    }
                                 }
                             }
+                        }
+                        if (needs_pbo_sync) {
+                            // Unmap before GL reads — sync point between
+                            // the kernel and GL. PBO will be remapped at
+                            // the start of the next render that needs it.
+                            unmap_cuda_resource(&scene->pbo_cuda[j].cuda_resource);
+                            map_cuda_resource(&scene->pbo_cuda[j].cuda_resource);
+                            cuda_pointer_from_resource(
+                                &scene->pbo_cuda[j].cuda_buffer,
+                                &scene->pbo_cuda[j].cuda_pbo_storage_buffer_size,
+                                &scene->pbo_cuda[j].cuda_resource);
                         }
                     }
                     bind_pbo(&scene->pbo_cuda[j].pbo);
