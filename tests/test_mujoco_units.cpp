@@ -33,7 +33,7 @@ int main() {
         std::getline(ss, sx, ','); std::getline(ss, sy, ','); std::getline(ss, sz, ',');
         if (idx < 0 || idx >= 24) continue;
         double x = std::stod(sx), y = std::stod(sy), z = std::stod(sz);
-        if (std::abs(x) < 1e6) kp3d[idx] = {x, y, z, true, 1.0f};
+        if (std::abs(x) < 1e6) { kp3d[idx].x = x; kp3d[idx].y = y; kp3d[idx].z = z; kp3d[idx].set_triangulated(1.0f); }
     }
 
     // Centroids
@@ -114,7 +114,7 @@ int main() {
             std::getline(ss2,a,','); std::getline(ss2,b,','); std::getline(ss2,c,',');
             if (idx<0||idx>=24) continue;
             double x=std::stod(a),y=std::stod(b),z=std::stod(c);
-            if (std::abs(x)<1e6) kp[idx]={x,y,z,true,1.0f};
+            if (std::abs(x)<1e6) { kp[idx].x=x; kp[idx].y=y; kp[idx].z=z; kp[idx].set_triangulated(1.0f); }
         }
         mujoco_ik_solve(mj, ik2, kp.data(), 24, fn);
         printf("  Frame %5d: %.1f mm, %d iters, %.0f ms\n",
