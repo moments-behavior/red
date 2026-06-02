@@ -106,6 +106,11 @@ struct VideoFrameRange {
     int start_frame = 0;
     int stop_frame = 0;    // 0 = all
     int frame_step = 1;
+    // Per-camera constant frame offset (parallel to cam_ordered) for timestamp-
+    // based synchronization of free-running cameras. actual_frame = reference_frame
+    // + offset; detections are keyed by the shared reference index so all cameras
+    // link to the same 3D board points. Empty => all-zero (index-based, default).
+    std::vector<int> cam_frame_offset;
 };
 
 // Progress tracking for ArUco calibration (shared between pipeline thread and UI)
@@ -737,6 +742,11 @@ inline bool detect_and_calibrate_intrinsics_video(
                 board.marker_length = cs.marker_side_length;
                 board.dictionary_id = cs.dictionary;
 
+                // Per-camera timestamp-sync offset: this camera's actual frame
+                // for reference frame R is R + cam_off. Default 0 (index-based).
+                int cam_off = (cam_i < (int)vfr.cam_frame_offset.size())
+                                  ? vfr.cam_frame_offset[cam_i] : 0;
+
 #ifdef __APPLE__
                 // macOS: FFmpegDemuxer + VTAsyncDecoder + Metal GPU
                 std::unique_ptr<FFmpegDemuxer> demuxer;
@@ -757,11 +767,14 @@ inline bool detect_and_calibrate_intrinsics_video(
                 std::vector<uint8_t> gray(w * h);
 
                 int frame = 0;
+                // Per-camera decode bounds shifted by the sync offset.
+                int cam_start = std::max(0, vfr.start_frame + cam_off);
+                int cam_stop = stop_fr + cam_off;
                 bool first_pkt_from_seek = false;
                 uint8_t *seek_pkt = nullptr; size_t seek_pkt_size = 0;
                 PacketData seek_pkt_info;
-                if (vfr.start_frame > 0) {
-                    SeekContext seek_ctx((uint64_t)vfr.start_frame, PREV_KEY_FRAME, BY_NUMBER);
+                if (cam_start > 0) {
+                    SeekContext seek_ctx((uint64_t)cam_start, PREV_KEY_FRAME, BY_NUMBER);
                     if (demuxer->Seek(seek_ctx, seek_pkt, seek_pkt_size, seek_pkt_info)) {
                         frame = (int)demuxer->FrameNumberFromTs(seek_ctx.out_frame_pts);
                         if (frame < 0) frame = 0;
@@ -772,7 +785,8 @@ inline bool detect_and_calibrate_intrinsics_video(
                 // Unified process_frame: BGRA→gray then full-res detection
                 // (same pipeline as image path — proven REDv4 approach)
                 auto process_frame = [&](CVPixelBufferRef pb) {
-                    bool should_detect = frame_to_idx.count(frame) > 0;
+                    int ref_frame = frame - cam_off;  // shared reference frame
+                    bool should_detect = frame_to_idx.count(ref_frame) > 0;
                     if (should_detect) {
                         CVPixelBufferLockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
                         const uint8_t *bgra = (const uint8_t *)CVPixelBufferGetBaseAddress(pb);
@@ -789,7 +803,7 @@ inline bool detect_and_calibrate_intrinsics_video(
                             nullptr, 0, 1);  // full-res contour finding
                         if ((int)charuco.ids.size() >= 6) {
                             aruco_detect::cornerSubPix(gray.data(), w, h, charuco.corners, 3, 100, 0.001f);
-                            int sorted_idx = frame_to_idx[frame];
+                            int sorted_idx = frame_to_idx[ref_frame];
                             det.cam_data.corners_per_image[sorted_idx] = charuco.corners;
                             det.cam_data.ids_per_image[sorted_idx] = charuco.ids;
                             std::vector<Eigen::Vector3f> obj_pts;
@@ -822,7 +836,7 @@ inline bool detect_and_calibrate_intrinsics_video(
                 };
 
                 while (true) {
-                    if (frame >= stop_fr) break;
+                    if (frame >= cam_stop) break;
                     uint8_t *pkt_data = nullptr; size_t pkt_size = 0; PacketData pkt_info;
                     if (first_pkt_from_seek) {
                         pkt_data = seek_pkt; pkt_size = seek_pkt_size;
@@ -832,10 +846,10 @@ inline bool detect_and_calibrate_intrinsics_video(
                     vt.submit_blocking(pkt_data, pkt_size, pkt_info.pts,
                                        pkt_info.dts, demuxer->GetTimebase(), is_key);
                     while (CVPixelBufferRef pb = vt.drain_one()) {
-                        process_frame(pb); if (frame >= stop_fr) break; }
-                    if (frame >= stop_fr) break;
+                        process_frame(pb); if (frame >= cam_stop) break; }
+                    if (frame >= cam_stop) break;
                 }
-                while (frame < stop_fr) {
+                while (frame < cam_stop) {
                     CVPixelBufferRef pb = vt.drain_one();
                     if (!pb) break; process_frame(pb);
                 }
@@ -849,7 +863,9 @@ inline bool detect_and_calibrate_intrinsics_video(
                 det.cam_data.image_width = w; det.cam_data.image_height = h;
                 std::vector<uint8_t> gray(w * h);
                 for (int frame_num : frame_numbers) {
-                    const uint8_t *rgb = reader.readFrame(frame_num);
+                    int actual = frame_num + cam_off;  // shift read by sync offset
+                    if (actual < 0) continue;          // no frame for this reference
+                    const uint8_t *rgb = reader.readFrame(actual);
                     if (!rgb) continue;
                     for (int i = 0; i < w * h; i++)
                         gray[i] = (uint8_t)((rgb[i*3]*77 + rgb[i*3+1]*150 + rgb[i*3+2]*29) >> 8);
@@ -3485,22 +3501,33 @@ inline bool bundle_adjust_experimental(
         // fix_mode==2: free extrinsics + fx,fy,cx,cy,k1,k2 + 3D points.
         // Lock tangential distortion (p1,p2) and k3 — these are poorly
         // constrained with typical ChArUco data and cause 3D accuracy loss
-        // when freed. Only unlock if user provides explicit ba_config bounds.
+        // when freed. The user may additionally lock focal (fx,fy), principal
+        // point (cx,cy), and radial (k1,k2): for few-camera / top-down /
+        // near-planar rigs, freeing these is degenerate and lets BA trade
+        // intrinsics against camera pose, tilting the recovered extrinsics.
         if(bp.fix_mode==2){
+            bool lock_focal=false, lock_principal=false, lock_distortion=false;
+            if(!config.ba_config.is_null()){
+                lock_focal     = config.ba_config.value("lock_focal", false);
+                lock_principal = config.ba_config.value("lock_principal", false);
+                lock_distortion= config.ba_config.value("lock_distortion", false);
+            }
             std::vector<int> obs_per_cam(nc, 0);
             for(const auto&obs:observations) obs_per_cam[obs.ci]++;
             for(int c=0;c<nc;c++){
+                std::vector<int> fix={12,13,14}; // p1,p2,k3 always locked
                 if(obs_per_cam[c]<30){
                     // Too few observations — fix all intrinsics
-                    std::vector<int> fix={6,7,8,9,10,11,12,13,14};
-                    problem.SetManifold(cp[c].data(),new ceres::SubsetManifold(15,fix));
+                    fix={6,7,8,9,10,11,12,13,14};
                     fprintf(stderr,"[Experimental]   Camera %s: %d obs < 30, fixing intrinsics\n",
                             config.cam_ordered[c].c_str(), obs_per_cam[c]);
                 } else {
-                    // Lock p1(12), p2(13), k3(14) — prevents distortion overfitting
-                    std::vector<int> fix={12,13,14};
-                    problem.SetManifold(cp[c].data(),new ceres::SubsetManifold(15,fix));
+                    if(lock_focal)      { fix.push_back(6); fix.push_back(7); }
+                    if(lock_principal)  { fix.push_back(8); fix.push_back(9); }
+                    if(lock_distortion) { fix.push_back(10); fix.push_back(11); }
                 }
+                std::sort(fix.begin(), fix.end());
+                problem.SetManifold(cp[c].data(),new ceres::SubsetManifold(15,fix));
             }
         }
 

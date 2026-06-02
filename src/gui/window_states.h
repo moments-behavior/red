@@ -105,6 +105,13 @@ struct WindowStates {
         calibration.aruco_frame_step = 10;
         calibration.aruco_total_frames = 0;
         calibration.aruco_video_count = 0;
+        calibration.aruco_sync_by_timestamp = false;
+        calibration.aruco_ts_pattern = "cam{cam}_timestamps_*.csv";
+        calibration.aruco_sync_status.clear();
+        calibration.aruco_sync_ok = false;
+        calibration.aruco_ba_lock_focal = false;
+        calibration.aruco_ba_lock_principal = false;
+        calibration.aruco_ba_lock_distortion = false;
         calibration.tele_flip_y = true;
         calibration.tele_square_pixels = false;
         calibration.tele_zero_skew = false;

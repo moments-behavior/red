@@ -117,6 +117,21 @@ struct CalibrationToolState {
     int aruco_total_frames = 0;
     int aruco_video_count = 0;     // cached number of matched videos
 
+    // Timestamp-based camera sync (videos only; default off => index-based).
+    // For free-running / software-triggered rigs whose videos start at staggered
+    // frames. Off leaves the proven index-based pairing untouched.
+    bool aruco_sync_by_timestamp = false;
+    std::string aruco_ts_pattern = "cam{cam}_timestamps_*.csv";  // {cam}=video token
+    std::string aruco_sync_status;     // human-readable detection result for the UI
+    bool aruco_sync_ok = false;        // true if a usable, constant offset was found
+
+    // Lock per-camera intrinsics during bundle adjustment (default: all off =>
+    // BA refines fx,fy,cx,cy,k1,k2). Lock these for few-camera / top-down /
+    // near-planar rigs where freeing them is degenerate and tilts extrinsics.
+    bool aruco_ba_lock_focal = false;       // lock fx,fy
+    bool aruco_ba_lock_principal = false;   // lock cx,cy
+    bool aruco_ba_lock_distortion = false;  // lock k1,k2
+
     // Global registration: which frame from calibration media to use (0-based)
     int global_reg_frame = 0;      // user-selectable in Calibration Tool UI
 

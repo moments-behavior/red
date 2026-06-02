@@ -391,6 +391,11 @@ struct CalibProject {
     int last_aruco_total_video_frames = 0;
     int last_aruco_cameras_used = 0;
     double last_aruco_mean_reproj = 0;
+    bool last_aruco_sync_by_timestamp = false;          // timestamp-sync enabled
+    std::string last_aruco_ts_pattern = "cam{cam}_timestamps_*.csv";  // lab CSV glob
+    bool last_aruco_ba_lock_focal = false;              // BA: lock fx,fy
+    bool last_aruco_ba_lock_principal = false;          // BA: lock cx,cy
+    bool last_aruco_ba_lock_distortion = false;         // BA: lock k1,k2
 
     // Last DLT calibration result (persisted for reopening)
     int dlt_method = -1;                  // -1 = not run, 0/1/2 = Linear/k1/k1k2
@@ -461,6 +466,11 @@ inline void to_json(nlohmann::json &j, const CalibProject &p) {
                        {"last_aruco_total_video_frames", p.last_aruco_total_video_frames},
                        {"last_aruco_cameras_used", p.last_aruco_cameras_used},
                        {"last_aruco_mean_reproj", p.last_aruco_mean_reproj},
+                       {"last_aruco_sync_by_timestamp", p.last_aruco_sync_by_timestamp},
+                       {"last_aruco_ts_pattern", p.last_aruco_ts_pattern},
+                       {"last_aruco_ba_lock_focal", p.last_aruco_ba_lock_focal},
+                       {"last_aruco_ba_lock_principal", p.last_aruco_ba_lock_principal},
+                       {"last_aruco_ba_lock_distortion", p.last_aruco_ba_lock_distortion},
                        {"dlt_method", p.dlt_method},
                        {"dlt_mean_rmse", p.dlt_mean_rmse},
                        {"dlt_per_camera_rmse", p.dlt_per_camera_rmse},
@@ -542,6 +552,12 @@ inline void from_json(const nlohmann::json &j, CalibProject &p) {
     p.last_aruco_total_video_frames = j.value("last_aruco_total_video_frames", 0);
     p.last_aruco_cameras_used = j.value("last_aruco_cameras_used", 0);
     p.last_aruco_mean_reproj = j.value("last_aruco_mean_reproj", 0.0);
+    p.last_aruco_sync_by_timestamp = j.value("last_aruco_sync_by_timestamp", false);
+    p.last_aruco_ts_pattern = j.value("last_aruco_ts_pattern",
+                                      std::string("cam{cam}_timestamps_*.csv"));
+    p.last_aruco_ba_lock_focal = j.value("last_aruco_ba_lock_focal", false);
+    p.last_aruco_ba_lock_principal = j.value("last_aruco_ba_lock_principal", false);
+    p.last_aruco_ba_lock_distortion = j.value("last_aruco_ba_lock_distortion", false);
     p.dlt_method = j.value("dlt_method", -1);
     p.dlt_mean_rmse = j.value("dlt_mean_rmse", 0.0);
     p.dlt_per_camera_rmse = j.value("dlt_per_camera_rmse", std::vector<double>{});

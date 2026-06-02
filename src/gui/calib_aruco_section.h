@@ -9,9 +9,76 @@
 #endif
 #include "imgui.h"
 #include "implot.h"
+#include <misc/cpp/imgui_stdlib.h>
+#include "camera_timestamps.h"
 #include <algorithm>
+#include <filesystem>
+#include <map>
 #include <numeric>
 #include <string>
+
+// Detect per-camera constant frame offsets from timestamp sidecars, for
+// timestamp-based synchronization of free-running rigs. Searches the media
+// folder then its parent (lab CSVs often sit one level above the videos).
+// Returns offsets aligned to `cams` (empty on failure), and fills a
+// human-readable `status` plus `ok` (true only if a constant, clean offset
+// was found for every camera). Reused by the Detect button and the run path.
+inline std::vector<int> aruco_detect_sync_offsets(
+        const std::string &media_folder, const std::vector<std::string> &cams,
+        const std::string &pattern, std::string &status, bool &ok) {
+    namespace ct = camera_timestamps;
+    ok = false;
+    if (media_folder.empty() || cams.empty()) { status = "No media/cameras"; return {}; }
+
+    std::map<std::string, int> counts;
+    auto vids = CalibrationTool::discover_aruco_videos(media_folder, cams);
+    for (const auto &c : cams) {
+        auto it = vids.find(c);
+        counts[c] = (it != vids.end())
+            ? CalibrationPipeline::get_video_frame_count(it->second) : -1;
+    }
+
+    ct::CameraTimestamps ts = ct::load(media_folder, cams, pattern, counts);
+    if (ts.format == ct::Format::None) {
+        std::string parent = std::filesystem::path(media_folder).parent_path().string();
+        if (!parent.empty() && parent != media_folder)
+            ts = ct::load(parent, cams, pattern, counts);
+    }
+    if (ts.format == ct::Format::None) {
+        status = "No timestamp files found — videos stay index-paired";
+        return {};
+    }
+    for (const auto &c : cams) ts.video_frame_count[c] = counts.count(c) ? counts[c] : -1;
+
+    ct::OffsetResult off = ct::compute_offsets(ts, cams);
+    ct::Validation val = ct::validate(ts);
+
+    std::vector<int> offsets;
+    offsets.reserve(cams.size());
+    std::string offs, warn;
+    bool good = true;
+    for (const auto &c : cams) {
+        int o = off.offset.count(c) ? off.offset[c] : 0;
+        offsets.push_back(o);
+        offs += c + ":" + std::to_string(o) + " ";
+        if (off.constant.count(c) && !off.constant.at(c)) {
+            good = false; warn += "Cam" + c + " offset varies; ";
+        }
+        auto vit = val.cams.find(c);
+        if (vit != val.cams.end()) {
+            if (!vit->second.counts_ok) { good = false; warn += "Cam" + c + " rows!=video; "; }
+            if (vit->second.est_dropped > 0) {
+                good = false;
+                warn += "Cam" + c + " ~" + std::to_string(vit->second.est_dropped) + " dropped; ";
+            }
+        }
+    }
+    const char *fn = (ts.format == ct::Format::OrangePTP) ? "Orange PTP" : "Lab CSV";
+    status = std::string(fn) + " [ref " + off.reference + "]  offsets: " + offs +
+             (good ? "(constant)" : "  WARNING: " + warn);
+    ok = good;
+    return offsets;
+}
 
 // Draw the Aruco Calibration section inside the Calibration Tool window.
 // Called only when state.project.has_aruco() && state.config_loaded.
@@ -251,6 +318,30 @@ inline void DrawCalibArucoSection(CalibrationToolState &state, AppContext &ctx,
                                         est * state.aruco_video_count);
                         }
                     }
+
+                    // Timestamp-based camera sync (free-running / staggered-start
+                    // rigs). Default off => proven index-based pairing is untouched.
+                    ImGui::Checkbox("Sync cameras by timestamp##aruco",
+                                    &state.aruco_sync_by_timestamp);
+                    if (state.aruco_sync_by_timestamp) {
+                        ImGui::SetNextItemWidth(280);
+                        if (ImGui::InputText("Lab CSV pattern##aruco",
+                                             &state.aruco_ts_pattern))
+                            state.aruco_sync_status.clear();  // re-detect on change
+                        ImGui::SameLine();
+                        bool detect = ImGui::Button("Detect##aruco_sync");
+                        if (detect || state.aruco_sync_status.empty())
+                            aruco_detect_sync_offsets(
+                                media_folder, state.config.cam_ordered,
+                                state.aruco_ts_pattern, state.aruco_sync_status,
+                                state.aruco_sync_ok);
+                        if (!state.aruco_sync_status.empty()) {
+                            ImVec4 col = state.aruco_sync_ok
+                                ? ImVec4(0.4f, 1.0f, 0.4f, 1.0f)
+                                : ImVec4(1.0f, 0.6f, 0.2f, 1.0f);
+                            ImGui::TextColored(col, "%s", state.aruco_sync_status.c_str());
+                        }
+                    }
                     ImGui::Separator();
                 }
 
@@ -315,6 +406,11 @@ inline void DrawCalibArucoSection(CalibrationToolState &state, AppContext &ctx,
                             state.project.last_aruco_total_video_frames = state.aruco_total_frames;
                             state.project.last_aruco_cameras_used = (int)state.aruco_result.cam_names.size();
                             state.project.last_aruco_mean_reproj = state.aruco_result.mean_reproj_error;
+                            state.project.last_aruco_sync_by_timestamp = state.aruco_sync_by_timestamp;
+                            state.project.last_aruco_ts_pattern = state.aruco_ts_pattern;
+                            state.project.last_aruco_ba_lock_focal = state.aruco_ba_lock_focal;
+                            state.project.last_aruco_ba_lock_principal = state.aruco_ba_lock_principal;
+                            state.project.last_aruco_ba_lock_distortion = state.aruco_ba_lock_distortion;
                             std::string pf =
                                 state.project.project_path + "/" +
                                 state.project.project_name + ".redproj";
@@ -363,6 +459,20 @@ inline void DrawCalibArucoSection(CalibrationToolState &state, AppContext &ctx,
                     }
                 }
 
+                // Bundle-adjustment intrinsic locking. Default: BA refines
+                // fx,fy,cx,cy,k1,k2 (best for many-camera rigs). For few-camera
+                // or top-down / near-planar rigs, lock the poorly-constrained
+                // intrinsics so BA can't trade them against camera pose (which
+                // tilts/shifts the recovered camera positions).
+                ImGui::TextUnformatted("Lock in bundle adjustment:");
+                ImGui::SameLine();
+                ImGui::Checkbox("focal (fx,fy)##ba", &state.aruco_ba_lock_focal);
+                ImGui::SameLine();
+                ImGui::Checkbox("principal pt (cx,cy)##ba", &state.aruco_ba_lock_principal);
+                ImGui::SameLine();
+                ImGui::Checkbox("distortion (k1,k2)##ba", &state.aruco_ba_lock_distortion);
+                ImGui::Separator();
+
                 // Calibrate button (unified — runs experimental pipeline)
                 bool can_run = state.config_loaded &&
                     !media_folder.empty() &&
@@ -379,6 +489,10 @@ inline void DrawCalibArucoSection(CalibrationToolState &state, AppContext &ctx,
                     auto enabled = state.enabled_cameras();
                     auto filtered_config = state.config;
                     filtered_config.cam_ordered = enabled;
+                    // Intrinsic-locking flags for Stage 2 bundle adjustment.
+                    filtered_config.ba_config["lock_focal"] = state.aruco_ba_lock_focal;
+                    filtered_config.ba_config["lock_principal"] = state.aruco_ba_lock_principal;
+                    filtered_config.ba_config["lock_distortion"] = state.aruco_ba_lock_distortion;
                     // Pass global registration media info to pipeline
                     filtered_config.global_reg_media_folder =
                         state.project.global_reg_media_folder;
@@ -413,6 +527,14 @@ inline void DrawCalibArucoSection(CalibrationToolState &state, AppContext &ctx,
                         vfr.start_frame = state.aruco_start_frame;
                         vfr.stop_frame = state.aruco_stop_frame;
                         vfr.frame_step = state.aruco_frame_step;
+                        if (state.aruco_sync_by_timestamp) {
+                            std::string sync_status; bool sync_ok = false;
+                            vfr.cam_frame_offset = aruco_detect_sync_offsets(
+                                media_folder, enabled, state.aruco_ts_pattern,
+                                sync_status, sync_ok);
+                            fprintf(stderr, "[Calibration] timestamp sync: %s\n",
+                                    sync_status.c_str());
+                        }
                         state.aruco_future = std::async(
                             std::launch::async,
                             [config = filtered_config, base,
