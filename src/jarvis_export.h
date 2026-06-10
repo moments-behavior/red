@@ -637,9 +637,11 @@ inline void extract_jpegs_for_camera(
 
     namespace fs = std::filesystem;
 
-    // Create directories
-    fs::create_directories(output_folder + "/train/" + trial_name + "/" + cam);
-    fs::create_directories(output_folder + "/val/" + trial_name + "/" + cam);
+    // Output directories are created on demand per mode in the write loop below
+    // (train/val for JARVIS-style splits, "labeled-data" for DeepLabCut). The
+    // mode comes from frame_to_mode, so we can't assume train/val up front —
+    // hard-coding them dropped DeepLabCut's "labeled-data" frames (write_jpeg
+    // silently failed to open a file in a nonexistent directory).
 
     // Combine and sort all frames
     std::vector<int> all_frames;
@@ -679,6 +681,7 @@ inline void extract_jpegs_for_camera(
         if (it != frame_to_mode.end()) {
             std::string dir = output_folder + "/" + it->second + "/" +
                               trial_name + "/" + cam + "/";
+            fs::create_directories(dir); // mode dir may not exist yet
             std::string filename =
                 dir + "Frame_" + std::to_string(frame_num) + ".jpg";
             write_jpeg(filename.c_str(), w, h, 3, rgb, jpeg_quality);
