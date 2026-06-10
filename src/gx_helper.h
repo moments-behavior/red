@@ -82,6 +82,22 @@ inline GLFWwindow *gx_glfw_init_render_target(u32 major_version,
         exit(EXIT_FAILURE);
     }
 
+    // Launch filling the screen instead of a small 1920x1080 window. Size to the
+    // monitor work area first (honored even by WMs that ignore maximize), then
+    // request maximize last (proper maximized state where supported; otherwise
+    // the work-area size still fills the screen). Order matters — sizing after
+    // maximizing would un-maximize it.
+    GLFWmonitor *monitor = glfwGetPrimaryMonitor();
+    if (monitor != NULL) {
+        int mx = 0, my = 0, mw = 0, mh = 0;
+        glfwGetMonitorWorkarea(monitor, &mx, &my, &mw, &mh);
+        if (mw > 0 && mh > 0) {
+            glfwSetWindowPos(window, mx, my);
+            glfwSetWindowSize(window, mw, mh);
+        }
+    }
+    glfwMaximizeWindow(window);
+
     return window;
 }
 
