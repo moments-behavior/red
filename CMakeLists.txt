@@ -1679,6 +1679,13 @@ else()
     find_package(CUDAToolkit REQUIRED)
     find_package(PkgConfig REQUIRED)
 
+    # CBLAS provider (used by descriptor_matcher.h). Ubuntu 22.04 ships a literal
+    # libcblas.so (netlib/atlas); 24.04 dropped that name but libopenblas.so
+    # exports the full cblas_* API. Find whichever exists instead of hardcoding
+    # -lcblas, so the build works on both the 22.04 reference box and 24.04.
+    find_library(RED_CBLAS_LIB NAMES cblas openblas blas REQUIRED)
+    message(STATUS "Using CBLAS provider: ${RED_CBLAS_LIB}")
+
     # FFmpeg via pkg-config — prefer the custom CUDA-enabled build at
     # $HOME/nvidia/ffmpeg (shared with orange) over any system FFmpeg.
     set(RED_FFMPEG_PKGCONFIG "$ENV{HOME}/nvidia/ffmpeg/build/lib/pkgconfig")
@@ -1818,7 +1825,7 @@ else()
         # NVDEC (driver-provided: libnvcuvid.so from /usr/lib/x86_64-linux-gnu)
         nvcuvid
         # cblas: used by descriptor_matcher.h on non-Windows/non-Mac
-        cblas
+        ${RED_CBLAS_LIB}
         Threads::Threads
         ${CMAKE_DL_LIBS}
     )
@@ -1903,6 +1910,13 @@ else()
         INSTALL_RPATH "${RED_RPATH_INSTALL}"
     )
 
+    # Emit DT_RPATH (old dtags) instead of DT_RUNPATH. The shared FFmpeg's
+    # libavcodec/libavformat have a transitive DT_NEEDED on libswresample.so.3
+    # (same dir). DT_RUNPATH does not apply to a dependency's own NEEDED libs,
+    # so libswresample fails to resolve at runtime; DT_RPATH propagates. Same
+    # fix orange uses for its bundled FFmpeg.
+    target_link_options(red PRIVATE "-Wl,--disable-new-dtags")
+
     # ── Test targets (same deps as red, replacing red.cpp) ──────────────────
     set(TEST_GUI_SRC_FILES ${SRC_FILES})
     list(REMOVE_ITEM TEST_GUI_SRC_FILES "${CMAKE_SOURCE_DIR}/src/red.cpp")
@@ -1942,7 +1956,7 @@ else()
             CUDA::nppig
             CUDA::nppial
             nvcuvid
-            cblas
+            ${RED_CBLAS_LIB}
             Threads::Threads
             ${CMAKE_DL_LIBS}
         )
@@ -1971,6 +1985,9 @@ else()
             BUILD_RPATH "${RED_RPATH_BUILD}"
             INSTALL_RPATH "${RED_RPATH_INSTALL}"
         )
+        # See note on the red target: DT_RPATH so the shared FFmpeg's
+        # transitive libswresample.so.3 resolves at runtime.
+        target_link_options(${TEST_NAME} PRIVATE "-Wl,--disable-new-dtags")
     endforeach()
 
 endif()
