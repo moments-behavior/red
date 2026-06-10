@@ -107,16 +107,22 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
     }
 
     if (ImGui::BeginMenu("Tools")) {
+        // 3D / calibration-dependent tools are disabled for 2D (uncalibrated)
+        // projects — they index camera calibration and would otherwise crash.
+        const bool is_2d = project_is_2d(pm);
+
         if (ImGui::MenuItem("Export Tool")) {
             export_state.show = true;
         }
         ImGui::Separator();
+        ImGui::BeginDisabled(is_2d);
         if (ImGui::MenuItem("JARVIS Export Tool")) {
             jarvis_export_state.show = true;
         }
         if (ImGui::MenuItem("JARVIS Import Tool")) {
             jarvis_import_state.show = true;
         }
+        ImGui::EndDisabled();
         ImGui::Separator();
         if (ImGui::MenuItem("Bbox Tool")) {
             bbox_state.show = true;
@@ -127,6 +133,7 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
         if (ImGui::MenuItem("SAM Assist")) {
             sam_tool_state.show = true;
         }
+        ImGui::BeginDisabled(is_2d);
         if (ImGui::MenuItem("JARVIS Predict")) {
             jarvis_predict_state.show = true;
         }
@@ -134,11 +141,14 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
         if (ImGui::MenuItem("Triangulation Diagnostics")) {
             triangulation_diag_state.show = true;
         }
+        ImGui::EndDisabled();
 #ifdef RED_HAS_MUJOCO
         ImGui::Separator();
+        ImGui::BeginDisabled(is_2d);
         if (ImGui::MenuItem("Body Model")) {
             win.body_model.show = true;
         }
+        ImGui::EndDisabled();
 #endif
         ImGui::EndMenu();
     }

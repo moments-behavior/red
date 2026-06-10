@@ -71,25 +71,26 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
     DrawPanel("Export Tool", state.show,
         [&]() {
 
-        // Format selector
+        // Format selector. Nerfstudio/3DGS needs camera calibration, so it is
+        // omitted for 2D (uncalibrated) projects. The 2D formats (JARVIS, COCO,
+        // DeepLabCut, YOLO) read per-camera 2D labels only.
         ImGui::SeparatorText("Format");
-        static const char *format_labels[] = {
-            "JARVIS", "COCO Keypoints",
-            "DeepLabCut", "YOLO Pose", "YOLO Detection",
-            "Nerfstudio / 3DGS"
-        };
-        ImGui::Combo("Export Format", &state.format_idx, format_labels,
-                     IM_ARRAYSIZE(format_labels));
+        std::vector<const char *> format_labels = {
+            "JARVIS", "COCO Keypoints", "DeepLabCut", "YOLO Pose",
+            "YOLO Detection"};
+        std::vector<ExportFormats::Format> format_map = {
+            ExportFormats::JARVIS, ExportFormats::COCO,
+            ExportFormats::DEEPLABCUT, ExportFormats::YOLO_POSE,
+            ExportFormats::YOLO_DETECT};
+        if (!project_is_2d(pm)) {
+            format_labels.push_back("Nerfstudio / 3DGS");
+            format_map.push_back(ExportFormats::NERFSTUDIO);
+        }
+        if (state.format_idx >= (int)format_labels.size())
+            state.format_idx = 0;
+        ImGui::Combo("Export Format", &state.format_idx, format_labels.data(),
+                     (int)format_labels.size());
 
-        // Map UI index to ExportFormats::Format enum
-        static const ExportFormats::Format format_map[] = {
-            ExportFormats::JARVIS,
-            ExportFormats::COCO,
-            ExportFormats::DEEPLABCUT,
-            ExportFormats::YOLO_POSE,
-            ExportFormats::YOLO_DETECT,
-            ExportFormats::NERFSTUDIO,
-        };
         auto fmt = format_map[state.format_idx];
         bool is_jarvis = (fmt == ExportFormats::JARVIS);
 

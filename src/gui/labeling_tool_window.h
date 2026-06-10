@@ -211,10 +211,17 @@ inline void DrawLabelingToolWindow(
         for (const auto &[fnum, fa] : annotations) {
             if (!frame_has_any_keypoints(fa))
                 continue;
-            bool complete = (skeleton.has_skeleton && scene->num_cams > 1)
-                ? frame_is_complete(fa) &&
-                  frame_is_fully_triangulated(fa, skeleton.num_nodes)
-                : false;
+            bool complete;
+            if (!skeleton.has_skeleton) {
+                complete = false;
+            } else if (project_is_2d(pm)) {
+                // 2D: complete = every keypoint labeled on every camera
+                // (no triangulation requirement).
+                complete = frame_is_complete(fa);
+            } else {
+                complete = scene->num_cams > 1 && frame_is_complete(fa) &&
+                           frame_is_fully_triangulated(fa, skeleton.num_nodes);
+            }
             labeled_frames.push_back({(int)fnum, complete});
         }
 
