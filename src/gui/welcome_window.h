@@ -133,7 +133,15 @@ inline void DrawWelcomeWindow(AppContext &ctx, WindowStates &win) {
     ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0, 0.5f));
     if (ImGui::Button("Create Annotation Project", ImVec2(-1, 0))) {
         win.annotation.show = true;
+        win.annotation.two_d_mode = false; // calibrated multi-camera 3D
     }
+    if (ImGui::Button("Create 2D Annotation Project", ImVec2(-1, 0))) {
+        win.annotation.show = true;
+        win.annotation.two_d_mode = true; // single / uncalibrated camera(s), 2D only
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Label 2D keypoints on one or more uncalibrated\n"
+                          "cameras. No calibration or triangulation.");
     if (ImGui::Button("Load Annotation Project", ImVec2(-1, 0))) {
         IGFD::FileDialogConfig cfg;
         cfg.countSelectionMax = 1;

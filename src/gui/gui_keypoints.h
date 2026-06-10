@@ -111,7 +111,14 @@ inline void reprojection(FrameAnnotation &fa, SkeletonContext *skeleton,
                          const std::vector<CameraParams> &camera_params,
                          RenderScene *scene) {
 
-    bool telecentric = !camera_params.empty() && camera_params[0].telecentric;
+    // 2D / uncalibrated projects have no projection matrices: there is nothing
+    // to triangulate or reproject, and indexing camera_params[] would be out of
+    // bounds. Bail so the per-camera 2D labels stand on their own. (Guards every
+    // reprojection() call site at once — T-key, JARVIS, the Triangulate button.)
+    if (camera_params.empty())
+        return;
+
+    bool telecentric = camera_params[0].telecentric;
 
     for (u32 node = 0; node < skeleton->num_nodes; node++) {
 

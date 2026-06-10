@@ -32,6 +32,7 @@ inline std::vector<std::string> discover_mp4_cameras(const std::string &folder) 
 
 struct AnnotationDialogState {
     bool show = false;
+    bool two_d_mode = false; // 2D-only project: no calibration, no triangulation
     std::string video_folder;
     std::vector<std::string> discovered_cameras;
     std::vector<bool> camera_selected;
@@ -84,8 +85,19 @@ inline void DrawAnnotationDialog(AnnotationDialogState &state,
 
     if (!state.show) return;
 
+    // Reflect the chosen mode onto the project every frame while shown. In 2D
+    // mode there is no calibration / camera model.
+    pm.annotation_2d = state.two_d_mode;
+    if (state.two_d_mode) {
+        pm.calibration_folder.clear();
+        pm.telecentric = false;
+    }
+
     ImGui::SetNextWindowSize(ImVec2(720, 460), ImGuiCond_FirstUseEver);
-    if (ImGui::Begin("Create Annotation Project", &state.show, ImGuiWindowFlags_NoCollapse)) {
+    const char *dlg_title = state.two_d_mode
+                                ? "Create 2D Annotation Project"
+                                : "Create Annotation Project";
+    if (ImGui::Begin(dlg_title, &state.show, ImGuiWindowFlags_NoCollapse)) {
 
         // error banner
         if (!state.status.empty()) {
@@ -107,6 +119,7 @@ inline void DrawAnnotationDialog(AnnotationDialogState &state,
             pm.calibration_folder.clear();
             pm.camera_names.clear();
             pm.load_skeleton_from_json = false;
+            pm.annotation_2d = false;
             // Reset dialog state
             state.status.clear();
             state.video_folder.clear();
@@ -297,11 +310,12 @@ inline void DrawAnnotationDialog(AnnotationDialogState &state,
                     : (annot_skel_labels.empty() ? std::string()
                                                  : std::string(annot_skel_labels[annot_skeleton_idx]));
 
-            // ---- Camera Model + Calibration (only if multiple cameras) ----
+            // ---- Camera Model + Calibration (multiple CALIBRATED cameras) ----
+            // Hidden in 2D mode: 2D projects are uncalibrated by definition.
             {
                 int n_sel = 0;
                 for (auto b : state.camera_selected) if (b) n_sel++;
-                if (n_sel > 1) {
+                if (n_sel > 1 && !state.two_d_mode) {
                 // Camera Model selector
                 ImGui::TableNextRow();
                 LabelCell("Camera Model");
@@ -352,7 +366,8 @@ inline void DrawAnnotationDialog(AnnotationDialogState &state,
         const bool annot_ok =
             !pm.project_name.empty() && !pm.project_root_path.empty() &&
             annot_n_selected > 0 &&
-            (annot_n_selected <= 1 || !pm.calibration_folder.empty()) &&
+            (state.two_d_mode || annot_n_selected <= 1 ||
+             !pm.calibration_folder.empty()) &&
             (!pm.load_skeleton_from_json || !pm.skeleton_file.empty());
 
         // Right-align Create button

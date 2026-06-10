@@ -48,6 +48,8 @@ struct ProjectManager {
     std::string skeleton_name;
     std::string media_folder;
     bool telecentric = false; // true if using telecentric DLT calibration
+    bool annotation_2d = false; // 2D-only: single/uncalibrated camera(s), no
+                                // calibration / triangulation / 3D view
     AnnotationConfig annotation_config; // annotation capabilities
 
     // JARVIS models imported into this project
@@ -88,6 +90,7 @@ inline void to_json(nlohmann::json &j, const ProjectManager &p) {
                        {"skeleton_name", p.skeleton_name},
                        {"media_folder", p.media_folder},
                        {"telecentric", p.telecentric},
+                       {"annotation_2d", p.annotation_2d},
                        {"annotation_config", p.annotation_config},
                        {"jarvis_models", p.jarvis_models},
                        {"active_jarvis_model", p.active_jarvis_model}};
@@ -106,11 +109,20 @@ inline void from_json(const nlohmann::json &j, ProjectManager &p) {
     p.skeleton_name = j.value("skeleton_name", std::string{});
     p.media_folder = j.value("media_folder", std::string{});
     p.telecentric = j.value("telecentric", false);
+    p.annotation_2d = j.value("annotation_2d", false);
     if (j.contains("annotation_config"))
         p.annotation_config = j["annotation_config"].get<AnnotationConfig>();
     if (j.contains("jarvis_models"))
         p.jarvis_models = j["jarvis_models"].get<std::vector<ProjectManager::JarvisModelEntry>>();
     p.active_jarvis_model = j.value("active_jarvis_model", -1);
+}
+
+// True when the project is 2D-only: explicitly flagged, or has no usable
+// calibration loaded. Gates triangulation / 3D view / reprojection / 3D export
+// and the multi-view completeness metric. (camera_params is empty for an
+// uncalibrated project, so old uncalibrated projects are treated 2D-safely.)
+inline bool project_is_2d(const ProjectManager &p) {
+    return p.annotation_2d || p.camera_params.empty();
 }
 
 inline bool save_project_manager_json(const ProjectManager &p,
