@@ -139,23 +139,62 @@ cmake --build release -j$(sysctl -n hw.ncpu)
 ```
 Binary: `release/red`. Optional `lib/onnxruntime/`, `lib/mujoco.framework/` auto-detected.
 
-### Linux (Janelia machine)
-```bash
-cmake -S . -B release && cmake --build release -j
-```
+### Linux — two supported targets
+
+The Linux `else()` block in `CMakeLists.txt` builds on both the original
+**22.04 / CUDA-12.2** reference box and the newer **24.04 / gcc-13 / CUDA-13.1**
+(Blackwell) box. The same source compiles on both — the 24.04 fixes are
+backward-compatible and not `#if`-gated (see commit `d9d2a09`).
+
+Common to both:
 - CUDA arch defaults to `86;89` (A16 + RTX 4000 Ada). Override with
   `-DCMAKE_CUDA_ARCHITECTURES=...`.
-- Pre-reqs already on machine: Eigen3, Ceres (`/usr/local`), glfw3, GLEW,
-  OpenGL, cblas, CUDAToolkit 12.2 (`/usr/local/cuda`), custom FFmpeg
-  (`$HOME/nvidia/ffmpeg/build/lib/pkgconfig`), driver-provided `libnvcuvid.so`
-  (driver 535.x).
 - `find_package(Ceres)` requires `GTest::gmock` (via absl) — apt
   `libgtest-dev` lacks gmock, so CMakeLists explicitly finds GTest at
-  `/usr/local/lib/cmake/GTest` first.
+  `/usr/local/lib/cmake/GTest` first. Build googletest+gmock to `/usr/local`:
+  `cmake -S /usr/src/googletest -B /tmp/gt -DCMAKE_BUILD_TYPE=Release && sudo cmake --build /tmp/gt --target install -j`.
 - Fresh clone: `git submodule update --init lib/implot3d` (it's a submodule).
+- Custom CUDA FFmpeg at `$HOME/nvidia/ffmpeg/build/lib/pkgconfig` (shared with
+  orange) is preferred over any system FFmpeg — don't install a system one.
 - Optional bundled libs (auto-detected, RPATH-isolated via
   `$ORIGIN/../lib/...`): `lib/onnxruntime/`, `lib/cudnn/`, `lib/mujoco/`.
 - Binaries: `release/red`, `release/test_gui`, `release/test_annotation`.
+  Run tests headless: `DISPLAY= ./release/test_annotation` (673) /
+  `DISPLAY= ./release/test_gui` (178).
+
+**22.04 / CUDA-12.2 reference box** (driver 535.x):
+```bash
+cmake -S . -B release && cmake --build release -j
+```
+Pre-reqs already on machine: Eigen3, Ceres (`/usr/local`), glfw3, GLEW, OpenGL,
+`cblas`, CUDAToolkit 12.2 (`/usr/local/cuda`), driver-provided `libnvcuvid.so`.
+
+**24.04 / CUDA-13.1 (Blackwell) box** (driver 590; shares orange's toolchain
+read-only). Verified building + passing all tests + GUI playback (June 2026):
+```bash
+# apt deps (online); 24.04 dropped libcblas.so → install openblas (exports cblas_*)
+sudo apt-get install -y libeigen3-dev libceres-dev libopenblas-dev \
+    patchelf libgtest-dev libgmock-dev
+# nvcc is NOT on PATH → pass it explicitly. 120 = Blackwell display GPU.
+cmake -S . -B release -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc \
+    -DCMAKE_CUDA_ARCHITECTURES="86;89;120"
+cmake --build release -j$(nproc)
+```
+The three 24.04/CUDA-13 build fixes (all backward-compatible, in `d9d2a09`):
+1. `src/global.h` includes `<string>` — gcc-13's libstdc++ no longer pulls it
+   transitively through `<map>`/`<unordered_map>`.
+2. CMake finds a CBLAS provider (`find_library(NAMES cblas openblas blas)`)
+   instead of hardcoding `-lcblas` — 24.04 has `libopenblas.so`, not `libcblas.so`.
+3. `-Wl,--disable-new-dtags` on red + test targets → DT_RPATH so the shared
+   FFmpeg's transitive `libswresample.so.3` resolves at runtime.
+
+The CUDA-13 source hazards (cuCtxCreate `_v4`, NPP `_Ctx`, NVTX) were already
+handled in red, so no source porting was needed beyond fix #1. ML inference
+(JARVIS/SAM) is still compiled out on the 24.04 box — see the runbook in the
+`moments_setup` repo (`RED_2404_NOTES.md`) for the full build path and the
+Phase-B (TensorRT) inference plan, including running JARVIS on the Blackwell
+via TensorRT 10.
 
 ### Windows (RTX 3090)
 Use `build.bat` / `build_cmd.bat` (vcvars64 + CMake). Toolchain via vcpkg
