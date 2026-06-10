@@ -51,6 +51,10 @@
 #ifdef _WIN32
 #include <windows.h>                       // GetModuleFileName
 #endif
+#if defined(__linux__)
+#include <limits.h>                        // PATH_MAX
+#include <unistd.h>                        // readlink
+#endif
 #include "implot.h"
 #include "implot_internal.h"
 #include "project.h"
@@ -264,8 +268,22 @@ int main(int argc, char **argv) {
         window->exe_dir = std::filesystem::canonical(exe_buf).parent_path().string();
     }
 #else
-    window->exe_dir =
-        std::filesystem::canonical(argv[0]).parent_path().string();
+    {
+        // On Linux read the real binary path from /proc/self/exe, so red works
+        // when launched via PATH (e.g. a `red` symlink): argv[0] is then just
+        // "red" and canonical(argv[0]) would fail. Fall back to argv[0] only if
+        // /proc isn't available.
+        char exe_buf[PATH_MAX];
+        ssize_t n = readlink("/proc/self/exe", exe_buf, sizeof(exe_buf) - 1);
+        if (n > 0) {
+            exe_buf[n] = '\0';
+            window->exe_dir =
+                std::filesystem::path(exe_buf).parent_path().string();
+        } else {
+            window->exe_dir =
+                std::filesystem::canonical(argv[0]).parent_path().string();
+        }
+    }
 #endif
 
     render_initialize_target(window);
