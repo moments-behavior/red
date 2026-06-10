@@ -71,6 +71,12 @@ struct ExportConfig {
     // Camera params (loaded from project, indexed parallel to camera_names)
     std::vector<CameraParams> camera_params;
 
+    // Per-camera image dimensions (parallel to camera_names). Supplied from the
+    // loaded video so 2D / uncalibrated projects — which have no calibration
+    // YAML to read dims from — can still export. Empty/<=0 => fall back to YAML.
+    std::vector<int> image_width;
+    std::vector<int> image_height;
+
     // Export options
     float bbox_margin = 50.0f;
     float train_ratio = 0.9f;
@@ -80,6 +86,42 @@ struct ExportConfig {
     // Nerfstudio-specific: frame list (if empty, uses annotated frames)
     std::vector<int> nerfstudio_frames;
 };
+
+// ── Per-camera image-size resolver ──
+// Fills img_w/img_h keyed by camera name. Prefers dimensions supplied in the
+// config (from the loaded video — used by 2D/uncalibrated projects); otherwise
+// reads them from the calibration YAML (calibrated projects). Returns false and
+// sets *status if a camera's size can't be determined either way.
+inline bool resolve_image_dims(const ExportConfig &cfg,
+                               std::map<std::string, int> &img_w,
+                               std::map<std::string, int> &img_h,
+                               std::string *status) {
+    const bool have_cfg_dims =
+        cfg.image_width.size() == cfg.camera_names.size() &&
+        cfg.image_height.size() == cfg.camera_names.size();
+    for (size_t ci = 0; ci < cfg.camera_names.size(); ++ci) {
+        const auto &cam = cfg.camera_names[ci];
+        if (have_cfg_dims && cfg.image_width[ci] > 0 &&
+            cfg.image_height[ci] > 0) {
+            img_w[cam] = cfg.image_width[ci];
+            img_h[cam] = cfg.image_height[ci];
+            continue;
+        }
+        std::string path = cfg.calibration_folder + "/" + cam + ".yaml";
+        try {
+            auto yaml = opencv_yaml::read(path);
+            img_w[cam] = yaml.getInt("image_width");
+            img_h[cam] = yaml.getInt("image_height");
+        } catch (...) {
+            if (status)
+                *status = "Error: cannot determine image size for camera '" +
+                          cam + "' (no video dims and no calibration YAML at " +
+                          path + ")";
+            return false;
+        }
+    }
+    return true;
+}
 
 // ── Train/val split helper ──
 inline void split_train_val(const std::vector<u32> &frames, float train_ratio,
@@ -307,19 +349,10 @@ inline bool export_coco(const ExportConfig &cfg, const AnnotationMap &amap,
     std::vector<u32> train, val;
     split_train_val(labeled, cfg.train_ratio, cfg.seed, train, val);
 
-    // Read image dimensions from calibration
+    // Per-camera image dimensions (video dims for 2D, else calibration YAML)
     std::map<std::string, int> img_w, img_h;
-    for (const auto &cam : cfg.camera_names) {
-        std::string path = cfg.calibration_folder + "/" + cam + ".yaml";
-        try {
-            auto yaml = opencv_yaml::read(path);
-            img_w[cam] = yaml.getInt("image_width");
-            img_h[cam] = yaml.getInt("image_height");
-        } catch (...) {
-            if (status) *status = "Error: Cannot read calibration: " + path;
-            return false;
-        }
-    }
+    if (!resolve_image_dims(cfg, img_w, img_h, status))
+        return false;
 
     fs::create_directories(cfg.output_folder + "/annotations");
 
@@ -373,19 +406,10 @@ inline bool export_yolo(const ExportConfig &cfg, const AnnotationMap &amap,
     std::vector<u32> train, val;
     split_train_val(labeled, cfg.train_ratio, cfg.seed, train, val);
 
-    // Read image dims
+    // Per-camera image dimensions (video dims for 2D, else calibration YAML)
     std::map<std::string, int> img_w, img_h;
-    for (const auto &cam : cfg.camera_names) {
-        std::string path = cfg.calibration_folder + "/" + cam + ".yaml";
-        try {
-            auto yaml = opencv_yaml::read(path);
-            img_w[cam] = yaml.getInt("image_width");
-            img_h[cam] = yaml.getInt("image_height");
-        } catch (...) {
-            if (status) *status = "Error: Cannot read calibration: " + path;
-            return false;
-        }
-    }
+    if (!resolve_image_dims(cfg, img_w, img_h, status))
+        return false;
 
     auto write_split = [&](const std::vector<u32> &frames, const std::string &split) {
         for (int ci = 0; ci < (int)cfg.camera_names.size(); ++ci) {
@@ -508,18 +532,10 @@ inline bool export_deeplabcut(const ExportConfig &cfg, const AnnotationMap &amap
         return false;
     }
 
-    // Read image dims
-    std::map<std::string, int> img_h;
-    for (const auto &cam : cfg.camera_names) {
-        std::string path = cfg.calibration_folder + "/" + cam + ".yaml";
-        try {
-            auto yaml = opencv_yaml::read(path);
-            img_h[cam] = yaml.getInt("image_height");
-        } catch (...) {
-            if (status) *status = "Error: Cannot read calibration: " + path;
-            return false;
-        }
-    }
+    // Per-camera image dimensions (video dims for 2D, else calibration YAML)
+    std::map<std::string, int> img_w, img_h;
+    if (!resolve_image_dims(cfg, img_w, img_h, status))
+        return false;
 
     for (int ci = 0; ci < (int)cfg.camera_names.size(); ++ci) {
         const auto &cam = cfg.camera_names[ci];

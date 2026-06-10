@@ -200,7 +200,7 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
             if (ImGui::Button("Start Export")) {
                 if (state.label_folder.empty() && total_count == 0 && !is_nerfstudio) {
                     validation_error = "No annotations found (keypoints or masks)";
-                } else if (pm.calibration_folder.empty()) {
+                } else if (!project_is_2d(pm) && pm.calibration_folder.empty()) {
                     validation_error = "No calibration folder set";
                 } else if (is_jarvis && pm.media_folder.empty()) {
                     validation_error = "No media folder set (required for JARVIS)";
@@ -251,6 +251,18 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
                     ecfg.seed               = state.seed;
                     ecfg.jpeg_quality       = state.jpeg_quality;
                     ecfg.camera_params      = pm.camera_params;
+                    // Per-camera image dims from the loaded video, so 2D /
+                    // uncalibrated projects (no calibration YAML) can export.
+                    if (ctx.scene) {
+                        for (size_t i = 0; i < pm.camera_names.size(); i++) {
+                            int w = (i < ctx.scene->num_cams)
+                                        ? (int)ctx.scene->image_width[i] : 0;
+                            int h = (i < ctx.scene->num_cams)
+                                        ? (int)ctx.scene->image_height[i] : 0;
+                            ecfg.image_width.push_back(w);
+                            ecfg.image_height.push_back(h);
+                        }
+                    }
                     ecfg.node_names         = skeleton.node_names;
                     for (const auto &e : skeleton.edges)
                         ecfg.edges.push_back({e.x, e.y});
