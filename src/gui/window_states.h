@@ -7,6 +7,7 @@
 #include "gui/jarvis_export_window.h"
 #include "gui/jarvis_import_window.h"
 #include "gui/jarvis_predict_window.h"
+#include "gui/proofread_window.h"
 #include "gui/export_window.h"
 #include "gui/bbox_tool.h"
 #include "gui/obb_tool.h"
@@ -27,6 +28,7 @@ struct WindowStates {
     JarvisExportState jarvis_export;
     JarvisImportState jarvis_import;
     JarvisPredictState jarvis_predict;
+    ProofreadWindowState proofread;
     ExportWindowState export_win;
     BBoxToolState bbox;
     OBBToolState obb;
@@ -144,6 +146,14 @@ struct WindowStates {
         jarvis_predict.cached_keypoint_path.clear();
         jarvis_predict.cached_info_path.clear();
         jarvis_predict.model_dir_display.clear();
+        proofread.show = false;
+        proofread.server.sessions.clear();
+        proofread.server.status.clear();
+        proofread.server.reachable = false;
+        proofread.server.n_bad_total = 0;
+        proofread.expanded_session = -1;
+        proofread.open_requested = false;
+        proofread.refresh_requested = false;
         export_win.show = false;
         export_win.format_idx = 0;
         export_win.include_video_index = false;

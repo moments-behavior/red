@@ -19,6 +19,7 @@
 #include "jarvis_inference.h"
 #include "posetail_infer.h"
 #include "posetail_server_client.h"
+#include "proofread_client.h"
 #ifdef __APPLE__
 #include "jarvis_coreml.h"
 #endif
@@ -588,6 +589,9 @@ int main(int argc, char **argv) {
 #endif
                                                  ctx); },
                 nullptr});
+    panels.add({"Proofread Queue",
+                [&]() { DrawProofreadWindow(win.proofread); },
+                [&]() { return win.proofread.show; }});
 
     // Helper: find the first visible camera index (for frame-buffer display).
     auto find_visible_cam = [&]() -> int {
