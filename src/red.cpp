@@ -1599,6 +1599,40 @@ int main(int argc, char **argv) {
                                      decoder_threads, is_view_focused,
                                      window_was_decoding);
                     }
+
+                    // Download the session's calibration YAMLs from the
+                    // dashboard and stash them under a date-keyed cache dir
+                    // so red's project plumbing has a real calibration_folder
+                    // to point at. (Date derived from the YYYY_MM_DD prefix
+                    // in the session name — same convention the dashboard
+                    // uses to look up calib files.)
+                    const std::string &session_name =
+                        win.proofread.requested_session;
+                    std::string date = session_name.size() >= 10
+                                         ? session_name.substr(0, 10)
+                                         : std::string{};
+                    const char *home = std::getenv("HOME");
+                    std::filesystem::path cache_root =
+                        std::filesystem::path(home ? home : "/tmp") /
+                        ".cache" / "red" / "proofread";
+                    std::filesystem::path calib_cache =
+                        cache_root / (date.empty() ? session_name : date);
+                    std::string calib_err;
+                    bool calib_ok = proofread_fetch_calib(
+                        win.proofread.server,
+                        win.proofread.requested_animal,
+                        win.proofread.requested_session,
+                        calib_cache, &calib_err);
+                    if (!calib_ok) {
+                        popups.pushError(
+                            "Could not fetch calibration for " +
+                            win.proofread.requested_animal + "/" +
+                            win.proofread.requested_session + ": " +
+                            calib_err);
+                    } else {
+                        pm.calibration_folder = calib_cache.string();
+                    }
+
                     pm.media_folder = rec.string();
                     if (rec.has_parent_path()) {
                         pm.project_name =

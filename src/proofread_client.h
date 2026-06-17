@@ -41,8 +41,11 @@
 
 #include "httplib.h"
 #include "json.hpp"
+#include "miniz.h"
 
 #include <chrono>
+#include <cstdio>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -165,5 +168,80 @@ inline bool proofread_fetch(ProofreadState &s) {
 
     const auto t1 = std::chrono::steady_clock::now();
     s.last_ms = std::chrono::duration<float, std::milli>(t1 - t0).count();
+    return true;
+}
+
+
+// Download the OpenCV-format Cam*.yaml zip for one session and extract it
+// into `dest_dir` (created if missing). Returns true on success.
+// `error_out` is filled with a human-readable message on failure.
+//
+// Useful before red's load_videos: the server stores the calibration that
+// JARVIS used for this session at /home/user/red_data/calib/<date>/calibration/,
+// and we want pm.calibration_folder pointing at a local mirror so the
+// rest of red's project plumbing has its yamls.
+inline bool proofread_fetch_calib(const ProofreadState &s,
+                                   const std::string &animal,
+                                   const std::string &session,
+                                   const std::filesystem::path &dest_dir,
+                                   std::string *error_out = nullptr) {
+    auto set_err = [&](const std::string &m) {
+        if (error_out) *error_out = m;
+        return false;
+    };
+    if (s.url.empty())     return set_err("Server URL is empty");
+    if (animal.empty())    return set_err("Animal is empty");
+    if (session.empty())   return set_err("Session is empty");
+
+    const std::string base = proofread_client_detail::normalize_url(s.url);
+    httplib::Client cli(base);
+    cli.set_connection_timeout(3, 0);
+    cli.set_read_timeout(15, 0);
+
+    char path[512];
+    std::snprintf(path, sizeof(path),
+                   "/api/session_calib_zip?animal=%s&session=%s",
+                   animal.c_str(), session.c_str());
+    auto res = cli.Get(path);
+    if (!res) {
+        return set_err(std::string("Cannot reach server: ") +
+                        httplib::to_string(res.error()));
+    }
+    if (res->status != 200) {
+        return set_err("HTTP " + std::to_string(res->status) +
+                        " from " + path);
+    }
+
+    std::error_code ec;
+    std::filesystem::create_directories(dest_dir, ec);
+    if (ec) return set_err("Cannot create dest dir " + dest_dir.string() +
+                            ": " + ec.message());
+
+    mz_zip_archive zip;
+    mz_zip_zero_struct(&zip);
+    if (!mz_zip_reader_init_mem(&zip, res->body.data(),
+                                 res->body.size(), 0)) {
+        return set_err("Bad zip from server");
+    }
+    const mz_uint n = mz_zip_reader_get_num_files(&zip);
+    for (mz_uint i = 0; i < n; ++i) {
+        char fname[256];
+        if (!mz_zip_reader_get_filename(&zip, i, fname, sizeof(fname))) {
+            mz_zip_reader_end(&zip);
+            return set_err("Bad filename entry in zip");
+        }
+        // Reject path-traversal entries: only flat Cam*.yaml allowed.
+        if (std::string(fname).find("..") != std::string::npos ||
+            std::string(fname).find('/')  != std::string::npos) {
+            continue;
+        }
+        const auto out_path = dest_dir / fname;
+        if (!mz_zip_reader_extract_to_file(&zip, i,
+                                            out_path.string().c_str(), 0)) {
+            mz_zip_reader_end(&zip);
+            return set_err("Failed to extract " + std::string(fname));
+        }
+    }
+    mz_zip_reader_end(&zip);
     return true;
 }
