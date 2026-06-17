@@ -154,6 +154,7 @@ struct WindowStates {
         proofread.expanded_session = -1;
         proofread.open_requested = false;
         proofread.refresh_requested = false;
+        proofread.pending_seek_frame = -1;
         export_win.show = false;
         export_win.format_idx = 0;
         export_win.include_video_index = false;

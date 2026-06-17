@@ -38,6 +38,10 @@ struct ProofreadWindowState {
     std::string requested_recording_path;  // /mnt/free/<animal>/<session>
     int         requested_frame = 0;
 
+    // Deferred seek: set after a successful load_videos() so the next
+    // frame can issue the seek once decoders are ready. -1 = no pending.
+    int pending_seek_frame = -1;
+
     // The user asked for a fresh fetch (informational; the window already
     // ran the fetch by the time the caller sees this flag).
     bool refresh_requested = false;

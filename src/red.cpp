@@ -1581,6 +1581,62 @@ int main(int argc, char **argv) {
                        posetail_server_state.status.c_str());
             }
 
+            // --- Proofread Queue: open a session + seek to a bad frame ---
+            // The Proofread Queue window sets open_requested when the user
+            // clicks "Open" on a bad-frame row. We translate that into the
+            // normal media-load + seek path, deferring the seek by one
+            // frame so the decoders have time to warm up.
+            if (win.proofread.open_requested) {
+                win.proofread.open_requested = false;
+                std::filesystem::path rec(
+                    win.proofread.requested_recording_path);
+                if (!std::filesystem::is_directory(rec)) {
+                    popups.pushError(
+                        "Recording folder not found: " + rec.string());
+                } else if (pm.media_folder != rec.string() || !ps.video_loaded) {
+                    if (ps.video_loaded) {
+                        unload_media(ps, pm, demuxers, dc_context, scene,
+                                     decoder_threads, is_view_focused,
+                                     window_was_decoding);
+                    }
+                    pm.media_folder = rec.string();
+                    if (rec.has_parent_path()) {
+                        pm.project_name =
+                            rec.parent_path().filename().string() + "/" +
+                            rec.filename().string();
+                    } else {
+                        pm.project_name = rec.filename().string();
+                    }
+                    std::map<std::string, std::string> empty_selected;
+                    load_videos(empty_selected, ps, pm, window_was_decoding,
+                                demuxers, dc_context, scene,
+                                label_buffer_size, decoder_threads,
+                                is_view_focused);
+                    input_is_imgs = false;
+                    win.proofread.pending_seek_frame =
+                        win.proofread.requested_frame;
+                } else {
+                    // Same recording already loaded — seek immediately.
+                    win.proofread.pending_seek_frame =
+                        win.proofread.requested_frame;
+                }
+            }
+
+            // Deferred seek: runs the frame after a successful load_videos,
+            // so the demuxers are initialized and dc_context->total_num_frame
+            // is valid.
+            if (win.proofread.pending_seek_frame >= 0 && ps.video_loaded &&
+                dc_context->total_num_frame > 0) {
+                int f = std::clamp(win.proofread.pending_seek_frame, 0,
+                                    dc_context->total_num_frame - 1);
+                ps.slider_frame_number = f;
+                ps.slider_just_changed = true;
+                ps.to_display_frame_number = f;
+                ps.pause_seeked = true;
+                seek_all_cameras(scene, f, dc_context->video_fps, ps, true);
+                win.proofread.pending_seek_frame = -1;
+            }
+
             // --- PoseTail: Load model ---
             if (win.jarvis_predict.posetail_load_requested) {
                 win.jarvis_predict.posetail_load_requested = false;
