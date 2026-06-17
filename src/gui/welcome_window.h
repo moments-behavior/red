@@ -157,6 +157,9 @@ inline void DrawWelcomeWindow(AppContext &ctx, WindowStates &win) {
         win.proofread_dialog.selected_animal.clear();
         win.proofread_dialog.selected_session.clear();
         win.proofread_dialog.status.clear();
+        // Auto-pull the animal+session list so the user doesn't have to
+        // press Refresh first.
+        win.proofread_dialog.pending_fetch = true;
     }
     if (ImGui::Button("Load Proofread Project", ImVec2(-1, 0))) {
         IGFD::FileDialogConfig cfg;

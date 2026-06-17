@@ -157,6 +157,7 @@ struct WindowStates {
         proofread_dialog.selected_session.clear();
         proofread_dialog.status.clear();
         proofread_dialog.calib_cache_dir.clear();
+        proofread_dialog.pending_fetch = false;
         proofread.show = false;
         proofread.server.sessions.clear();
         proofread.server.status.clear();

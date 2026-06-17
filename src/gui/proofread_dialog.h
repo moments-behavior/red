@@ -66,6 +66,10 @@ struct ProofreadDialogState {
     // Cache for the calib dir we mirror to (filled at Create time so the
     // caller can verify it).
     std::string calib_cache_dir;
+    // Set by the menu / welcome button when the dialog is opened so the
+    // first DrawProofreadDialog call silently pulls the animal+session
+    // list from the default URL. Cleared after the fetch fires.
+    bool pending_fetch = false;
 };
 
 
@@ -98,6 +102,15 @@ inline void DrawProofreadDialog(ProofreadDialogState &state,
     }
 
     if (!state.show) return;
+
+    // Auto-pull animal/session list from the default URL on first show.
+    // The menu / welcome buttons set pending_fetch = true so we re-fetch
+    // each time the dialog is opened (in case new sessions appeared).
+    if (state.pending_fetch) {
+        state.pending_fetch = false;
+        proofread_fetch(state.server);
+        state.status = state.server.status;
+    }
 
     ImGui::SetNextWindowSize(ImVec2(720, 480), ImGuiCond_FirstUseEver);
     if (ImGui::Begin("Create Proofread Project", &state.show,
