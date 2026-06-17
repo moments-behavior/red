@@ -420,7 +420,24 @@ inline void DrawProofreadDialog(ProofreadDialogState &state,
                 state.calib_cache_dir = calib_dir.string();
                 pm.calibration_folder = calib_dir.string();
 
-                // 2) Derive media_folder + discover cameras from disk.
+                // 2) Build the camera set from the calibration directory —
+                // *only* cameras that have a Cam{ID}.yaml are part of the
+                // calibrated set. Untracked cams on disk (e.g. Cam710040)
+                // are intentionally skipped: they have no calibration and
+                // red would otherwise try to load + fail on them.
+                std::set<std::string> calibrated_cams;
+                if (std::filesystem::is_directory(calib_dir)) {
+                    for (const auto &e :
+                         std::filesystem::directory_iterator(calib_dir)) {
+                        if (!e.is_regular_file()) continue;
+                        if (e.path().extension() != ".yaml") continue;
+                        const std::string stem = e.path().stem().string();
+                        if (stem.rfind("Cam", 0) == 0) {
+                            calibrated_cams.insert(stem);
+                        }
+                    }
+                }
+
                 pm.media_folder = "/mnt/free/" + state.selected_animal + "/" +
                                   state.selected_session;
                 pm.camera_names.clear();
@@ -430,7 +447,9 @@ inline void DrawProofreadDialog(ProofreadDialogState &state,
                         if (!e.is_regular_file()) continue;
                         auto ext = e.path().extension().string();
                         if (ext != ".mp4" && ext != ".MP4") continue;
-                        pm.camera_names.push_back(e.path().stem().string());
+                        const std::string stem = e.path().stem().string();
+                        if (calibrated_cams.count(stem) == 0) continue;
+                        pm.camera_names.push_back(stem);
                     }
                     std::sort(pm.camera_names.begin(), pm.camera_names.end());
                 }
