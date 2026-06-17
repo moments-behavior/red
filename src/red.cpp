@@ -528,6 +528,25 @@ int main(int argc, char **argv) {
     panels.add({"Annotation Dialog",
                 [&]() { DrawAnnotationDialog(win.annotation, ctx, annot_create_cb); },
                 nullptr});
+    // "Create Proofread Project" reuses the annotation create callback —
+    // the dialog itself populates pm.{calibration_folder, media_folder,
+    // camera_names, proofread_*} before invoking it. After a successful
+    // create, auto-show the bad-frame queue panel.
+    panels.add({"Proofread Dialog",
+                [&]() {
+                    bool was_open = win.proofread_dialog.show;
+                    DrawProofreadDialog(win.proofread_dialog, ctx,
+                                         annot_create_cb);
+                    if (was_open && !win.proofread_dialog.show &&
+                        win.proofread_dialog.status.empty()) {
+                        // Dialog closed via Create (status is empty on success).
+                        win.proofread.show = true;
+                        win.proofread.initial_fetch_done = false;
+                        win.proofread.server.url =
+                            win.proofread_dialog.server.url;
+                    }
+                },
+                nullptr});
     panels.add({"Keypoints",
                 [&]() { DrawKeypointsWindow(ctx); },
                 [&]() { return pm.plot_keypoints_flag; }});
@@ -590,7 +609,7 @@ int main(int argc, char **argv) {
                                                  ctx); },
                 nullptr});
     panels.add({"Proofread Queue",
-                [&]() { DrawProofreadWindow(win.proofread); },
+                [&]() { DrawProofreadWindow(win.proofread, ctx); },
                 [&]() { return win.proofread.show; }});
 
     // Helper: find the first visible camera index (for frame-buffer display).
@@ -1581,76 +1600,17 @@ int main(int argc, char **argv) {
                        posetail_server_state.status.c_str());
             }
 
-            // --- Proofread Queue: open a session + seek to a bad frame ---
-            // The Proofread Queue window sets open_requested when the user
-            // clicks "Open" on a bad-frame row. We translate that into the
-            // normal media-load + seek path, deferring the seek by one
-            // frame so the decoders have time to warm up.
+            // --- Proofread Queue: seek to a bad frame ---
+            // The panel only fires when a proofread project is already
+            // loaded for the session, so the videos + calib are in place.
+            // We just translate "open" into a pending seek that the
+            // deferred-seek block below picks up next frame.
             if (win.proofread.open_requested) {
                 win.proofread.open_requested = false;
-                std::filesystem::path rec(
-                    win.proofread.requested_recording_path);
-                if (!std::filesystem::is_directory(rec)) {
+                if (!ps.video_loaded) {
                     popups.pushError(
-                        "Recording folder not found: " + rec.string());
-                } else if (pm.media_folder != rec.string() || !ps.video_loaded) {
-                    if (ps.video_loaded) {
-                        unload_media(ps, pm, demuxers, dc_context, scene,
-                                     decoder_threads, is_view_focused,
-                                     window_was_decoding);
-                    }
-
-                    // Download the session's calibration YAMLs from the
-                    // dashboard and stash them under a date-keyed cache dir
-                    // so red's project plumbing has a real calibration_folder
-                    // to point at. (Date derived from the YYYY_MM_DD prefix
-                    // in the session name — same convention the dashboard
-                    // uses to look up calib files.)
-                    const std::string &session_name =
-                        win.proofread.requested_session;
-                    std::string date = session_name.size() >= 10
-                                         ? session_name.substr(0, 10)
-                                         : std::string{};
-                    const char *home = std::getenv("HOME");
-                    std::filesystem::path cache_root =
-                        std::filesystem::path(home ? home : "/tmp") /
-                        ".cache" / "red" / "proofread";
-                    std::filesystem::path calib_cache =
-                        cache_root / (date.empty() ? session_name : date);
-                    std::string calib_err;
-                    bool calib_ok = proofread_fetch_calib(
-                        win.proofread.server,
-                        win.proofread.requested_animal,
-                        win.proofread.requested_session,
-                        calib_cache, &calib_err);
-                    if (!calib_ok) {
-                        popups.pushError(
-                            "Could not fetch calibration for " +
-                            win.proofread.requested_animal + "/" +
-                            win.proofread.requested_session + ": " +
-                            calib_err);
-                    } else {
-                        pm.calibration_folder = calib_cache.string();
-                    }
-
-                    pm.media_folder = rec.string();
-                    if (rec.has_parent_path()) {
-                        pm.project_name =
-                            rec.parent_path().filename().string() + "/" +
-                            rec.filename().string();
-                    } else {
-                        pm.project_name = rec.filename().string();
-                    }
-                    std::map<std::string, std::string> empty_selected;
-                    load_videos(empty_selected, ps, pm, window_was_decoding,
-                                demuxers, dc_context, scene,
-                                label_buffer_size, decoder_threads,
-                                is_view_focused);
-                    input_is_imgs = false;
-                    win.proofread.pending_seek_frame =
-                        win.proofread.requested_frame;
+                        "No video loaded — open a Proofread project first.");
                 } else {
-                    // Same recording already loaded — seek immediately.
                     win.proofread.pending_seek_frame =
                         win.proofread.requested_frame;
                 }

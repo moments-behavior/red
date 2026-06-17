@@ -7,6 +7,7 @@
 #include "gui/jarvis_export_window.h"
 #include "gui/jarvis_import_window.h"
 #include "gui/jarvis_predict_window.h"
+#include "gui/proofread_dialog.h"
 #include "gui/proofread_window.h"
 #include "gui/export_window.h"
 #include "gui/bbox_tool.h"
@@ -28,6 +29,7 @@ struct WindowStates {
     JarvisExportState jarvis_export;
     JarvisImportState jarvis_import;
     JarvisPredictState jarvis_predict;
+    ProofreadDialogState proofread_dialog;
     ProofreadWindowState proofread;
     ExportWindowState export_win;
     BBoxToolState bbox;
@@ -146,15 +148,23 @@ struct WindowStates {
         jarvis_predict.cached_keypoint_path.clear();
         jarvis_predict.cached_info_path.clear();
         jarvis_predict.model_dir_display.clear();
+        proofread_dialog.show = false;
+        proofread_dialog.server.sessions.clear();
+        proofread_dialog.server.status.clear();
+        proofread_dialog.server.reachable = false;
+        proofread_dialog.server.n_bad_total = 0;
+        proofread_dialog.selected_animal.clear();
+        proofread_dialog.selected_session.clear();
+        proofread_dialog.status.clear();
+        proofread_dialog.calib_cache_dir.clear();
         proofread.show = false;
         proofread.server.sessions.clear();
         proofread.server.status.clear();
         proofread.server.reachable = false;
         proofread.server.n_bad_total = 0;
-        proofread.expanded_session = -1;
         proofread.open_requested = false;
-        proofread.refresh_requested = false;
         proofread.pending_seek_frame = -1;
+        proofread.initial_fetch_done = false;
         export_win.show = false;
         export_win.format_idx = 0;
         export_win.include_video_index = false;

@@ -79,6 +79,26 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
         ImGui::EndMenu();
     }
 
+    if (ImGui::BeginMenu("Proofread")) {
+        if (ImGui::MenuItem("Create Proofread Project")) {
+            win.proofread_dialog.show = true;
+            // Reset transient fields for a fresh dialog
+            win.proofread_dialog.selected_animal.clear();
+            win.proofread_dialog.selected_session.clear();
+            win.proofread_dialog.status.clear();
+        }
+        if (ImGui::MenuItem("Load Proofread Project")) {
+            IGFD::FileDialogConfig cfg;
+            cfg.countSelectionMax = 1;
+            cfg.path = pm.project_root_path;
+            cfg.flags = ImGuiFileDialogFlags_Modal;
+            ImGuiFileDialog::Instance()->OpenDialog(
+                "LoadProofProject", "Load Proofread Project",
+                "Red Project{.redproj}", cfg);
+        }
+        ImGui::EndMenu();
+    }
+
     if (ImGui::BeginMenu("Calibrate")) {
         if (ImGui::MenuItem("Create Calibration Project")) {
             calib_state.show = true;
@@ -128,9 +148,6 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
         }
         if (ImGui::MenuItem("JARVIS Predict")) {
             jarvis_predict_state.show = true;
-        }
-        if (ImGui::MenuItem("Proofread Queue")) {
-            win.proofread.show = true;
         }
 #ifdef RED_HAS_MUJOCO
         ImGui::Separator();

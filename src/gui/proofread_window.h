@@ -1,23 +1,19 @@
 #pragma once
-// proofread_window.h — ImGui panel for the JARVIS pose-proofreading workflow.
+// proofread_window.h — bad-frames navigator panel that appears after a
+// Proofread project is loaded. Reads bad-frame indices from the
+// dashboard's /api/bad_frames_all endpoint, scoped to (pm.proofread_animal,
+// pm.proofread_session), and lets the user click any frame to seek.
 //
-// Talks to the mouse_dashboard server via proofread_client.h:
-//   GET /api/bad_frames_all?residual_threshold_mm=...&min_gap=...
-//
-// Wire it from red.cpp's main loop:
-//   DrawProofreadWindow(win.proofread);
-//
-// Action signals (caller is responsible for handling them):
-//   - open_requested + requested_recording_path + requested_frame
-//     → the user picked a row and wants the viewer to jump there.
-//   - refresh_requested
-//     → the user pressed the Refresh button. The window triggers the
-//       fetch itself; this flag is left for the caller to do extra
-//       housekeeping (e.g. close a stale session if its frames vanished).
+// Action signal:
+//   - open_requested + requested_frame
+//     The main loop reads these and issues an accurate seek_all_cameras
+//     to the requested video frame.
 
 #include "imgui.h"
-#include <misc/cpp/imgui_stdlib.h>   // ImGui::InputText with std::string
 #include "proofread_client.h"
+#include "app_context.h"
+
+#include <misc/cpp/imgui_stdlib.h>
 
 #include <algorithm>
 #include <cstdio>
@@ -26,208 +22,155 @@
 
 struct ProofreadWindowState {
     bool show = false;
-    ProofreadState server;   // url, threshold, sessions, status, ...
+    ProofreadState server;   // url, threshold, sessions (fetched lazily)
 
-    // Which session row is expanded (index into server.sessions, or -1).
-    int expanded_session = -1;
-
-    // The user clicked an "Open" button — caller handles it.
+    // Action signal: the user clicked a frame and wants to seek there.
     bool        open_requested = false;
+    int         requested_frame = 0;
     std::string requested_animal;
     std::string requested_session;
-    std::string requested_recording_path;  // /mnt/free/<animal>/<session>
-    int         requested_frame = 0;
+    std::string requested_recording_path;
 
-    // Deferred seek: set after a successful load_videos() so the next
-    // frame can issue the seek once decoders are ready. -1 = no pending.
+    // Seek-only path (no video reload needed); cleared once the main loop
+    // performs the seek.
     int pending_seek_frame = -1;
 
-    // The user asked for a fresh fetch (informational; the window already
-    // ran the fetch by the time the caller sees this flag).
-    bool refresh_requested = false;
+    // True once we've auto-fetched on first show.
+    bool initial_fetch_done = false;
 };
 
 
 namespace proofread_window_detail {
 
-// Compact summary line shown under the URL bar.
-inline void summary_line(const ProofreadState &s) {
-    if (!s.reachable && s.sessions.empty()) {
-        ImGui::TextDisabled("Not connected. Set URL and press Refresh.");
-        return;
-    }
-    ImGui::Text("%d sessions · %d bad frames · last fetch %.0f ms",
-                static_cast<int>(s.sessions.size()),
-                s.n_bad_total, s.last_ms);
-    if (!s.generated_at.empty()) {
-        ImGui::SameLine();
-        ImGui::TextDisabled(" · server time %s", s.generated_at.c_str());
-    }
-}
-
-// Color a status string the same way the posetail panel does.
-inline void status_line(const std::string &status) {
-    if (status.empty()) return;
-    bool bad =
-        status.find("Cannot") != std::string::npos ||
-        status.find("failed") != std::string::npos ||
-        status.find("error")  != std::string::npos ||
-        status.find("Bad")    != std::string::npos;
-    ImVec4 col = bad ? ImVec4(1.0f, 0.45f, 0.45f, 1.0f)
-                     : ImVec4(0.6f, 0.95f, 0.6f, 1.0f);
-    ImGui::TextColored(col, "%s", status.c_str());
-}
-
-// Sum bad frames across consecutive sessions of one animal.
-inline int animal_bad_total(const ProofreadState &s, const std::string &animal) {
-    int n = 0;
-    for (const auto &ps : s.sessions) if (ps.animal == animal) n += ps.n_frames_bad;
-    return n;
-}
-
-// Distinct animals, in the order they appear in s.sessions.
-inline std::vector<std::string> distinct_animals(const ProofreadState &s) {
-    std::vector<std::string> out;
+inline const ProofreadSession *find_session(const ProofreadState &s,
+                                             const std::string &animal,
+                                             const std::string &session) {
     for (const auto &ps : s.sessions) {
-        if (std::find(out.begin(), out.end(), ps.animal) == out.end()) {
-            out.push_back(ps.animal);
-        }
+        if (ps.animal == animal && ps.session == session) return &ps;
     }
-    return out;
+    return nullptr;
 }
 
 }  // namespace proofread_window_detail
 
 
-inline void DrawProofreadWindow(ProofreadWindowState &w) {
+// Draw the proofread bad-frame panel. Scopes to (pm.proofread_animal,
+// pm.proofread_session) — i.e. the session loaded by the current project.
+inline void DrawProofreadWindow(ProofreadWindowState &w, AppContext &ctx) {
+    const auto &pm = ctx.pm;
+
+    // If the loaded project is not a proofread project, this panel is a no-op
+    // (still drawable if the user opens it via the menu, but with a hint).
+    const bool is_proofread = !pm.proofread_animal.empty() &&
+                              !pm.proofread_session.empty();
+
     if (!w.show) return;
 
-    ImGui::SetNextWindowSize(ImVec2(620, 540), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(420, 540), ImGuiCond_FirstUseEver);
     if (!ImGui::Begin("Proofread Queue", &w.show)) {
         ImGui::End();
         return;
     }
 
-    // ─── Server config ─────────────────────────────────────────────────
-    ImGui::TextUnformatted("Dashboard server");
-    ImGui::SameLine();
-    ImGui::TextDisabled("(http://host:port)");
-    ImGui::SetNextItemWidth(-1);
-    ImGui::InputText("##proofread_url", &w.server.url);
-
-    ImGui::SetNextItemWidth(140);
-    ImGui::InputFloat("residual ≥ (mm)", &w.server.residual_threshold_mm,
-                       1.0f, 5.0f, "%.1f");
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(100);
-    ImGui::InputInt("min gap (fr)", &w.server.min_gap, 1, 10);
-    if (w.server.min_gap < 0) w.server.min_gap = 0;
-    ImGui::SameLine();
-    if (ImGui::Button("Refresh")) {
-        proofread_fetch(w.server);
-        w.refresh_requested = true;
-        w.expanded_session = -1;
-    }
-
-    proofread_window_detail::status_line(w.server.status);
-    proofread_window_detail::summary_line(w.server);
-
-    ImGui::Separator();
-
-    // ─── Session list ──────────────────────────────────────────────────
-    if (w.server.sessions.empty()) {
+    if (!is_proofread) {
         ImGui::TextDisabled(
-            "No sessions to proofread yet — press Refresh once the dashboard "
-            "is reachable.");
+            "No proofread project loaded.\n"
+            "Use Proofread → Create Proofread Project (or Load) first.");
         ImGui::End();
         return;
     }
 
-    const auto animals = proofread_window_detail::distinct_animals(w.server);
-
-    if (ImGui::BeginChild("##proofread_scroll", ImVec2(0, 0), false,
-                           ImGuiWindowFlags_HorizontalScrollbar)) {
-        for (const auto &animal : animals) {
-            int animal_total = proofread_window_detail::animal_bad_total(
-                w.server, animal);
-            char header[160];
-            std::snprintf(header, sizeof(header),
-                          "%s   (%d bad frames)###proofread_%s",
-                          animal.c_str(), animal_total, animal.c_str());
-
-            if (!ImGui::CollapsingHeader(header,
-                                          ImGuiTreeNodeFlags_DefaultOpen)) {
-                continue;
-            }
-
-            // Per-session rows for this animal.
-            for (int si = 0; si < static_cast<int>(w.server.sessions.size()); ++si) {
-                const auto &ps = w.server.sessions[si];
-                if (ps.animal != animal) continue;
-
-                bool expanded = (w.expanded_session == si);
-                ImGui::PushID(si);
-
-                // Header row: session id, bad count, expand/open button.
-                if (ImGui::ArrowButton("##expand",
-                                        expanded ? ImGuiDir_Down : ImGuiDir_Right)) {
-                    w.expanded_session = expanded ? -1 : si;
-                }
-                ImGui::SameLine();
-                ImGui::Text("%s", ps.session.c_str());
-                ImGui::SameLine();
-                ImGui::TextDisabled(" · %d / %d",
-                                     ps.n_frames_bad, ps.n_frames_total);
-                ImGui::SameLine(ImGui::GetWindowWidth() - 180.0f);
-                if (ImGui::SmallButton("Open first")) {
-                    w.open_requested = true;
-                    w.requested_animal = ps.animal;
-                    w.requested_session = ps.session;
-                    w.requested_recording_path = ps.recording_path;
-                    w.requested_frame = ps.frames.empty() ? 0 : ps.frames.front();
-                }
-
-                if (expanded) {
-                    if (ImGui::BeginTable("##frames", 3,
-                                           ImGuiTableFlags_RowBg |
-                                           ImGuiTableFlags_BordersInnerH |
-                                           ImGuiTableFlags_ScrollY |
-                                           ImGuiTableFlags_SizingFixedFit,
-                                           ImVec2(0.0f, 220.0f))) {
-                        ImGui::TableSetupColumn("Frame", ImGuiTableColumnFlags_WidthFixed, 90.0f);
-                        ImGui::TableSetupColumn("Residual (mm)", ImGuiTableColumnFlags_WidthFixed, 130.0f);
-                        ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthStretch);
-                        ImGui::TableHeadersRow();
-
-                        for (int fi = 0; fi < static_cast<int>(ps.frames.size()); ++fi) {
-                            ImGui::TableNextRow();
-                            ImGui::TableNextColumn();
-                            ImGui::Text("%d", ps.frames[fi]);
-                            ImGui::TableNextColumn();
-                            float r = fi < static_cast<int>(ps.residuals_mm.size())
-                                        ? ps.residuals_mm[fi] : 0.0f;
-                            ImGui::Text("%.1f", r);
-                            ImGui::TableNextColumn();
-                            ImGui::PushID(fi);
-                            if (ImGui::SmallButton("Open")) {
-                                w.open_requested = true;
-                                w.requested_animal = ps.animal;
-                                w.requested_session = ps.session;
-                                w.requested_recording_path = ps.recording_path;
-                                w.requested_frame = ps.frames[fi];
-                            }
-                            ImGui::PopID();
-                        }
-                        ImGui::EndTable();
-                    }
-                }
-
-                ImGui::PopID();
-                ImGui::Separator();
-            }
-        }
+    // Bind the server URL from the project on first draw, then auto-fetch.
+    if (!w.initial_fetch_done) {
+        if (!pm.proofread_server_url.empty())
+            w.server.url = pm.proofread_server_url;
+        proofread_fetch(w.server);
+        w.initial_fetch_done = true;
     }
-    ImGui::EndChild();
 
+    // ── Top bar ───────────────────────────────────────────────────────
+    ImGui::TextDisabled("server:");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(-180.0f);
+    ImGui::InputText("##proof_panel_url", &w.server.url);
+    ImGui::SameLine();
+    if (ImGui::Button("Refresh##proof_panel")) {
+        proofread_fetch(w.server);
+    }
+
+    ImGui::SetNextItemWidth(130.0f);
+    ImGui::InputFloat("residual ≥ mm##proof_panel",
+                       &w.server.residual_threshold_mm, 1.0f, 5.0f, "%.1f");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(100.0f);
+    ImGui::InputInt("min gap##proof_panel",
+                     &w.server.min_gap, 1, 10);
+    if (w.server.min_gap < 0) w.server.min_gap = 0;
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Apply##proof_panel")) {
+        proofread_fetch(w.server);
+    }
+
+    if (!w.server.status.empty()) {
+        bool bad =
+            w.server.status.find("Cannot") != std::string::npos ||
+            w.server.status.find("failed") != std::string::npos ||
+            w.server.status.find("error")  != std::string::npos;
+        ImVec4 col = bad ? ImVec4(1.0f, 0.45f, 0.45f, 1.0f)
+                          : ImVec4(0.6f, 0.95f, 0.6f, 1.0f);
+        ImGui::TextColored(col, "%s", w.server.status.c_str());
+    }
+    ImGui::Separator();
+
+    // ── Per-session header ────────────────────────────────────────────
+    ImGui::Text("%s   %s",
+                 pm.proofread_animal.c_str(), pm.proofread_session.c_str());
+    const ProofreadSession *ps = proofread_window_detail::find_session(
+        w.server, pm.proofread_animal, pm.proofread_session);
+    if (!ps) {
+        ImGui::TextDisabled("(session not in current server response — "
+                             "press Refresh)");
+        ImGui::End();
+        return;
+    }
+    ImGui::Text("bad frames: %d / %d  (residual >= %.1f mm)",
+                 ps->n_frames_bad, ps->n_frames_total,
+                 w.server.residual_threshold_mm);
+    ImGui::Separator();
+
+    // ── Frame table ───────────────────────────────────────────────────
+    if (ImGui::BeginTable("##frames", 3,
+                           ImGuiTableFlags_RowBg |
+                           ImGuiTableFlags_BordersInnerH |
+                           ImGuiTableFlags_ScrollY |
+                           ImGuiTableFlags_SizingFixedFit,
+                           ImVec2(0.0f, 0.0f))) {
+        ImGui::TableSetupColumn("Frame", ImGuiTableColumnFlags_WidthFixed, 90.0f);
+        ImGui::TableSetupColumn("Residual (mm)", ImGuiTableColumnFlags_WidthFixed, 130.0f);
+        ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableSetupScrollFreeze(0, 1);
+        ImGui::TableHeadersRow();
+
+        for (int fi = 0; fi < (int)ps->frames.size(); ++fi) {
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::Text("%d", ps->frames[fi]);
+            ImGui::TableNextColumn();
+            float r = fi < (int)ps->residuals_mm.size()
+                        ? ps->residuals_mm[fi] : 0.0f;
+            ImGui::Text("%.1f", r);
+            ImGui::TableNextColumn();
+            ImGui::PushID(fi);
+            if (ImGui::SmallButton("Seek")) {
+                w.open_requested = true;
+                w.requested_animal = pm.proofread_animal;
+                w.requested_session = pm.proofread_session;
+                w.requested_recording_path = ps->recording_path;
+                w.requested_frame = ps->frames[fi];
+            }
+            ImGui::PopID();
+        }
+        ImGui::EndTable();
+    }
     ImGui::End();
 }

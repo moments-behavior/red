@@ -60,6 +60,13 @@ struct ProjectManager {
     };
     std::vector<JarvisModelEntry> jarvis_models;
     int active_jarvis_model = -1;  // index into jarvis_models, -1 = none
+
+    // Proofread metadata. Set by "Create Proofread Project"; persisted in
+    // .redproj so "Load Proofread Project" can refetch the bad-frames list
+    // and the calib auto-pull mirror dir.
+    std::string proofread_server_url;
+    std::string proofread_animal;
+    std::string proofread_session;
 };
 
 inline void to_json(nlohmann::json &j, const ProjectManager::JarvisModelEntry &m) {
@@ -90,7 +97,10 @@ inline void to_json(nlohmann::json &j, const ProjectManager &p) {
                        {"telecentric", p.telecentric},
                        {"annotation_config", p.annotation_config},
                        {"jarvis_models", p.jarvis_models},
-                       {"active_jarvis_model", p.active_jarvis_model}};
+                       {"active_jarvis_model", p.active_jarvis_model},
+                       {"proofread_server_url", p.proofread_server_url},
+                       {"proofread_animal", p.proofread_animal},
+                       {"proofread_session", p.proofread_session}};
 }
 
 inline void from_json(const nlohmann::json &j, ProjectManager &p) {
@@ -111,6 +121,9 @@ inline void from_json(const nlohmann::json &j, ProjectManager &p) {
     if (j.contains("jarvis_models"))
         p.jarvis_models = j["jarvis_models"].get<std::vector<ProjectManager::JarvisModelEntry>>();
     p.active_jarvis_model = j.value("active_jarvis_model", -1);
+    p.proofread_server_url = j.value("proofread_server_url", std::string{});
+    p.proofread_animal     = j.value("proofread_animal", std::string{});
+    p.proofread_session    = j.value("proofread_session", std::string{});
 }
 
 inline bool save_project_manager_json(const ProjectManager &p,

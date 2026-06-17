@@ -222,6 +222,48 @@ inline void HandleMainMenuDialogs(
         ImGuiFileDialog::Instance()->Close();
     }
 
+    // LoadProofProject (Proofread > Load)
+    if (ImGuiFileDialog::Instance()->Display("LoadProofProject", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
+        if (ImGuiFileDialog::Instance()->IsOk()) {
+            const auto sel = ImGuiFileDialog::Instance()->GetSelection();
+            std::filesystem::path cfg_path;
+            if (!sel.empty()) {
+                cfg_path = std::filesystem::path(sel.begin()->second);
+            } else {
+                std::string full =
+                    ImGuiFileDialog::Instance()->GetFilePathName(
+                        IGFD_ResultMode_KeepInputFile);
+                if (!full.empty()) cfg_path = std::filesystem::path(full);
+                else
+                    cfg_path = std::filesystem::path(
+                        ImGuiFileDialog::Instance()->GetCurrentPath());
+            }
+            ProjectManager loaded;
+            std::string err;
+            if (!load_project_manager_json(&loaded, cfg_path, &err)) {
+                popups.pushError(err);
+            } else {
+                close_project(ctx);
+                win.reset();
+                if (nuke_inference_fn) nuke_inference_fn();
+                pm = loaded;
+                if (setup_project(pm, skeleton, skeleton_map, &err)) {
+                    on_project_loaded(ctx, print_metadata_fn, print_summary_fn);
+                    // Auto-open the bad-frame queue panel and seed it with
+                    // the .redproj's server URL so the first fetch hits
+                    // the right host.
+                    win.proofread.show = true;
+                    win.proofread.initial_fetch_done = false;
+                    if (!pm.proofread_server_url.empty())
+                        win.proofread.server.url = pm.proofread_server_url;
+                } else {
+                    popups.pushError(err);
+                }
+            }
+        }
+        ImGuiFileDialog::Instance()->Close();
+    }
+
     // LoadAnnotProject (Annotate > Load)
     if (ImGuiFileDialog::Instance()->Display("LoadAnnotProject", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
         if (ImGuiFileDialog::Instance()->IsOk()) {
