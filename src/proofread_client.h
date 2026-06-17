@@ -64,9 +64,11 @@ struct ProofreadSession {
 
 
 struct ProofreadState {
-    // User-editable URL like "http://10.102.10.88:8000" — same machine that
-    // serves the JARVIS dashboard.
-    std::string url = "http://10.102.10.88:8000";
+    // User-editable URL like "http://10.102.10.138:8000" — the lab Linux
+    // box that runs mouse_dashboard's uvicorn server. NOTE: this is a
+    // *different* host from the posetail server (which lives at .88) —
+    // don't copy that default; it'll return 404 from a posetail process.
+    std::string url = "http://10.102.10.138:8000";
     // Residual cutoff (mm). Default matches the dashboard default.
     float residual_threshold_mm = 25.0f;
     // Cluster debounce window in frames. Defaults to 50, which collapses
