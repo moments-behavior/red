@@ -144,6 +144,30 @@ inline void DrawWelcomeWindow(AppContext &ctx, WindowStates &win) {
     }
     ImGui::PopStyleVar();
 
+    // Proofread section
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+    ImGui::TextColored(ImVec4(0.5f, 0.7f, 1.0f, 1.0f), "Proofread");
+    ImGui::Spacing();
+
+    ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0, 0.5f));
+    if (ImGui::Button("Create Proofread Project", ImVec2(-1, 0))) {
+        win.proofread_dialog.show = true;
+        win.proofread_dialog.selected_animal.clear();
+        win.proofread_dialog.selected_session.clear();
+        win.proofread_dialog.status.clear();
+    }
+    if (ImGui::Button("Load Proofread Project", ImVec2(-1, 0))) {
+        IGFD::FileDialogConfig cfg;
+        cfg.countSelectionMax = 1;
+        cfg.flags = ImGuiFileDialogFlags_Modal;
+        ImGuiFileDialog::Instance()->OpenDialog(
+            "LoadProofProject", "Load Proofread Project",
+            "Red Project{.redproj}", cfg);
+    }
+    ImGui::PopStyleVar();
+
     // Recent Projects section
     if (!ctx.user_settings.recent_projects.empty()) {
         ImGui::Spacing();
