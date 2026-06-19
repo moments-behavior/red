@@ -37,7 +37,12 @@ echo "[*] Installing $APP_NAME ..."
 mkdir -p "$APPDIR" "$BINDIR" "$DESKTOP_DIR" "$MIME_PKGS_DIR"
 
 # --- Install binary (+fonts if present) ---
-install -m 755 "$BIN_SRC" "$APPDIR/$APP_NAME"
+# The binary finds its fonts relative to its OWN location (/proc/self/exe), at
+# `<exe_dir>/../fonts` — NOT relative to CWD. So the binary must live one level
+# below APPDIR (in bin/) for `../fonts` to land on APPDIR/fonts. (Putting the
+# binary directly in APPDIR makes it search APPDIR/../fonts and fonts vanish.)
+mkdir -p "$APPDIR/bin"
+install -m 755 "$BIN_SRC" "$APPDIR/bin/$APP_NAME"
 if [[ -d "$FONTS_SRC" ]]; then
   mkdir -p "$APPDIR/fonts"
   cp -a "$FONTS_SRC"/. "$APPDIR/fonts"/
@@ -53,7 +58,7 @@ cat > "$WRAPPER" <<'EOF'
 set -euo pipefail
 APPDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../opt/red" && pwd)"
 cd "$APPDIR"
-exec "$APPDIR/red" "$@"
+exec "$APPDIR/bin/red" "$@"
 EOF
 chmod +x "$WRAPPER"
 
