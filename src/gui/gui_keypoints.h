@@ -149,7 +149,8 @@ inline void reprojection(FrameAnnotation &fa, SkeletonContext *skeleton,
                     if (telecentric) {
                         pt_undist = red_math::undistortPointTelecentric(
                             pt, camera_params[view_idx].k,
-                            camera_params[view_idx].dist_coeffs);
+                            camera_params[view_idx].dist_coeffs,
+                            camera_params[view_idx].dist_center);
                     } else {
                         pt_undist = red_math::undistortPoint(
                             pt, camera_params[view_idx].k,
@@ -194,7 +195,8 @@ inline void reprojection(FrameAnnotation &fa, SkeletonContext *skeleton,
                         pt3d,
                         camera_params[view_idx].projection_mat,
                         camera_params[view_idx].k,
-                        camera_params[view_idx].dist_coeffs);
+                        camera_params[view_idx].dist_coeffs,
+                        camera_params[view_idx].dist_center);
                     double x = reproj(0);
                     double y = double(scene->image_height[view_idx]) -
                                reproj(1);

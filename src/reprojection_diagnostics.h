@@ -132,7 +132,8 @@ inline Diagnostics compute_diagnostics(
             Eigen::Vector2d undist;
             if (telecentric) {
                 undist = red_math::undistortPointTelecentric(
-                    obs, cameras[m].k, cameras[m].dist_coeffs);
+                    obs, cameras[m].k, cameras[m].dist_coeffs,
+                    cameras[m].dist_center);
             } else {
                 undist = red_math::undistortPoint(
                     obs, cameras[m].k, cameras[m].dist_coeffs);
@@ -174,7 +175,8 @@ inline Diagnostics compute_diagnostics(
             if (telecentric) {
                 reproj = red_math::projectPointTelecentric(
                     pt3d, cameras[m].projection_mat,
-                    cameras[m].k, cameras[m].dist_coeffs);
+                    cameras[m].k, cameras[m].dist_coeffs,
+                    cameras[m].dist_center);
             } else {
                 reproj = red_math::projectPointR(
                     pt3d, cameras[m].r, cameras[m].tvec,

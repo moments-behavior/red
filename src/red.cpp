@@ -510,11 +510,11 @@ int main(int argc, char **argv) {
         copy_default_layout_to_project(ctx, proj_path);
     };
     calib_cb.switch_ini = [&ctx](const std::string &proj_path) {
-        ctx.project_ini_path = proj_path + "/imgui_layout.ini";
-        ImGuiIO &io = ImGui::GetIO();
-        io.IniFilename = ctx.project_ini_path.c_str();
-        if (std::filesystem::exists(ctx.project_ini_path))
-            ImGui::LoadIniSettingsFromDisk(ctx.project_ini_path.c_str());
+        // Use the shared robust ini-switch (with dock-node fixup) so calibration
+        // projects get a correct layout on a mid-session load -- same machinery
+        // the annotation path uses. The bare LoadIniSettingsFromDisk used here
+        // previously left the dock tree scrambled (labeling windows orphaned).
+        switch_ini_to_path(ctx, proj_path);
     };
     calib_cb.print_metadata = print_metadata;
     calib_cb.deferred = &deferred;
@@ -744,6 +744,22 @@ int main(int argc, char **argv) {
         DrawTransportBar(win.transport, ctx);
 
         ImGui::DockSpaceOverViewport(0x00000001);
+
+        // "Label Landmarks" request: dock the Keypoints + Labeling Tool windows
+        // into a fresh left sidebar and focus them. Done here (right after the
+        // dockspace node exists, before panels submit) via DockBuilder so the
+        // placement is deterministic -- it does not depend on the .ini layout,
+        // which can be corrupted by a mid-session reload on a fresh project.
+        if (win.calibration.request_dock_labeling) {
+            win.calibration.request_dock_labeling = false;
+            ImGuiID root = 0x00000001;
+            ImGuiID left = 0;
+            ImGui::DockBuilderSplitNode(root, ImGuiDir_Left, 0.20f, &left, &root);
+            ImGui::DockBuilderDockWindow("Keypoints", left);
+            ImGui::DockBuilderDockWindow("Labeling Tool", left);
+            ImGui::DockBuilderFinish(0x00000001);
+            ImGui::SetWindowFocus("Labeling Tool");
+        }
 
         // Draw all registered panels
         panels.drawAll();

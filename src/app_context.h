@@ -187,10 +187,21 @@ inline void migrate_ini_window_names(const std::string &ini_path) {
     }
 }
 
-// Switch ImGui layout ini to the project folder.
-inline void switch_ini_to_project(AppContext &ctx) {
-    ctx.project_ini_path = ctx.pm.project_path + "/imgui_layout.ini";
-    copy_default_layout_to_project(ctx, ctx.pm.project_path);
+// Switch ImGui layout ini to a given project folder.
+//
+// The dock-fixup after LoadIniSettingsFromDisk is essential for a *mid-session*
+// reload: loading an ini merges its dock nodes into the live context, but those
+// freshly-loaded nodes have a stale LastFrameAlive and would be garbage-collected
+// on the next frame -- scrambling the dock tree (camera windows hard-docked to
+// 0x05-0x08 collide, and tool windows like Keypoints/Labeling Tool get orphaned
+// onto an internal split node and become invisible). Re-applying each window's
+// DockId from the loaded settings and marking every node alive makes the reload
+// actually take effect. Both the annotation path (switch_ini_to_project) and the
+// calibration path must go through here, or calibration projects come up with a
+// broken layout where you cannot reach the labeling windows.
+inline void switch_ini_to_path(AppContext &ctx, const std::string &project_path) {
+    ctx.project_ini_path = project_path + "/imgui_layout.ini";
+    copy_default_layout_to_project(ctx, project_path);
     migrate_ini_window_names(ctx.project_ini_path);
     ImGuiIO &io = ImGui::GetIO();
     io.IniFilename = ctx.project_ini_path.c_str();
@@ -210,6 +221,11 @@ inline void switch_ini_to_project(AppContext &ctx) {
                 node->LastFrameAlive = g->FrameCount;
         }
     }
+}
+
+// Switch ImGui layout ini to the current project folder (ctx.pm.project_path).
+inline void switch_ini_to_project(AppContext &ctx) {
+    switch_ini_to_path(ctx, ctx.pm.project_path);
 }
 
 // Close project: auto-save, unload media, reset all project state.

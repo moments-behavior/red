@@ -226,36 +226,40 @@ inline void DrawCalibrationToolWindow(
         // Phase 2: Unified Calibration Tool window (project loaded)
         // Clear stale dock-pending flag (no longer auto-docking)
         state.dock_pending = false;
+
+        // Deferred label import: wait a few frames for dock layout.
+        // NOTE: this MUST run outside the ImGui::Begin() body below. When the
+        // Calibration Tool window is docked as a non-active tab (as it is right
+        // after creating a project from the default layout), Begin() returns
+        // false and its body is skipped -- which would freeze this countdown
+        // forever and leave plot_keypoints_flag false, so the Keypoints and
+        // Labeling Tool windows never appear until the app is restarted.
+        if (state.tele_deferred_label_frames > 0) {
+            state.tele_deferred_label_frames--;
+            if (state.tele_deferred_label_frames == 0 &&
+                state.tele_videos_loaded) {
+                int n_lm = CalibrationTool::count_landmarks_3d(
+                    state.project.landmarks_3d_file);
+                if (n_lm > 0) {
+                    setup_landmark_skeleton(ctx.skeleton, n_lm, pm,
+                                             state.project.project_path);
+                    int imported = load_telecentric_labels(
+                        ctx, n_lm,
+                        state.project.effective_labels_folder());
+                    if (imported > 0)
+                        state.status = "Loaded " +
+                            std::to_string(imported) +
+                            " labels. Labeling active.";
+                }
+            }
+        }
+
         ImGui::SetNextWindowSize(ImVec2(580, 600), ImGuiCond_FirstUseEver);
         if (state.pointsource_focus_window) {
             ImGui::SetNextWindowFocus();
             state.pointsource_focus_window = false;
         }
         if (ImGui::Begin("Calibration Tool", &state.show)) {
-
-            // Deferred label import: wait a few frames for dock layout
-            if (state.tele_deferred_label_frames > 0) {
-                state.tele_deferred_label_frames--;
-                if (state.tele_deferred_label_frames == 0 &&
-                    state.tele_videos_loaded) {
-                    int n_lm = CalibrationTool::count_landmarks_3d(
-                        state.project.landmarks_3d_file);
-                    if (n_lm > 0) {
-                        setup_landmark_skeleton(ctx.skeleton, n_lm, pm,
-                                                 state.project.project_path);
-                        std::string labels_dir =
-                            state.project.effective_labels_folder();
-                        int imported = TelecentricDLT::import_dlt_labels(
-                            ctx.annotations, 0, n_lm,
-                            (int)scene->num_cams, pm.camera_names,
-                            labels_dir);
-                        if (imported > 0)
-                            state.status = "Loaded " +
-                                std::to_string(imported) +
-                                " labels. Labeling active.";
-                    }
-                }
-            }
 
             // ---- Section 1: Project Info ----
             if (ImGui::CollapsingHeader("Project", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -325,6 +329,85 @@ inline void DrawCalibrationToolWindow(
                 }
             }
             ImGui::Spacing();
+
+            // ---- Prominent "Label Landmarks" action (telecentric) ----
+            // Top of the window, OUTSIDE any collapsing header, so it is always
+            // visible. ONE CLICK does everything needed to start labeling: if the
+            // project videos are not loaded this session (e.g. the project was
+            // reopened, or videos were already loaded from a prior project when
+            // this one was created), it loads them; then it builds a skeleton
+            // sized to the 3D landmarks CSV, imports any existing labels, and asks
+            // the main loop to dock + focus the Keypoints/Labeling Tool windows.
+            // Only requirement: a 3D landmarks CSV is set. (Do NOT gate on the
+            // fragile tele_videos_loaded flag -- that left the button greyed out
+            // when videos were in fact usable.)
+            if (state.project.is_telecentric()) {
+                int n_lm = CalibrationTool::count_landmarks_3d(
+                    state.project.landmarks_3d_file);
+                bool labeling_active = ctx.skeleton.has_skeleton &&
+                    ctx.skeleton.num_nodes == n_lm && n_lm > 0 &&
+                    pm.plot_keypoints_flag;
+                std::string blabel =
+                    (labeling_active ? "Show Labeling Windows ("
+                                     : "Label Landmarks (") +
+                    std::to_string(n_lm) + " landmarks)";
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.13f, 0.45f, 0.72f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.20f, 0.55f, 0.88f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.10f, 0.38f, 0.62f, 1.0f));
+                ImGui::BeginDisabled(n_lm <= 0);
+                if (ImGui::Button(blabel.c_str(), ImVec2(-1.0f, 34.0f))) {
+                    if (!ctx.ps.video_loaded) {
+                        // Videos not loaded this session: load them, then set up
+                        // the skeleton + import labels. Deferred so heavy media
+                        // work runs at a safe point (start of next frame), which
+                        // is also before the dock request is handled -- so the
+                        // windows dock AND show content in the same frame.
+                        cb.deferred->enqueue([&ctx, &cb, &state, n_lm]() {
+                            auto &pm2 = ctx.pm;
+                            if (ctx.ps.video_loaded) cb.unload_media();
+                            ctx.imgs_names.clear();
+                            pm2.media_folder = state.project.media_folder;
+                            pm2.camera_names.clear();
+                            for (const auto &cn : state.project.camera_names)
+                                pm2.camera_names.push_back("Cam" + cn);
+                            cb.load_videos();
+                            cb.print_metadata();
+                            state.tele_videos_loaded = true;
+                            if (n_lm > 0) {
+                                setup_landmark_skeleton(ctx.skeleton, n_lm, pm2,
+                                    state.project.project_path);
+                                int imported = load_telecentric_labels(
+                                    ctx, n_lm,
+                                    state.project.effective_labels_folder());
+                                state.status =
+                                    "Loaded videos + labeling enabled (" +
+                                    std::to_string(n_lm) + " landmarks" +
+                                    (imported > 0 ? ", " + std::to_string(imported) +
+                                                    " imported" : "") + ").";
+                            }
+                        });
+                    } else if (!labeling_active && n_lm > 0) {
+                        setup_landmark_skeleton(ctx.skeleton, n_lm, pm,
+                                                state.project.project_path);
+                        int imported = load_telecentric_labels(
+                            ctx, n_lm,
+                            state.project.effective_labels_folder());
+                        state.tele_videos_loaded = true;
+                        state.status = "Labeling enabled (" +
+                            std::to_string(n_lm) + " landmarks" +
+                            (imported > 0 ? ", " + std::to_string(imported) +
+                                            " imported" : "") + ").";
+                    }
+                    state.request_dock_labeling = true;
+                }
+                ImGui::EndDisabled();
+                ImGui::PopStyleColor(3);
+                if (n_lm <= 0)
+                    ImGui::TextDisabled("Set a 3D landmarks CSV to enable labeling");
+                else if (!ctx.ps.video_loaded)
+                    ImGui::TextDisabled("Click to load videos and start labeling");
+                ImGui::Spacing();
+            }
 
             // ---- Section: Telecentric DLT Calibration (if telecentric) ----
             if (state.project.is_telecentric()) {

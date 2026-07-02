@@ -9,6 +9,47 @@
 #include <filesystem>
 #include <string>
 
+// Load previously-saved telecentric labels into frame 0 of the live annotation
+// buffer. Prefers the labeling tool's OWN save location (labeled_data, wide
+// red_csv v2 written by AnnotationCSV::save_all) so reopening a project restores
+// what the user labeled; falls back to the DLT export (red_data) for projects
+// that only have that. Returns the number of labeled camera-keypoints loaded.
+//
+// Rationale: the labeling tool saves to labeled_data, but the telecentric load
+// path historically only read red_data (the DLT export), so reopening a project
+// showed no labels unless "Export Labels for DLT" had been clicked first.
+inline int load_telecentric_labels(AppContext &ctx, int n_lm,
+                                    const std::string &dlt_labels_folder) {
+    int num_cams = ctx.scene ? (int)ctx.scene->num_cams : 0;
+    if (n_lm <= 0 || num_cams <= 0) return 0;
+
+    // 1) Wide-format labels saved by the labeling tool (source of truth).
+    std::string recent, err;
+    if (!ctx.pm.keypoints_root_folder.empty() &&
+        AnnotationCSV::find_most_recent_labels(
+            ctx.pm.keypoints_root_folder, recent, err) == 0) {
+        AnnotationMap loaded;
+        AnnotationCSV::load_all(recent, loaded, ctx.skeleton.name, n_lm,
+                                num_cams, ctx.pm.camera_names, err);
+        auto it = loaded.find(0);
+        if (it != loaded.end()) {
+            int cnt = 0;
+            for (auto &cam : it->second.cameras)
+                for (auto &kp : cam.keypoints)
+                    if (kp.labeled) cnt++;
+            if (cnt > 0) {
+                ctx.annotations[0] = it->second;  // restore frame 0 into buffer
+                return cnt;
+            }
+        }
+    }
+
+    // 2) Fall back to the DLT export (red_data).
+    return TelecentricDLT::import_dlt_labels(ctx.annotations, 0, n_lm, num_cams,
+                                             ctx.pm.camera_names,
+                                             dlt_labels_folder);
+}
+
 // Draw the Telecentric DLT Calibration section inside the Calibration Tool window.
 // Called only when state.project.is_telecentric().
 inline void DrawCalibTeleSection(CalibrationToolState &state, AppContext &ctx,
@@ -146,12 +187,9 @@ inline void DrawCalibTeleSection(CalibrationToolState &state, AppContext &ctx,
                                     setup_landmark_skeleton(ctx.skeleton, n_lm,
                                                              pm, state.project.project_path);
 
-                                    std::string labels_dir =
-                                        state.project.effective_labels_folder();
-                                    int imported = TelecentricDLT::import_dlt_labels(
-                                        ctx.annotations, 0, n_lm,
-                                        (int)scene->num_cams, pm.camera_names,
-                                        labels_dir);
+                                    int imported = load_telecentric_labels(
+                                        ctx, n_lm,
+                                        state.project.effective_labels_folder());
 
                                     state.status =
                                         "Loaded " + std::to_string(
@@ -181,26 +219,16 @@ inline void DrawCalibTeleSection(CalibrationToolState &state, AppContext &ctx,
                     }
                 }
 
-                // ---- Start Labeling button ----
+                // ---- Labeling status + Export ----
+                // (The "Label Landmarks" action lives at the top of the
+                // Calibration Tool window so it is always visible.)
                 if (state.tele_videos_loaded && cached_3d_count > 0) {
                     ImGui::Spacing();
                     auto &skeleton = ctx.skeleton;
                     bool labeling_active = skeleton.has_skeleton &&
                                            skeleton.num_nodes == cached_3d_count &&
                                            pm.plot_keypoints_flag;
-                    if (!labeling_active) {
-                        if (ImGui::Button("Start Labeling##tele_label")) {
-                            setup_landmark_skeleton(skeleton, cached_3d_count,
-                                                     pm, state.project.project_path);
-                            state.status = "Labeling enabled (" +
-                                std::to_string(cached_3d_count) +
-                                " landmarks). Use Labeling Tool to annotate.";
-                        }
-                        ImGui::SameLine();
-                        ImGui::TextDisabled(
-                            "Set up %d-point skeleton for labeling",
-                            cached_3d_count);
-                    } else {
+                    if (labeling_active) {
                         ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f),
                             "Labeling active (%d landmarks)", cached_3d_count);
 
@@ -270,6 +298,34 @@ inline void DrawCalibTeleSection(CalibrationToolState &state, AppContext &ctx,
                     ImGui::Checkbox("Bundle adjustment##tele", &state.tele_do_ba);
                 } else {
                     ImGui::TextDisabled("Bundle adjustment: always on (estimates distortion)");
+                    ImGui::Checkbox("Fit distortion center##tele",
+                                    &state.tele_fit_center);
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip(
+                            "Fit a free radial-distortion center per camera\n"
+                            "instead of pinning it to the projected origin.\n"
+                            "Small gain; validated to generalize on GoldTL lenses.");
+                }
+
+                // Target refinement: bundle-adjust the 3D landmark positions
+                ImGui::Checkbox("Refine 3D target (bundle-adjust landmarks)##tele",
+                                &state.tele_refine_target);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip(
+                        "Jointly optimize the 3D landmark positions and the\n"
+                        "cameras, anchored to the CSV by a prior. Corrects a\n"
+                        "slightly-inaccurate physical target and writes\n"
+                        "landmarks_3d_refined.csv. Best when the target's 3D\n"
+                        "coordinates are hand-measured / imperfect.");
+                if (state.tele_refine_target) {
+                    ImGui::Indent();
+                    ImGui::SetNextItemWidth(160);
+                    ImGui::SliderFloat("Prior strength (px/mm)##tele",
+                                       &state.tele_target_prior, 5.0f, 400.0f,
+                                       "%.0f", ImGuiSliderFlags_Logarithmic);
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("(lower = move points more)");
+                    ImGui::Unindent();
                 }
 
                 ImGui::Spacing();
@@ -325,41 +381,74 @@ inline void DrawCalibTeleSection(CalibrationToolState &state, AppContext &ctx,
                                    state.project.has_telecentric_input();
                     ImGui::BeginDisabled(!can_run);
                     if (ImGui::Button("Run DLT Calibration")) {
-                        state.tele_dlt_running = true;
-                        state.tele_dlt_done = false;
-                        state.tele_dlt_status = "Starting DLT calibration...";
+                        // Auto-export the current 2D labels (frame 0 = the
+                        // telecentric target) to DLT format, then point the solver
+                        // at them. This removes the separate "Export Labels for
+                        // DLT" step -- skipping it left landmark_labels_folder
+                        // empty and the solver failed with
+                        // "Failed to parse 2D labels: /Cam....csv".
+                        std::string tele_export_folder =
+                            state.project.project_path + "/red_data";
+                        auto tele_exp = TelecentricDLT::export_labels_for_dlt(
+                            ctx.annotations, 0, ctx.skeleton.num_nodes,
+                            (int)scene->num_cams, pm.camera_names,
+                            tele_export_folder, ctx.skeleton.name);
+                        if (!tele_exp.success) {
+                            state.tele_dlt_status =
+                                "Error exporting labels: " + tele_exp.error;
+                        } else {
+                            state.project.landmark_labels_folder =
+                                tele_export_folder;
+                            {
+                                std::string proj_file =
+                                    state.project.project_path + "/" +
+                                    state.project.project_name + ".redproj";
+                                std::string save_err;
+                                CalibrationTool::save_project(
+                                    state.project, proj_file, &save_err);
+                            }
 
-                        TelecentricDLT::DLTConfig dlt_cfg;
-                        dlt_cfg.camera_names = state.project.camera_names;
-                        dlt_cfg.landmark_labels_folder =
-                            state.project.landmark_labels_folder;
-                        dlt_cfg.landmarks_3d_file =
-                            state.project.landmarks_3d_file;
-                        const char *method_suffix[] = {
-                            "dlt_linear", "dlt_k1", "dlt_k1k2"};
-                        dlt_cfg.output_folder =
-                            state.project.project_path + "/" +
-                            method_suffix[state.tele_method];
-                        dlt_cfg.flip_y = state.tele_flip_y;
-                        dlt_cfg.square_pixels = state.tele_square_pixels;
-                        dlt_cfg.zero_skew = state.tele_zero_skew;
-                        dlt_cfg.do_ba = state.tele_do_ba;
-                        dlt_cfg.method = static_cast<TelecentricDLT::Method>(
-                            state.tele_method);
+                            state.tele_dlt_running = true;
+                            state.tele_dlt_done = false;
+                            state.tele_dlt_status = "Starting DLT calibration...";
 
-                        // Get image dimensions from loaded video
-                        if (scene->num_cams > 0) {
-                            dlt_cfg.image_width = scene->image_width[0];
-                            dlt_cfg.image_height = scene->image_height[0];
+                            TelecentricDLT::DLTConfig dlt_cfg;
+                            dlt_cfg.camera_names = state.project.camera_names;
+                            dlt_cfg.landmark_labels_folder =
+                                state.project.landmark_labels_folder;
+                            dlt_cfg.landmarks_3d_file =
+                                state.project.landmarks_3d_file;
+                            const char *method_suffix[] = {
+                                "dlt_linear", "dlt_k1", "dlt_k1k2"};
+                            dlt_cfg.output_folder =
+                                state.project.project_path + "/" +
+                                method_suffix[state.tele_method];
+                            dlt_cfg.flip_y = state.tele_flip_y;
+                            dlt_cfg.square_pixels = state.tele_square_pixels;
+                            dlt_cfg.zero_skew = state.tele_zero_skew;
+                            dlt_cfg.do_ba = state.tele_do_ba;
+                            dlt_cfg.method = static_cast<TelecentricDLT::Method>(
+                                state.tele_method);
+                            dlt_cfg.refine_target = state.tele_refine_target;
+                            dlt_cfg.target_prior_weight =
+                                state.tele_target_prior;
+                            dlt_cfg.fit_distortion_center =
+                                state.tele_fit_center;
+
+                            // Get image dimensions from loaded video
+                            if (scene->num_cams > 0) {
+                                dlt_cfg.image_width = scene->image_width[0];
+                                dlt_cfg.image_height = scene->image_height[0];
+                            }
+
+                            state.tele_dlt_future = std::async(
+                                std::launch::async,
+                                [dlt_cfg,
+                                 status_ptr = &state.tele_dlt_status]() {
+                                    return TelecentricDLT::run_dlt_calibration(
+                                        dlt_cfg, status_ptr);
+                                });
                         }
-
-                        state.tele_dlt_future = std::async(
-                            std::launch::async,
-                            [dlt_cfg,
-                             status_ptr = &state.tele_dlt_status]() {
-                                return TelecentricDLT::run_dlt_calibration(
-                                    dlt_cfg, status_ptr);
-                            });
                     }
                     ImGui::EndDisabled();
 
@@ -428,6 +517,49 @@ inline void DrawCalibTeleSection(CalibrationToolState &state, AppContext &ctx,
                                 state.tele_dlt_result.mean_rmse);
                     ImGui::Text("Output: %s",
                                 state.tele_dlt_result.output_folder.c_str());
+
+                    // ---- Target refinement report ----
+                    const auto &res = state.tele_dlt_result;
+                    if (res.target_refined && !res.point_movement.empty()) {
+                        ImGui::Spacing();
+                        ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f),
+                            "3D target refined (mean move %.4f mm, max %.4f mm)",
+                            res.movement_mean, res.movement_max);
+                        if (!res.refined_csv_path.empty()) {
+                            ImGui::TextDisabled("Wrote: %s",
+                                                res.refined_csv_path.c_str());
+                            ImGui::SameLine();
+                            if (ImGui::SmallButton("Use as 3D file##useref")) {
+                                state.project.landmarks_3d_file =
+                                    res.refined_csv_path;
+                                std::string pf = state.project.project_path +
+                                    "/" + state.project.project_name + ".redproj";
+                                std::string er;
+                                CalibrationTool::save_project(
+                                    state.project, pf, &er);
+                                state.status = "Adopted refined 3D target.";
+                            }
+                            if (ImGui::IsItemHovered())
+                                ImGui::SetTooltip(
+                                    "Set this project's 3D landmarks file to the\n"
+                                    "refined target and save the project.");
+                        }
+                        // Largest movers = posts whose CSV 3D is most suspect
+                        std::vector<std::pair<double, int>> mv;
+                        for (size_t i = 0; i < res.point_movement.size(); i++)
+                            mv.push_back({res.point_movement[i], (int)i});
+                        std::sort(mv.rbegin(), mv.rend());
+                        if (ImGui::TreeNode("Largest landmark corrections")) {
+                            ImGui::TextDisabled(
+                                "Big movers suggest an inaccurate 3D coord "
+                                "(re-check the physical post).");
+                            int n = std::min((int)mv.size(), 8);
+                            for (int k = 0; k < n; k++)
+                                ImGui::BulletText("Pt%d: %.4f mm",
+                                                  mv[k].second, mv[k].first);
+                            ImGui::TreePop();
+                        }
+                    }
 
                     // Cross-validation results
                     if (!state.tele_dlt_result.cv_results.empty()) {

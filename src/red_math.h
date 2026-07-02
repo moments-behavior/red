@@ -79,7 +79,8 @@ undistortPoint(const Eigen::Vector2d &pt, const Eigen::Matrix3d &K,
 // Given distorted pixel, returns undistorted pixel.
 inline Eigen::Vector2d
 undistortPointTelecentric(const Eigen::Vector2d &pt, const Eigen::Matrix3d &K,
-                          const Eigen::Matrix<double, 5, 1> &dist) {
+                          const Eigen::Matrix<double, 5, 1> &dist,
+                          const Eigen::Vector2d &center = Eigen::Vector2d::Zero()) {
     double k1 = dist(0), k2 = dist(1);
 
     // No distortion — early out
@@ -89,26 +90,28 @@ undistortPointTelecentric(const Eigen::Vector2d &pt, const Eigen::Matrix3d &K,
     // Unpack K2 and translation
     double sx = K(0, 0), skew = K(0, 1), tx = K(0, 2);
     double sy = K(1, 1), ty = K(1, 2);
+    double cx = center(0), cy = center(1); // distortion center (normalized coords)
 
     // Pixel → normalized distorted coords: K2^{-1} * (pt - t)
     // K2 = [sx skew; 0 sy], K2^{-1} = [1/sx -skew/(sx*sy); 0 1/sy]
     double xd = (pt(0) - tx) / sx - skew / (sx * sy) * (pt(1) - ty);
     double yd = (pt(1) - ty) / sy;
 
-    // Iterative undistortion: find (xn, yn) such that
-    //   xd = xn * (1 + k1*r2 + k2*r4)
-    //   yd = yn * (1 + k1*r2 + k2*r4)
-    double xn = xd, yn = yd;
+    // Iterative undistortion about the distortion center:
+    //   xd - cx = (xn - cx) * (1 + k1*r2 + k2*r4),  r2 = (xn-cx)^2 + (yn-cy)^2
+    double dxd = xd - cx, dyd = yd - cy;
+    double dxn = dxd, dyn = dyd;
     for (int i = 0; i < 15; i++) {
-        double xn_prev = xn, yn_prev = yn;
-        double r2 = xn * xn + yn * yn;
+        double px = dxn, py = dyn;
+        double r2 = dxn * dxn + dyn * dyn;
         double r4 = r2 * r2;
         double d = 1.0 + k1 * r2 + k2 * r4;
         if (std::abs(d) < 1e-15) break;
-        xn = xd / d;
-        yn = yd / d;
-        if (std::abs(xn - xn_prev) + std::abs(yn - yn_prev) < 1e-14) break;
+        dxn = dxd / d;
+        dyn = dyd / d;
+        if (std::abs(dxn - px) + std::abs(dyn - py) < 1e-14) break;
     }
+    double xn = dxn + cx, yn = dyn + cy;
 
     // Normalized undistorted → pixel: K2 * (xn, yn) + t
     double u = sx * xn + skew * yn + tx;
@@ -219,7 +222,8 @@ inline Eigen::Vector2d
 projectPointTelecentric(const Eigen::Vector3d &pt3d,
                         const Eigen::Matrix<double, 3, 4> &P,
                         const Eigen::Matrix3d &K,
-                        const Eigen::Matrix<double, 5, 1> &dist) {
+                        const Eigen::Matrix<double, 5, 1> &dist,
+                        const Eigen::Vector2d &center = Eigen::Vector2d::Zero()) {
     double k1 = dist(0), k2 = dist(1);
 
     // Affine projection (no distortion): u = P(0,:)*[X;1], v = P(1,:)*[X;1]
@@ -230,19 +234,21 @@ projectPointTelecentric(const Eigen::Vector3d &pt3d,
     if (std::abs(k1) < 1e-15 && std::abs(k2) < 1e-15)
         return Eigen::Vector2d(u_lin, v_lin);
 
-    // Apply distortion: pixel → normalized → distort → pixel
+    // Apply distortion: pixel → normalized → distort (about center) → pixel
     double sx = K(0, 0), skew = K(0, 1), tx = K(0, 2);
     double sy = K(1, 1), ty = K(1, 2);
+    double cx = center(0), cy = center(1); // distortion center (normalized coords)
 
     // Undistorted normalized coords
     double xn = (u_lin - tx) / sx - skew / (sx * sy) * (v_lin - ty);
     double yn = (v_lin - ty) / sy;
 
-    double r2 = xn * xn + yn * yn;
+    double dxn = xn - cx, dyn = yn - cy;
+    double r2 = dxn * dxn + dyn * dyn;
     double r4 = r2 * r2;
     double d = 1.0 + k1 * r2 + k2 * r4;
-    double xd = xn * d;
-    double yd = yn * d;
+    double xd = dxn * d + cx;
+    double yd = dyn * d + cy;
 
     return Eigen::Vector2d(sx * xd + skew * yd + tx, sy * yd + ty);
 }

@@ -100,6 +100,7 @@ struct WindowStates {
         calibration.config_path.clear();
         calibration.pointsource_config = {};
         calibration.dock_pending = false;
+        calibration.request_dock_labeling = false;
         calibration.aruco_start_frame = 0;
         calibration.aruco_stop_frame = 0;
         calibration.aruco_frame_step = 10;

@@ -17,6 +17,9 @@ struct CameraParams {
     Eigen::Vector3d rvec = Eigen::Vector3d::Zero();
     Eigen::Vector3d tvec = Eigen::Vector3d::Zero();
     Eigen::Matrix<double, 3, 4> projection_mat = Eigen::Matrix<double, 3, 4>::Zero();
+    // Radial-distortion center for telecentric cameras (normalized coords).
+    // Zero = distortion centered on the projected origin (legacy behavior).
+    Eigen::Vector2d dist_center = Eigen::Vector2d::Zero();
     bool telecentric = false;
     int image_width = 0;
     int image_height = 0;
@@ -179,14 +182,22 @@ inline bool camera_load_params_from_dlt_csv(const std::string &dlt_csv_path,
                     std::istringstream ss(data_line);
                     std::string tok;
                     double dk1 = 0, dk2 = 0, dsx = 0, dsy = 0, dskew = 0;
+                    double dcx = 0, dcy = 0; // optional distortion center
                     std::getline(ss, tok, ','); dk1 = std::stod(tok);
                     std::getline(ss, tok, ','); dk2 = std::stod(tok);
                     std::getline(ss, tok, ','); dsx = std::stod(tok);
                     std::getline(ss, tok, ','); dsy = std::stod(tok);
                     std::getline(ss, tok, ','); dskew = std::stod(tok);
+                    // Newer files append cx,cy (free distortion center). Older
+                    // 5-column files omit them → center stays (0,0).
+                    if (std::getline(ss, tok, ',') && !tok.empty())
+                        dcx = std::stod(tok);
+                    if (std::getline(ss, tok, ',') && !tok.empty())
+                        dcy = std::stod(tok);
 
                     camera_params.dist_coeffs(0) = dk1;
                     camera_params.dist_coeffs(1) = dk2;
+                    camera_params.dist_center = Eigen::Vector2d(dcx, dcy);
                     // Update K2 with refined values from distortion CSV
                     camera_params.k(0, 0) = dsx;
                     camera_params.k(0, 1) = dskew;

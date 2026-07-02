@@ -153,10 +153,19 @@ struct CalibrationToolState {
     bool tele_zero_skew = false;
     bool tele_do_ba = true;
     int tele_method = 0; // 0=Linear DLT, 1=DLT+k1, 2=DLT+k1k2
+    // Target refinement: bundle-adjust the 3D landmark positions to the labels
+    bool tele_refine_target = false;
+    float tele_target_prior = 20.0f; // prior strength (px/mm)
+    // Fit a free radial-distortion center (only with a distortion method)
+    bool tele_fit_center = false;
     // History of calibration runs for comparison
     std::vector<TelecentricDLT::DLTResult> tele_run_history;
     // Deferred label import (waits N frames for dock layout to stabilize)
     int tele_deferred_label_frames = 0;
+    // Request (from "Label Landmarks" button) to dock + focus the Keypoints and
+    // Labeling Tool windows. Consumed once in the main loop, which places them
+    // via DockBuilder so they are reliably visible even on a fresh project.
+    bool request_dock_labeling = false;
 
     // Reprojection diagnostics (triangulate-and-reproject, read-only)
     bool reproj_diag_done = false;

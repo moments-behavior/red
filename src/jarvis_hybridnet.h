@@ -746,7 +746,7 @@ inline bool jarvis_hn_compute_center_3d(
         // undistort there if non-zero dist coeffs are present (mirrors
         // red's gui_keypoints.h labeling convention).
         Eigen::Vector2d und = cp.telecentric
-            ? red_math::undistortPointTelecentric(Eigen::Vector2d(nx, ny), cp.k, cp.dist_coeffs)
+            ? red_math::undistortPointTelecentric(Eigen::Vector2d(nx, ny), cp.k, cp.dist_coeffs, cp.dist_center)
             : red_math::undistortPoint(Eigen::Vector2d(nx, ny), cp.k, cp.dist_coeffs);
         center_2d_undist.push_back(und);
         center_proj_mats.push_back(cp.projection_mat);
@@ -816,7 +816,7 @@ inline void jarvis_hn_write_kp3d_and_2d_overlay(
         for (int j = 0; j < J; ++j) {
             Eigen::Vector3d p3(fa.kp3d[j].x, fa.kp3d[j].y, fa.kp3d[j].z);
             Eigen::Vector2d uv = cp.telecentric
-                ? red_math::projectPointTelecentric(p3, cp.projection_mat, cp.k, cp.dist_coeffs)
+                ? red_math::projectPointTelecentric(p3, cp.projection_mat, cp.k, cp.dist_coeffs, cp.dist_center)
                 : red_math::projectPointR(p3, cp.r, cp.tvec, cp.k, cp.dist_coeffs);
             auto &kp = fa.cameras[c].keypoints[j];
             kp.x = uv[0];
@@ -953,7 +953,7 @@ inline bool jarvis_hybridnet_predict_frame(
     for (int c = 0; c < N; ++c) {
         const auto &cp = camera_params[c];
         Eigen::Vector2d cHM = cp.telecentric
-            ? red_math::projectPointTelecentric(center_3D, cp.projection_mat, cp.k, cp.dist_coeffs)
+            ? red_math::projectPointTelecentric(center_3D, cp.projection_mat, cp.k, cp.dist_coeffs, cp.dist_center)
             : red_math::projectPointR(center_3D, cp.r, cp.tvec, cp.k, cp.dist_coeffs);
         int cx = static_cast<int>(std::round(cHM[0]));
         int cy = static_cast<int>(std::round(cHM[1]));
@@ -1276,7 +1276,7 @@ inline bool jarvis_hybridnet_predict_frame_device(
     for (int c = 0; c < N; ++c) {
         const auto &cp = camera_params[c];
         Eigen::Vector2d cHM = cp.telecentric
-            ? red_math::projectPointTelecentric(center_3D, cp.projection_mat, cp.k, cp.dist_coeffs)
+            ? red_math::projectPointTelecentric(center_3D, cp.projection_mat, cp.k, cp.dist_coeffs, cp.dist_center)
             : red_math::projectPointR(center_3D, cp.r, cp.tvec, cp.k, cp.dist_coeffs);
         int cx = static_cast<int>(std::round(cHM[0]));
         int cy = static_cast<int>(std::round(cHM[1]));
