@@ -6,7 +6,12 @@
 #import <CoreVideo/CoreVideo.h>
 #import <Accelerate/Accelerate.h>
 #include "jarvis_coreml.h"
+#include "jarvis_hn_reproject.h"   // validated host reprojection + soft-argmax
+#include "red_math.h"              // undistortPoint, triangulatePoints, projectPointR
+#include "skeleton.h"
+#include "json.hpp"
 #include <filesystem>
+#include <fstream>
 
 // ── Helpers ──
 
@@ -213,6 +218,53 @@ static HMPeak heatmap_argmax(MLMultiArray *hm, int channel, int hm_h, int hm_w) 
     return peak;
 }
 
+// Copy an MLMultiArray to a C-contiguous float32 vector, honoring its strides.
+// CRITICAL: CoreML mlprogram outputs can be stride-padded (e.g. V2VNet's
+// [1,24,50,50,50] comes back with the last dim padded 50→64 for GPU alignment).
+// Reading dataPointer linearly would scramble the volume. Always go via strides.
+static void copy_mlarray_contiguous(MLMultiArray *a, std::vector<float> &out) {
+    const int nd = (int)a.shape.count;
+    std::vector<long> shp(nd), str(nd);
+    size_t total = 1;
+    for (int i = 0; i < nd; ++i) {
+        shp[i] = [a.shape[i] longValue];
+        str[i] = [a.strides[i] longValue];
+        total *= (size_t)shp[i];
+    }
+    out.resize(total);
+    const bool f16 = (a.dataType == MLMultiArrayDataTypeFloat16);
+    const float *pf = f16 ? nullptr : (const float *)a.dataPointer;
+    const __fp16 *ph = f16 ? (const __fp16 *)a.dataPointer : nullptr;
+    std::vector<long> idx(nd, 0);
+    for (size_t o = 0; o < total; ++o) {
+        long off = 0;
+        for (int d = 0; d < nd; ++d) off += idx[d] * str[d];
+        out[o] = f16 ? (float)ph[off] : pf[off];
+        for (int d = nd - 1; d >= 0; --d) { if (++idx[d] < shp[d]) break; idx[d] = 0; }
+    }
+}
+
+// Largest 4D output (the hi-res heatmap head) from a CoreML prediction.
+static MLMultiArray *largest_4d_output(id<MLFeatureProvider> output) {
+    MLMultiArray *best = nil;
+    for (NSString *name in output.featureNames) {
+        MLFeatureValue *fv = [output featureValueForName:name];
+        if (fv.multiArrayValue && fv.multiArrayValue.shape.count == 4) {
+            MLMultiArray *arr = fv.multiArrayValue;
+            if (!best || [arr.shape[2] intValue] > [best.shape[2] intValue]) best = arr;
+        }
+    }
+    return best;
+}
+
+// Forward decl — full volumetric 3D HybridNet path (defined below).
+static bool jarvis_coreml_predict_hybridnet_3d(
+    JarvisCoreMLState &s, AnnotationMap &amap, u32 frame_num,
+    const std::vector<CVPixelBufferRef> &pbs,
+    const std::vector<int> &widths, const std::vector<int> &heights,
+    const SkeletonContext &skeleton, int num_cameras,
+    const std::vector<CameraParams> &camera_params);
+
 // ── Public API ──
 
 bool jarvis_coreml_available() {
@@ -257,8 +309,48 @@ bool jarvis_coreml_init(JarvisCoreMLState &s, const std::string &model_dir,
 
     s.center_model = (__bridge_retained void *)cd;
     s.keypoint_model = (__bridge_retained void *)kd;
+
+    // Full volumetric 3D HybridNet: if v2vnet.mlpackage is present, load it and
+    // switch into 3D mode. Reprojection + soft-argmax run in host C++
+    // (jarvis_hn_reproject.h); V2VNet (3D CNN) runs on the Apple GPU.
+    s.hybridnet = false;
+    std::string v2v_path = model_dir + "/v2vnet.mlpackage";
+    if (std::filesystem::exists(v2v_path)) {
+        MLModel *v2v = load_mlpackage(v2v_path, err);
+        if (!v2v) {
+            s.status = "V2VNet load failed: " + err;
+            return false;
+        }
+        s.v2v_model = (__bridge_retained void *)v2v;
+        s.hybridnet = true;
+        // Parse the hybridnet block from model_info.json (falls back to defaults).
+        s.hn_num_cameras = 16;
+        s.hn_roi_cube_mm = 200.0f;
+        s.hn_grid_spacing_mm = 2.0f;
+        s.hn_grid_in = 100;
+        s.hn_grid_out = 50;
+        try {
+            std::string mi = model_dir + "/model_info.json";
+            if (std::filesystem::exists(mi)) {
+                std::ifstream f(mi);
+                nlohmann::json j; f >> j;
+                if (j.contains("hybridnet")) {
+                    const auto &h = j["hybridnet"];
+                    s.hn_num_cameras     = h.value("num_cameras", s.hn_num_cameras);
+                    s.hn_roi_cube_mm     = h.value("roi_cube_size", s.hn_roi_cube_mm);
+                    s.hn_grid_spacing_mm = h.value("grid_spacing", s.hn_grid_spacing_mm);
+                    s.hn_grid_in         = h.value("grid_in", s.hn_grid_in);
+                    s.hn_grid_out        = h.value("grid_out", s.hn_grid_out);
+                }
+            }
+        } catch (const std::exception &) { /* keep defaults */ }
+    }
+
     s.loaded = true;
-    s.status = "CoreML loaded (" + std::to_string(s.num_joints) + " joints, GPU/ANE)";
+    s.status = s.hybridnet
+        ? ("CoreML HybridNet 3D loaded (" + std::to_string(s.num_joints) +
+           " joints, " + std::to_string(s.hn_num_cameras) + " cams, GPU)")
+        : ("CoreML loaded (" + std::to_string(s.num_joints) + " joints, GPU/ANE)");
     return true;
 }
 
@@ -268,11 +360,24 @@ bool jarvis_coreml_predict_frame(
     const std::vector<CVPixelBufferRef> &pixel_buffers,
     const std::vector<int> &cam_widths,
     const std::vector<int> &cam_heights,
-    const SkeletonContext &/*skeleton*/,
+    const SkeletonContext &skeleton,
     int num_cameras,
+    const std::vector<CameraParams> &camera_params,
     float confidence_threshold) {
 
     if (!s.loaded) { s.status = "Not loaded"; return false; }
+
+    // Full volumetric 3D HybridNet path — writes kp3d directly.
+    if (s.hybridnet) {
+        if (camera_params.empty()) {
+            s.status = "HybridNet 3D needs camera calibration (none loaded)";
+            return false;
+        }
+        return jarvis_coreml_predict_hybridnet_3d(
+            s, amap, frame_num, pixel_buffers, cam_widths, cam_heights,
+            skeleton, num_cameras, camera_params);
+    }
+    (void)skeleton;
 
     {
         auto t0 = std::chrono::steady_clock::now();
@@ -417,5 +522,220 @@ void jarvis_coreml_cleanup(JarvisCoreMLState &s) {
         CFRelease(s.keypoint_model);
         s.keypoint_model = nullptr;
     }
+    if (s.v2v_model) {
+        CFRelease(s.v2v_model);
+        s.v2v_model = nullptr;
+    }
+    s.hybridnet = false;
     s.loaded = false;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Full volumetric 3D HybridNet path (CoreML).
+//   per-cam: CenterDetect → 2D peak → undistort
+//   once:    DLT triangulate → center3D (world mm)
+//   per-cam: reproject center3D → centerHM → crop 704² → KeypointDetect heatmaps
+//   once:    host reprojection (hn_reproject) → V2VNet (CoreML/GPU) → soft-argmax
+//   write:   kp3d + per-cam 2D overlay
+// Mirrors the validated Python reference (hybridnet_reference.py, ~2 mm) and the
+// TensorRT host path in jarvis_hybridnet.h. Uses the P^T / K^T conventions.
+// ─────────────────────────────────────────────────────────────────────────
+static bool jarvis_coreml_predict_hybridnet_3d(
+    JarvisCoreMLState &s, AnnotationMap &amap, u32 frame_num,
+    const std::vector<CVPixelBufferRef> &pbs,
+    const std::vector<int> &widths, const std::vector<int> &heights,
+    const SkeletonContext &skeleton, int /*num_cameras*/,
+    const std::vector<CameraParams> &cams) {
+
+    const int NC = s.hn_num_cameras;
+    const int NJ = s.num_joints;
+    const int C  = s.center_input_size;      // 320
+    const int B  = s.keypoint_input_size;    // 704
+    const int bbox_hw = B / 2;               // 352
+    const int Hcen_hi = C / 2;               // 160
+    const int hs = B / 2 + 2;                // 354 (padded heatmap side)
+    const int gin = s.hn_grid_in;            // 100
+    const int gout = s.hn_grid_out;          // 50
+    constexpr float kCenterThresh = 50.0f;   // matches JARVIS python / TRT path
+
+    if ((int)pbs.size() < NC || (int)widths.size() < NC ||
+        (int)heights.size() < NC || (int)cams.size() < NC) {
+        s.status = "HybridNet 3D: fewer cameras/params than model expects";
+        return false;
+    }
+    for (int c = 0; c < NC; ++c) {
+        if (!pbs[c]) { s.status = "HybridNet 3D: all " + std::to_string(NC) +
+                                  " cameras must have a frame"; return false; }
+    }
+
+    MLModel *cd_model = (__bridge MLModel *)s.center_model;
+    MLModel *kd_model = (__bridge MLModel *)s.keypoint_model;
+    MLModel *v2v_model = (__bridge MLModel *)s.v2v_model;
+    auto t0 = std::chrono::steady_clock::now();
+
+    // ── STAGE 1+2: CenterDetect per cam → triangulate center3D ──────────
+    std::vector<Eigen::Vector2d> center_2d;
+    std::vector<Eigen::Matrix<double, 3, 4>> center_Ps;
+    for (int c = 0; c < NC; ++c) {
+        @autoreleasepool {
+            CVPixelBufferRef rz = resize_pixelbuf(pbs[c], C, C);
+            if (!rz) continue;
+            MLMultiArray *tensor = pixelbuf_to_normalized_array(rz, C, C);
+            CVPixelBufferRelease(rz);
+            if (!tensor) continue;
+            NSError *e = nil;
+            id<MLFeatureProvider> in = [[MLDictionaryFeatureProvider alloc]
+                initWithDictionary:@{@"image":[MLFeatureValue featureValueWithMultiArray:tensor]} error:&e];
+            if (!in) continue;
+            id<MLFeatureProvider> out = [cd_model predictionFromFeatures:in error:&e];
+            if (!out) continue;
+            MLMultiArray *hm = largest_4d_output(out);
+            if (!hm) continue;
+            std::vector<float> plane;
+            copy_mlarray_contiguous(hm, plane);           // (1,1,160,160) → 160*160
+            int hw = [hm.shape[3] intValue];
+            int hh = [hm.shape[2] intValue];
+            int best = 0; float bv = plane[0];
+            for (int i = 1; i < hh * hw; ++i) if (plane[i] > bv) { bv = plane[i]; best = i; }
+            if (bv < kCenterThresh) continue;
+            double px = best % hw, py = best / hw;
+            double nx = (px + 0.5) * widths[c]  / (double)Hcen_hi;
+            double ny = (py + 0.5) * heights[c] / (double)Hcen_hi;
+            Eigen::Vector2d und = cams[c].telecentric
+                ? red_math::undistortPointTelecentric({nx, ny}, cams[c].k, cams[c].dist_coeffs, cams[c].dist_center)
+                : red_math::undistortPoint({nx, ny}, cams[c].k, cams[c].dist_coeffs);
+            center_2d.push_back(und);
+            center_Ps.push_back(cams[c].projection_mat);
+        }
+    }
+    if (center_2d.size() < 2) {
+        s.status = "HybridNet 3D: <2 cameras detected the animal center";
+        return false;
+    }
+    Eigen::Vector3d center3D = red_math::triangulatePoints(center_2d, center_Ps);
+    const float c3[3] = {(float)center3D[0], (float)center3D[1], (float)center3D[2]};
+
+    // ── STAGE 3+4: centerHM → crop → KeypointDetect heatmaps ────────────
+    std::vector<float> heatmaps((size_t)NC * NJ * hs * hs, 0.0f);   // cam-major, padded 354²
+    std::vector<int> cHMx(NC), cHMy(NC);
+    for (int c = 0; c < NC; ++c) {
+        @autoreleasepool {
+            Eigen::Vector2d cHM = cams[c].telecentric
+                ? red_math::projectPointTelecentric(center3D, cams[c].projection_mat, cams[c].k, cams[c].dist_coeffs, cams[c].dist_center)
+                : red_math::projectPointR(center3D, cams[c].r, cams[c].tvec, cams[c].k, cams[c].dist_coeffs);
+            int cx = std::clamp((int)std::lround(cHM[0]), bbox_hw, widths[c]  - bbox_hw);
+            int cy = std::clamp((int)std::lround(cHM[1]), bbox_hw, heights[c] - bbox_hw);
+            cHMx[c] = cx; cHMy[c] = cy;
+            CVPixelBufferRef crop = crop_pixelbuf(pbs[c], cx, cy, B);
+            if (!crop) continue;
+            MLMultiArray *tensor = pixelbuf_to_normalized_array(crop, B, B);
+            CVPixelBufferRelease(crop);
+            if (!tensor) continue;
+            NSError *e = nil;
+            id<MLFeatureProvider> in = [[MLDictionaryFeatureProvider alloc]
+                initWithDictionary:@{@"image":[MLFeatureValue featureValueWithMultiArray:tensor]} error:&e];
+            if (!in) continue;
+            id<MLFeatureProvider> out = [kd_model predictionFromFeatures:in error:&e];
+            if (!out) continue;
+            MLMultiArray *hm = largest_4d_output(out);       // (1,24,352,352)
+            if (!hm) continue;
+            std::vector<float> kh;
+            copy_mlarray_contiguous(hm, kh);                 // 24*352*352 contiguous
+            int kh_h = [hm.shape[2] intValue], kh_w = [hm.shape[3] intValue];
+            // write into the 1-px padded (NJ,354,354) slot for camera c
+            float *dst = heatmaps.data() + (size_t)c * NJ * hs * hs;
+            for (int j = 0; j < NJ; ++j) {
+                const float *src = kh.data() + (size_t)j * kh_h * kh_w;
+                float *djp = dst + (size_t)j * hs * hs;
+                for (int y = 0; y < kh_h; ++y)
+                    for (int x = 0; x < kh_w; ++x)
+                        djp[(y + 1) * hs + (x + 1)] = src[y * kh_w + x];
+            }
+        }
+    }
+
+    // ── STAGE 5: assemble reprojection inputs (P^T, K^T, dist) ──────────
+    std::vector<float> camMats((size_t)NC * 12), intrMats((size_t)NC * 9),
+                       distC((size_t)NC * 5, 0.0f), cHMf((size_t)NC * 2);
+    for (int c = 0; c < NC; ++c) {
+        const auto &P = cams[c].projection_mat;              // 3x4
+        for (int r = 0; r < 4; ++r)
+            for (int col = 0; col < 3; ++col)
+                camMats[(size_t)c * 12 + r * 3 + col] = (float)P(col, r);   // P^T
+        const auto &K = cams[c].k;                           // 3x3
+        for (int i = 0; i < 3; ++i)
+            for (int jj = 0; jj < 3; ++jj)
+                intrMats[(size_t)c * 9 + i * 3 + jj] = (float)K(jj, i);     // K^T
+        for (int k = 0; k < 5; ++k) distC[(size_t)c * 5 + k] = (float)cams[c].dist_coeffs(k);
+        cHMf[(size_t)c * 2 + 0] = (float)cHMx[c];
+        cHMf[(size_t)c * 2 + 1] = (float)cHMy[c];
+    }
+
+    // ── STAGE 6a: host reprojection → voxel volume (NJ,100³) ────────────
+    HNReproParams P;
+    P.num_cameras = NC; P.num_joints = NJ; P.grid_full = gin;
+    P.grid_spacing = s.hn_grid_spacing_mm; P.roi_cube = s.hn_roi_cube_mm; P.heatmap_size = hs;
+    std::vector<float> h3d((size_t)NJ * gin * gin * gin);
+    hn_reproject(P, camMats.data(), intrMats.data(), distC.data(),
+                 c3, cHMf.data(), heatmaps.data(), h3d.data());
+
+    // ── STAGE 6b: V2VNet (CoreML, Apple GPU) ────────────────────────────
+    std::vector<float> vout;
+    {
+        auto th = std::chrono::steady_clock::now();
+        NSError *e = nil;
+        MLMultiArray *vin = [[MLMultiArray alloc]
+            initWithShape:@[@1, @(NJ), @(gin), @(gin), @(gin)]
+            dataType:MLMultiArrayDataTypeFloat32 error:&e];
+        if (!vin) { s.status = "HybridNet 3D: V2V input alloc failed"; return false; }
+        float *dp = (float *)vin.dataPointer;               // (1,NJ,100,100,100) is contiguous
+        for (size_t i = 0; i < h3d.size(); ++i) dp[i] = h3d[i] / 255.0f;
+        id<MLFeatureProvider> in = [[MLDictionaryFeatureProvider alloc]
+            initWithDictionary:@{@"vox_in":[MLFeatureValue featureValueWithMultiArray:vin]} error:&e];
+        if (!in) { s.status = "HybridNet 3D: V2V input build failed"; return false; }
+        id<MLFeatureProvider> out = [v2v_model predictionFromFeatures:in error:&e];
+        if (!out) { s.status = "HybridNet 3D: V2V predict failed"; return false; }
+        MLMultiArray *vo = [out featureValueForName:@"vox_out"].multiArrayValue;
+        if (!vo) for (NSString *n in out.featureNames)         // fallback: first 5D output
+            if ([out featureValueForName:n].multiArrayValue.shape.count == 5)
+                { vo = [out featureValueForName:n].multiArrayValue; break; }
+        if (!vo) { s.status = "HybridNet 3D: V2V output missing"; return false; }
+        copy_mlarray_contiguous(vo, vout);                   // stride-aware — CRITICAL (50→64 pad)
+        s.last_hybrid3d_ms = std::chrono::duration<float, std::milli>(
+            std::chrono::steady_clock::now() - th).count();
+    }
+
+    // ── STAGE 6c: soft-argmax → world-mm points ─────────────────────────
+    std::vector<float> pts((size_t)NJ * 3), conf((size_t)NJ);
+    hn_soft_argmax(P, vout.data(), gout, c3, pts.data(), conf.data());
+
+    // ── STAGE 7: write kp3d + per-cam 2D overlay ────────────────────────
+    FrameAnnotation &fa = get_or_create_frame(amap, frame_num, skeleton.num_nodes, NC);
+    for (int j = 0; j < NJ && j < (int)fa.kp3d.size(); ++j) {
+        fa.kp3d[j].x = pts[j * 3 + 0];
+        fa.kp3d[j].y = pts[j * 3 + 1];
+        fa.kp3d[j].z = pts[j * 3 + 2];
+        fa.kp3d[j].set_hybridnet(conf[j]);
+    }
+    for (int c = 0; c < NC; ++c) {
+        for (int j = 0; j < NJ && j < (int)fa.cameras[c].keypoints.size(); ++j) {
+            Eigen::Vector3d p3(pts[j * 3 + 0], pts[j * 3 + 1], pts[j * 3 + 2]);
+            Eigen::Vector2d uv = cams[c].telecentric
+                ? red_math::projectPointTelecentric(p3, cams[c].projection_mat, cams[c].k, cams[c].dist_coeffs, cams[c].dist_center)
+                : red_math::projectPointR(p3, cams[c].r, cams[c].tvec, cams[c].k, cams[c].dist_coeffs);
+            auto &kp = fa.cameras[c].keypoints[j];
+            kp.x = uv[0];
+            kp.y = (double)heights[c] - uv[1];   // image → ImPlot (origin bottom-left)
+            kp.labeled = true;
+            kp.source = LabelSource::Predicted;
+            kp.confidence = conf[j];
+        }
+    }
+
+    s.last_total_ms = std::chrono::duration<float, std::milli>(
+        std::chrono::steady_clock::now() - t0).count();
+    s.status = "HybridNet 3D: " + std::to_string(NJ) + " joints, " +
+               std::to_string((int)center_2d.size()) + "/" + std::to_string(NC) +
+               " cams, " + std::to_string((int)s.last_total_ms) + " ms";
+    return true;
 }

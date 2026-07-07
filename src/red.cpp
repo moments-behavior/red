@@ -1684,11 +1684,13 @@ int main(int argc, char **argv) {
 
                     jarvis_coreml_predict_frame(jarvis_coreml_state, annotations,
                         (u32)current_frame_num, pbs, widths, heights,
-                        skeleton, (int)scene->num_cams,
+                        skeleton, (int)scene->num_cams, pm.camera_params,
                         win.jarvis_predict.confidence_threshold);
-                    // Triangulate (reprojection is in gui_keypoints.h, only in this TU)
-                    reprojection(annotations.at(current_frame_num),
-                                 &skeleton, pm.camera_params, scene);
+                    // HybridNet writes 3D directly; only 2D path needs triangulation
+                    // (reprojection is in gui_keypoints.h, only in this TU).
+                    if (!jarvis_coreml_state.hybridnet)
+                        reprojection(annotations.at(current_frame_num),
+                                     &skeleton, pm.camera_params, scene);
                     printf("[JARVIS CoreML] %s (%d/%d cameras)\n",
                            jarvis_coreml_state.status.c_str(),
                            cams_used, (int)scene->num_cams);
@@ -2105,9 +2107,10 @@ int main(int argc, char **argv) {
                                     pbs[c] = scene->display_buffer[c][slot].pixel_buffer;
                                 jarvis_coreml_predict_frame(jarvis_coreml_state,
                                     annotations, frame, pbs, w_b, h_b,
-                                    skeleton, (int)scene->num_cams,
+                                    skeleton, (int)scene->num_cams, pm.camera_params,
                                     bp.confidence_threshold);
-                                if (!pm.camera_params.empty())
+                                if (!jarvis_coreml_state.hybridnet &&
+                                    !pm.camera_params.empty())
                                     reprojection(annotations.at(frame),
                                                  &skeleton, pm.camera_params, scene);
                                 auto tp1 = std::chrono::steady_clock::now();

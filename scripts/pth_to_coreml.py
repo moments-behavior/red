@@ -31,10 +31,63 @@ import torch
 
 
 class SimpleConfig:
-    """Minimal config object that EfficientTrackBackbone expects."""
+    """Minimal config object that EfficientTrackBackbone / V2VNet expect."""
     def __init__(self, **kwargs):
         for k, v in kwargs.items():
             setattr(self, k, v)
+
+
+import torch.nn as nn
+
+
+class ManualInstanceNorm3d(nn.Module):
+    """CoreML/ORT-safe InstanceNorm3d (explicit mean/var; safe on zero-variance
+    channels). Mirrors scripts/export_jarvis_onnx.py."""
+    def __init__(self, num_features, eps=1e-5, affine=False):
+        super().__init__()
+        self.eps = eps
+        self.affine = affine
+        self.num_features = num_features
+        if affine:
+            self.weight = nn.Parameter(torch.ones(num_features))
+            self.bias = nn.Parameter(torch.zeros(num_features))
+
+    def forward(self, x):
+        mean = x.mean(dim=(2, 3, 4), keepdim=True)
+        var = x.var(dim=(2, 3, 4), keepdim=True, unbiased=False)
+        x = (x - mean) / torch.sqrt(var + self.eps)
+        if self.affine:
+            x = x * self.weight.view(1, -1, 1, 1, 1) + self.bias.view(1, -1, 1, 1, 1)
+        return x
+
+
+def replace_instance_norm_3d(model):
+    for name, module in model.named_children():
+        if isinstance(module, nn.InstanceNorm3d):
+            r = ManualInstanceNorm3d(module.num_features, eps=module.eps,
+                                     affine=module.affine)
+            if module.affine and module.weight is not None:
+                r.weight.data = module.weight.data.clone()
+                r.bias.data = module.bias.data.clone()
+            setattr(model, name, r)
+        else:
+            replace_instance_norm_3d(module)
+
+
+def find_latest_hybridnet_pth(models_dir):
+    """Find the latest HybridNet-*_final.pth under <models_dir>/HybridNet/Run_*/."""
+    hn_dir = os.path.join(models_dir, "HybridNet")
+    if not os.path.isdir(hn_dir):
+        return None
+    runs = sorted(glob.glob(os.path.join(hn_dir, "Run_*")))
+    for run_dir in reversed(runs):
+        finals = glob.glob(os.path.join(run_dir, "HybridNet-*_final.pth"))
+        if finals:
+            return finals[0]
+        pths = glob.glob(os.path.join(run_dir, "*.pth"))
+        if pths:
+            return sorted(pths)[-1]
+    return None
 
 
 def find_latest_pth(module_dir):
@@ -72,6 +125,9 @@ def read_jarvis_config(jarvis_project):
         "keypoint_input_size": 512,
         "model_size": "medium",
         "project_name": "",
+        "num_cameras": 16,
+        "roi_cube_size": 200,
+        "grid_spacing": 2,
     }
 
     # Search for config.yaml in multiple locations:
@@ -113,6 +169,11 @@ def read_jarvis_config(jarvis_project):
         # Model size from either section
         config["model_size"] = cd_cfg.get("MODEL_SIZE", kd_cfg.get("MODEL_SIZE", "medium"))
 
+        hn_cfg = cfg.get("HYBRIDNET", {})
+        config["num_cameras"] = hn_cfg.get("NUM_CAMERAS", 16)
+        config["roi_cube_size"] = hn_cfg.get("ROI_CUBE_SIZE", 200)
+        config["grid_spacing"] = hn_cfg.get("GRID_SPACING", 2)
+
         config["_has_config"] = True
         print(f"  Config: {config['num_joints']} joints, "
               f"center={config['center_input_size']}, "
@@ -125,11 +186,33 @@ def read_jarvis_config(jarvis_project):
     return config
 
 
-def infer_output_channels_from_weights(weights_path):
-    """Infer the number of output channels from a checkpoint's final_conv1 weight."""
-    if not os.path.exists(weights_path):
+def extract_hn_efftrack_state(hn_pth):
+    """Extract the effTrack.* sub-state_dict from a HybridNet checkpoint.
+
+    CRITICAL: the 2D keypoint detector used by the volumetric 3D pipeline is the
+    effTrack baked INTO the HybridNet checkpoint (jointly trained with V2VNet),
+    NOT the standalone KeypointDetect checkpoint. V2VNet only produces accurate,
+    confident output when fed heatmaps from ITS OWN effTrack; feeding it heatmaps
+    from the standalone KeypointDetect model degrades accuracy from ~2mm to ~20mm
+    and confidence from ~0.9 to ~0.28 (verified on the vertical_cyl dataset).
+    """
+    state = torch.load(hn_pth, map_location="cpu", weights_only=True)
+    eff = {k[len("effTrack."):]: v for k, v in state.items()
+           if k.startswith("effTrack.")}
+    return eff if eff else None
+
+
+def infer_output_channels_from_weights(weights):
+    """Infer the number of output channels from a checkpoint's final_conv1 weight.
+
+    `weights` may be a path to a .pth file or an already-loaded state_dict.
+    """
+    if isinstance(weights, dict):
+        sd = weights
+    elif os.path.exists(weights):
+        sd = torch.load(weights, map_location="cpu")
+    else:
         return None
-    sd = torch.load(weights_path, map_location="cpu")
     if "final_conv1.weight" in sd:
         return sd["final_conv1.weight"].shape[0]
     return None
@@ -140,7 +223,9 @@ def build_model(mode, weights_path, config):
 
     Args:
         mode: 'center' or 'keypoint'
-        weights_path: path to .pth state_dict file
+        weights_path: path to .pth state_dict file, OR an in-memory state_dict
+            (used to source the keypoint detector from a HybridNet checkpoint's
+            internal effTrack).
         config: dict from read_jarvis_config
 
     Returns:
@@ -178,8 +263,12 @@ def build_model(mode, weights_path, config):
     model = EfficientTrackBackbone(cfg, model_size=model_size,
                                     output_channels=output_channels)
 
-    if os.path.exists(weights_path):
+    state_dict = None
+    if isinstance(weights_path, dict):
+        state_dict = weights_path
+    elif os.path.exists(weights_path):
         state_dict = torch.load(weights_path, map_location="cpu")
+    if state_dict is not None:
         result = model.load_state_dict(state_dict, strict=False)
         if result.missing_keys or result.unexpected_keys:
             print(f"  WARNING: {len(result.missing_keys)} missing, "
@@ -188,7 +277,8 @@ def build_model(mode, weights_path, config):
                 print(f"    missing: {k}")
             for k in result.unexpected_keys[:5]:
                 print(f"    unexpected: {k}")
-        print(f"  Loaded weights: {weights_path}")
+        src = "<in-memory state_dict>" if isinstance(weights_path, dict) else weights_path
+        print(f"  Loaded weights: {src}")
     else:
         print(f"  WARNING: weights not found: {weights_path}")
 
@@ -264,6 +354,73 @@ def convert_to_coreml(model, input_size, output_path, model_name):
     print(f"  Saved: {output_path} ({size_mb:.1f} MB)")
 
     return size_mb, convert_time
+
+
+def convert_v2vnet_to_coreml(hn_pth_path, config, output_path):
+    """Convert the V2VNet (3D CNN inside HybridNet) to CoreML .mlpackage.
+
+    V2VNet is the only learned network in the 3D 'hybrid3d' stage; the
+    reprojection (voxel grid) is deterministic geometry done in host C++.
+    Input grid = ROI_CUBE_SIZE/GRID_SPACING (net downsamples to half internally).
+
+    Returns (size_mb, convert_time_s, grid_in, grid_out) or None on failure.
+    """
+    import coremltools as ct
+    from jarvis.hybridnet.v2vnet import V2VNet
+
+    nj = config["num_joints"]
+    grid_in = int(config["roi_cube_size"] / config["grid_spacing"])   # e.g. 100
+    grid_out = grid_in // 2                                            # e.g. 50
+
+    print(f"  Building V2VNet({nj},{nj}), grid_in={grid_in} -> grid_out={grid_out}")
+    net = V2VNet(nj, nj)
+    state = torch.load(hn_pth_path, map_location="cpu", weights_only=True)
+    v2v = {k[len("v2vNet."):]: v for k, v in state.items()
+           if k.startswith("v2vNet.")}
+    if not v2v:
+        print(f"  ERROR: no v2vNet.* weights in {hn_pth_path}")
+        return None
+    result = net.load_state_dict(v2v, strict=False)
+    if result.missing_keys or result.unexpected_keys:
+        print(f"  WARNING: {len(result.missing_keys)} missing, "
+              f"{len(result.unexpected_keys)} unexpected V2VNet keys")
+    replace_instance_norm_3d(net)
+    net.eval()
+
+    t0 = time.time()
+    dummy = torch.randn(1, nj, grid_in, grid_in, grid_in)
+    try:
+        with torch.no_grad():
+            traced = torch.jit.trace(net, dummy)
+    except Exception as e:
+        print(f"  ERROR: V2VNet trace failed: {e}")
+        return None
+    print(f"  Traced in {time.time() - t0:.2f}s")
+
+    t0 = time.time()
+    try:
+        ml = ct.convert(
+            traced,
+            inputs=[ct.TensorType(name="vox_in", shape=(1, nj, grid_in, grid_in, grid_in))],
+            outputs=[ct.TensorType(name="vox_out")],
+            convert_to="mlprogram",
+            minimum_deployment_target=ct.target.macOS13,
+            compute_precision=ct.precision.FLOAT16,
+        )
+    except Exception as e:
+        print(f"  ERROR: V2VNet coreml conversion failed: {e}")
+        return None
+    convert_time = time.time() - t0
+    print(f"  Converted in {convert_time:.2f}s")
+
+    if os.path.exists(output_path):
+        shutil.rmtree(output_path)
+    ml.save(output_path)
+    total = sum(os.path.getsize(os.path.join(dp, f))
+                for dp, _, fns in os.walk(output_path) for f in fns)
+    size_mb = total / (1024 * 1024)
+    print(f"  Saved: {output_path} ({size_mb:.1f} MB)")
+    return size_mb, convert_time, grid_in, grid_out
 
 
 def main():
@@ -369,14 +526,50 @@ def main():
     cd_path = os.path.join(args.output_dir, "center_detect.mlpackage")
     cd_mb, cd_time = convert_to_coreml(cd_model, cd_size, cd_path, "CenterDetect")
 
-    # Convert KeypointDetect
+    # Resolve the HybridNet checkpoint first: it decides which keypoint weights
+    # the keypoint_detect.mlpackage must carry.
+    hn_models_dir = models_dir if "models_dir" in dir() else None
+    hn_pth = find_latest_hybridnet_pth(hn_models_dir) if hn_models_dir else None
+
+    # Convert KeypointDetect.
+    # For a 3D (HybridNet) project, the keypoint detector MUST be the effTrack
+    # baked into the HybridNet checkpoint — V2VNet was jointly trained with it and
+    # only produces accurate/confident output when fed that effTrack's heatmaps.
+    # The standalone KeypointDetect checkpoint yields ~20mm/conf~0.28 instead of
+    # ~2mm/conf~0.9. Fall back to the standalone checkpoint only for 2D-only
+    # projects (no HybridNet checkpoint).
     print(f"\n--- KeypointDetect ---")
-    kd_model, kd_size = build_model("keypoint", kd_pth, config)
+    kp_weights = kd_pth
+    if hn_pth:
+        hn_eff = extract_hn_efftrack_state(hn_pth)
+        if hn_eff:
+            kp_weights = hn_eff
+            print(f"  3D project: sourcing keypoint detector from HybridNet "
+                  f"checkpoint's internal effTrack: {hn_pth}")
+        else:
+            print(f"  WARNING: no effTrack.* weights in {hn_pth}; "
+                  f"falling back to standalone KeypointDetect")
+    kd_model, kd_size = build_model("keypoint", kp_weights, config)
     kd_path = os.path.join(args.output_dir, "keypoint_detect.mlpackage")
     kd_mb, kd_time = convert_to_coreml(kd_model, kd_size, kd_path, "KeypointDetect")
 
-    # Infer actual num_joints from the keypoint model
-    actual_joints = infer_output_channels_from_weights(kd_pth)
+    # Convert HybridNet V2VNet (3D CNN) if a HybridNet checkpoint is present.
+    # Optional: absence just yields a 2D-only model. Failure does not abort.
+    v2v_result = None
+    if hn_pth:
+        print(f"\n--- HybridNet V2VNet (3D) ---")
+        print(f"HybridNet checkpoint: {hn_pth}")
+        v2v_path = os.path.join(args.output_dir, "v2vnet.mlpackage")
+        try:
+            v2v_result = convert_v2vnet_to_coreml(hn_pth, config, v2v_path)
+        except Exception as e:
+            print(f"  ERROR: V2VNet conversion raised: {e}")
+            v2v_result = None
+    else:
+        print(f"\n--- No HybridNet checkpoint found; 2D-only conversion ---")
+
+    # Infer actual num_joints from the keypoint model actually converted
+    actual_joints = infer_output_channels_from_weights(kp_weights)
     num_joints = actual_joints if actual_joints else config["num_joints"]
 
     # Write/update model_info.json
@@ -413,6 +606,20 @@ def main():
         "input_bias": [0.0, 0.0, 0.0],
         "note": "TensorType input — C++ applies ImageNet normalization manually",
     }
+
+    if v2v_result is not None:
+        v2v_mb, v2v_time, grid_in, grid_out = v2v_result
+        metadata["hybridnet"] = {
+            "mlpackage_file": "v2vnet.mlpackage",
+            "mlpackage_size_mb": round(v2v_mb, 1),
+            "num_cameras": config["num_cameras"],
+            "roi_cube_size": config["roi_cube_size"],
+            "grid_spacing": config["grid_spacing"],
+            "grid_in": grid_in,      # V2VNet input voxel grid side (reprojection output)
+            "grid_out": grid_out,    # V2VNet output side = soft-argmax grid
+            "num_joints": num_joints,
+            "note": "3D CNN only; reprojection + soft-argmax done in host C++",
+        }
 
     with open(meta_path, "w") as f:
         json.dump(metadata, f, indent=2)
