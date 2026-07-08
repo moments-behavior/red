@@ -439,6 +439,14 @@ def main():
                         help="Override center detect input size (0 = use config.yaml value)")
     parser.add_argument("--num_joints", type=int, default=0,
                         help="Override number of joints (0 = use config.yaml value)")
+    parser.add_argument("--world_scale", type=float, default=1.0,
+                        help="Scale applied to the hybridnet roi_cube_size and grid_spacing "
+                             "written to model_info.json, converting the model's TRAINING world "
+                             "units into the INFERENCE calibration's units. The host reprojection "
+                             "builds the voxel grid in the calibration's units, so these MUST match. "
+                             "E.g. a fly model trained in 0.1mm units used with a millimetre DLT "
+                             "calibration -> --world_scale 0.1 (48/1 -> 4.8/0.1). grid_in/grid_out "
+                             "are dimensionless tensor sizes and are NOT scaled. Default 1.0.")
     args = parser.parse_args()
 
     # Add JARVIS to path
@@ -609,16 +617,29 @@ def main():
 
     if v2v_result is not None:
         v2v_mb, v2v_time, grid_in, grid_out = v2v_result
+        # roi_cube_size / grid_spacing define the voxel grid's PHYSICAL size. The host
+        # reprojection builds the grid in the inference calibration's units, so scale the
+        # training-unit values by --world_scale to match. grid_in/grid_out are the V2VNet
+        # tensor dimensions (dimensionless) and are deliberately left unscaled.
+        roi_scaled = config["roi_cube_size"] * args.world_scale
+        spacing_scaled = config["grid_spacing"] * args.world_scale
+        if args.world_scale != 1.0:
+            print(f"  world_scale={args.world_scale}: roi_cube_size "
+                  f"{config['roi_cube_size']} -> {roi_scaled}, grid_spacing "
+                  f"{config['grid_spacing']} -> {spacing_scaled} "
+                  f"(grid_in={grid_in}, grid_out={grid_out} unchanged)")
         metadata["hybridnet"] = {
             "mlpackage_file": "v2vnet.mlpackage",
             "mlpackage_size_mb": round(v2v_mb, 1),
             "num_cameras": config["num_cameras"],
-            "roi_cube_size": config["roi_cube_size"],
-            "grid_spacing": config["grid_spacing"],
+            "roi_cube_size": roi_scaled,     # physical, in inference-calibration units
+            "grid_spacing": spacing_scaled,  # physical, in inference-calibration units
             "grid_in": grid_in,      # V2VNet input voxel grid side (reprojection output)
             "grid_out": grid_out,    # V2VNet output side = soft-argmax grid
             "num_joints": num_joints,
-            "note": "3D CNN only; reprojection + soft-argmax done in host C++",
+            "world_scale": args.world_scale,  # training-units -> calibration-units factor
+            "note": "3D CNN only; reprojection + soft-argmax done in host C++. "
+                    "roi_cube_size/grid_spacing are physical (inference-calibration units).",
         }
 
     with open(meta_path, "w") as f:
