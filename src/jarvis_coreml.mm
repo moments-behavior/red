@@ -630,7 +630,7 @@ static bool jarvis_coreml_predict_hybridnet_3d(
     // the center-stage cost. Pick ≤kCenterMaxCams evenly-spaced camera indices.
     // Preprocessing (resize 7MP→320² + normalize) is per-camera independent →
     // run in parallel across cores; the ANE predicts run serially.
-    constexpr int kCenterMaxCams = 8;
+    const int kCenterMaxCams = std::max(2, s.hn_center_cams);   // configurable
     const int n_center = std::min(NC, kCenterMaxCams);
     std::vector<int> ccam(n_center);
     for (int i = 0; i < n_center; ++i) ccam[i] = (int)((long)i * NC / n_center);

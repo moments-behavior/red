@@ -1038,6 +1038,26 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
                               "buffer. Same output; faster on long videos. Off = the\n"
                               "original chunked path.");
 
+#ifdef __APPLE__
+        // HybridNet 3D: how many cameras feed CenterDetect (crop-ROI localization).
+        // Keypoint detection always uses all cameras; fewer center cams ≈ halves
+        // the center stage at negligible accuracy cost. Persisted in user settings.
+        if (jarvis_coreml.hybridnet) {
+            int max_cams = std::max(2, jarvis_coreml.hn_num_cameras);
+            int cams = std::clamp(ctx.user_settings.jarvis_center_cams, 2, max_cams);
+            ImGui::SetNextItemWidth(160);
+            if (ImGui::SliderInt("Center cameras", &cams, 2, max_cams)) {
+                ctx.user_settings.jarvis_center_cams = cams;
+                jarvis_coreml.hn_center_cams = cams;
+                save_user_settings(ctx.user_settings);
+            }
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Cameras used to locate the crop ROI (CenterDetect).\n"
+                                  "Keypoint detection always uses all cameras. Fewer =\n"
+                                  "faster center stage; %d = use all. Default 8.", max_cams);
+        }
+#endif
+
         bool can_predict = jarvis.loaded;
 #ifdef __APPLE__
         can_predict = can_predict || jarvis_coreml.loaded;

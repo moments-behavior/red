@@ -1979,6 +1979,11 @@ int main(int argc, char **argv) {
                 auto &bp = win.jarvis_predict;
                 using Phase = JarvisPredictState::BatchPhase;
                 int buf_size = (int)scene->size_of_buffer;
+#ifdef __APPLE__
+                // Keep the live HybridNet center-camera count in sync with the
+                // persisted user setting (predict clamps to [2, num_cameras]).
+                jarvis_coreml_state.hn_center_cams = user_settings.jarvis_center_cams;
+#endif
 
                 // --- Initialize ---
                 if (bp.batch_requested && !bp.batch_running) {

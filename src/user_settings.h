@@ -36,6 +36,12 @@ struct UserSettings {
     // (buffers are allocated at startup).
     bool use_cpu_buffer = true;
 
+    // HybridNet 3D prediction: number of (spread) cameras used for CenterDetect
+    // to locate the crop ROI. Keypoint detection always uses all cameras; fewer
+    // center cams ≈ halves the center stage at negligible accuracy cost. Clamped
+    // to [2, num_cameras] at use; set == num_cameras to use all.
+    int jarvis_center_cams = 8;
+
     // Export defaults
     float jarvis_margin = 50.0f;
     float jarvis_train_ratio = 0.9f;
@@ -76,6 +82,7 @@ inline void to_json(nlohmann::json &j, const UserSettings &s) {
         {"default_realtime_playback", s.default_realtime_playback},
         {"default_buffer_size", s.default_buffer_size},
         {"use_cpu_buffer", s.use_cpu_buffer},
+        {"jarvis_center_cams", s.jarvis_center_cams},
         {"jarvis_margin", s.jarvis_margin},
         {"jarvis_train_ratio", s.jarvis_train_ratio},
         {"jarvis_seed", s.jarvis_seed},
@@ -97,6 +104,7 @@ inline void from_json(const nlohmann::json &j, UserSettings &s) {
     s.default_realtime_playback = j.value("default_realtime_playback", true);
     s.default_buffer_size = j.value("default_buffer_size", 64);
     s.use_cpu_buffer = j.value("use_cpu_buffer", true);
+    s.jarvis_center_cams = j.value("jarvis_center_cams", 8);
     s.jarvis_margin = j.value("jarvis_margin", 50.0f);
     s.jarvis_train_ratio = j.value("jarvis_train_ratio", 0.9f);
     s.jarvis_seed = j.value("jarvis_seed", 42);

@@ -50,6 +50,10 @@ struct JarvisCoreMLState {
     float hn_grid_spacing_mm = 2.0f;
     int   hn_grid_in        = 100;   // reprojected voxel grid (roi/spacing)
     int   hn_grid_out       = 50;    // V2VNet output grid
+    // Max cameras used for CenterDetect (crop-ROI localization only; keypoint
+    // detection uses all). Mirrored from UserSettings.jarvis_center_cams;
+    // clamped to [2, hn_num_cameras] at use.
+    int   hn_center_cams    = 8;
 
     // Persistent HybridNet 3D scratch, allocated once at load (avoids per-frame
     // 385MB heatmap + 96MB h3d/V2V-input churn). Opaque to keep this header ObjC-
