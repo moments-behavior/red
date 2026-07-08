@@ -5,8 +5,10 @@
 #import <CoreML/CoreML.h>
 #import <CoreVideo/CoreVideo.h>
 #import <Accelerate/Accelerate.h>
+#include <dispatch/dispatch.h>
 #include "jarvis_coreml.h"
-#include "jarvis_hn_reproject.h"   // validated host reprojection + soft-argmax
+#include "jarvis_hn_reproject.h"   // validated host reprojection + soft-argmax (CPU fallback)
+#include "jarvis_hn_metal.h"       // GPU reprojection (bit-exact port of hn_reproject)
 #include "red_math.h"              // undistortPoint, triangulatePoints, projectPointR
 #include "skeleton.h"
 #include "json.hpp"
@@ -344,6 +346,37 @@ bool jarvis_coreml_init(JarvisCoreMLState &s, const std::string &model_dir,
                 }
             }
         } catch (const std::exception &) { /* keep defaults */ }
+
+        // Allocate the GPU reprojection + persistent scratch once. The heatmap
+        // and h3d buffers live in shared memory and are reused every frame; the
+        // heatmap buffer is zeroed once here so its 1-px pad borders stay 0
+        // (the interior is fully overwritten each frame). If Metal init fails we
+        // fall back to the CPU hn_reproject (hn_metal stays null).
+        const int hs = s.keypoint_input_size / 2 + 2;   // padded heatmap side (354)
+        HNReproParams hp;
+        hp.num_cameras = s.hn_num_cameras;
+        hp.num_joints  = s.num_joints;
+        hp.grid_full   = s.hn_grid_in;
+        hp.grid_spacing = s.hn_grid_spacing_mm;
+        hp.roi_cube    = s.hn_roi_cube_mm;
+        hp.heatmap_size = hs;
+        auto *m = new HNMetalReproject();
+        std::string merr;
+        if (m->init(hp, &merr)) {
+            memset(m->heatmaps_ptr(), 0,
+                   (size_t)hp.num_cameras * hp.num_joints * hs * hs * sizeof(float));
+            s.hn_metal = m;
+            // Persistent V2V input (1,NJ,gin,gin,gin) — reused every frame.
+            NSError *ve = nil;
+            MLMultiArray *vin = [[MLMultiArray alloc]
+                initWithShape:@[@1, @(s.num_joints), @(s.hn_grid_in), @(s.hn_grid_in), @(s.hn_grid_in)]
+                dataType:MLMultiArrayDataTypeFloat32 error:&ve];
+            if (vin) s.v2v_input = (__bridge_retained void *)vin;
+        } else {
+            delete m;
+            fprintf(stderr, "[HybridNet] Metal reprojection unavailable (%s); "
+                            "using CPU fallback\n", merr.c_str());
+        }
     }
 
     s.loaded = true;
@@ -526,6 +559,14 @@ void jarvis_coreml_cleanup(JarvisCoreMLState &s) {
         CFRelease(s.v2v_model);
         s.v2v_model = nullptr;
     }
+    if (s.hn_metal) {
+        delete (HNMetalReproject *)s.hn_metal;
+        s.hn_metal = nullptr;
+    }
+    if (s.v2v_input) {
+        CFRelease(s.v2v_input);   // balances __bridge_retained
+        s.v2v_input = nullptr;
+    }
     s.hybridnet = false;
     s.loaded = false;
 }
@@ -573,40 +614,84 @@ static bool jarvis_coreml_predict_hybridnet_3d(
     MLModel *v2v_model = (__bridge MLModel *)s.v2v_model;
     auto t0 = std::chrono::steady_clock::now();
 
-    // ── STAGE 1+2: CenterDetect per cam → triangulate center3D ──────────
+    // Env-gated stage profiling (HN_TIMING=1): separates the irreducible ANE
+    // predict time from overlappable host preprocessing. now()/dt in ms.
+    static const bool hn_timing = getenv("HN_TIMING") != nullptr;
+    auto now = [] { return std::chrono::steady_clock::now(); };
+    auto dt = [](std::chrono::steady_clock::time_point a,
+                 std::chrono::steady_clock::time_point b) {
+        return std::chrono::duration<double, std::milli>(b - a).count();
+    };
+    double ms_cd_pre = 0, ms_cd_pred = 0, ms_kp_pre = 0, ms_kp_pred = 0, ms_kp_copy = 0;
+
+    // ── STAGE 1+2: CenterDetect → triangulate center3D ──────────────────
+    // center3D only locates the 704² crop ROI (keypoint detection still runs on
+    // ALL cameras), so a spatially-spread subset triangulates it fine at ~half
+    // the center-stage cost. Pick ≤kCenterMaxCams evenly-spaced camera indices.
+    // Preprocessing (resize 7MP→320² + normalize) is per-camera independent →
+    // run in parallel across cores; the ANE predicts run serially.
+    constexpr int kCenterMaxCams = 8;
+    const int n_center = std::min(NC, kCenterMaxCams);
+    std::vector<int> ccam(n_center);
+    for (int i = 0; i < n_center; ++i) ccam[i] = (int)((long)i * NC / n_center);
+
     std::vector<Eigen::Vector2d> center_2d;
     std::vector<Eigen::Matrix<double, 3, 4>> center_Ps;
-    for (int c = 0; c < NC; ++c) {
-        @autoreleasepool {
-            CVPixelBufferRef rz = resize_pixelbuf(pbs[c], C, C);
-            if (!rz) continue;
-            MLMultiArray *tensor = pixelbuf_to_normalized_array(rz, C, C);
-            CVPixelBufferRelease(rz);
-            if (!tensor) continue;
-            NSError *e = nil;
-            id<MLFeatureProvider> in = [[MLDictionaryFeatureProvider alloc]
-                initWithDictionary:@{@"image":[MLFeatureValue featureValueWithMultiArray:tensor]} error:&e];
-            if (!in) continue;
-            id<MLFeatureProvider> out = [cd_model predictionFromFeatures:in error:&e];
-            if (!out) continue;
-            MLMultiArray *hm = largest_4d_output(out);
-            if (!hm) continue;
-            std::vector<float> plane;
-            copy_mlarray_contiguous(hm, plane);           // (1,1,160,160) → 160*160
-            int hw = [hm.shape[3] intValue];
-            int hh = [hm.shape[2] intValue];
-            int best = 0; float bv = plane[0];
-            for (int i = 1; i < hh * hw; ++i) if (plane[i] > bv) { bv = plane[i]; best = i; }
-            if (bv < kCenterThresh) continue;
-            double px = best % hw, py = best / hw;
-            double nx = (px + 0.5) * widths[c]  / (double)Hcen_hi;
-            double ny = (py + 0.5) * heights[c] / (double)Hcen_hi;
-            Eigen::Vector2d und = cams[c].telecentric
-                ? red_math::undistortPointTelecentric({nx, ny}, cams[c].k, cams[c].dist_coeffs, cams[c].dist_center)
-                : red_math::undistortPoint({nx, ny}, cams[c].k, cams[c].dist_coeffs);
-            center_2d.push_back(und);
-            center_Ps.push_back(cams[c].projection_mat);
+    dispatch_queue_t q = dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0);
+    {
+        auto tp = now();
+        std::vector<void *> cd_in(NC, nullptr);
+        void **cdp = cd_in.data();
+        const int *ccp = ccam.data();
+        const CVPixelBufferRef *pbp = pbs.data();
+        const int Csz = C;
+        dispatch_apply(n_center, q, ^(size_t ii) {
+            int c = ccp[ii];
+            @autoreleasepool {
+                if (!pbp[c]) return;
+                CVPixelBufferRef rz = resize_pixelbuf(pbp[c], Csz, Csz);
+                if (!rz) return;
+                MLMultiArray *tensor = pixelbuf_to_normalized_array(rz, Csz, Csz);
+                CVPixelBufferRelease(rz);
+                if (!tensor) return;
+                NSError *e = nil;
+                id<MLFeatureProvider> in = [[MLDictionaryFeatureProvider alloc]
+                    initWithDictionary:@{@"image":[MLFeatureValue featureValueWithMultiArray:tensor]} error:&e];
+                if (in) cdp[c] = (__bridge_retained void *)in;
+            }
+        });
+        ms_cd_pre = dt(tp, now());
+
+        auto tq = now();
+        for (int ii = 0; ii < n_center; ++ii) {
+            int c = ccam[ii];
+            @autoreleasepool {
+                if (!cd_in[c]) continue;
+                id<MLFeatureProvider> in = (__bridge_transfer id<MLFeatureProvider>)cd_in[c];
+                cd_in[c] = nullptr;
+                NSError *e = nil;
+                id<MLFeatureProvider> out = [cd_model predictionFromFeatures:in error:&e];
+                if (!out) continue;
+                MLMultiArray *hm = largest_4d_output(out);
+                if (!hm) continue;
+                std::vector<float> plane;
+                copy_mlarray_contiguous(hm, plane);           // (1,1,160,160) → 160*160
+                int hw = [hm.shape[3] intValue];
+                int hh = [hm.shape[2] intValue];
+                int best = 0; float bv = plane[0];
+                for (int i = 1; i < hh * hw; ++i) if (plane[i] > bv) { bv = plane[i]; best = i; }
+                if (bv < kCenterThresh) continue;
+                double px = best % hw, py = best / hw;
+                double nx = (px + 0.5) * widths[c]  / (double)Hcen_hi;
+                double ny = (py + 0.5) * heights[c] / (double)Hcen_hi;
+                Eigen::Vector2d und = cams[c].telecentric
+                    ? red_math::undistortPointTelecentric({nx, ny}, cams[c].k, cams[c].dist_coeffs, cams[c].dist_center)
+                    : red_math::undistortPoint({nx, ny}, cams[c].k, cams[c].dist_coeffs);
+                center_2d.push_back(und);
+                center_Ps.push_back(cams[c].projection_mat);
+            }
         }
+        ms_cd_pred = dt(tq, now());
     }
     if (center_2d.size() < 2) {
         s.status = "HybridNet 3D: <2 cameras detected the animal center";
@@ -616,41 +701,98 @@ static bool jarvis_coreml_predict_hybridnet_3d(
     const float c3[3] = {(float)center3D[0], (float)center3D[1], (float)center3D[2]};
 
     // ── STAGE 3+4: centerHM → crop → KeypointDetect heatmaps ────────────
-    std::vector<float> heatmaps((size_t)NC * NJ * hs * hs, 0.0f);   // cam-major, padded 354²
+    // Write directly into the persistent, cam-major, 1-px-padded (354²) heatmap
+    // buffer. With Metal it is the GPU's shared buffer (borders pre-zeroed once
+    // at load, interior fully overwritten each frame); otherwise a per-frame
+    // zeroed vector. A camera that fails prediction has its slot zeroed so no
+    // stale data leaks across frames.
+    HNMetalReproject *metal = (HNMetalReproject *)s.hn_metal;
+    const size_t cam_slot = (size_t)NJ * hs * hs;
+    std::vector<float> heatmaps_cpu;
+    float *heatmaps;
+    if (metal) {
+        heatmaps = metal->heatmaps_ptr();
+    } else {
+        heatmaps_cpu.assign((size_t)NC * cam_slot, 0.0f);
+        heatmaps = heatmaps_cpu.data();
+    }
     std::vector<int> cHMx(NC), cHMy(NC);
-    for (int c = 0; c < NC; ++c) {
-        @autoreleasepool {
-            Eigen::Vector2d cHM = cams[c].telecentric
-                ? red_math::projectPointTelecentric(center3D, cams[c].projection_mat, cams[c].k, cams[c].dist_coeffs, cams[c].dist_center)
-                : red_math::projectPointR(center3D, cams[c].r, cams[c].tvec, cams[c].k, cams[c].dist_coeffs);
-            int cx = std::clamp((int)std::lround(cHM[0]), bbox_hw, widths[c]  - bbox_hw);
-            int cy = std::clamp((int)std::lround(cHM[1]), bbox_hw, heights[c] - bbox_hw);
-            cHMx[c] = cx; cHMy[c] = cy;
-            CVPixelBufferRef crop = crop_pixelbuf(pbs[c], cx, cy, B);
-            if (!crop) continue;
-            MLMultiArray *tensor = pixelbuf_to_normalized_array(crop, B, B);
-            CVPixelBufferRelease(crop);
-            if (!tensor) continue;
-            NSError *e = nil;
-            id<MLFeatureProvider> in = [[MLDictionaryFeatureProvider alloc]
-                initWithDictionary:@{@"image":[MLFeatureValue featureValueWithMultiArray:tensor]} error:&e];
-            if (!in) continue;
-            id<MLFeatureProvider> out = [kd_model predictionFromFeatures:in error:&e];
-            if (!out) continue;
-            MLMultiArray *hm = largest_4d_output(out);       // (1,24,352,352)
-            if (!hm) continue;
-            std::vector<float> kh;
-            copy_mlarray_contiguous(hm, kh);                 // 24*352*352 contiguous
-            int kh_h = [hm.shape[2] intValue], kh_w = [hm.shape[3] intValue];
-            // write into the 1-px padded (NJ,354,354) slot for camera c
-            float *dst = heatmaps.data() + (size_t)c * NJ * hs * hs;
-            for (int j = 0; j < NJ; ++j) {
-                const float *src = kh.data() + (size_t)j * kh_h * kh_w;
-                float *djp = dst + (size_t)j * hs * hs;
-                for (int y = 0; y < kh_h; ++y)
-                    for (int x = 0; x < kh_w; ++x)
-                        djp[(y + 1) * hs + (x + 1)] = src[y * kh_w + x];
+    // Parallel preprocess: per-cam centerHM → crop (704²) → normalize → provider.
+    {
+        auto tp = now();
+        std::vector<void *> kp_in(NC, nullptr);
+        void **kpp = kp_in.data();
+        int *cxp = cHMx.data(), *cyp = cHMy.data();
+        const CVPixelBufferRef *pbp = pbs.data();
+        const CameraParams *camp = cams.data();
+        const int *wp = widths.data(), *hp = heights.data();
+        const int Bsz = B, bhw = bbox_hw;
+        dispatch_apply(NC, q, ^(size_t c) {
+            @autoreleasepool {
+                Eigen::Vector2d cHM = camp[c].telecentric
+                    ? red_math::projectPointTelecentric(center3D, camp[c].projection_mat, camp[c].k, camp[c].dist_coeffs, camp[c].dist_center)
+                    : red_math::projectPointR(center3D, camp[c].r, camp[c].tvec, camp[c].k, camp[c].dist_coeffs);
+                int cx = std::clamp((int)std::lround(cHM[0]), bhw, wp[c] - bhw);
+                int cy = std::clamp((int)std::lround(cHM[1]), bhw, hp[c] - bhw);
+                cxp[c] = cx; cyp[c] = cy;
+                if (!pbp[c]) return;
+                CVPixelBufferRef crop = crop_pixelbuf(pbp[c], cx, cy, Bsz);
+                if (!crop) return;
+                MLMultiArray *tensor = pixelbuf_to_normalized_array(crop, Bsz, Bsz);
+                CVPixelBufferRelease(crop);
+                if (!tensor) return;
+                NSError *e = nil;
+                id<MLFeatureProvider> in = [[MLDictionaryFeatureProvider alloc]
+                    initWithDictionary:@{@"image":[MLFeatureValue featureValueWithMultiArray:tensor]} error:&e];
+                if (in) kpp[c] = (__bridge_retained void *)in;
             }
+        });
+        ms_kp_pre = dt(tp, now());
+
+        // Serial predict + copy heatmaps into the (persistent) buffer.
+        for (int c = 0; c < NC; ++c) {
+            bool ok = false;
+            @autoreleasepool {
+                if (kp_in[c]) {
+                    id<MLFeatureProvider> in = (__bridge_transfer id<MLFeatureProvider>)kp_in[c];
+                    kp_in[c] = nullptr;
+                    NSError *e = nil;
+                    auto tb = now();
+                    id<MLFeatureProvider> out = [kd_model predictionFromFeatures:in error:&e];
+                    ms_kp_pred += dt(tb, now());
+                    MLMultiArray *hm = out ? largest_4d_output(out) : nil;   // (1,24,352,352)
+                    if (hm) {
+                        // Copy the (stride-padded) CoreML heatmap straight into the
+                        // 1-px-padded (NJ,354,354) slot for camera c — a single
+                        // stride-aware pass (no contiguous intermediate). Values are
+                        // bit-identical to copy_mlarray_contiguous.
+                        int kh_h = [hm.shape[2] intValue], kh_w = [hm.shape[3] intValue];
+                        long sj = [hm.strides[1] longValue], sy = [hm.strides[2] longValue],
+                             sx = [hm.strides[3] longValue];
+                        const bool f16 = (hm.dataType == MLMultiArrayDataTypeFloat16);
+                        const float  *pf = f16 ? nullptr : (const float *)hm.dataPointer;
+                        const __fp16 *ph = f16 ? (const __fp16 *)hm.dataPointer : nullptr;
+                        float *dst = heatmaps + (size_t)c * cam_slot;
+                        auto td = now();
+                        for (int j = 0; j < NJ; ++j) {
+                            float *djp = dst + (size_t)j * hs * hs;
+                            long jb = (long)j * sj;
+                            for (int y = 0; y < kh_h; ++y) {
+                                long yb = jb + (long)y * sy;
+                                float *row = djp + (size_t)(y + 1) * hs + 1;
+                                if (f16) for (int x = 0; x < kh_w; ++x) row[x] = (float)ph[yb + (long)x * sx];
+                                else     for (int x = 0; x < kh_w; ++x) row[x] = pf[yb + (long)x * sx];
+                            }
+                        }
+                        ms_kp_copy += dt(td, now());
+                        ok = true;
+                    }
+                }
+            }
+            // Persistent Metal buffer: clear a failed camera's slot (rare) so the
+            // previous frame's heatmaps don't leak. (CPU vector is already zeroed.)
+            if (metal && !ok)
+                memset(heatmaps + (size_t)c * cam_slot, 0, cam_slot * sizeof(float));
         }
     }
 
@@ -671,25 +813,47 @@ static bool jarvis_coreml_predict_hybridnet_3d(
         cHMf[(size_t)c * 2 + 1] = (float)cHMy[c];
     }
 
-    // ── STAGE 6a: host reprojection → voxel volume (NJ,100³) ────────────
+    // ── STAGE 6a: reprojection → voxel volume (NJ,100³) ─────────────────
+    // GPU (Metal) when available — bit-identical to the CPU hn_reproject,
+    // ~10ms vs ~450ms. Falls back to the validated host path otherwise.
     HNReproParams P;
     P.num_cameras = NC; P.num_joints = NJ; P.grid_full = gin;
     P.grid_spacing = s.hn_grid_spacing_mm; P.roi_cube = s.hn_roi_cube_mm; P.heatmap_size = hs;
-    std::vector<float> h3d((size_t)NJ * gin * gin * gin);
-    hn_reproject(P, camMats.data(), intrMats.data(), distC.data(),
-                 c3, cHMf.data(), heatmaps.data(), h3d.data());
+    const size_t vf = (size_t)NJ * gin * gin * gin;
+    const float *h3d;
+    std::vector<float> h3d_cpu;
+    auto tr0 = now();
+    if (metal) {
+        if (!metal->reproject(camMats.data(), intrMats.data(), distC.data(),
+                              c3, cHMf.data())) {
+            s.status = "HybridNet 3D: Metal reprojection failed"; return false;
+        }
+        h3d = metal->h3d_ptr();
+    } else {
+        h3d_cpu.assign(vf, 0.0f);
+        hn_reproject(P, camMats.data(), intrMats.data(), distC.data(),
+                     c3, cHMf.data(), heatmaps, h3d_cpu.data());
+        h3d = h3d_cpu.data();
+    }
+    double ms_repro = dt(tr0, now());
 
     // ── STAGE 6b: V2VNet (CoreML, Apple GPU) ────────────────────────────
     std::vector<float> vout;
     {
         auto th = std::chrono::steady_clock::now();
         NSError *e = nil;
-        MLMultiArray *vin = [[MLMultiArray alloc]
-            initWithShape:@[@1, @(NJ), @(gin), @(gin), @(gin)]
-            dataType:MLMultiArrayDataTypeFloat32 error:&e];
-        if (!vin) { s.status = "HybridNet 3D: V2V input alloc failed"; return false; }
+        MLMultiArray *vin = s.v2v_input ? (__bridge MLMultiArray *)s.v2v_input : nil;
+        if (!vin) {   // one-off fallback if the persistent input wasn't allocated
+            vin = [[MLMultiArray alloc]
+                initWithShape:@[@1, @(NJ), @(gin), @(gin), @(gin)]
+                dataType:MLMultiArrayDataTypeFloat32 error:&e];
+            if (!vin) { s.status = "HybridNet 3D: V2V input alloc failed"; return false; }
+        }
         float *dp = (float *)vin.dataPointer;               // (1,NJ,100,100,100) is contiguous
-        for (size_t i = 0; i < h3d.size(); ++i) dp[i] = h3d[i] / 255.0f;
+        // Normalize h3d for V2V. vsdiv (true divide) matches the original
+        // scalar `h3d[i] / 255.0f` bit-for-bit (vsmul by 1/255 would not).
+        float div255 = 255.0f;
+        vDSP_vsdiv(h3d, 1, &div255, dp, 1, (vDSP_Length)vf);
         id<MLFeatureProvider> in = [[MLDictionaryFeatureProvider alloc]
             initWithDictionary:@{@"vox_in":[MLFeatureValue featureValueWithMultiArray:vin]} error:&e];
         if (!in) { s.status = "HybridNet 3D: V2V input build failed"; return false; }
@@ -734,6 +898,16 @@ static bool jarvis_coreml_predict_hybridnet_3d(
 
     s.last_total_ms = std::chrono::duration<float, std::milli>(
         std::chrono::steady_clock::now() - t0).count();
+    if (hn_timing) {
+        fprintf(stderr,
+            "[HN_TIMING] total=%.0f | center: pre=%.0f pred=%.0f | "
+            "keypoint: pre=%.0f pred=%.0f copy=%.0f | reproj=%.0f v2v=%.0f | "
+            "rest=%.0f\n",
+            s.last_total_ms, ms_cd_pre, ms_cd_pred, ms_kp_pre, ms_kp_pred, ms_kp_copy,
+            ms_repro, s.last_hybrid3d_ms,
+            s.last_total_ms - ms_cd_pre - ms_cd_pred - ms_kp_pre - ms_kp_pred -
+                ms_kp_copy - ms_repro - s.last_hybrid3d_ms);
+    }
     s.status = "HybridNet 3D: " + std::to_string(NJ) + " joints, " +
                std::to_string((int)center_2d.size()) + "/" + std::to_string(NC) +
                " cams, " + std::to_string((int)s.last_total_ms) + " ms";

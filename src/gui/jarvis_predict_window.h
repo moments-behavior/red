@@ -47,8 +47,9 @@ struct JarvisPredictState {
     // Set by "Predict Current Frame" button; consumed by main loop
     bool predict_requested = false;
 
-    // Predict from: false = Shown (visible cameras only), true = All cameras
-    bool predict_from_all = false;
+    // Predict from: false = Shown (visible cameras only), true = All cameras.
+    // Default to All — HybridNet 3D needs every camera, and "Shown" is rarely useful.
+    bool predict_from_all = true;
 
     // Batch prediction — non-blocking state machine (one frame per render iteration)
     enum class BatchPhase {

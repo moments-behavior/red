@@ -51,6 +51,13 @@ struct JarvisCoreMLState {
     int   hn_grid_in        = 100;   // reprojected voxel grid (roi/spacing)
     int   hn_grid_out       = 50;    // V2VNet output grid
 
+    // Persistent HybridNet 3D scratch, allocated once at load (avoids per-frame
+    // 385MB heatmap + 96MB h3d/V2V-input churn). Opaque to keep this header ObjC-
+    // free: hn_metal is HNMetalReproject* (GPU reprojection, its heatmaps/h3d
+    // buffers reused every frame); v2v_input is a retained MLMultiArray*.
+    void *hn_metal   = nullptr;   // HNMetalReproject* (nullptr → CPU fallback)
+    void *v2v_input  = nullptr;   // MLMultiArray* (1,NJ,gin,gin,gin), reused
+
     // Timing (per jarvis_coreml_predict_frame call)
     float last_center_ms = 0;
     float last_keypoint_ms = 0;

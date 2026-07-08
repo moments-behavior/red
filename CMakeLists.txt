@@ -1,5 +1,14 @@
 cmake_minimum_required(VERSION 3.18...3.31)
 
+# Default to an optimized build. Without this the build type is empty and the
+# compiler runs at -O0, which cripples hot host loops (e.g. the HybridNet
+# reprojection: 3200ms at -O0 vs ~450ms at -O3). Respects an explicit
+# -DCMAKE_BUILD_TYPE=... and multi-config generators.
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING
+        "Build type (Debug/Release/RelWithDebInfo/MinSizeRel)" FORCE)
+endif()
+
 if(APPLE)
     project(red LANGUAGES CXX OBJCXX)
 
