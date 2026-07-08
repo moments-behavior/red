@@ -13,15 +13,16 @@
 # cd anyway for exact parity.)
 #
 # Usage:
-#   ./make_mac_app.sh              # create ~/Desktop/Red.app
-#   ./make_mac_app.sh /Applications   # or install to /Applications, ~/Applications, etc.
+#   ./make_mac_app.sh                 # create ~/Applications/Red.app (shows in Launchpad/Spotlight)
+#   ./make_mac_app.sh ~/Desktop       # or anywhere else (/Applications needs admin)
 set -euo pipefail
 
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN="$SRC_DIR/release/red"
 ICON_SRC="$SRC_DIR/icon.png"
-DEST_DIR="${1:-$HOME/Desktop}"
+DEST_DIR="${1:-$HOME/Applications}"
 APP="$DEST_DIR/Red.app"
+mkdir -p "$DEST_DIR"
 
 [[ -x "$BIN" ]]      || { echo "ERROR: $BIN not found/executable. Build first: cmake --build \"$SRC_DIR/release\" -j"; exit 1; }
 [[ -f "$ICON_SRC" ]] || { echo "ERROR: $ICON_SRC not found"; exit 1; }
