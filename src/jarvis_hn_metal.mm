@@ -147,7 +147,7 @@ struct HNConstGPU { float step; float hsm1; float hsm2; float inv_nc; int halfg;
 @property (nonatomic, strong) id<MTLBuffer> cHM;        // NC*2
 @property (nonatomic, strong) id<MTLBuffer> val1;       // NC*GH³
 @property (nonatomic, strong) id<MTLBuffer> val2;       // NC*GH³
-@property (nonatomic, strong) id<MTLBuffer> heatmaps;   // NC*NJ*HS*HS (fp16)
+@property (nonatomic, strong) id<MTLBuffer> heatmaps;   // NC*NJ*HS*HS (fp32)
 @property (nonatomic, strong) id<MTLBuffer> h3d;        // NJ*GF³
 @property (nonatomic, assign) HNConstGPU consts;
 @property (nonatomic, assign) HNReproParams params;
@@ -225,7 +225,8 @@ bool HNMetalReproject::init(const HNReproParams &P, std::string *err) {
         o.val2     = mk_shared(dev, (size_t)NC * vh);
         o.heatmaps = mk_shared(dev, (size_t)NC * NJ * hs * hs);
         o.h3d      = mk_shared(dev, (size_t)NJ * vf);
-        if (!o.queue || !o.camMats || !o.heatmaps || !o.h3d)
+        if (!o.queue || !o.camMats || !o.intrMats || !o.distC || !o.center3D ||
+            !o.cHM || !o.val1 || !o.val2 || !o.heatmaps || !o.h3d)
             return fail("buffer/queue alloc failed");
 
         HNConstGPU C;

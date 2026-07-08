@@ -1998,6 +1998,8 @@ int main(int argc, char **argv) {
                     bp.batch_seek_ms = 0;
                     bp.batch_decode_ms = 0;
                     bp.batch_chunks = 0;
+                    bp.batch_cancel_requested = false;
+                    bp.batch_cancelled = false;
                     bp.batch_t0 = std::chrono::steady_clock::now();
 #ifdef __APPLE__
                     bp.batch_phase = bp.batch_streaming ? Phase::STREAM_SEEK : Phase::SEEK;
@@ -2012,6 +2014,13 @@ int main(int argc, char **argv) {
 
                 // --- Per-frame state machine tick ---
                 if (bp.batch_running && jarvis_any_loaded && scene->num_cams > 0) {
+                    // Cancel is routed here so cleanup (decoder stop) runs via
+                    // FINISHING rather than being skipped by a bare running=false.
+                    if (bp.batch_cancel_requested) {
+                        bp.batch_cancel_requested = false;
+                        bp.batch_cancelled = true;
+                        bp.batch_phase = Phase::FINISHING;
+                    }
                     switch (bp.batch_phase) {
 
                     case Phase::SEEK: {
@@ -2291,6 +2300,16 @@ int main(int argc, char **argv) {
                             int frame = bp.batch_current;
                             int slot = bp.stream_read_head;
 
+                            // Stop cleanly at end of video (total_num_frame is
+                            // INT_MAX until a decoder hits EOF, then the real
+                            // count) — avoids the ~15s not-ready timeout below.
+                            if (frame >= dc_context->total_num_frame) {
+                                printf("[Batch] Reached end of video (%d frames) "
+                                       "at frame %d\n", dc_context->total_num_frame, frame);
+                                bp.batch_phase = Phase::FINISHING;
+                                break;
+                            }
+
                             // Wait until every camera has THIS frame in the slot.
                             // available_to_write is published last by the decoder,
                             // so false ⇒ pixel_buffer + frame_number are valid;
@@ -2386,7 +2405,7 @@ int main(int argc, char **argv) {
                         // the visible camera on the next interaction).
                         for (auto &[key, value] : window_need_decoding)
                             value.store(false);
-                        bp.batch_status = "Complete: " +
+                        bp.batch_status = (bp.batch_cancelled ? "Cancelled: " : "Complete: ") +
                             std::to_string(bp.batch_completed) + " frames in " +
                             std::to_string((int)(total_ms / 1000.0f)) + "s (" +
                             std::to_string((int)(total_ms / std::max(1, bp.batch_completed))) +
@@ -2394,6 +2413,7 @@ int main(int argc, char **argv) {
                         if (bp.batch_skipped > 0)
                             bp.batch_status += " (" + std::to_string(bp.batch_skipped) +
                                 " skipped)";
+                        bp.batch_cancelled = false;
                         printf("[Batch] %s\n", bp.batch_status.c_str());
                         // I/O breakdown: predict is the useful work; seek+decode
                         // is per-chunk overhead the 370ms/frame number hides.

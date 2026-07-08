@@ -67,6 +67,8 @@ struct JarvisPredictState {
     };
     bool batch_running = false;
     bool batch_requested = false;
+    bool batch_cancel_requested = false;  // Cancel button → routed through FINISHING cleanup
+    bool batch_cancelled = false;          // status flag for the FINISHING message
     int batch_start = 0;
     int batch_end = 0;
     int batch_step = 4;
@@ -1094,9 +1096,9 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
                 ImGui::TextDisabled("(%d skipped — already have manual labels)",
                                     state.batch_skipped);
             if (ImGui::Button("Cancel Batch")) {
-                state.batch_running = false;
-                state.batch_status = "Cancelled at frame " +
-                    std::to_string(state.batch_current);
+                // Route through the state machine so FINISHING runs its cleanup
+                // (stop decoders, release state) instead of leaving them running.
+                state.batch_cancel_requested = true;
             }
         } else {
             ImGui::SetNextItemWidth(120);

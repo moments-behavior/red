@@ -206,9 +206,12 @@ void decoder_process(DecoderContext *dc_context, FFmpegDemuxer *demuxer,
                                        (uint8_t *)pTmpImage, size_in_bytes,
                                        cudaMemcpyDeviceToDevice);
                         }
-                        display_buffer[buffer_head].available_to_write = false;
+                        // Publish available_to_write LAST so a consumer that sees
+                        // it false is guaranteed the matching frame_number (and
+                        // frame data, written above) — same invariant as the mac path.
                         dc_context->decoding_flag = true;
                         display_buffer[buffer_head].frame_number = nFrame;
+                        display_buffer[buffer_head].available_to_write = false;
                     } else {
                         while (
                             !display_buffer[buffer_head].available_to_write &&
@@ -235,9 +238,10 @@ void decoder_process(DecoderContext *dc_context, FFmpegDemuxer *demuxer,
                                        cudaMemcpyDeviceToDevice);
                         }
 
-                        display_buffer[buffer_head].available_to_write = false;
+                        // Publish available_to_write LAST (see note above).
                         display_buffer[buffer_head].frame_number = nFrame;
                         latest_decoded_frame[cam_name].store(nFrame);
+                        display_buffer[buffer_head].available_to_write = false;
                     }
                     nFrame = nFrame + 1;
                     buffer_head = (buffer_head + 1) % size_of_buffer;
