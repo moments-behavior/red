@@ -51,9 +51,18 @@ struct JarvisPredictState {
     // Default to All — HybridNet 3D needs every camera, and "Shown" is rarely useful.
     bool predict_from_all = true;
 
+    // Streaming batch mode: seek once and keep decoders filling the ring ahead
+    // of the predict cursor (decode overlaps predict), instead of the chunked
+    // seek-fill-predict cycle that re-seeks every buffer and stalls the GPU cold
+    // at each boundary. Same frames predicted → same output; purely an I/O-
+    // scheduling change. Default off so it can be A/B'd against the proven path.
+    bool batch_streaming = false;
+
     // Batch prediction — non-blocking state machine (one frame per render iteration)
+    // STREAM_SEEK/STREAM_RUN are the streaming path (seek once, decoders keep
+    // filling the ring ahead of the predict cursor); the others are the chunked path.
     enum class BatchPhase {
-        IDLE, SEEK, WAIT_BUFFER, PREDICT, FINISHING
+        IDLE, SEEK, WAIT_BUFFER, PREDICT, FINISHING, STREAM_SEEK, STREAM_RUN
     };
     bool batch_running = false;
     bool batch_requested = false;
@@ -69,8 +78,14 @@ struct JarvisPredictState {
     int batch_chunk_start = 0;     // first frame of current buffer chunk
     int batch_chunk_last_slot = 0; // last slot to wait for in current chunk
     int batch_wait_frames = 0;     // timeout counter for buffer fill
+    int stream_read_head = 0;      // streaming mode: ring slot of the next frame
     std::chrono::steady_clock::time_point batch_t0;
     float batch_predict_ms = 0;
+    // I/O overhead profiling (accumulated across all chunks in a batch)
+    std::chrono::steady_clock::time_point chunk_seek_t0, chunk_wait_t0;
+    float batch_seek_ms = 0;    // total time in blocking seek_all_cameras
+    float batch_decode_ms = 0;  // total time waiting for decoders to fill buffers
+    int   batch_chunks = 0;     // number of seek/fill cycles
 
     // Conversion state (thread-safe via shared_ptr)
     std::shared_ptr<ConvertJob> convert_job;
@@ -1014,6 +1029,13 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
             ImGui::SetTooltip("Shown: fast, uses visible cameras only\n"
                               "All: seeks all cameras to current frame first\n"
                               "(HybridNet ignores this and always uses all cameras)");
+
+        ImGui::Checkbox("Streaming batch (faster)", &state.batch_streaming);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Batch predict streams frames continuously (seek once,\n"
+                              "decode overlaps predict) instead of re-seeking every\n"
+                              "buffer. Same output; faster on long videos. Off = the\n"
+                              "original chunked path.");
 
         bool can_predict = jarvis.loaded;
 #ifdef __APPLE__

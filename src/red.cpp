@@ -1990,8 +1990,15 @@ int main(int argc, char **argv) {
                     bp.batch_total = (bp.batch_end - bp.batch_start) / bp.batch_step + 1;
                     bp.batch_status = "Running...";
                     bp.batch_predict_ms = 0;
+                    bp.batch_seek_ms = 0;
+                    bp.batch_decode_ms = 0;
+                    bp.batch_chunks = 0;
                     bp.batch_t0 = std::chrono::steady_clock::now();
-                    bp.batch_phase = Phase::SEEK;
+#ifdef __APPLE__
+                    bp.batch_phase = bp.batch_streaming ? Phase::STREAM_SEEK : Phase::SEEK;
+#else
+                    bp.batch_phase = Phase::SEEK;   // streaming path is macOS-only
+#endif
                     bp.batch_chunk_start = bp.batch_start;
                     ps.play_video = false;
                     printf("[Batch] Starting: frames %d-%d step %d (%d frames)\n",
@@ -2005,8 +2012,11 @@ int main(int argc, char **argv) {
                     case Phase::SEEK: {
                         // Seek to current chunk start. Blocking (~3-5s) but
                         // only happens once per 64-frame buffer fill.
+                        bp.chunk_seek_t0 = std::chrono::steady_clock::now();
                         seek_all_cameras(scene, bp.batch_chunk_start,
                                          dc_context->video_fps, ps, false);
+                        bp.batch_seek_ms += std::chrono::duration<float, std::milli>(
+                            std::chrono::steady_clock::now() - bp.chunk_seek_t0).count();
                         current_frame_num = bp.batch_chunk_start;
                         // Force all decoders to fill the buffer
                         for (auto &[key, value] : window_need_decoding)
@@ -2016,6 +2026,7 @@ int main(int argc, char **argv) {
                             bp.batch_end - bp.batch_chunk_start + 1);
                         bp.batch_chunk_last_slot = frames_needed - 1;
                         bp.batch_wait_frames = 0;
+                        bp.chunk_wait_t0 = std::chrono::steady_clock::now();
                         bp.batch_phase = Phase::WAIT_BUFFER;
                         printf("[Batch] Seeking to frame %d (need %d buffer slots)...\n",
                                bp.batch_chunk_start, frames_needed);
@@ -2039,8 +2050,12 @@ int main(int argc, char **argv) {
                             }
                         }
                         if (ready) {
-                            printf("[Batch] Buffer filled (waited %d frames)\n",
-                                   bp.batch_wait_frames);
+                            float decode_ms = std::chrono::duration<float, std::milli>(
+                                std::chrono::steady_clock::now() - bp.chunk_wait_t0).count();
+                            bp.batch_decode_ms += decode_ms;
+                            bp.batch_chunks++;
+                            printf("[Batch] Buffer filled (waited %d frames, %.0f ms decode)\n",
+                                   bp.batch_wait_frames, decode_ms);
                             // Stop decoder threads to free CPU cores for CoreML
                             for (auto &[key, value] : window_need_decoding)
                                 value.store(false);
@@ -2226,11 +2241,146 @@ int main(int argc, char **argv) {
                         break;
                     }
 
+                    case Phase::STREAM_SEEK: {
+                        // Streaming: seek ONCE to the batch start, then keep the
+                        // decoders filling the ring continuously ahead of the
+                        // predict cursor (no per-chunk re-seek, decode overlaps
+                        // predict). seek_all_cameras puts batch_start in slot 0.
+                        bp.chunk_seek_t0 = std::chrono::steady_clock::now();
+                        seek_all_cameras(scene, bp.batch_start,
+                                         dc_context->video_fps, ps, false);
+                        bp.batch_seek_ms += std::chrono::duration<float, std::milli>(
+                            std::chrono::steady_clock::now() - bp.chunk_seek_t0).count();
+                        current_frame_num = bp.batch_start;
+                        bp.stream_read_head = 0;
+                        bp.batch_current = bp.batch_start;
+                        bp.batch_chunks = 1;              // one seek for the whole batch
+                        bp.batch_wait_frames = 0;
+                        ps.pause_seeked = true;           // suppress visibility re-seek
+                        for (auto &[key, value] : window_need_decoding)
+                            value.store(true);            // decoders run for the whole batch
+                        bp.batch_phase = Phase::STREAM_RUN;
+                        printf("[Batch] Streaming from frame %d (single seek)...\n",
+                               bp.batch_start);
+                        break;
+                    }
+
+                    case Phase::STREAM_RUN: {
+#ifdef __APPLE__
+                        int nc_pred = (int)scene->num_cams;
+                        std::vector<int> w_b(nc_pred), h_b(nc_pred);
+                        for (int c = 0; c < nc_pred; ++c) {
+                            w_b[c] = (int)scene->image_width[c];
+                            h_b[c] = (int)scene->image_height[c];
+                        }
+                        std::vector<CVPixelBufferRef> pbs(nc_pred, nullptr);
+
+                        // Consume a bounded number of frames per tick, then yield
+                        // to the render loop (progress/cancel). Decoders keep
+                        // filling in the background — they stay well ahead since
+                        // decode (~26ms/frame) is far faster than predict.
+                        const int kStreamYield = 20;
+                        int processed = 0;
+                        while (bp.batch_current <= bp.batch_end && bp.batch_running &&
+                               processed < kStreamYield) {
+                            int frame = bp.batch_current;
+                            int slot = bp.stream_read_head;
+
+                            // Wait until every camera has THIS frame in the slot.
+                            // available_to_write is published last by the decoder,
+                            // so false ⇒ pixel_buffer + frame_number are valid;
+                            // match frame_number as the source of truth.
+                            bool ready = true;
+                            for (int c = 0; c < nc_pred; ++c) {
+                                auto &sl = scene->display_buffer[c][slot];
+                                if (sl.available_to_write.load() ||
+                                    sl.frame_number.load() != frame ||
+                                    !sl.pixel_buffer) { ready = false; break; }
+                            }
+                            if (!ready) {
+                                // Decoder hasn't caught up (start-up, or EOF).
+                                bp.batch_wait_frames++;
+                                if (bp.batch_wait_frames > 900) {   // ~15s → EOF/stall
+                                    printf("[Batch] Streaming stopped at frame %d "
+                                           "(decoder idle / end of video)\n", frame);
+                                    bp.batch_phase = Phase::FINISHING;
+                                }
+                                break;   // yield; decoders keep filling
+                            }
+                            bp.batch_wait_frames = 0;
+
+                            // Predict step-matched frames; consume/release every
+                            // slot regardless so the ring keeps streaming.
+                            if (((frame - bp.batch_start) % bp.batch_step) == 0) {
+                                bool has_manual = false;
+                                if (annotations.count((u32)frame)) {
+                                    const auto &fa = annotations.at((u32)frame);
+                                    for (const auto &cam : fa.cameras) {
+                                        for (const auto &kp : cam.keypoints)
+                                            if (kp.labeled && kp.source == LabelSource::Manual) {
+                                                has_manual = true; break;
+                                            }
+                                        if (has_manual) break;
+                                    }
+                                }
+                                if (has_manual) {
+                                    bp.batch_skipped++;
+                                } else {
+                                    auto tp0 = std::chrono::steady_clock::now();
+                                    for (int c = 0; c < nc_pred; ++c)
+                                        pbs[c] = scene->display_buffer[c][slot].pixel_buffer;
+                                    jarvis_coreml_predict_frame(jarvis_coreml_state,
+                                        annotations, (u32)frame, pbs, w_b, h_b,
+                                        skeleton, (int)scene->num_cams, pm.camera_params,
+                                        bp.confidence_threshold);
+                                    if (!jarvis_coreml_state.hybridnet &&
+                                        !pm.camera_params.empty())
+                                        reprojection(annotations.at((u32)frame),
+                                                     &skeleton, pm.camera_params, scene);
+                                    bp.batch_predict_ms += std::chrono::duration<float, std::milli>(
+                                        std::chrono::steady_clock::now() - tp0).count();
+                                    bp.batch_completed++;
+                                    printf("[Batch] Frame %d (slot %d): %.0f ms  [%d/%d]\n",
+                                           frame, slot, jarvis_coreml_state.last_total_ms,
+                                           bp.batch_completed, bp.batch_total);
+                                }
+                            }
+
+                            // Release the slot back to the decoder (mandatory —
+                            // otherwise the ring fills and the decoder stalls).
+                            for (int c = 0; c < nc_pred; ++c) {
+                                auto &sl = scene->display_buffer[c][slot];
+                                if (sl.pixel_buffer) {
+                                    CFRelease(sl.pixel_buffer);
+                                    sl.pixel_buffer = nullptr;
+                                }
+                                sl.available_to_write = true;
+                            }
+                            bp.stream_read_head = (bp.stream_read_head + 1) % buf_size;
+                            bp.batch_current += 1;
+                            current_frame_num = frame;
+                            processed++;
+                        }
+                        if (bp.batch_current > bp.batch_end)
+                            bp.batch_phase = Phase::FINISHING;
+#else
+                        // Streaming is a macOS (CVPixelBuffer) optimization; other
+                        // platforms are never routed here (init keeps them chunked).
+                        bp.batch_phase = Phase::FINISHING;
+#endif
+                        break;
+                    }
+
                     case Phase::FINISHING: {
                         auto t1 = std::chrono::steady_clock::now();
                         float total_ms = std::chrono::duration<float, std::milli>(t1 - bp.batch_t0).count();
                         bp.batch_running = false;
                         bp.batch_phase = Phase::IDLE;
+                        // Match the chunked path's post-batch state: decoders idle
+                        // (streaming left them running; the render loop re-enables
+                        // the visible camera on the next interaction).
+                        for (auto &[key, value] : window_need_decoding)
+                            value.store(false);
                         bp.batch_status = "Complete: " +
                             std::to_string(bp.batch_completed) + " frames in " +
                             std::to_string((int)(total_ms / 1000.0f)) + "s (" +
@@ -2240,6 +2390,15 @@ int main(int argc, char **argv) {
                             bp.batch_status += " (" + std::to_string(bp.batch_skipped) +
                                 " skipped)";
                         printf("[Batch] %s\n", bp.batch_status.c_str());
+                        // I/O breakdown: predict is the useful work; seek+decode
+                        // is per-chunk overhead the 370ms/frame number hides.
+                        float io_ms = bp.batch_seek_ms + bp.batch_decode_ms;
+                        printf("[Batch] Wall %.1fs = predict %.1fs + seek %.1fs + "
+                               "decode %.1fs (+%.1fs other) | %d chunks, I/O overhead %.0f%%\n",
+                               total_ms / 1000.f, bp.batch_predict_ms / 1000.f,
+                               bp.batch_seek_ms / 1000.f, bp.batch_decode_ms / 1000.f,
+                               (total_ms - bp.batch_predict_ms - io_ms) / 1000.f,
+                               bp.batch_chunks, 100.f * io_ms / std::max(1.f, total_ms));
                         break;
                     }
 
