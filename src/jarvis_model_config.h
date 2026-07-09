@@ -4,6 +4,7 @@
 // Parsed once from model_info.json and passed to both ONNX and CoreML init.
 
 #include "json.hpp"
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -17,6 +18,15 @@ struct JarvisModelConfig {
     std::string architecture;     // e.g., "EfficientTrack-medium"
     std::string precision;        // e.g., "float16"
     bool imagenet_norm = false;   // ImageNet normalization baked into CoreML model
+    // HybridNet 3D volumetric stage (only present for 3D models). roi_cube_size
+    // and grid_spacing are physical, in the inference calibration's world units;
+    // grid_in/grid_out are the V2VNet input/output voxel-grid sides (dimensionless).
+    bool has_hybridnet = false;
+    int hn_num_cameras = 16;
+    float hn_roi_cube = 200.0f;
+    float hn_grid_spacing = 2.0f;
+    int hn_grid_in = 100;
+    int hn_grid_out = 50;
 };
 
 // Parse model_info.json once into a unified config. Safe to call with nullptr.
@@ -53,6 +63,20 @@ inline JarvisModelConfig parse_jarvis_model_info(const char *path) {
                     cfg.imagenet_norm = true;
             }
         }
-    } catch (...) {}
+        if (j.contains("hybridnet")) {
+            auto &h = j["hybridnet"];
+            cfg.has_hybridnet = true;
+            cfg.hn_num_cameras  = h.value("num_cameras",  cfg.hn_num_cameras);
+            cfg.hn_roi_cube     = h.value("roi_cube_size", cfg.hn_roi_cube);
+            cfg.hn_grid_spacing = h.value("grid_spacing",  cfg.hn_grid_spacing);
+            cfg.hn_grid_in      = h.value("grid_in",       cfg.hn_grid_in);
+            cfg.hn_grid_out     = h.value("grid_out",      cfg.hn_grid_out);
+        }
+    } catch (const std::exception &e) {
+        // A malformed model_info.json must not look identical to a missing one:
+        // surface it so a silently-wrong default config can be diagnosed.
+        std::fprintf(stderr, "[jarvis] failed to parse %s: %s\n",
+                     path ? path : "(null)", e.what());
+    }
     return cfg;
 }

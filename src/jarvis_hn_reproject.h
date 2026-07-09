@@ -8,20 +8,28 @@
 //   intrMats = K^T               layout (num_cameras,3,3)  cx=[2,0] cy=[2,1] fx=[0,0] fy=[1,1]
 //   distC    = (num_cameras,5)   uses k1=[0], k2=[1] (radial only, matches ReprojectionLayer)
 //   heatmaps = (num_cameras,num_joints,hs,hs) row-major, hs = bbox/2+2 (padded, e.g. 354)
-//   grid: 50^3 sampling grid, projected coords trilinear-upsampled to 100^3 before indexing.
+//   grid: (grid_full/2)^3 sampling grid, projected coords trilinear-upsampled to
+//         grid_full^3 before indexing (e.g. mouse 50^3->100^3, fly 24^3->48^3).
 #pragma once
 #include <algorithm>
 #include <cmath>
 #include <vector>
 #include <cstdint>
 
+// JARVIS heatmap value range: EfficientTrack heatmaps and V2VNet volumes are
+// scaled to [0, 255]. Used to normalise the V2V input and to map a soft-argmax
+// peak to a [0,1] confidence. Shared by the CoreML (.mm), CPU and TensorRT paths
+// so the confidence scale stays single-sourced. NOTE: distinct from the 8-bit
+// pixel-normalisation 255 in the image preprocessing — do not conflate them.
+static constexpr float kHeatmapScale = 255.0f;
+
 struct HNReproParams {
-    int num_cameras;      // 16
-    int num_joints;       // 24
-    int grid_full;        // 100  (= roi/spacing)
-    float grid_spacing;   // 2.0
-    float roi_cube;       // 200.0
-    int heatmap_size;     // 354  (= bbox/2 + 2, padded)
+    int num_cameras;      // e.g. mouse 16, fly 7
+    int num_joints;       // e.g. mouse 24, fly 50
+    int grid_full;        // V2VNet input side = grid_in (e.g. mouse 100, fly 48)
+    float grid_spacing;   // world units per grid step (calibration units)
+    float roi_cube;       // ROI cube side in world units (calibration units)
+    int heatmap_size;     // = keypoint_bbox/2 + 2, padded (e.g. mouse 354, fly 226)
 };
 
 // Trilinear sample of a (g,g,g) float volume at fractional (fi,fj,fk), border-clamped.
@@ -51,8 +59,8 @@ static inline void hn_reproject(const HNReproParams &P,
     const int NC = P.num_cameras, NJ = P.num_joints;
     const int gf = P.grid_full, gh = gf / 2;          // 100, 50
     const int hs = P.heatmap_size;
-    const float step = P.grid_spacing * 2.0f;         // 4mm between 50^3 samples
-    const int half = gh / 2;                          // 25
+    const float step = P.grid_spacing * 2.0f;         // world spacing between gh^3 samples
+    const int half = gh / 2;                          // grid centre (gh/2)
     const float hsm1 = (float)(hs - 1), hsm2 = (float)(hs - 2);
     const size_t vf = (size_t)gf * gf * gf;
     const size_t vh = (size_t)gh * gh * gh;
@@ -129,8 +137,8 @@ static inline void hn_soft_argmax(const HNReproParams &P, const float *vol, int 
         const float *center3D, float *pts, float *conf) {
     const int NJ = P.num_joints;
     const size_t v = (size_t)g * g * g;
-    const float scale = P.grid_spacing * 2.0f;          // *4
-    const float offset = P.roi_cube * 0.5f;             // -100
+    const float scale = P.grid_spacing * 2.0f;          // world units per output voxel
+    const float offset = P.roi_cube * 0.5f;             // half-ROI (subtracted below)
     for (int jt = 0; jt < NJ; ++jt) {
         const float *vp = vol + (size_t)jt * v;
         double norm = 0, sx = 0, sy = 0, sz = 0, mx = -1e30;
@@ -146,6 +154,6 @@ static inline void hn_soft_argmax(const HNReproParams &P, const float *vol, int 
         pts[jt * 3 + 0] = x * scale - offset + center3D[0];
         pts[jt * 3 + 1] = y * scale - offset + center3D[1];
         pts[jt * 3 + 2] = z * scale - offset + center3D[2];
-        conf[jt] = std::min((float)mx, 255.0f) / 255.0f;
+        conf[jt] = std::min((float)mx, kHeatmapScale) / kHeatmapScale;
     }
 }

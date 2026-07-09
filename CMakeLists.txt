@@ -589,6 +589,22 @@ if(APPLE)
         CXX_STANDARD_REQUIRED ON
     )
 
+    # CPU (hn_reproject) vs Metal (HNMetalReproject) reprojection parity.
+    # Enforces the "bit-exact" claim shared by jarvis_hn_reproject.h and
+    # jarvis_hn_metal.mm. Metal-only, so Apple-block only.
+    add_executable(test_jarvis_hn_parity
+        tests/test_jarvis_hn_parity.mm
+        src/jarvis_hn_metal.mm
+    )
+    target_include_directories(test_jarvis_hn_parity PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_jarvis_hn_parity PRIVATE
+        "-framework Metal" "-framework Foundation" "-framework CoreGraphics"
+    )
+    set_target_properties(test_jarvis_hn_parity PROPERTIES
+        CXX_STANDARD 17
+        CXX_STANDARD_REQUIRED ON
+    )
+
     # Video pipeline test: tests video-based aruco calibration
     add_executable(test_video_pipeline
         tests/test_video_pipeline.cpp

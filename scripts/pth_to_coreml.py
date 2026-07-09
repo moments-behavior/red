@@ -475,6 +475,11 @@ def main():
     #   3. flat layout:    <dir>/center_detect.pth + keypoint_detect.pth
     cd_pth = None
     kd_pth = None
+    # Directory under which find_latest_hybridnet_pth() looks for HybridNet/Run_*/.
+    # Set explicitly in every branch below (was previously probed with a fragile
+    # `"models_dir" in dir()` check that left flat-layout 3D projects without a
+    # v2vnet.mlpackage even when a HybridNet checkpoint existed).
+    models_dir = None
 
     # Try flat layout first (RED project jarvis_models/<name>/)
     flat_cd = os.path.join(args.jarvis_project, "center_detect.pth")
@@ -482,6 +487,8 @@ def main():
     if os.path.exists(flat_cd) and os.path.exists(flat_kd):
         cd_pth = flat_cd
         kd_pth = flat_kd
+        # Still search the project dir for a HybridNet checkpoint (3D flat layout).
+        models_dir = args.jarvis_project
         print(f"  Using flat layout: {args.jarvis_project}")
     else:
         # Try JARVIS project layout
@@ -536,7 +543,7 @@ def main():
 
     # Resolve the HybridNet checkpoint first: it decides which keypoint weights
     # the keypoint_detect.mlpackage must carry.
-    hn_models_dir = models_dir if "models_dir" in dir() else None
+    hn_models_dir = models_dir
     hn_pth = find_latest_hybridnet_pth(hn_models_dir) if hn_models_dir else None
 
     # Convert KeypointDetect.
@@ -621,8 +628,9 @@ def main():
         # reprojection builds the grid in the inference calibration's units, so scale the
         # training-unit values by --world_scale to match. grid_in/grid_out are the V2VNet
         # tensor dimensions (dimensionless) and are deliberately left unscaled.
-        roi_scaled = config["roi_cube_size"] * args.world_scale
-        spacing_scaled = config["grid_spacing"] * args.world_scale
+        # round() strips float dust (e.g. 48 * 0.1 == 4.800000000000001).
+        roi_scaled = round(config["roi_cube_size"] * args.world_scale, 6)
+        spacing_scaled = round(config["grid_spacing"] * args.world_scale, 6)
         if args.world_scale != 1.0:
             print(f"  world_scale={args.world_scale}: roi_cube_size "
                   f"{config['roi_cube_size']} -> {roi_scaled}, grid_spacing "

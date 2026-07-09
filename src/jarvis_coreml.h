@@ -69,7 +69,8 @@ struct JarvisCoreMLState {
     float last_total_ms = 0;
 };
 
-// Initialize: load .mlpackage (compiles to .mlmodelc on first use, cached after).
+// Initialize: load .mlpackage (compiled to a temp .mlmodelc each launch, then
+// removed once loaded into memory; not cached to disk between launches).
 // model_dir: directory containing center_detect.mlpackage/ and keypoint_detect.mlpackage/
 // Pass pre-parsed config to avoid redundant JSON I/O.
 bool jarvis_coreml_init(JarvisCoreMLState &s, const std::string &model_dir,

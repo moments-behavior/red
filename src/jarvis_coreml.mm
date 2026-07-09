@@ -42,8 +42,14 @@ static MLModel *load_mlpackage(const std::string &path, std::string &err) {
         if (!model) {
             err = "Load failed: " +
                   std::string(error.localizedDescription.UTF8String);
+            [[NSFileManager defaultManager] removeItemAtURL:compiled error:nil];
             return nil;
         }
+        // The compiled .mlmodelc is a temp directory owned by the caller; the model
+        // is fully loaded into memory above, so remove it (matches learned_ik_coreml).
+        // NOTE: this recompiles on every launch — a future improvement is to compile
+        // once to a persistent path beside the .mlpackage and reuse it.
+        [[NSFileManager defaultManager] removeItemAtURL:compiled error:nil];
         return model;
     }
 }
@@ -216,7 +222,7 @@ static HMPeak heatmap_argmax(MLMultiArray *hm, int channel, int hm_h, int hm_w) 
     HMPeak peak;
     peak.x = (float)(max_idx % hm_w) * 2.0f; // stride-2 heatmap
     peak.y = (float)(max_idx / hm_w) * 2.0f;
-    peak.confidence = std::min(max_val, 255.0f) / 255.0f;
+    peak.confidence = std::min(max_val, kHeatmapScale) / kHeatmapScale;
     return peak;
 }
 
@@ -325,27 +331,15 @@ bool jarvis_coreml_init(JarvisCoreMLState &s, const std::string &model_dir,
         }
         s.v2v_model = (__bridge_retained void *)v2v;
         s.hybridnet = true;
-        // Parse the hybridnet block from model_info.json (falls back to defaults).
-        s.hn_num_cameras = 16;
-        s.hn_roi_cube_mm = 200.0f;
-        s.hn_grid_spacing_mm = 2.0f;
-        s.hn_grid_in = 100;
-        s.hn_grid_out = 50;
-        try {
-            std::string mi = model_dir + "/model_info.json";
-            if (std::filesystem::exists(mi)) {
-                std::ifstream f(mi);
-                nlohmann::json j; f >> j;
-                if (j.contains("hybridnet")) {
-                    const auto &h = j["hybridnet"];
-                    s.hn_num_cameras     = h.value("num_cameras", s.hn_num_cameras);
-                    s.hn_roi_cube_mm     = h.value("roi_cube_size", s.hn_roi_cube_mm);
-                    s.hn_grid_spacing_mm = h.value("grid_spacing", s.hn_grid_spacing_mm);
-                    s.hn_grid_in         = h.value("grid_in", s.hn_grid_in);
-                    s.hn_grid_out        = h.value("grid_out", s.hn_grid_out);
-                }
-            }
-        } catch (const std::exception &) { /* keep defaults */ }
+        // HybridNet grid geometry comes from the already-parsed model_info.json
+        // (parse_jarvis_model_info -> cfg), so the file is parsed once. roi_cube/
+        // grid_spacing are physical, in the inference calibration's world units;
+        // grid_in/out are the V2VNet voxel-grid sides.
+        s.hn_num_cameras     = cfg.hn_num_cameras;
+        s.hn_roi_cube_mm     = cfg.hn_roi_cube;
+        s.hn_grid_spacing_mm = cfg.hn_grid_spacing;
+        s.hn_grid_in         = cfg.hn_grid_in;
+        s.hn_grid_out        = cfg.hn_grid_out;
 
         // Allocate the GPU reprojection + persistent scratch once. The heatmap
         // and h3d buffers live in shared memory and are reused every frame; the
@@ -423,20 +417,7 @@ bool jarvis_coreml_predict_frame(
         MLModel *cd_model = (__bridge MLModel *)s.center_model;
         MLModel *kd_model = (__bridge MLModel *)s.keypoint_model;
 
-        // Helper: find the largest 4D heatmap output from a CoreML prediction
-        auto find_heatmap = [](id<MLFeatureProvider> output) -> MLMultiArray * {
-            MLMultiArray *best = nil;
-            for (NSString *name in output.featureNames) {
-                MLFeatureValue *fv = [output featureValueForName:name];
-                if (fv.multiArrayValue && fv.multiArrayValue.shape.count == 4) {
-                    MLMultiArray *arr = fv.multiArrayValue;
-                    int h = [arr.shape[2] intValue];
-                    if (!best || h > [best.shape[2] intValue])
-                        best = arr;
-                }
-            }
-            return best;
-        };
+        // (heatmap head selection uses the shared largest_4d_output helper)
 
         // Per-camera pipeline: CenterDetect → crop → KeypointDetect
         // Processing each camera fully before moving to the next improves
@@ -468,7 +449,7 @@ bool jarvis_coreml_predict_frame(
             id<MLFeatureProvider> cd_output = [cd_model predictionFromFeatures:cd_input error:&error];
             if (!cd_output || error) continue;
 
-            MLMultiArray *cd_hm = find_heatmap(cd_output);
+            MLMultiArray *cd_hm = largest_4d_output(cd_output);
             if (!cd_hm) continue;
 
             int cd_hm_h = [cd_hm.shape[2] intValue];
@@ -490,6 +471,9 @@ bool jarvis_coreml_predict_frame(
             auto tk0 = std::chrono::steady_clock::now();
             int bbox_size = s.keypoint_input_size;
             int half = bbox_size / 2;
+            // A camera smaller than the crop makes the clamp bounds cross
+            // (hi < lo → std::clamp UB) and the crop under-sized; skip it.
+            if (cam_widths[c] < bbox_size || cam_heights[c] < bbox_size) continue;
             int cx = std::clamp((int)center.x, half, cam_widths[c] - half);
             int cy = std::clamp((int)center.y, half, cam_heights[c] - half);
 
@@ -511,7 +495,7 @@ bool jarvis_coreml_predict_frame(
             id<MLFeatureProvider> kd_output = [kd_model predictionFromFeatures:kd_input error:&error];
             if (!kd_output || error) continue;
 
-            MLMultiArray *kd_hm = find_heatmap(kd_output);
+            MLMultiArray *kd_hm = largest_4d_output(kd_output);
             if (!kd_hm) continue;
 
             int kd_hm_h = [kd_hm.shape[2] intValue];
@@ -698,6 +682,13 @@ static bool jarvis_coreml_predict_hybridnet_3d(
         return false;
     }
     Eigen::Vector3d center3D = red_math::triangulatePoints(center_2d, center_Ps);
+    // Degenerate (near-collinear / near-coincident) geometry can yield NaN/Inf,
+    // which would propagate through the reprojection clamp into (int) casts (UB)
+    // and produce garbage 3D written with a plausible confidence. Fail cleanly.
+    if (!center3D.allFinite()) {
+        s.status = "HybridNet 3D: degenerate center triangulation (non-finite)";
+        return false;
+    }
     const float c3[3] = {(float)center3D[0], (float)center3D[1], (float)center3D[2]};
 
     // ── STAGE 3+4: centerHM → crop → KeypointDetect heatmaps ────────────
@@ -729,6 +720,10 @@ static bool jarvis_coreml_predict_hybridnet_3d(
         const int Bsz = B, bhw = bbox_hw;
         dispatch_apply(NC, q, ^(size_t c) {
             @autoreleasepool {
+                // A camera smaller than the crop makes the clamp bounds cross
+                // (hi < lo → std::clamp UB). Leave its heatmap slot zeroed (handled
+                // below via the null kp_in check) by skipping this camera.
+                if (wp[c] < Bsz || hp[c] < Bsz) return;
                 Eigen::Vector2d cHM = camp[c].telecentric
                     ? red_math::projectPointTelecentric(center3D, camp[c].projection_mat, camp[c].k, camp[c].dist_coeffs, camp[c].dist_center)
                     : red_math::projectPointR(center3D, camp[c].r, camp[c].tvec, camp[c].k, camp[c].dist_coeffs);
@@ -849,11 +844,12 @@ static bool jarvis_coreml_predict_hybridnet_3d(
                 dataType:MLMultiArrayDataTypeFloat32 error:&e];
             if (!vin) { s.status = "HybridNet 3D: V2V input alloc failed"; return false; }
         }
-        float *dp = (float *)vin.dataPointer;               // (1,NJ,100,100,100) is contiguous
-        // Normalize h3d for V2V. vsdiv (true divide) matches the original
-        // scalar `h3d[i] / 255.0f` bit-for-bit (vsmul by 1/255 would not).
-        float div255 = 255.0f;
-        vDSP_vsdiv(h3d, 1, &div255, dp, 1, (vDSP_Length)vf);
+        float *dp = (float *)vin.dataPointer;               // (1,NJ,gin³) contiguous
+        // Normalize h3d for V2V by the heatmap value range. vsdiv (true divide)
+        // matches the original scalar `h3d[i] / kHeatmapScale` bit-for-bit
+        // (vsmul by the reciprocal would not).
+        float hm_scale = kHeatmapScale;
+        vDSP_vsdiv(h3d, 1, &hm_scale, dp, 1, (vDSP_Length)vf);
         id<MLFeatureProvider> in = [[MLDictionaryFeatureProvider alloc]
             initWithDictionary:@{@"vox_in":[MLFeatureValue featureValueWithMultiArray:vin]} error:&e];
         if (!in) { s.status = "HybridNet 3D: V2V input build failed"; return false; }

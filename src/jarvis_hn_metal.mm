@@ -327,10 +327,15 @@ bool HNMetalReproject::reproject(const float *camMats, const float *intrMats,
         [cmd commit];
         [cmd waitUntilCompleted];
         (void)NJ;
+        // Check status before reading GPU timestamps: on error they are undefined.
+        if (cmd.status == MTLCommandBufferStatusError) {
+            NSLog(@"[HNMetal] GPU command buffer error: %@",
+                  cmd.error ? cmd.error.localizedDescription : @"unknown");
+            return false;
+        }
         float t = (float)((cmd.GPUEndTime - cmd.GPUStartTime) * 1000.0);
         if (split) { last_gather_ms = t; last_gpu_ms = last_project_ms + t; }
         else last_gpu_ms = t;
-        if (cmd.status == MTLCommandBufferStatusError) return false;
         return true;
     }
 }

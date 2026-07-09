@@ -212,7 +212,7 @@ inline HeatmapPeak heatmap_argmax(const float *heatmap, int h, int w) {
     HeatmapPeak peak;
     peak.x = (float)(max_idx % w) * 2.0f; // 2x scale (heatmap is half resolution)
     peak.y = (float)(max_idx / w) * 2.0f;
-    peak.confidence = std::min(max_val, 255.0f) / 255.0f;
+    peak.confidence = std::min(max_val, kHeatmapScale) / kHeatmapScale;
     return peak;
 }
 
