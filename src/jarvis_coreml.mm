@@ -564,66 +564,46 @@ void jarvis_coreml_cleanup(JarvisCoreMLState &s) {
 //   write:   kp3d + per-cam 2D overlay
 // Mirrors the validated Python reference (hybridnet_reference.py, ~2 mm) and the
 // TensorRT host path in jarvis_hybridnet.h. Uses the P^T / K^T conventions.
+// The seven pipeline stages are factored into the hn_* helpers below; the
+// orchestration lives in jarvis_coreml_predict_hybridnet_3d at the end.
 // ─────────────────────────────────────────────────────────────────────────
-static bool jarvis_coreml_predict_hybridnet_3d(
-    JarvisCoreMLState &s, AnnotationMap &amap, u32 frame_num,
-    const std::vector<CVPixelBufferRef> &pbs,
-    const std::vector<int> &widths, const std::vector<int> &heights,
-    const SkeletonContext &skeleton, int /*num_cameras*/,
-    const std::vector<CameraParams> &cams) {
 
-    const int NC = s.hn_num_cameras;
-    const int NJ = s.num_joints;
-    const int C  = s.center_input_size;      // 320
-    const int B  = s.keypoint_input_size;    // 704
-    const int bbox_hw = B / 2;               // 352
-    const int Hcen_hi = C / 2;               // 160
-    const int hs = B / 2 + 2;                // 354 (padded heatmap side)
-    const int gin = s.hn_grid_in;            // 100
-    const int gout = s.hn_grid_out;          // 50
+// Per-stage host timing (ms), aggregated for the HN_TIMING diagnostic.
+struct HNTiming { double cd_pre = 0, cd_pred = 0, kp_pre = 0, kp_pred = 0, kp_copy = 0; };
+
+static inline std::chrono::steady_clock::time_point hn_now() {
+    return std::chrono::steady_clock::now();
+}
+static inline double hn_dt(std::chrono::steady_clock::time_point a,
+                           std::chrono::steady_clock::time_point b) {
+    return std::chrono::duration<double, std::milli>(b - a).count();
+}
+
+// STAGE 1+2: CenterDetect on a spatially-spread subset of cameras → triangulate
+// the 3D animal centre (center3D). center_max_cams == s.hn_center_cams; center3D
+// only locates the crop ROI so the subset is fine. Returns false (err set) if
+// fewer than 2 cameras clear the threshold or the triangulation is degenerate.
+static bool hn_center_triangulate(
+        MLModel *cd_model,
+        const std::vector<CVPixelBufferRef> &pbs,
+        const std::vector<int> &widths, const std::vector<int> &heights,
+        const std::vector<CameraParams> &cams,
+        int NC, int C, int Hcen_hi, int center_max_cams,
+        dispatch_queue_t q,
+        Eigen::Vector3d &center3D, int &n_center_used,
+        HNTiming &tm, std::string &err) {
     constexpr float kCenterThresh = 50.0f;   // matches JARVIS python / TRT path
-
-    if ((int)pbs.size() < NC || (int)widths.size() < NC ||
-        (int)heights.size() < NC || (int)cams.size() < NC) {
-        s.status = "HybridNet 3D: fewer cameras/params than model expects";
-        return false;
-    }
-    for (int c = 0; c < NC; ++c) {
-        if (!pbs[c]) { s.status = "HybridNet 3D: all " + std::to_string(NC) +
-                                  " cameras must have a frame"; return false; }
-    }
-
-    MLModel *cd_model = (__bridge MLModel *)s.center_model;
-    MLModel *kd_model = (__bridge MLModel *)s.keypoint_model;
-    MLModel *v2v_model = (__bridge MLModel *)s.v2v_model;
-    auto t0 = std::chrono::steady_clock::now();
-
-    // Env-gated stage profiling (HN_TIMING=1): separates the irreducible ANE
-    // predict time from overlappable host preprocessing. now()/dt in ms.
-    static const bool hn_timing = getenv("HN_TIMING") != nullptr;
-    auto now = [] { return std::chrono::steady_clock::now(); };
-    auto dt = [](std::chrono::steady_clock::time_point a,
-                 std::chrono::steady_clock::time_point b) {
-        return std::chrono::duration<double, std::milli>(b - a).count();
-    };
-    double ms_cd_pre = 0, ms_cd_pred = 0, ms_kp_pre = 0, ms_kp_pred = 0, ms_kp_copy = 0;
-
-    // ── STAGE 1+2: CenterDetect → triangulate center3D ──────────────────
-    // center3D only locates the 704² crop ROI (keypoint detection still runs on
-    // ALL cameras), so a spatially-spread subset triangulates it fine at ~half
-    // the center-stage cost. Pick ≤kCenterMaxCams evenly-spaced camera indices.
-    // Preprocessing (resize 7MP→320² + normalize) is per-camera independent →
-    // run in parallel across cores; the ANE predicts run serially.
-    const int kCenterMaxCams = std::max(2, s.hn_center_cams);   // configurable
+    const int kCenterMaxCams = std::max(2, center_max_cams);
     const int n_center = std::min(NC, kCenterMaxCams);
     std::vector<int> ccam(n_center);
     for (int i = 0; i < n_center; ++i) ccam[i] = (int)((long)i * NC / n_center);
 
     std::vector<Eigen::Vector2d> center_2d;
     std::vector<Eigen::Matrix<double, 3, 4>> center_Ps;
-    dispatch_queue_t q = dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0);
     {
-        auto tp = now();
+        // Preprocess (resize→320²→normalize→provider) is per-camera independent →
+        // run in parallel; the ANE predicts run serially below.
+        auto tp = hn_now();
         std::vector<void *> cd_in(NC, nullptr);
         void **cdp = cd_in.data();
         const int *ccp = ccam.data();
@@ -644,9 +624,9 @@ static bool jarvis_coreml_predict_hybridnet_3d(
                 if (in) cdp[c] = (__bridge_retained void *)in;
             }
         });
-        ms_cd_pre = dt(tp, now());
+        tm.cd_pre = hn_dt(tp, hn_now());
 
-        auto tq = now();
+        auto tq = hn_now();
         for (int ii = 0; ii < n_center; ++ii) {
             int c = ccam[ii];
             @autoreleasepool {
@@ -659,7 +639,7 @@ static bool jarvis_coreml_predict_hybridnet_3d(
                 MLMultiArray *hm = largest_4d_output(out);
                 if (!hm) continue;
                 std::vector<float> plane;
-                copy_mlarray_contiguous(hm, plane);           // (1,1,160,160) → 160*160
+                copy_mlarray_contiguous(hm, plane);
                 int hw = [hm.shape[3] intValue];
                 int hh = [hm.shape[2] intValue];
                 int best = 0; float bv = plane[0];
@@ -675,125 +655,127 @@ static bool jarvis_coreml_predict_hybridnet_3d(
                 center_Ps.push_back(cams[c].projection_mat);
             }
         }
-        ms_cd_pred = dt(tq, now());
+        tm.cd_pred = hn_dt(tq, hn_now());
     }
     if (center_2d.size() < 2) {
-        s.status = "HybridNet 3D: <2 cameras detected the animal center";
+        err = "HybridNet 3D: <2 cameras detected the animal center";
         return false;
     }
-    Eigen::Vector3d center3D = red_math::triangulatePoints(center_2d, center_Ps);
+    center3D = red_math::triangulatePoints(center_2d, center_Ps);
     // Degenerate (near-collinear / near-coincident) geometry can yield NaN/Inf,
     // which would propagate through the reprojection clamp into (int) casts (UB)
     // and produce garbage 3D written with a plausible confidence. Fail cleanly.
     if (!center3D.allFinite()) {
-        s.status = "HybridNet 3D: degenerate center triangulation (non-finite)";
+        err = "HybridNet 3D: degenerate center triangulation (non-finite)";
         return false;
     }
-    const float c3[3] = {(float)center3D[0], (float)center3D[1], (float)center3D[2]};
+    n_center_used = (int)center_2d.size();
+    return true;
+}
 
-    // ── STAGE 3+4: centerHM → crop → KeypointDetect heatmaps ────────────
-    // Write directly into the persistent, cam-major, 1-px-padded (354²) heatmap
-    // buffer. With Metal it is the GPU's shared buffer (borders pre-zeroed once
-    // at load, interior fully overwritten each frame); otherwise a per-frame
-    // zeroed vector. A camera that fails prediction has its slot zeroed so no
-    // stale data leaks across frames.
-    HNMetalReproject *metal = (HNMetalReproject *)s.hn_metal;
+// STAGE 3+4: project center3D into each camera → crop (bbox_size²) → KeypointDetect
+// → copy the per-camera heatmaps into the padded, cam-major `heatmaps` buffer
+// (NC*NJ*hs*hs). Fills cHMx/cHMy with the (clamped) crop centres for reprojection.
+// metal_persistent zeroes a failed camera's slot (the CPU buffer is pre-zeroed).
+static void hn_keypoint_heatmaps(
+        MLModel *kd_model,
+        const std::vector<CVPixelBufferRef> &pbs,
+        const std::vector<int> &widths, const std::vector<int> &heights,
+        const std::vector<CameraParams> &cams,
+        const Eigen::Vector3d &center3D,
+        int NC, int NJ, int B, int bbox_hw, int hs,
+        dispatch_queue_t q, float *heatmaps, bool metal_persistent,
+        std::vector<int> &cHMx, std::vector<int> &cHMy, HNTiming &tm) {
     const size_t cam_slot = (size_t)NJ * hs * hs;
-    std::vector<float> heatmaps_cpu;
-    float *heatmaps;
-    if (metal) {
-        heatmaps = metal->heatmaps_ptr();
-    } else {
-        heatmaps_cpu.assign((size_t)NC * cam_slot, 0.0f);
-        heatmaps = heatmaps_cpu.data();
-    }
-    std::vector<int> cHMx(NC), cHMy(NC);
-    // Parallel preprocess: per-cam centerHM → crop (704²) → normalize → provider.
-    {
-        auto tp = now();
-        std::vector<void *> kp_in(NC, nullptr);
-        void **kpp = kp_in.data();
-        int *cxp = cHMx.data(), *cyp = cHMy.data();
-        const CVPixelBufferRef *pbp = pbs.data();
-        const CameraParams *camp = cams.data();
-        const int *wp = widths.data(), *hp = heights.data();
-        const int Bsz = B, bhw = bbox_hw;
-        dispatch_apply(NC, q, ^(size_t c) {
-            @autoreleasepool {
-                // A camera smaller than the crop makes the clamp bounds cross
-                // (hi < lo → std::clamp UB). Leave its heatmap slot zeroed (handled
-                // below via the null kp_in check) by skipping this camera.
-                if (wp[c] < Bsz || hp[c] < Bsz) return;
-                Eigen::Vector2d cHM = camp[c].telecentric
-                    ? red_math::projectPointTelecentric(center3D, camp[c].projection_mat, camp[c].k, camp[c].dist_coeffs, camp[c].dist_center)
-                    : red_math::projectPointR(center3D, camp[c].r, camp[c].tvec, camp[c].k, camp[c].dist_coeffs);
-                int cx = std::clamp((int)std::lround(cHM[0]), bhw, wp[c] - bhw);
-                int cy = std::clamp((int)std::lround(cHM[1]), bhw, hp[c] - bhw);
-                cxp[c] = cx; cyp[c] = cy;
-                if (!pbp[c]) return;
-                CVPixelBufferRef crop = crop_pixelbuf(pbp[c], cx, cy, Bsz);
-                if (!crop) return;
-                MLMultiArray *tensor = pixelbuf_to_normalized_array(crop, Bsz, Bsz);
-                CVPixelBufferRelease(crop);
-                if (!tensor) return;
-                NSError *e = nil;
-                id<MLFeatureProvider> in = [[MLDictionaryFeatureProvider alloc]
-                    initWithDictionary:@{@"image":[MLFeatureValue featureValueWithMultiArray:tensor]} error:&e];
-                if (in) kpp[c] = (__bridge_retained void *)in;
-            }
-        });
-        ms_kp_pre = dt(tp, now());
+    auto tp = hn_now();
+    std::vector<void *> kp_in(NC, nullptr);
+    void **kpp = kp_in.data();
+    int *cxp = cHMx.data(), *cyp = cHMy.data();
+    const CVPixelBufferRef *pbp = pbs.data();
+    const CameraParams *camp = cams.data();
+    const int *wp = widths.data(), *hp = heights.data();
+    const int Bsz = B, bhw = bbox_hw;
+    const Eigen::Vector3d c3d = center3D;   // captured by value into the block
+    dispatch_apply(NC, q, ^(size_t c) {
+        @autoreleasepool {
+            // A camera smaller than the crop makes the clamp bounds cross
+            // (hi < lo → std::clamp UB). Leave its heatmap slot zeroed (handled
+            // below via the null kp_in check) by skipping this camera.
+            if (wp[c] < Bsz || hp[c] < Bsz) return;
+            Eigen::Vector2d cHM = camp[c].telecentric
+                ? red_math::projectPointTelecentric(c3d, camp[c].projection_mat, camp[c].k, camp[c].dist_coeffs, camp[c].dist_center)
+                : red_math::projectPointR(c3d, camp[c].r, camp[c].tvec, camp[c].k, camp[c].dist_coeffs);
+            int cx = std::clamp((int)std::lround(cHM[0]), bhw, wp[c] - bhw);
+            int cy = std::clamp((int)std::lround(cHM[1]), bhw, hp[c] - bhw);
+            cxp[c] = cx; cyp[c] = cy;
+            if (!pbp[c]) return;
+            CVPixelBufferRef crop = crop_pixelbuf(pbp[c], cx, cy, Bsz);
+            if (!crop) return;
+            MLMultiArray *tensor = pixelbuf_to_normalized_array(crop, Bsz, Bsz);
+            CVPixelBufferRelease(crop);
+            if (!tensor) return;
+            NSError *e = nil;
+            id<MLFeatureProvider> in = [[MLDictionaryFeatureProvider alloc]
+                initWithDictionary:@{@"image":[MLFeatureValue featureValueWithMultiArray:tensor]} error:&e];
+            if (in) kpp[c] = (__bridge_retained void *)in;
+        }
+    });
+    tm.kp_pre = hn_dt(tp, hn_now());
 
-        // Serial predict + copy heatmaps into the (persistent) buffer.
-        for (int c = 0; c < NC; ++c) {
-            bool ok = false;
-            @autoreleasepool {
-                if (kp_in[c]) {
-                    id<MLFeatureProvider> in = (__bridge_transfer id<MLFeatureProvider>)kp_in[c];
-                    kp_in[c] = nullptr;
-                    NSError *e = nil;
-                    auto tb = now();
-                    id<MLFeatureProvider> out = [kd_model predictionFromFeatures:in error:&e];
-                    ms_kp_pred += dt(tb, now());
-                    MLMultiArray *hm = out ? largest_4d_output(out) : nil;   // (1,24,352,352)
-                    if (hm) {
-                        // Copy the (stride-padded) CoreML heatmap straight into the
-                        // 1-px-padded (NJ,354,354) slot for camera c — a single
-                        // stride-aware pass (no contiguous intermediate). Values are
-                        // bit-identical to copy_mlarray_contiguous.
-                        int kh_h = [hm.shape[2] intValue], kh_w = [hm.shape[3] intValue];
-                        long sj = [hm.strides[1] longValue], sy = [hm.strides[2] longValue],
-                             sx = [hm.strides[3] longValue];
-                        const bool f16 = (hm.dataType == MLMultiArrayDataTypeFloat16);
-                        const float  *pf = f16 ? nullptr : (const float *)hm.dataPointer;
-                        const __fp16 *ph = f16 ? (const __fp16 *)hm.dataPointer : nullptr;
-                        float *dst = heatmaps + (size_t)c * cam_slot;
-                        auto td = now();
-                        for (int j = 0; j < NJ; ++j) {
-                            float *djp = dst + (size_t)j * hs * hs;
-                            long jb = (long)j * sj;
-                            for (int y = 0; y < kh_h; ++y) {
-                                long yb = jb + (long)y * sy;
-                                float *row = djp + (size_t)(y + 1) * hs + 1;
-                                if (f16) for (int x = 0; x < kh_w; ++x) row[x] = (float)ph[yb + (long)x * sx];
-                                else     for (int x = 0; x < kh_w; ++x) row[x] = pf[yb + (long)x * sx];
-                            }
+    // Serial predict + copy heatmaps into the (persistent) buffer.
+    for (int c = 0; c < NC; ++c) {
+        bool ok = false;
+        @autoreleasepool {
+            if (kp_in[c]) {
+                id<MLFeatureProvider> in = (__bridge_transfer id<MLFeatureProvider>)kp_in[c];
+                kp_in[c] = nullptr;
+                NSError *e = nil;
+                auto tb = hn_now();
+                id<MLFeatureProvider> out = [kd_model predictionFromFeatures:in error:&e];
+                tm.kp_pred += hn_dt(tb, hn_now());
+                MLMultiArray *hm = out ? largest_4d_output(out) : nil;
+                if (hm) {
+                    // Stride-aware copy straight into the 1-px-padded (NJ,hs,hs) slot
+                    // for camera c (bit-identical to copy_mlarray_contiguous).
+                    int kh_h = [hm.shape[2] intValue], kh_w = [hm.shape[3] intValue];
+                    long sj = [hm.strides[1] longValue], sy = [hm.strides[2] longValue],
+                         sx = [hm.strides[3] longValue];
+                    const bool f16 = (hm.dataType == MLMultiArrayDataTypeFloat16);
+                    const float  *pf = f16 ? nullptr : (const float *)hm.dataPointer;
+                    const __fp16 *ph = f16 ? (const __fp16 *)hm.dataPointer : nullptr;
+                    float *dst = heatmaps + (size_t)c * cam_slot;
+                    auto td = hn_now();
+                    for (int j = 0; j < NJ; ++j) {
+                        float *djp = dst + (size_t)j * hs * hs;
+                        long jb = (long)j * sj;
+                        for (int y = 0; y < kh_h; ++y) {
+                            long yb = jb + (long)y * sy;
+                            float *row = djp + (size_t)(y + 1) * hs + 1;
+                            if (f16) for (int x = 0; x < kh_w; ++x) row[x] = (float)ph[yb + (long)x * sx];
+                            else     for (int x = 0; x < kh_w; ++x) row[x] = pf[yb + (long)x * sx];
                         }
-                        ms_kp_copy += dt(td, now());
-                        ok = true;
                     }
+                    tm.kp_copy += hn_dt(td, hn_now());
+                    ok = true;
                 }
             }
-            // Persistent Metal buffer: clear a failed camera's slot (rare) so the
-            // previous frame's heatmaps don't leak. (CPU vector is already zeroed.)
-            if (metal && !ok)
-                memset(heatmaps + (size_t)c * cam_slot, 0, cam_slot * sizeof(float));
         }
+        if (metal_persistent && !ok)
+            memset(heatmaps + (size_t)c * cam_slot, 0, cam_slot * sizeof(float));
     }
+}
 
-    // ── STAGE 5: assemble reprojection inputs (P^T, K^T, dist) ──────────
-    std::vector<float> camMats((size_t)NC * 12), intrMats((size_t)NC * 9),
-                       distC((size_t)NC * 5, 0.0f), cHMf((size_t)NC * 2);
+// STAGE 5: pack the per-camera geometry into the flat layouts hn_reproject expects
+// (camMats = P^T NC*4*3, intrMats = K^T NC*3*3, distC NC*5, cHMf NC*2 crop centres).
+static void hn_assemble_reproject_inputs(
+        const std::vector<CameraParams> &cams,
+        const std::vector<int> &cHMx, const std::vector<int> &cHMy, int NC,
+        std::vector<float> &camMats, std::vector<float> &intrMats,
+        std::vector<float> &distC, std::vector<float> &cHMf) {
+    camMats.assign((size_t)NC * 12, 0.0f);
+    intrMats.assign((size_t)NC * 9, 0.0f);
+    distC.assign((size_t)NC * 5, 0.0f);
+    cHMf.assign((size_t)NC * 2, 0.0f);
     for (int c = 0; c < NC; ++c) {
         const auto &P = cams[c].projection_mat;              // 3x4
         for (int r = 0; r < 4; ++r)
@@ -807,21 +789,30 @@ static bool jarvis_coreml_predict_hybridnet_3d(
         cHMf[(size_t)c * 2 + 0] = (float)cHMx[c];
         cHMf[(size_t)c * 2 + 1] = (float)cHMy[c];
     }
+}
 
-    // ── STAGE 6a: reprojection → voxel volume (NJ,100³) ─────────────────
-    // GPU (Metal) when available — bit-identical to the CPU hn_reproject,
-    // ~10ms vs ~450ms. Falls back to the validated host path otherwise.
-    HNReproParams P;
-    P.num_cameras = NC; P.num_joints = NJ; P.grid_full = gin;
-    P.grid_spacing = s.hn_grid_spacing_mm; P.roi_cube = s.hn_roi_cube_mm; P.heatmap_size = hs;
+// STAGE 6: reproject the heatmaps into the voxel volume (Metal GPU when available,
+// bit-identical CPU hn_reproject otherwise), run V2VNet on the Apple GPU, and
+// soft-argmax to world-unit points + confidences. Sets s.last_hybrid3d_ms.
+static bool hn_reproject_v2v_softargmax(
+        JarvisCoreMLState &s, MLModel *v2v_model, HNMetalReproject *metal,
+        const HNReproParams &P,
+        const std::vector<float> &camMats, const std::vector<float> &intrMats,
+        const std::vector<float> &distC, const float c3[3],
+        const std::vector<float> &cHMf, const float *heatmaps,
+        int NJ, int gin, int gout,
+        std::vector<float> &pts, std::vector<float> &conf,
+        double &ms_repro, std::string &err) {
     const size_t vf = (size_t)NJ * gin * gin * gin;
+
+    // ── STAGE 6a: reprojection → voxel volume (NJ,gin³) ──
     const float *h3d;
     std::vector<float> h3d_cpu;
-    auto tr0 = now();
+    auto tr0 = hn_now();
     if (metal) {
         if (!metal->reproject(camMats.data(), intrMats.data(), distC.data(),
                               c3, cHMf.data())) {
-            s.status = "HybridNet 3D: Metal reprojection failed"; return false;
+            err = "HybridNet 3D: Metal reprojection failed"; return false;
         }
         h3d = metal->h3d_ptr();
     } else {
@@ -830,9 +821,9 @@ static bool jarvis_coreml_predict_hybridnet_3d(
                      c3, cHMf.data(), heatmaps, h3d_cpu.data());
         h3d = h3d_cpu.data();
     }
-    double ms_repro = dt(tr0, now());
+    ms_repro = hn_dt(tr0, hn_now());
 
-    // ── STAGE 6b: V2VNet (CoreML, Apple GPU) ────────────────────────────
+    // ── STAGE 6b: V2VNet (CoreML, Apple GPU) ──
     std::vector<float> vout;
     {
         auto th = std::chrono::steady_clock::now();
@@ -842,34 +833,42 @@ static bool jarvis_coreml_predict_hybridnet_3d(
             vin = [[MLMultiArray alloc]
                 initWithShape:@[@1, @(NJ), @(gin), @(gin), @(gin)]
                 dataType:MLMultiArrayDataTypeFloat32 error:&e];
-            if (!vin) { s.status = "HybridNet 3D: V2V input alloc failed"; return false; }
+            if (!vin) { err = "HybridNet 3D: V2V input alloc failed"; return false; }
         }
         float *dp = (float *)vin.dataPointer;               // (1,NJ,gin³) contiguous
         // Normalize h3d for V2V by the heatmap value range. vsdiv (true divide)
-        // matches the original scalar `h3d[i] / kHeatmapScale` bit-for-bit
-        // (vsmul by the reciprocal would not).
+        // matches the original scalar `h3d[i] / kHeatmapScale` bit-for-bit.
         float hm_scale = kHeatmapScale;
         vDSP_vsdiv(h3d, 1, &hm_scale, dp, 1, (vDSP_Length)vf);
         id<MLFeatureProvider> in = [[MLDictionaryFeatureProvider alloc]
             initWithDictionary:@{@"vox_in":[MLFeatureValue featureValueWithMultiArray:vin]} error:&e];
-        if (!in) { s.status = "HybridNet 3D: V2V input build failed"; return false; }
+        if (!in) { err = "HybridNet 3D: V2V input build failed"; return false; }
         id<MLFeatureProvider> out = [v2v_model predictionFromFeatures:in error:&e];
-        if (!out) { s.status = "HybridNet 3D: V2V predict failed"; return false; }
+        if (!out) { err = "HybridNet 3D: V2V predict failed"; return false; }
         MLMultiArray *vo = [out featureValueForName:@"vox_out"].multiArrayValue;
         if (!vo) for (NSString *n in out.featureNames)         // fallback: first 5D output
             if ([out featureValueForName:n].multiArrayValue.shape.count == 5)
                 { vo = [out featureValueForName:n].multiArrayValue; break; }
-        if (!vo) { s.status = "HybridNet 3D: V2V output missing"; return false; }
+        if (!vo) { err = "HybridNet 3D: V2V output missing"; return false; }
         copy_mlarray_contiguous(vo, vout);                   // stride-aware — CRITICAL (50→64 pad)
         s.last_hybrid3d_ms = std::chrono::duration<float, std::milli>(
             std::chrono::steady_clock::now() - th).count();
     }
 
-    // ── STAGE 6c: soft-argmax → world-mm points ─────────────────────────
-    std::vector<float> pts((size_t)NJ * 3), conf((size_t)NJ);
+    // ── STAGE 6c: soft-argmax → world-unit points ──
+    pts.assign((size_t)NJ * 3, 0.0f);
+    conf.assign((size_t)NJ, 0.0f);
     hn_soft_argmax(P, vout.data(), gout, c3, pts.data(), conf.data());
+    return true;
+}
 
-    // ── STAGE 7: write kp3d + per-cam 2D overlay ────────────────────────
+// STAGE 7: write the 3D keypoints and the per-camera 2D reprojection overlay into
+// the frame annotation.
+static void hn_write_outputs(
+        AnnotationMap &amap, u32 frame_num, const SkeletonContext &skeleton,
+        const std::vector<float> &pts, const std::vector<float> &conf,
+        const std::vector<CameraParams> &cams,
+        const std::vector<int> &heights, int NC, int NJ) {
     FrameAnnotation &fa = get_or_create_frame(amap, frame_num, skeleton.num_nodes, NC);
     for (int j = 0; j < NJ && j < (int)fa.kp3d.size(); ++j) {
         fa.kp3d[j].x = pts[j * 3 + 0];
@@ -891,21 +890,105 @@ static bool jarvis_coreml_predict_hybridnet_3d(
             kp.confidence = conf[j];
         }
     }
+}
 
-    s.last_total_ms = std::chrono::duration<float, std::milli>(
-        std::chrono::steady_clock::now() - t0).count();
+static bool jarvis_coreml_predict_hybridnet_3d(
+    JarvisCoreMLState &s, AnnotationMap &amap, u32 frame_num,
+    const std::vector<CVPixelBufferRef> &pbs,
+    const std::vector<int> &widths, const std::vector<int> &heights,
+    const SkeletonContext &skeleton, int /*num_cameras*/,
+    const std::vector<CameraParams> &cams) {
+
+    const int NC = s.hn_num_cameras;
+    const int NJ = s.num_joints;
+    const int C  = s.center_input_size;
+    const int B  = s.keypoint_input_size;
+    const int bbox_hw = B / 2;
+    const int Hcen_hi = C / 2;
+    const int hs = B / 2 + 2;                // padded heatmap side (bbox/2 + 2)
+    const int gin = s.hn_grid_in;            // V2VNet input grid side
+    const int gout = s.hn_grid_out;          // soft-argmax output grid side
+
+    if ((int)pbs.size() < NC || (int)widths.size() < NC ||
+        (int)heights.size() < NC || (int)cams.size() < NC) {
+        s.status = "HybridNet 3D: fewer cameras/params than model expects";
+        return false;
+    }
+    for (int c = 0; c < NC; ++c) {
+        if (!pbs[c]) { s.status = "HybridNet 3D: all " + std::to_string(NC) +
+                                  " cameras must have a frame"; return false; }
+    }
+
+    MLModel *cd_model = (__bridge MLModel *)s.center_model;
+    MLModel *kd_model = (__bridge MLModel *)s.keypoint_model;
+    MLModel *v2v_model = (__bridge MLModel *)s.v2v_model;
+    HNMetalReproject *metal = (HNMetalReproject *)s.hn_metal;
+    dispatch_queue_t q = dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0);
+    static const bool hn_timing = getenv("HN_TIMING") != nullptr;  // per-stage host timing
+    const auto t0 = hn_now();
+    HNTiming tm;
+    std::string err;
+    double ms_repro = 0;
+
+    // ── STAGE 1+2: CenterDetect → triangulate center3D ──
+    Eigen::Vector3d center3D;
+    int n_center_used = 0;
+    if (!hn_center_triangulate(cd_model, pbs, widths, heights, cams, NC, C,
+                               Hcen_hi, s.hn_center_cams, q,
+                               center3D, n_center_used, tm, err)) {
+        s.status = err; return false;
+    }
+    const float c3[3] = {(float)center3D[0], (float)center3D[1], (float)center3D[2]};
+
+    // ── STAGE 3+4: crop → KeypointDetect heatmaps (into the persistent buffer) ──
+    // With Metal the heatmaps live in the GPU's shared buffer (borders pre-zeroed
+    // once at load); otherwise a per-frame zeroed vector. A camera that fails
+    // prediction has its slot zeroed so no stale data leaks across frames.
+    const size_t cam_slot = (size_t)NJ * hs * hs;
+    std::vector<float> heatmaps_cpu;
+    float *heatmaps;
+    if (metal) {
+        heatmaps = metal->heatmaps_ptr();
+    } else {
+        heatmaps_cpu.assign((size_t)NC * cam_slot, 0.0f);
+        heatmaps = heatmaps_cpu.data();
+    }
+    std::vector<int> cHMx(NC), cHMy(NC);
+    hn_keypoint_heatmaps(kd_model, pbs, widths, heights, cams, center3D,
+                         NC, NJ, B, bbox_hw, hs, q, heatmaps, metal != nullptr,
+                         cHMx, cHMy, tm);
+
+    // ── STAGE 5: assemble reprojection inputs (P^T, K^T, dist) ──
+    std::vector<float> camMats, intrMats, distC, cHMf;
+    hn_assemble_reproject_inputs(cams, cHMx, cHMy, NC, camMats, intrMats, distC, cHMf);
+
+    // ── STAGE 6: reproject → V2VNet → soft-argmax ──
+    HNReproParams P;
+    P.num_cameras = NC; P.num_joints = NJ; P.grid_full = gin;
+    P.grid_spacing = s.hn_grid_spacing_mm; P.roi_cube = s.hn_roi_cube_mm; P.heatmap_size = hs;
+    std::vector<float> pts, conf;
+    if (!hn_reproject_v2v_softargmax(s, v2v_model, metal, P, camMats, intrMats,
+                                     distC, c3, cHMf, heatmaps, NJ, gin, gout,
+                                     pts, conf, ms_repro, err)) {
+        s.status = err; return false;
+    }
+
+    // ── STAGE 7: write kp3d + per-cam 2D overlay ──
+    hn_write_outputs(amap, frame_num, skeleton, pts, conf, cams, heights, NC, NJ);
+
+    s.last_total_ms = hn_dt(t0, hn_now());
     if (hn_timing) {
         fprintf(stderr,
             "[HN_TIMING] total=%.0f | center: pre=%.0f pred=%.0f | "
             "keypoint: pre=%.0f pred=%.0f copy=%.0f | reproj=%.0f v2v=%.0f | "
             "rest=%.0f\n",
-            s.last_total_ms, ms_cd_pre, ms_cd_pred, ms_kp_pre, ms_kp_pred, ms_kp_copy,
+            s.last_total_ms, tm.cd_pre, tm.cd_pred, tm.kp_pre, tm.kp_pred, tm.kp_copy,
             ms_repro, s.last_hybrid3d_ms,
-            s.last_total_ms - ms_cd_pre - ms_cd_pred - ms_kp_pre - ms_kp_pred -
-                ms_kp_copy - ms_repro - s.last_hybrid3d_ms);
+            s.last_total_ms - tm.cd_pre - tm.cd_pred - tm.kp_pre - tm.kp_pred -
+                tm.kp_copy - ms_repro - s.last_hybrid3d_ms);
     }
     s.status = "HybridNet 3D: " + std::to_string(NJ) + " joints, " +
-               std::to_string((int)center_2d.size()) + "/" + std::to_string(NC) +
+               std::to_string(n_center_used) + "/" + std::to_string(NC) +
                " cams, " + std::to_string((int)s.last_total_ms) + " ms";
     return true;
 }
