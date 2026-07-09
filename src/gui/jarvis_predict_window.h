@@ -600,6 +600,16 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
                 std::error_code ec;
                 fs::create_directories(dest, ec);
 
+                // Guard against a self-referential import: when the source folder
+                // IS the destination (e.g. re-importing the model already inside the
+                // project's jarvis_models/<name>/), the .mlpackage remove_all()+copy
+                // below would delete each package and then fail to copy from the
+                // just-deleted source, destroying the models (model_info.json, copied
+                // via copy_file, would survive — the exact data-loss fingerprint).
+                // The files are already in place, so skip the copy and just register.
+                std::error_code eq_ec;
+                bool same_dir = fs::equivalent(fs::path(src_dir), dest, eq_ec) && !eq_ec;
+                if (!same_dir) {
                 try {
                 for (auto &entry : fs::directory_iterator(src_dir)) {
                     auto fname = entry.path().filename().string();
@@ -618,12 +628,18 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
                     }
                     if (entry.is_directory() && fname.find(".mlpackage") != std::string::npos) {
                         fs::path ml_dest = dest / fname;
+                        // Belt-and-braces vs the same_dir guard: never remove_all a
+                        // package that is the same filesystem object as the source.
+                        std::error_code same_ec;
+                        if (fs::equivalent(entry.path(), ml_dest, same_ec) && !same_ec)
+                            continue;
                         fs::remove_all(ml_dest, ec);
                         fs::copy(entry.path(), ml_dest,
                                  fs::copy_options::recursive, ec);
                     }
                 }
                 } catch (...) {}  // tolerate directory iteration errors
+                }
 
                 jarvis_register_model(pm, model_name, rel,
                     lr.num_joints, lr.center_input_size, lr.keypoint_input_size);
