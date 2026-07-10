@@ -250,6 +250,12 @@ void decoder_process(DecoderContext *dc_context, FFmpegDemuxer *demuxer,
                                   << dc_context->total_num_frame << std::endl;
                     }
                 }
+            } else {
+                // Not decoding (e.g. batch predict idles decoders to free CPU).
+                // Sleep instead of busy-spinning at 100% CPU. The seek check at the
+                // top of the loop still runs every iteration, so a seek request is
+                // serviced promptly even while idle. Mirrors the macOS path.
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
             }
         }
     } while (!(dc_context->stop_flag));

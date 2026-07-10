@@ -154,7 +154,7 @@ inline JarvisLoadResult jarvis_load_from_dir(
     , JarvisTensorRTState &jarvis_trt
 #endif
 #if defined(__linux__) || defined(_WIN32)
-#ifdef RED_HAS_ONNXRUNTIME
+#if defined(RED_HAS_ONNXRUNTIME) || defined(RED_HAS_TENSORRT_HN)
     , JarvisHybridNetState &jarvis_hn
 #endif
 #endif
@@ -165,7 +165,7 @@ inline JarvisLoadResult jarvis_load_from_dir(
     r.config = parse_jarvis_model_info(fs::exists(mi) ? mi.string().c_str() : nullptr);
 
 #if defined(__linux__) || defined(_WIN32)
-#ifdef RED_HAS_ONNXRUNTIME
+#if defined(RED_HAS_ONNXRUNTIME) || defined(RED_HAS_TENSORRT_HN)
     // HybridNet 3D mode: presence of hybrid3d.onnx + manifest.json triggers
     // the full 3-stage pipeline. Replaces the 2D+triangulate shortcut.
     if (jarvis_hybridnet_dir_is_valid(base_dir)) {
@@ -272,15 +272,21 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
                                      JarvisTensorRTState &jarvis_trt,
 #endif
 #if defined(__linux__) || defined(_WIN32)
-#ifdef RED_HAS_ONNXRUNTIME
+#if defined(RED_HAS_ONNXRUNTIME) || defined(RED_HAS_TENSORRT_HN)
                                      JarvisHybridNetState &jarvis_hn,
 #endif
 #endif
                                      AppContext &ctx) {
     DrawPanel("JARVIS Predict", state.show,
         [&]() {
-        // Availability check
-        if (!jarvis.available) {
+        // Availability check. The HybridNet TensorRT direct-runtime path needs
+        // no ONNX Runtime, so treat the panel as available when it is compiled
+        // in — jarvis.available only reflects the ORT 2-stage path.
+        bool ml_available = jarvis.available;
+#if defined(RED_HAS_TENSORRT_HN)
+        ml_available = true;
+#endif
+        if (!ml_available) {
             ImGui::TextColored(ImVec4(1, 0.5f, 0, 1),
                                "ONNX Runtime not available");
             ImGui::TextWrapped("Compile with ONNX Runtime in lib/onnxruntime/ "
@@ -294,7 +300,7 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
         bool any_loaded = jarvis.loaded || jarvis_coreml.loaded;
 #elif defined(_WIN32)
         bool any_loaded = jarvis.loaded || jarvis_trt.loaded || jarvis_hn.loaded;
-#elif defined(__linux__) && defined(RED_HAS_ONNXRUNTIME)
+#elif defined(__linux__) && (defined(RED_HAS_ONNXRUNTIME) || defined(RED_HAS_TENSORRT_HN))
         bool any_loaded = jarvis.loaded || jarvis_hn.loaded;
 #else
         bool any_loaded = jarvis.loaded;
@@ -316,7 +322,7 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
                     , jarvis_trt
 #endif
 #if defined(__linux__) || defined(_WIN32)
-#ifdef RED_HAS_ONNXRUNTIME
+#if defined(RED_HAS_ONNXRUNTIME) || defined(RED_HAS_TENSORRT_HN)
                     , jarvis_hn
 #endif
 #endif
@@ -348,7 +354,7 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
                             , jarvis_trt
 #endif
 #if defined(__linux__) || defined(_WIN32)
-#ifdef RED_HAS_ONNXRUNTIME
+#if defined(RED_HAS_ONNXRUNTIME) || defined(RED_HAS_TENSORRT_HN)
                             , jarvis_hn
 #endif
 #endif
@@ -403,7 +409,7 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
                     , jarvis_trt
 #endif
 #if defined(__linux__) || defined(_WIN32)
-#ifdef RED_HAS_ONNXRUNTIME
+#if defined(RED_HAS_ONNXRUNTIME) || defined(RED_HAS_TENSORRT_HN)
                     , jarvis_hn
 #endif
 #endif
@@ -581,7 +587,7 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
                 , jarvis_trt
 #endif
 #if defined(__linux__) || defined(_WIN32)
-#ifdef RED_HAS_ONNXRUNTIME
+#if defined(RED_HAS_ONNXRUNTIME) || defined(RED_HAS_TENSORRT_HN)
                 , jarvis_hn
 #endif
 #endif
@@ -660,13 +666,13 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
             show_loaded = show_loaded || jarvis_trt.loaded;
 #endif
 #if defined(__linux__) || defined(_WIN32)
-#ifdef RED_HAS_ONNXRUNTIME
+#if defined(RED_HAS_ONNXRUNTIME) || defined(RED_HAS_TENSORRT_HN)
             show_loaded = show_loaded || jarvis_hn.loaded;
 #endif
 #endif
             if (show_loaded) {
 #if defined(__linux__) || defined(_WIN32)
-#ifdef RED_HAS_ONNXRUNTIME
+#if defined(RED_HAS_ONNXRUNTIME) || defined(RED_HAS_TENSORRT_HN)
                 if (jarvis_hn.loaded) {
                     ImGui::TextColored(ImVec4(0, 1, 0, 1), "Loaded (HybridNet 3D)");
                 } else
@@ -1022,7 +1028,7 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
                         jarvis.last_total_ms);
         }
 #if defined(__linux__) || defined(_WIN32)
-#ifdef RED_HAS_ONNXRUNTIME
+#if defined(RED_HAS_ONNXRUNTIME) || defined(RED_HAS_TENSORRT_HN)
         if (jarvis_hn.loaded) {
             double total = jarvis_hn.last_center_ms + jarvis_hn.last_efftrack_ms +
                            jarvis_hn.last_hybrid3d_ms;
@@ -1083,7 +1089,7 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
         can_predict = can_predict || jarvis_trt.loaded;
 #endif
 #if defined(__linux__) || defined(_WIN32)
-#ifdef RED_HAS_ONNXRUNTIME
+#if defined(RED_HAS_ONNXRUNTIME) || defined(RED_HAS_TENSORRT_HN)
         can_predict = can_predict || jarvis_hn.loaded;
 #endif
 #endif

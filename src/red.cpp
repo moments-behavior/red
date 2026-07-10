@@ -361,7 +361,7 @@ int main(int argc, char **argv) {
     JarvisTensorRTState jarvis_trt_state;
 #endif
 #if defined(__linux__) || defined(_WIN32)
-#ifdef RED_HAS_ONNXRUNTIME
+#if defined(RED_HAS_ONNXRUNTIME) || defined(RED_HAS_TENSORRT_HN)
     JarvisHybridNetState jarvis_hn_state;
 #endif
 #endif
@@ -549,7 +549,7 @@ int main(int argc, char **argv) {
         jarvis_trt_state = JarvisTensorRTState{};
 #endif
 #if defined(__linux__) || defined(_WIN32)
-#ifdef RED_HAS_ONNXRUNTIME
+#if defined(RED_HAS_ONNXRUNTIME) || defined(RED_HAS_TENSORRT_HN)
         jarvis_hybridnet_unload(jarvis_hn_state);
 #endif
 #endif
@@ -639,7 +639,7 @@ int main(int argc, char **argv) {
                                                  jarvis_trt_state,
 #endif
 #if defined(__linux__) || defined(_WIN32)
-#ifdef RED_HAS_ONNXRUNTIME
+#if defined(RED_HAS_ONNXRUNTIME) || defined(RED_HAS_TENSORRT_HN)
                                                  jarvis_hn_state,
 #endif
 #endif
@@ -1606,7 +1606,7 @@ int main(int argc, char **argv) {
             jarvis_any_loaded = jarvis_any_loaded || jarvis_trt_state.loaded;
 #endif
 #if defined(__linux__) || defined(_WIN32)
-#ifdef RED_HAS_ONNXRUNTIME
+#if defined(RED_HAS_ONNXRUNTIME) || defined(RED_HAS_TENSORRT_HN)
             jarvis_any_loaded = jarvis_any_loaded || jarvis_hn_state.loaded;
 #endif
 #endif
@@ -1723,13 +1723,13 @@ int main(int argc, char **argv) {
 
                 // HybridNet needs all N cams (model has a fixed input shape);
                 // the 2D + DLT path can work on whatever's visible.
-#ifdef RED_HAS_ONNXRUNTIME
+#if defined(RED_HAS_ONNXRUNTIME) || defined(RED_HAS_TENSORRT_HN)
                 const bool hn_active = jarvis_hn_state.loaded;
 #else
                 const bool hn_active = false;
 #endif
 
-#ifdef RED_HAS_ONNXRUNTIME
+#if defined(RED_HAS_ONNXRUNTIME) || defined(RED_HAS_TENSORRT_HN)
                 // Force a global seek + decoder-wake when HN predict is about
                 // to fire and some cam doesn't yet have the current frame in
                 // its ring buffer. Mirrors the macOS Predict-from-All path.
@@ -1810,7 +1810,7 @@ int main(int argc, char **argv) {
                 // points and produces nonsense 3D.
                 std::vector<int> mh_per_cam(scene->num_cams, mh);
                 bool hn_can_proceed = true;
-#ifdef RED_HAS_ONNXRUNTIME
+#if defined(RED_HAS_ONNXRUNTIME) || defined(RED_HAS_TENSORRT_HN)
                 if (hn_active) {
                     const char *hn_verbose_env = std::getenv("RED_HN_VERBOSE");
                     const bool hn_verbose = (hn_verbose_env && hn_verbose_env[0] == '1');
@@ -1903,7 +1903,7 @@ int main(int argc, char **argv) {
                     }
                 }
 
-#ifdef RED_HAS_ONNXRUNTIME
+#if defined(RED_HAS_ONNXRUNTIME) || defined(RED_HAS_TENSORRT_HN)
                 if (jarvis_hn_state.loaded) {
                     // HybridNet handles the full 3-stage pipeline internally
                     // (CenterDetect → DLT triangulate → effTrack → Hybrid3D)
@@ -2025,10 +2025,14 @@ int main(int argc, char **argv) {
 
                     case Phase::SEEK: {
                         // Seek to current chunk start. Blocking (~3-5s) but
-                        // only happens once per 64-frame buffer fill.
+                        // only happens once per 64-frame buffer fill. MUST be an
+                        // ACCURATE seek: a keyframe-aligned (fast) seek lands the
+                        // ring buffer on the nearest preceding keyframe, so slot 0
+                        // would be an EARLIER frame than batch_chunk_start and every
+                        // prediction would be stored against the wrong frame.
                         bp.chunk_seek_t0 = std::chrono::steady_clock::now();
                         seek_all_cameras(scene, bp.batch_chunk_start,
-                                         dc_context->video_fps, ps, false);
+                                         dc_context->video_fps, ps, true);
                         bp.batch_seek_ms += std::chrono::duration<float, std::milli>(
                             std::chrono::steady_clock::now() - bp.chunk_seek_t0).count();
                         current_frame_num = bp.batch_chunk_start;
@@ -2114,6 +2118,31 @@ int main(int argc, char **argv) {
 
                             u32 frame = (u32)bp.batch_current;
 
+                            // Guard against buffer/frame misalignment. The decoder
+                            // stamps each slot with its true frame_number; if the
+                            // expected slot doesn't hold `frame` (e.g. a seek landed
+                            // the ring on a different frame), find the correct slot,
+                            // and if `frame` isn't in this chunk at all, re-seek a
+                            // fresh chunk starting here. Mirrors the macOS streaming
+                            // path's frame_number match — without it, predictions get
+                            // silently stored against the wrong (offset) frame.
+                            if (scene->num_cams > 0 &&
+                                scene->display_buffer[0][slot].frame_number.load() != (int)frame) {
+                                int found = -1;
+                                for (int s = 0; s < buf_size; ++s)
+                                    if (scene->display_buffer[0][s].frame_number.load() == (int)frame) {
+                                        found = s; break;
+                                    }
+                                if (found < 0) {
+                                    bp.batch_chunk_start = bp.batch_current;
+                                    bp.batch_phase = Phase::SEEK;
+                                    for (auto &[key, value] : window_need_decoding)
+                                        value.store(true);
+                                    break;
+                                }
+                                slot = found;
+                            }
+
                             // Skip frames with manual labels
                             bool has_manual = false;
                             if (annotations.count(frame)) {
@@ -2155,7 +2184,7 @@ int main(int argc, char **argv) {
 #else
                                     const bool trt_loaded = false;
 #endif
-#ifdef RED_HAS_ONNXRUNTIME
+#if defined(RED_HAS_ONNXRUNTIME) || defined(RED_HAS_TENSORRT_HN)
                                     const bool hn_loaded = jarvis_hn_state.loaded;
 #else
                                     const bool hn_loaded = false;
@@ -2183,7 +2212,7 @@ int main(int argc, char **argv) {
                                         }
                                         rgb_bufs[c] = rgb_storage[c].data();
                                     }
-#ifdef RED_HAS_ONNXRUNTIME
+#if defined(RED_HAS_ONNXRUNTIME) || defined(RED_HAS_TENSORRT_HN)
                                     if (hn_loaded) {
                                         // HybridNet handles 3D + per-cam 2D internally;
                                         // skip the separate reprojection() call.
@@ -2400,11 +2429,23 @@ int main(int argc, char **argv) {
                         float total_ms = std::chrono::duration<float, std::milli>(t1 - bp.batch_t0).count();
                         bp.batch_running = false;
                         bp.batch_phase = Phase::IDLE;
-                        // Match the chunked path's post-batch state: decoders idle
-                        // (streaming left them running; the render loop re-enables
-                        // the visible camera on the next interaction).
+#ifdef __APPLE__
+                        // macOS: decoders idle post-batch; the render loop re-enables
+                        // the visible camera on the next interaction (streaming path).
                         for (auto &[key, value] : window_need_decoding)
                             value.store(false);
+#else
+                        // Linux/Windows (chunked path): RE-ENABLE decoding so the app
+                        // returns to the normal interactive state. If left disabled,
+                        // a subsequent seek (e.g. clicking a Keypoint Labels square)
+                        // calls seek_all_cameras(), which spins the UI thread waiting
+                        // on the decoders' seek-ack that never comes — a hard hang.
+                        // Also lets spacebar playback resume. Decoders fill the ring
+                        // then park (1ms sleep) when paused, so this is cheap.
+                        for (auto &[key, value] : window_need_decoding)
+                            value.store(true);
+                        ps.pause_seeked = false;  // allow the render loop to resync
+#endif
                         bp.batch_status = (bp.batch_cancelled ? "Cancelled: " : "Complete: ") +
                             std::to_string(bp.batch_completed) + " frames in " +
                             std::to_string((int)(total_ms / 1000.0f)) + "s (" +
