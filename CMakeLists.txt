@@ -1770,19 +1770,57 @@ else()
         message(STATUS "ONNX Runtime not found in lib/onnxruntime/ — JARVIS prediction disabled")
     endif()
 
-    # Optional TensorRT 8.6 for JARVIS HybridNet direct-runtime inference.
-    # Read-only orange-shared install — never bundled, never modified.
+    # Optional TensorRT for JARVIS HybridNet direct-runtime inference.
     # Engine files for the loaded JARVIS model are compiled offline via
     # scripts/compile_tensorrt_engines.sh. At runtime, jarvis_hybridnet.h
     # uses TRT when .engine files are present and falls back to the ORT CUDA EP.
-    set(TENSORRT_DIR "$ENV{HOME}/nvidia/TensorRT-8.6.1.6")
+    #
+    # Two install layouts are supported (tried in this order):
+    #   1. Self-contained tarball — the 22.04 reference box: TRT 8.6.1.6 under
+    #      $HOME/nvidia/TensorRT-8.6.1.6 (read-only, orange-shared, never
+    #      bundled/modified), or any dir passed via -DTENSORRT_DIR=. Layout:
+    #      <dir>/include/NvInfer.h + <dir>/lib/libnvinfer.so.
+    #   2. System / apt install — the 24.04 / CUDA-13 boxes (e.g. flyrig): TRT
+    #      10 from the NVIDIA CUDA apt repo, headers in /usr/include/<triplet>,
+    #      libs in /usr/lib/<triplet>. Found via find_path/find_library.
+    # red only loads prebuilt .engine files (no ONNX parsing, no builder at
+    # runtime) and uses the modern name-based API (createInferRuntime,
+    # deserializeCudaEngine, enqueueV3, setTensorAddress, setInputShape,
+    # getTensorShape, getIOTensorName) shared across TRT 8.5–11 — none of the
+    # binding-index APIs TRT 10 removed — so either TRT major works unchanged.
+    set(TENSORRT_DIR "$ENV{HOME}/nvidia/TensorRT-8.6.1.6" CACHE PATH
+        "TensorRT tarball root; tried before the system/apt install")
+    set(HAS_TENSORRT_HN FALSE)
     if(EXISTS "${TENSORRT_DIR}/include/NvInfer.h" AND
        EXISTS "${TENSORRT_DIR}/lib/libnvinfer.so")
+        # Layout 1: self-contained tarball.
         set(HAS_TENSORRT_HN TRUE)
-        message(STATUS "TensorRT found at ${TENSORRT_DIR} (HybridNet direct runtime enabled)")
+        set(TENSORRT_INCLUDE_DIR "${TENSORRT_DIR}/include")
+        set(TENSORRT_LIB         "${TENSORRT_DIR}/lib/libnvinfer.so")
+        set(TENSORRT_PLUGIN_LIB  "${TENSORRT_DIR}/lib/libnvinfer_plugin.so")
+        set(TENSORRT_LIB_DIR     "${TENSORRT_DIR}/lib")
+        message(STATUS "TensorRT found at ${TENSORRT_DIR} (tarball; HybridNet direct runtime enabled)")
     else()
-        set(HAS_TENSORRT_HN FALSE)
-        message(STATUS "TensorRT not found at ${TENSORRT_DIR} — JARVIS HybridNet will use ORT CUDA EP only")
+        # Layout 2: system / apt (e.g. TRT 10 from the CUDA repo).
+        find_path(TENSORRT_INCLUDE_DIR NAMES NvInfer.h PATH_SUFFIXES x86_64-linux-gnu)
+        find_library(TENSORRT_LIB NAMES nvinfer)
+        find_library(TENSORRT_PLUGIN_LIB NAMES nvinfer_plugin)
+        if(TENSORRT_INCLUDE_DIR AND TENSORRT_LIB AND TENSORRT_PLUGIN_LIB)
+            set(HAS_TENSORRT_HN TRUE)
+            get_filename_component(TENSORRT_LIB_DIR "${TENSORRT_LIB}" DIRECTORY)
+            message(STATUS "TensorRT found in system paths: ${TENSORRT_LIB} "
+                           "(HybridNet direct runtime enabled)")
+        else()
+            message(STATUS "TensorRT not found (tarball ${TENSORRT_DIR} or system paths) "
+                           "— JARVIS HybridNet will use ORT CUDA EP only")
+        endif()
+    endif()
+    # Report the detected TRT major version (informational — the app is
+    # version-agnostic across the modern API described above).
+    if(HAS_TENSORRT_HN AND EXISTS "${TENSORRT_INCLUDE_DIR}/NvInferVersion.h")
+        file(STRINGS "${TENSORRT_INCLUDE_DIR}/NvInferVersion.h" _trt_ver_line
+             REGEX "define +NV_TENSORRT_MAJOR")
+        message(STATUS "  ${_trt_ver_line}")
     endif()
 
     # Optional MuJoCo for body-model IK (bundled at lib/mujoco/)
@@ -1825,7 +1863,7 @@ else()
         target_include_directories(red PRIVATE "${ONNXRUNTIME_DIR}/include")
     endif()
     if(HAS_TENSORRT_HN)
-        target_include_directories(red PRIVATE "${TENSORRT_DIR}/include")
+        target_include_directories(red PRIVATE "${TENSORRT_INCLUDE_DIR}")
     endif()
     if(HAS_MUJOCO)
         target_include_directories(red PRIVATE "${MUJOCO_DIR}/include" "${MUJOCO_DIR}/include/mujoco")
@@ -1866,9 +1904,9 @@ else()
         # plugin lib loaded, hybrid3d.engine deserialization fails with
         # "getPluginCreator could not find plugin: InstanceNormalization_TRT".
         target_link_libraries(red PRIVATE
-            "${TENSORRT_DIR}/lib/libnvinfer.so"
+            "${TENSORRT_LIB}"
             "-Wl,--no-as-needed"
-            "${TENSORRT_DIR}/lib/libnvinfer_plugin.so"
+            "${TENSORRT_PLUGIN_LIB}"
             "-Wl,--as-needed")
     endif()
     if(HAS_MUJOCO)
@@ -1925,7 +1963,7 @@ else()
     # (or symlink the install to a fixed location) since the absolute path
     # under $HOME is not portable.
     if(HAS_TENSORRT_HN)
-        list(APPEND RED_RPATH_BUILD "${TENSORRT_DIR}/lib")
+        list(APPEND RED_RPATH_BUILD "${TENSORRT_LIB_DIR}")
     endif()
 
     set_target_properties(red PROPERTIES
@@ -1992,11 +2030,11 @@ else()
         endif()
         if(HAS_TENSORRT_HN)
             target_compile_definitions(${TEST_NAME} PRIVATE RED_HAS_TENSORRT_HN)
-            target_include_directories(${TEST_NAME} PRIVATE "${TENSORRT_DIR}/include")
+            target_include_directories(${TEST_NAME} PRIVATE "${TENSORRT_INCLUDE_DIR}")
             target_link_libraries(${TEST_NAME} PRIVATE
-                "${TENSORRT_DIR}/lib/libnvinfer.so"
+                "${TENSORRT_LIB}"
                 "-Wl,--no-as-needed"
-                "${TENSORRT_DIR}/lib/libnvinfer_plugin.so"
+                "${TENSORRT_PLUGIN_LIB}"
                 "-Wl,--as-needed")
         endif()
         if(HAS_MUJOCO)

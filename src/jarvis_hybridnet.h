@@ -328,6 +328,13 @@ struct JarvisHybridNetState {
     bool loaded = false;
     JarvisHybridNetConfig cfg;
 
+    // CUDA device the engines were deserialized on. All inference (and the
+    // pre-inference cudaSetDevice in the predict paths) must target this same
+    // device — on multi-GPU boxes (e.g. flyrig: A16 sm_86 + RTX 4000 Ada
+    // sm_89) hardcoding device 0 could run kernels on a different device than
+    // the one that holds the engine's memory. Set in jarvis_hybridnet_load.
+    int gpu_device_id = 0;
+
     jarvis_hn_trt::Logger trt_logger;
     std::unique_ptr<jarvis_hn_trt::Engine> trt_center;     // center_detect.engine
     std::unique_ptr<jarvis_hn_trt::Engine> trt_efftrack;   // hybridnet_efftrack.engine
@@ -535,6 +542,7 @@ inline bool jarvis_hybridnet_load(JarvisHybridNetState &state,
         return false;
     }
 
+    state.gpu_device_id = gpu_device_id;
     cudaSetDevice(gpu_device_id);
     auto try_engine = [&](std::unique_ptr<jarvis_hn_trt::Engine> &out,
                           const fs::path &path, const char *label) -> bool {
@@ -866,7 +874,7 @@ inline bool jarvis_hybridnet_predict_frame(
     }
     // Clear any stale CUDA error from red's other GPU work (NVDEC, GL interop).
     // Without this the next TRT kernel inherits the sticky error and fails.
-    cudaSetDevice(0);
+    cudaSetDevice(state.gpu_device_id);
     cudaError_t stale = cudaGetLastError();
     if (stale != cudaSuccess) {
         std::fprintf(stderr,
@@ -1158,7 +1166,7 @@ inline bool jarvis_hybridnet_predict_frame_device(
         return false;
     }
 
-    cudaSetDevice(0);
+    cudaSetDevice(state.gpu_device_id);
     cudaError_t stale = cudaGetLastError();
     if (stale != cudaSuccess) {
         std::fprintf(stderr,
