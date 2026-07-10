@@ -263,7 +263,7 @@ class Hybrid3DStage(nn.Module):
 
 
 def export_hybrid3d(cfg, pth_path: str, out_path: str,
-                    opset_version: int = 17) -> dict:
+                    opset_version: int = 17, world_scale: float = 1.0) -> dict:
     """Export the 3D stage: reproLayer + V2VNet + soft-argmax."""
     stage = Hybrid3DStage(cfg).cuda()
     hn_state = torch.load(pth_path, map_location="cuda", weights_only=True)
@@ -274,6 +274,27 @@ def export_hybrid3d(cfg, pth_path: str, out_path: str,
     if missing or unexpected:
         print(f"  [hybrid3d] missing={len(missing)} unexpected={len(unexpected)}")
     stage.eval()
+
+    # world_scale reconciles the model's training grid units with the inference
+    # calibration units. E.g. a fly telecentric model trains in units where the
+    # ROI cube is 48 / spacing 1, but the DLT calibration is in mm and the fly is
+    # ~a few mm → those are really 4.8mm / 0.1mm, so --world_scale 0.1. Without it
+    # the reprojected voxel grid is 10x too large and keypoints scatter off-image.
+    # This whole reprojection+decode is baked into the ONNX (unlike the Mac/CoreML
+    # path, where host C++ does it and scripts/pth_to_coreml.py --world_scale scales
+    # the metadata C++ reads), so BOTH the reproLayer's physical grid AND the final
+    # decode magnitudes must scale together. Scale the PHYSICAL tensors here, post-
+    # construction — the integer voxel COUNT (grid_size=int(ROI/spacing)) is computed
+    # from the unscaled cfg and must stay 48→24, so we must NOT scale the cfg itself.
+    if world_scale != 1.0:
+        stage.reproLayer.grid = stage.reproLayer.grid * world_scale
+        stage.grid_spacing = stage.grid_spacing * world_scale
+        stage.grid_size = stage.grid_size * world_scale
+        print(f"  [hybrid3d] world_scale={world_scale}: physical grid scaled "
+              f"(roi {cfg.HYBRIDNET.ROI_CUBE_SIZE}->"
+              f"{round(cfg.HYBRIDNET.ROI_CUBE_SIZE * world_scale, 6)}mm, spacing "
+              f"{cfg.HYBRIDNET.GRID_SPACING}->"
+              f"{round(cfg.HYBRIDNET.GRID_SPACING * world_scale, 6)}mm; voxel count unchanged)")
 
     num_cams = cfg.HYBRIDNET.NUM_CAMERAS
     num_joints = cfg.KEYPOINTDETECT.NUM_JOINTS
@@ -385,6 +406,11 @@ def main():
     p.add_argument("--jarvis-src", default="/home/user/src/jarvis-local",
                    help="Path to jarvis-local source tree")
     p.add_argument("--opset", type=int, default=17)
+    p.add_argument("--world_scale", type=float, default=1.0,
+                   help="Scale reconciling model grid units with calibration units "
+                        "(fly telecentric: ROI 48 / spacing 1 are really 4.8mm / 0.1mm "
+                        "=> --world_scale 0.1). Affects hybrid3d only. Mirrors "
+                        "pth_to_coreml.py --world_scale on the Mac/CoreML path.")
     p.add_argument("--stage",
                    choices=["center", "keypoint", "hybridnet_efftrack", "hybrid3d", "all"],
                    default="all")
@@ -429,7 +455,8 @@ def main():
         out = out_dir / "hybrid3d.onnx"
         print(f"\nExporting Hybrid3D (reproLayer + V2V + soft-argmax) -> {out}")
         results.append(export_hybrid3d(cfg, args.hybridnet_pth, str(out),
-                                        opset_version=args.opset))
+                                        opset_version=args.opset,
+                                        world_scale=args.world_scale))
 
     # Provenance: copy the training config and write a manifest so the C++ side
     # can read training-time hyperparams (crop sizes, num cameras, ROI, etc.)
@@ -451,8 +478,9 @@ def main():
             "keypoint_model_size": cfg.KEYPOINTDETECT.MODEL_SIZE,
             "num_joints": cfg.KEYPOINTDETECT.NUM_JOINTS,
             "num_cameras": cfg.HYBRIDNET.NUM_CAMERAS,
-            "roi_cube_size_mm": cfg.HYBRIDNET.ROI_CUBE_SIZE,
-            "grid_spacing_mm": cfg.HYBRIDNET.GRID_SPACING,
+            "roi_cube_size_mm": round(cfg.HYBRIDNET.ROI_CUBE_SIZE * args.world_scale, 6),
+            "grid_spacing_mm": round(cfg.HYBRIDNET.GRID_SPACING * args.world_scale, 6),
+            "world_scale": args.world_scale,
             "dataset_mean": list(cfg.DATASET.MEAN),
             "dataset_std": list(cfg.DATASET.STD),
             "keypoint_names": list(cfg.KEYPOINT_NAMES),
