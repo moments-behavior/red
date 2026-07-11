@@ -18,7 +18,9 @@
 #include "annotation.h"
 #include "project.h"
 #include "skeleton.h"
+#include "prediction_store.h"
 
+#include <cmath>
 #include <cstdio>
 #include <ctime>
 #include <filesystem>
@@ -175,6 +177,82 @@ inline JarvisExportResult jarvis_export_predictions3D(
 
         r.rows_written++;
         if (frame_has_3d) r.frames_with_data++;
+    }
+    f.close();
+
+    r.ok = true;
+    r.output_dir = output_dir;
+    r.message = "Exported " + std::to_string(r.rows_written) + " frames (" +
+                std::to_string(r.frames_with_data) + " with 3D) to " +
+                fs::path(output_dir).filename().string();
+    return r;
+}
+
+// Same JARVIS-CLI-compatible output, but sourced from a memory-mapped
+// PredictionReader (Batch Predict "Store" mode, where predictions live in the
+// .rpred store rather than the AnnotationMap). Rows absent from the store are
+// written as all-NaN, so row index == frame - frame_start, matching the CLI.
+inline JarvisExportResult jarvis_export_predictions3D_from_reader(
+    const std::string &output_dir,
+    const predstore::PredictionReader &reader,
+    const SkeletonContext &skel,
+    const ProjectManager &pm,
+    int frame_start,
+    int number_frames)
+{
+    namespace fs = std::filesystem;
+    JarvisExportResult r;
+
+    const int nj = skel.num_nodes;
+    if (nj <= 0) { r.message = "No skeleton loaded — nothing to export."; return r; }
+    if (number_frames <= 0) { r.message = "Empty frame range — nothing to export."; return r; }
+    if (!reader.is_open()) { r.message = "Prediction store not open."; return r; }
+
+    std::error_code ec;
+    fs::create_directories(output_dir, ec);
+    if (ec) { r.message = "Failed to create " + output_dir + ": " + ec.message(); return r; }
+
+    {
+        std::ofstream y(fs::path(output_dir) / "info.yaml");
+        if (!y) { r.message = "Cannot open info.yaml for writing."; return r; }
+        y << "recording_path: " << pm.media_folder << "\n";
+        y << "dataset_name: " << pm.calibration_folder << "\n";
+        y << "frame_start: " << frame_start << "\n";
+        y << "number_frames: " << number_frames << "\n";
+    }
+
+    std::ofstream f(fs::path(output_dir) / "data3D.csv", std::ios::binary);
+    if (!f) { r.message = "Cannot open data3D.csv for writing."; return r; }
+    static constexpr const char *CRLF = "\r\n";
+
+    for (int j = 0; j < nj; ++j) {
+        std::string name = (j < (int)skel.node_names.size())
+                               ? skel.node_names[j] : ("kp" + std::to_string(j));
+        for (int k = 0; k < 4; ++k) { f << name; if (!(j == nj - 1 && k == 3)) f << ","; }
+    }
+    f << CRLF;
+    for (int j = 0; j < nj; ++j) { f << "x,y,z,confidence"; if (j != nj - 1) f << ","; }
+    f << CRLF;
+
+    const int epf = reader.elements_per_frame();
+    for (int i = 0; i < number_frames; ++i) {
+        const float *row = reader.frame((uint32_t)(frame_start + i));
+        bool has = (row != nullptr);
+        for (int j = 0; j < nj; ++j) {
+            bool valid = has && (j * 4 + 3) < epf && !std::isnan(row[j * 4]);
+            if (valid) {
+                jarvis_write_coord(f, row[j * 4 + 0]); f << ",";
+                jarvis_write_coord(f, row[j * 4 + 1]); f << ",";
+                jarvis_write_coord(f, row[j * 4 + 2]); f << ",";
+                jarvis_write_coord(f, row[j * 4 + 3]);
+            } else {
+                f << "NaN,NaN,NaN,NaN";
+            }
+            if (j != nj - 1) f << ",";
+        }
+        f << CRLF;
+        r.rows_written++;
+        if (has) r.frames_with_data++;
     }
     f.close();
 

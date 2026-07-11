@@ -14,6 +14,7 @@
 #include "imgui.h"
 #include "app_context.h"
 #include "jarvis_inference.h"
+#include "prediction_store.h"
 #ifdef __APPLE__
 #include "jarvis_coreml.h"
 #elif defined(_WIN32)
@@ -53,6 +54,35 @@ struct JarvisPredictState {
     // main loop after Predict Current Frame and at Batch Predict completion.
     bool export_predictions3D = false;
     std::string export_status;   // last export result, shown in the panel
+
+    // Where Batch Predict sends its results:
+    //   LabelingTool — into the AnnotationMap as labeled frames (legacy; floods
+    //                  the Labeling Tool when predicting large sections).
+    //   Store        — into a separate mmap'd prediction store (Pose Stats +
+    //                  read-only video overlay), leaving the Labeling Tool clean.
+    // Single-frame Predict always goes to the Labeling Tool for now.
+    enum class PredDest { LabelingTool, Store };
+    PredDest batch_prediction_dest = PredDest::Store;
+    bool show_prediction_overlay = true;   // draw store predictions on the videos
+    std::string store_path;                // current session's .rpred store file
+    std::string store_status;              // last store result, shown in the panel
+
+    // --- Saved-predictions picker (load a previous session's store) ---
+    // One .rpred file in <project>/predictions/red_store/, plus provenance from
+    // its sidecar .json (video/model/frame range) when present.
+    struct StoredPrediction {
+        std::string path;          // absolute .rpred path
+        std::string label;         // "2026-07-11 12:18" (from filename timestamp)
+        std::string model;         // model name (sidecar)
+        std::string video;         // media_folder (sidecar)
+        int frame_start = -1, frame_end = -1;  // sidecar (−1 = unknown)
+        uint32_t n_stored = 0, total_frames = 0, fps = 0;
+        uint16_t num_keypoints = 0;
+    };
+    std::vector<StoredPrediction> store_list;  // newest first
+    bool store_list_dirty = true;              // rescan red_store/ when set
+    std::string active_store_path;             // currently mmap'd store
+    std::string load_store_request;            // picker click → main loop opens it
 
     // Predict from: false = Shown (visible cameras only), true = All cameras.
     // Default to All — HybridNet 3D needs every camera, and "Shown" is rarely useful.
@@ -270,6 +300,61 @@ inline void jarvis_register_model(
     std::filesystem::path redproj = std::filesystem::path(pm.project_path) /
                                      (pm.project_name + ".redproj");
     save_project_manager_json(pm, redproj);
+}
+
+// Scan <project>/predictions/red_store/ for .rpred stores, newest first, and
+// populate state.store_list (header counts + provenance from each sidecar .json).
+inline void jarvis_scan_prediction_stores(const std::string &project_path,
+                                          JarvisPredictState &state) {
+    namespace fs = std::filesystem;
+    state.store_list.clear();
+    if (project_path.empty()) return;
+    fs::path dir = fs::path(project_path) / "predictions" / "red_store";
+    std::error_code ec;
+    if (!fs::is_directory(dir, ec)) return;
+
+    for (auto &e : fs::directory_iterator(dir, ec)) {
+        if (ec) break;
+        if (e.path().extension() != ".rpred") continue;
+        auto hdr = predstore::read_store_header(e.path().string());
+        if (!hdr.ok) continue;
+
+        JarvisPredictState::StoredPrediction sp;
+        sp.path = e.path().string();
+        sp.n_stored = hdr.n_stored;
+        sp.total_frames = hdr.total_frames;
+        sp.fps = hdr.fps;
+        sp.num_keypoints = hdr.num_keypoints;
+
+        // Human label from the filename timestamp: pred_YYYYMMDD-HHMMSS.rpred
+        std::string stem = e.path().stem().string();  // pred_20260711-121803
+        if (stem.rfind("pred_", 0) == 0 && stem.size() >= 5 + 15) {
+            std::string ts = stem.substr(5);           // 20260711-121803
+            sp.label = ts.substr(0, 4) + "-" + ts.substr(4, 2) + "-" +
+                       ts.substr(6, 2) + " " + ts.substr(9, 2) + ":" +
+                       ts.substr(11, 2);
+        } else {
+            sp.label = stem;
+        }
+
+        // Provenance sidecar (optional).
+        fs::path side = e.path();
+        side.replace_extension(".json");
+        std::ifstream sf(side);
+        if (sf) {
+            try {
+                nlohmann::json j; sf >> j;
+                sp.model = j.value("model_name", std::string{});
+                sp.video = j.value("media_folder", std::string{});
+                sp.frame_start = j.value("frame_start", -1);
+                sp.frame_end = j.value("frame_end", -1);
+            } catch (...) {}
+        }
+        state.store_list.push_back(std::move(sp));
+    }
+    // Newest first (path carries the sortable timestamp).
+    std::sort(state.store_list.begin(), state.store_list.end(),
+              [](const auto &a, const auto &b) { return a.path > b.path; });
 }
 
 inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarvis,
@@ -1156,6 +1241,28 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
                 ImGui::TextDisabled("%d frames to predict", n);
             }
 
+            // Destination: separate store (default, keeps the Labeling Tool
+            // clean + feeds Pose Stats/overlay) vs. loading as labeled frames.
+            using PredDest = JarvisPredictState::PredDest;
+            ImGui::Text("Send to:");
+            ImGui::SameLine();
+            if (ImGui::RadioButton("Predictions store",
+                                   state.batch_prediction_dest == PredDest::Store))
+                state.batch_prediction_dest = PredDest::Store;
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip(
+                    "Write to a separate prediction store (Pose Stats + read-only\n"
+                    "video overlay). Does NOT add frames to the Labeling Tool, so\n"
+                    "predicting large sections stays uncluttered.");
+            ImGui::SameLine();
+            if (ImGui::RadioButton("Labeling Tool",
+                                   state.batch_prediction_dest == PredDest::LabelingTool))
+                state.batch_prediction_dest = PredDest::LabelingTool;
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip(
+                    "Legacy behavior: load predictions as labeled frames. Floods\n"
+                    "the Labeling Tool when predicting large sections.");
+
             bool can_batch = can_predict &&
                 state.batch_end >= state.batch_start && state.batch_step > 0;
             if (!can_batch) ImGui::BeginDisabled();
@@ -1180,6 +1287,65 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
             ImGui::TextColored(
                 is_error ? ImVec4(1, 0.3f, 0.3f, 1) : ImVec4(0.5f, 1, 0.5f, 1),
                 "%s", state.export_status.c_str());
+        }
+
+        if (!state.store_status.empty()) {
+            bool is_error = state.store_status.find("Failed") != std::string::npos ||
+                            state.store_status.find("Cannot") != std::string::npos ||
+                            state.store_status.find("⚠") != std::string::npos;
+            ImGui::TextColored(
+                is_error ? ImVec4(1, 0.5f, 0.2f, 1) : ImVec4(0.5f, 1, 0.5f, 1),
+                "%s", state.store_status.c_str());
+        }
+
+        // --- Saved Predictions (load a previous session's store) ---
+        ImGui::Separator();
+        ImGui::SeparatorText("Saved Predictions");
+
+        if (state.store_list_dirty) {
+            jarvis_scan_prediction_stores(pm.project_path, state);
+            state.store_list_dirty = false;
+        }
+        ImGui::SameLine(ImGui::GetContentRegionAvail().x - 60);
+        if (ImGui::SmallButton("Refresh")) state.store_list_dirty = true;
+
+        if (state.store_list.empty()) {
+            ImGui::TextDisabled("No saved prediction stores in this project.");
+        } else {
+            if (ImGui::BeginChild("##store_list", ImVec2(0, 110), true)) {
+                for (const auto &sp : state.store_list) {
+                    bool is_active = (sp.path == state.active_store_path);
+                    char row[256];
+                    snprintf(row, sizeof(row), "%s  ·  %u frames%s%s",
+                             sp.label.c_str(), sp.n_stored,
+                             sp.model.empty() ? "" : "  ·  ",
+                             sp.model.c_str());
+                    if (ImGui::Selectable(row, is_active))
+                        state.load_store_request = sp.path;
+                    if (ImGui::IsItemHovered()) {
+                        std::string tip = sp.path;
+                        if (sp.frame_start >= 0)
+                            tip += "\nframes " + std::to_string(sp.frame_start) +
+                                   "–" + std::to_string(sp.frame_end);
+                        tip += "\n" + std::to_string(sp.num_keypoints) +
+                               " keypoints · " + std::to_string(sp.fps) + " fps";
+                        if (!sp.video.empty()) tip += "\nvideo: " + sp.video;
+                        ImGui::SetTooltip("%s", tip.c_str());
+                    }
+                }
+            }
+            ImGui::EndChild();
+        }
+
+        // Overlay toggle — shown whenever a store is loaded.
+        if (!state.active_store_path.empty()) {
+            ImGui::Checkbox("Show predictions overlay on videos",
+                            &state.show_prediction_overlay);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip(
+                    "Draw the loaded store's 3D poses (confidence-colored) over\n"
+                    "the camera videos as you play. Read-only; independent of the\n"
+                    "Labeling Tool.");
         }
         },
         // always_fn: file dialog handlers (run every frame)

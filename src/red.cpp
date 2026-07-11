@@ -28,6 +28,8 @@
 #endif
 #include "gui/jarvis_predict_window.h"
 #include "jarvis_predict_export.h"
+#include "prediction_store.h"
+#include "gui/prediction_overlay.h"
 #include "gui/annotation_dialog.h"
 #include "gui/calibration_tool_window.h"
 #include "gui/labeling_tool_window.h"
@@ -323,6 +325,14 @@ int main(int argc, char **argv) {
 
     // Annotation model
     AnnotationMap annotations;
+
+    // Separate prediction store (Batch Predict → Store mode). Kept out of
+    // `annotations` so predicting large sections never floods the Labeling
+    // Tool. `prediction_writer` streams to a .rpred file during a batch;
+    // `prediction_store` mmaps the finished file for the read-only overlay
+    // and (later) Pose Stats.
+    predstore::PredictionWriter prediction_writer;
+    predstore::PredictionReader prediction_store;
 
     // others
     ImVec4 clear_color = ImVec4(0.0f, 0.0f, 0.0f, 1.00f);
@@ -1472,6 +1482,22 @@ int main(int argc, char **argv) {
                                     annotations.at(current_frame_num),
                                     &skeleton, j, scene->num_cams);
                             }
+
+                            // Read-only overlay of JARVIS predictions from the
+                            // separate store (not in `annotations`, so no manual
+                            // label is required for the frame to show).
+                            if (skeleton.has_skeleton && display.show_keypoints &&
+                                win.jarvis_predict.show_prediction_overlay &&
+                                prediction_store.is_open() &&
+                                (int)prediction_store.num_keypoints() ==
+                                    skeleton.num_nodes) {
+                                const float *pose = prediction_store.frame(
+                                    (uint32_t)current_frame_num);
+                                if (pose)
+                                    gui_plot_prediction_overlay(
+                                        pose, j, &skeleton, pm.camera_params, scene,
+                                        win.jarvis_predict.confidence_threshold);
+                            }
                         }
 
                         // --- Annotation tool overlays + input (bbox, OBB, SAM) ---
@@ -1987,13 +2013,110 @@ int main(int argc, char **argv) {
                 }
             }
 
+            // --- Prediction store: load-on-request + auto-open newest ---
+            {
+                auto &jp = win.jarvis_predict;
+                // On project change, drop the active store and auto-open the
+                // newest saved store for the new project (if any).
+                static std::string last_store_project = "\x01";  // != any real path
+                if (last_store_project != pm.project_path) {
+                    last_store_project = pm.project_path;
+                    jp.store_list_dirty = true;
+                    jp.active_store_path.clear();
+                    jp.store_status.clear();
+                    prediction_store.close();
+                    if (!pm.project_path.empty()) {
+                        std::filesystem::path dir =
+                            std::filesystem::path(pm.project_path) /
+                            "predictions" / "red_store";
+                        std::error_code ec;
+                        std::string newest;
+                        if (std::filesystem::is_directory(dir, ec)) {
+                            for (auto &e :
+                                 std::filesystem::directory_iterator(dir, ec)) {
+                                if (e.path().extension() == ".rpred" &&
+                                    e.path().string() > newest)
+                                    newest = e.path().string();
+                            }
+                        }
+                        if (!newest.empty()) jp.load_store_request = newest;
+                    }
+                }
+
+                // Consume a load request (picker click or auto-open). Never
+                // load while a batch is writing its own store.
+                if (!jp.load_store_request.empty() && !jp.batch_running) {
+                    std::string p = jp.load_store_request;
+                    jp.load_store_request.clear();
+                    prediction_store.close();
+                    if (prediction_store.open(p)) {
+                        jp.active_store_path = p;
+                        int nkp = (int)prediction_store.num_keypoints();
+                        if (nkp != skeleton.num_nodes) {
+                            jp.store_status = "⚠ store has " +
+                                std::to_string(nkp) + " keypoints, skeleton has " +
+                                std::to_string(skeleton.num_nodes) +
+                                " — overlay disabled";
+                        } else {
+                            jp.store_status = "Loaded " +
+                                std::to_string(prediction_store.stored_frames()) +
+                                " frames from " +
+                                std::filesystem::path(p).filename().string();
+                        }
+                        printf("[Store] %s\n", jp.store_status.c_str());
+                    } else {
+                        jp.active_store_path.clear();
+                        jp.store_status = "Failed to open store: " +
+                            std::filesystem::path(p).filename().string();
+                    }
+                }
+            }
+
             // --- Batch prediction (non-blocking state machine) ---
             // Processes one frame per render iteration so the UI stays
             // responsive and camera viewports update live.
             {
                 auto &bp = win.jarvis_predict;
                 using Phase = JarvisPredictState::BatchPhase;
+                using PredDest = JarvisPredictState::PredDest;
                 int buf_size = (int)scene->size_of_buffer;
+
+                // Extract frame's 3D+conf from `annotations` into a
+                // 4*num_nodes float buffer (NaN where a keypoint has no valid
+                // 3D). Returns true if at least one keypoint is valid.
+                auto extract_pred_row = [&](u32 frame,
+                                            std::vector<float> &buf) -> bool {
+                    const int nn = skeleton.num_nodes;
+                    buf.assign((size_t)nn * 4,
+                               std::numeric_limits<float>::quiet_NaN());
+                    auto it = annotations.find(frame);
+                    if (it == annotations.end()) return false;
+                    const auto &kp3d = it->second.kp3d;
+                    bool any = false;
+                    for (int jn = 0; jn < nn && jn < (int)kp3d.size(); ++jn) {
+                        const auto &p = kp3d[jn];
+                        if (p.source != Kp3DSource::None && p.x != UNLABELED) {
+                            buf[jn * 4 + 0] = (float)p.x;
+                            buf[jn * 4 + 1] = (float)p.y;
+                            buf[jn * 4 + 2] = (float)p.z;
+                            buf[jn * 4 + 3] = p.confidence;
+                            any = true;
+                        }
+                    }
+                    return any;
+                };
+
+                // In Store mode: pull the just-predicted frame's 3D into the
+                // store writer, then erase it from `annotations` so it never
+                // reaches the Labeling Tool. No-op in LabelingTool mode.
+                auto stash_prediction = [&](u32 frame) {
+                    if (bp.batch_prediction_dest != PredDest::Store) return;
+                    if (!prediction_writer.is_open()) return;
+                    std::vector<float> buf;
+                    if (extract_pred_row(frame, buf))
+                        prediction_writer.add_frame(frame, buf.data());
+                    annotations.erase(frame);
+                };
 #ifdef __APPLE__
                 // Keep the live HybridNet center-camera count in sync with the
                 // persisted user setting (predict clamps to [2, num_cameras]).
@@ -2016,6 +2139,33 @@ int main(int argc, char **argv) {
                     bp.batch_cancel_requested = false;
                     bp.batch_cancelled = false;
                     bp.batch_t0 = std::chrono::steady_clock::now();
+
+                    // Store mode: open a fresh .rpred store to stream this
+                    // batch's predictions into (kept out of the Labeling Tool).
+                    bp.store_status.clear();
+                    prediction_store.close();  // release any prior mmap
+                    if (bp.batch_prediction_dest == PredDest::Store &&
+                        !pm.project_path.empty() && skeleton.num_nodes > 0) {
+                        std::error_code sec;
+                        std::filesystem::path store_dir =
+                            std::filesystem::path(pm.project_path) /
+                            "predictions" / "red_store";
+                        std::filesystem::create_directories(store_dir, sec);
+                        std::time_t t = std::time(nullptr);
+                        std::tm tmb{};
+                        localtime_r(&t, &tmb);
+                        char ts[32];
+                        std::strftime(ts, sizeof(ts), "%Y%m%d-%H%M%S", &tmb);
+                        bp.store_path =
+                            (store_dir / (std::string("pred_") + ts + ".rpred"))
+                                .string();
+                        if (!prediction_writer.open(bp.store_path,
+                                                    skeleton.num_nodes)) {
+                            bp.store_status =
+                                "Failed to open prediction store for writing";
+                            bp.store_path.clear();
+                        }
+                    }
 #ifdef __APPLE__
                     bp.batch_phase = bp.batch_streaming ? Phase::STREAM_SEEK : Phase::SEEK;
 #else
@@ -2282,6 +2432,9 @@ int main(int argc, char **argv) {
                                        frame, slot,
                                        bp.batch_completed, bp.batch_total);
 #endif
+                                // Store mode: move this frame's 3D into the
+                                // prediction store, out of the Labeling Tool.
+                                stash_prediction((u32)frame);
                             }
 
                             bp.batch_current += bp.batch_step;
@@ -2411,6 +2564,9 @@ int main(int argc, char **argv) {
                                     printf("[Batch] Frame %d (slot %d): %.0f ms  [%d/%d]\n",
                                            frame, slot, jarvis_coreml_state.last_total_ms,
                                            bp.batch_completed, bp.batch_total);
+                                    // Store mode: move 3D into the store, out of
+                                    // the Labeling Tool.
+                                    stash_prediction((u32)frame);
                                 }
                             }
 
@@ -2472,18 +2628,74 @@ int main(int argc, char **argv) {
                         bp.batch_cancelled = false;
                         printf("[Batch] %s\n", bp.batch_status.c_str());
 
+                        // Store mode: finalize the .rpred store and mmap it for
+                        // the read-only overlay + Pose Stats.
+                        if (prediction_writer.is_open()) {
+                            uint32_t total_v =
+                                (dc_context->total_num_frame > 0 &&
+                                 dc_context->total_num_frame != INT_MAX)
+                                    ? (uint32_t)dc_context->total_num_frame
+                                    : (uint32_t)(bp.batch_end + 1);
+                            uint32_t stored = prediction_writer.stored_frames();
+                            uint32_t fps = (uint32_t)std::lround(
+                                dc_context->video_fps > 0 ? dc_context->video_fps : 0);
+                            if (prediction_writer.finalize(total_v, fps) &&
+                                prediction_store.open(bp.store_path)) {
+                                bp.store_status = "Prediction store: " +
+                                    std::to_string(stored) + " frames → " +
+                                    std::filesystem::path(bp.store_path)
+                                        .filename().string();
+                                printf("[Store] %s\n", bp.store_status.c_str());
+                                bp.active_store_path = bp.store_path;
+                                bp.store_list_dirty = true;  // show in picker
+
+                                // Provenance sidecar (<store>.json): which video
+                                // / model / frame range these predictions are for.
+                                std::string model_name;
+                                if (pm.active_jarvis_model >= 0 &&
+                                    pm.active_jarvis_model < (int)pm.jarvis_models.size())
+                                    model_name = pm.jarvis_models[pm.active_jarvis_model].name;
+                                nlohmann::json meta = {
+                                    {"store_file", std::filesystem::path(bp.store_path)
+                                                       .filename().string()},
+                                    {"media_folder", pm.media_folder},
+                                    {"model_name", model_name},
+                                    {"skeleton", pm.skeleton_name},
+                                    {"num_keypoints", (int)skeleton.num_nodes},
+                                    {"frame_start", bp.batch_start},
+                                    {"frame_end", bp.batch_end},
+                                    {"n_stored", (int)stored},
+                                    {"fps", (int)fps},
+                                };
+                                std::filesystem::path side = bp.store_path;
+                                side.replace_extension(".json");
+                                std::ofstream sf(side);
+                                if (sf) sf << meta.dump(2) << "\n";
+                            } else {
+                                bp.store_status = "Failed to finalize prediction store";
+                            }
+                        }
+
                         // Optional: write the batch's whole [start, end] range to
                         // a JARVIS-CLI-compatible Predictions_3D_<ts>/ folder.
                         // Frames skipped by Step (or never predicted, e.g. after a
                         // cancel) are NaN rows, so row index == frame - start, as
-                        // the CLI expects. Runs alongside the in-red labeled frames.
+                        // the CLI expects. In Store mode the frames were moved out
+                        // of `annotations` into the store, so read them from there.
                         if (bp.export_predictions3D && !pm.project_path.empty()) {
                             int fstart = bp.batch_start;
                             int nframes = bp.batch_end - bp.batch_start + 1;
                             std::string dir =
                                 jarvis_make_predictions_dir(pm.project_path);
-                            JarvisExportResult er = jarvis_export_predictions3D(
-                                dir, annotations, skeleton, pm, fstart, nframes);
+                            JarvisExportResult er =
+                                (bp.batch_prediction_dest == PredDest::Store &&
+                                 prediction_store.is_open())
+                                    ? jarvis_export_predictions3D_from_reader(
+                                          dir, prediction_store, skeleton, pm,
+                                          fstart, nframes)
+                                    : jarvis_export_predictions3D(
+                                          dir, annotations, skeleton, pm,
+                                          fstart, nframes);
                             bp.export_status = er.message;
                             printf("[JARVIS export] %s\n", er.message.c_str());
                         }
