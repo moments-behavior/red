@@ -27,6 +27,7 @@
 #include "jarvis_hybridnet.h"
 #endif
 #include "gui/jarvis_predict_window.h"
+#include "jarvis_predict_export.h"
 #include "gui/annotation_dialog.h"
 #include "gui/calibration_tool_window.h"
 #include "gui/labeling_tool_window.h"
@@ -1970,6 +1971,20 @@ int main(int argc, char **argv) {
                     printf("[JARVIS ONNX] %s\n", jarvis_state.status.c_str());
                 }
 #endif
+
+                // Optional: mirror this single predicted frame into a
+                // JARVIS-CLI-compatible Predictions_3D_<ts>/ folder (data3D.csv
+                // + info.yaml), in addition to the in-red labeled frame. A
+                // one-frame export: frame_start = current frame, count = 1.
+                if (win.jarvis_predict.export_predictions3D &&
+                    !pm.project_path.empty()) {
+                    std::string dir = jarvis_make_predictions_dir(pm.project_path);
+                    JarvisExportResult er = jarvis_export_predictions3D(
+                        dir, annotations, skeleton, pm,
+                        (int)current_frame_num, 1);
+                    win.jarvis_predict.export_status = er.message;
+                    printf("[JARVIS export] %s\n", er.message.c_str());
+                }
             }
 
             // --- Batch prediction (non-blocking state machine) ---
@@ -2456,6 +2471,22 @@ int main(int argc, char **argv) {
                                 " skipped)";
                         bp.batch_cancelled = false;
                         printf("[Batch] %s\n", bp.batch_status.c_str());
+
+                        // Optional: write the batch's whole [start, end] range to
+                        // a JARVIS-CLI-compatible Predictions_3D_<ts>/ folder.
+                        // Frames skipped by Step (or never predicted, e.g. after a
+                        // cancel) are NaN rows, so row index == frame - start, as
+                        // the CLI expects. Runs alongside the in-red labeled frames.
+                        if (bp.export_predictions3D && !pm.project_path.empty()) {
+                            int fstart = bp.batch_start;
+                            int nframes = bp.batch_end - bp.batch_start + 1;
+                            std::string dir =
+                                jarvis_make_predictions_dir(pm.project_path);
+                            JarvisExportResult er = jarvis_export_predictions3D(
+                                dir, annotations, skeleton, pm, fstart, nframes);
+                            bp.export_status = er.message;
+                            printf("[JARVIS export] %s\n", er.message.c_str());
+                        }
                         // I/O breakdown: predict is the useful work; seek+decode
                         // is per-chunk overhead the 370ms/frame number hides.
                         float io_ms = bp.batch_seek_ms + bp.batch_decode_ms;

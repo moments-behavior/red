@@ -47,6 +47,13 @@ struct JarvisPredictState {
     // Set by "Predict Current Frame" button; consumed by main loop
     bool predict_requested = false;
 
+    // Save 3D predictions to a JARVIS-CLI-compatible Predictions_3D folder
+    // (data3D.csv + info.yaml) under <project>/predictions/predictions3D/,
+    // in addition to the normal in-red labeled-frame loading. Consumed by the
+    // main loop after Predict Current Frame and at Batch Predict completion.
+    bool export_predictions3D = false;
+    std::string export_status;   // last export result, shown in the panel
+
     // Predict from: false = Shown (visible cameras only), true = All cameras.
     // Default to All — HybridNet 3D needs every camera, and "Shown" is rarely useful.
     bool predict_from_all = true;
@@ -1062,6 +1069,18 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
                               "buffer. Same output; faster on long videos. Off = the\n"
                               "original chunked path.");
 
+        ImGui::Checkbox("Save 3D to Predictions folder (JARVIS format)",
+                        &state.export_predictions3D);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip(
+                "In addition to loading predictions as labeled frames, write a\n"
+                "JARVIS-CLI-compatible Predictions_3D_<timestamp>/ folder\n"
+                "(data3D.csv + info.yaml) under the project's\n"
+                "predictions/predictions3D/. Batch Predict writes its whole\n"
+                "start..end range (frames skipped by Step are NaN rows, so\n"
+                "row index == frame). Predict Current Frame writes a 1-frame\n"
+                "folder.");
+
 #ifdef __APPLE__
         // HybridNet 3D: how many cameras feed CenterDetect (crop-ROI localization).
         // Keypoint detection always uses all cameras; fewer center cams ≈ halves
@@ -1151,6 +1170,16 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
             ImGui::TextColored(
                 is_done ? ImVec4(0.5f, 1, 0.5f, 1) : ImVec4(1, 0.8f, 0, 1),
                 "%s", state.batch_status.c_str());
+        }
+
+        if (!state.export_status.empty()) {
+            bool is_error = state.export_status.find("Failed") != std::string::npos ||
+                            state.export_status.find("Cannot") != std::string::npos ||
+                            state.export_status.find("No ") != std::string::npos ||
+                            state.export_status.find("Empty") != std::string::npos;
+            ImGui::TextColored(
+                is_error ? ImVec4(1, 0.3f, 0.3f, 1) : ImVec4(0.5f, 1, 0.5f, 1),
+                "%s", state.export_status.c_str());
         }
         },
         // always_fn: file dialog handlers (run every frame)
