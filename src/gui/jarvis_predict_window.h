@@ -78,7 +78,7 @@ struct JarvisPredictState {
     bool batch_cancelled = false;          // status flag for the FINISHING message
     int batch_start = 0;
     int batch_end = 0;
-    int batch_step = 4;
+    int batch_step = 1;
     int batch_current = 0;         // next frame to predict
     int batch_completed = 0;
     int batch_total = 0;
