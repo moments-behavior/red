@@ -209,6 +209,19 @@ struct PredictionReader {
         return nullptr;
     }
 
+    // Sequential access to the i-th stored frame (0..stored_frames-1), in
+    // ascending frame order. Writes the absolute frame number to *frame_out.
+    // For one-pass scans (e.g. building the Pose Stats time-series) this is
+    // O(1) per frame vs. frame()'s O(log n) binary search.
+    const float *stored_at(uint32_t i, uint32_t *frame_out) const {
+        if (!is_open() || i >= n_stored_) return nullptr;
+        if (frame_out) *frame_out = index_[i * 2];
+        uint32_t di = index_[i * 2 + 1];
+        size_t off = data_offset_ + (size_t)di * epf_ * 4;
+        if (off + (size_t)epf_ * 4 > file_size_) return nullptr;
+        return (const float *)(data_ + off);
+    }
+
   private:
     void move_from(PredictionReader &o) {
         data_ = o.data_; file_size_ = o.file_size_;

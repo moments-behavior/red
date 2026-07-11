@@ -157,6 +157,9 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
         if (ImGui::MenuItem("Settings")) {
             settings_state.show = true;
         }
+        if (ImGui::MenuItem("Pose Stats")) {
+            win.pose_stats.show = true;
+        }
         if (ImGui::MenuItem("Help")) {
             show_help_window = true;
         }

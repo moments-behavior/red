@@ -656,6 +656,11 @@ int main(int argc, char **argv) {
 #endif
                                                  ctx); },
                 nullptr});
+    panels.add({"Pose Stats",
+                [&]() { DrawPoseStatsWindow(win.pose_stats, prediction_store,
+                                            win.jarvis_predict.active_store_path,
+                                            skeleton, current_frame_num); },
+                nullptr});
 
     // Helper: find the first visible camera index (for frame-buffer display).
     auto find_visible_cam = [&]() -> int {
@@ -774,6 +779,18 @@ int main(int argc, char **argv) {
 
         // Draw all registered panels
         panels.drawAll();
+
+        // Pose Stats: double-click-to-seek request.
+        if (win.pose_stats.seek_requested) {
+            win.pose_stats.seek_requested = false;
+            int tgt = win.pose_stats.seek_frame;
+            seek_all_cameras(scene, tgt, dc_context->video_fps, ps, true);
+            current_frame_num = tgt;
+            ps.pause_selected = 0;
+            ps.pause_seeked = true;
+            for (auto &[key, value] : window_need_decoding)
+                value.store(true);
+        }
 
         // Handle main menu file dialogs
         HandleMainMenuDialogs(ctx, win, media_root_dir,
