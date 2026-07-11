@@ -49,6 +49,12 @@ struct PoseStatsState {
     double pending_seek_time = 0.0;
 
     bool refit = false;   // double-click → reset axes to full view next frame
+
+    // "Fix this frame": promote the current frame's prediction into the
+    // Labeling Tool for manual correction (consumed by the main loop).
+    bool promote_requested = false;
+    int  promote_frame = 0;
+    std::string promote_status;
 };
 
 // One pass over stored frames → bucketed mean-confidence series (overall +
@@ -183,6 +189,23 @@ inline void DrawPoseStatsWindow(PoseStatsState &st,
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Click plot to seek · drag to pan · "
                               "scroll to zoom · double-click to reset view");
+
+        // Promote the current frame into the Labeling Tool for manual fixing.
+        ImGui::SameLine();
+        bool has_pred = store.frame((uint32_t)current_frame_num) != nullptr;
+        if (!has_pred) ImGui::BeginDisabled();
+        char fix_lbl[48];
+        snprintf(fix_lbl, sizeof(fix_lbl), "Fix frame %d", current_frame_num);
+        if (ImGui::SmallButton(fix_lbl)) {
+            st.promote_requested = true;
+            st.promote_frame = current_frame_num;
+        }
+        if (!has_pred) ImGui::EndDisabled();
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip(has_pred
+                ? "Promote this predicted frame into the Labeling Tool's\n"
+                  "\"Needs Improvement\" list so you can correct its keypoints."
+                : "No prediction stored for this frame.");
 
         // ImPlot's native double-click "fit" snaps X to the DATA extent, which
         // for a sparse / sub-range store is just the predicted region — not the

@@ -792,6 +792,58 @@ int main(int argc, char **argv) {
                 value.store(true);
         }
 
+        // Pose Stats: promote a predicted frame into the Labeling Tool so the
+        // user can manually correct it. Reprojects the store's 3D pose to each
+        // camera as editable (Predicted-source) keypoints, keeps the 3D, and
+        // flags the frame Needs-Improvement so it lands in that section and is
+        // protected from a later Batch Predict overwrite.
+        if (win.pose_stats.promote_requested) {
+            win.pose_stats.promote_requested = false;
+            int pf = win.pose_stats.promote_frame;
+            const float *pose = prediction_store.frame((uint32_t)pf);
+            if (pose && (int)prediction_store.num_keypoints() == skeleton.num_nodes &&
+                scene->num_cams > 0) {
+                FrameAnnotation &fa = get_or_create_frame(
+                    annotations, (u32)pf, skeleton.num_nodes, scene->num_cams);
+                fa.needs_improvement = true;
+                int placed_3d = 0;
+                for (int k = 0; k < skeleton.num_nodes; ++k) {
+                    float x = pose[k * 4 + 0], y = pose[k * 4 + 1];
+                    float z = pose[k * 4 + 2], c = pose[k * 4 + 3];
+                    if (std::isnan(x) || std::isnan(y) || std::isnan(z)) continue;
+                    fa.kp3d[k].x = x; fa.kp3d[k].y = y; fa.kp3d[k].z = z;
+                    fa.kp3d[k].set_imported(c);  // predicted, awaiting review
+                    placed_3d++;
+                    Eigen::Vector3d p3d(x, y, z);
+                    for (int cam = 0; cam < scene->num_cams &&
+                                      cam < (int)pm.camera_params.size(); ++cam) {
+                        double px, py;
+                        if (reproject_3d_to_cam(p3d, pm.camera_params[cam],
+                                                (int)scene->image_width[cam],
+                                                (int)scene->image_height[cam],
+                                                px, py)) {
+                            auto &kp2d = fa.cameras[cam].keypoints[k];
+                            kp2d.x = px; kp2d.y = py; kp2d.labeled = true;
+                            kp2d.confidence = c;
+                            kp2d.source = LabelSource::Predicted;
+                        }
+                    }
+                }
+                seek_all_cameras(scene, pf, dc_context->video_fps, ps, true);
+                current_frame_num = pf;
+                ps.pause_selected = 0; ps.pause_seeked = true;
+                for (auto &[key, value] : window_need_decoding)
+                    value.store(true);
+                pm.plot_keypoints_flag = true;  // reveal the Labeling Tool
+                ctx.toasts.pushSuccess("Frame " + std::to_string(pf) +
+                    " → Needs Improvement (" + std::to_string(placed_3d) +
+                    " keypoints)");
+            } else {
+                ctx.toasts.pushError("Could not promote frame " +
+                    std::to_string(pf) + " (no matching prediction).");
+            }
+        }
+
         // Handle main menu file dialogs
         HandleMainMenuDialogs(ctx, win, media_root_dir,
                               print_metadata, print_summary,
@@ -2329,6 +2381,9 @@ int main(int argc, char **argv) {
                             bool has_manual = false;
                             if (annotations.count(frame)) {
                                 const auto &fa = annotations.at(frame);
+                                // Protect manual labels AND promoted "needs
+                                // improvement" frames from being overwritten.
+                                if (fa.needs_improvement) has_manual = true;
                                 for (const auto &cam : fa.cameras) {
                                     for (const auto &kp : cam.keypoints)
                                         if (kp.labeled && kp.source == LabelSource::Manual) {
@@ -2553,6 +2608,7 @@ int main(int argc, char **argv) {
                                 bool has_manual = false;
                                 if (annotations.count((u32)frame)) {
                                     const auto &fa = annotations.at((u32)frame);
+                                    if (fa.needs_improvement) has_manual = true;
                                     for (const auto &cam : fa.cameras) {
                                         for (const auto &kp : cam.keypoints)
                                             if (kp.labeled && kp.source == LabelSource::Manual) {

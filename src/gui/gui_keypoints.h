@@ -107,6 +107,26 @@ inline bool is_in_camera_fov(const Eigen::Vector3d &point_world,
     return (x > 0 && x < image_width && y > 0 && y < image_height);
 }
 
+// Project a single 3D point into a camera's image, returning ImPlot coords
+// (Y=0 at bottom). Returns false if the point falls outside the image. Mirrors
+// the per-camera reprojection in reprojection() (telecentric vs pinhole).
+inline bool reproject_3d_to_cam(const Eigen::Vector3d &pt3d,
+                                const CameraParams &cp, int W, int H,
+                                double &out_x, double &out_y) {
+    if (cp.telecentric) {
+        auto rp = red_math::projectPointTelecentric(
+            pt3d, cp.projection_mat, cp.k, cp.dist_coeffs, cp.dist_center);
+        out_x = rp(0);
+        out_y = (double)H - rp(1);
+    } else {
+        if (!is_in_camera_fov(pt3d, cp.r, cp.tvec, cp.k, W, H)) return false;
+        auto rp = red_math::projectPointR(pt3d, cp.r, cp.tvec, cp.k, cp.dist_coeffs);
+        out_x = rp(0);
+        out_y = (double)H - rp(1);
+    }
+    return (out_x > 0 && out_x < W && out_y > 0 && out_y < H);
+}
+
 inline void reprojection(FrameAnnotation &fa, SkeletonContext *skeleton,
                          const std::vector<CameraParams> &camera_params,
                          RenderScene *scene) {

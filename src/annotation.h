@@ -157,6 +157,12 @@ struct FrameAnnotation {
     int instance_id  = 0;   // object identity (for multi-animal tracking)
     int category_id  = 0;   // class index
 
+    // Set when a predicted frame is promoted from the prediction store into the
+    // Labeling Tool for manual correction. Surfaces the frame in the Labeling
+    // Tool's "Needs Improvement" section and protects it from being overwritten
+    // by a later Batch Predict. Cleared when the user marks it fixed.
+    bool needs_improvement = false;
+
     // 3D keypoints (triangulated from multi-view)
     std::vector<Keypoint3D> kp3d;         // [num_nodes]
 
@@ -254,8 +260,8 @@ inline nlohmann::json annotations_to_json(const AnnotationMap &amap) {
     nlohmann::json frames_arr = nlohmann::json::array();
 
     for (const auto &[fnum, fa] : amap) {
-        // Only serialize frames that have extended (extras) data
-        bool has_extended = false;
+        // Serialize frames that carry extended (extras) data OR a needs-fix flag
+        bool has_extended = fa.needs_improvement;
         for (const auto &cam : fa.cameras) {
             if (cam.has_bbox() || cam.has_obb() || cam.has_mask()) {
                 has_extended = true;
@@ -268,6 +274,7 @@ inline nlohmann::json annotations_to_json(const AnnotationMap &amap) {
         jf["frame"] = fnum;
         jf["instance_id"] = fa.instance_id;
         jf["category_id"] = fa.category_id;
+        if (fa.needs_improvement) jf["needs_improvement"] = true;
 
         nlohmann::json cams = nlohmann::json::array();
         for (size_t c = 0; c < fa.cameras.size(); ++c) {
@@ -324,6 +331,8 @@ inline void annotations_from_json(const nlohmann::json &root, AnnotationMap &ama
             fa.instance_id = jf["instance_id"].get<int>();
         if (jf.contains("category_id"))
             fa.category_id = jf["category_id"].get<int>();
+        if (jf.contains("needs_improvement"))
+            fa.needs_improvement = jf["needs_improvement"].get<bool>();
 
         if (!jf.contains("cameras")) continue;
 

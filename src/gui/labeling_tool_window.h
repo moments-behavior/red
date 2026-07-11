@@ -206,8 +206,11 @@ inline void DrawLabelingToolWindow(
         ImGui::Separator();
 
         // === Collect labeled frames (shared by grid + timeline) ===
+        // needs_improvement frames (promoted predictions awaiting a manual fix)
+        // are collected separately so they get their own section below.
         struct LabeledFrameInfo { int frame; bool complete; };
         std::vector<LabeledFrameInfo> labeled_frames;
+        std::vector<LabeledFrameInfo> needs_fix_frames;
         for (const auto &[fnum, fa] : annotations) {
             if (!frame_has_any_keypoints(fa))
                 continue;
@@ -222,7 +225,10 @@ inline void DrawLabelingToolWindow(
                 complete = scene->num_cams > 1 && frame_is_complete(fa) &&
                            frame_is_fully_triangulated(fa, skeleton.num_nodes);
             }
-            labeled_frames.push_back({(int)fnum, complete});
+            if (fa.needs_improvement)
+                needs_fix_frames.push_back({(int)fnum, complete});
+            else
+                labeled_frames.push_back({(int)fnum, complete});
         }
 
         // === Collect SAM mask frames ===
@@ -258,11 +264,13 @@ inline void DrawLabelingToolWindow(
         const ImVec4 color_orange(0.9f, 0.55f, 0.12f, 1.0f);
         const ImVec4 color_purple(0.63f, 0.35f, 0.86f, 1.0f);
         const ImVec4 color_lilac(0.78f, 0.59f, 1.0f, 1.0f);
+        const ImVec4 color_red(0.90f, 0.28f, 0.28f, 1.0f);
 
         // Grid cell PushID offsets (max ~10k frames per section before collision)
-        constexpr int kKpIdOffset   = 0;
-        constexpr int kSamIdOffset  = 10000;
-        constexpr int kBBoxIdOffset = 20000;
+        constexpr int kKpIdOffset      = 0;
+        constexpr int kSamIdOffset     = 10000;
+        constexpr int kBBoxIdOffset    = 20000;
+        constexpr int kNeedsFixIdOffset = 30000;
 
         // Helper: render a clickable grid cell with custom drawing.
         // draw_fn(ImDrawList*, ImVec2 min, ImVec2 max) draws the cell interior.
@@ -311,6 +319,42 @@ inline void DrawLabelingToolWindow(
                     ImGui::SameLine(0, gap);
             }
         };
+
+        // ─── Section 0: Needs Improvement (promoted predictions to fix) ───
+        if (!needs_fix_frames.empty()) {
+            auto fix_pn = find_prev_next([](const FrameAnnotation &fa) {
+                return fa.needs_improvement;
+            });
+            ImGui::Text("Needs Improvement (%zu)", needs_fix_frames.size());
+            ImGui::SameLine();
+            jump_buttons(fix_pn, "needsfix");
+
+            // "Mark fixed" for the current frame, if it is one of them.
+            auto cur_it = annotations.find((u32)current_frame_num);
+            bool cur_needs_fix = cur_it != annotations.end() &&
+                                 cur_it->second.needs_improvement;
+            if (cur_needs_fix) {
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Mark fixed"))
+                    cur_it->second.needs_improvement = false;
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Clear the Needs-Improvement flag on the "
+                                      "current frame (moves it to Keypoint Labels).");
+            }
+
+            ImU32 red_u32 = ImGui::ColorConvertFloat4ToU32(color_red);
+            for (size_t i = 0; i < needs_fix_frames.size(); ++i) {
+                auto &nf = needs_fix_frames[i];
+                char tip[64];
+                snprintf(tip, sizeof(tip), "Frame %d — needs fixing", nf.frame);
+                grid_cell(kNeedsFixIdOffset + (int)i, nf.frame, tip,
+                    [red_u32](ImDrawList *dl, ImVec2 mn, ImVec2 mx) {
+                        dl->AddRectFilled(mn, mx, red_u32);
+                    });
+                grid_wrap(i, needs_fix_frames.size());
+            }
+            ImGui::Spacing();
+        }
 
         // ─── Section 1: Keypoint Labels ───
         ImGui::Text("Keypoint Labels (%zu)", labeled_frames.size());
