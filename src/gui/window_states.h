@@ -7,6 +7,7 @@
 #include "gui/jarvis_export_window.h"
 #include "gui/jarvis_import_window.h"
 #include "gui/jarvis_predict_window.h"
+#include "gui/bouts_window.h"
 #include "gui/pose_stats_window.h"
 #include "gui/export_window.h"
 #include "gui/bbox_tool.h"
@@ -30,6 +31,7 @@ struct WindowStates {
     JarvisImportState jarvis_import;
     JarvisPredictState jarvis_predict;
     PoseStatsState pose_stats;
+    BoutState bouts;
     ExportWindowState export_win;
     BBoxToolState bbox;
     OBBToolState obb;
@@ -162,6 +164,7 @@ struct WindowStates {
         jarvis_predict.store_list_dirty = true;
         jarvis_predict.store_status.clear();
         pose_stats = PoseStatsState{};
+        bouts = BoutState{};
         export_win.show = false;
         export_win.format_idx = 0;
         export_win.include_video_index = false;

@@ -17,6 +17,7 @@
 #include "skeleton.h"
 #include "prediction_store.h"
 #include "gui/panel.h"
+#include "gui/bouts_window.h"
 
 #include <algorithm>
 #include <cmath>
@@ -120,7 +121,8 @@ inline void DrawPoseStatsWindow(PoseStatsState &st,
                                 const predstore::PredictionReader &store,
                                 const std::string &active_store_path,
                                 SkeletonContext &skel,
-                                int current_frame_num) {
+                                int current_frame_num,
+                                const BoutState &bouts) {
     DrawPanel("Pose Stats", st.show, [&]() {
         if (!store.is_open() || active_store_path.empty()) {
             ImGui::TextDisabled("No prediction store loaded.");
@@ -228,6 +230,18 @@ inline void DrawPoseStatsWindow(PoseStatsState &st,
             ImPlot::SetupAxis(ImAxis_Y1, "Confidence", ImPlotAxisFlags_Lock);
             ImPlot::SetupAxisLimits(ImAxis_X1, 0, (double)st.total_frames, xcond);
             ImPlot::SetupAxisLimits(ImAxis_Y1, 0.0, 1.0, ImPlotCond_Always);
+
+            // Detected bouts (translucent green spans) behind the traces, so
+            // good-tracking regions are visible on the confidence timeline.
+            if (bouts.cached_store_path == active_store_path && !bouts.bouts.empty()) {
+                ImDrawList *bdl = ImPlot::GetPlotDrawList();
+                ImU32 span_col = IM_COL32(60, 200, 90, 38);
+                for (const auto &b : bouts.bouts) {
+                    ImVec2 p0 = ImPlot::PlotToPixels((double)b.start, 1.0);
+                    ImVec2 p1 = ImPlot::PlotToPixels((double)b.end + 1, 0.0);
+                    bdl->AddRectFilled(p0, p1, span_col);
+                }
+            }
 
             // Overall mean (bold white).
             ImPlot::SetNextLineStyle(ImVec4(1, 1, 1, 1), 2.0f);

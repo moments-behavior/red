@@ -160,6 +160,9 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
         if (ImGui::MenuItem("Pose Stats")) {
             win.pose_stats.show = true;
         }
+        if (ImGui::MenuItem("Bouts")) {
+            win.bouts.show = true;
+        }
         if (ImGui::MenuItem("Help")) {
             show_help_window = true;
         }
