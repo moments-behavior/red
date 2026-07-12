@@ -79,6 +79,12 @@ struct ProofreadState {
     // *different* host from the posetail server (which lives at .88) —
     // don't copy that default; it'll return 404 from a posetail process.
     std::string url = "http://10.102.10.138:8000";
+    // HTTP Basic auth — the dashboard requires a login (checked against
+    // ~/.config/mouse_dashboard/auth on the server). Sent on every request
+    // when username is non-empty. Leave blank if the server runs with
+    // MOUSE_DASHBOARD_NO_AUTH=1.
+    std::string username;
+    std::string password;
     // Residual cutoff (mm). Default matches the dashboard default.
     float residual_threshold_mm = 25.0f;
     // Scorer cutoff: a core keypoint scoring below this is "bad".
@@ -131,6 +137,7 @@ inline bool proofread_fetch(ProofreadState &s) {
     httplib::Client cli(base);
     cli.set_connection_timeout(3, 0);
     cli.set_read_timeout(30, 0);   // /api/bad_frames_all scans 50 sessions
+    if (!s.username.empty()) cli.set_basic_auth(s.username, s.password);
 
     const bool scorer = (s.source == ProofreadState::Source::Scorer);
     char path[256];
@@ -229,6 +236,7 @@ inline bool proofread_fetch_calib(const ProofreadState &s,
     httplib::Client cli(base);
     cli.set_connection_timeout(3, 0);
     cli.set_read_timeout(15, 0);
+    if (!s.username.empty()) cli.set_basic_auth(s.username, s.password);
 
     char path[512];
     std::snprintf(path, sizeof(path),

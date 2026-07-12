@@ -65,6 +65,7 @@ struct ProjectManager {
     // .redproj so "Load Proofread Project" can refetch the bad-frames list
     // and the calib auto-pull mirror dir.
     std::string proofread_server_url;
+    std::string proofread_username;   // dashboard login user (password not stored)
     std::string proofread_animal;
     std::string proofread_session;
 };
@@ -99,6 +100,7 @@ inline void to_json(nlohmann::json &j, const ProjectManager &p) {
                        {"jarvis_models", p.jarvis_models},
                        {"active_jarvis_model", p.active_jarvis_model},
                        {"proofread_server_url", p.proofread_server_url},
+                       {"proofread_username", p.proofread_username},
                        {"proofread_animal", p.proofread_animal},
                        {"proofread_session", p.proofread_session}};
 }
@@ -122,6 +124,7 @@ inline void from_json(const nlohmann::json &j, ProjectManager &p) {
         p.jarvis_models = j["jarvis_models"].get<std::vector<ProjectManager::JarvisModelEntry>>();
     p.active_jarvis_model = j.value("active_jarvis_model", -1);
     p.proofread_server_url = j.value("proofread_server_url", std::string{});
+    p.proofread_username   = j.value("proofread_username", std::string{});
     p.proofread_animal     = j.value("proofread_animal", std::string{});
     p.proofread_session    = j.value("proofread_session", std::string{});
 }
