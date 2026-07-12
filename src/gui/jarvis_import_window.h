@@ -7,6 +7,8 @@
 #include "gui/panel.h"
 #include <ImGuiFileDialog.h>
 #include <misc/cpp/imgui_stdlib.h>
+#include <climits>
+#include <cmath>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -22,6 +24,8 @@ struct JarvisImportState {
     bool done = false;
     Red3DImport::ImportStats result;
     std::string saved_folder;       // labeled_data/<ts>/ written on success
+    std::string store_to_load;      // .rpred to activate (consumed by main loop)
+    std::string store_status;       // prediction-store result line for the panel
     std::string error;
 };
 
@@ -74,6 +78,7 @@ inline void DrawJarvisImportWindow(JarvisImportState &state, AppContext &ctx) {
             state.done = false;
             state.error.clear();
             state.saved_folder.clear();
+            state.store_status.clear();
 
             // Per-camera pixel dims: prefer the loaded video, fall back to
             // calibration image size.
@@ -108,6 +113,39 @@ inline void DrawJarvisImportWindow(JarvisImportState &state, AppContext &ctx) {
                 if (state.saved_folder.empty()) {
                     state.error = "Save failed: " + save_err;
                 } else {
+                    // Also write a .rpred prediction store from the imported 3D
+                    // so the Bouts / Pose Stats tools (which read only from the
+                    // store, not the editable AnnotationMap) can see it. Done
+                    // BEFORE the merge below moves `loaded` frames out.
+                    {
+                        std::string store_dir =
+                            (std::filesystem::path(pm.project_path) /
+                             "predictions" / "red_store").string();
+                        uint32_t fps =
+                            (ctx.dc_context && ctx.dc_context->video_fps > 0)
+                                ? (uint32_t)std::lround(ctx.dc_context->video_fps)
+                                : 0u;
+                        uint32_t total_frames =
+                            (ctx.dc_context && ctx.dc_context->total_num_frame > 0 &&
+                             ctx.dc_context->total_num_frame != INT_MAX)
+                                ? (uint32_t)ctx.dc_context->total_num_frame
+                                : 0u;  // 0 → writer derives max frame + 1
+                        Red3DImport::StoreWriteResult sr =
+                            Red3DImport::write_store_from_map(
+                                loaded, skeleton.num_nodes, store_dir, fps,
+                                total_frames);
+                        if (sr.ok) {
+                            state.store_to_load = sr.path;  // main loop activates
+                            state.store_status =
+                                "Prediction store: " +
+                                std::to_string(sr.frames_stored) +
+                                " frames (Bouts / Pose Stats)";
+                        } else {
+                            state.store_status =
+                                "Prediction store not written: " + sr.error;
+                        }
+                    }
+
                     // Merge into the live Labeling Tool map (predictions win over
                     // any existing entry for the same frame).
                     for (auto &[frame, fa] : loaded)
@@ -135,6 +173,8 @@ inline void DrawJarvisImportWindow(JarvisImportState &state, AppContext &ctx) {
             ImGui::Text("3D keypoints: %lld   Reprojected 2D: %lld",
                         state.result.kp3d_placed, state.result.kp2d_placed);
             ImGui::TextWrapped("Saved to: %s", state.saved_folder.c_str());
+            if (!state.store_status.empty())
+                ImGui::TextWrapped("%s", state.store_status.c_str());
         }
         },
         [&]() {

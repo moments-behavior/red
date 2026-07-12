@@ -21,11 +21,16 @@
 #include "annotation.h"
 #include "annotation_csv.h"   // parse_csv_double
 #include "camera.h"
+#include "prediction_store.h"
 #include "red_math.h"
 
 #include <Eigen/Core>
 #include <cmath>
+#include <cstdint>
+#include <ctime>
+#include <filesystem>
 #include <fstream>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -117,7 +122,7 @@ inline ImportStats import_red3d_csv(const std::string &path, AnnotationMap &amap
             bool hc = AnnotationCSV::parse_csv_double(ptr, c);
             if (hx && hy && hz && !std::isnan(x) && !std::isnan(y) && !std::isnan(z)) {
                 vx[k] = x; vy[k] = y; vz[k] = z;
-                vc[k] = hc ? c : 0.0;
+                vc[k] = hc ? c : 1.0;
                 valid[k] = 1;
                 any = true;
             } else {
@@ -155,6 +160,129 @@ inline ImportStats import_red3d_csv(const std::string &path, AnnotationMap &amap
     }
 
     return st;
+}
+
+struct StoreWriteResult {
+    bool ok = false;
+    std::string path;       // absolute .rpred written (empty on failure)
+    int frames_stored = 0;  // frames with >= 1 valid keypoint (present in store)
+    std::string error;
+};
+
+// Local timestamp for the pred_<ts>.rpred filename — a copy of
+// jarvis_import_detail::timestamp_now(), duplicated here so this header does not
+// transitively pull in json.hpp via jarvis_predict_import.h.
+inline std::string store_timestamp_now() {
+    std::time_t t = std::time(nullptr);
+    std::tm tm_buf{};
+#ifdef _WIN32
+    localtime_s(&tm_buf, &t);
+#else
+    localtime_r(&t, &tm_buf);
+#endif
+    char ts[32];
+    std::strftime(ts, sizeof(ts), "%Y%m%d-%H%M%S", &tm_buf);
+    return ts;
+}
+
+// Stream a finished AnnotationMap into a sparse .rpred prediction store so the
+// Bouts / Pose Stats tools (which read only from predstore::PredictionReader)
+// can see 3D-imported labels. Byte-compatible with the stores red's Batch
+// Predict and the JARVIS-CLI importer produce.
+//   num_nodes          — store keypoint count (use the project skeleton's, so
+//                        the load guard and Pose Stats "Fix frame" promote match).
+//   out_store_dir      — <project>/predictions/red_store; created if absent.
+//   fps                — video fps for bout durations (0 if unknown).
+//   total_video_frames — full video length for the Pose Stats X-axis (0 → derive
+//                        as max stored frame + 1).
+// The map is a std::map<u32,...>, so iteration is ascending — satisfying the
+// writer's strictly-increasing frame requirement. A frame is stored only if it
+// has >= 1 valid 3D keypoint; per-keypoint values are (x,y,z,conf) when
+// kp3d[k].source != None, NaN otherwise (matching extract_pred_row in red.cpp).
+inline StoreWriteResult write_store_from_map(
+    const AnnotationMap &amap, int num_nodes,
+    const std::string &out_store_dir,
+    uint32_t fps, uint32_t total_video_frames) {
+    namespace fs = std::filesystem;
+    StoreWriteResult r;
+
+    if (num_nodes <= 0) { r.error = "Project has no skeleton (num_nodes = 0)"; return r; }
+    if (amap.empty())   { r.error = "No frames to store"; return r; }
+
+    std::error_code ec;
+    fs::create_directories(out_store_dir, ec);
+    if (ec) {
+        r.error = "Cannot create store dir " + out_store_dir + ": " + ec.message();
+        return r;
+    }
+
+    // pred_<ts>.rpred, with a collision suffix (two imports within one second)
+    // so the "Saved Predictions" picker's timestamp label / newest-first sort
+    // stay correct — mirrors jarvis_import_predictions3D.
+    std::string ts = store_timestamp_now();
+    fs::path store_path = fs::path(out_store_dir) / ("pred_" + ts + ".rpred");
+    for (int k = 2; fs::exists(store_path, ec); ++k)
+        store_path = fs::path(out_store_dir) /
+                     ("pred_" + ts + "-" + std::to_string(k) + ".rpred");
+
+    predstore::PredictionWriter w;
+    if (!w.open(store_path.string(), num_nodes)) {
+        r.error = "Cannot open store for writing: " + store_path.string();
+        return r;
+    }
+
+    const float kNaN = std::numeric_limits<float>::quiet_NaN();
+    std::vector<float> buf((size_t)num_nodes * 4);
+    int stored = 0;
+    u32 max_frame = 0;
+    for (const auto &[frame, fa] : amap) {
+        bool any = false;
+        for (int k = 0; k < num_nodes; ++k) {
+            const size_t base = (size_t)k * 4;
+            const bool valid = k < (int)fa.kp3d.size() &&
+                               fa.kp3d[k].source != Kp3DSource::None;
+            if (valid) {
+                const auto &p = fa.kp3d[k];
+                buf[base + 0] = (float)p.x;
+                buf[base + 1] = (float)p.y;
+                buf[base + 2] = (float)p.z;
+                buf[base + 3] = p.confidence;
+                any = true;
+            } else {
+                buf[base + 0] = buf[base + 1] = buf[base + 2] = buf[base + 3] = kNaN;
+            }
+        }
+        if (!any) continue;
+        if (!w.add_frame(frame, buf.data())) {
+            w.close();
+            fs::remove(store_path, ec);
+            r.error = "Write failed at frame " + std::to_string(frame) +
+                      " — store discarded.";
+            return r;
+        }
+        if (frame > max_frame) max_frame = frame;
+        ++stored;
+    }
+
+    if (stored == 0) {
+        w.close();
+        fs::remove(store_path, ec);
+        r.error = "No frames with valid 3D keypoints to store.";
+        return r;
+    }
+
+    const uint32_t total =
+        (total_video_frames > 0) ? total_video_frames : (max_frame + 1);
+    if (!w.finalize(total, fps)) {
+        fs::remove(store_path, ec);
+        r.error = "Failed to finalize the prediction store.";
+        return r;
+    }
+
+    r.ok = true;
+    r.path = store_path.string();
+    r.frames_stored = stored;
+    return r;
 }
 
 }  // namespace Red3DImport

@@ -2186,6 +2186,15 @@ int main(int argc, char **argv) {
                     }
                 }
 
+                // The 3D-label importer (Import 3D Predictions) writes a .rpred
+                // alongside the editable labels; activate it through the same
+                // guarded path so Bouts / Pose Stats pick it up.
+                if (!win.jarvis_import.store_to_load.empty()) {
+                    jp.load_store_request = win.jarvis_import.store_to_load;
+                    jp.store_list_dirty = true;   // refresh Saved Predictions list
+                    win.jarvis_import.store_to_load.clear();
+                }
+
                 // Consume a load request (picker click or auto-open). Never
                 // load while a batch is writing its own store.
                 if (!jp.load_store_request.empty() && !jp.batch_running) {
