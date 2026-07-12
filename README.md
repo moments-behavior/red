@@ -4,6 +4,20 @@ A complete pipeline for multi-camera calibration, 2D/3D annotation, and AI-assis
 
 Developed at the [Johnson Lab](https://www.janelia.org/lab/johnson-lab), HHMI Janelia Research Campus.
 
+> **This branch — `pose_proofread_client`.** On top of the base RED feature
+> set it adds two things:
+> - **Proofreading workflow** — pull *bad frames* from the
+>   [mouse_dashboard](https://github.com/JohnsonLabJanelia/mouse_pose_dashboard)
+>   server, jump to them on the original recording, and fix them with red's
+>   normal tools. See [Proofreading Workflow](#proofreading-workflow) and
+>   [`docs/PROOFREAD.md`](docs/PROOFREAD.md).
+> - **PoseTail HTTP inference client** — offload the PoseTail temporal tracker
+>   to a shared GPU host. See [`docs/POSETAIL_SERVER_CLIENT.md`](docs/POSETAIL_SERVER_CLIENT.md).
+>
+> The macOS/Homebrew instructions below target the `rob_ui_overhaul` release
+> branch; to get the proofreading + PoseTail features build this branch from
+> source (see [Linux](#linux-build-from-source)).
+
 ---
 
 ## Installation (macOS Apple Silicon)
@@ -153,6 +167,7 @@ red /path/to/project.redproj
 - [Calibration](#calibration)
 - [Annotation Workflow](#annotation-workflow)
 - [AI-Assisted Labeling (JARVIS)](#ai-assisted-labeling-jarvis)
+- [Proofreading Workflow](#proofreading-workflow)
 - [Architecture Overview](#architecture-overview)
 - [Supported Animals and Skeletons](#supported-animals-and-skeletons)
 - [Project File Format](#project-file-format)
@@ -168,6 +183,8 @@ red /path/to/project.redproj
 - **Integrated multi-camera calibration** -- ArUco/ChArUco board detection, laser refinement, and telecentric DLT calibration, all without OpenCV
 - **2D keypoint annotation with automatic 3D triangulation** -- label keypoints in any camera view and triangulate 3D positions in real time via Eigen-based DLT
 - **AI-assisted labeling via JARVIS pose estimation** -- top-down pose estimation with native CoreML inference on Apple Silicon and ONNX Runtime as a cross-platform fallback
+- **Dashboard-driven proofreading** *(this branch)* -- pull bad frames (by IK residual or by learned scorer) from the mouse_dashboard server, auto-fetch the session's calibration, and jump straight to each bad frame to correct it
+- **PoseTail HTTP inference client** *(this branch)* -- offload the PoseTail forward temporal tracker to a shared GPU host over HTTP
 - **SAM (Segment Anything) assisted segmentation** -- MobileSAM integration for interactive segmentation masks via click prompts
 - **Bounding box and oriented bounding box annotation** -- axis-aligned and rotated bounding box tools for detection tasks
 - **Active learning loop** -- label, export, train, predict, correct: iteratively improve model accuracy with minimal manual effort
@@ -298,6 +315,53 @@ CoreML is the preferred backend on Apple Silicon. Models are stored per-project 
 
 ---
 
+## Proofreading Workflow
+
+*(This branch, `pose_proofread_client`.)* Where the JARVIS loop labels from
+scratch, the proofreading workflow **corrects existing predictions** on
+sessions that have already been run through the pipeline. Bad frames come from
+the [mouse_dashboard](https://github.com/JohnsonLabJanelia/mouse_pose_dashboard)
+server; red jumps to them on the original recording so you can re-label with
+the normal tools. Full write-up: [`docs/PROOFREAD.md`](docs/PROOFREAD.md).
+
+### Create a Proofread Project
+
+From the top-level **Proofread** menu (or the blue **Proofread** section on
+the Welcome screen) → **Create Proofread Project**:
+
+1. **Connect** to the dashboard (default `http://10.102.10.138:8000`). The
+   animal/session list is pulled automatically.
+2. **Pick an animal and session.** On select, the session's **calibration is
+   fetched automatically** from the server into `~/.cache/red/proofread/<date>/`.
+   Those yamls are already red's OpenCV format, so 3D triangulation works with
+   no conversion — no manual calibration wiring.
+3. Only **calibrated cameras** load (a camera needs both a `Cam<ID>.yaml` and
+   a matching video). The project name defaults to **`<session>_proofread`**
+   (editable) so exports don't collide with the original session's data.
+4. Creating the project yields a **normal, full red project** — all labeling,
+   JARVIS, PoseTail, save, and export tools are available.
+
+### Walk the Bad Frames
+
+The **Proofread Queue** panel lists the session's bad frames; clicking
+**Seek** jumps all cameras to that frame. A **source toggle** chooses how a
+frame is flagged:
+
+| Source | A frame is "bad" when… | Coverage |
+|--------|------------------------|----------|
+| **IK residual** | its triangulation residual ≥ a threshold (mm) | every session with finished IK |
+| **Scorer** | a core keypoint's learned score is below a threshold | only sessions with a `scorer.parquet` |
+
+Both are offered because scorer coverage is still partial. Fix a frame, seek
+to the next, and save/export as usual.
+
+> **Login note:** the dashboard has an HTTP Basic login, but requests from
+> trusted LAN IPs skip it (default: the `10.102.10.0/24` lab subnet), so red —
+> and any machine on the lab network — connects with no password. Restrict it
+> with the server's `MOUSE_DASHBOARD_TRUSTED_IPS` env var.
+
+---
+
 ## Architecture Overview
 
 ### Threading Model
@@ -355,7 +419,10 @@ Label provenance is tracked per keypoint (`Manual`, `Predicted`, `Imported`).
 | `src/jarvis_inference.h`    | ONNX Runtime inference                                   |
 | `src/jarvis_export.h`       | JARVIS/COCO export                                       |
 | `src/sam_inference.h`       | Segment Anything (MobileSAM) integration                 |
-| `src/gui/`                  | 25 modular GUI files (ImGui windows, menus, panels)      |
+| `src/proofread_client.h`    | Dashboard client: bad-frame list (IK/scorer) + calib fetch *(this branch)* |
+| `src/posetail_server_client.h` | PoseTail HTTP inference client *(this branch)*         |
+| `src/gui/proofread_dialog.h` / `proofread_window.h` | Proofread create form + bad-frame queue *(this branch)* |
+| `src/gui/`                  | Modular GUI files (ImGui windows, menus, panels)         |
 
 ---
 
@@ -511,9 +578,17 @@ The `.redproj` file contains:
         "class_names": ["animal"]
     },
     "jarvis_models": [],
-    "active_jarvis_model": -1
+    "active_jarvis_model": -1,
+
+    "proofread_server_url": "http://10.102.10.138:8000",
+    "proofread_animal": "rat",
+    "proofread_session": "2026_05_21_12_57_09"
 }
 ```
+
+The `proofread_*` fields are set only for projects made via **Create Proofread
+Project** (empty otherwise); they let **Load Proofread Project** refetch the
+bad-frame list from the dashboard. See [Proofreading Workflow](#proofreading-workflow).
 
 ### Calibration Output Formats
 
