@@ -98,9 +98,35 @@ inline void DrawProofreadWindow(ProofreadWindowState &w, AppContext &ctx) {
         proofread_fetch(w.server);
     }
 
-    ImGui::SetNextItemWidth(130.0f);
-    ImGui::InputFloat("residual ≥ mm##proof_panel",
-                       &w.server.residual_threshold_mm, 1.0f, 5.0f, "%.1f");
+    // ── Source selector: IK residual vs Scorer ────────────────────────
+    // Both are offered because scorer coverage is still partial — a session
+    // with no scorer.parquet simply won't appear when Scorer is selected.
+    {
+        int src = (w.server.source == ProofreadState::Source::Scorer) ? 1 : 0;
+        ImGui::TextDisabled("bad by:");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(150.0f);
+        if (ImGui::Combo("##proof_src", &src, "IK residual\0Scorer\0")) {
+            w.server.source = src == 1 ? ProofreadState::Source::Scorer
+                                        : ProofreadState::Source::Residual;
+            proofread_fetch(w.server);   // re-pull from the other endpoint
+        }
+    }
+
+    const bool scorer_src = (w.server.source == ProofreadState::Source::Scorer);
+    if (scorer_src) {
+        ImGui::SetNextItemWidth(130.0f);
+        ImGui::InputFloat("score < ##proof_panel",
+                           &w.server.scorer_threshold, 0.05f, 0.25f, "%.2f");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(90.0f);
+        ImGui::InputInt("min bad kps##proof_panel", &w.server.min_bad_kps, 1, 1);
+        if (w.server.min_bad_kps < 1) w.server.min_bad_kps = 1;
+    } else {
+        ImGui::SetNextItemWidth(130.0f);
+        ImGui::InputFloat("residual ≥ mm##proof_panel",
+                           &w.server.residual_threshold_mm, 1.0f, 5.0f, "%.1f");
+    }
     ImGui::SameLine();
     ImGui::SetNextItemWidth(100.0f);
     ImGui::InputInt("min gap##proof_panel",
@@ -133,20 +159,28 @@ inline void DrawProofreadWindow(ProofreadWindowState &w, AppContext &ctx) {
         ImGui::End();
         return;
     }
-    ImGui::Text("bad frames: %d / %d  (residual >= %.1f mm)",
-                 ps->n_frames_bad, ps->n_frames_total,
-                 w.server.residual_threshold_mm);
+    if (scorer_src) {
+        ImGui::Text("bad frames: %d / %d  (core kp score < %.2f)",
+                     ps->n_frames_bad, ps->n_frames_total,
+                     w.server.scorer_threshold);
+    } else {
+        ImGui::Text("bad frames: %d / %d  (residual >= %.1f mm)",
+                     ps->n_frames_bad, ps->n_frames_total,
+                     w.server.residual_threshold_mm);
+    }
     ImGui::Separator();
 
     // ── Frame table ───────────────────────────────────────────────────
-    if (ImGui::BeginTable("##frames", 3,
+    if (ImGui::BeginTable("##frames", 4,
                            ImGuiTableFlags_RowBg |
                            ImGuiTableFlags_BordersInnerH |
                            ImGuiTableFlags_ScrollY |
                            ImGuiTableFlags_SizingFixedFit,
                            ImVec2(0.0f, 0.0f))) {
         ImGui::TableSetupColumn("Frame", ImGuiTableColumnFlags_WidthFixed, 90.0f);
-        ImGui::TableSetupColumn("Residual (mm)", ImGuiTableColumnFlags_WidthFixed, 130.0f);
+        ImGui::TableSetupColumn(scorer_src ? "Score" : "Residual (mm)",
+                                 ImGuiTableColumnFlags_WidthFixed, 110.0f);
+        ImGui::TableSetupColumn("Worst kp", ImGuiTableColumnFlags_WidthFixed, 90.0f);
         ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableHeadersRow();
@@ -156,9 +190,20 @@ inline void DrawProofreadWindow(ProofreadWindowState &w, AppContext &ctx) {
             ImGui::TableNextColumn();
             ImGui::Text("%d", ps->frames[fi]);
             ImGui::TableNextColumn();
-            float r = fi < (int)ps->residuals_mm.size()
-                        ? ps->residuals_mm[fi] : 0.0f;
-            ImGui::Text("%.1f", r);
+            if (scorer_src) {
+                float sc = fi < (int)ps->scores.size() ? ps->scores[fi] : 0.0f;
+                ImGui::Text("%.2f", sc);
+            } else {
+                float r = fi < (int)ps->residuals_mm.size()
+                            ? ps->residuals_mm[fi] : 0.0f;
+                ImGui::Text("%.1f", r);
+            }
+            ImGui::TableNextColumn();
+            if (scorer_src && fi < (int)ps->worst_kps.size()) {
+                ImGui::TextUnformatted(ps->worst_kps[fi].c_str());
+            } else {
+                ImGui::TextDisabled("-");
+            }
             ImGui::TableNextColumn();
             ImGui::PushID(fi);
             if (ImGui::SmallButton("Seek")) {

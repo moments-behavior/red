@@ -59,11 +59,21 @@ struct ProofreadSession {
     int n_frames_total = 0;
     int n_frames_bad   = 0;
     std::vector<int>   frames;        // frame indices to relabel
-    std::vector<float> residuals_mm;  // parallel to `frames`
+    std::vector<float> residuals_mm;  // IK source: parallel to `frames`
+    std::vector<float> scores;        // scorer source: worst core-kp score
+    std::vector<std::string> worst_kps;  // scorer source: worst kp name
 };
 
 
 struct ProofreadState {
+    // Which server-side model flags a frame as "bad". Both are offered
+    // because scorer coverage is still partial — not every session has a
+    // scorer.parquet yet, but every IK-finished session has residuals.
+    //   Residual → /api/bad_frames_all      (IK residual >= threshold_mm)
+    //   Scorer   → /api/scorer_bad_frames_all (core kp score < threshold)
+    enum class Source { Residual, Scorer };
+    Source source = Source::Residual;
+
     // User-editable URL like "http://10.102.10.138:8000" — the lab Linux
     // box that runs mouse_dashboard's uvicorn server. NOTE: this is a
     // *different* host from the posetail server (which lives at .88) —
@@ -71,9 +81,14 @@ struct ProofreadState {
     std::string url = "http://10.102.10.138:8000";
     // Residual cutoff (mm). Default matches the dashboard default.
     float residual_threshold_mm = 25.0f;
+    // Scorer cutoff: a core keypoint scoring below this is "bad".
+    float scorer_threshold = 0.0f;
+    // Scorer: how many core kps must be below threshold for a bad window.
+    int   min_bad_kps = 1;
     // Cluster debounce window in frames. Defaults to 50, which collapses
     // runs of adjacent bad frames into one worst-frame pick — usually what
-    // you want for relabeling.
+    // you want for relabeling. (Scorer windows are 16 frames wide, so a
+    // larger gap like 160 is sensible there.)
     int   min_gap = 50;
 
     bool reachable = false;
@@ -117,10 +132,18 @@ inline bool proofread_fetch(ProofreadState &s) {
     cli.set_connection_timeout(3, 0);
     cli.set_read_timeout(30, 0);   // /api/bad_frames_all scans 50 sessions
 
+    const bool scorer = (s.source == ProofreadState::Source::Scorer);
     char path[256];
-    std::snprintf(path, sizeof(path),
-                   "/api/bad_frames_all?residual_threshold_mm=%.3f&min_gap=%d",
-                   s.residual_threshold_mm, s.min_gap);
+    if (scorer) {
+        std::snprintf(path, sizeof(path),
+                       "/api/scorer_bad_frames_all"
+                       "?threshold=%.3f&min_bad_kps=%d&min_gap=%d",
+                       s.scorer_threshold, s.min_bad_kps, s.min_gap);
+    } else {
+        std::snprintf(path, sizeof(path),
+                       "/api/bad_frames_all?residual_threshold_mm=%.3f&min_gap=%d",
+                       s.residual_threshold_mm, s.min_gap);
+    }
     auto res = cli.Get(path);
     if (!res) {
         s.status = "Cannot reach server (" + base + "): " +
@@ -128,8 +151,9 @@ inline bool proofread_fetch(ProofreadState &s) {
         return false;
     }
     if (res->status != 200) {
-        s.status = "GET /api/bad_frames_all failed: HTTP " +
-                   std::to_string(res->status);
+        s.status = std::string("GET ") + (scorer ? "/api/scorer_bad_frames_all"
+                                                  : "/api/bad_frames_all") +
+                   " failed: HTTP " + std::to_string(res->status);
         return false;
     }
 
@@ -157,6 +181,12 @@ inline bool proofread_fetch(ProofreadState &s) {
         }
         if (item.contains("residuals_mm")) {
             ps.residuals_mm = item["residuals_mm"].get<std::vector<float>>();
+        }
+        if (item.contains("scores")) {
+            ps.scores = item["scores"].get<std::vector<float>>();
+        }
+        if (item.contains("worst_kps")) {
+            ps.worst_kps = item["worst_kps"].get<std::vector<std::string>>();
         }
         out.push_back(std::move(ps));
     }

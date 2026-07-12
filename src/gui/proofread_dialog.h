@@ -84,6 +84,43 @@ inline void DrawProofreadDialog(ProofreadDialogState &state,
     const auto &skeleton_map = ctx.skeleton_map;
     const auto &skeleton_dir = ctx.skeleton_dir;
 
+    // Auto-grab this session's calibration from the server into a per-date
+    // cache dir and point pm.calibration_folder at it. Idempotent: if the
+    // yamls are already cached we skip the network round-trip. Called both
+    // when the user picks a session (so calib is ready before Create) and
+    // again at Create time as a safety net.
+    auto ensure_calib = [&](const std::string &animal,
+                            const std::string &session) -> bool {
+        if (animal.empty() || session.empty()) return false;
+        const std::string date =
+            session.size() >= 10 ? session.substr(0, 10) : session;
+        const char *home = std::getenv("HOME");
+        std::filesystem::path calib_dir =
+            std::filesystem::path(home ? home : "/tmp") /
+            ".cache" / "red" / "proofread" / date;
+        bool have_yaml = false;
+        if (std::filesystem::is_directory(calib_dir)) {
+            for (const auto &e :
+                 std::filesystem::directory_iterator(calib_dir)) {
+                if (e.is_regular_file() && e.path().extension() == ".yaml") {
+                    have_yaml = true;
+                    break;
+                }
+            }
+        }
+        if (!have_yaml) {
+            std::string err;
+            if (!proofread_fetch_calib(state.server, animal, session,
+                                        calib_dir, &err)) {
+                state.status = "Could not fetch calibration: " + err;
+                return false;
+            }
+        }
+        state.calib_cache_dir = calib_dir.string();
+        pm.calibration_folder = calib_dir.string();
+        return true;
+    };
+
     // ── File dialogs (must run every frame) ───────────────────────────
     if (ImGuiFileDialog::Instance()->Display(
             "ChooseProofRootDir", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
@@ -255,6 +292,14 @@ inline void DrawProofreadDialog(ProofreadDialogState &state,
                             pm.project_name =
                                 proofread_dialog_detail::default_project_name(
                                     state.selected_animal, s);
+                            // Auto-grab calibration from the server the moment
+                            // a session is picked — these yamls are already in
+                            // red's format (camera_matrix/rc_ext/tc_ext), so
+                            // triangulation works with no conversion.
+                            if (ensure_calib(state.selected_animal, s)) {
+                                state.status = "Calibration ready → " +
+                                               state.calib_cache_dir;
+                            }
                         }
                         if (sel) ImGui::SetItemDefaultFocus();
                     }
@@ -400,25 +445,13 @@ inline void DrawProofreadDialog(ProofreadDialogState &state,
         if (ImGui::Button(create_label)) {
             state.status.clear();
 
-            // 1) Auto-fetch calib into a per-date cache dir.
-            const std::string date =
-                state.selected_session.size() >= 10
-                    ? state.selected_session.substr(0, 10)
-                    : state.selected_session;
-            const char *home = std::getenv("HOME");
-            std::filesystem::path calib_dir =
-                std::filesystem::path(home ? home : "/tmp") /
-                ".cache" / "red" / "proofread" / date;
-            std::string calib_err;
-            if (!proofread_fetch_calib(state.server,
-                                        state.selected_animal,
-                                        state.selected_session,
-                                        calib_dir, &calib_err)) {
-                state.status =
-                    "Could not fetch calibration: " + calib_err;
+            // 1) Ensure calib is present (usually already fetched on select).
+            //    ensure_calib sets pm.calibration_folder + state.calib_cache_dir.
+            if (!ensure_calib(state.selected_animal,
+                              state.selected_session)) {
+                // ensure_calib already set state.status with the reason.
             } else {
-                state.calib_cache_dir = calib_dir.string();
-                pm.calibration_folder = calib_dir.string();
+                std::filesystem::path calib_dir = state.calib_cache_dir;
 
                 // 2) Build the camera set from the calibration directory —
                 // *only* cameras that have a Cam{ID}.yaml are part of the
