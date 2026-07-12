@@ -47,11 +47,14 @@ inline std::vector<std::string> sessions_for_animal(const ProofreadState &s,
     return out;
 }
 
-// "<animal>__<session>" with characters safe for a directory name.
+// "<session>_proofread" — keyed on the session (a unique timestamp) with a
+// _proofread suffix so an exported/uploaded proofread dataset never collides
+// with the original session's data. Animal is unused (kept for call sites).
 inline std::string default_project_name(const std::string &animal,
                                          const std::string &session) {
-    if (animal.empty() || session.empty()) return {};
-    return "proofread__" + animal + "__" + session;
+    (void)animal;
+    if (session.empty()) return {};
+    return session + "_proofread";
 }
 
 }  // namespace proofread_dialog_detail
