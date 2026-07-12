@@ -37,10 +37,12 @@
 #include <string>
 #include <vector>
 
+#ifndef _WIN32
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#endif
 
 namespace predstore {
 
@@ -173,6 +175,27 @@ struct PredictionReader {
 
     bool open(const std::string &path) {
         close();
+#ifdef _WIN32
+        // Windows has no mmap; read the whole store into memory instead. The
+        // index is tiny and access is random, so a single buffered read is the
+        // simplest port — the POSIX path's out-of-core paging is sacrificed.
+        // All downstream accessors read through data_, so pointing it at the
+        // buffer keeps parse_header()/frame()/stored_at() unchanged.
+        std::FILE *fp = std::fopen(path.c_str(), "rb");
+        if (!fp) return false;
+        if (std::fseek(fp, 0, SEEK_END) != 0) { std::fclose(fp); return false; }
+        long sz = std::ftell(fp);
+        if (sz < 0) { std::fclose(fp); return false; }
+        std::fseek(fp, 0, SEEK_SET);
+        file_size_ = (size_t)sz;
+        if (file_size_ < kDataOffset) { std::fclose(fp); file_size_ = 0; return false; }
+        buf_.resize(file_size_);
+        size_t got = std::fread(buf_.data(), 1, file_size_, fp);
+        std::fclose(fp);
+        if (got != file_size_) { buf_.clear(); file_size_ = 0; return false; }
+        data_ = buf_.data();
+        return parse_header();
+#else
         int fd = ::open(path.c_str(), O_RDONLY);
         if (fd < 0) return false;
         struct stat st{};
@@ -185,10 +208,16 @@ struct PredictionReader {
         if (data_ == MAP_FAILED) { data_ = nullptr; file_size_ = 0; return false; }
         madvise((void *)data_, file_size_, MADV_RANDOM);
         return parse_header();
+#endif
     }
 
     void close() {
+#ifdef _WIN32
+        std::vector<uint8_t>().swap(buf_);
+        data_ = nullptr;
+#else
         if (data_) { munmap((void *)data_, file_size_); data_ = nullptr; }
+#endif
         file_size_ = 0; index_ = nullptr; data_section_ = nullptr;
         total_video_frames_ = n_stored_ = fps_ = 0; num_kp_ = epf_ = 0;
     }
@@ -235,6 +264,9 @@ struct PredictionReader {
 
   private:
     void move_from(PredictionReader &o) {
+        // buf_ is used only on Windows (empty elsewhere). Moving the vector
+        // preserves its allocation, so the raw data_ copy below stays valid.
+        buf_ = std::move(o.buf_);
         data_ = o.data_; file_size_ = o.file_size_;
         total_video_frames_ = o.total_video_frames_; n_stored_ = o.n_stored_;
         fps_ = o.fps_; num_kp_ = o.num_kp_; epf_ = o.epf_;
@@ -271,6 +303,7 @@ struct PredictionReader {
         return true;
     }
 
+    std::vector<uint8_t> buf_;             // backing store on Windows (no mmap)
     const uint8_t *data_ = nullptr;
     size_t file_size_ = 0;
     uint32_t total_video_frames_ = 0, n_stored_ = 0, fps_ = 0;
