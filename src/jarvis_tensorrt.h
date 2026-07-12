@@ -16,6 +16,7 @@
 #ifdef _WIN32
 
 #include "annotation.h"
+#include "jarvis_hn_reproject.h"  // kHeatmapScale (single-sourced heatmap range)
 #include "jarvis_model_config.h"
 #include "skeleton.h"
 #include "types.h"

@@ -2316,7 +2316,11 @@ int main(int argc, char **argv) {
                         std::filesystem::create_directories(store_dir, sec);
                         std::time_t t = std::time(nullptr);
                         std::tm tmb{};
+#ifdef _WIN32
+                        localtime_s(&tmb, &t);
+#else
                         localtime_r(&t, &tmb);
+#endif
                         char ts[32];
                         std::strftime(ts, sizeof(ts), "%Y%m%d-%H%M%S", &tmb);
                         bp.store_path =

@@ -393,7 +393,10 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
 #ifdef __APPLE__
         bool any_loaded = jarvis.loaded || jarvis_coreml.loaded;
 #elif defined(_WIN32)
-        bool any_loaded = jarvis.loaded || jarvis_trt.loaded || jarvis_hn.loaded;
+        bool any_loaded = jarvis.loaded || jarvis_trt.loaded;
+#if defined(RED_HAS_ONNXRUNTIME) || defined(RED_HAS_TENSORRT_HN)
+        any_loaded = any_loaded || jarvis_hn.loaded;  // jarvis_hn param only exists here
+#endif
 #elif defined(__linux__) && (defined(RED_HAS_ONNXRUNTIME) || defined(RED_HAS_TENSORRT_HN))
         bool any_loaded = jarvis.loaded || jarvis_hn.loaded;
 #else

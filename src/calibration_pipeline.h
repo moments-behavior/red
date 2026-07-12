@@ -3897,7 +3897,11 @@ run_full_pipeline_REMOVED(const CalibrationTool::CalibConfig &config,
     auto now = std::chrono::system_clock::now();
     std::time_t t = std::chrono::system_clock::to_time_t(now);
     std::tm tstruct;
+#ifdef _WIN32
+    localtime_s(&tstruct, &t);
+#else
     localtime_r(&t, &tstruct);
+#endif
     char tbuf[64];
     std::strftime(tbuf, sizeof(tbuf), "%Y_%m_%d_%H_%M_%S", &tstruct);
     std::string output_folder = base_folder + "/" + tbuf;
