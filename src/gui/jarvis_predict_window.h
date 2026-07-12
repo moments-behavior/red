@@ -83,6 +83,8 @@ struct JarvisPredictState {
     bool store_list_dirty = true;              // rescan red_store/ when set
     std::string active_store_path;             // currently mmap'd store
     std::string load_store_request;            // picker click → main loop opens it
+    std::string import_request;                // data3D.csv/folder → main loop imports it
+    std::string import_status;                 // last import result, shown in panel
 
     // Predict from: false = Shown (visible cameras only), true = All cameras.
     // Default to All — HybridNet 3D needs every camera, and "Shown" is rarely useful.
@@ -1306,8 +1308,35 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
             jarvis_scan_prediction_stores(pm.project_path, state);
             state.store_list_dirty = false;
         }
-        ImGui::SameLine(ImGui::GetContentRegionAvail().x - 60);
+        ImGui::SameLine(ImGui::GetContentRegionAvail().x - 130);
+        if (ImGui::SmallButton("Import JARVIS…")) {
+            IGFD::FileDialogConfig cfg;
+            cfg.countSelectionMax = 1;
+            cfg.flags = ImGuiFileDialogFlags_Modal;
+            if (!pm.media_folder.empty()) cfg.path = pm.media_folder;
+            ImGuiFileDialog::Instance()->OpenDialog(
+                "JarvisImportPreds", "Select JARVIS data3D.csv", ".csv",
+                cfg);
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip(
+                "Import a JARVIS-CLI 3D prediction folder (data3D.csv + info.yaml,\n"
+                "e.g. produced on a cluster) into this project's prediction store,\n"
+                "so it gets the same overlay / Pose Stats / Bouts treatment as an\n"
+                "in-app Batch Predict.");
+        ImGui::SameLine();
         if (ImGui::SmallButton("Refresh")) state.store_list_dirty = true;
+
+        if (!state.import_status.empty()) {
+            bool import_err = state.import_status.find("Cannot") != std::string::npos ||
+                              state.import_status.find("Failed") != std::string::npos ||
+                              state.import_status.find("No ") != std::string::npos ||
+                              state.import_status.find("missing") != std::string::npos ||
+                              state.import_status.find("no data") != std::string::npos;
+            ImGui::TextColored(
+                import_err ? ImVec4(1, 0.5f, 0.2f, 1) : ImVec4(0.5f, 1, 0.5f, 1),
+                "%s", state.import_status.c_str());
+        }
 
         if (state.store_list.empty()) {
             ImGui::TextDisabled("No saved prediction stores in this project.");
@@ -1356,6 +1385,15 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
                 if (ImGuiFileDialog::Instance()->IsOk()) {
                     state.models_folder =
                         ImGuiFileDialog::Instance()->GetCurrentPath();
+                }
+                ImGuiFileDialog::Instance()->Close();
+            }
+            if (ImGuiFileDialog::Instance()->Display(
+                    "JarvisImportPreds", ImGuiWindowFlags_NoCollapse,
+                    ImVec2(680, 440))) {
+                if (ImGuiFileDialog::Instance()->IsOk()) {
+                    state.import_request =
+                        ImGuiFileDialog::Instance()->GetFilePathName();
                 }
                 ImGuiFileDialog::Instance()->Close();
             }

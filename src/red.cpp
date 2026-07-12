@@ -28,6 +28,7 @@
 #endif
 #include "gui/jarvis_predict_window.h"
 #include "jarvis_predict_export.h"
+#include "jarvis_predict_import.h"
 #include "prediction_store.h"
 #include "gui/prediction_overlay.h"
 #include "gui/annotation_dialog.h"
@@ -2128,12 +2129,60 @@ int main(int argc, char **argv) {
                         if (std::filesystem::is_directory(dir, ec)) {
                             for (auto &e :
                                  std::filesystem::directory_iterator(dir, ec)) {
-                                if (e.path().extension() == ".rpred" &&
-                                    e.path().string() > newest)
+                                if (e.path().extension() != ".rpred") continue;
+                                if (e.path().string() <= newest) continue;
+                                // Skip files with an unreadable/invalid header
+                                // (e.g. a half-written cluster import) so we
+                                // auto-open the newest VALID store.
+                                if (predstore::read_store_header(
+                                        e.path().string()).ok)
                                     newest = e.path().string();
                             }
                         }
                         if (!newest.empty()) jp.load_store_request = newest;
+                    }
+                }
+
+                // Import a JARVIS-CLI 3D prediction folder (data3D.csv +
+                // info.yaml) into this project's store, then load it through the
+                // normal guarded path below. Never import mid-batch (the writer
+                // would collide with the batch's own store).
+                if (!jp.import_request.empty() && !jp.batch_running) {
+                    std::string src = jp.import_request;
+                    jp.import_request.clear();
+                    if (pm.project_path.empty()) {
+                        jp.import_status = "Open a project before importing.";
+                    } else {
+                        std::string store_dir =
+                            (std::filesystem::path(pm.project_path) /
+                             "predictions" / "red_store").string();
+                        std::string model_name;
+                        if (pm.active_jarvis_model >= 0 &&
+                            pm.active_jarvis_model < (int)pm.jarvis_models.size())
+                            model_name =
+                                pm.jarvis_models[pm.active_jarvis_model].name;
+                        int fps_hint = (int)std::lround(
+                            dc_context->video_fps > 0 ? dc_context->video_fps : 0);
+                        int total_hint =
+                            (dc_context->total_num_frame > 0 &&
+                             dc_context->total_num_frame != INT_MAX)
+                                ? dc_context->total_num_frame
+                                : 0;
+                        JarvisImportResult ir = jarvis_import_predictions3D(
+                            src, store_dir, pm.media_folder, model_name,
+                            pm.skeleton_name, fps_hint, total_hint);
+                        jp.import_status = ir.message;
+                        printf("[Import] %s\n", ir.message.c_str());
+                        if (ir.ok) {
+                            jp.store_list_dirty = true;
+                            if (ir.num_keypoints != skeleton.num_nodes)
+                                jp.import_status +=
+                                    "  (⚠ " + std::to_string(ir.num_keypoints) +
+                                    " keypoints vs skeleton's " +
+                                    std::to_string(skeleton.num_nodes) + ")";
+                            else
+                                jp.load_store_request = ir.store_path;  // auto-open
+                        }
                     }
                 }
 
@@ -2144,14 +2193,20 @@ int main(int argc, char **argv) {
                     jp.load_store_request.clear();
                     prediction_store.close();
                     if (prediction_store.open(p)) {
-                        jp.active_store_path = p;
                         int nkp = (int)prediction_store.num_keypoints();
                         if (nkp != skeleton.num_nodes) {
+                            // A store whose keypoint count doesn't match the
+                            // active skeleton must NOT stay active: Pose Stats /
+                            // Bouts would read past each frame's block. Close it
+                            // and leave no active store.
+                            prediction_store.close();
+                            jp.active_store_path.clear();
                             jp.store_status = "⚠ store has " +
                                 std::to_string(nkp) + " keypoints, skeleton has " +
                                 std::to_string(skeleton.num_nodes) +
-                                " — overlay disabled";
+                                " — not loaded";
                         } else {
+                            jp.active_store_path = p;
                             jp.store_status = "Loaded " +
                                 std::to_string(prediction_store.stored_frames()) +
                                 " frames from " +
@@ -2205,10 +2260,15 @@ int main(int argc, char **argv) {
                 // reaches the Labeling Tool. No-op in LabelingTool mode.
                 auto stash_prediction = [&](u32 frame) {
                     if (bp.batch_prediction_dest != PredDest::Store) return;
-                    if (!prediction_writer.is_open()) return;
-                    std::vector<float> buf;
-                    if (extract_pred_row(frame, buf))
-                        prediction_writer.add_frame(frame, buf.data());
+                    // Store the prediction if the writer is healthy, then ALWAYS
+                    // erase the frame from `annotations` — in Store mode a
+                    // prediction must never leak into the Labeling Tool, even if
+                    // the writer failed to open or a write errored mid-batch.
+                    if (prediction_writer.is_open()) {
+                        std::vector<float> buf;
+                        if (extract_pred_row(frame, buf))
+                            prediction_writer.add_frame(frame, buf.data());
+                    }
                     annotations.erase(frame);
                 };
 #ifdef __APPLE__
@@ -2255,8 +2315,13 @@ int main(int argc, char **argv) {
                                 .string();
                         if (!prediction_writer.open(bp.store_path,
                                                     skeleton.num_nodes)) {
+                            // Can't write the store — fall back to loading
+                            // predictions as labeled frames rather than silently
+                            // dropping them (stash erases in Store mode).
+                            bp.batch_prediction_dest = PredDest::LabelingTool;
                             bp.store_status =
-                                "Failed to open prediction store for writing";
+                                "Could not open prediction store — predictions "
+                                "will load as labeled frames instead";
                             bp.store_path.clear();
                         }
                     }
