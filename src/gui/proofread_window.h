@@ -84,10 +84,6 @@ inline void DrawProofreadWindow(ProofreadWindowState &w, AppContext &ctx) {
     if (!w.initial_fetch_done) {
         if (!pm.proofread_server_url.empty())
             w.server.url = pm.proofread_server_url;
-        if (!pm.proofread_username.empty())
-            w.server.username = pm.proofread_username;
-        // Password isn't persisted; if it's still blank the first fetch will
-        // 401 and the user types it in the login field, then hits Refresh.
         proofread_fetch(w.server);
         w.initial_fetch_done = true;
     }
@@ -101,15 +97,6 @@ inline void DrawProofreadWindow(ProofreadWindowState &w, AppContext &ctx) {
     if (ImGui::Button("Refresh##proof_panel")) {
         proofread_fetch(w.server);
     }
-    // HTTP Basic auth — the dashboard requires a login.
-    ImGui::TextDisabled("login:");
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(120.0f);
-    ImGui::InputText("user##proof_panel_user", &w.server.username);
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(120.0f);
-    ImGui::InputText("pass##proof_panel_pass", &w.server.password,
-                     ImGuiInputTextFlags_Password);
 
     // ── Source selector: IK residual vs Scorer ────────────────────────
     // Both are offered because scorer coverage is still partial — a session

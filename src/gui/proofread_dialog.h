@@ -221,23 +221,6 @@ inline void DrawProofreadDialog(ProofreadDialogState &state,
                 }
             }
 
-            // ── Login (HTTP Basic auth) ──
-            ImGui::TableNextRow();
-            LabelCell("Login (user / pass)");
-            ImGui::TableSetColumnIndex(1);
-            {
-                float gap = ImGui::GetStyle().ItemInnerSpacing.x;
-                float half = (ImGui::GetContentRegionAvail().x - gap) * 0.5f;
-                ImGui::SetNextItemWidth(half);
-                ImGui::InputText("##proof_user", &state.server.username);
-                ImGui::SameLine(0, gap);
-                ImGui::SetNextItemWidth(half);
-                ImGui::InputText("##proof_pass", &state.server.password,
-                                 ImGuiInputTextFlags_Password);
-            }
-            ImGui::TableSetColumnIndex(2);
-            ImGui::Dummy(ImVec2(1, 1));
-
             // ── Threshold + min-gap (compact row) ──
             ImGui::TableNextRow();
             LabelCell("Bad-frame filter");
@@ -511,7 +494,6 @@ inline void DrawProofreadDialog(ProofreadDialogState &state,
                 } else {
                     // 3) Stamp proofread metadata so Load can refetch.
                     pm.proofread_server_url = state.server.url;
-                    pm.proofread_username   = state.server.username;
                     pm.proofread_animal     = state.selected_animal;
                     pm.proofread_session    = state.selected_session;
 
