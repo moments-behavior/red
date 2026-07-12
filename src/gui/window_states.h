@@ -160,6 +160,8 @@ struct WindowStates {
         jarvis_predict.model_dir_display.clear();
         jarvis_predict.active_store_path.clear();
         jarvis_predict.load_store_request.clear();
+        jarvis_predict.import_request.clear();
+        jarvis_predict.import_status.clear();
         jarvis_predict.store_list.clear();
         jarvis_predict.store_list_dirty = true;
         jarvis_predict.store_status.clear();

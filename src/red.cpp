@@ -28,6 +28,7 @@
 #endif
 #include "gui/jarvis_predict_window.h"
 #include "jarvis_predict_export.h"
+#include "jarvis_predict_import.h"
 #include "prediction_store.h"
 #include "gui/prediction_overlay.h"
 #include "gui/annotation_dialog.h"
@@ -2139,6 +2140,49 @@ int main(int argc, char **argv) {
                             }
                         }
                         if (!newest.empty()) jp.load_store_request = newest;
+                    }
+                }
+
+                // Import a JARVIS-CLI 3D prediction folder (data3D.csv +
+                // info.yaml) into this project's store, then load it through the
+                // normal guarded path below. Never import mid-batch (the writer
+                // would collide with the batch's own store).
+                if (!jp.import_request.empty() && !jp.batch_running) {
+                    std::string src = jp.import_request;
+                    jp.import_request.clear();
+                    if (pm.project_path.empty()) {
+                        jp.import_status = "Open a project before importing.";
+                    } else {
+                        std::string store_dir =
+                            (std::filesystem::path(pm.project_path) /
+                             "predictions" / "red_store").string();
+                        std::string model_name;
+                        if (pm.active_jarvis_model >= 0 &&
+                            pm.active_jarvis_model < (int)pm.jarvis_models.size())
+                            model_name =
+                                pm.jarvis_models[pm.active_jarvis_model].name;
+                        int fps_hint = (int)std::lround(
+                            dc_context->video_fps > 0 ? dc_context->video_fps : 0);
+                        int total_hint =
+                            (dc_context->total_num_frame > 0 &&
+                             dc_context->total_num_frame != INT_MAX)
+                                ? dc_context->total_num_frame
+                                : 0;
+                        JarvisImportResult ir = jarvis_import_predictions3D(
+                            src, store_dir, pm.media_folder, model_name,
+                            pm.skeleton_name, fps_hint, total_hint);
+                        jp.import_status = ir.message;
+                        printf("[Import] %s\n", ir.message.c_str());
+                        if (ir.ok) {
+                            jp.store_list_dirty = true;
+                            if (ir.num_keypoints != skeleton.num_nodes)
+                                jp.import_status +=
+                                    "  (⚠ " + std::to_string(ir.num_keypoints) +
+                                    " keypoints vs skeleton's " +
+                                    std::to_string(skeleton.num_nodes) + ")";
+                            else
+                                jp.load_store_request = ir.store_path;  // auto-open
+                        }
                     }
                 }
 
