@@ -75,10 +75,12 @@ struct PredictionWriter {
         }
         index_.clear();
         finalized_ = false;
+        failed_ = false;
         return true;
     }
 
-    bool is_open() const { return fp_ != nullptr && !finalized_; }
+    bool is_open() const { return fp_ != nullptr && !finalized_ && !failed_; }
+    bool failed() const { return failed_; }
     uint32_t stored_frames() const { return (uint32_t)index_.size(); }
 
     // Append one frame's elements_per_frame float32 values. `values` must point
@@ -88,15 +90,22 @@ struct PredictionWriter {
     bool add_frame(uint32_t frame_number, const float *values) {
         if (!is_open()) return false;
         uint32_t data_index = (uint32_t)index_.size();
-        if (std::fwrite(values, sizeof(float), epf_, fp_) != (size_t)epf_)
+        if (std::fwrite(values, sizeof(float), epf_, fp_) != (size_t)epf_) {
+            // A short write desynchronizes the file offset from data_index; the
+            // partial block can't be un-written, so mark the writer failed. All
+            // later add_frame() calls return false and finalize() refuses, so no
+            // corrupt store ever reaches a reader.
+            failed_ = true;
             return false;
+        }
         index_.push_back({frame_number, data_index});
         return true;
     }
 
     // Write the footer index and back-patch the header. Safe to call once.
+    // Refuses if a prior write failed, so a desynced file never becomes a store.
     bool finalize(uint32_t total_video_frames, uint32_t fps) {
-        if (!fp_ || finalized_) return false;
+        if (!fp_ || finalized_ || failed_) return false;
         // Current position is the end of the data section = index offset.
         long ix = std::ftell(fp_);
         if (ix < 0) return false;
@@ -134,6 +143,7 @@ struct PredictionWriter {
         if (fp_) { std::fclose(fp_); fp_ = nullptr; }
         index_.clear();
         finalized_ = false;
+        failed_ = false;
     }
 
   private:
@@ -143,6 +153,7 @@ struct PredictionWriter {
     uint16_t num_kp_ = 0;
     uint16_t epf_ = 0;
     bool finalized_ = false;
+    bool failed_ = false;
     std::vector<IndexEntry> index_;
 };
 
@@ -243,8 +254,18 @@ struct PredictionReader {
         std::memcpy(&epf_, data_ + 22, 2);
         std::memcpy(&data_offset_, data_ + 24, 8);
         uint64_t index_offset; std::memcpy(&index_offset, data_ + 32, 8);
-        // Bounds-check the index footer.
-        if (index_offset + (size_t)n_stored_ * 8 > file_size_) { close(); return false; }
+        // Validate the layout against the mapped size WITHOUT integer overflow
+        // (a corrupt header must not yield a wild index_ pointer). All operands
+        // are widened to uint64; every subtraction is guarded by a prior <= .
+        const uint64_t fsz = (uint64_t)file_size_;
+        if (data_offset_ < 40 || data_offset_ > fsz) { close(); return false; }
+        if (index_offset < data_offset_ || index_offset > fsz) { close(); return false; }
+        // Footer must fit: n_stored * 8 bytes at index_offset.
+        if ((uint64_t)n_stored_ * 8u > fsz - index_offset) { close(); return false; }
+        // Data blocks must fit between data_offset and the footer.
+        if ((uint64_t)n_stored_ * (uint64_t)epf_ * 4u > index_offset - data_offset_) {
+            close(); return false;
+        }
         index_ = (const uint32_t *)(data_ + index_offset);
         data_section_ = data_ + data_offset_;
         return true;

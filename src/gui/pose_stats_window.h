@@ -67,6 +67,9 @@ inline void pose_stats_build(PoseStatsState &st,
     st.stored_frames = store.stored_frames();
     st.num_kp = skel.num_nodes;
     const int nn = st.num_kp;
+    // Never read past a stored frame's block: the store may hold fewer keypoints
+    // than the current skeleton. Keypoints beyond nread stay NaN.
+    const int nread = std::min(nn, (int)store.num_keypoints());
     const uint32_t total = std::max<uint32_t>(1, st.total_frames);
     const int B = (int)std::min<uint32_t>(total, 4000u);
     st.num_buckets = B;
@@ -90,7 +93,7 @@ inline void pose_stats_build(PoseStatsState &st,
         if (b >= B) b = B - 1;
         double fsum = 0;
         int fcnt = 0;
-        for (int k = 0; k < nn; ++k) {
+        for (int k = 0; k < nread; ++k) {
             float c = row[k * 4 + 3];
             if (!std::isnan(c)) {
                 fsum += c;

@@ -2128,8 +2128,13 @@ int main(int argc, char **argv) {
                         if (std::filesystem::is_directory(dir, ec)) {
                             for (auto &e :
                                  std::filesystem::directory_iterator(dir, ec)) {
-                                if (e.path().extension() == ".rpred" &&
-                                    e.path().string() > newest)
+                                if (e.path().extension() != ".rpred") continue;
+                                if (e.path().string() <= newest) continue;
+                                // Skip files with an unreadable/invalid header
+                                // (e.g. a half-written cluster import) so we
+                                // auto-open the newest VALID store.
+                                if (predstore::read_store_header(
+                                        e.path().string()).ok)
                                     newest = e.path().string();
                             }
                         }
@@ -2144,14 +2149,20 @@ int main(int argc, char **argv) {
                     jp.load_store_request.clear();
                     prediction_store.close();
                     if (prediction_store.open(p)) {
-                        jp.active_store_path = p;
                         int nkp = (int)prediction_store.num_keypoints();
                         if (nkp != skeleton.num_nodes) {
+                            // A store whose keypoint count doesn't match the
+                            // active skeleton must NOT stay active: Pose Stats /
+                            // Bouts would read past each frame's block. Close it
+                            // and leave no active store.
+                            prediction_store.close();
+                            jp.active_store_path.clear();
                             jp.store_status = "⚠ store has " +
                                 std::to_string(nkp) + " keypoints, skeleton has " +
                                 std::to_string(skeleton.num_nodes) +
-                                " — overlay disabled";
+                                " — not loaded";
                         } else {
+                            jp.active_store_path = p;
                             jp.store_status = "Loaded " +
                                 std::to_string(prediction_store.stored_frames()) +
                                 " frames from " +
@@ -2205,10 +2216,15 @@ int main(int argc, char **argv) {
                 // reaches the Labeling Tool. No-op in LabelingTool mode.
                 auto stash_prediction = [&](u32 frame) {
                     if (bp.batch_prediction_dest != PredDest::Store) return;
-                    if (!prediction_writer.is_open()) return;
-                    std::vector<float> buf;
-                    if (extract_pred_row(frame, buf))
-                        prediction_writer.add_frame(frame, buf.data());
+                    // Store the prediction if the writer is healthy, then ALWAYS
+                    // erase the frame from `annotations` — in Store mode a
+                    // prediction must never leak into the Labeling Tool, even if
+                    // the writer failed to open or a write errored mid-batch.
+                    if (prediction_writer.is_open()) {
+                        std::vector<float> buf;
+                        if (extract_pred_row(frame, buf))
+                            prediction_writer.add_frame(frame, buf.data());
+                    }
                     annotations.erase(frame);
                 };
 #ifdef __APPLE__
@@ -2255,8 +2271,13 @@ int main(int argc, char **argv) {
                                 .string();
                         if (!prediction_writer.open(bp.store_path,
                                                     skeleton.num_nodes)) {
+                            // Can't write the store — fall back to loading
+                            // predictions as labeled frames rather than silently
+                            // dropping them (stash erases in Store mode).
+                            bp.batch_prediction_dest = PredDest::LabelingTool;
                             bp.store_status =
-                                "Failed to open prediction store for writing";
+                                "Could not open prediction store — predictions "
+                                "will load as labeled frames instead";
                             bp.store_path.clear();
                         }
                     }

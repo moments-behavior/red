@@ -14,6 +14,7 @@
 #include "prediction_store.h"
 #include "gui/panel.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
@@ -64,7 +65,9 @@ inline std::vector<Bout> bout_segment(const predstore::PredictionReader &store,
                                       const SkeletonContext &skel,
                                       const BoutParams &p) {
     std::vector<Bout> bouts;
-    const int nn = skel.num_nodes;
+    // Read at most the store's own keypoint count so a store with fewer
+    // keypoints than the current skeleton never over-reads a frame block.
+    const int nn = std::min(skel.num_nodes, (int)store.num_keypoints());
     if (nn <= 0 || !store.is_open()) return bouts;
 
     bool in_bout = false;
