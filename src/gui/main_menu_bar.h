@@ -119,7 +119,7 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
         if (ImGui::MenuItem("JARVIS Export Tool")) {
             jarvis_export_state.show = true;
         }
-        if (ImGui::MenuItem("JARVIS Import Tool")) {
+        if (ImGui::MenuItem("Import 3D Predictions")) {
             jarvis_import_state.show = true;
         }
         ImGui::EndDisabled();

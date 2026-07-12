@@ -140,10 +140,11 @@ struct WindowStates {
         jarvis_export.label_display.clear();
         jarvis_export.label_cache_key.clear();
         jarvis_import.show = false;
-        jarvis_import.data3d_path.clear();
-        jarvis_import.conf_threshold = 0.0f;
+        jarvis_import.keypoints3d_path.clear();
         jarvis_import.done = false;
         jarvis_import.result = {};
+        jarvis_import.saved_folder.clear();
+        jarvis_import.error.clear();
         jarvis_predict.show = false;
         jarvis_predict.predict_requested = false;
         jarvis_predict.models_folder.clear();
