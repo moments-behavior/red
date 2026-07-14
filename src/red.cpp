@@ -83,6 +83,7 @@
 #endif
 #include <ImGuiFileDialog.h>
 #include <algorithm>
+#include <climits>                        // INT_MAX (only pulled in via a __linux__-guarded <limits.h> otherwise)
 #include <cstddef>
 #include <fstream>
 #include <iomanip>
