@@ -163,6 +163,9 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
         if (ImGui::MenuItem("Bouts")) {
             win.bouts.show = true;
         }
+        if (ImGui::MenuItem("Bout Filter")) {
+            win.bout_filter.show = true;
+        }
         if (ImGui::MenuItem("Help")) {
             show_help_window = true;
         }

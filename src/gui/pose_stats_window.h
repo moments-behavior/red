@@ -18,6 +18,7 @@
 #include "prediction_store.h"
 #include "gui/panel.h"
 #include "gui/bouts_window.h"
+#include "gui/bout_filter_window.h"
 
 #include <algorithm>
 #include <cmath>
@@ -125,7 +126,8 @@ inline void DrawPoseStatsWindow(PoseStatsState &st,
                                 const std::string &active_store_path,
                                 SkeletonContext &skel,
                                 int current_frame_num,
-                                const BoutState &bouts) {
+                                const BoutState &bouts,
+                                const BoutFilterState *bout_filter = nullptr) {
     DrawPanel("Pose Stats", st.show, [&]() {
         if (!store.is_open() || active_store_path.empty()) {
             ImGui::TextDisabled("No prediction store loaded.");
@@ -243,6 +245,20 @@ inline void DrawPoseStatsWindow(PoseStatsState &st,
                     ImVec2 p0 = ImPlot::PlotToPixels((double)b.start, 1.0);
                     ImVec2 p1 = ImPlot::PlotToPixels((double)b.end + 1, 0.0);
                     bdl->AddRectFilled(p0, p1, span_col);
+                }
+            }
+
+            // Bout Filter results: accepted (green) and rejected (red) walking
+            // bouts, so filter decisions are visible on the confidence timeline.
+            if (bout_filter && bout_filter->inputs_valid &&
+                bout_filter->cached_store_path == active_store_path) {
+                ImDrawList *fdl = ImPlot::GetPlotDrawList();
+                ImU32 acc_col = IM_COL32(60, 200, 90, 55);
+                ImU32 rej_col = IM_COL32(220, 70, 70, 55);
+                for (const auto &b : bout_filter->result.bouts) {
+                    ImVec2 p0 = ImPlot::PlotToPixels((double)b.start, 1.0);
+                    ImVec2 p1 = ImPlot::PlotToPixels((double)b.end + 1, 0.0);
+                    fdl->AddRectFilled(p0, p1, b.accepted ? acc_col : rej_col);
                 }
             }
 

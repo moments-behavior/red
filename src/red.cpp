@@ -661,12 +661,17 @@ int main(int argc, char **argv) {
                 [&]() { DrawPoseStatsWindow(win.pose_stats, prediction_store,
                                             win.jarvis_predict.active_store_path,
                                             skeleton, current_frame_num,
-                                            win.bouts); },
+                                            win.bouts, &win.bout_filter); },
                 nullptr});
     panels.add({"Bouts",
                 [&]() { DrawBoutsWindow(win.bouts, prediction_store,
                                         win.jarvis_predict.active_store_path,
                                         skeleton); },
+                nullptr});
+    panels.add({"Bout Filter",
+                [&]() { DrawBoutFilterWindow(win.bout_filter, prediction_store,
+                                             win.jarvis_predict.active_store_path,
+                                             skeleton, ctx); },
                 nullptr});
 
     // Helper: find the first visible camera index (for frame-buffer display).
@@ -816,6 +821,24 @@ int main(int argc, char **argv) {
             win.bouts.export_status = bouts_export_csv(
                 win.bouts, win.jarvis_predict.active_store_path, fps);
             printf("[Bouts] %s\n", win.bouts.export_status.c_str());
+        }
+
+        // Bout Filter: seek to a bout, or export the filtered bout list.
+        if (win.bout_filter.seek_requested) {
+            win.bout_filter.seek_requested = false;
+            int tgt = win.bout_filter.seek_frame;
+            seek_all_cameras(scene, tgt, dc_context->video_fps, ps, true);
+            current_frame_num = tgt;
+            ps.pause_selected = 0;
+            ps.pause_seeked = true;
+            for (auto &[key, value] : window_need_decoding)
+                value.store(true);
+        }
+        if (win.bout_filter.export_requested) {
+            win.bout_filter.export_requested = false;
+            win.bout_filter.export_status = bout_filter_export_csv(
+                win.bout_filter, win.jarvis_predict.active_store_path);
+            printf("[Bout Filter] %s\n", win.bout_filter.export_status.c_str());
         }
 
         // Pose Stats: promote a predicted frame into the Labeling Tool so the

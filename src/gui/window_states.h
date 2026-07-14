@@ -8,6 +8,7 @@
 #include "gui/jarvis_import_window.h"
 #include "gui/jarvis_predict_window.h"
 #include "gui/bouts_window.h"
+#include "gui/bout_filter_window.h"
 #include "gui/pose_stats_window.h"
 #include "gui/export_window.h"
 #include "gui/bbox_tool.h"
@@ -32,6 +33,7 @@ struct WindowStates {
     JarvisPredictState jarvis_predict;
     PoseStatsState pose_stats;
     BoutState bouts;
+    BoutFilterState bout_filter;
     ExportWindowState export_win;
     BBoxToolState bbox;
     OBBToolState obb;
@@ -168,6 +170,15 @@ struct WindowStates {
         jarvis_predict.store_status.clear();
         pose_stats = PoseStatsState{};
         bouts = BoutState{};
+        // Keep scanned profiles + current selection; clear per-store results.
+        bout_filter.inputs = boutfilter::Inputs{};
+        bout_filter.inputs_valid = false;
+        bout_filter.cached_store_path.clear();
+        bout_filter.cached_profile.clear();
+        bout_filter.result = boutfilter::Result{};
+        bout_filter.dirty = true;
+        bout_filter.build_error.clear();
+        bout_filter.export_status.clear();
         export_win.show = false;
         export_win.format_idx = 0;
         export_win.include_video_index = false;

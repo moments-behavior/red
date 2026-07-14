@@ -72,6 +72,11 @@ class Red < Formula
     (share/"red").install "default_imgui_layout.ini"
     (share/"red/scripts").install "scripts/pth_to_coreml.py"
 
+    # Bout Filter profiles (species/rig configs). The app searches for these at
+    # ../share/red/prfs/ relative to the binary; a built-in fly profile is used
+    # as a fallback when none are installed.
+    (share/"red/prfs").install Dir["prfs/*"] if Dir.exist?("prfs")
+
     # Install bundled models (SuperPoint for calibration refinement).
     # The app searches for these at ../share/red/models/ relative to the binary.
     if (buildpath/"models/superpoint/superpoint.mlpackage").exist?
