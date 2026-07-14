@@ -145,7 +145,7 @@ struct WindowStates {
         jarvis_import.keypoints3d_path.clear();
         jarvis_import.done = false;
         jarvis_import.result = {};
-        jarvis_import.saved_folder.clear();
+        jarvis_import.store_to_load.clear();
         jarvis_import.error.clear();
         jarvis_predict.show = false;
         jarvis_predict.predict_requested = false;
