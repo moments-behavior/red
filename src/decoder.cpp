@@ -138,6 +138,19 @@ void decoder_process(DecoderContext *dc_context, FFmpegDemuxer *demuxer,
                     } else {
                         nFrameReturned = dec.Decode(pVideo, nVideoBytes);
                     }
+                    // EOF guard: the demuxer is exhausted AND the decoder has
+                    // been fully flushed (no buffered frames left), so the
+                    // requested frame lies past the true end of the stream —
+                    // e.g. the user typed a frame number beyond the video, or
+                    // beyond an over-estimated frame count. Land on the last
+                    // real frame instead of looping forever: without this the
+                    // thread spins (demux fails -> flush returns 0 -> repeat)
+                    // and hangs the whole UI, because seek_all_cameras
+                    // busy-waits on seek_done which would never be set.
+                    if (!demux_success && nFrameReturned == 0) {
+                        seek_info->seek_frame = curr_frame;
+                        break;
+                    }
                     while (nFrameReturned != 0) {
                         curr_frame++;
                         if (curr_frame == seek_info->seek_frame) {
