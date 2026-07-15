@@ -183,9 +183,12 @@ inline void DrawTransportBar(TransportBarState &state, AppContext &ctx) {
         }
         ImGui::InputInt("##timeline_input", &state.edit_buf, 0, 0);
         if (ImGui::IsItemDeactivatedAfterEdit()) {
-            // Enter — clamp and seek
+            // Enter — clamp and seek to the EXACT frame the user typed.
+            // seek_accurate = true forward-decodes from the keyframe to the
+            // requested frame (same precise path the Labeling Tool uses),
+            // instead of snapping to the previous keyframe like scrubbing.
             state.edit_buf = std::clamp(state.edit_buf, 0, dc->estimated_num_frames);
-            seek_all_cameras(ctx.scene, state.edit_buf, dc->video_fps, ps, false);
+            seek_all_cameras(ctx.scene, state.edit_buf, dc->video_fps, ps, true);
             state.slider_text_editing = false;
             ps.slider_text_editing = false;
         } else if (ImGui::IsItemDeactivated()) {
