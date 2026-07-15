@@ -274,6 +274,7 @@ inline void close_project(AppContext &ctx) {
     ctx.pm.plot_keypoints_flag = false;
     ctx.pm.show_project_window = false;
     ctx.pm.telecentric = false;
+    ctx.pm.sync_fix_enabled = false;
     ctx.pm.annotation_config = AnnotationConfig{};
     ctx.pm.jarvis_models.clear();
     ctx.pm.active_jarvis_model = -1;
@@ -322,6 +323,15 @@ inline void on_project_loaded(AppContext &ctx,
                 ctx.scene, ctx.label_buffer_size, ctx.decoder_threads,
                 ctx.is_view_focused);
     if (print_metadata_fn) print_metadata_fn();
+    // The desync fix was requested by the project but the plan could not be
+    // built/validated (load_videos already logged why) — playback continues
+    // index-paired, which is exactly what the user asked to avoid.
+    if (ctx.pm.sync_fix_enabled && !g_sync_fix.plan.usable()) {
+        ctx.toasts.push(
+            "Desync fix is enabled in this project but no usable sync plan "
+            "was found (" + g_sync_fix.plan.error + "). Cameras are "
+            "index-paired.", Toast::Warning, 10.0f);
+    }
     int loaded_cameras = (int)ctx.pm.camera_names.size();
     if (loaded_cameras < expected_cameras) {
         int skipped = expected_cameras - loaded_cameras;

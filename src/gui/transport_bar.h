@@ -4,6 +4,7 @@
 #include "utils.h"
 #include <algorithm>
 #include <chrono>
+#include <climits>
 
 struct TransportBarState {
     // Cmd+click on slider: replace slider with InputInt, pause playback.
@@ -11,6 +12,62 @@ struct TransportBarState {
     bool focus_input = false;  // one-shot: give InputInt keyboard focus
     int edit_buf = 0;
 };
+
+// Toggle the canonical-timeline desync fix. Pauses, switches the timeline
+// between canonical slots and mp4 indices (translating the current position
+// through the reference camera's mapping), then re-baselines every decoder
+// with an accurate seek — the seek is the epoch boundary at which decoders
+// re-sample the mode.
+inline void sync_fix_toggle(AppContext &ctx, bool enable) {
+    auto *dc = ctx.dc_context;
+    const sync_plan::SyncPlan &plan = g_sync_fix.plan;
+    if (!plan.usable() || ctx.pm.camera_names.empty() || ctx.demuxers.empty())
+        return;
+    const sync_plan::SyncCam *cam0 = plan.cam(ctx.pm.camera_names[0]);
+    if (!cam0) return;
+
+    ctx.ps.play_video = false;
+    ctx.ps.pause_selected = 0;
+
+    int64_t cur = ctx.current_frame_num;
+    int64_t target;
+    if (enable) {
+        int64_t p = std::clamp<int64_t>(cur, 0, cam0->decoded_len - 1);
+        target = std::clamp<int64_t>(cam0->slot_of_pos(p), 0,
+                                     plan.canonical_len - 1);
+        dc->sync_canonical_len = plan.canonical_len;
+        dc->total_num_frame = (int)plan.canonical_len;
+        dc->estimated_num_frames = (int)plan.canonical_len - 1;
+        // Canonical slots are uniform in trigger time — pace playback by the
+        // trigger interval.
+        dc->video_fps = 1e9 / (double)plan.delta_ns;
+        dc->sync_fix_active = true;
+    } else {
+        int64_t slot = std::clamp<int64_t>(cur, 0, plan.canonical_len - 1);
+        target = cam0->seek_pos(slot);
+        dc->sync_fix_active = false;
+        // Restore native counts/fps from the reference demuxer; decoders
+        // repopulate total_num_frame when they hit EOF (as at initial load).
+        dc->video_fps = ctx.demuxers[0]->GetFramerate();
+        if (ctx.demuxers[0]->GetNumFrames() == 0)
+            dc->estimated_num_frames =
+                (int)(ctx.demuxers[0]->GetDuration() * dc->video_fps);
+        else
+            dc->estimated_num_frames = (int)ctx.demuxers[0]->GetNumFrames() - 1;
+        dc->total_num_frame = INT_MAX;
+    }
+
+    seek_all_cameras(ctx.scene, (int)target, dc->video_fps, ctx.ps, true);
+    ctx.current_frame_num = (int)target;
+    for (auto &kv : window_need_decoding) kv.second.store(true);
+
+    ctx.pm.sync_fix_enabled = enable;
+    if (!ctx.pm.project_path.empty() && !ctx.pm.project_name.empty()) {
+        std::string redproj =
+            ctx.pm.project_path + "/" + ctx.pm.project_name + ".redproj";
+        save_project_manager_json(ctx.pm, redproj);
+    }
+}
 
 inline void DrawTransportBar(TransportBarState &state, AppContext &ctx) {
     int &current_frame_num = ctx.current_frame_num;
@@ -174,6 +231,81 @@ inline void DrawTransportBar(TransportBarState &state, AppContext &ctx) {
     ImGui::TextColored(label_col, "RT");
     ImGui::SameLine(0, spacing);
     ImGui::Checkbox("##realtime", &ps.realtime_playback);
+
+    // === Desync fix (canonical trigger timeline) ===
+    // Only shown when a usable sync plan exists for the loaded videos.
+    if (g_sync_fix.plan.usable() && !ctx.input_is_imgs) {
+        const sync_plan::SyncPlan &plan = g_sync_fix.plan;
+        bool clean = plan.status == sync_plan::Status::Clean;
+
+        ImGui::SameLine(0, spacing);
+        ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
+        ImGui::SameLine(0, spacing);
+
+        ImGui::TextColored(label_col, "Sync");
+        ImGui::SameLine(0, spacing);
+        bool sync_active = dc->sync_fix_active.load();
+        ImGui::BeginDisabled(clean);
+        if (ImGui::Checkbox("##syncfix", &sync_active))
+            sync_fix_toggle(ctx, sync_active);
+        ImGui::EndDisabled();
+
+        ImGui::SameLine(0, spacing);
+        ImVec4 status_col = clean ? green_col
+                            : plan.status == sync_plan::Status::Trim
+                                ? ImVec4(0.9f, 0.9f, 0.4f, 1.0f)
+                                : ImVec4(1.0f, 0.6f, 0.2f, 1.0f);
+        ImGui::TextColored(status_col, "%s", sync_plan::status_name(plan.status));
+        if (ImGui::IsItemHovered()) {
+            ImGui::BeginTooltip();
+            if (clean) {
+                ImGui::TextUnformatted(
+                    "Cameras are already aligned — nothing to fix.");
+            } else {
+                ImGui::Text("Plan source: %s", plan.source.c_str());
+                ImGui::Text("Canonical timeline: %lld trigger slots",
+                            (long long)plan.canonical_len);
+                if (plan.first_drop_slot >= 0)
+                    ImGui::Text("First drop at slot %lld",
+                                (long long)plan.first_drop_slot);
+                ImGui::Separator();
+                if (ImGui::BeginTable("##syncplan", 5)) {
+                    ImGui::TableSetupColumn("camera");
+                    ImGui::TableSetupColumn("start");
+                    ImGui::TableSetupColumn("decoded");
+                    ImGui::TableSetupColumn("drops");
+                    ImGui::TableSetupColumn("lost");
+                    ImGui::TableHeadersRow();
+                    for (const auto &kv : plan.cams) {
+                        int64_t lost = 0;
+                        for (const auto &g : kv.second.gaps) lost += g.lost;
+                        ImGui::TableNextRow();
+                        ImGui::TableNextColumn();
+                        ImGui::TextUnformatted(kv.first.c_str());
+                        ImGui::TableNextColumn();
+                        ImGui::Text("%lld", (long long)kv.second.start_slot);
+                        ImGui::TableNextColumn();
+                        ImGui::Text("%lld", (long long)kv.second.decoded_len);
+                        ImGui::TableNextColumn();
+                        ImGui::Text("%zu", kv.second.gaps.size());
+                        ImGui::TableNextColumn();
+                        ImGui::Text("%lld", (long long)lost);
+                    }
+                    ImGui::EndTable();
+                }
+                ImGui::Separator();
+                ImGui::TextUnformatted(
+                    sync_active
+                        ? "Timeline is canonical trigger slots; dropped "
+                          "frames show the held previous frame with a badge.\n"
+                          "Note: seeks are frame-accurate in this mode "
+                          "(step/fast buttons are slower)."
+                        : "Cameras are index-paired and desync after drops. "
+                          "Enable to view on the canonical trigger timeline.");
+            }
+            ImGui::EndTooltip();
+        }
+    }
 
     ImGui::SameLine(0, spacing);
     ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);

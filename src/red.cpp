@@ -1516,6 +1516,18 @@ int main(int argc, char **argv) {
                             ImVec2(scene->image_width[j],
                                    scene->image_height[j]));
 
+                        // Desync fix: the displayed slot is a duplicate
+                        // standing in for a frame this camera dropped.
+                        if (dc_context->sync_fix_active.load()) {
+                            int disp_head = ps.play_video ? ps.read_head
+                                                          : select_corr_head;
+                            if (scene->display_buffer[j][disp_head]
+                                    .dropped.load())
+                                DrawDroppedFrameBadge(
+                                    (float)scene->image_width[j],
+                                    (float)scene->image_height[j]);
+                        }
+
                         if (pm.plot_keypoints_flag) {
                             // labeling (keypoints)
                             // OBB tool uses G key (not W), so no keypoint conflict

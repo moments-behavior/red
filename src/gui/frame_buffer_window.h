@@ -98,6 +98,11 @@ inline void DrawFrameBufferWindow(AppContext &ctx, int select_corr_head) {
                         ? ImGui::GetColorU32(ImGuiCol_Text)
                         : ImGui::GetColorU32(ImGuiCol_TextDisabled);
                 }
+                // Desync fix: this slot is a duplicate for a dropped frame
+                // on the visible camera — tint it red.
+                if (ctx.dc_context->sync_fix_active.load() &&
+                    scene.display_buffer[visible_idx][buf_idx].dropped.load())
+                    text_col = IM_COL32(230, 80, 80, 255);
                 // Draw rotated text (90 deg CCW) — read bottom-to-top like a book spine
                 float str_w = ImGui::CalcTextSize(text).x;
                 ImVec2 text_pos(pos.x + (item_w - font_size) * 0.5f,

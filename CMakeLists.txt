@@ -407,6 +407,14 @@ if(APPLE)
         CXX_STANDARD_REQUIRED ON
     )
 
+    # Sync-plan unit test: header-only logic, stdlib + vendored json.hpp only
+    add_executable(test_sync_plan tests/test_sync_plan.cpp)
+    target_include_directories(test_sync_plan PRIVATE src)
+    set_target_properties(test_sync_plan PROPERTIES
+        CXX_STANDARD 17
+        CXX_STANDARD_REQUIRED ON
+    )
+
     # MuJoCo IK integration tests
     if(HAS_MUJOCO)
         # Unit/scale diagnostics

@@ -72,6 +72,7 @@ void render_allocate_scene_memory(RenderScene *scene, u32 size_of_buffer) {
 #endif
             scene->display_buffer[j][i].frame_number = -1;
             scene->display_buffer[j][i].available_to_write = true;
+            scene->display_buffer[j][i].dropped = false;
         }
     }
 

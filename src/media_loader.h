@@ -121,6 +121,12 @@ unload_media(PlaybackState &ps, ProjectManager &pm,
     // Clear stale per-camera decoded frame counters
     latest_decoded_frame.clear();
 
+    // Reset the desync-fix plan (decoder threads held pointers into it, so
+    // this must happen after they are joined above)
+    g_sync_fix = SyncFixState{};
+    dc_context->sync_fix_active = false;
+    dc_context->sync_canonical_len = 0;
+
     // Reset realtime playback (load_images sets false; load_videos expects true)
     ps.realtime_playback = true;
     ps.accumulated_play_time = 0.0;
@@ -208,6 +214,81 @@ load_images(std::map<std::string, std::string> &selected_files,
         is_view_focused.push_back(false);
     }
     ps.video_loaded = true;
+}
+
+// Build or import the desync-fix sync plan for the loaded videos into
+// g_sync_fix. Precedence: a cluster_pose sync_plan.json next to the videos,
+// else per-camera timestamp sidecars (Cam<cam>_meta.csv or lab ISO CSVs) in
+// the media folder or its parent. On any inconsistency the plan is left
+// invalid with plan.error set — the feature simply stays unavailable.
+inline void
+sync_fix_load_plan(const std::string &media_folder,
+                   const std::vector<std::string> &cam_names,
+                   const std::vector<FFmpegDemuxer *> &demuxers) {
+    namespace fs = std::filesystem;
+    g_sync_fix = SyncFixState{};
+    sync_plan::SyncPlan &plan = g_sync_fix.plan;
+    if (cam_names.empty() || media_folder.empty()) return;
+
+    // Demuxed frame counts, for validating the plan against the actual mp4s
+    // (0 = unknown, skipped by the check).
+    std::map<std::string, int> counts;
+    for (size_t i = 0; i < cam_names.size() && i < demuxers.size(); ++i)
+        counts[cam_names[i]] = (int)demuxers[i]->GetNumFrames();
+
+    fs::path plan_json = fs::path(media_folder) / "sync_plan.json";
+    if (fs::exists(plan_json)) {
+        plan = sync_plan::load_json(plan_json.string());
+        // A loaded camera the plan cannot map would silently desync — the
+        // exact failure mode this feature exists to fix. Refuse the plan.
+        for (const auto &name : cam_names) {
+            if (plan.valid && !plan.cam(name)) {
+                plan.valid = false;
+                plan.error = "camera " + name + " missing from sync_plan.json";
+            }
+        }
+    } else {
+        namespace ct = camera_timestamps;
+        std::vector<std::string> tokens;
+        std::map<std::string, int> token_counts;  // ct keys by camera token
+        for (const auto &name : cam_names) {
+            std::string tok = sync_plan::detail::cam_token(name);
+            tokens.push_back(tok);
+            token_counts[tok] = counts.count(name) ? counts[name] : -1;
+        }
+        const std::string lab_pattern = "cam{cam}_timestamps_*.csv";
+        ct::CameraTimestamps ts =
+            ct::load(media_folder, tokens, lab_pattern, token_counts);
+        if (ts.format == ct::Format::None) {
+            fs::path parent = fs::path(media_folder).parent_path();
+            if (!parent.empty())
+                ts = ct::load(parent.string(), tokens, lab_pattern,
+                              token_counts);
+        }
+        if (ts.format == ct::Format::None) {
+            plan.error = "no timestamp metadata found";
+            std::cout << "[sync-fix] unavailable: " << plan.error << std::endl;
+            return;
+        }
+        plan = sync_plan::build(ts, cam_names);
+    }
+
+    if (plan.valid) sync_plan::check_decoded_counts(plan, counts);
+    if (plan.valid) {
+        std::string err;
+        if (!sync_plan::self_check(plan, &err)) {
+            plan.valid = false;
+            plan.error = "plan self-check failed: " + err;
+        }
+    }
+    if (plan.valid) {
+        std::cout << "[sync-fix] plan " << sync_plan::status_name(plan.status)
+                  << " (" << plan.source << "): canonical_len "
+                  << plan.canonical_len << ", first_drop_slot "
+                  << plan.first_drop_slot << std::endl;
+    } else {
+        std::cout << "[sync-fix] unavailable: " << plan.error << std::endl;
+    }
 }
 
 inline void
@@ -306,11 +387,31 @@ load_videos(std::map<std::string, std::string> &selected_files,
     }
     render_allocate_scene_memory(scene, label_buffer_size);
 
+    // Desync fix: build/import the sync plan and apply the persisted toggle
+    // BEFORE the decoder threads spawn (they sample the mode at start).
+    // A clean plan is an identity mapping — leave the fix off so playback
+    // keeps fast (non-accurate) seeks.
+    sync_fix_load_plan(pm.media_folder, pm.camera_names, demuxers);
+    const sync_plan::SyncPlan &splan = g_sync_fix.plan;
+    bool sync_enable = pm.sync_fix_enabled && splan.usable() &&
+                       splan.status != sync_plan::Status::Clean;
+    dc_context->sync_fix_active = sync_enable;
+    dc_context->sync_canonical_len = splan.canonical_len;
+    if (sync_enable) {
+        dc_context->total_num_frame = (int)splan.canonical_len;
+        dc_context->estimated_num_frames = (int)splan.canonical_len - 1;
+        // Canonical slots are uniform in trigger time — pace playback by the
+        // trigger interval, not the (nominal) container frame rate.
+        dc_context->video_fps = 1e9 / (double)splan.delta_ns;
+    }
+
     for (int i = 0; i < scene->num_cams; i++) {
+        const sync_plan::SyncCam *sync_cam =
+            splan.usable() ? splan.cam(pm.camera_names[i]) : nullptr;
         decoder_threads.push_back(std::thread(
             &decoder_process, dc_context, demuxers[i], pm.camera_names[i],
             scene->display_buffer[i], scene->size_of_buffer,
-            &scene->seek_context[i], scene->use_cpu_buffer));
+            &scene->seek_context[i], scene->use_cpu_buffer, sync_cam));
         is_view_focused.push_back(false);
     }
     ps.video_loaded = true;

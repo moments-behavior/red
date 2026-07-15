@@ -50,6 +50,10 @@ struct ProjectManager {
     bool telecentric = false; // true if using telecentric DLT calibration
     bool annotation_2d = false; // 2D-only: single/uncalibrated camera(s), no
                                 // calibration / triangulation / 3D view
+    // Canonical-timeline desync fix (sync_plan.h). Project-scoped because it
+    // changes what a frame index means: with the fix ON, labels/predictions
+    // are keyed by canonical trigger slot, OFF by raw mp4 index.
+    bool sync_fix_enabled = false;
     AnnotationConfig annotation_config; // annotation capabilities
 
     // JARVIS models imported into this project
@@ -91,6 +95,7 @@ inline void to_json(nlohmann::json &j, const ProjectManager &p) {
                        {"media_folder", p.media_folder},
                        {"telecentric", p.telecentric},
                        {"annotation_2d", p.annotation_2d},
+                       {"sync_fix_enabled", p.sync_fix_enabled},
                        {"annotation_config", p.annotation_config},
                        {"jarvis_models", p.jarvis_models},
                        {"active_jarvis_model", p.active_jarvis_model}};
@@ -110,6 +115,7 @@ inline void from_json(const nlohmann::json &j, ProjectManager &p) {
     p.media_folder = j.value("media_folder", std::string{});
     p.telecentric = j.value("telecentric", false);
     p.annotation_2d = j.value("annotation_2d", false);
+    p.sync_fix_enabled = j.value("sync_fix_enabled", false);
     if (j.contains("annotation_config"))
         p.annotation_config = j["annotation_config"].get<AnnotationConfig>();
     if (j.contains("jarvis_models"))
