@@ -427,6 +427,7 @@ int main(int argc, char **argv) {
     PopupStack popups;
     ToastQueue toasts;
     DeferredQueue deferred;
+    DeferredQueue preframe;  // flushed before ImGui::NewFrame() (ini/dock reloads)
 
     std::unordered_map<std::string, bool> window_was_decoding;
     std::unordered_map<std::string, bool> window_is_visible;  // actual ImGui visibility (prev frame)
@@ -459,7 +460,7 @@ int main(int argc, char **argv) {
         pm, ps, scene, dc_context,
         skeleton, skeleton_map,
         annotations,
-        popups, toasts, deferred,
+        popups, toasts, deferred, preframe,
         user_settings, red_data_dir, skeleton_dir,
         imgs_names, demuxers, decoder_threads,
         is_view_focused, window_was_decoding,
@@ -664,6 +665,9 @@ int main(int argc, char **argv) {
                                             skeleton, current_frame_num,
                                             win.bouts, &win.bout_filter); },
                 nullptr});
+    panels.add({"Frame Drops",
+                [&]() { DrawFrameDropsWindow(win.frame_drops, ctx); },
+                nullptr});
     panels.add({"Bouts",
                 [&]() { DrawBoutsWindow(win.bouts, prediction_store,
                                         win.jarvis_predict.active_store_path,
@@ -694,6 +698,13 @@ int main(int argc, char **argv) {
     while (!glfwWindowShouldClose(window->render_target)) {
         // Poll and handle events (inputs, window resize, etc.)
         glfwPollEvents();
+
+        // Run work that must happen OUTSIDE the ImGui frame (project-switch
+        // ini/dock reloads enqueued by switch_ini_to_path). Reloading dock
+        // settings mid-frame crashes: nodes are destroyed while windows are
+        // already submitted, and rebuilt nodes can bind to memory-compacted
+        // host windows.
+        preframe.flush();
 
         // When minimized, block until the user restores the window.
         // Avoids spinning the render loop (Metal nextDrawable returns nil,
@@ -797,6 +808,19 @@ int main(int argc, char **argv) {
         if (win.pose_stats.seek_requested) {
             win.pose_stats.seek_requested = false;
             int tgt = win.pose_stats.seek_frame;
+            seek_all_cameras(scene, tgt, dc_context->video_fps, ps, true);
+            current_frame_num = tgt;
+            ps.pause_selected = 0;
+            ps.pause_seeked = true;
+            for (auto &[key, value] : window_need_decoding)
+                value.store(true);
+        }
+
+        // Frame Drops: double-click-to-seek request (already mapped to
+        // playback coordinates by the window).
+        if (win.frame_drops.seek_requested) {
+            win.frame_drops.seek_requested = false;
+            int tgt = win.frame_drops.seek_frame;
             seek_all_cameras(scene, tgt, dc_context->video_fps, ps, true);
             current_frame_num = tgt;
             ps.pause_selected = 0;

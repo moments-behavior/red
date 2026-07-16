@@ -47,6 +47,9 @@ struct AppContext {
     PopupStack &popups;
     ToastQueue &toasts;
     DeferredQueue &deferred;
+    // Flushed at the top of the main loop, BEFORE ImGui::NewFrame() — the only
+    // point where ImGui settings/dock state may be reloaded (see switch_ini_to_path).
+    DeferredQueue &preframe;
 
     // Settings + paths
     UserSettings &user_settings;
@@ -189,23 +192,38 @@ inline void migrate_ini_window_names(const std::string &ini_path) {
 
 // Switch ImGui layout ini to a given project folder.
 //
-// The dock-fixup after LoadIniSettingsFromDisk is essential for a *mid-session*
-// reload: loading an ini merges its dock nodes into the live context, but those
-// freshly-loaded nodes have a stale LastFrameAlive and would be garbage-collected
-// on the next frame -- scrambling the dock tree (camera windows hard-docked to
-// 0x05-0x08 collide, and tool windows like Keypoints/Labeling Tool get orphaned
-// onto an internal split node and become invisible). Re-applying each window's
-// DockId from the loaded settings and marking every node alive makes the reload
-// actually take effect. Both the annotation path (switch_ini_to_project) and the
-// calibration path must go through here, or calibration projects come up with a
-// broken layout where you cannot reach the labeling windows.
+// A *mid-session* reload must NOT run inside the ImGui frame. Loading an ini
+// destroys and rebuilds every dock node while this frame's dockspace and
+// windows are already partially submitted; the rebuilt nodes bind HostWindow
+// by name to old windows (DockContextBuildNodesFromSettings), which may have
+// been memory-compacted (IDStack freed) -- BeginDocked then dereferences that
+// stale host and crashes (GetID reads IDStack.Data[-1] == 0xffff...fffc).
+// So the reload is deferred to ctx.preframe, flushed at the top of the main
+// loop before ImGui::NewFrame(), where dock hosts get re-Begun before any
+// docked window submits.
+//
+// The dock-fixup after LoadIniSettingsFromDisk is still essential: clearing
+// the old settings undocks every live window (DockId = 0), and freshly loaded
+// window settings only apply to windows created later. Re-applying each live
+// window's DockId/DockOrder from the loaded settings and marking every node
+// alive makes the reload actually take effect. Both the annotation path
+// (switch_ini_to_project) and the calibration path must go through here, or
+// projects come up with a broken layout (camera windows hard-docked to
+// 0x05-0x08 collide, Keypoints/Labeling Tool orphaned and invisible).
 inline void switch_ini_to_path(AppContext &ctx, const std::string &project_path) {
     ctx.project_ini_path = project_path + "/imgui_layout.ini";
     copy_default_layout_to_project(ctx, project_path);
     migrate_ini_window_names(ctx.project_ini_path);
-    ImGuiIO &io = ImGui::GetIO();
-    io.IniFilename = ctx.project_ini_path.c_str();
-    if (ctx.main_loop_running && std::filesystem::exists(ctx.project_ini_path)) {
+    if (!ctx.main_loop_running) {
+        // Startup path: NewFrame() loads io.IniFilename itself.
+        ImGui::GetIO().IniFilename = ctx.project_ini_path.c_str();
+        return;
+    }
+    ctx.preframe.enqueue([&ctx]() {
+        ImGuiIO &io = ImGui::GetIO();
+        io.IniFilename = ctx.project_ini_path.c_str();
+        if (!std::filesystem::exists(ctx.project_ini_path))
+            return;
         ImGui::LoadIniSettingsFromDisk(ctx.project_ini_path.c_str());
         ImGuiContext* g = ImGui::GetCurrentContext();
         for (int i = 0; i < g->Windows.Size; i++) {
@@ -220,7 +238,7 @@ inline void switch_ini_to_path(AppContext &ctx, const std::string &project_path)
             if (node)
                 node->LastFrameAlive = g->FrameCount;
         }
-    }
+    });
 }
 
 // Switch ImGui layout ini to the current project folder (ctx.pm.project_path).

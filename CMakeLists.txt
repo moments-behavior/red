@@ -1083,6 +1083,9 @@ if(APPLE)
         CXX_STANDARD_REQUIRED ON
     )
 
+    # Personal experiment targets with sources outside the repo — only
+    # buildable on the machine that has /Users/johnsonr/red_dev.
+    if(EXISTS "/Users/johnsonr/red_dev")
     # Cross-validate laser modes against aruco detections
     add_executable(test_crossval_modes /Users/johnsonr/red_dev/quan_v_rob_calib/test_crossval_modes.cpp)
     target_include_directories(test_crossval_modes PRIVATE
@@ -1301,6 +1304,7 @@ if(APPLE)
         CXX_STANDARD 17
         CXX_STANDARD_REQUIRED ON
     )
+    endif()  # EXISTS /Users/johnsonr/red_dev
 
     # JARVIS inference pipeline benchmark (ONNX Runtime only, no GUI deps)
     if(HAS_ONNXRUNTIME)

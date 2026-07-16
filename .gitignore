@@ -11,6 +11,7 @@ imgui.ini
 data
 src/fonts
 .clangd
+.cache/
 build/
 .idea/
 cmake-build-debug/

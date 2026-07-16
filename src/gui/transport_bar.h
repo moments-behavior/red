@@ -11,6 +11,13 @@ struct TransportBarState {
     bool slider_text_editing = false;
     bool focus_input = false;  // one-shot: give InputInt keyboard focus
     int edit_buf = 0;
+
+    // Desync-fix gap ticks under the timeline slider: which of the N bins
+    // contain a dropped-frame gap on any camera. Rebuilt when the plan or the
+    // Sync-fix state changes (positions differ between the two coordinate
+    // systems).
+    std::string tick_key;
+    std::vector<uint8_t> tick_bins;
 };
 
 // Toggle the canonical-timeline desync fix. Pauses, switches the timeline
@@ -216,6 +223,49 @@ inline void DrawTransportBar(TransportBarState &state, AppContext &ctx) {
             ps.slider_frame_number = state.edit_buf;
             ps.slider_just_changed = true;
             seek_all_cameras(ctx.scene, state.edit_buf, dc->video_fps, ps, false);
+        }
+
+        // Red gap ticks under the slider: where any camera dropped frames.
+        // Positions are canonical slots when the Sync fix is ON; when OFF they
+        // are mapped through the reference camera's mp4 index (a gap has zero
+        // width there — the lost frames simply don't exist in that timeline).
+        if (g_sync_fix.plan.usable() &&
+            g_sync_fix.plan.status == sync_plan::Status::Reindex &&
+            !ctx.input_is_imgs && !ctx.pm.camera_names.empty()) {
+            const sync_plan::SyncPlan &plan = g_sync_fix.plan;
+            const bool fix_on = dc->sync_fix_active.load();
+            constexpr int kTickBins = 200;
+            std::string key = plan.source + (fix_on ? "#on" : "#off");
+            if (state.tick_key != key) {
+                state.tick_key = key;
+                state.tick_bins.assign(kTickBins, 0);
+                const sync_plan::SyncCam *cam0 =
+                    plan.cam(ctx.pm.camera_names[0]);
+                const int64_t range =
+                    std::max<int64_t>(1, dc->estimated_num_frames + 1);
+                for (const auto &kv : plan.cams) {
+                    for (const auto &g : kv.second.gaps) {
+                        int64_t pos = fix_on || !cam0 ? g.slot
+                                                      : cam0->seek_pos(g.slot);
+                        int64_t span = fix_on ? g.lost : 1;
+                        int b0 = (int)std::clamp<int64_t>(
+                            pos * kTickBins / range, 0, kTickBins - 1);
+                        int b1 = (int)std::clamp<int64_t>(
+                            (pos + span - 1) * kTickBins / range, 0,
+                            kTickBins - 1);
+                        for (int b = b0; b <= b1; ++b) state.tick_bins[b] = 1;
+                    }
+                }
+            }
+            ImVec2 r0 = ImGui::GetItemRectMin();
+            ImVec2 r1 = ImGui::GetItemRectMax();
+            ImDrawList *tdl = ImGui::GetWindowDrawList();
+            for (int b = 0; b < kTickBins; ++b) {
+                if (!state.tick_bins[b]) continue;
+                float x = r0.x + (r1.x - r0.x) * (b + 0.5f) / kTickBins;
+                tdl->AddLine(ImVec2(x, r1.y - 3.0f), ImVec2(x, r1.y - 1.0f),
+                             IM_COL32(220, 60, 60, 200), 1.0f);
+            }
         }
     }
 
