@@ -170,7 +170,7 @@ int main() {
             std::getline(ss,a,','); std::getline(ss,b,','); std::getline(ss,c,',');
             if (idx<0||idx>=24) continue;
             double x=std::stod(a),y=std::stod(b),z=std::stod(c);
-            if (std::abs(x)<1e6) kp[idx]={x,y,z,true,1.0f};
+            if (std::abs(x)<1e6) { kp[idx].x=x; kp[idx].y=y; kp[idx].z=z; kp[idx].set_triangulated(1.0f); }
         }
 
         mujoco_ik_solve(mj, ik, kp.data(), 24, fn);
