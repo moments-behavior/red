@@ -134,6 +134,9 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
             sam_tool_state.show = true;
         }
         ImGui::BeginDisabled(is_2d);
+        if (ImGui::MenuItem("Midline Tool")) {
+            win.midline.show = true;
+        }
         if (ImGui::MenuItem("JARVIS Predict")) {
             jarvis_predict_state.show = true;
         }

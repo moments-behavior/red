@@ -5,6 +5,9 @@
 #include "skeleton.h"
 #include "camera.h"
 #include "red_math.h"
+#include <algorithm>
+#include <cmath>
+#include <iomanip>
 #include <sstream>
 #include <vector>
 
@@ -126,6 +129,142 @@ inline bool reproject_3d_to_cam(const Eigen::Vector3d &pt3d,
         out_y = (double)H - rp(1);
     }
     return (out_x > 0 && out_x < W && out_y > 0 && out_y < H);
+}
+
+// ── Single-view midline solve ──────────────────────────────────────────────
+// World up-axis for this rig. Verified 3 ways on the Feeding 3D export +
+// Posts39a/July6_dlt_linear calibration (body-above-feet, roam-spread, and
+// foot-cloud floor normal all point to +z). Used only by the force-vertical
+// plane mode and the sanity check below; the default preimage-plane solve does
+// not need it.
+static const Eigen::Vector3d MIDLINE_WORLD_UP = Eigen::Vector3d(0, 0, 1);
+
+// Undistort one keypoint (ImPlot coords, y-up) into the projection frame the
+// camera math expects (y flipped to image coords), mirroring reprojection().
+inline Eigen::Vector2d midline_undistort_px(double implot_x, double implot_y,
+                                            const CameraParams &cp, int H,
+                                            bool telecentric) {
+    Eigen::Vector2d pt(implot_x, (double)H - implot_y);
+    if (telecentric)
+        return red_math::undistortPointTelecentric(pt, cp.k, cp.dist_coeffs,
+                                                    cp.dist_center);
+    return red_math::undistortPoint(pt, cp.k, cp.dist_coeffs);
+}
+
+inline red_math::Ray3D midline_backproject(const Eigen::Vector2d &undist_px,
+                                           const CameraParams &cp,
+                                           bool telecentric) {
+    if (telecentric)
+        return red_math::backprojectRayTelecentric(cp.projection_mat, undist_px);
+    return red_math::backprojectRayPinhole(cp.r, cp.tvec, cp.k, undist_px);
+}
+
+// Solve 3D for a midline structure from ONE side camera's keypoints plus the
+// 2-click line drawn in the line camera (fa.midline). Writes fa.kp3d for every
+// node labeled in the side camera and reprojects into all OTHER views for
+// verification (mirrors reprojection()'s per-camera telecentric/pinhole flow).
+// `status` is filled for the UI; `min_sin` returns the worst ray/plane angle
+// sine (small ⇒ side camera edge-on to the plane, ill-conditioned).
+// Returns true if at least one keypoint was solved.
+inline bool solve_midline_constraint(FrameAnnotation &fa,
+                                     SkeletonContext *skeleton,
+                                     const std::vector<CameraParams> &cp,
+                                     RenderScene *scene, std::string &status,
+                                     double &min_sin) {
+    min_sin = 1.0;
+    const MidlineConstraint &m = fa.midline;
+    int nc = (int)scene->num_cams;
+    if (cp.empty()) { status = "No calibration loaded"; return false; }
+    if (!m.has_line) { status = "Draw the 2-click line in the line camera"; return false; }
+    if (m.keypoint_camera_id < 0 || m.keypoint_camera_id >= nc ||
+        m.line_camera_id < 0 || m.line_camera_id >= nc) {
+        status = "Pick a side camera and a line camera"; return false;
+    }
+    const int side = m.keypoint_camera_id, line = m.line_camera_id;
+    if (side >= (int)fa.cameras.size()) { status = "Side camera has no annotations"; return false; }
+    const bool telecentric = cp[0].telecentric;
+
+    // --- Build the constraint plane from the drawn line ---
+    Eigen::Vector2d e1 = midline_undistort_px(m.p1x, m.p1y, cp[line],
+                                              scene->image_height[line], telecentric);
+    Eigen::Vector2d e2 = midline_undistort_px(m.p2x, m.p2y, cp[line],
+                                              scene->image_height[line], telecentric);
+    if ((e2 - e1).norm() < 1e-6) { status = "Line endpoints coincide"; return false; }
+
+    red_math::Plane3D plane;
+    if (m.force_vertical) {
+        red_math::Ray3D r1 = midline_backproject(e1, cp[line], telecentric);
+        red_math::Ray3D r2 = midline_backproject(e2, cp[line], telecentric);
+        double cond = 0;
+        if (!red_math::verticalPlaneFromFootprint(r1.anchor, r2.anchor,
+                                                  MIDLINE_WORLD_UP, plane, cond)) {
+            status = "Degenerate line: horizontal footprint too short "
+                     "(line drawn end-on, or line camera not top-down)";
+            return false;
+        }
+    } else {
+        Eigen::Vector2d n_img; double off;
+        red_math::imageLineThroughPoints(e1, e2, n_img, off);
+        plane = telecentric
+                    ? red_math::preimagePlaneTelecentric(cp[line].projection_mat, n_img, off)
+                    : red_math::preimagePlanePinhole(cp[line].r, cp[line].tvec,
+                                                     cp[line].k, n_img, off);
+    }
+    if (plane.normal.norm() < 1e-9) { status = "Could not build a plane from the line"; return false; }
+
+    // --- Intersect each side-view ray with the plane ---
+    int n_solved = 0;
+    for (u32 node = 0; node < skeleton->num_nodes; node++) {
+        if (node >= (u32)fa.cameras[side].keypoints.size()) break;
+        const auto &kp = fa.cameras[side].keypoints[node];
+        if (!kp.labeled) continue;
+        Eigen::Vector2d pu = midline_undistort_px(kp.x, kp.y, cp[side],
+                                                  scene->image_height[side], telecentric);
+        red_math::Ray3D ray = midline_backproject(pu, cp[side], telecentric);
+        Eigen::Vector3d X; double s = 0;
+        if (!red_math::intersectRayPlane(ray, plane, X, s)) continue;
+        min_sin = std::min(min_sin, s);
+        fa.kp3d[node].x = X(0);
+        fa.kp3d[node].y = X(1);
+        fa.kp3d[node].z = X(2);
+        fa.kp3d[node].set_triangulated();
+        // Single manual side label drives it → treat as reviewed iff manual.
+        fa.kp3d[node].reviewed = (kp.source == LabelSource::Manual);
+        n_solved++;
+
+        // Reproject into every OTHER view for verification (keep the side
+        // camera's manual label as the source of truth).
+        for (int v = 0; v < nc; v++) {
+            if (v == side) continue;
+            if (v >= (int)fa.cameras.size()) continue;
+            if (node >= (u32)fa.cameras[v].keypoints.size()) continue;
+            double rx, ry;
+            if (reproject_3d_to_cam(X, cp[v], scene->image_width[v],
+                                    scene->image_height[v], rx, ry)) {
+                fa.cameras[v].keypoints[node].x = rx;
+                fa.cameras[v].keypoints[node].y = ry;
+                fa.cameras[v].keypoints[node].labeled = true;
+                fa.cameras[v].keypoints[node].source = LabelSource::Predicted;
+            }
+        }
+    }
+
+    if (n_solved == 0) {
+        status = "No labeled keypoints in the side camera to solve";
+        return false;
+    }
+
+    double ang_deg = std::asin(std::min(1.0, std::max(0.0, min_sin))) * 180.0 / M_PI;
+    std::ostringstream oss;
+    oss << (m.force_vertical ? "Solved " : "Solved ") << n_solved
+        << (m.force_vertical ? " pt(s) [force-vertical]" : " pt(s) [preimage plane]")
+        << ", side/plane angle " << std::fixed << std::setprecision(1) << ang_deg << "°";
+    if (min_sin < 0.15)
+        status = "WARNING edge-on: " + oss.str() +
+                 " — side camera nearly parallel to the plane; pick a more head-on side camera";
+    else
+        status = oss.str();
+    return true;
 }
 
 inline void reprojection(FrameAnnotation &fa, SkeletonContext *skeleton,

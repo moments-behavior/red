@@ -616,4 +616,143 @@ decomposeEssentialMatrix(const Eigen::Matrix3d &E) {
     return dec;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Single-view midline constraint geometry
+//
+// Back-project image points to world rays, build a plane from a drawn image line
+// (its true back-projected "preimage" plane, or a forced-vertical plane), and
+// intersect side-view rays with that plane to solve 3D from a single view.
+//
+// Validated against ground truth (import_150frames_keypoints3d.csv + the
+// Posts39a/July6_dlt_linear telecentric calibration): the telecentric
+// back-projection round-trips projectPointTelecentric to ~1e-15, and the
+// preimage-plane solve recovers a real midline to ~0.017 fly-units median.
+//
+// Convention: image points are UNDISTORTED pixel coords in the same frame the
+// projection matrix / [R|t] expect (i.e. the y-flipped coords used by
+// reprojection() and projectPoint*), NOT ImPlot (y-up) coords. The caller
+// undistorts + flips before calling, mirroring reprojection().
+// A plane is stored as {normal N, scalar c} meaning N·X = c.
+// ─────────────────────────────────────────────────────────────────────────────
+
+struct Ray3D {
+    Eigen::Vector3d anchor = Eigen::Vector3d::Zero(); // a point on the ray
+    Eigen::Vector3d dir    = Eigen::Vector3d::Zero(); // unit direction
+};
+
+struct Plane3D {
+    Eigen::Vector3d normal = Eigen::Vector3d::Zero(); // unit normal
+    double c = 0.0;                                   // normal·X = c
+};
+
+// Back-project a pixel to a world ray for a telecentric (affine) camera.
+// P is the 3×4 affine projection matrix [A t; 0 0 0 1]. All rays of a
+// telecentric camera are parallel; anchor is the min-norm point on the ray.
+inline Ray3D backprojectRayTelecentric(const Eigen::Matrix<double, 3, 4> &P,
+                                       const Eigen::Vector2d &uv) {
+    Eigen::Matrix<double, 2, 3> A = P.block<2, 3>(0, 0);
+    Eigen::Vector2d b = P.block<2, 1>(0, 3);
+    Eigen::Vector2d m = uv - b;
+    Eigen::Matrix2d AAt = A * A.transpose();
+    Ray3D ray;
+    ray.anchor = A.transpose() * AAt.ldlt().solve(m); // min-norm solution
+    Eigen::Vector3d d = A.row(0).transpose().cross(A.row(1).transpose());
+    double n = d.norm();
+    ray.dir = (n > 1e-12) ? (d / n).eval() : Eigen::Vector3d::UnitZ();
+    return ray;
+}
+
+// Back-project a pixel to a world ray for a pinhole (perspective) camera.
+// R,t are world→camera (X_cam = R X_world + t), matching CameraParams.
+inline Ray3D backprojectRayPinhole(const Eigen::Matrix3d &R,
+                                   const Eigen::Vector3d &t,
+                                   const Eigen::Matrix3d &K,
+                                   const Eigen::Vector2d &uv) {
+    Eigen::Vector3d dir_cam = K.inverse() * Eigen::Vector3d(uv.x(), uv.y(), 1.0);
+    Ray3D ray;
+    ray.anchor = -R.transpose() * t;              // camera center in world
+    Eigen::Vector3d d = R.transpose() * dir_cam;  // ray dir in world
+    double n = d.norm();
+    ray.dir = (n > 1e-12) ? (d / n).eval() : Eigen::Vector3d::UnitZ();
+    return ray;
+}
+
+// Preimage plane of an image line for a telecentric camera. The image line is
+// {p : n_img·p = off}; returns the world plane whose projection is that line.
+inline Plane3D preimagePlaneTelecentric(const Eigen::Matrix<double, 3, 4> &P,
+                                        const Eigen::Vector2d &n_img,
+                                        double off) {
+    Eigen::Matrix<double, 2, 3> A = P.block<2, 3>(0, 0);
+    Eigen::Vector2d b = P.block<2, 1>(0, 3);
+    Plane3D pl;
+    Eigen::Vector3d N = A.transpose() * n_img;
+    double c = off - n_img.dot(b);
+    double nn = N.norm();
+    if (nn > 1e-12) { pl.normal = N / nn; pl.c = c / nn; }
+    return pl;
+}
+
+// Preimage plane of an image line for a pinhole camera.
+inline Plane3D preimagePlanePinhole(const Eigen::Matrix3d &R,
+                                    const Eigen::Vector3d &t,
+                                    const Eigen::Matrix3d &K,
+                                    const Eigen::Vector2d &n_img, double off) {
+    // Homogeneous image line l = [n_img; -off]; preimage plane normal = R^T K^T l.
+    Eigen::Vector3d l(n_img.x(), n_img.y(), -off);
+    Eigen::Vector3d Ktl = K.transpose() * l;
+    Plane3D pl;
+    Eigen::Vector3d N = R.transpose() * Ktl;
+    double c = -Ktl.dot(t);
+    double nn = N.norm();
+    if (nn > 1e-12) { pl.normal = N / nn; pl.c = c / nn; }
+    return pl;
+}
+
+// Image line through two pixels: returns unit normal n_img and offset off with
+// n_img·p = off for both endpoints.
+inline void imageLineThroughPoints(const Eigen::Vector2d &p1,
+                                   const Eigen::Vector2d &p2,
+                                   Eigen::Vector2d &n_img, double &off) {
+    Eigen::Vector2d dir = p2 - p1;
+    n_img = Eigen::Vector2d(-dir.y(), dir.x());
+    double nn = n_img.norm();
+    if (nn > 1e-12) n_img /= nn;
+    off = n_img.dot(p1);
+}
+
+// Vertical plane built by extruding the footprint of a drawn line along `up`.
+// a1,a2 are the back-projected anchors of the two line endpoints (their
+// horizontal separation is the footprint). `cond` returns the horizontal
+// footprint length: small ⇒ degenerate (line drawn end-on / zero length / top
+// camera not looking down). Returns false when degenerate.
+inline bool verticalPlaneFromFootprint(const Eigen::Vector3d &a1,
+                                       const Eigen::Vector3d &a2,
+                                       const Eigen::Vector3d &up, Plane3D &out,
+                                       double &cond) {
+    Eigen::Vector3d u = up.normalized();
+    Eigen::Vector3d delta = a2 - a1;
+    Eigen::Vector3d horiz = delta - delta.dot(u) * u;
+    cond = horiz.norm();
+    Eigen::Vector3d N = u.cross(delta); // == u × horiz; horizontal, ⟂ line dir
+    double nn = N.norm();
+    if (nn < 1e-9 || cond < 1e-9) return false;
+    out.normal = N / nn;
+    out.c = out.normal.dot(a1);
+    return true;
+}
+
+// Intersect a ray with a plane. `sin_angle` = |sin(angle between ray and
+// plane)| = conditioning: near 0 ⇒ ray nearly parallel to plane (edge-on,
+// ill-conditioned). Returns false when parallel.
+inline bool intersectRayPlane(const Ray3D &ray, const Plane3D &plane,
+                              Eigen::Vector3d &out, double &sin_angle) {
+    double denom = plane.normal.dot(ray.dir);
+    sin_angle = std::abs(denom) /
+                (plane.normal.norm() * ray.dir.norm() + 1e-30);
+    if (std::abs(denom) < 1e-12) return false;
+    double t = (plane.c - plane.normal.dot(ray.anchor)) / denom;
+    out = ray.anchor + t * ray.dir;
+    return true;
+}
+
 } // namespace red_math

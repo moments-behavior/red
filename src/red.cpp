@@ -11,6 +11,7 @@
 #include "gui/export_window.h"
 #include "gui/bbox_tool.h"
 #include "gui/obb_tool.h"
+#include "gui/midline_tool.h"
 #include "gui/sam_tool.h"
 #ifdef RED_HAS_MUJOCO
 #include "mujoco_context.h"
@@ -631,6 +632,9 @@ int main(int argc, char **argv) {
     panels.add({"OBB Tool",
                 [&]() { DrawOBBToolWindow(win.obb, ctx); },
                 nullptr});
+    panels.add({"Midline Tool",
+                [&]() { DrawMidlineToolWindow(win.midline, ctx); },
+                [&]() { return pm.plot_keypoints_flag; }});
     panels.add({"SAM Assist",
                 [&]() { DrawSamToolWindow(win.sam_tool, sam_state, ctx); },
                 nullptr});
@@ -1686,6 +1690,16 @@ int main(int argc, char **argv) {
                             if (display.show_bboxes) {
                                 obb_draw_overlays(win.obb, win.bbox,
                                                   annotations, frame, j, iw, ih);
+                            }
+
+                            // Midline tool (line drawing in the line camera)
+                            if (win.midline.enabled) {
+                                midline_handle_input(win.midline, annotations,
+                                                     frame, j, nn, nc, iw, ih);
+                            }
+                            if (display.show_keypoints) {
+                                midline_draw_overlay(win.midline, annotations,
+                                                     frame, j);
                             }
 
                             // Accepted mask overlays (stored in AnnotationMap)

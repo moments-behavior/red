@@ -151,11 +151,33 @@ struct CameraAnnotation {
     bool has_mask() const { return extras && extras->has_mask;  }
 };
 
+// ── Single-view midline constraint ──
+// Lets the user solve 3D for a midline structure (e.g. the 4-keypoint
+// proboscis) from ONE side camera plus a 2-click line drawn in a top/line
+// camera. The keypoints are labeled only in `keypoint_camera_id`; the line's
+// two endpoints (ImPlot coords, y-up, matching Keypoint2D) live in
+// `line_camera_id`. The line fixes the plane the midline lies in; each side ray
+// is intersected with that plane to recover 3D. See red_math midline helpers.
+// Small + by-value so FrameAnnotation stays trivially copyable.
+struct MidlineConstraint {
+    int  keypoint_camera_id = -1;   // side camera the keypoints are labeled in
+    int  line_camera_id     = -1;   // camera the 2-click line is drawn in
+    double p1x = 0, p1y = 0;        // line endpoint 1 (ImPlot coords, y-up)
+    double p2x = 0, p2y = 0;        // line endpoint 2
+    bool force_vertical = false;    // false: true preimage plane (default,
+                                    //  ~3× more accurate); true: extrude the
+                                    //  footprint along world up (regularized)
+    bool has_line = false;          // both endpoints placed
+};
+
 // ── All annotations for one frame ──
 struct FrameAnnotation {
     u32 frame_number = 0;
     int instance_id  = 0;   // object identity (for multi-animal tracking)
     int category_id  = 0;   // class index
+
+    // Optional single-view midline solve constraint for this frame.
+    MidlineConstraint midline;
 
     // Set when a predicted frame is promoted from the prediction store into the
     // Labeling Tool for manual correction. Surfaces the frame in the Labeling
@@ -261,7 +283,8 @@ inline nlohmann::json annotations_to_json(const AnnotationMap &amap) {
 
     for (const auto &[fnum, fa] : amap) {
         // Serialize frames that carry extended (extras) data OR a needs-fix flag
-        bool has_extended = fa.needs_improvement;
+        // OR a single-view midline constraint.
+        bool has_extended = fa.needs_improvement || fa.midline.has_line;
         for (const auto &cam : fa.cameras) {
             if (cam.has_bbox() || cam.has_obb() || cam.has_mask()) {
                 has_extended = true;
@@ -275,6 +298,17 @@ inline nlohmann::json annotations_to_json(const AnnotationMap &amap) {
         jf["instance_id"] = fa.instance_id;
         jf["category_id"] = fa.category_id;
         if (fa.needs_improvement) jf["needs_improvement"] = true;
+
+        if (fa.midline.has_line) {
+            const auto &m = fa.midline;
+            jf["midline"] = {
+                {"keypoint_camera_id", m.keypoint_camera_id},
+                {"line_camera_id", m.line_camera_id},
+                {"p1", {m.p1x, m.p1y}},
+                {"p2", {m.p2x, m.p2y}},
+                {"force_vertical", m.force_vertical},
+            };
+        }
 
         nlohmann::json cams = nlohmann::json::array();
         for (size_t c = 0; c < fa.cameras.size(); ++c) {
@@ -333,6 +367,17 @@ inline void annotations_from_json(const nlohmann::json &root, AnnotationMap &ama
             fa.category_id = jf["category_id"].get<int>();
         if (jf.contains("needs_improvement"))
             fa.needs_improvement = jf["needs_improvement"].get<bool>();
+
+        if (jf.contains("midline")) {
+            const auto &jm = jf["midline"];
+            auto &m = fa.midline;
+            m.keypoint_camera_id = jm.value("keypoint_camera_id", -1);
+            m.line_camera_id = jm.value("line_camera_id", -1);
+            if (jm.contains("p1")) { m.p1x = jm["p1"][0]; m.p1y = jm["p1"][1]; }
+            if (jm.contains("p2")) { m.p2x = jm["p2"][0]; m.p2y = jm["p2"][1]; }
+            m.force_vertical = jm.value("force_vertical", false);
+            m.has_line = true;
+        }
 
         if (!jf.contains("cameras")) continue;
 

@@ -14,6 +14,7 @@
 #include "gui/export_window.h"
 #include "gui/bbox_tool.h"
 #include "gui/obb_tool.h"
+#include "gui/midline_tool.h"
 #include "gui/sam_tool.h"
 #include "gui/triangulation_diagnostics_window.h"
 #ifdef RED_HAS_MUJOCO
@@ -39,6 +40,7 @@ struct WindowStates {
     ExportWindowState export_win;
     BBoxToolState bbox;
     OBBToolState obb;
+    MidlineToolState midline;
     SamToolState sam_tool;
     TriangulationDiagnosticsState triangulation_diag;
 #ifdef RED_HAS_MUJOCO
@@ -209,6 +211,9 @@ struct WindowStates {
         obb.show = false;
         obb.enabled = false;
         obb.draw_state = OBBDrawState::Idle;
+        // Reset midline tool but keep any user default cam selection re-derived
+        // on next project open (inited=false forces re-pick).
+        midline = MidlineToolState{};
 #ifdef RED_HAS_MUJOCO
         if (body_model.renderer) {
             mujoco_renderer_destroy(body_model.renderer);
