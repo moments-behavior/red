@@ -1,5 +1,7 @@
 #pragma once
 #include "camera.h"
+#include "global.h"
+#include "keypoint_colors.h"
 #include "project_handler.h"
 #include "skeleton.h"
 #include "utils.h"
@@ -288,6 +290,10 @@ inline bool setup_project(ProjectManager &pm, SkeletonContext &skeleton,
         }
         skeleton_initialize(it->first.c_str(), &skeleton, it->second);
     }
+
+    // Recolor keypoints from the user-selected colormap (single global source
+    // of truth). Covers both the JSON and primitive skeleton paths at once.
+    apply_keypoint_colormap(skeleton, g_keypoint_colormap);
 
     pm.keypoints_root_folder =
         (std::filesystem::path(pm.project_path) / "labeled_data").string();

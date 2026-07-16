@@ -23,4 +23,10 @@ struct SyncFixState {
     sync_plan::SyncPlan plan;  // plan.usable() gates the whole feature
 };
 extern SyncFixState g_sync_fix;
+
+// Selected keypoint colormap (see keypoint_colors.h). Single source of truth
+// so every skeleton-load path recolors consistently. < 0 == legacy HSV
+// rainbow; >= 0 == an ImPlotColormap_ index. Seeded from UserSettings at
+// startup and updated live when the user changes it in Settings.
+extern int g_keypoint_colormap;
 #endif

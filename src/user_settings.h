@@ -42,6 +42,13 @@ struct UserSettings {
     // to [2, num_cameras] at use; set == num_cameras to use all.
     int jarvis_center_cams = 8;
 
+    // Keypoint colors. keypoint_colormap: -1 == legacy HSV rainbow (default),
+    // >= 0 == an ImPlotColormap_ index (Viridis, Plasma, Jet, ...).
+    // active_keypoint_color: RGB highlight for the selected keypoint (default
+    // white), shown in the camera views and the Keypoints table.
+    int keypoint_colormap = -1;
+    std::vector<float> active_keypoint_color = {1.0f, 1.0f, 1.0f};
+
     // Export defaults
     float jarvis_margin = 50.0f;
     float jarvis_train_ratio = 0.9f;
@@ -82,6 +89,8 @@ inline void to_json(nlohmann::json &j, const UserSettings &s) {
         {"default_realtime_playback", s.default_realtime_playback},
         {"default_buffer_size", s.default_buffer_size},
         {"use_cpu_buffer", s.use_cpu_buffer},
+        {"keypoint_colormap", s.keypoint_colormap},
+        {"active_keypoint_color", s.active_keypoint_color},
         {"jarvis_center_cams", s.jarvis_center_cams},
         {"jarvis_margin", s.jarvis_margin},
         {"jarvis_train_ratio", s.jarvis_train_ratio},
@@ -104,6 +113,9 @@ inline void from_json(const nlohmann::json &j, UserSettings &s) {
     s.default_realtime_playback = j.value("default_realtime_playback", true);
     s.default_buffer_size = j.value("default_buffer_size", 64);
     s.use_cpu_buffer = j.value("use_cpu_buffer", true);
+    s.keypoint_colormap = j.value("keypoint_colormap", -1);
+    s.active_keypoint_color =
+        j.value("active_keypoint_color", std::vector<float>{1.0f, 1.0f, 1.0f});
     s.jarvis_center_cams = j.value("jarvis_center_cams", 8);
     s.jarvis_margin = j.value("jarvis_margin", 50.0f);
     s.jarvis_train_ratio = j.value("jarvis_train_ratio", 0.9f);

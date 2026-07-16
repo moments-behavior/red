@@ -305,6 +305,9 @@ int main(int argc, char **argv) {
     // Frame buffers are allocated later in media_loader::render_allocate_scene_memory
     // based on this flag, so it must be set before any project is loaded.
     scene->use_cpu_buffer = user_settings.use_cpu_buffer;
+    // Seed the keypoint colormap global from persisted settings before any
+    // project loads (setup_project reads it to color node_colors).
+    g_keypoint_colormap = user_settings.keypoint_colormap;
     std::string skeleton_dir = red_data_dir + "/skeleton";
     std::vector<std::thread> decoder_threads;
     std::vector<FFmpegDemuxer *> demuxers;
@@ -1635,7 +1638,8 @@ int main(int argc, char **argv) {
                                 display.show_keypoints) {
                                 gui_plot_keypoints(
                                     annotations.at(current_frame_num),
-                                    &skeleton, j, scene->num_cams);
+                                    &skeleton, j, scene->num_cams,
+                                    active_keypoint_color(user_settings));
                             }
 
                             // Read-only overlay of JARVIS predictions from the

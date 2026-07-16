@@ -1,7 +1,10 @@
 #pragma once
 #include "imgui.h"
+#include "implot.h"
 #include "app_context.h"
+#include "global.h"
 #include "gui/panel.h"
+#include "keypoint_colors.h"
 #include <ImGuiFileDialog.h>
 #include <misc/cpp/imgui_stdlib.h>
 
@@ -59,6 +62,52 @@ inline void DrawSettingsWindow(SettingsState &state, AppContext &ctx) {
                 display_changed = true;
             if (ImGui::Checkbox("Pivot Mid-Gray", &s.default_pivot_midgray))
                 display_changed = true;
+        }
+
+        // --- Keypoint Colors ---
+        if (ImGui::CollapsingHeader("Keypoint Colors")) {
+            // Colormap for all keypoints. "Rainbow (HSV)" is the legacy
+            // default; the rest are ImPlot's built-in matplotlib/MATLAB maps
+            // (Viridis, Plasma, Jet, Spectral, ...). Selecting one recolors
+            // the live skeleton immediately; Save persists the choice.
+            const char *preview = (s.keypoint_colormap < 0)
+                ? "Rainbow (HSV)"
+                : ImPlot::GetColormapName(s.keypoint_colormap);
+            if (ImGui::BeginCombo("Colormap", preview)) {
+                if (ImGui::Selectable("Rainbow (HSV)",
+                                      s.keypoint_colormap < 0)) {
+                    s.keypoint_colormap = KEYPOINT_COLORMAP_RAINBOW;
+                    g_keypoint_colormap = s.keypoint_colormap;
+                    apply_keypoint_colormap(ctx.skeleton, g_keypoint_colormap);
+                    other_changed = true;
+                }
+                for (int i = 0; i < ImPlot::GetColormapCount(); i++) {
+                    if (ImGui::Selectable(ImPlot::GetColormapName(i),
+                                          s.keypoint_colormap == i)) {
+                        s.keypoint_colormap = i;
+                        g_keypoint_colormap = i;
+                        apply_keypoint_colormap(ctx.skeleton,
+                                                g_keypoint_colormap);
+                        other_changed = true;
+                    }
+                }
+                ImGui::EndCombo();
+            }
+            // Visual preview bar of the selected colormap.
+            if (s.keypoint_colormap >= 0) {
+                ImPlot::ColormapButton(
+                    ImPlot::GetColormapName(s.keypoint_colormap),
+                    ImVec2(-1, 0), s.keypoint_colormap);
+            }
+
+            // Active (selected) keypoint highlight color.
+            if (s.active_keypoint_color.size() < 3)
+                s.active_keypoint_color.resize(3, 1.0f);
+            if (ImGui::ColorEdit3("Active Keypoint",
+                                  s.active_keypoint_color.data()))
+                other_changed = true;
+            ImGui::TextDisabled(
+                "Applies to all camera views and the Keypoints table.");
         }
 
         // --- Playback ---
@@ -143,6 +192,8 @@ inline void DrawSettingsWindow(SettingsState &state, AppContext &ctx) {
             defaults.default_project_root_path = s.default_project_root_path;
             defaults.default_media_root_path = s.default_media_root_path;
             s = defaults;
+            g_keypoint_colormap = s.keypoint_colormap;
+            apply_keypoint_colormap(ctx.skeleton, g_keypoint_colormap);
             display_changed = playback_changed = other_changed = true;
         }
         // Propagate only the sections that actually changed (no auto-save;

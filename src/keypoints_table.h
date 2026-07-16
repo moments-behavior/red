@@ -1,5 +1,6 @@
 #pragma once
 #include "app_context.h"
+#include "keypoint_colors.h"
 #include <imgui.h>
 
 inline void DrawKeypointsWindow(AppContext &ctx) {
@@ -9,6 +10,7 @@ inline void DrawKeypointsWindow(AppContext &ctx) {
     auto &skeleton = ctx.skeleton;
     auto &annotations = ctx.annotations;
     auto &is_view_focused = ctx.is_view_focused;
+    const ImVec4 active_kp_color = active_keypoint_color(ctx.user_settings);
 
     if (ImGui::Begin("Keypoints")) {
 
@@ -77,27 +79,54 @@ inline void DrawKeypointsWindow(AppContext &ctx) {
                     for (int column = 1; column < columns_count; column++) {
                         if (ImGui::TableSetColumnIndex(column)) {
                             if (keypoints_find) {
-                                const auto &fa = annotations.at(current_frame_num);
+                                auto &fa = annotations.at(current_frame_num);
+                                const int node = column - 1;
+                                const bool is_active =
+                                    row < (int)fa.cameras.size() &&
+                                    fa.cameras[row].active_id == (u32)node;
                                 ImVec4 node_color = ImVec4(0, 0, 0, 0);
 
-                                if (row < (int)fa.cameras.size() &&
-                                    fa.cameras[row].active_id == (u32)(column - 1)) {
-                                    node_color = (ImVec4)ImColor::HSV(
-                                        0.8f, 1.0f, 1.0f);
+                                if (is_active) {
+                                    node_color = active_kp_color; // user-selected
                                 } else if (row < (int)fa.cameras.size() &&
-                                           (column - 1) < (int)fa.cameras[row].keypoints.size() &&
-                                           fa.cameras[row].keypoints[column - 1].labeled) {
+                                           node < (int)fa.cameras[row].keypoints.size() &&
+                                           fa.cameras[row].keypoints[node].labeled) {
                                     node_color =
-                                        skeleton.node_colors[column - 1];
+                                        skeleton.node_colors[node];
                                     node_color.w = 0.9f;
                                 }
 
-                                if ((column - 1) < (int)fa.kp3d.size() &&
-                                    fa.kp3d[column - 1].triangulated) {
-                                    ImGui::TextColored(
-                                        ImVec4(1.0f, 1.0f, 1.0f, 1.0f),
-                                        "T");
+                                const bool triangulated =
+                                    node < (int)fa.kp3d.size() &&
+                                    fa.kp3d[node].triangulated;
+
+                                // The whole cell is a click target: clicking
+                                // sets this keypoint active for this camera view.
+                                ImGui::PushID(column);
+                                float cell_w = ImGui::GetContentRegionAvail().x;
+                                if (cell_w < 1.0f)
+                                    cell_w = ImGui::GetFrameHeight();
+                                ImVec2 p0 = ImGui::GetCursorScreenPos();
+                                if (ImGui::InvisibleButton(
+                                        "##kpcell",
+                                        ImVec2(cell_w, ImGui::GetFrameHeight()))) {
+                                    if (row < (int)fa.cameras.size())
+                                        fa.cameras[row].active_id = (u32)node;
                                 }
+                                if (ImGui::IsItemHovered() &&
+                                    node < (int)skeleton.node_names.size() &&
+                                    row < (int)pm.camera_names.size()) {
+                                    ImGui::SetTooltip(
+                                        "Set active: %s / %s",
+                                        pm.camera_names[row].c_str(),
+                                        skeleton.node_names[node].c_str());
+                                }
+                                // Triangulated marker, drawn over the cell.
+                                if (triangulated)
+                                    ImGui::GetWindowDrawList()->AddText(
+                                        ImVec2(p0.x + 2.0f, p0.y),
+                                        IM_COL32(255, 255, 255, 255), "T");
+                                ImGui::PopID();
 
                                 ImU32 cell_bg_color =
                                     ImGui::GetColorU32(node_color);

@@ -9,7 +9,8 @@
 #include <vector>
 
 inline void gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
-                               int view_idx, int num_cams) {
+                               int view_idx, int num_cams,
+                               ImVec4 active_color = ImVec4(1, 1, 1, 1)) {
     if (view_idx >= (int)fa.cameras.size()) return;
     auto &cam = fa.cameras[view_idx];
 
@@ -19,7 +20,7 @@ inline void gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
         if (cam.keypoints[node].labeled) {
             ImVec4 node_color;
             if (cam.active_id == node) {
-                node_color = (ImVec4)ImColor::HSV(0.8, 1.0f, 1.0f);
+                node_color = active_color; // active keypoint: user-selected color
                 node_color.w = 0.9;
                 pt_size = 8.0f;
             } else {
