@@ -78,6 +78,7 @@ struct SourceInfo {
     std::string skeleton_name;
     int num_nodes = 0;
     std::vector<std::pair<int, int>> edges;
+    bool telecentric = false;               // DLT calibration (no per-cam YAML)
 };
 
 // ---------------------------------------------------------------------------
@@ -91,7 +92,9 @@ inline std::string resolve_calib_folder(const std::string &folder,
                                         const std::vector<std::string> &cams) {
     namespace fs = std::filesystem;
     if (folder.empty() || !fs::is_directory(folder)) return folder;
-    if (!cams.empty() && fs::exists(fs::path(folder) / (cams.front() + ".yaml")))
+    if (!cams.empty() &&
+        (fs::exists(fs::path(folder) / (cams.front() + ".yaml")) ||
+         fs::exists(fs::path(folder) / (cams.front() + "_dlt.csv"))))
         return folder;
     std::string newest;
     for (const auto &e : fs::directory_iterator(folder)) {
@@ -141,15 +144,16 @@ inline SourceInfo scan_project(const std::string &redproj_path,
         s.message = "Cannot read project: " + err;
         return s;
     }
-    if (project_is_2d(pm) || pm.telecentric) {
-        s.message = "2D / telecentric projects are not supported (JARVIS needs "
-                    "perspective multi-view calibration).";
+    if (project_is_2d(pm)) {
+        s.message = "2D / uncalibrated projects are not supported (JARVIS needs "
+                    "multi-view calibration).";
         return s;
     }
     if (pm.camera_names.size() < 2) {
         s.message = "Project has fewer than 2 cameras.";
         return s;
     }
+    s.telecentric = pm.telecentric;
 
     // Rebuild the skeleton to read its node names.
     SkeletonContext skel;
@@ -165,6 +169,17 @@ inline SourceInfo scan_project(const std::string &redproj_path,
     s.camera_names = pm.camera_names;
     s.media_folder = pm.media_folder;
     s.calibration_folder = resolve_calib_folder(pm.calibration_folder, pm.camera_names);
+
+    // Validate calibration files exist for every camera (DLT csv when telecentric,
+    // perspective YAML otherwise).
+    for (const auto &cam : pm.camera_names) {
+        std::string need = s.calibration_folder + "/" + cam +
+                           (s.telecentric ? "_dlt.csv" : ".yaml");
+        if (!std::filesystem::exists(need)) {
+            s.message = "Missing calibration file: " + need;
+            return s;
+        }
+    }
 
     // Most-recent label folder.
     std::string labels;
@@ -282,15 +297,26 @@ inline bool build_project_json(const SourceInfo &src, float margin_pixel,
                                std::map<std::string, int> &img_w,
                                std::map<std::string, int> &img_h,
                                std::string *err) {
-    // Read image dims from calibration YAMLs.
+    // Resolve image dims. Perspective projects read them from the calibration
+    // YAML; telecentric projects have no YAML, so open each camera video.
     for (const auto &cam : src.camera_names) {
-        try {
-            auto yaml = opencv_yaml::read(src.calibration_folder + "/" + cam + ".yaml");
-            img_w[cam] = yaml.getInt("image_width");
-            img_h[cam] = yaml.getInt("image_height");
-        } catch (const std::exception &e) {
-            if (err) *err = "Cannot read calibration for " + cam + ": " + e.what();
-            return false;
+        if (src.telecentric) {
+            ffmpeg_reader::FrameReader reader;
+            if (!reader.open(src.media_folder + "/" + cam + ".mp4")) {
+                if (err) *err = "Cannot open video for dims: " + cam + ".mp4";
+                return false;
+            }
+            img_w[cam] = reader.width();
+            img_h[cam] = reader.height();
+        } else {
+            try {
+                auto yaml = opencv_yaml::read(src.calibration_folder + "/" + cam + ".yaml");
+                img_w[cam] = yaml.getInt("image_width");
+                img_h[cam] = yaml.getInt("image_height");
+            } catch (const std::exception &e) {
+                if (err) *err = "Cannot read calibration for " + cam + ": " + e.what();
+                return false;
+            }
         }
     }
 
@@ -315,6 +341,7 @@ inline bool build_project_json(const SourceInfo &src, float margin_pixel,
     cfg.edges = src.edges;
     cfg.num_keypoints = src.num_nodes;
     cfg.margin_pixel = margin_pixel;
+    cfg.telecentric = src.telecentric; // makes calibrations reference <cam>_dlt.csv
 
     out_json = JarvisExport::generate_annotation_json_from_amap(
         trial_name, frames, amap, cfg, img_w, img_h, nullptr, nullptr);
@@ -473,8 +500,15 @@ inline bool merge_datasets(const MergeConfig &cfg_in,
                 auto rit = rmap.find(it.key());
                 if (rit != rmap.end()) new_trial = rit->second;
                 json cams = json::object();
-                for (auto cit = it.value().begin(); cit != it.value().end(); ++cit)
-                    cams[cit.key()] = "calib_params/" + new_trial + "/" + cit.key() + ".yaml";
+                for (auto cit = it.value().begin(); cit != it.value().end(); ++cit) {
+                    // Preserve the source filename (e.g. <cam>.yaml OR <cam>_dlt.csv);
+                    // only swap the trial directory. Forcing ".yaml" here would break
+                    // telecentric datasets whose calibrations point at _dlt.csv.
+                    std::string base =
+                        std::filesystem::path(cit.value().get<std::string>()).filename().string();
+                    if (base.empty()) base = cit.key() + ".yaml";
+                    cams[cit.key()] = "calib_params/" + new_trial + "/" + base;
+                }
                 calibrations[new_trial] = cams;
             }
         }
@@ -558,22 +592,28 @@ inline bool merge_datasets(const MergeConfig &cfg_in,
                 }
             }
         } else {
-            // Project: reuse JarvisExport::write_calibration_yamls (RED->JARVIS conversion).
+            // Project: copy DLT CSVs (telecentric) or convert RED->JARVIS YAML.
             std::string trial = project_trial[(int)i];
-            std::map<std::string, int> w, h;
-            for (const auto &cam : s.camera_names) {
-                try {
-                    auto yaml = opencv_yaml::read(s.calibration_folder + "/" + cam + ".yaml");
-                    w[cam] = yaml.getInt("image_width");
-                    h[cam] = yaml.getInt("image_height");
-                } catch (...) {}
-            }
             JarvisExport::ExportConfig ccfg;
             ccfg.camera_names = s.camera_names;
             ccfg.calibration_folder = s.calibration_folder;
             ccfg.output_folder = out;
             std::string cerr;
-            if (!JarvisExport::write_calibration_yamls(ccfg, trial, w, h, &cerr)) {
+            bool ok;
+            if (s.telecentric) {
+                ok = JarvisExport::write_dlt_calibration(ccfg, trial, &cerr);
+            } else {
+                std::map<std::string, int> w, h;
+                for (const auto &cam : s.camera_names) {
+                    try {
+                        auto yaml = opencv_yaml::read(s.calibration_folder + "/" + cam + ".yaml");
+                        w[cam] = yaml.getInt("image_width");
+                        h[cam] = yaml.getInt("image_height");
+                    } catch (...) {}
+                }
+                ok = JarvisExport::write_calibration_yamls(ccfg, trial, w, h, &cerr);
+            }
+            if (!ok) {
                 if (status) *status = "Error: " + cerr;
                 return false;
             }

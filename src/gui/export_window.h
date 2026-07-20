@@ -251,6 +251,7 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
                     ecfg.seed               = state.seed;
                     ecfg.jpeg_quality       = state.jpeg_quality;
                     ecfg.camera_params      = pm.camera_params;
+                    ecfg.telecentric        = pm.telecentric;
                     // Per-camera image dims from the loaded video, so 2D /
                     // uncalibrated projects (no calibration YAML) can export.
                     if (ctx.scene) {

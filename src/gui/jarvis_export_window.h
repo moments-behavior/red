@@ -126,6 +126,18 @@ inline void DrawJarvisExportWindow(JarvisExportState &state, AppContext &ctx) {
                     jcfg.train_ratio = state.train_ratio;
                     jcfg.seed = state.seed;
                     jcfg.jpeg_quality = state.jpeg_quality;
+                    jcfg.telecentric = pm.telecentric;
+                    // Telecentric projects have no per-camera YAML, so supply
+                    // image dims from the loaded video (ctx.scene).
+                    if (ctx.scene) {
+                        for (size_t i = 0; i < pm.camera_names.size(); i++) {
+                            if (i >= ctx.scene->num_cams) break;
+                            jcfg.image_width_override[pm.camera_names[i]] =
+                                (int)ctx.scene->image_width[i];
+                            jcfg.image_height_override[pm.camera_names[i]] =
+                                (int)ctx.scene->image_height[i];
+                        }
+                    }
 
                     // Copy node names and edges from skeleton
                     jcfg.node_names = skeleton.node_names;

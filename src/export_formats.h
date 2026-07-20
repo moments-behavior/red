@@ -71,6 +71,11 @@ struct ExportConfig {
     // Camera params (loaded from project, indexed parallel to camera_names)
     std::vector<CameraParams> camera_params;
 
+    // Telecentric (DLT) calibration. When true the calibration folder has
+    // <cam>_dlt.csv (no <cam>.yaml); JARVIS export copies those verbatim and
+    // sources image dims from the video (image_width/image_height below).
+    bool telecentric = false;
+
     // Per-camera image dimensions (parallel to camera_names). Supplied from the
     // loaded video so 2D / uncalibrated projects — which have no calibration
     // YAML to read dims from — can still export. Empty/<=0 => fall back to YAML.
@@ -657,6 +662,15 @@ inline bool export_jarvis(const ExportConfig &cfg, const AnnotationMap &amap,
     jcfg.train_ratio        = cfg.train_ratio;
     jcfg.seed               = cfg.seed;
     jcfg.jpeg_quality       = cfg.jpeg_quality;
+    jcfg.telecentric        = cfg.telecentric;
+    // Forward per-camera video dims as overrides so telecentric (no YAML) works
+    // and calibrated projects can still fall back to YAML inside the exporter.
+    for (size_t i = 0; i < cfg.camera_names.size(); ++i) {
+        int w = (i < cfg.image_width.size()) ? cfg.image_width[i] : 0;
+        int h = (i < cfg.image_height.size()) ? cfg.image_height[i] : 0;
+        if (w > 0) jcfg.image_width_override[cfg.camera_names[i]] = w;
+        if (h > 0) jcfg.image_height_override[cfg.camera_names[i]] = h;
+    }
     return JarvisExport::export_jarvis_dataset(jcfg, amap, status, img_counter);
 }
 

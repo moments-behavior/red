@@ -85,7 +85,51 @@ struct ExportConfig {
     float train_ratio = 0.9f;
     int seed = 42;
     int jpeg_quality = 95;
+
+    // Telecentric (DLT) calibration. When true, there are no per-camera <cam>.yaml
+    // files — calibration lives in <cam>_dlt.csv (+ optional <cam>_distortion.csv),
+    // and image dims are unavailable from a YAML, so the caller must supply them
+    // via the overrides below (typically from the loaded video). The JSON
+    // `calibrations` reference then points at <cam>_dlt.csv and the calibration
+    // files are copied verbatim (see write_dlt_calibration) rather than converted.
+    bool telecentric = false;
+    // Optional per-camera image dims (keyed by camera name). When present and >0
+    // these take priority over reading image_width/height from the calibration
+    // YAML — required for telecentric, harmless for perspective.
+    std::map<std::string, int> image_width_override;
+    std::map<std::string, int> image_height_override;
 };
+
+// Resolve per-camera image dims: prefer the config override (from the loaded
+// video), else read image_width/image_height from the perspective calibration
+// YAML. Returns false with *status set if a camera's dims cannot be determined.
+inline bool resolve_export_image_dims(const ExportConfig &config,
+                                      std::map<std::string, int> &image_width,
+                                      std::map<std::string, int> &image_height,
+                                      std::string *status) {
+    for (const auto &cam : config.camera_names) {
+        auto wit = config.image_width_override.find(cam);
+        auto hit = config.image_height_override.find(cam);
+        if (wit != config.image_width_override.end() && wit->second > 0 &&
+            hit != config.image_height_override.end() && hit->second > 0) {
+            image_width[cam] = wit->second;
+            image_height[cam] = hit->second;
+            continue;
+        }
+        std::string calib_path = config.calibration_folder + "/" + cam + ".yaml";
+        try {
+            opencv_yaml::YamlFile yaml = opencv_yaml::read(calib_path);
+            image_width[cam] = yaml.getInt("image_width");
+            image_height[cam] = yaml.getInt("image_height");
+        } catch (const std::exception &) {
+            if (status)
+                *status = "Error: Cannot determine image size for camera '" + cam +
+                          "' (no video dims and no calibration YAML: " + calib_path + ")";
+            return false;
+        }
+    }
+    return true;
+}
 
 // ---------------------------------------------------------------------------
 // CSV readers — match data_exporter/utils.py
@@ -491,10 +535,12 @@ inline nlohmann::json generate_annotation_json(
         categories.push_back(cat);
     }
 
-    // Calibrations
+    // Calibrations. Telecentric projects reference the raw DLT CSV; perspective
+    // projects reference the converted JARVIS YAML.
+    const char *calib_ext = config.telecentric ? "_dlt.csv" : ".yaml";
     nlohmann::json calib_dict;
     for (const auto &cam : config.camera_names) {
-        calib_dict[cam] = "calib_params/" + trial_name + "/" + cam + ".yaml";
+        calib_dict[cam] = "calib_params/" + trial_name + "/" + cam + calib_ext;
     }
 
     // Framesets
@@ -570,6 +616,47 @@ inline bool write_calibration_yamls(const ExportConfig &config,
                           " (" + e.what() + ")";
             return false;
         }
+    }
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Telecentric calibration writer — copy the raw DLT CSVs verbatim
+// ---------------------------------------------------------------------------
+// Telecentric projects have no per-camera <cam>.yaml to convert; calibration is
+// the affine/orthographic DLT stored in <cam>_dlt.csv (+ optional
+// <cam>_distortion.csv). The JARVIS dataset format's pinhole K/R/T can't
+// faithfully represent an orthographic camera, so we copy the DLT files as-is
+// (the DLT-aware JARVIS consumer reads them directly) and the JSON `calibrations`
+// entry points at <cam>_dlt.csv (see the calib_dict blocks above).
+inline bool write_dlt_calibration(const ExportConfig &config,
+                                  const std::string &trial_name,
+                                  std::string *status) {
+    namespace fs = std::filesystem;
+    std::string save_dir = config.output_folder + "/calib_params/" + trial_name;
+    std::error_code ec;
+    fs::create_directories(save_dir, ec);
+
+    for (const auto &cam : config.camera_names) {
+        std::string dlt_src = config.calibration_folder + "/" + cam + "_dlt.csv";
+        if (!fs::exists(dlt_src)) {
+            if (status)
+                *status = "Error: Missing telecentric calibration file: " + dlt_src;
+            return false;
+        }
+        fs::copy_file(dlt_src, save_dir + "/" + cam + "_dlt.csv",
+                      fs::copy_options::overwrite_existing, ec);
+        if (ec) {
+            if (status)
+                *status = "Error: Cannot copy calibration file: " + dlt_src +
+                          " (" + ec.message() + ")";
+            return false;
+        }
+        // Optional distortion sidecar.
+        std::string dist_src = config.calibration_folder + "/" + cam + "_distortion.csv";
+        if (fs::exists(dist_src))
+            fs::copy_file(dist_src, save_dir + "/" + cam + "_distortion.csv",
+                          fs::copy_options::overwrite_existing, ec);
     }
     return true;
 }
@@ -838,10 +925,12 @@ inline nlohmann::json generate_annotation_json_from_amap(
         categories.push_back(cat);
     }
 
-    // Calibrations
+    // Calibrations. Telecentric projects reference the raw DLT CSV; perspective
+    // projects reference the converted JARVIS YAML.
+    const char *calib_ext = config.telecentric ? "_dlt.csv" : ".yaml";
     nlohmann::json calib_dict;
     for (const auto &cam : config.camera_names) {
-        calib_dict[cam] = "calib_params/" + trial_name + "/" + cam + ".yaml";
+        calib_dict[cam] = "calib_params/" + trial_name + "/" + cam + calib_ext;
     }
 
     // Framesets
@@ -913,21 +1002,10 @@ inline bool export_jarvis_dataset(const ExportConfig &config_in,
     stats.train_frames = static_cast<int>(train_frames.size());
     stats.val_frames = static_cast<int>(val_frames.size());
 
-    // 3. Read image dimensions from calibration files
+    // 3. Resolve image dimensions (video override first, else calibration YAML)
     std::map<std::string, int> image_width, image_height;
-    for (const auto &cam : config.camera_names) {
-        std::string calib_path =
-            config.calibration_folder + "/" + cam + ".yaml";
-        try {
-            opencv_yaml::YamlFile yaml = opencv_yaml::read(calib_path);
-            image_width[cam] = yaml.getInt("image_width");
-            image_height[cam] = yaml.getInt("image_height");
-        } catch (const std::exception &e) {
-            if (status)
-                *status = "Error: Cannot open calibration: " + calib_path;
-            return false;
-        }
-    }
+    if (!resolve_export_image_dims(config, image_width, image_height, status))
+        return false;
 
     // Extract trial_name from label_folder (last directory component)
     std::string trial_name = fs::path(config.label_folder).filename().string();
@@ -970,9 +1048,11 @@ inline bool export_jarvis_dataset(const ExportConfig &config_in,
         f << val_json.dump(4);
     }
 
-    // 7. Write calibration YAMLs
-    if (!write_calibration_yamls(config, trial_name, image_width, image_height,
-                                 status))
+    // 7. Write calibration: copy DLT CSVs (telecentric) or convert YAMLs (perspective)
+    bool calib_ok = config.telecentric
+        ? write_dlt_calibration(config, trial_name, status)
+        : write_calibration_yamls(config, trial_name, image_width, image_height, status);
+    if (!calib_ok)
         return false;
 
     // 8. Extract JPEG frames — one thread per camera
@@ -1081,21 +1161,10 @@ inline bool export_jarvis_dataset(const ExportConfig &config_in,
     stats.train_frames = static_cast<int>(train_frames.size());
     stats.val_frames = static_cast<int>(val_frames.size());
 
-    // 3. Read image dimensions from calibration files
+    // 3. Resolve image dimensions (video override first, else calibration YAML)
     std::map<std::string, int> image_width, image_height;
-    for (const auto &cam : config.camera_names) {
-        std::string calib_path =
-            config.calibration_folder + "/" + cam + ".yaml";
-        try {
-            opencv_yaml::YamlFile yaml = opencv_yaml::read(calib_path);
-            image_width[cam] = yaml.getInt("image_width");
-            image_height[cam] = yaml.getInt("image_height");
-        } catch (const std::exception &e) {
-            if (status)
-                *status = "Error: Cannot open calibration: " + calib_path;
-            return false;
-        }
-    }
+    if (!resolve_export_image_dims(config, image_width, image_height, status))
+        return false;
 
     // Extract trial_name from label_folder (last directory component)
     std::string trial_name = fs::path(config.label_folder).filename().string();
