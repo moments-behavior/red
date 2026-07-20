@@ -12,11 +12,13 @@
 #include "gui/pose_stats_window.h"
 #include "gui/frame_drops_window.h"
 #include "gui/export_window.h"
+#include "gui/group_export_window.h"
 #include "gui/bbox_tool.h"
 #include "gui/obb_tool.h"
 #include "gui/midline_tool.h"
 #include "gui/sam_tool.h"
 #include "gui/triangulation_diagnostics_window.h"
+#include "gui/switch_skeleton_window.h"
 #ifdef RED_HAS_MUJOCO
 #include "gui/body_model_window.h"
 #endif
@@ -38,11 +40,13 @@ struct WindowStates {
     BoutState bouts;
     BoutFilterState bout_filter;
     ExportWindowState export_win;
+    GroupExportState group_export;
     BBoxToolState bbox;
     OBBToolState obb;
     MidlineToolState midline;
     SamToolState sam_tool;
     TriangulationDiagnosticsState triangulation_diag;
+    SwitchSkeletonState switch_skeleton;
 #ifdef RED_HAS_MUJOCO
     BodyModelState body_model;
 #endif
@@ -201,6 +205,18 @@ struct WindowStates {
         export_win.label_folder.clear();
         export_win.label_display.clear();
         export_win.label_cache_key.clear();
+        // Group export is standalone (not tied to the open project), but clear
+        // its transient state on switch. The merge thread holds its own copy of
+        // the source list, so clearing here is safe.
+        group_export.show = false;
+        group_export.sources.clear();
+        group_export.output_dir.clear();
+        group_export.status.clear();
+        group_export.in_progress.store(false);
+        group_export.images_saved.store(0);
+        group_export.images_total = 0;
+        group_export.finished.store(false);
+        group_export.finished_status.reset();
         bbox.show = false;
         bbox.enabled = false;
         bbox.drawing = false;
@@ -242,6 +258,7 @@ struct WindowStates {
         sam_tool.encoder_path = "models/mobilesam/mobile_sam_encoder.onnx";
         sam_tool.decoder_path = "models/mobilesam/mobile_sam_decoder.onnx";
         triangulation_diag = TriangulationDiagnosticsState{};
+        switch_skeleton = SwitchSkeletonState{};
         show_help = false;
     }
 };

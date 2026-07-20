@@ -195,6 +195,41 @@ inline bool load_project_manager_json(ProjectManager *out,
     }
 }
 
+// Load/replace the active skeleton per pm.load_skeleton_from_json /
+// skeleton_file / skeleton_name, clearing the target SkeletonContext's
+// existing node/edge state first. Shared by setup_project() (new project)
+// and switch_project_skeleton() (gui/switch_skeleton_window.h, switching an
+// already-open project's skeleton mid-session).
+inline bool reload_skeleton(ProjectManager &pm, SkeletonContext &skeleton,
+                            const std::map<std::string, SkeletonPrimitive> &skeleton_map,
+                            std::string *err) {
+    skeleton.num_nodes = 0;
+    skeleton.num_edges = 0;
+    skeleton.name.clear();
+    skeleton.has_skeleton = true;
+    skeleton.node_colors.clear();
+    skeleton.edges.clear();
+    skeleton.node_names.clear();
+
+    if (pm.load_skeleton_from_json) {
+        try {
+            load_skeleton_json(pm.skeleton_file, &skeleton);
+        } catch (const std::exception &e) {
+            if (err) *err = "Error loading skeleton: " + std::string(e.what());
+            return false;
+        }
+    } else {
+        auto it = skeleton_map.find(pm.skeleton_name);
+        if (it == skeleton_map.end()) {
+            if (err)
+                *err = "Unknown skeleton: " + pm.skeleton_name;
+            return false;
+        }
+        skeleton_initialize(it->first.c_str(), &skeleton, it->second);
+    }
+    return true;
+}
+
 inline bool setup_project(ProjectManager &pm, SkeletonContext &skeleton,
                    const std::map<std::string, SkeletonPrimitive> &skeleton_map,
                    std::string *err) {
@@ -266,30 +301,8 @@ inline bool setup_project(ProjectManager &pm, SkeletonContext &skeleton,
         }
     }
 
-    skeleton.num_nodes = 0;
-    skeleton.num_edges = 0;
-    skeleton.name.clear();
-    skeleton.has_skeleton = true;
-    skeleton.node_colors.clear();
-    skeleton.edges.clear();
-    skeleton.node_names.clear();
-
-    if (pm.load_skeleton_from_json) {
-        try {
-            load_skeleton_json(pm.skeleton_file, &skeleton);
-        } catch (const std::exception &e) {
-            if (err) *err = "Error loading skeleton: " + std::string(e.what());
-            return false;
-        }
-    } else {
-        auto it = skeleton_map.find(pm.skeleton_name);
-        if (it == skeleton_map.end()) {
-            if (err)
-                *err = "Unknown skeleton: " + pm.skeleton_name;
-            return false;
-        }
-        skeleton_initialize(it->first.c_str(), &skeleton, it->second);
-    }
+    if (!reload_skeleton(pm, skeleton, skeleton_map, err))
+        return false;
 
     // Recolor keypoints from the user-selected colormap (single global source
     // of truth). Covers both the JSON and primitive skeleton paths at once.

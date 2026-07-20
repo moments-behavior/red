@@ -222,6 +222,17 @@ inline void HandleMainMenuDialogs(
         ImGuiFileDialog::Instance()->Close();
     }
 
+    // ChooseSkeletonSwitch (Switch Skeleton window) — writes into the
+    // window's staged field, not pm, since the change isn't applied until
+    // the user clicks "Apply" there.
+    if (ImGuiFileDialog::Instance()->Display("ChooseSkeletonSwitch", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
+        if (ImGuiFileDialog::Instance()->IsOk()) {
+            win.switch_skeleton.skeleton_file =
+                ImGuiFileDialog::Instance()->GetFilePathName();
+        }
+        ImGuiFileDialog::Instance()->Close();
+    }
+
     // LoadAnnotProject (Annotate > Load)
     if (ImGuiFileDialog::Instance()->Display("LoadAnnotProject", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
         if (ImGuiFileDialog::Instance()->IsOk()) {

@@ -29,8 +29,18 @@
 #include <fstream>
 #include <limits>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
+
+// Group a rejection reason by its prefix, dropping the numeric detail
+// (e.g. "too few walking cycles (1)" -> "too few walking cycles") so the
+// results breakdown and the table filter checkboxes bucket consistently
+// regardless of the exact count/distance/etc. in any one bout's reason.
+inline std::string bout_reason_prefix(const std::string &reason) {
+    size_t paren = reason.find(" (");
+    return paren != std::string::npos ? reason.substr(0, paren) : reason;
+}
 
 // One selectable profile: species/rig mapping + default filter values.
 struct BoutFilterProfile {
@@ -50,6 +60,13 @@ struct BoutFilterState {
     bool show = false;
     boutfilter::Params params;
 
+    // Live preview: reproject threshold planes into the camera views
+    // (bout_filter_preview.h). UI-only — never touches boutfilter::compute().
+    bool  show_floor_preview = false;
+    bool  show_ywall_preview = false;
+    bool  show_xwall_preview = false;
+    float preview_height_mm = 3.0f;   // top of the Y/X-wall rectangles
+
     std::vector<BoutFilterProfile> profiles;
     int  profile_idx = -1;
     bool profiles_scanned = false;
@@ -63,6 +80,11 @@ struct BoutFilterState {
 
     boutfilter::Result result;
     bool dirty = true;                       // recompute compute() from inputs
+
+    // Table filter: which rows to show. UI-only — never touches compute().
+    bool filter_show_accepted = true;
+    bool filter_show_rejected = true;
+    std::set<std::string> filter_hidden_reasons;  // rejection-reason prefixes hidden from the table
 
     // Requests consumed by the main loop.
     bool seek_requested = false;
@@ -333,6 +355,26 @@ inline void DrawBoutFilterWindow(BoutFilterState &st,
         }
         if (!st.inputs_valid) { ImGui::TextDisabled("Preparing..."); return; }
 
+        // --- Live preview of the thresholds below, reprojected onto the
+        // camera video views (bout_filter_preview.h / red.cpp). Independent
+        // of the sliders' own recompute (`ch`/`st.dirty`) below. ---
+        ImGui::SeparatorText("Camera preview");
+        ImGui::TextColored(ImVec4(1.0f, 0.66f, 0.16f, 1), "\xE2\x96\xA0");
+        ImGui::SameLine(0, 4);
+        ImGui::Checkbox("Floor plane##prev", &st.show_floor_preview);
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(0.24f, 0.55f, 1.0f, 1), "\xE2\x96\xA0");
+        ImGui::SameLine(0, 4);
+        ImGui::Checkbox("Y walls##prev", &st.show_ywall_preview);
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(0.90f, 0.35f, 0.90f, 1), "\xE2\x96\xA0");
+        ImGui::SameLine(0, 4);
+        ImGui::Checkbox("X walls##prev", &st.show_xwall_preview);
+        ImGui::BeginDisabled(!st.show_ywall_preview && !st.show_xwall_preview);
+        ImGui::SetNextItemWidth(200);
+        ImGui::SliderFloat("Preview height (mm)", &st.preview_height_mm, 0.5f, 20.0f, "%.1f");
+        ImGui::EndDisabled();
+
         boutfilter::Params &p = st.params;
         bool ch = false;
 
@@ -413,24 +455,29 @@ inline void DrawBoutFilterWindow(BoutFilterState &st,
                                "%s", st.export_status.c_str());
         }
 
+        // --- Table filter: show/hide by accept/reject and specific reason ---
+        ImGui::Checkbox(("Accepted (" + std::to_string(R.n_accepted) + ")").c_str(),
+                        &st.filter_show_accepted);
+        ImGui::SameLine();
+        ImGui::Checkbox(("Rejected (" + std::to_string(R.n_rejected) + ")").c_str(),
+                        &st.filter_show_rejected);
         if (R.n_rejected > 0) {
-            std::map<std::string, int> reasons;
+            std::map<std::string, int> reason_counts;
             for (const auto &b : R.bouts)
-                if (!b.accepted) {
-                    // group by the reason prefix (drop the numeric detail)
-                    std::string r = b.reason;
-                    size_t paren = r.find(" (");
-                    if (paren != std::string::npos) r = r.substr(0, paren);
-                    reasons[r]++;
+                if (!b.accepted) reason_counts[bout_reason_prefix(b.reason)]++;
+            ImGui::BeginDisabled(!st.filter_show_rejected);
+            ImGui::Indent();
+            for (auto &kv : reason_counts) {
+                bool shown = st.filter_hidden_reasons.find(kv.first) ==
+                             st.filter_hidden_reasons.end();
+                std::string label = kv.first + " (" + std::to_string(kv.second) + ")";
+                if (ImGui::Checkbox(label.c_str(), &shown)) {
+                    if (shown) st.filter_hidden_reasons.erase(kv.first);
+                    else st.filter_hidden_reasons.insert(kv.first);
                 }
-            std::string line = "Rejected: ";
-            bool first = true;
-            for (auto &kv : reasons) {
-                if (!first) line += ", ";
-                line += kv.first + " \xC3\x97" + std::to_string(kv.second);
-                first = false;
             }
-            ImGui::TextDisabled("%s", line.c_str());
+            ImGui::Unindent();
+            ImGui::EndDisabled();
         }
 
         // Per-filter frame pass rates.
@@ -452,15 +499,22 @@ inline void DrawBoutFilterWindow(BoutFilterState &st,
             ImGui::TableSetupColumn("Status");
             ImGui::TableSetupColumn("Reason");
             ImGui::TableHeadersRow();
+            size_t shown = 0;
             for (size_t i = 0; i < R.bouts.size(); ++i) {
                 const boutfilter::ResultBout &b = R.bouts[i];
+                if (b.accepted) {
+                    if (!st.filter_show_accepted) continue;
+                } else {
+                    if (!st.filter_show_rejected) continue;
+                    if (st.filter_hidden_reasons.count(bout_reason_prefix(b.reason))) continue;
+                }
                 ImGui::TableNextRow();
                 ImU32 bg = b.accepted ? IM_COL32(40, 90, 45, 90)
                                       : IM_COL32(110, 40, 40, 90);
                 ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, bg);
                 ImGui::TableSetColumnIndex(0);
                 char lbl[32];
-                snprintf(lbl, sizeof(lbl), "%zu##bf%zu", i + 1, i);
+                snprintf(lbl, sizeof(lbl), "%zu##bf%zu", ++shown, i);
                 if (ImGui::Selectable(lbl, false, ImGuiSelectableFlags_SpanAllColumns)) {
                     st.seek_requested = true;
                     st.seek_frame = b.start;

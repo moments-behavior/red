@@ -244,6 +244,28 @@ inline bool frame_has_any_keypoints(const FrameAnnotation &fa) {
     return false;
 }
 
+// Check if the frame has anything a user manually provided or is actively
+// correcting: a hand-placed 2D keypoint, a hand-edited 3D keypoint, or a
+// promoted frame awaiting correction. Used to gate destructive operations
+// (e.g. switching skeletons, gui/switch_skeleton_window.h) that re-index
+// every keypoint by node position and would silently corrupt this data.
+inline bool frame_has_any_manual_labels(const FrameAnnotation &fa) {
+    if (fa.needs_improvement) return true;
+    for (const auto &kp3 : fa.kp3d)
+        if (kp3.source == Kp3DSource::Manual) return true;
+    for (const auto &cam : fa.cameras)
+        for (const auto &kp : cam.keypoints)
+            if (kp.labeled && kp.source == LabelSource::Manual) return true;
+    return false;
+}
+
+// Whole-project version of frame_has_any_manual_labels.
+inline bool project_has_any_manual_labels(const AnnotationMap &amap) {
+    for (const auto &[frame, fa] : amap)
+        if (frame_has_any_manual_labels(fa)) return true;
+    return false;
+}
+
 // Check if any camera has a mask on this frame
 inline bool frame_has_any_masks(const FrameAnnotation &fa) {
     for (const auto &cam : fa.cameras)

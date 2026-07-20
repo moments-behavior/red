@@ -311,15 +311,27 @@ inline std::vector<float> compute_speed(const KpTrack &b, int start, int end, in
     return spd;
 }
 
-inline std::vector<Span> split_at_immobility(const std::vector<Span> &bouts,
+// Re-splits each candidate bout wherever a floor-Z, Y-wall, X-wall, or
+// immobility violation occurs — mirrors Python's split_bouts_at_violations,
+// which combines all four ("split_bout" mode) into one violation mask before
+// re-scanning for >= min_bout_frames sub-runs. Without this, gap-bridging in
+// find_bouts() can merge a wall/floor touch into the middle of a candidate
+// bout instead of cutting it out.
+inline std::vector<Span> split_at_violations(const std::vector<Span> &bouts,
                                              const KpTrack &body,
+                                             const std::vector<char> &floor_viol,
+                                             const std::vector<char> &ywall_viol,
+                                             const std::vector<char> &xwall_viol,
                                              const Params &p, int fps) {
     std::vector<Span> result;
     for (const auto &bt : bouts) {
         int start = bt.start, end = bt.end;
-        std::vector<float> spd = compute_speed(body, start, end, fps);
-        int len = (int)spd.size();
+        int len = end - start + 1;
         std::vector<char> viol(len, 0);
+        for (int i = 0; i < len; ++i)
+            viol[i] = floor_viol[start + i] || ywall_viol[start + i] || xwall_viol[start + i];
+
+        std::vector<float> spd = compute_speed(body, start, end, fps);
         int run_len = 0, run_start = 0;
         for (int i = 0; i < len; ++i) {
             bool stat = spd[i] < p.immobility_speed_threshold;
@@ -424,7 +436,7 @@ inline Result compute(const Inputs &in, const Params &p) {
                     !ywall_viol[i] && !xwall_viol[i]) ? 1 : 0;
 
     std::vector<Span> candidates = find_bouts(valid, p.min_bout_frames, p.max_gap_bridge);
-    candidates = split_at_immobility(candidates, in.body_ref, p, in.fps);
+    candidates = split_at_violations(candidates, in.body_ref, floor_viol, ywall_viol, xwall_viol, p, in.fps);
     R.n_candidates = (int)candidates.size();
 
     for (const auto &c : candidates) {

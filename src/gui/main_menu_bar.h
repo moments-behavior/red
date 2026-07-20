@@ -58,6 +58,12 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
                 "ChooseProject", "Choose Project File", ".redproj",
                 config);
         }
+        ImGui::BeginDisabled(pm.project_path.empty());
+        if (ImGui::MenuItem("Switch Skeleton...")) {
+            win.switch_skeleton.show = true;
+            win.switch_skeleton.initialized = false;
+        }
+        ImGui::EndDisabled();
         ImGui::EndMenu();
     }
 
@@ -113,6 +119,11 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
 
         if (ImGui::MenuItem("Export Tool")) {
             export_state.show = true;
+        }
+        // Standalone multi-dataset merge — works with no project open, so it is
+        // deliberately NOT gated by the is_2d / open-project check below.
+        if (ImGui::MenuItem("Group JARVIS Export...")) {
+            win.group_export.show = true;
         }
         ImGui::Separator();
         ImGui::BeginDisabled(is_2d);

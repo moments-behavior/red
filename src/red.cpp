@@ -32,6 +32,7 @@
 #include "jarvis_predict_import.h"
 #include "prediction_store.h"
 #include "gui/prediction_overlay.h"
+#include "gui/bout_filter_preview.h"
 #include "gui/annotation_dialog.h"
 #include "gui/calibration_tool_window.h"
 #include "gui/labeling_tool_window.h"
@@ -626,6 +627,9 @@ int main(int argc, char **argv) {
     panels.add({"Export Tool",
                 [&]() { DrawExportWindow(win.export_win, ctx, annotations); },
                 nullptr});
+    panels.add({"Group JARVIS Export",
+                [&]() { DrawGroupExportWindow(win.group_export, ctx); },
+                nullptr});
     panels.add({"Bbox Tool",
                 [&]() { DrawBBoxToolWindow(win.bbox, ctx); },
                 nullptr});
@@ -684,6 +688,11 @@ int main(int argc, char **argv) {
                 [&]() { DrawBoutFilterWindow(win.bout_filter, prediction_store,
                                              win.jarvis_predict.active_store_path,
                                              skeleton, ctx); },
+                nullptr});
+    panels.add({"Switch Skeleton",
+                [&]() { DrawSwitchSkeletonWindow(win.switch_skeleton, ctx,
+                                                 prediction_store, win.jarvis_predict,
+                                                 win.bout_filter); },
                 nullptr});
 
     // Helper: find the first visible camera index (for frame-buffer display).
@@ -1661,6 +1670,16 @@ int main(int argc, char **argv) {
                                         pose, j, &skeleton, pm.camera_params, scene,
                                         win.jarvis_predict.confidence_threshold);
                             }
+                        }
+
+                        // Bout Filter threshold-plane live preview —
+                        // independent of keypoint display / skeleton presence.
+                        if (win.bout_filter.inputs_valid &&
+                            (win.bout_filter.show_floor_preview ||
+                             win.bout_filter.show_ywall_preview ||
+                             win.bout_filter.show_xwall_preview)) {
+                            bout_filter_draw_wall_preview(
+                                win.bout_filter, j, pm.camera_params, scene);
                         }
 
                         // --- Annotation tool overlays + input (bbox, OBB, SAM) ---
