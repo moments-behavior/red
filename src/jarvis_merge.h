@@ -144,8 +144,14 @@ inline SourceInfo scan_project(const std::string &redproj_path,
         s.message = "Cannot read project: " + err;
         return s;
     }
-    if (project_is_2d(pm)) {
-        s.message = "2D / uncalibrated projects are not supported (JARVIS needs "
+    // Gate on the *persisted* annotation_2d flag, NOT project_is_2d(): the latter
+    // also treats an empty camera_params as 2D, but camera_params is rebuilt by
+    // setup_project() at load and is never serialized — load_project_manager_json()
+    // leaves it empty, so project_is_2d() would reject every calibrated project.
+    // Real calibration presence is enforced by the camera-count + calibration-file
+    // checks below.
+    if (pm.annotation_2d) {
+        s.message = "2D annotation projects are not supported (JARVIS needs "
                     "multi-view calibration).";
         return s;
     }
