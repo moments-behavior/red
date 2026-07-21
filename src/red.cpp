@@ -881,6 +881,14 @@ int main(int argc, char **argv) {
                 win.bout_filter, win.jarvis_predict.active_store_path);
             printf("[Bout Filter] %s\n", win.bout_filter.export_status.c_str());
         }
+        // Persist the manual-edit overlay whenever it changed (kept off the
+        // draw/hot path; writes only when edits actually mutate).
+        if (win.bout_filter.edits_save_requested) {
+            win.bout_filter.edits_save_requested = false;
+            std::string err = bout_filter_save_edits(
+                win.bout_filter, win.jarvis_predict.active_store_path);
+            if (!err.empty()) printf("[Bout Filter] %s\n", err.c_str());
+        }
 
         // Pose Stats: promote a predicted frame into the Labeling Tool so the
         // user can manually correct it. Reprojects the store's 3D pose to each

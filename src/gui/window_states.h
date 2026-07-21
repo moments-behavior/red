@@ -184,10 +184,17 @@ struct WindowStates {
         bout_filter.inputs_valid = false;
         bout_filter.cached_store_path.clear();
         bout_filter.cached_profile.clear();
+        bout_filter.auto_result = boutfilter::Result{};
         bout_filter.result = boutfilter::Result{};
         bout_filter.dirty = true;
         bout_filter.build_error.clear();
         bout_filter.export_status.clear();
+        // Clear the manual-edit overlay; it reloads from the new store's
+        // sidecar on the next draw (a store change re-triggers the load).
+        bout_filter.edits = boutfilter::BoutEdits{};
+        bout_filter.edits_dirty = true;
+        bout_filter.edits_save_requested = false;
+        bout_filter.selected_ids.clear();
         export_win.show = false;
         export_win.format_idx = 0;
         export_win.include_video_index = false;

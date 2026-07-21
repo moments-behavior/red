@@ -57,6 +57,11 @@ struct Inputs {
     KpTrack body_ref;                    // scutellum / thorax
 };
 
+// Provenance of a displayed bout / a forced status. Manual edits are anchored
+// to frame ranges (not bout indices) so they survive a wholesale recompute.
+enum class EditKind     : uint8_t { None = 0, Merge = 1, Adjust = 2, Manual = 3 };
+enum class ForcedStatus : uint8_t { None = 0, Accept = 1, Reject = 2 };
+
 struct ResultBout {
     int start = 0, end = 0, n_frames = 0;
     double duration_s = 0;
@@ -65,6 +70,10 @@ struct ResultBout {
     std::string reason;
     double total_distance_mm = NAN, net_displacement_mm = NAN;
     double mean_speed_mm_s = NAN, max_speed_mm_s = NAN, body_z_mean = NAN;
+    // Manual-edit provenance (None/0 => pure auto-detected).
+    EditKind edit_kind = EditKind::None;
+    bool     status_overridden = false;   // accept/reject was manually forced
+    uint64_t edit_id = 0;                 // links to the overlay entry (0 = none)
 };
 
 struct Span { int start, end; };  // inclusive
@@ -76,6 +85,33 @@ struct Result {
     int n_accepted = 0, n_rejected = 0;
     double pct_conf = 0, pct_upright = 0, pct_floor_ok = 0,
            pct_ywall_ok = 0, pct_xwall_ok = 0, pct_all = 0;
+    std::vector<std::string> edit_warnings;   // stale/orphaned manual edits
+};
+
+// ── manual-edit overlay ──────────────────────────────────────────────────────
+// A merge and a boundary-adjust both reduce to a manual bout with an explicit,
+// user-authoritative [start,end] whose metrics are recomputed via evaluate_bout.
+struct ManualBout {
+    uint64_t     id = 0;
+    int          start = 0, end = 0;      // inclusive, authoritative
+    ForcedStatus forced = ForcedStatus::None;
+    EditKind     kind = EditKind::Manual; // Merge or Adjust (provenance for UI/CSV)
+};
+
+// An accept/reject flip on an otherwise auto-detected bout, anchored to the
+// auto bout's frame range at the time the override was made.
+struct StatusOverride {
+    uint64_t     id = 0;
+    Span         anchor{0, 0};
+    ForcedStatus status = ForcedStatus::Accept;
+};
+
+struct BoutEdits {
+    int schema_version = 1;
+    uint64_t next_id = 1;                  // monotonic id source (persisted)
+    std::vector<ManualBout>     manual_bouts;
+    std::vector<StatusOverride> overrides;
+    bool empty() const { return manual_bouts.empty() && overrides.empty(); }
 };
 
 // ── low-level numeric helpers (mirror numpy/scipy) ───────────────────────────
@@ -377,6 +413,74 @@ inline std::vector<Span> rle_true(const std::vector<char> &m) {
     return spans;
 }
 
+// ── evaluate one candidate/manual bout ───────────────────────────────────────
+// Computes metrics + the accept/reject decision for the inclusive frame range
+// [start,end]. Extracted from compute()'s per-candidate loop so manual
+// merge/adjust edits recompute metrics with the exact same logic. Unlike
+// compute()'s candidates (always in bounds), manual ranges are user-supplied,
+// so this clamps to the stored frame range and rejects an empty/invalid span.
+inline ResultBout evaluate_bout(const Inputs &in, const Params &p, int start, int end) {
+    ResultBout b;
+    const int n = in.total_frames;
+    if (n <= 0) { b.start = start; b.end = end; b.reason = "invalid range"; return b; }
+    if (start < 0) start = 0;
+    if (end > n - 1) end = n - 1;
+    if (start > end) { b.start = start; b.end = end; b.reason = "invalid range"; return b; }
+
+    b.start = start; b.end = end;
+    b.n_frames = end - start + 1;
+    b.duration_s = (double)b.n_frames / in.fps;
+
+    int min_cycles = INT32_MAX;
+    for (const auto &leg : in.leg_tips) {
+        std::vector<float> seg(leg.z.begin() + start, leg.z.begin() + end + 1);
+        min_cycles = std::min(min_cycles, count_swing_phases(seg, p));
+    }
+    if (min_cycles == INT32_MAX) min_cycles = 0;
+    b.min_cycles = min_cycles;
+    if (min_cycles < p.min_walking_cycles) {
+        b.accepted = false;
+        b.reason = "too few walking cycles (" + std::to_string(min_cycles) + ")";
+        return b;
+    }
+
+    // travelled distance (finite frames only)
+    double total = 0, netx = 0, nety = 0;
+    int nfin = 0; float fx0 = 0, fy0 = 0, fxl = 0, fyl = 0;
+    float px = NAN, py = NAN;
+    for (int i = start; i <= end; ++i) {
+        float x = in.body_ref.x[i], y = in.body_ref.y[i];
+        if (std::isnan(x) || std::isnan(y)) continue;
+        if (nfin == 0) { fx0 = x; fy0 = y; }
+        else { float dx = x - px, dy = y - py; total += std::sqrt(dx*dx + dy*dy); }
+        fxl = x; fyl = y; px = x; py = y; ++nfin;
+    }
+    if (nfin < 2) {
+        b.accepted = false; b.reason = "insufficient valid frames";
+        return b;
+    }
+    netx = fxl - fx0; nety = fyl - fy0;
+    b.total_distance_mm = total;
+    b.net_displacement_mm = std::sqrt(netx*netx + nety*nety);
+    if (total < p.min_distance_mm) {
+        b.accepted = false;
+        char buf[64]; snprintf(buf, sizeof(buf), "too short (%.1f mm)", total);
+        b.reason = buf;
+        return b;
+    }
+
+    std::vector<float> spd = compute_speed(in.body_ref, start, end, in.fps);
+    double smean = 0, smax = 0; int sc = 0;
+    for (float s : spd) { if (!std::isnan(s)) { smean += s; smax = std::max(smax, (double)s); ++sc; } }
+    double zmean = 0; int zc = 0;
+    for (int i = start; i <= end; ++i) { float z = in.body_ref.z[i]; if (!std::isnan(z)) { zmean += z; ++zc; } }
+    b.mean_speed_mm_s = sc ? smean / sc : 0;
+    b.max_speed_mm_s = smax;
+    b.body_z_mean = zc ? zmean / zc : NAN;
+    b.accepted = true;
+    return b;
+}
+
 // ── full pipeline ─────────────────────────────────────────────────────────────
 
 inline Result compute(const Inputs &in, const Params &p) {
@@ -439,61 +543,8 @@ inline Result compute(const Inputs &in, const Params &p) {
     candidates = split_at_violations(candidates, in.body_ref, floor_viol, ywall_viol, xwall_viol, p, in.fps);
     R.n_candidates = (int)candidates.size();
 
-    for (const auto &c : candidates) {
-        ResultBout b;
-        b.start = c.start; b.end = c.end;
-        b.n_frames = c.end - c.start + 1;
-        b.duration_s = (double)b.n_frames / in.fps;
-
-        int min_cycles = INT32_MAX;
-        for (const auto &leg : in.leg_tips) {
-            std::vector<float> seg(leg.z.begin() + c.start, leg.z.begin() + c.end + 1);
-            min_cycles = std::min(min_cycles, count_swing_phases(seg, p));
-        }
-        if (min_cycles == INT32_MAX) min_cycles = 0;
-        b.min_cycles = min_cycles;
-        if (min_cycles < p.min_walking_cycles) {
-            b.accepted = false;
-            b.reason = "too few walking cycles (" + std::to_string(min_cycles) + ")";
-            R.bouts.push_back(b); continue;
-        }
-
-        // travelled distance (finite frames only)
-        double total = 0, netx = 0, nety = 0;
-        int nfin = 0; float fx0 = 0, fy0 = 0, fxl = 0, fyl = 0;
-        float px = NAN, py = NAN;
-        for (int i = c.start; i <= c.end; ++i) {
-            float x = in.body_ref.x[i], y = in.body_ref.y[i];
-            if (std::isnan(x) || std::isnan(y)) continue;
-            if (nfin == 0) { fx0 = x; fy0 = y; }
-            else { float dx = x - px, dy = y - py; total += std::sqrt(dx*dx + dy*dy); }
-            fxl = x; fyl = y; px = x; py = y; ++nfin;
-        }
-        if (nfin < 2) {
-            b.accepted = false; b.reason = "insufficient valid frames";
-            R.bouts.push_back(b); continue;
-        }
-        netx = fxl - fx0; nety = fyl - fy0;
-        b.total_distance_mm = total;
-        b.net_displacement_mm = std::sqrt(netx*netx + nety*nety);
-        if (total < p.min_distance_mm) {
-            b.accepted = false;
-            char buf[64]; snprintf(buf, sizeof(buf), "too short (%.1f mm)", total);
-            b.reason = buf;
-            R.bouts.push_back(b); continue;
-        }
-
-        std::vector<float> spd = compute_speed(in.body_ref, c.start, c.end, in.fps);
-        double smean = 0, smax = 0; int sc = 0;
-        for (float s : spd) { if (!std::isnan(s)) { smean += s; smax = std::max(smax, (double)s); ++sc; } }
-        double zmean = 0; int zc = 0;
-        for (int i = c.start; i <= c.end; ++i) { float z = in.body_ref.z[i]; if (!std::isnan(z)) { zmean += z; ++zc; } }
-        b.mean_speed_mm_s = sc ? smean / sc : 0;
-        b.max_speed_mm_s = smax;
-        b.body_z_mean = zc ? zmean / zc : NAN;
-        b.accepted = true;
-        R.bouts.push_back(b);
-    }
+    for (const auto &c : candidates)
+        R.bouts.push_back(evaluate_bout(in, p, c.start, c.end));
 
     for (auto &b : R.bouts) (b.accepted ? R.n_accepted : R.n_rejected)++;
 
@@ -514,6 +565,120 @@ inline Result compute(const Inputs &in, const Params &p) {
     R.pct_xwall_ok = pct(n - count_true(xwall_viol));
     R.pct_all = pct(nvalid);
     return R;
+}
+
+// ── manual-edit overlay replay ────────────────────────────────────────────────
+// Transforms a fresh compute() result (all rows edit_kind==None) into the
+// curated list by replaying the manual overlay. Deterministic: depends only on
+// (R, edits, in, p) and fixed tie-break rules, so the curated list is identical
+// on every recompute. Only overrides can go stale (they decorate auto bouts);
+// a manual bout that overlaps no auto bout is authoritative and persists.
+inline void apply_bout_edits(Result &R, const BoutEdits &edits,
+                             const Inputs &in, const Params &p) {
+    const int total = in.total_frames;
+    auto stronger = [](ForcedStatus a, ForcedStatus b) {
+        // Reject > Accept > None
+        auto rank = [](ForcedStatus s) {
+            return s == ForcedStatus::Reject ? 2 : s == ForcedStatus::Accept ? 1 : 0;
+        };
+        return rank(a) >= rank(b) ? a : b;
+    };
+
+    // 1. Coalesce manual bouts: drop fully-invalid/out-of-range (orphans),
+    //    clamp partial, sort by start, union any that overlap or touch.
+    std::vector<ManualBout> mb;
+    for (const auto &m : edits.manual_bouts) {
+        if (m.start > m.end || m.end < 0 || m.start > total - 1 || total <= 0) {
+            R.edit_warnings.push_back(
+                "manual bout " + std::to_string(m.start) + "-" + std::to_string(m.end) +
+                " is outside the stored frame range");
+            continue;
+        }
+        ManualBout c = m;
+        if (c.start < 0) c.start = 0;
+        if (c.end > total - 1) c.end = total - 1;
+        mb.push_back(c);
+    }
+    std::sort(mb.begin(), mb.end(),
+              [](const ManualBout &a, const ManualBout &b) { return a.start < b.start; });
+    std::vector<ManualBout> merged;
+    for (const auto &c : mb) {
+        if (!merged.empty() && c.start <= merged.back().end + 1) {
+            ManualBout &top = merged.back();
+            top.end = std::max(top.end, c.end);
+            top.forced = stronger(top.forced, c.forced);
+            top.kind = EditKind::Merge;   // a union is a merge
+        } else {
+            merged.push_back(c);
+        }
+    }
+
+    // 2. Suppress auto bouts overlapping any coalesced manual range (whole
+    //    bout consumed — no partial truncation).
+    std::vector<ResultBout> kept;
+    for (const auto &a : R.bouts) {
+        bool consumed = false;
+        for (const auto &M : merged)
+            if (a.start <= M.end && a.end >= M.start) { consumed = true; break; }
+        if (!consumed) kept.push_back(a);
+    }
+    R.bouts.swap(kept);
+
+    // 3. Materialize each coalesced manual bout with recomputed metrics.
+    for (const auto &M : merged) {
+        ResultBout b = evaluate_bout(in, p, M.start, M.end);
+        b.edit_kind = M.kind;
+        b.edit_id = M.id;
+        if (M.forced == ForcedStatus::Accept) {
+            if (!b.accepted) b.reason = "manually accepted";
+            b.accepted = true;
+            b.status_overridden = true;
+        } else if (M.forced == ForcedStatus::Reject) {
+            b.accepted = false;
+            b.reason = "manually rejected";
+            b.status_overridden = true;
+        }
+        R.bouts.push_back(b);
+    }
+
+    // 4. Apply status overrides to the best-matching surviving auto row
+    //    (IoU-style overlap >= 0.5). No match => stale.
+    for (const auto &O : edits.overrides) {
+        int best = -1; double best_iou = 0.0;
+        int anchor_len = O.anchor.end - O.anchor.start + 1;
+        for (size_t i = 0; i < R.bouts.size(); ++i) {
+            ResultBout &b = R.bouts[i];
+            if (b.edit_kind != EditKind::None) continue;   // auto rows only
+            int ov = std::min(b.end, O.anchor.end) - std::max(b.start, O.anchor.start) + 1;
+            if (ov <= 0) continue;
+            int denom = std::max(anchor_len, b.n_frames);
+            double iou = denom > 0 ? (double)ov / denom : 0.0;
+            if (iou > best_iou) { best_iou = iou; best = (int)i; }
+        }
+        if (best >= 0 && best_iou >= 0.5) {
+            ResultBout &b = R.bouts[best];
+            b.status_overridden = true;
+            b.edit_id = O.id;
+            if (O.status == ForcedStatus::Accept) {
+                if (!b.accepted) b.reason = "manually accepted";
+                b.accepted = true;
+            } else {
+                b.accepted = false;
+                b.reason = "manually rejected";
+            }
+        } else {
+            R.edit_warnings.push_back(
+                "status override for frames " + std::to_string(O.anchor.start) + "-" +
+                std::to_string(O.anchor.end) + " no longer matches any bout");
+        }
+    }
+
+    // 5. Re-sort by start and recount (n_candidates stays = auto count;
+    //    frame-level percentages describe filters, not bouts, so untouched).
+    std::sort(R.bouts.begin(), R.bouts.end(),
+              [](const ResultBout &a, const ResultBout &b) { return a.start < b.start; });
+    R.n_accepted = R.n_rejected = 0;
+    for (const auto &b : R.bouts) (b.accepted ? R.n_accepted : R.n_rejected)++;
 }
 
 }  // namespace boutfilter
