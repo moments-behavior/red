@@ -34,6 +34,7 @@ struct GroupExportState {
     float margin = 50.0f;
     int seed = 42;
     int jpeg_quality = 95;
+    bool scale_10x = true; // telecentric fly x10 (default on; applies to telecentric project sources)
 
     // Thread-safe progress / handoff (see export_window.h for the protocol).
     std::atomic<bool> in_progress{false};
@@ -156,6 +157,19 @@ inline void DrawGroupExportWindow(GroupExportState &state, AppContext &ctx) {
         ImGui::SliderFloat("Bbox Margin (px, projects only)", &state.margin, 0.0f, 200.0f);
         ImGui::SliderInt("JPEG Quality (projects only)", &state.jpeg_quality, 10, 100);
 
+        bool any_telecentric = false;
+        for (const auto &s : state.sources)
+            if (s.valid && s.telecentric) { any_telecentric = true; break; }
+        if (any_telecentric) {
+            ImGui::Checkbox("Scale 10x (fly/telecentric)", &state.scale_10x);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip(
+                    "Inflate world units x10 so JARVIS's integer-mm voxel grid\n"
+                    "resolves a ~3mm fly. Bakes projectionMatrix[0:2,0:3]*=0.1 into\n"
+                    "each telecentric project's exported <cam>.yaml. Predicted 3D\n"
+                    "comes out x10 — divide by 10 for mm. Keep checked for the fly rig.");
+        }
+
         ImGui::Separator();
 
         if (!state.in_progress.load(std::memory_order_relaxed)) {
@@ -180,6 +194,7 @@ inline void DrawGroupExportWindow(GroupExportState &state, AppContext &ctx) {
                     mcfg.seed = state.seed;
                     mcfg.margin_pixel = state.margin;
                     mcfg.jpeg_quality = state.jpeg_quality;
+                    mcfg.scale_10x = state.scale_10x;
 
                     state.images_saved.store(0, std::memory_order_relaxed);
                     state.images_total = total_images;

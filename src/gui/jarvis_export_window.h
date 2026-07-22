@@ -17,6 +17,7 @@ struct JarvisExportState {
     float train_ratio = 0.9f;
     int seed = 42;
     int jpeg_quality = 95;
+    bool scale_10x = true; // telecentric fly x10 (default on for telecentric)
     bool in_progress = false;
     std::string status;
 
@@ -95,6 +96,16 @@ inline void DrawJarvisExportWindow(JarvisExportState &state, AppContext &ctx) {
         ImGui::SliderInt("JPEG Quality", &state.jpeg_quality,
                          10, 100);
 
+        if (pm.telecentric) {
+            ImGui::Checkbox("Scale 10x (fly/telecentric)", &state.scale_10x);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip(
+                    "Inflate world units x10 so JARVIS's integer-mm voxel grid\n"
+                    "resolves a ~3mm fly. Bakes projectionMatrix[0:2,0:3]*=0.1\n"
+                    "into the exported <cam>.yaml. Predicted 3D comes out x10 —\n"
+                    "divide by 10 for mm. Keep checked for the fly rig.");
+        }
+
         ImGui::Separator();
 
         if (!state.in_progress) {
@@ -127,6 +138,7 @@ inline void DrawJarvisExportWindow(JarvisExportState &state, AppContext &ctx) {
                     jcfg.seed = state.seed;
                     jcfg.jpeg_quality = state.jpeg_quality;
                     jcfg.telecentric = pm.telecentric;
+                    jcfg.scale_10x = state.scale_10x;
                     // Telecentric projects have no per-camera YAML, so supply
                     // image dims from the loaded video (ctx.scene).
                     if (ctx.scene) {

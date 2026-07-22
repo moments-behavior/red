@@ -27,6 +27,7 @@ struct ExportWindowState {
     bool show = false;
     int format_idx = 0; // 0=JARVIS, 1=COCO, 2=DLC, 3=YOLO Pose, 4=YOLO Detect, 5=Nerfstudio
     bool include_video_index = false; // JARVIS: include video_index.json
+    bool scale_10x = true; // JARVIS telecentric fly x10 (default on for telecentric)
     std::string output_dir;
     float margin = 50.0f;
     float train_ratio = 0.9f;
@@ -98,6 +99,15 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
         if (is_jarvis) {
             ImGui::Checkbox("Include video index (for semi-supervised training)",
                             &state.include_video_index);
+            if (pm.telecentric) {
+                ImGui::Checkbox("Scale 10x (fly/telecentric)", &state.scale_10x);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip(
+                        "Inflate world units x10 so JARVIS's integer-mm voxel grid\n"
+                        "resolves a ~3mm fly. Bakes projectionMatrix[0:2,0:3]*=0.1\n"
+                        "into the exported <cam>.yaml. Predicted 3D comes out x10 —\n"
+                        "divide by 10 for mm. Keep checked for the fly rig.");
+            }
         }
 
         ImGui::SeparatorText("Project Info");
@@ -252,6 +262,7 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
                     ecfg.jpeg_quality       = state.jpeg_quality;
                     ecfg.camera_params      = pm.camera_params;
                     ecfg.telecentric        = pm.telecentric;
+                    ecfg.scale_10x          = state.scale_10x;
                     // Per-camera image dims from the loaded video, so 2D /
                     // uncalibrated projects (no calibration YAML) can export.
                     if (ctx.scene) {

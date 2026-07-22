@@ -54,6 +54,7 @@ struct MergeConfig {
     int seed = 42;
     float margin_pixel = 50.0f;  // used only for Project sources (dataset bboxes are kept as-is)
     int jpeg_quality = 95;       // used only for Project sources (dataset JPEGs are copied as-is)
+    bool scale_10x = false;      // telecentric fly x10; applied to Project-source projectionMatrix
 };
 
 struct SourceInfo {
@@ -347,7 +348,7 @@ inline bool build_project_json(const SourceInfo &src, float margin_pixel,
     cfg.edges = src.edges;
     cfg.num_keypoints = src.num_nodes;
     cfg.margin_pixel = margin_pixel;
-    cfg.telecentric = src.telecentric; // makes calibrations reference <cam>_dlt.csv
+    cfg.telecentric = src.telecentric; // makes calibrations reference <cam>.yaml
 
     out_json = JarvisExport::generate_annotation_json_from_amap(
         trial_name, frames, amap, cfg, img_w, img_h, nullptr, nullptr);
@@ -598,18 +599,32 @@ inline bool merge_datasets(const MergeConfig &cfg_in,
                 }
             }
         } else {
-            // Project: copy DLT CSVs (telecentric) or convert RED->JARVIS YAML.
+            // Project: write a JARVIS-readable <cam>.yaml. Telecentric emits a
+            // projectionMatrix (dims from video, x10 optional); perspective
+            // converts the RED intrinsic/R/T (dims from the source YAML).
             std::string trial = project_trial[(int)i];
             JarvisExport::ExportConfig ccfg;
             ccfg.camera_names = s.camera_names;
             ccfg.calibration_folder = s.calibration_folder;
             ccfg.output_folder = out;
+            ccfg.telecentric = s.telecentric;
+            ccfg.scale_10x = cfg_in.scale_10x;
             std::string cerr;
             bool ok;
+            std::map<std::string, int> w, h;
             if (s.telecentric) {
-                ok = JarvisExport::write_dlt_calibration(ccfg, trial, &cerr);
+                for (const auto &cam : s.camera_names) {
+                    ffmpeg_reader::FrameReader reader;
+                    if (!reader.open(s.media_folder + "/" + cam + ".mp4")) {
+                        if (status)
+                            *status = "Error: cannot open video for calib dims: " + cam + ".mp4";
+                        return false;
+                    }
+                    w[cam] = reader.width();
+                    h[cam] = reader.height();
+                }
+                ok = JarvisExport::write_projection_yaml(ccfg, trial, w, h, &cerr);
             } else {
-                std::map<std::string, int> w, h;
                 for (const auto &cam : s.camera_names) {
                     try {
                         auto yaml = opencv_yaml::read(s.calibration_folder + "/" + cam + ".yaml");

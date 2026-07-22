@@ -86,18 +86,25 @@ struct ExportConfig {
     int seed = 42;
     int jpeg_quality = 95;
 
-    // Telecentric (DLT) calibration. When true, there are no per-camera <cam>.yaml
-    // files — calibration lives in <cam>_dlt.csv (+ optional <cam>_distortion.csv),
-    // and image dims are unavailable from a YAML, so the caller must supply them
-    // via the overrides below (typically from the loaded video). The JSON
-    // `calibrations` reference then points at <cam>_dlt.csv and the calibration
-    // files are copied verbatim (see write_dlt_calibration) rather than converted.
+    // Telecentric (DLT) calibration. When true, the source calibration lives in
+    // <cam>_dlt.csv (11 DLT coeffs; no per-camera <cam>.yaml), and image dims are
+    // unavailable from a YAML, so the caller must supply them via the overrides
+    // below (typically from the loaded video). The exporter converts each DLT to
+    // a JARVIS-readable projectionMatrix <cam>.yaml (see write_projection_yaml),
+    // and the JSON `calibrations` reference points at that <cam>.yaml.
     bool telecentric = false;
     // Optional per-camera image dims (keyed by camera name). When present and >0
     // these take priority over reading image_width/height from the calibration
     // YAML — required for telecentric, harmless for perspective.
     std::map<std::string, int> image_width_override;
     std::map<std::string, int> image_height_override;
+
+    // Telecentric "fly x10" scaling. When true, the exported projectionMatrix has
+    // its affine block (rows 0-1, cols 0-2) multiplied by 0.1, inflating world
+    // units x10 so JARVIS's integer-mm voxel grid has usable resolution on a ~3mm
+    // fly. Predicted 3D then comes out in x10 units → divide by 10 for mm. Only
+    // meaningful when telecentric. See write_projection_yaml.
+    bool scale_10x = false;
 };
 
 // Resolve per-camera image dims: prefer the config override (from the loaded
@@ -535,9 +542,9 @@ inline nlohmann::json generate_annotation_json(
         categories.push_back(cat);
     }
 
-    // Calibrations. Telecentric projects reference the raw DLT CSV; perspective
-    // projects reference the converted JARVIS YAML.
-    const char *calib_ext = config.telecentric ? "_dlt.csv" : ".yaml";
+    // Calibrations. Both telecentric (projectionMatrix) and perspective
+    // (intrinsic/R/T) exports write a per-camera <cam>.yaml that JARVIS reads.
+    const char *calib_ext = ".yaml";
     nlohmann::json calib_dict;
     for (const auto &cam : config.camera_names) {
         calib_dict[cam] = "calib_params/" + trial_name + "/" + cam + calib_ext;
@@ -623,12 +630,12 @@ inline bool write_calibration_yamls(const ExportConfig &config,
 // ---------------------------------------------------------------------------
 // Telecentric calibration writer — copy the raw DLT CSVs verbatim
 // ---------------------------------------------------------------------------
-// Telecentric projects have no per-camera <cam>.yaml to convert; calibration is
-// the affine/orthographic DLT stored in <cam>_dlt.csv (+ optional
-// <cam>_distortion.csv). The JARVIS dataset format's pinhole K/R/T can't
-// faithfully represent an orthographic camera, so we copy the DLT files as-is
-// (the DLT-aware JARVIS consumer reads them directly) and the JSON `calibrations`
-// entry points at <cam>_dlt.csv (see the calib_dict blocks above).
+// UNUSED by the current export path: the JARVIS-HybridNet fork cannot read a raw
+// <cam>_dlt.csv (it reads a projectionMatrix <cam>.yaml via cv2.FileStorage), so
+// exports/merges now go through write_projection_yaml instead. This verbatim-copy
+// writer is retained for "plan (b)" — once the fork learns to read <cam>_dlt.csv
+// directly (and apply the x10 itself), the telecentric export path can switch
+// back to shipping raw DLT and reference <cam>_dlt.csv in the JSON `calibrations`.
 inline bool write_dlt_calibration(const ExportConfig &config,
                                   const std::string &trial_name,
                                   std::string *status) {
@@ -657,6 +664,104 @@ inline bool write_dlt_calibration(const ExportConfig &config,
         if (fs::exists(dist_src))
             fs::copy_file(dist_src, save_dir + "/" + cam + "_distortion.csv",
                           fs::copy_options::overwrite_existing, ec);
+    }
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Telecentric calibration writer — emit a JARVIS-readable projectionMatrix YAML
+// ---------------------------------------------------------------------------
+// The JARVIS-HybridNet fork reads telecentric calibration via
+// cv2.FileStorage(path).getNode('projectionMatrix').mat(): a per-camera
+// <cam>.yaml holding a 3x4 DLT projection matrix (plus image dims and a
+// documentation-only `scale`). It CANNOT read the raw <cam>_dlt.csv, so this is
+// the writer used for training exports. We build the matrix from the raw 11
+// DLT coefficients exactly as the reference Python exporter (red3d2jarvis.py,
+// branch dltv2) did: read the 11 coeffs, append 1.0, reshape row-major to 3x4
+// ([c8,c9,c10,1] in the last row — which is [0,0,0,1] for a telecentric/affine
+// camera whose last three coeffs are zero).
+//
+// The `scale_10x` fly hack: telecentric fly world units are inflated x10 so
+// JARVIS's integer-mm voxel grid (GRID_SPACING) has usable resolution on a ~3mm
+// fly. Because JARVIS re-triangulates 3D from the 2D labels + this matrix, the
+// x10 is carried entirely here: projectionMatrix[0:2,0:3] *= 0.1 (rows 0-1,
+// cols 0-2 — the affine block; the translation column and last row are left as
+// is). Predicted 3D then comes out in x10 units → divide by 10 for mm. The
+// `scale` field is written for documentation only; JARVIS never reads it.
+inline bool write_projection_yaml(const ExportConfig &config,
+                                  const std::string &trial_name,
+                                  const std::map<std::string, int> &image_width,
+                                  const std::map<std::string, int> &image_height,
+                                  std::string *status) {
+    namespace fs = std::filesystem;
+    std::string save_dir = config.output_folder + "/calib_params/" + trial_name;
+    std::error_code ec;
+    fs::create_directories(save_dir, ec);
+
+    for (const auto &cam : config.camera_names) {
+        std::string dlt_src = config.calibration_folder + "/" + cam + "_dlt.csv";
+        if (!fs::exists(dlt_src)) {
+            if (status)
+                *status = "Error: Missing telecentric calibration file: " + dlt_src;
+            return false;
+        }
+
+        try {
+            // Parse the 11 DLT coefficients. Accept both one-per-line and
+            // comma-separated layouts by collecting every numeric token.
+            std::vector<double> coeffs;
+            {
+                std::ifstream f(dlt_src);
+                if (!f.is_open()) {
+                    if (status)
+                        *status = "Error: Cannot open calibration file: " + dlt_src;
+                    return false;
+                }
+                std::string chunk;
+                while (f >> chunk) {
+                    std::stringstream cs(chunk);
+                    std::string sub;
+                    while (std::getline(cs, sub, ',')) {
+                        if (sub.empty()) continue;
+                        coeffs.push_back(std::stod(sub));
+                    }
+                }
+            }
+            if (coeffs.size() < 11) {
+                if (status)
+                    *status = "Error: Expected 11 DLT coefficients in: " + dlt_src +
+                              " (got " + std::to_string(coeffs.size()) + ")";
+                return false;
+            }
+
+            // Row-major 3x4: [c0..c3; c4..c7; c8,c9,c10,1].
+            Eigen::MatrixXd PM(3, 4);
+            PM << coeffs[0], coeffs[1], coeffs[2],  coeffs[3],
+                  coeffs[4], coeffs[5], coeffs[6],  coeffs[7],
+                  coeffs[8], coeffs[9], coeffs[10], 1.0;
+
+            // Fly x10 hack: scale the affine block (rows 0-1, cols 0-2).
+            if (config.scale_10x)
+                PM.block(0, 0, 2, 3) *= 0.1;
+
+            std::string output_path = save_dir + "/" + cam + ".yaml";
+            opencv_yaml::YamlWriter writer(output_path);
+            if (!writer.isOpen()) {
+                if (status)
+                    *status = "Error: Cannot write calibration file: " + output_path;
+                return false;
+            }
+            writer.writeScalar("image_width", image_width.at(cam));
+            writer.writeScalar("image_height", image_height.at(cam));
+            writer.writeMatrix("projectionMatrix", PM);
+            writer.writeScalar("scale", config.scale_10x ? 10 : 1);
+            writer.close();
+        } catch (const std::exception &e) {
+            if (status)
+                *status = "Error: Cannot write telecentric calibration for '" + cam +
+                          "' from " + dlt_src + " (" + e.what() + ")";
+            return false;
+        }
     }
     return true;
 }
@@ -925,9 +1030,9 @@ inline nlohmann::json generate_annotation_json_from_amap(
         categories.push_back(cat);
     }
 
-    // Calibrations. Telecentric projects reference the raw DLT CSV; perspective
-    // projects reference the converted JARVIS YAML.
-    const char *calib_ext = config.telecentric ? "_dlt.csv" : ".yaml";
+    // Calibrations. Both telecentric (projectionMatrix) and perspective
+    // (intrinsic/R/T) exports write a per-camera <cam>.yaml that JARVIS reads.
+    const char *calib_ext = ".yaml";
     nlohmann::json calib_dict;
     for (const auto &cam : config.camera_names) {
         calib_dict[cam] = "calib_params/" + trial_name + "/" + cam + calib_ext;
@@ -1048,9 +1153,10 @@ inline bool export_jarvis_dataset(const ExportConfig &config_in,
         f << val_json.dump(4);
     }
 
-    // 7. Write calibration: copy DLT CSVs (telecentric) or convert YAMLs (perspective)
+    // 7. Write calibration: projectionMatrix YAML (telecentric) or intrinsic/R/T
+    // YAML (perspective) — both JARVIS-readable.
     bool calib_ok = config.telecentric
-        ? write_dlt_calibration(config, trial_name, status)
+        ? write_projection_yaml(config, trial_name, image_width, image_height, status)
         : write_calibration_yamls(config, trial_name, image_width, image_height, status);
     if (!calib_ok)
         return false;
@@ -1212,11 +1318,15 @@ inline bool export_jarvis_dataset(const ExportConfig &config_in,
         f << val_json.dump(4);
     }
 
-    // 7. Write calibration YAMLs
+    // 7. Write calibration YAMLs (projectionMatrix for telecentric, else K/R/T)
     if (status)
         *status = "Writing calibration files...";
-    if (!write_calibration_yamls(config, trial_name, image_width, image_height,
-                                 status))
+    bool calib_ok = config.telecentric
+        ? write_projection_yaml(config, trial_name, image_width, image_height,
+                                status)
+        : write_calibration_yamls(config, trial_name, image_width, image_height,
+                                  status);
+    if (!calib_ok)
         return false;
 
     // 8. Extract JPEG frames — one thread per camera
