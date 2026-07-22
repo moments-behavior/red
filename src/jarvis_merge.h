@@ -545,18 +545,32 @@ inline bool merge_datasets(const MergeConfig &cfg_in,
     for (size_t k = 0; k < fs_keys.size(); ++k) rec_is_val[fs_keys[k]] = is_val[k] != 0;
 
     // 7. Build merged train/val JSONs.
+    // Image ids are re-numbered 0..N-1 contiguously *within each split*. JARVIS's
+    // dataset loader (datasetBase.py) indexes `self.image_ids[id]`, i.e. it treats
+    // an image's `id` as its positional index, so each instances_*.json must have
+    // ids 0..N-1. The global ids assigned in step 5 are split across train/val and
+    // are therefore non-contiguous per split — renumber them here, remapping each
+    // annotation's image_id and every frameset frame id to match.
     auto build_split = [&](bool want_val) {
         json images = json::array(), anns = json::array(), fsets = json::object();
+        int next_id = 0, next_ann_id = 0;
         for (const auto &rec : recs) {
             std::string key = rec.trial + "|" + std::to_string(rec.frame);
             if (rec_is_val[key] != want_val) continue;
-            images.push_back(rec.image);
-            for (const auto &a : rec.anns) anns.push_back(a);
+            int local_id = next_id++;
+            json img = rec.image;
+            img["id"] = local_id;
+            images.push_back(std::move(img));
+            for (auto a : rec.anns) {
+                a["image_id"] = local_id;
+                a["id"] = next_ann_id++;
+                anns.push_back(std::move(a));
+            }
             std::string fkey = rec.trial + "/Frame_" + std::to_string(rec.frame);
             if (!fsets.contains(fkey)) {
                 fsets[fkey] = {{"datasetName", rec.trial}, {"frames", json::array()}};
             }
-            fsets[fkey]["frames"].push_back(rec.image["id"]);
+            fsets[fkey]["frames"].push_back(local_id);
         }
         json root;
         root["keypoint_names"] = merged_kp;
