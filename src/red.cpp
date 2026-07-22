@@ -881,11 +881,13 @@ int main(int argc, char **argv) {
             ps.pause_seeked = true;
             for (auto &[key, value] : window_need_decoding)
                 value.store(true);
-            // Arm bout looping: playback wraps back to the bout start when it
-            // reaches the end. seek_all_cameras above cleared loop_bout; re-arm
-            // it here with this bout's range. Any later manual seek clears it.
+            // Arm the bout boundary: playback either wraps back to the bout
+            // start or pauses at its end when it reaches loop_end, depending
+            // on the "Loop bout" checkbox (checked live at the wrap site).
+            // seek_all_cameras above cleared loop_bout; re-arm it here with
+            // this bout's range. Any later manual seek clears it.
             // loop_start stays pinned to the real bout start, not preload_from.
-            ps.loop_bout  = win.bout_filter.loop_bout_enabled;
+            ps.loop_bout  = true;
             ps.loop_start = tgt;
             ps.loop_end   = win.bout_filter.seek_frame_end;
         }
@@ -3094,8 +3096,8 @@ int main(int argc, char **argv) {
                 frame_to_show = std::min(frame_to_show, min_decoded_frame);
                 frame_to_show =
                     std::min(frame_to_show, dc_context->total_num_frame - 1);
-                if (ps.loop_bout && win.bout_filter.loop_bout_enabled &&
-                    frame_to_show > ps.loop_end) {
+                bool at_bout_end = ps.loop_bout && frame_to_show > ps.loop_end;
+                if (at_bout_end && win.bout_filter.loop_bout_enabled) {
                     // Reached the end of the looped bout: wrap to its start.
                     // seek_all_cameras clears loop_bout, so re-arm afterward
                     // (loop_start/loop_end are untouched by the seek).
@@ -3106,6 +3108,14 @@ int main(int argc, char **argv) {
                     for (auto &[key, value] : window_need_decoding)
                         value.store(true);
                 } else {
+                if (at_bout_end) {
+                    // Looping is disabled: stop at the bout's end frame
+                    // instead of playing past it. Clear loop_bout so a
+                    // subsequent manual "play" isn't clamped here again.
+                    frame_to_show = ps.loop_end;
+                    ps.play_video = false;
+                    ps.loop_bout = false;
+                }
                 int frame_delta = frame_to_show - ps.to_display_frame_number;
                 if (frame_delta > 0) {
                     ps.to_display_frame_number = frame_to_show;
