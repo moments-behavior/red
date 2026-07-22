@@ -34,6 +34,7 @@ struct GroupExportState {
     float margin = 50.0f;
     int seed = 42;
     int jpeg_quality = 95;
+    bool scale_10x = false; // project sources: write calibration so 3D reconstructs in 10x-mm
 
     // Thread-safe progress / handoff (see export_window.h for the protocol).
     std::atomic<bool> in_progress{false};
@@ -155,6 +156,7 @@ inline void DrawGroupExportWindow(GroupExportState &state, AppContext &ctx) {
         ImGui::InputInt("Random Seed", &state.seed);
         ImGui::SliderFloat("Bbox Margin (px, projects only)", &state.margin, 0.0f, 200.0f);
         ImGui::SliderInt("JPEG Quality (projects only)", &state.jpeg_quality, 10, 100);
+        ImGui::Checkbox("Scale 10x (mm->10x-mm; projects only)", &state.scale_10x);
 
         ImGui::Separator();
 
@@ -180,6 +182,7 @@ inline void DrawGroupExportWindow(GroupExportState &state, AppContext &ctx) {
                     mcfg.seed = state.seed;
                     mcfg.margin_pixel = state.margin;
                     mcfg.jpeg_quality = state.jpeg_quality;
+                    mcfg.scale_10x = state.scale_10x;
 
                     state.images_saved.store(0, std::memory_order_relaxed);
                     state.images_total = total_images;

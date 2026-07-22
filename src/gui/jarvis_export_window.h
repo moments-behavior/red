@@ -17,6 +17,7 @@ struct JarvisExportState {
     float train_ratio = 0.9f;
     int seed = 42;
     int jpeg_quality = 95;
+    bool scale_10x = false; // write calibration so 3D reconstructs in 10x-mm
     bool in_progress = false;
     std::string status;
 
@@ -94,6 +95,8 @@ inline void DrawJarvisExportWindow(JarvisExportState &state, AppContext &ctx) {
         ImGui::InputInt("Random Seed", &state.seed);
         ImGui::SliderInt("JPEG Quality", &state.jpeg_quality,
                          10, 100);
+        ImGui::Checkbox("Scale 10x (mm->10x-mm; for tightly-spaced keypoints)",
+                        &state.scale_10x);
 
         ImGui::Separator();
 
@@ -127,6 +130,7 @@ inline void DrawJarvisExportWindow(JarvisExportState &state, AppContext &ctx) {
                     jcfg.seed = state.seed;
                     jcfg.jpeg_quality = state.jpeg_quality;
                     jcfg.telecentric = pm.telecentric;
+                    jcfg.scale_10x = state.scale_10x;
                     // Telecentric projects have no per-camera YAML, so supply
                     // image dims from the loaded video (ctx.scene).
                     if (ctx.scene) {
