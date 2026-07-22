@@ -27,7 +27,7 @@ struct ExportWindowState {
     bool show = false;
     int format_idx = 0; // 0=JARVIS, 1=COCO, 2=DLC, 3=YOLO Pose, 4=YOLO Detect, 5=Nerfstudio
     bool include_video_index = false; // JARVIS: include video_index.json
-    bool scale_10x = true; // JARVIS telecentric fly x10 (default on for telecentric)
+    bool scale_10x = false; // JARVIS: write calibration so 3D reconstructs in 10x-mm
     std::string output_dir;
     float margin = 50.0f;
     float train_ratio = 0.9f;
@@ -99,15 +99,15 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
         if (is_jarvis) {
             ImGui::Checkbox("Include video index (for semi-supervised training)",
                             &state.include_video_index);
-            if (pm.telecentric) {
-                ImGui::Checkbox("Scale 10x (fly/telecentric)", &state.scale_10x);
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip(
-                        "Inflate world units x10 so JARVIS's integer-mm voxel grid\n"
-                        "resolves a ~3mm fly. Bakes projectionMatrix[0:2,0:3]*=0.1\n"
-                        "into the exported <cam>.yaml. Predicted 3D comes out x10 —\n"
-                        "divide by 10 for mm. Keep checked for the fly rig.");
-            }
+            ImGui::Checkbox("Scale 10x (mm->10x-mm; for tightly-spaced keypoints)",
+                            &state.scale_10x);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip(
+                    "Write the calibration so JARVIS reconstructs 3D in 10x-mm,\n"
+                    "so the integer-mm voxel grid resolves e.g. a ~3mm fly.\n"
+                    "Telecentric: projectionMatrix[0:2,0:3]*=0.1; perspective:\n"
+                    "T*=10. Predicted 3D comes out x10 — divide by 10 for mm.\n"
+                    "Check for the fly rig.");
         }
 
         ImGui::SeparatorText("Project Info");

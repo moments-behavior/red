@@ -54,7 +54,8 @@ struct MergeConfig {
     int seed = 42;
     float margin_pixel = 50.0f;  // used only for Project sources (dataset bboxes are kept as-is)
     int jpeg_quality = 95;       // used only for Project sources (dataset JPEGs are copied as-is)
-    bool scale_10x = false;      // telecentric fly x10; applied to Project-source projectionMatrix
+    bool scale_10x = false;      // Project sources only: write calibration so JARVIS reconstructs
+                                 // 3D in 10x-mm (dataset sources keep their baked-in scale).
 };
 
 struct SourceInfo {
@@ -348,7 +349,9 @@ inline bool build_project_json(const SourceInfo &src, float margin_pixel,
     cfg.edges = src.edges;
     cfg.num_keypoints = src.num_nodes;
     cfg.margin_pixel = margin_pixel;
-    cfg.telecentric = src.telecentric; // makes calibrations reference <cam>.yaml
+    // Note: the JSON `calibrations` entry is always <cam>.yaml regardless of
+    // telecentric; the actual calibration file (yaml with projectionMatrix vs
+    // intrinsicMatrix/R/T) is written separately in merge_datasets step 8.
 
     out_json = JarvisExport::generate_annotation_json_from_amap(
         trial_name, frames, amap, cfg, img_w, img_h, nullptr, nullptr);
@@ -418,6 +421,8 @@ inline bool merge_datasets(const MergeConfig &cfg_in,
     std::vector<detail::Chunk> chunks;
     // Project sources also need image dims for the calib writer later; capture per source.
     std::map<int, std::string> project_trial; // src_index -> renamed trial
+    std::map<int, std::pair<std::map<std::string, int>, std::map<std::string, int>>>
+        project_dims; // src_index -> (image_width, image_height) by cam
     for (size_t i = 0; i < srcs.size(); ++i) {
         const SourceInfo &s = *srcs[i];
         if (s.kind == SourceInfo::Project) {
@@ -430,6 +435,7 @@ inline bool merge_datasets(const MergeConfig &cfg_in,
                 if (status) *status = "Error: " + s.display_name + ": " + err;
                 return false;
             }
+            project_dims[(int)i] = {w, h};
             chunks.push_back({std::move(pj), (int)i, ""});
         } else {
             for (const char *mode : {"train", "val"}) {
@@ -614,40 +620,21 @@ inline bool merge_datasets(const MergeConfig &cfg_in,
             }
         } else {
             // Project: write a JARVIS-readable <cam>.yaml. Telecentric emits a
-            // projectionMatrix (dims from video, x10 optional); perspective
-            // converts the RED intrinsic/R/T (dims from the source YAML).
+            // projectionMatrix (x10 optional); perspective converts the RED
+            // intrinsic/R/T. Reuse the dims already resolved in step 4 (video
+            // for telecentric, YAML otherwise).
             std::string trial = project_trial[(int)i];
+            const auto &w = project_dims[(int)i].first;
+            const auto &h = project_dims[(int)i].second;
             JarvisExport::ExportConfig ccfg;
             ccfg.camera_names = s.camera_names;
             ccfg.calibration_folder = s.calibration_folder;
             ccfg.output_folder = out;
-            ccfg.telecentric = s.telecentric;
             ccfg.scale_10x = cfg_in.scale_10x;
             std::string cerr;
-            bool ok;
-            std::map<std::string, int> w, h;
-            if (s.telecentric) {
-                for (const auto &cam : s.camera_names) {
-                    ffmpeg_reader::FrameReader reader;
-                    if (!reader.open(s.media_folder + "/" + cam + ".mp4")) {
-                        if (status)
-                            *status = "Error: cannot open video for calib dims: " + cam + ".mp4";
-                        return false;
-                    }
-                    w[cam] = reader.width();
-                    h[cam] = reader.height();
-                }
-                ok = JarvisExport::write_projection_yaml(ccfg, trial, w, h, &cerr);
-            } else {
-                for (const auto &cam : s.camera_names) {
-                    try {
-                        auto yaml = opencv_yaml::read(s.calibration_folder + "/" + cam + ".yaml");
-                        w[cam] = yaml.getInt("image_width");
-                        h[cam] = yaml.getInt("image_height");
-                    } catch (...) {}
-                }
-                ok = JarvisExport::write_calibration_yamls(ccfg, trial, w, h, &cerr);
-            }
+            bool ok = s.telecentric
+                ? JarvisExport::write_projection_yaml(ccfg, trial, w, h, &cerr)
+                : JarvisExport::write_calibration_yamls(ccfg, trial, w, h, &cerr);
             if (!ok) {
                 if (status) *status = "Error: " + cerr;
                 return false;

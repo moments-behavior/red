@@ -17,7 +17,7 @@ struct JarvisExportState {
     float train_ratio = 0.9f;
     int seed = 42;
     int jpeg_quality = 95;
-    bool scale_10x = true; // telecentric fly x10 (default on for telecentric)
+    bool scale_10x = false; // write calibration so 3D reconstructs in 10x-mm
     bool in_progress = false;
     std::string status;
 
@@ -95,16 +95,15 @@ inline void DrawJarvisExportWindow(JarvisExportState &state, AppContext &ctx) {
         ImGui::InputInt("Random Seed", &state.seed);
         ImGui::SliderInt("JPEG Quality", &state.jpeg_quality,
                          10, 100);
-
-        if (pm.telecentric) {
-            ImGui::Checkbox("Scale 10x (fly/telecentric)", &state.scale_10x);
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip(
-                    "Inflate world units x10 so JARVIS's integer-mm voxel grid\n"
-                    "resolves a ~3mm fly. Bakes projectionMatrix[0:2,0:3]*=0.1\n"
-                    "into the exported <cam>.yaml. Predicted 3D comes out x10 —\n"
-                    "divide by 10 for mm. Keep checked for the fly rig.");
-        }
+        ImGui::Checkbox("Scale 10x (mm->10x-mm; for tightly-spaced keypoints)",
+                        &state.scale_10x);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip(
+                "Write the calibration so JARVIS reconstructs 3D in 10x-mm,\n"
+                "so the integer-mm voxel grid resolves e.g. a ~3mm fly.\n"
+                "Telecentric: projectionMatrix[0:2,0:3]*=0.1; perspective:\n"
+                "T*=10. Predicted 3D comes out x10 — divide by 10 for mm.\n"
+                "Check for the fly rig.");
 
         ImGui::Separator();
 

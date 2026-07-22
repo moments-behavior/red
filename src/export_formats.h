@@ -76,9 +76,8 @@ struct ExportConfig {
     // projectionMatrix <cam>.yaml and sources image dims from the video
     // (image_width/image_height below).
     bool telecentric = false;
-
-    // Telecentric fly x10 scaling for the JARVIS projectionMatrix (see
-    // JarvisExport::write_projection_yaml). Only meaningful when telecentric.
+    // 10x unit scaling for the JARVIS calibration — telecentric and perspective
+    // alike (see JarvisExport::ExportConfig::scale_10x).
     bool scale_10x = false;
 
     // Per-camera image dimensions (parallel to camera_names). Supplied from the

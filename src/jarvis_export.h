@@ -99,11 +99,15 @@ struct ExportConfig {
     std::map<std::string, int> image_width_override;
     std::map<std::string, int> image_height_override;
 
-    // Telecentric "fly x10" scaling. When true, the exported projectionMatrix has
-    // its affine block (rows 0-1, cols 0-2) multiplied by 0.1, inflating world
-    // units x10 so JARVIS's integer-mm voxel grid has usable resolution on a ~3mm
-    // fly. Predicted 3D then comes out in x10 units → divide by 10 for mm. Only
-    // meaningful when telecentric. See write_projection_yaml.
+    // 10x unit scaling. When true the exported calibration is written so that
+    // 3D reconstructed by JARVIS comes out in 10x-mm (mm×10) rather than mm —
+    // useful for tightly-spaced keypoints (e.g. a ~3mm fly) where mm coordinates
+    // are too small for JARVIS's integer-mm voxel grid / healthy HybridNet
+    // training. 2D pixel labels are unchanged; only the calibration is adjusted
+    // (telecentric: projectionMatrix affine block ×0.1, see write_projection_yaml;
+    // perspective: translation ×10, see write_calibration_yamls), and a `scale`
+    // field is written to record the factor. Predicted 3D comes out in x10 units
+    // → divide by 10 for mm. Mirrors data_exporter/red3d2jarvis.py --scale_10x.
     bool scale_10x = false;
 };
 
@@ -542,12 +546,11 @@ inline nlohmann::json generate_annotation_json(
         categories.push_back(cat);
     }
 
-    // Calibrations. Both telecentric (projectionMatrix) and perspective
-    // (intrinsic/R/T) exports write a per-camera <cam>.yaml that JARVIS reads.
-    const char *calib_ext = ".yaml";
+    // Calibrations. Both telecentric (projectionMatrix + scale) and perspective
+    // (intrinsicMatrix/R/T) exports write a per-camera <cam>.yaml that JARVIS reads.
     nlohmann::json calib_dict;
     for (const auto &cam : config.camera_names) {
-        calib_dict[cam] = "calib_params/" + trial_name + "/" + cam + calib_ext;
+        calib_dict[cam] = "calib_params/" + trial_name + "/" + cam + ".yaml";
     }
 
     // Framesets
@@ -602,6 +605,11 @@ inline bool write_calibration_yamls(const ExportConfig &config,
             Eigen::MatrixXd dist_t = dist.transpose();
             Eigen::MatrixXd Rt = R.transpose();
 
+            // 10x: scale translation so JARVIS reconstructs 3D in 10x-mm (camera
+            // centers ×10 → reconstruction ×10). Reprojection of the (scaled) 3D
+            // is unchanged; the `scale` field records the factor for downstream.
+            if (config.scale_10x) T = T * 10.0;
+
             std::string output_path = save_dir + "/" + cam + ".yaml";
             opencv_yaml::YamlWriter writer(output_path);
             if (!writer.isOpen()) {
@@ -616,6 +624,9 @@ inline bool write_calibration_yamls(const ExportConfig &config,
             writer.writeMatrix("distortionCoefficients", dist_t);
             writer.writeMatrix("R", Rt);
             writer.writeMatrix("T", T);
+            // Only emit `scale` when scaling is active, so the perspective output
+            // is byte-identical to before when 10x is off.
+            if (config.scale_10x) writer.writeScalar("scale", 10);
             writer.close();
         } catch (const std::exception &e) {
             if (status)
@@ -1030,12 +1041,11 @@ inline nlohmann::json generate_annotation_json_from_amap(
         categories.push_back(cat);
     }
 
-    // Calibrations. Both telecentric (projectionMatrix) and perspective
-    // (intrinsic/R/T) exports write a per-camera <cam>.yaml that JARVIS reads.
-    const char *calib_ext = ".yaml";
+    // Calibrations. Both telecentric (projectionMatrix + scale) and perspective
+    // (intrinsicMatrix/R/T) exports write a per-camera <cam>.yaml that JARVIS reads.
     nlohmann::json calib_dict;
     for (const auto &cam : config.camera_names) {
-        calib_dict[cam] = "calib_params/" + trial_name + "/" + cam + calib_ext;
+        calib_dict[cam] = "calib_params/" + trial_name + "/" + cam + ".yaml";
     }
 
     // Framesets
