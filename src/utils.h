@@ -30,6 +30,9 @@ struct PlaybackState {
     float set_playback_speed = 1.0f;
     double inst_speed = 1.0;
     bool slider_text_editing = false;  // true while user is typing in slider
+    bool loop_bout = false;   // true while a Bout Filter bout is armed for looping
+    int  loop_start = 0;      // inclusive first frame of the looped bout
+    int  loop_end   = 0;      // inclusive last frame of the looped bout
 };
 
 bool string_ends_with(const std::string &str, const std::string &suffix);

@@ -874,6 +874,12 @@ int main(int argc, char **argv) {
             ps.pause_seeked = true;
             for (auto &[key, value] : window_need_decoding)
                 value.store(true);
+            // Arm bout looping: playback wraps back to the bout start when it
+            // reaches the end. seek_all_cameras above cleared loop_bout; re-arm
+            // it here with this bout's range. Any later manual seek clears it.
+            ps.loop_bout  = true;
+            ps.loop_start = win.bout_filter.seek_frame;
+            ps.loop_end   = win.bout_filter.seek_frame_end;
         }
         if (win.bout_filter.export_requested) {
             win.bout_filter.export_requested = false;
@@ -3077,6 +3083,17 @@ int main(int argc, char **argv) {
                 frame_to_show = std::min(frame_to_show, min_decoded_frame);
                 frame_to_show =
                     std::min(frame_to_show, dc_context->total_num_frame - 1);
+                if (ps.loop_bout && frame_to_show > ps.loop_end) {
+                    // Reached the end of the looped bout: wrap to its start.
+                    // seek_all_cameras clears loop_bout, so re-arm afterward
+                    // (loop_start/loop_end are untouched by the seek).
+                    seek_all_cameras(scene, ps.loop_start,
+                                     dc_context->video_fps, ps, true);
+                    ps.loop_bout = true;
+                    current_frame_num = ps.loop_start;
+                    for (auto &[key, value] : window_need_decoding)
+                        value.store(true);
+                } else {
                 int frame_delta = frame_to_show - ps.to_display_frame_number;
                 if (frame_delta > 0) {
                     ps.to_display_frame_number = frame_to_show;
@@ -3099,6 +3116,7 @@ int main(int argc, char **argv) {
                         (ps.read_head + frame_delta) % scene->size_of_buffer;
                     if (!ps.slider_text_editing)
                         ps.slider_frame_number = ps.to_display_frame_number;
+                }
                 }
             }
         }

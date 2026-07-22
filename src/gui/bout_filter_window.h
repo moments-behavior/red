@@ -100,6 +100,7 @@ struct BoutFilterState {
     // Requests consumed by the main loop.
     bool seek_requested = false;
     int  seek_frame = 0;
+    int  seek_frame_end = 0;
     bool export_requested = false;
     std::string export_status;
 };
@@ -856,6 +857,7 @@ inline void DrawBoutFilterWindow(BoutFilterState &st,
                         st.selected_ids.insert(key);
                         st.seek_requested = true;
                         st.seek_frame = b.start;
+                        st.seek_frame_end = b.end;
                     }
                 }
                 if (ImGui::IsItemHovered() && (b.accepted ||
