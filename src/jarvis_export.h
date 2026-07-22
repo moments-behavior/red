@@ -99,16 +99,18 @@ struct ExportConfig {
     std::map<std::string, int> image_width_override;
     std::map<std::string, int> image_height_override;
 
-    // 10x unit scaling. When true the exported calibration is written so that
-    // 3D reconstructed by JARVIS comes out in 10x-mm (mm×10) rather than mm —
-    // useful for tightly-spaced keypoints (e.g. a ~3mm fly) where mm coordinates
-    // are too small for JARVIS's integer-mm voxel grid / healthy HybridNet
-    // training. 2D pixel labels are unchanged; only the calibration is adjusted
-    // (telecentric: projectionMatrix affine block ×0.1, see write_projection_yaml;
-    // perspective: translation ×10, see write_calibration_yamls), and a `scale`
-    // field is written to record the factor. Predicted 3D comes out in x10 units
-    // → divide by 10 for mm. Mirrors data_exporter/red3d2jarvis.py --scale_10x.
-    bool scale_10x = false;
+    // Unit scaling factor (>=1). When >1 the exported calibration is written so
+    // that 3D reconstructed by JARVIS comes out in (mm × scale_factor) rather
+    // than mm — useful for tightly-spaced keypoints (e.g. a ~3mm fly) where mm
+    // coordinates are too small for JARVIS's integer-mm voxel grid / healthy
+    // HybridNet training. 2D pixel labels are unchanged; only the calibration is
+    // adjusted (telecentric: projectionMatrix affine block × 1/scale_factor, see
+    // write_projection_yaml; perspective: translation × scale_factor, see
+    // write_calibration_yamls), and a `scale` field records the factor.
+    // scale_factor==1 is a no-op. Predicted 3D comes out in scaled units →
+    // divide by scale_factor for mm. Generalizes data_exporter/red3d2jarvis.py
+    // --scale_10x (which used a fixed 10×).
+    int scale_factor = 1;
 };
 
 // Resolve per-camera image dims: prefer the config override (from the loaded
@@ -605,10 +607,11 @@ inline bool write_calibration_yamls(const ExportConfig &config,
             Eigen::MatrixXd dist_t = dist.transpose();
             Eigen::MatrixXd Rt = R.transpose();
 
-            // 10x: scale translation so JARVIS reconstructs 3D in 10x-mm (camera
-            // centers ×10 → reconstruction ×10). Reprojection of the (scaled) 3D
-            // is unchanged; the `scale` field records the factor for downstream.
-            if (config.scale_10x) T = T * 10.0;
+            // Scale: multiply translation so JARVIS reconstructs 3D in
+            // (mm × scale_factor) (camera centers scale → reconstruction scales).
+            // Reprojection of the (scaled) 3D is unchanged; the `scale` field
+            // records the factor for downstream.
+            if (config.scale_factor != 1) T = T * (double)config.scale_factor;
 
             std::string output_path = save_dir + "/" + cam + ".yaml";
             opencv_yaml::YamlWriter writer(output_path);
@@ -625,8 +628,8 @@ inline bool write_calibration_yamls(const ExportConfig &config,
             writer.writeMatrix("R", Rt);
             writer.writeMatrix("T", T);
             // Only emit `scale` when scaling is active, so the perspective output
-            // is byte-identical to before when 10x is off.
-            if (config.scale_10x) writer.writeScalar("scale", 10);
+            // is byte-identical to before when scaling is off (factor 1).
+            if (config.scale_factor != 1) writer.writeScalar("scale", config.scale_factor);
             writer.close();
         } catch (const std::exception &e) {
             if (status)
@@ -645,7 +648,7 @@ inline bool write_calibration_yamls(const ExportConfig &config,
 // <cam>_dlt.csv (it reads a projectionMatrix <cam>.yaml via cv2.FileStorage), so
 // exports/merges now go through write_projection_yaml instead. This verbatim-copy
 // writer is retained for "plan (b)" — once the fork learns to read <cam>_dlt.csv
-// directly (and apply the x10 itself), the telecentric export path can switch
+// directly (and apply the scale itself), the telecentric export path can switch
 // back to shipping raw DLT and reference <cam>_dlt.csv in the JSON `calibrations`.
 inline bool write_dlt_calibration(const ExportConfig &config,
                                   const std::string &trial_name,
@@ -692,13 +695,14 @@ inline bool write_dlt_calibration(const ExportConfig &config,
 // ([c8,c9,c10,1] in the last row — which is [0,0,0,1] for a telecentric/affine
 // camera whose last three coeffs are zero).
 //
-// The `scale_10x` fly hack: telecentric fly world units are inflated x10 so
-// JARVIS's integer-mm voxel grid (GRID_SPACING) has usable resolution on a ~3mm
-// fly. Because JARVIS re-triangulates 3D from the 2D labels + this matrix, the
-// x10 is carried entirely here: projectionMatrix[0:2,0:3] *= 0.1 (rows 0-1,
-// cols 0-2 — the affine block; the translation column and last row are left as
-// is). Predicted 3D then comes out in x10 units → divide by 10 for mm. The
-// `scale` field is written for documentation only; JARVIS never reads it.
+// The `scale_factor` fly hack: telecentric fly world units are inflated
+// (× scale_factor) so JARVIS's integer-mm voxel grid (GRID_SPACING) has usable
+// resolution on a ~3mm fly. Because JARVIS re-triangulates 3D from the 2D
+// labels + this matrix, the scaling is carried entirely here:
+// projectionMatrix[0:2,0:3] *= 1/scale_factor (rows 0-1, cols 0-2 — the affine
+// block; the translation column and last row are left as is). Predicted 3D
+// then comes out in scaled units → divide by scale_factor for mm. The `scale`
+// field is written for documentation only; JARVIS never reads it.
 inline bool write_projection_yaml(const ExportConfig &config,
                                   const std::string &trial_name,
                                   const std::map<std::string, int> &image_width,
@@ -751,9 +755,9 @@ inline bool write_projection_yaml(const ExportConfig &config,
                   coeffs[4], coeffs[5], coeffs[6],  coeffs[7],
                   coeffs[8], coeffs[9], coeffs[10], 1.0;
 
-            // Fly x10 hack: scale the affine block (rows 0-1, cols 0-2).
-            if (config.scale_10x)
-                PM.block(0, 0, 2, 3) *= 0.1;
+            // Fly scale hack: scale the affine block (rows 0-1, cols 0-2).
+            if (config.scale_factor != 1)
+                PM.block(0, 0, 2, 3) *= (1.0 / (double)config.scale_factor);
 
             std::string output_path = save_dir + "/" + cam + ".yaml";
             opencv_yaml::YamlWriter writer(output_path);
@@ -765,7 +769,7 @@ inline bool write_projection_yaml(const ExportConfig &config,
             writer.writeScalar("image_width", image_width.at(cam));
             writer.writeScalar("image_height", image_height.at(cam));
             writer.writeMatrix("projectionMatrix", PM);
-            writer.writeScalar("scale", config.scale_10x ? 10 : 1);
+            writer.writeScalar("scale", config.scale_factor);
             writer.close();
         } catch (const std::exception &e) {
             if (status)

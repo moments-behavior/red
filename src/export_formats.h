@@ -76,9 +76,9 @@ struct ExportConfig {
     // projectionMatrix <cam>.yaml and sources image dims from the video
     // (image_width/image_height below).
     bool telecentric = false;
-    // 10x unit scaling for the JARVIS calibration — telecentric and perspective
-    // alike (see JarvisExport::ExportConfig::scale_10x).
-    bool scale_10x = false;
+    // Unit scaling factor for the JARVIS calibration — telecentric and
+    // perspective alike (see JarvisExport::ExportConfig::scale_factor).
+    int scale_factor = 1;
 
     // Per-camera image dimensions (parallel to camera_names). Supplied from the
     // loaded video so 2D / uncalibrated projects — which have no calibration
@@ -667,7 +667,7 @@ inline bool export_jarvis(const ExportConfig &cfg, const AnnotationMap &amap,
     jcfg.seed               = cfg.seed;
     jcfg.jpeg_quality       = cfg.jpeg_quality;
     jcfg.telecentric        = cfg.telecentric;
-    jcfg.scale_10x          = cfg.scale_10x;
+    jcfg.scale_factor       = cfg.scale_factor;
     // Forward per-camera video dims as overrides so telecentric (no YAML) works
     // and calibrated projects can still fall back to YAML inside the exporter.
     for (size_t i = 0; i < cfg.camera_names.size(); ++i) {

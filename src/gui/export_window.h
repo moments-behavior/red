@@ -27,7 +27,7 @@ struct ExportWindowState {
     bool show = false;
     int format_idx = 0; // 0=JARVIS, 1=COCO, 2=DLC, 3=YOLO Pose, 4=YOLO Detect, 5=Nerfstudio
     bool include_video_index = false; // JARVIS: include video_index.json
-    bool scale_10x = false; // JARVIS: write calibration so 3D reconstructs in 10x-mm
+    int scale_factor = 1; // JARVIS: write calibration so 3D reconstructs in (mm × scale_factor)
     std::string output_dir;
     float margin = 50.0f;
     float train_ratio = 0.9f;
@@ -99,14 +99,15 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
         if (is_jarvis) {
             ImGui::Checkbox("Include video index (for semi-supervised training)",
                             &state.include_video_index);
-            ImGui::Checkbox("Scale 10x (mm->10x-mm; for tightly-spaced keypoints)",
-                            &state.scale_10x);
+            ImGui::SliderInt("Scale factor (x1-x100; for tightly-spaced keypoints)",
+                             &state.scale_factor, 1, 100);
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip(
-                    "Write the calibration so JARVIS reconstructs 3D in 10x-mm,\n"
-                    "so the integer-mm voxel grid resolves e.g. a ~3mm fly.\n"
-                    "Telecentric: projectionMatrix[0:2,0:3]*=0.1; perspective:\n"
-                    "T*=10. Predicted 3D comes out x10 — divide by 10 for mm.\n"
+                    "Write the calibration so JARVIS reconstructs 3D in\n"
+                    "(mm x scale factor), so the integer-mm voxel grid resolves\n"
+                    "e.g. a ~3mm fly. Telecentric: projectionMatrix[0:2,0:3] is\n"
+                    "divided by the factor; perspective: T is multiplied by it.\n"
+                    "Predicted 3D comes out scaled — divide by the factor for mm.\n"
                     "Check for the fly rig.");
         }
 
@@ -262,7 +263,7 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
                     ecfg.jpeg_quality       = state.jpeg_quality;
                     ecfg.camera_params      = pm.camera_params;
                     ecfg.telecentric        = pm.telecentric;
-                    ecfg.scale_10x          = state.scale_10x;
+                    ecfg.scale_factor       = state.scale_factor;
                     // Per-camera image dims from the loaded video, so 2D /
                     // uncalibrated projects (no calibration YAML) can export.
                     if (ctx.scene) {

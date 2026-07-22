@@ -54,8 +54,8 @@ struct MergeConfig {
     int seed = 42;
     float margin_pixel = 50.0f;  // used only for Project sources (dataset bboxes are kept as-is)
     int jpeg_quality = 95;       // used only for Project sources (dataset JPEGs are copied as-is)
-    bool scale_10x = false;      // Project sources only: write calibration so JARVIS reconstructs
-                                 // 3D in 10x-mm (dataset sources keep their baked-in scale).
+    int scale_factor = 1;        // Project sources only: write calibration so JARVIS reconstructs
+                                 // 3D in (mm × scale_factor) (dataset sources keep their baked-in scale).
 };
 
 struct SourceInfo {
@@ -630,7 +630,7 @@ inline bool merge_datasets(const MergeConfig &cfg_in,
             ccfg.camera_names = s.camera_names;
             ccfg.calibration_folder = s.calibration_folder;
             ccfg.output_folder = out;
-            ccfg.scale_10x = cfg_in.scale_10x;
+            ccfg.scale_factor = cfg_in.scale_factor;
             std::string cerr;
             bool ok = s.telecentric
                 ? JarvisExport::write_projection_yaml(ccfg, trial, w, h, &cerr)

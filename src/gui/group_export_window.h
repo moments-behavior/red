@@ -34,7 +34,7 @@ struct GroupExportState {
     float margin = 50.0f;
     int seed = 42;
     int jpeg_quality = 95;
-    bool scale_10x = false; // project sources: write calibration so 3D reconstructs in 10x-mm
+    int scale_factor = 1; // project sources: write calibration so 3D reconstructs in (mm × scale_factor)
 
     // Thread-safe progress / handoff (see export_window.h for the protocol).
     std::atomic<bool> in_progress{false};
@@ -156,14 +156,15 @@ inline void DrawGroupExportWindow(GroupExportState &state, AppContext &ctx) {
         ImGui::InputInt("Random Seed", &state.seed);
         ImGui::SliderFloat("Bbox Margin (px, projects only)", &state.margin, 0.0f, 200.0f);
         ImGui::SliderInt("JPEG Quality (projects only)", &state.jpeg_quality, 10, 100);
-        ImGui::Checkbox("Scale 10x (mm->10x-mm; projects only)", &state.scale_10x);
+        ImGui::SliderInt("Scale factor (x1-x100; projects only)", &state.scale_factor, 1, 100);
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip(
                 "Write each project source's calibration so JARVIS reconstructs\n"
-                "3D in 10x-mm, so the integer-mm voxel grid resolves e.g. a ~3mm\n"
-                "fly. Telecentric: projectionMatrix[0:2,0:3]*=0.1; perspective:\n"
-                "T*=10. Dataset sources keep their baked-in scale. Predicted 3D\n"
-                "comes out x10 — divide by 10 for mm. Check for the fly rig.");
+                "3D in (mm x scale factor), so the integer-mm voxel grid resolves\n"
+                "e.g. a ~3mm fly. Telecentric: projectionMatrix[0:2,0:3] is divided\n"
+                "by the factor; perspective: T is multiplied by it. Dataset sources\n"
+                "keep their baked-in scale. Predicted 3D comes out scaled — divide\n"
+                "by the factor for mm. Check for the fly rig.");
 
         ImGui::Separator();
 
@@ -189,7 +190,7 @@ inline void DrawGroupExportWindow(GroupExportState &state, AppContext &ctx) {
                     mcfg.seed = state.seed;
                     mcfg.margin_pixel = state.margin;
                     mcfg.jpeg_quality = state.jpeg_quality;
-                    mcfg.scale_10x = state.scale_10x;
+                    mcfg.scale_factor = state.scale_factor;
 
                     state.images_saved.store(0, std::memory_order_relaxed);
                     state.images_total = total_images;

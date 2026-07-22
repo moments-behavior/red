@@ -17,7 +17,7 @@ struct JarvisExportState {
     float train_ratio = 0.9f;
     int seed = 42;
     int jpeg_quality = 95;
-    bool scale_10x = false; // write calibration so 3D reconstructs in 10x-mm
+    int scale_factor = 1; // write calibration so 3D reconstructs in (mm × scale_factor)
     bool in_progress = false;
     std::string status;
 
@@ -95,14 +95,15 @@ inline void DrawJarvisExportWindow(JarvisExportState &state, AppContext &ctx) {
         ImGui::InputInt("Random Seed", &state.seed);
         ImGui::SliderInt("JPEG Quality", &state.jpeg_quality,
                          10, 100);
-        ImGui::Checkbox("Scale 10x (mm->10x-mm; for tightly-spaced keypoints)",
-                        &state.scale_10x);
+        ImGui::SliderInt("Scale factor (x1-x100; for tightly-spaced keypoints)",
+                         &state.scale_factor, 1, 100);
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip(
-                "Write the calibration so JARVIS reconstructs 3D in 10x-mm,\n"
-                "so the integer-mm voxel grid resolves e.g. a ~3mm fly.\n"
-                "Telecentric: projectionMatrix[0:2,0:3]*=0.1; perspective:\n"
-                "T*=10. Predicted 3D comes out x10 — divide by 10 for mm.\n"
+                "Write the calibration so JARVIS reconstructs 3D in\n"
+                "(mm x scale factor), so the integer-mm voxel grid resolves\n"
+                "e.g. a ~3mm fly. Telecentric: projectionMatrix[0:2,0:3] is\n"
+                "divided by the factor; perspective: T is multiplied by it.\n"
+                "Predicted 3D comes out scaled — divide by the factor for mm.\n"
                 "Check for the fly rig.");
 
         ImGui::Separator();
@@ -137,7 +138,7 @@ inline void DrawJarvisExportWindow(JarvisExportState &state, AppContext &ctx) {
                     jcfg.seed = state.seed;
                     jcfg.jpeg_quality = state.jpeg_quality;
                     jcfg.telecentric = pm.telecentric;
-                    jcfg.scale_10x = state.scale_10x;
+                    jcfg.scale_factor = state.scale_factor;
                     // Telecentric projects have no per-camera YAML, so supply
                     // image dims from the loaded video (ctx.scene).
                     if (ctx.scene) {
