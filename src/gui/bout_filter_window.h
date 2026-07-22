@@ -101,6 +101,7 @@ struct BoutFilterState {
     bool seek_requested = false;
     int  seek_frame = 0;
     int  seek_frame_end = 0;
+    bool loop_bout_enabled = true;   // when false, seeking to a bout does not loop it
     bool export_requested = false;
     std::string export_status;
 };
@@ -676,6 +677,8 @@ inline void DrawBoutFilterWindow(BoutFilterState &st,
             ImGui::OpenPopup("Adjust boundaries");
         }
         ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::Checkbox("Loop bout", &st.loop_bout_enabled);
         ImGui::SameLine();
         ImGui::BeginDisabled(nsel < 1);
         if (ImGui::SmallButton("Accept"))

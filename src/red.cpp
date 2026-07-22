@@ -868,17 +868,25 @@ int main(int argc, char **argv) {
         if (win.bout_filter.seek_requested) {
             win.bout_filter.seek_requested = false;
             int tgt = win.bout_filter.seek_frame;
-            seek_all_cameras(scene, tgt, dc_context->video_fps, ps, true);
+            // Preload ~50 frames before the bout start so the user can scrub
+            // backward (e.g. while nudging the start via "Adjust...") without
+            // waiting on a fresh decode. The buffer fills forward from the
+            // seek target, so seek early and offset display via pause_selected
+            // to land on the actual bout start frame.
+            const int kBoutPreloadFrames = 50;
+            int preload_from = std::max(0, tgt - kBoutPreloadFrames);
+            seek_all_cameras(scene, preload_from, dc_context->video_fps, ps, true);
             current_frame_num = tgt;
-            ps.pause_selected = 0;
+            ps.pause_selected = tgt - preload_from;
             ps.pause_seeked = true;
             for (auto &[key, value] : window_need_decoding)
                 value.store(true);
             // Arm bout looping: playback wraps back to the bout start when it
             // reaches the end. seek_all_cameras above cleared loop_bout; re-arm
             // it here with this bout's range. Any later manual seek clears it.
-            ps.loop_bout  = true;
-            ps.loop_start = win.bout_filter.seek_frame;
+            // loop_start stays pinned to the real bout start, not preload_from.
+            ps.loop_bout  = win.bout_filter.loop_bout_enabled;
+            ps.loop_start = tgt;
             ps.loop_end   = win.bout_filter.seek_frame_end;
         }
         if (win.bout_filter.export_requested) {
@@ -1670,9 +1678,12 @@ int main(int argc, char **argv) {
                             }
 
                             // Read-only overlay of JARVIS predictions from the
-                            // separate store (not in `annotations`, so no manual
-                            // label is required for the frame to show).
-                            if (skeleton.has_skeleton && display.show_keypoints &&
+                            // separate store. Skipped once the frame has its own
+                            // annotation entry (promoted for correction, or
+                            // hand-labeled) so the automatic prediction doesn't
+                            // linger once a frame has manual/human-owned data.
+                            if (!keypoints_find && skeleton.has_skeleton &&
+                                display.show_keypoints &&
                                 win.jarvis_predict.show_prediction_overlay &&
                                 prediction_store.is_open() &&
                                 (int)prediction_store.num_keypoints() ==
@@ -3083,7 +3094,8 @@ int main(int argc, char **argv) {
                 frame_to_show = std::min(frame_to_show, min_decoded_frame);
                 frame_to_show =
                     std::min(frame_to_show, dc_context->total_num_frame - 1);
-                if (ps.loop_bout && frame_to_show > ps.loop_end) {
+                if (ps.loop_bout && win.bout_filter.loop_bout_enabled &&
+                    frame_to_show > ps.loop_end) {
                     // Reached the end of the looped bout: wrap to its start.
                     // seek_all_cameras clears loop_bout, so re-arm afterward
                     // (loop_start/loop_end are untouched by the seek).
