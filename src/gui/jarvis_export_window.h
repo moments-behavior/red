@@ -179,6 +179,19 @@ inline void DrawJarvisExportWindow(JarvisExportState &state, AppContext &ctx) {
                     jcfg.train_ratio = state.train_ratio;
                     jcfg.seed = state.seed;
                     jcfg.jpeg_quality = state.jpeg_quality;
+                    // Video dims as fallback for calibration yamls that
+                    // lack image_width/image_height (e.g. proofread calib
+                    // fetched from the dashboard).
+                    if (ctx.scene) {
+                        for (size_t c = 0; c < pm.camera_names.size() &&
+                                           c < (size_t)ctx.scene->num_cams;
+                             ++c) {
+                            jcfg.fallback_image_width[pm.camera_names[c]] =
+                                (int)ctx.scene->image_width[c];
+                            jcfg.fallback_image_height[pm.camera_names[c]] =
+                                (int)ctx.scene->image_height[c];
+                        }
+                    }
                     if (state.use_frame_range) {
                         jcfg.frame_start = state.frame_start;
                         jcfg.frame_stop = state.frame_stop;

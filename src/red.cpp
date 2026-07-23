@@ -556,12 +556,12 @@ int main(int argc, char **argv) {
                     if (keypoints_find &&
                         ImGui::IsKeyPressed(ImGuiKey_T, false) &&
                         !ImGui::GetIO().WantTextInput) {
-                        if (!pm.camera_params.empty()) {
-                            reprojection(annotations.at(current_frame_num),
-                                         &skeleton, pm.camera_params, scene);
-                        } else {
+                        if (pm.camera_params.empty()) {
                             toasts.push("No calibration loaded",
                                         Toast::Warning, 3.0f);
+                        } else if (annotations.count(current_frame_num)) {
+                            reprojection(annotations.at(current_frame_num),
+                                         &skeleton, pm.camera_params, scene);
                         }
                     }
                 },

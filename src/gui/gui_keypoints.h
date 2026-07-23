@@ -169,6 +169,13 @@ inline void reprojection(FrameAnnotation &fa, SkeletonContext *skeleton,
                 if (view_idx >= (u32)fa.cameras.size()) continue;
                 if (node >= (u32)fa.cameras[view_idx].keypoints.size()) continue;
 
+                // Once triangulated, every view's 2D must mirror the 3D. If
+                // the reprojection falls outside this camera (or behind it),
+                // unlabel the keypoint here — leaving the old 2D labeled
+                // feeds a point inconsistent with the 3D into the *next*
+                // triangulation, which visibly drags all views on every
+                // subsequent Triangulate/T press.
+                bool placed = false;
                 if (telecentric) {
                     // Telecentric reprojection
                     auto reproj = red_math::projectPointTelecentric(
@@ -184,6 +191,7 @@ inline void reprojection(FrameAnnotation &fa, SkeletonContext *skeleton,
                         fa.cameras[view_idx].keypoints[node].x = x;
                         fa.cameras[view_idx].keypoints[node].y = y;
                         fa.cameras[view_idx].keypoints[node].labeled = true;
+                        placed = true;
                     }
                 } else {
                     // Perspective reprojection (matrix-based, safe for det(R)=-1)
@@ -205,8 +213,12 @@ inline void reprojection(FrameAnnotation &fa, SkeletonContext *skeleton,
                             fa.cameras[view_idx].keypoints[node].x = x;
                             fa.cameras[view_idx].keypoints[node].y = y;
                             fa.cameras[view_idx].keypoints[node].labeled = true;
+                            placed = true;
                         }
                     }
+                }
+                if (!placed) {
+                    fa.cameras[view_idx].keypoints[node].labeled = false;
                 }
             }
         }
@@ -379,28 +391,36 @@ inline void refine_3d_ba(FrameAnnotation &fa, SkeletonContext *skeleton,
         fa.kp3d[node].triangulated = true;
         nodes_refined++;
 
-        // Reproject onto every camera (same policy as reprojection()).
+        // Reproject onto every camera (same policy as reprojection()):
+        // in-view cameras get the reprojected 2D; cameras the 3D doesn't
+        // project into are unlabeled so stale 2D can't skew the next
+        // triangulation.
         for (u32 view_idx = 0; view_idx < scene->num_cams; view_idx++) {
             if (view_idx >= (u32)fa.cameras.size()) continue;
             if (node >= (u32)fa.cameras[view_idx].keypoints.size()) continue;
-            if (!is_in_camera_fov(X, camera_params[view_idx].r,
-                                  camera_params[view_idx].tvec,
-                                  camera_params[view_idx].k,
-                                  scene->image_width[view_idx],
-                                  scene->image_height[view_idx]))
-                continue;
-            Eigen::Vector2d proj = red_math::projectPointR(
-                X, camera_params[view_idx].r,
-                camera_params[view_idx].tvec,
-                camera_params[view_idx].k,
-                camera_params[view_idx].dist_coeffs);
-            double x = proj(0);
-            double y = (double)scene->image_height[view_idx] - proj(1);
-            if (x > 0 && x < scene->image_width[view_idx] &&
-                y > 0 && y < scene->image_height[view_idx]) {
-                fa.cameras[view_idx].keypoints[node].x = x;
-                fa.cameras[view_idx].keypoints[node].y = y;
-                fa.cameras[view_idx].keypoints[node].labeled = true;
+            bool placed = false;
+            if (is_in_camera_fov(X, camera_params[view_idx].r,
+                                 camera_params[view_idx].tvec,
+                                 camera_params[view_idx].k,
+                                 scene->image_width[view_idx],
+                                 scene->image_height[view_idx])) {
+                Eigen::Vector2d proj = red_math::projectPointR(
+                    X, camera_params[view_idx].r,
+                    camera_params[view_idx].tvec,
+                    camera_params[view_idx].k,
+                    camera_params[view_idx].dist_coeffs);
+                double x = proj(0);
+                double y = (double)scene->image_height[view_idx] - proj(1);
+                if (x > 0 && x < scene->image_width[view_idx] &&
+                    y > 0 && y < scene->image_height[view_idx]) {
+                    fa.cameras[view_idx].keypoints[node].x = x;
+                    fa.cameras[view_idx].keypoints[node].y = y;
+                    fa.cameras[view_idx].keypoints[node].labeled = true;
+                    placed = true;
+                }
+            }
+            if (!placed) {
+                fa.cameras[view_idx].keypoints[node].labeled = false;
             }
         }
     }

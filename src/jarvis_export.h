@@ -90,7 +90,55 @@ struct ExportConfig {
     int frame_step = 1;   // 1 = every frame, 10 = every 10th, etc.
     int export_num_keypoints = -1; // -1 = all, or truncate to first N keypoints
     std::string export_skeleton_name; // override skeleton name in output (empty = use source)
+    // Per-camera video dimensions, used when the calibration yaml has no
+    // image_width/image_height (those fields are optional in red — e.g.
+    // proofread calibrations fetched from the dashboard omit them).
+    std::map<std::string, int> fallback_image_width;
+    std::map<std::string, int> fallback_image_height;
 };
+
+// Resolve per-camera image dimensions: prefer the calibration yaml's
+// image_width/image_height, fall back to the video dimensions supplied in
+// the config. Errors only if the yaml is unreadable or neither source has
+// the dimensions.
+inline bool resolve_image_dims(const ExportConfig &config,
+                               std::map<std::string, int> &image_width,
+                               std::map<std::string, int> &image_height,
+                               std::string *status) {
+    for (const auto &cam : config.camera_names) {
+        std::string calib_path =
+            config.calibration_folder + "/" + cam + ".yaml";
+        bool have = false;
+        try {
+            opencv_yaml::YamlFile yaml = opencv_yaml::read(calib_path);
+            if (yaml.hasKey("image_width") && yaml.hasKey("image_height")) {
+                image_width[cam] = yaml.getInt("image_width");
+                image_height[cam] = yaml.getInt("image_height");
+                have = true;
+            }
+        } catch (const std::exception &) {
+            if (status)
+                *status = "Error: Cannot open calibration: " + calib_path;
+            return false;
+        }
+        if (!have) {
+            auto wit = config.fallback_image_width.find(cam);
+            auto hit = config.fallback_image_height.find(cam);
+            if (wit != config.fallback_image_width.end() && wit->second > 0 &&
+                hit != config.fallback_image_height.end() && hit->second > 0) {
+                image_width[cam] = wit->second;
+                image_height[cam] = hit->second;
+            } else {
+                if (status)
+                    *status = "Error: " + calib_path +
+                              " has no image_width/image_height and no video "
+                              "dimensions are available for " + cam;
+                return false;
+            }
+        }
+    }
+    return true;
+}
 
 // ---------------------------------------------------------------------------
 // CSV readers — match data_exporter/utils.py
@@ -948,21 +996,10 @@ inline bool export_jarvis_dataset(const ExportConfig &config_in,
     stats.train_frames = static_cast<int>(train_frames.size());
     stats.val_frames = static_cast<int>(val_frames.size());
 
-    // 3. Read image dimensions from calibration files
+    // 3. Read image dimensions (calibration yaml, else video dims)
     std::map<std::string, int> image_width, image_height;
-    for (const auto &cam : config.camera_names) {
-        std::string calib_path =
-            config.calibration_folder + "/" + cam + ".yaml";
-        try {
-            opencv_yaml::YamlFile yaml = opencv_yaml::read(calib_path);
-            image_width[cam] = yaml.getInt("image_width");
-            image_height[cam] = yaml.getInt("image_height");
-        } catch (const std::exception &e) {
-            if (status)
-                *status = "Error: Cannot open calibration: " + calib_path;
-            return false;
-        }
-    }
+    if (!resolve_image_dims(config, image_width, image_height, status))
+        return false;
 
     // Extract trial_name from label_folder (last directory component)
     std::string trial_name = fs::path(config.label_folder).filename().string();
@@ -1158,21 +1195,10 @@ inline bool export_jarvis_dataset(const ExportConfig &config_in,
     stats.train_frames = static_cast<int>(train_frames.size());
     stats.val_frames = static_cast<int>(val_frames.size());
 
-    // 3. Read image dimensions from calibration files
+    // 3. Read image dimensions (calibration yaml, else video dims)
     std::map<std::string, int> image_width, image_height;
-    for (const auto &cam : config.camera_names) {
-        std::string calib_path =
-            config.calibration_folder + "/" + cam + ".yaml";
-        try {
-            opencv_yaml::YamlFile yaml = opencv_yaml::read(calib_path);
-            image_width[cam] = yaml.getInt("image_width");
-            image_height[cam] = yaml.getInt("image_height");
-        } catch (const std::exception &e) {
-            if (status)
-                *status = "Error: Cannot open calibration: " + calib_path;
-            return false;
-        }
-    }
+    if (!resolve_image_dims(config, image_width, image_height, status))
+        return false;
 
     // Extract trial_name from label_folder (last directory component)
     std::string trial_name = fs::path(config.label_folder).filename().string();
