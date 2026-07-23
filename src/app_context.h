@@ -314,6 +314,28 @@ inline void on_project_loaded(AppContext &ctx,
             "Create a new project without those videos.",
             Toast::Warning, 10.0f);
     }
+    // Calibration vs video resolution check: a calibration computed at a
+    // different resolution than the loaded video makes every triangulation /
+    // reprojection land offset ("keypoints jump" on Triangulate). The yaml's
+    // image_width/height are optional, so this only fires when they're set.
+    if (ctx.scene) {
+        for (size_t j = 0; j < ctx.pm.camera_params.size() &&
+                           j < (size_t)ctx.scene->num_cams; ++j) {
+            const auto &cp = ctx.pm.camera_params[j];
+            if (cp.image_width > 0 &&
+                ((u32)cp.image_width != ctx.scene->image_width[j] ||
+                 (u32)cp.image_height != ctx.scene->image_height[j])) {
+                ctx.toasts.push(
+                    ctx.pm.camera_names[j] + ": calibration is " +
+                    std::to_string(cp.image_width) + "x" +
+                    std::to_string(cp.image_height) + " but video is " +
+                    std::to_string(ctx.scene->image_width[j]) + "x" +
+                    std::to_string(ctx.scene->image_height[j]) +
+                    " — triangulation will be offset.",
+                    Toast::Warning, 12.0f);
+            }
+        }
+    }
     std::string label_err;
     std::string most_recent_folder;
     if (!AnnotationCSV::find_most_recent_labels(ctx.pm.keypoints_root_folder,

@@ -7,7 +7,7 @@
 //   - Animal / Session  (populated from /api/bad_frames_all)
 //   - media_folder    auto-derived = /mnt/free/<animal>/<session>
 //   - calibration_folder  auto-fetched from /api/session_calib_zip into
-//                          ~/.cache/red/proofread/<date>/
+//                          ~/.cache/red/proofread/<animal>/<session>/
 // The user still fills in project name, root path, and a skeleton.
 
 #include "imgui.h"
@@ -87,20 +87,24 @@ inline void DrawProofreadDialog(ProofreadDialogState &state,
     const auto &skeleton_map = ctx.skeleton_map;
     const auto &skeleton_dir = ctx.skeleton_dir;
 
-    // Auto-grab this session's calibration from the server into a per-date
-    // cache dir and point pm.calibration_folder at it. Idempotent: if the
-    // yamls are already cached we skip the network round-trip. Called both
-    // when the user picks a session (so calib is ready before Create) and
-    // again at Create time as a safety net.
+    // Auto-grab this session's calibration from the server into a
+    // per-(animal, session) cache dir and point pm.calibration_folder at
+    // it. Keyed by session — NOT by date — because the server resolves the
+    // calibration per session (info.yaml `dataset_name` first), so two
+    // sessions recorded on the same date can legitimately use different
+    // calibrations; a date-keyed cache served whichever session was fetched
+    // first to every later session that day, silently shifting all
+    // triangulations. Idempotent: if the yamls are already cached we skip
+    // the network round-trip. Called both when the user picks a session
+    // (so calib is ready before Create) and again at Create time as a
+    // safety net.
     auto ensure_calib = [&](const std::string &animal,
                             const std::string &session) -> bool {
         if (animal.empty() || session.empty()) return false;
-        const std::string date =
-            session.size() >= 10 ? session.substr(0, 10) : session;
         const char *home = std::getenv("HOME");
         std::filesystem::path calib_dir =
             std::filesystem::path(home ? home : "/tmp") /
-            ".cache" / "red" / "proofread" / date;
+            ".cache" / "red" / "proofread" / animal / session;
         bool have_yaml = false;
         if (std::filesystem::is_directory(calib_dir)) {
             for (const auto &e :
@@ -423,7 +427,7 @@ inline void DrawProofreadDialog(ProofreadDialogState &state,
             LabelCell("Calibration");
             ImGui::TableSetColumnIndex(1);
             ImGui::TextDisabled(
-                "auto-fetched from server on Create  → ~/.cache/red/proofread/<date>/");
+                "auto-fetched from server on Create  → ~/.cache/red/proofread/<animal>/<session>/");
             ImGui::TableSetColumnIndex(2);
             ImGui::Dummy(ImVec2(1, 1));
 

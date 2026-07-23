@@ -332,7 +332,7 @@ the Welcome screen) → **Create Proofread Project**:
 1. **Connect** to the dashboard (default `http://10.102.10.138:8000`). The
    animal/session list is pulled automatically.
 2. **Pick an animal and session.** On select, the session's **calibration is
-   fetched automatically** from the server into `~/.cache/red/proofread/<date>/`.
+   fetched automatically** from the server into `~/.cache/red/proofread/<animal>/<session>/`.
    Those yamls are already red's OpenCV format, so 3D triangulation works with
    no conversion — no manual calibration wiring.
 3. Only **calibrated cameras** load (a camera needs both a `Cam<ID>.yaml` and

@@ -1448,18 +1448,65 @@ int main(int argc, char **argv) {
                     heights[c] = (int)scene->image_height[c];
                 }
 
+                // "All" mode: ensure every camera's buffer actually holds
+                // current_frame_num before predicting (mirrors the Apple
+                // path). Without this, a camera whose decoder lagged a seek
+                // gets JARVIS run on a stale frame — the 2D looks plausible
+                // but triangulating it drags the 3D (and every reprojected
+                // view) away from the true pose.
+                if (win.jarvis_predict.predict_from_all) {
+                    bool needs_seek = false;
+                    for (int c = 0; c < (int)scene->num_cams; ++c) {
+                        auto &slot = scene->display_buffer[c][mh];
+                        if (!slot.frame ||
+                            slot.frame_number.load() != current_frame_num) {
+                            needs_seek = true;
+                            break;
+                        }
+                    }
+                    if (needs_seek) {
+                        seek_all_cameras(scene, current_frame_num,
+                                         dc_context->video_fps, ps, true);
+                        ps.pause_selected = 0;
+                        for (auto &[key, value] : window_need_decoding)
+                            value.store(true);
+                        // Wait for all cameras to fill slot 0 (up to ~2s)
+                        for (int wait = 0; wait < 2000; ++wait) {
+                            bool ready = true;
+                            for (int c = 0; c < (int)scene->num_cams; ++c) {
+                                auto &slot = scene->display_buffer[c][0];
+                                if (slot.available_to_write.load() ||
+                                    !slot.frame ||
+                                    slot.frame_number.load() !=
+                                        current_frame_num) {
+                                    ready = false;
+                                    break;
+                                }
+                            }
+                            if (ready) break;
+                            std::this_thread::sleep_for(
+                                std::chrono::milliseconds(1));
+                        }
+                        mh = 0; // seek resets to slot 0
+                        select_corr_head = mh;
+                    }
+                }
+
                 auto cam_included_lx = [&](int c) -> bool {
                     if (c >= (int)pm.camera_names.size()) return false;
-                    if (win.jarvis_predict.predict_from_all) return true;
-                    // "Shown" mode: only cameras whose window is the active
-                    // docked tab (ImGui::Begin returned true this frame) AND
-                    // whose decoder buffer actually holds current_frame_num.
+                    auto &slot = scene->display_buffer[c][mh];
+                    // Never predict on a frame other than the one being
+                    // labeled, in either mode.
+                    bool fresh = slot.frame != nullptr &&
+                                 slot.frame_number.load() == current_frame_num;
+                    if (win.jarvis_predict.predict_from_all) return fresh;
+                    // "Shown" mode: additionally require the camera's window
+                    // to be the active docked tab (ImGui::Begin returned true
+                    // this frame).
                     auto it = window_is_visible.find(pm.camera_names[c]);
                     if (it == window_is_visible.end() || !it->second)
                         return false;
-                    auto &slot = scene->display_buffer[c][mh];
-                    return slot.frame != nullptr &&
-                           slot.frame_number.load() == current_frame_num;
+                    return fresh;
                 };
 
                 std::vector<const uint8_t *> rgb_bufs(scene->num_cams, nullptr);
@@ -1505,11 +1552,11 @@ int main(int argc, char **argv) {
                     included_names += nm;
                 }
 
-                // Clear stale Predicted keypoints on cameras we intentionally
-                // skipped this run so they don't bias triangulation or display
-                // as "fresh" results.
-                if (!win.jarvis_predict.predict_from_all &&
-                    annotations.count(current_frame_num)) {
+                // Clear stale Predicted keypoints on cameras we skipped this
+                // run (hidden window, or buffer not holding current_frame_num)
+                // so they don't bias triangulation or display as "fresh"
+                // results.
+                if (annotations.count(current_frame_num)) {
                     auto &fa = annotations.at(current_frame_num);
                     for (int c = 0; c < (int)scene->num_cams && c < (int)fa.cameras.size(); ++c) {
                         if (rgb_bufs[c] != nullptr) continue;

@@ -35,8 +35,10 @@ Server-driven form (mirrors the annotation-project dialog):
 - **Animal** / **Session** combos, populated from the server. The session
   combo shows each session's bad-frame count.
 - On session-select, **calibration is fetched automatically** from
-  `/api/session_calib_zip` into `~/.cache/red/proofread/<date>/`, and
-  `calibration_folder` is pointed at it.
+  `/api/session_calib_zip` into `~/.cache/red/proofread/<animal>/<session>/`,
+  and `calibration_folder` is pointed at it. The cache is keyed per session
+  (not per date) because the server resolves calibration per session — two
+  same-date sessions can use different calibrations.
 - **Only calibrated cameras load**: a camera is included only if it has both
   a `Cam<ID>.yaml` in the fetched calib *and* a `Cam<ID>.mp4` in the
   recording. Uncalibrated cams on disk are skipped.

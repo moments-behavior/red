@@ -220,6 +220,13 @@ load_videos(std::map<std::string, std::string> &selected_files,
     // camera_names stays in sync with demuxers after skipping failures.
     std::vector<std::string> loaded_cam_names;
 
+    // setup_project loads pm.camera_params in pm.camera_names order. If a
+    // camera is skipped below, camera_params must be re-paired by name —
+    // otherwise every camera after the skip silently triangulates and
+    // reprojects with its neighbor's calibration.
+    const std::vector<std::string> orig_cam_names = pm.camera_names;
+    const std::vector<CameraParams> orig_cam_params = pm.camera_params;
+
     if (selected_files.empty()) {
         for (const auto &cam_string : pm.camera_names) {
             std::map<std::string, std::string> m;
@@ -282,6 +289,32 @@ load_videos(std::map<std::string, std::string> &selected_files,
             dc_context->video_fps = demuxers[0]->GetFramerate();
         }
         pm.camera_names = loaded_cam_names;
+    }
+
+    // Re-pair camera_params with the cameras that actually loaded.
+    if (!orig_cam_params.empty() &&
+        orig_cam_params.size() == orig_cam_names.size()) {
+        std::vector<CameraParams> aligned;
+        aligned.reserve(loaded_cam_names.size());
+        bool all_found = true;
+        for (const std::string &nm : loaded_cam_names) {
+            auto it = std::find(orig_cam_names.begin(), orig_cam_names.end(), nm);
+            if (it == orig_cam_names.end()) {
+                all_found = false;
+                break;
+            }
+            aligned.push_back(orig_cam_params[it - orig_cam_names.begin()]);
+        }
+        if (all_found) {
+            pm.camera_params = std::move(aligned);
+        } else {
+            // A loaded camera has no matching calibration entry — better to
+            // disable triangulation than to run it with mismatched params.
+            std::cerr << "[load_videos] Loaded cameras do not match the "
+                         "calibrated camera set; clearing camera_params"
+                      << std::endl;
+            pm.camera_params.clear();
+        }
     }
 
     if (demuxers.empty()) {
