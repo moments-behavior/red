@@ -31,6 +31,8 @@
 #include "jarvis_predict_export.h"
 #include "jarvis_predict_import.h"
 #include "prediction_store.h"
+#include "prediction_merge.h"
+#include "gui/switch_skeleton_window.h"
 #include "gui/prediction_overlay.h"
 #include "gui/bout_filter_preview.h"
 #include "gui/annotation_dialog.h"
@@ -2447,9 +2449,13 @@ int main(int argc, char **argv) {
 #endif
                         char ts[32];
                         std::strftime(ts, sizeof(ts), "%Y%m%d-%H%M%S", &tmb);
-                        bp.store_path =
-                            (store_dir / (std::string("pred_") + ts + ".rpred"))
-                                .string();
+                        // A model-set pass points the writer at a private temp
+                        // store it merges + deletes later; otherwise a fresh
+                        // timestamped store per batch.
+                        bp.store_path = !bp.store_path_override.empty()
+                            ? bp.store_path_override
+                            : (store_dir / (std::string("pred_") + ts + ".rpred"))
+                                  .string();
                         if (!prediction_writer.open(bp.store_path,
                                                     skeleton.num_nodes)) {
                             // Can't write the store — fall back to loading
@@ -3012,6 +3018,318 @@ int main(int argc, char **argv) {
                     }
 
                     case Phase::IDLE:
+                        break;
+                    }
+                }
+            }
+
+            // --- Multi-model "set" batch controller ---
+            // Runs the active model set as a sequence of single-model batches
+            // (each into a private temp store), then merges those stores into
+            // one combined store and switches the project to a concatenated
+            // skeleton so the merged result displays. Sits on top of the batch
+            // state machine above, which it drives one pass at a time.
+            {
+                auto &jp = win.jarvis_predict;
+                auto &bp = win.jarvis_predict;   // same struct; alias for clarity
+                using SetPhase = JarvisPredictState::SetPhase;
+                using PredDest = JarvisPredictState::PredDest;
+
+                auto any_loaded = [&]() -> bool {
+                    bool a = jarvis_state.loaded;
+#ifdef __APPLE__
+                    a = a || jarvis_coreml_state.loaded;
+#elif defined(_WIN32)
+                    a = a || jarvis_trt_state.loaded;
+#endif
+#if defined(__linux__) || defined(_WIN32)
+#if defined(RED_HAS_ONNXRUNTIME) || defined(RED_HAS_TENSORRT_HN)
+                    a = a || jarvis_hn_state.loaded;
+#endif
+#endif
+                    return a;
+                };
+                auto load_model = [&](int model_index) -> bool {
+                    if (model_index < 0 ||
+                        model_index >= (int)pm.jarvis_models.size())
+                        return false;
+                    std::string base = pm.project_path + "/" +
+                        pm.jarvis_models[model_index].relative_path;
+                    jarvis_load_from_dir(base, jarvis_state
+#ifdef __APPLE__
+                        , jarvis_coreml_state
+#elif defined(_WIN32)
+                        , jarvis_trt_state
+#endif
+#if defined(__linux__) || defined(_WIN32)
+#if defined(RED_HAS_ONNXRUNTIME) || defined(RED_HAS_TENSORRT_HN)
+                        , jarvis_hn_state
+#endif
+#endif
+                    );
+                    return any_loaded();
+                };
+                auto store_dir = [&]() {
+                    return std::filesystem::path(pm.project_path) /
+                           "predictions" / "red_store";
+                };
+                auto set_abort = [&](const std::string &msg) {
+                    jp.set_status = msg;
+                    printf("[Set] %s\n", msg.c_str());
+                    // Best-effort cleanup of any temp stores written so far.
+                    std::error_code ec;
+                    for (auto &p : jp.set_passes) {
+                        if (p.store_path.empty()) continue;
+                        std::filesystem::remove(p.store_path, ec);
+                        std::filesystem::path side = p.store_path;
+                        side.replace_extension(".json");
+                        std::filesystem::remove(side, ec);
+                    }
+                    jp.export_predictions3D = jp.set_saved_export;
+                    jp.store_path_override.clear();
+                    jp.set_passes.clear();
+                    jp.set_running = false;
+                    jp.set_phase = SetPhase::IDLE;
+                };
+
+                // --- Start a set run: validate + build the pass list ---
+                if (jp.set_requested && !jp.set_running && !bp.batch_running) {
+                    jp.set_requested = false;
+                    if (pm.active_jarvis_model_set < 0 ||
+                        pm.active_jarvis_model_set >=
+                            (int)pm.jarvis_model_sets.size()) {
+                        jp.set_status = "No model set selected.";
+                    } else if (pm.jarvis_model_sets[pm.active_jarvis_model_set]
+                                   .members.empty()) {
+                        jp.set_status = "Selected model set has no members.";
+                    } else if (pm.project_path.empty() || !ps.video_loaded) {
+                        jp.set_status = "Open a project and load video first.";
+                    } else if (project_has_any_manual_labels(annotations)) {
+                        jp.set_status =
+                            "Project has manual labels — a model set switches "
+                            "skeletons between passes, which would re-index them. "
+                            "Clear/export manual labels first.";
+                    } else {
+                        const auto &set =
+                            pm.jarvis_model_sets[pm.active_jarvis_model_set];
+                        jp.set_passes.clear();
+                        std::string err;
+                        bool ok = true;
+                        for (const auto &m : set.members) {
+                            if (m.model_index < 0 ||
+                                m.model_index >= (int)pm.jarvis_models.size()) {
+                                err = "member references an unknown model";
+                                ok = false; break;
+                            }
+                            SkeletonContext sk;
+                            if (!resolve_member_skeleton(m, skeleton_map, sk, &err)) {
+                                ok = false; break;
+                            }
+                            JarvisPredictState::SetPass pass;
+                            pass.model_index = m.model_index;
+                            pass.skel_json = m.skeleton_from_json;
+                            pass.skel_file = m.skeleton_file;
+                            pass.skel_name = m.skeleton_name;
+                            pass.num_kp = sk.num_nodes;
+                            jp.set_passes.push_back(std::move(pass));
+                        }
+                        if (!ok) {
+                            jp.set_status = "Cannot start set: " + err;
+                            jp.set_passes.clear();
+                        } else {
+                            jp.set_name = set.name;
+                            jp.set_pass_idx = 0;
+                            jp.set_batch_start = bp.batch_start;
+                            jp.set_batch_end = bp.batch_end;
+                            jp.set_batch_step = bp.batch_step;
+                            jp.set_saved_export = bp.export_predictions3D;
+                            jp.set_cancel_requested = false;
+                            jp.set_running = true;
+                            jp.set_phase = SetPhase::START_PASS;
+                            jp.set_status = "Running set '" + set.name + "' (" +
+                                std::to_string(jp.set_passes.size()) + " models)...";
+                            printf("[Set] %s\n", jp.set_status.c_str());
+                        }
+                    }
+                }
+
+                if (jp.set_running) {
+                    switch (jp.set_phase) {
+                    case SetPhase::START_PASS: {
+                        int idx = jp.set_pass_idx;
+                        auto &pass = jp.set_passes[idx];
+                        // Switch to this model's skeleton (clears annotations +
+                        // closes any open store — safe, no manual labels).
+                        std::string err;
+                        if (!switch_project_skeleton(
+                                ctx, prediction_store, jp, win.bout_filter,
+                                pass.skel_json, pass.skel_file, pass.skel_name,
+                                &err)) {
+                            set_abort("Set failed switching skeleton: " + err);
+                            break;
+                        }
+                        if (!load_model(pass.model_index)) {
+                            set_abort("Set failed loading model '" +
+                                pm.jarvis_models[pass.model_index].name + "'.");
+                            break;
+                        }
+                        // Configure the underlying batch for this pass.
+                        std::error_code ec;
+                        std::filesystem::create_directories(store_dir(), ec);
+                        std::string tmp = (store_dir() /
+                            ("pred_set_tmp_" + std::to_string(idx) + ".rpred"))
+                            .string();
+                        pass.store_path = tmp;
+                        bp.store_path_override = tmp;
+                        bp.batch_prediction_dest = PredDest::Store;
+                        bp.export_predictions3D = false;  // export the merged store, not each pass
+                        bp.batch_start = jp.set_batch_start;
+                        bp.batch_end = jp.set_batch_end;
+                        bp.batch_step = jp.set_batch_step;
+                        bp.batch_requested = true;
+                        jp.set_pass_seen_running = false;
+                        jp.set_phase = SetPhase::WAIT_PASS;
+                        printf("[Set] Pass %d/%d: model '%s' (%d kp)\n",
+                               idx + 1, (int)jp.set_passes.size(),
+                               pm.jarvis_models[pass.model_index].name.c_str(),
+                               pass.num_kp);
+                        break;
+                    }
+                    case SetPhase::WAIT_PASS: {
+                        if (bp.batch_running) {
+                            jp.set_pass_seen_running = true;
+                            break;
+                        }
+                        if (!jp.set_pass_seen_running) break;  // not started yet
+                        // Pass finished. store_path_override already recorded in
+                        // pass.store_path during START_PASS.
+                        bp.store_path_override.clear();
+                        if (jp.set_cancel_requested) {
+                            set_abort("Set cancelled.");
+                            break;
+                        }
+                        jp.set_pass_idx++;
+                        jp.set_phase = (jp.set_pass_idx < (int)jp.set_passes.size())
+                            ? SetPhase::START_PASS : SetPhase::MERGE;
+                        break;
+                    }
+                    case SetPhase::MERGE: {
+                        // Build the concatenated skeleton from the members.
+                        std::vector<SkeletonContext> parts;
+                        std::string err;
+                        bool ok = true;
+                        for (auto &pass : jp.set_passes) {
+                            ProjectManager::JarvisModelSetMember m;
+                            m.model_index = pass.model_index;
+                            m.skeleton_from_json = pass.skel_json;
+                            m.skeleton_file = pass.skel_file;
+                            m.skeleton_name = pass.skel_name;
+                            SkeletonContext sk;
+                            if (!resolve_member_skeleton(m, skeleton_map, sk, &err)) {
+                                ok = false; break;
+                            }
+                            parts.push_back(std::move(sk));
+                        }
+                        if (!ok) { set_abort("Set merge failed: " + err); break; }
+
+                        SkeletonContext combined;
+                        std::string comb_name = jp.set_name.empty()
+                            ? "combined" : (jp.set_name + "_combined");
+                        build_combined_skeleton(parts, comb_name, combined);
+
+                        std::error_code ec;
+                        std::filesystem::path skel_dir =
+                            std::filesystem::path(pm.project_path) / "skeletons";
+                        std::filesystem::create_directories(skel_dir, ec);
+                        std::string skel_path =
+                            (skel_dir / (comb_name + ".json")).string();
+                        if (!write_skeleton_json(combined, skel_path, &err)) {
+                            set_abort("Set merge failed: " + err); break;
+                        }
+                        // Switch the project to the combined skeleton (closes the
+                        // per-pass store, clears annotations, persists .redproj).
+                        if (!switch_project_skeleton(
+                                ctx, prediction_store, jp, win.bout_filter,
+                                /*json*/ true, skel_path, comb_name, &err)) {
+                            set_abort("Set merge failed switching to combined "
+                                      "skeleton: " + err);
+                            break;
+                        }
+
+                        // Merge the per-pass temp stores into a timestamped store.
+                        std::vector<std::string> inputs;
+                        for (auto &p : jp.set_passes)
+                            if (!p.store_path.empty()) inputs.push_back(p.store_path);
+                        std::time_t t = std::time(nullptr);
+                        std::tm tmb{};
+#ifdef _WIN32
+                        localtime_s(&tmb, &t);
+#else
+                        localtime_r(&t, &tmb);
+#endif
+                        char ts[32];
+                        std::strftime(ts, sizeof(ts), "%Y%m%d-%H%M%S", &tmb);
+                        std::string final_path =
+                            (store_dir() / (std::string("pred_") + ts + ".rpred"))
+                            .string();
+                        if (!predstore::merge_concat(inputs, final_path, &err)) {
+                            set_abort("Set merge failed: " + err); break;
+                        }
+                        // Delete the temp per-pass stores + sidecars.
+                        for (auto &p : jp.set_passes) {
+                            if (p.store_path.empty()) continue;
+                            std::filesystem::remove(p.store_path, ec);
+                            std::filesystem::path side = p.store_path;
+                            side.replace_extension(".json");
+                            std::filesystem::remove(side, ec);
+                        }
+                        // Open the combined store as active.
+                        if (!prediction_store.open(final_path)) {
+                            set_abort("Set merge wrote store but could not open "
+                                      "it: " + final_path);
+                            break;
+                        }
+                        jp.active_store_path = final_path;
+                        jp.store_path = final_path;
+                        uint32_t stored = prediction_store.stored_frames();
+                        // Provenance sidecar (model_name = set name).
+                        nlohmann::json meta = {
+                            {"store_file",
+                             std::filesystem::path(final_path).filename().string()},
+                            {"media_folder", pm.media_folder},
+                            {"model_name", jp.set_name},
+                            {"skeleton", comb_name},
+                            {"num_keypoints", (int)combined.num_nodes},
+                            {"frame_start", jp.set_batch_start},
+                            {"frame_end", jp.set_batch_end},
+                            {"n_stored", (int)stored},
+                            {"fps", (int)prediction_store.fps()},
+                            {"model_set", true},
+                        };
+                        std::filesystem::path side = final_path;
+                        side.replace_extension(".json");
+                        std::ofstream sf(side);
+                        if (sf) sf << meta.dump(2) << "\n";
+
+                        jp.export_predictions3D = jp.set_saved_export;
+                        jp.store_path_override.clear();
+                        jp.store_list_dirty = true;
+                        jp.set_status = "Model set '" + jp.set_name +
+                            "' complete: " + std::to_string(stored) +
+                            " frames, " + std::to_string(combined.num_nodes) +
+                            " keypoints → " +
+                            std::filesystem::path(final_path).filename().string();
+                        printf("[Set] %s\n", jp.set_status.c_str());
+                        jp.set_phase = SetPhase::DONE;
+                        break;
+                    }
+                    case SetPhase::DONE: {
+                        jp.set_passes.clear();
+                        jp.set_running = false;
+                        jp.set_phase = SetPhase::IDLE;
+                        break;
+                    }
+                    case SetPhase::IDLE:
                         break;
                     }
                 }

@@ -129,6 +129,39 @@ struct JarvisPredictState {
     float batch_decode_ms = 0;  // total time waiting for decoders to fill buffers
     int   batch_chunks = 0;     // number of seek/fill cycles
 
+    // --- Multi-model "set" batch ---
+    // Runs each member model over the whole [batch_start, batch_end] range as
+    // its own pass (reusing the single-model BatchPhase state machine), then
+    // merges the per-pass stores into one combined store and switches the
+    // project to a concatenated skeleton so the merged store displays.
+    bool set_requested = false;   // UI "Run Model Set" → main loop starts it
+    bool set_running = false;
+    std::string set_name;         // active set's name (status + sidecar)
+    struct SetPass {
+        int model_index = -1;
+        bool skel_json = false;
+        std::string skel_file, skel_name;
+        int num_kp = 0;
+        std::string store_path;   // temp .rpred this pass wrote
+    };
+    std::vector<SetPass> set_passes;
+    int set_pass_idx = 0;
+    enum class SetPhase { IDLE, START_PASS, WAIT_PASS, MERGE, DONE };
+    SetPhase set_phase = SetPhase::IDLE;
+    bool set_pass_seen_running = false;  // WAIT_PASS: inner batch actually began
+    bool set_cancel_requested = false;   // UI cancel → abort the whole set
+    bool set_saved_export = false;       // remembers export_predictions3D across passes
+    int set_batch_start = 0, set_batch_end = 0, set_batch_step = 1;
+    std::string set_status;              // shown in the panel
+
+    // When non-empty, the next Batch Predict writes its store to exactly this
+    // path instead of a fresh timestamped one. The set controller uses this to
+    // point each pass at a private temp store it later merges + deletes.
+    std::string store_path_override;
+
+    // Set-editor UI scratch (not persisted).
+    std::string new_set_name;
+
     // Conversion state (thread-safe via shared_ptr)
     std::shared_ptr<ConvertJob> convert_job;
     std::string convert_status;  // UI-side copy, updated from job each frame
@@ -468,6 +501,145 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
                 ImGui::SameLine();
                 ImGui::TextDisabled("(%d joints, %dx%d)", m.num_joints,
                                     m.keypoint_input_size, m.keypoint_input_size);
+            }
+        }
+
+        // --- Model Sets (run several models on one video → merged output) ---
+        // A set lists models that each track a DIFFERENT group of keypoints; the
+        // batch runs them one after another over the same frames and concatenates
+        // their outputs. Each member carries its own skeleton (the model↔skeleton
+        // mapping is positional), so the batch switches skeletons between passes
+        // and finishes on a synthesized combined skeleton.
+        if (!pm.jarvis_models.empty()) {
+            ImGui::SeparatorText("Model Sets");
+
+            auto save_sets = [&]() {
+                if (pm.project_path.empty() || pm.project_name.empty()) return;
+                std::filesystem::path redproj =
+                    std::filesystem::path(pm.project_path) /
+                    (pm.project_name + ".redproj");
+                save_project_manager_json(pm, redproj);
+            };
+
+            const char *set_preview =
+                (pm.active_jarvis_model_set >= 0 &&
+                 pm.active_jarvis_model_set < (int)pm.jarvis_model_sets.size())
+                    ? pm.jarvis_model_sets[pm.active_jarvis_model_set].name.c_str()
+                    : "(none)";
+            ImGui::SetNextItemWidth(180);
+            if (ImGui::BeginCombo("##jarvis_set_combo", set_preview)) {
+                if (ImGui::Selectable("(none)", pm.active_jarvis_model_set < 0))
+                    pm.active_jarvis_model_set = -1;
+                for (int i = 0; i < (int)pm.jarvis_model_sets.size(); ++i) {
+                    bool sel = (i == pm.active_jarvis_model_set);
+                    std::string lbl = pm.jarvis_model_sets[i].name +
+                                      "##set" + std::to_string(i);
+                    if (ImGui::Selectable(lbl.c_str(), sel)) {
+                        pm.active_jarvis_model_set = i;
+                        save_sets();
+                    }
+                }
+                ImGui::EndCombo();
+            }
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(120);
+            ImGui::InputTextWithHint("##new_set_name", "new set name",
+                                     &state.new_set_name);
+            ImGui::SameLine();
+            bool can_new = !state.new_set_name.empty();
+            if (!can_new) ImGui::BeginDisabled();
+            if (ImGui::Button("New Set")) {
+                ProjectManager::JarvisModelSet s;
+                s.name = state.new_set_name;
+                pm.jarvis_model_sets.push_back(s);
+                pm.active_jarvis_model_set = (int)pm.jarvis_model_sets.size() - 1;
+                state.new_set_name.clear();
+                save_sets();
+            }
+            if (!can_new) ImGui::EndDisabled();
+
+            if (pm.active_jarvis_model_set >= 0 &&
+                pm.active_jarvis_model_set < (int)pm.jarvis_model_sets.size()) {
+                auto &set = pm.jarvis_model_sets[pm.active_jarvis_model_set];
+                bool changed = false;
+
+                // Preset skeleton names for the per-member picker.
+                std::vector<const char *> skel_labels;
+                skel_labels.reserve(ctx.skeleton_map.size());
+                for (auto &kv : ctx.skeleton_map)
+                    skel_labels.push_back(kv.first.c_str());
+
+                int erase_member = -1;
+                for (int mi = 0; mi < (int)set.members.size(); ++mi) {
+                    auto &mem = set.members[mi];
+                    ImGui::PushID(mi);
+                    ImGui::Text("%d.", mi + 1);
+                    ImGui::SameLine();
+                    const char *mprev =
+                        (mem.model_index >= 0 &&
+                         mem.model_index < (int)pm.jarvis_models.size())
+                            ? pm.jarvis_models[mem.model_index].name.c_str()
+                            : "(pick model)";
+                    ImGui::SetNextItemWidth(150);
+                    if (ImGui::BeginCombo("##mem_model", mprev)) {
+                        for (int j = 0; j < (int)pm.jarvis_models.size(); ++j) {
+                            bool sel = (j == mem.model_index);
+                            if (ImGui::Selectable(
+                                    pm.jarvis_models[j].name.c_str(), sel)) {
+                                mem.model_index = j;
+                                changed = true;
+                            }
+                        }
+                        ImGui::EndCombo();
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Checkbox("JSON", &mem.skeleton_from_json))
+                        changed = true;
+                    ImGui::SameLine();
+                    if (mem.skeleton_from_json) {
+                        ImGui::SetNextItemWidth(150);
+                        if (ImGui::InputTextWithHint("##mem_skel_file",
+                                "skeleton.json", &mem.skeleton_file))
+                            changed = true;
+                    } else {
+                        int cur = 0;
+                        for (int k = 0; k < (int)skel_labels.size(); ++k)
+                            if (mem.skeleton_name == skel_labels[k]) { cur = k; break; }
+                        ImGui::SetNextItemWidth(150);
+                        if (ImGui::Combo("##mem_skel_preset", &cur,
+                                skel_labels.data(), (int)skel_labels.size())) {
+                            mem.skeleton_name = skel_labels[cur];
+                            changed = true;
+                        } else if (mem.skeleton_name.empty() && !skel_labels.empty()) {
+                            mem.skeleton_name = skel_labels[cur];
+                        }
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::SmallButton("Remove")) erase_member = mi;
+                    ImGui::PopID();
+                }
+                if (erase_member >= 0) {
+                    set.members.erase(set.members.begin() + erase_member);
+                    changed = true;
+                }
+                if (ImGui::Button("+ Add Model")) {
+                    ProjectManager::JarvisModelSetMember mem;
+                    // Seed the model + skeleton from the current selection.
+                    mem.model_index = pm.active_jarvis_model;
+                    mem.skeleton_from_json = pm.load_skeleton_from_json;
+                    mem.skeleton_file = pm.skeleton_file;
+                    mem.skeleton_name = pm.skeleton_name;
+                    set.members.push_back(mem);
+                    changed = true;
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Delete Set")) {
+                    pm.jarvis_model_sets.erase(
+                        pm.jarvis_model_sets.begin() + pm.active_jarvis_model_set);
+                    pm.active_jarvis_model_set = -1;
+                    changed = true;
+                }
+                if (changed) save_sets();
             }
         }
 
@@ -1215,7 +1387,29 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
         ImGui::Separator();
         ImGui::SeparatorText("Batch Predict");
 
-        if (state.batch_running) {
+        if (state.set_running) {
+            // A model set is running: show which pass, reuse the batch progress
+            // bar for the active pass, and offer a set-level cancel.
+            ImGui::Text("Model set '%s' — pass %d / %d",
+                        state.set_name.c_str(), state.set_pass_idx + 1,
+                        (int)state.set_passes.size());
+            if (state.batch_running) {
+                float progress = state.batch_total > 0
+                    ? (float)(state.batch_completed + state.batch_skipped) /
+                          state.batch_total : 0.0f;
+                char overlay[64];
+                snprintf(overlay, sizeof(overlay), "%d / %d (frame %d)",
+                         state.batch_completed, state.batch_total,
+                         state.batch_current);
+                ImGui::ProgressBar(progress, ImVec2(-FLT_MIN, 0), overlay);
+            } else {
+                ImGui::TextDisabled("(switching model / merging...)");
+            }
+            if (ImGui::Button("Cancel Set")) {
+                state.set_cancel_requested = true;
+                state.batch_cancel_requested = true;
+            }
+        } else if (state.batch_running) {
             // Progress display
             float progress = state.batch_total > 0
                 ? (float)(state.batch_completed + state.batch_skipped) / state.batch_total : 0.0f;
@@ -1268,13 +1462,38 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
                     "Legacy behavior: load predictions as labeled frames. Floods\n"
                     "the Labeling Tool when predicting large sections.");
 
-            bool can_batch = can_predict &&
+            bool valid_range =
                 state.batch_end >= state.batch_start && state.batch_step > 0;
+            bool can_batch = can_predict && valid_range;
             if (!can_batch) ImGui::BeginDisabled();
             if (ImGui::Button("Start Batch Predict")) {
                 state.batch_requested = true;
             }
             if (!can_batch) ImGui::EndDisabled();
+
+            // Run the active model set over the same [Start, End] range. Each
+            // member model runs as its own pass; outputs are concatenated into
+            // one combined store (see the set controller in red.cpp).
+            bool set_active =
+                pm.active_jarvis_model_set >= 0 &&
+                pm.active_jarvis_model_set < (int)pm.jarvis_model_sets.size() &&
+                !pm.jarvis_model_sets[pm.active_jarvis_model_set].members.empty();
+            if (set_active) {
+                ImGui::SameLine();
+                bool can_set = valid_range;
+                if (!can_set) ImGui::BeginDisabled();
+                std::string btn = "Run Model Set (" +
+                    pm.jarvis_model_sets[pm.active_jarvis_model_set].name + ")";
+                if (ImGui::Button(btn.c_str())) {
+                    state.set_requested = true;
+                }
+                if (!can_set) ImGui::EndDisabled();
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip(
+                        "Run each model in the set over this frame range and\n"
+                        "concatenate their keypoints into one combined store.\n"
+                        "Requires no manual labels (skeletons switch per pass).");
+            }
         }
 
         if (!state.batch_status.empty()) {
@@ -1282,6 +1501,17 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
             ImGui::TextColored(
                 is_done ? ImVec4(0.5f, 1, 0.5f, 1) : ImVec4(1, 0.8f, 0, 1),
                 "%s", state.batch_status.c_str());
+        }
+
+        if (!state.set_status.empty()) {
+            bool is_error =
+                state.set_status.find("failed") != std::string::npos ||
+                state.set_status.find("Cannot") != std::string::npos ||
+                state.set_status.find("No ") != std::string::npos ||
+                state.set_status.find("cancelled") != std::string::npos;
+            ImGui::TextColored(
+                is_error ? ImVec4(1, 0.5f, 0.2f, 1) : ImVec4(0.5f, 1, 0.5f, 1),
+                "%s", state.set_status.c_str());
         }
 
         if (!state.export_status.empty()) {
