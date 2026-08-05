@@ -37,6 +37,7 @@
 #include "gui/bout_filter_preview.h"
 #include "gui/annotation_dialog.h"
 #include "gui/calibration_tool_window.h"
+#include "gui/crop_designer.h"
 #include "gui/labeling_tool_window.h"
 #include "gui/project_window.h"
 #include "gui/settings_window.h"
@@ -1718,6 +1719,10 @@ int main(int argc, char **argv) {
                             u32 frame = (u32)current_frame_num;
                             int nn = skeleton.num_nodes;
                             int nc = (int)scene->num_cams;
+
+                            // Crop designer (cropped-sensor calibration wizard)
+                            crop_designer_draw(win.calibration, annotations,
+                                               j, iw, ih);
 
                             // Bbox tool
                             if (win.bbox.enabled) {

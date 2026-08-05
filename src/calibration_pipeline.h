@@ -2143,10 +2143,19 @@ inline bool global_registration(
 inline bool write_calibration(
     const std::vector<CameraPose> &poses,
     const std::vector<std::string> &cam_names,
-    const std::string &output_folder, int image_width, int image_height,
+    const std::string &output_folder,
+    const std::vector<int> &image_widths,
+    const std::vector<int> &image_heights,
     std::string *status) {
 
     namespace fs = std::filesystem;
+
+    if (image_widths.size() != poses.size() ||
+        image_heights.size() != poses.size()) {
+        if (status)
+            *status = "Error: image dimension count does not match camera count";
+        return false;
+    }
 
     // Create output directory
     std::error_code ec;
@@ -2164,8 +2173,8 @@ inline bool write_calibration(
         try {
             opencv_yaml::YamlWriter writer(filename);
 
-            writer.writeScalar("image_width", image_width);
-            writer.writeScalar("image_height", image_height);
+            writer.writeScalar("image_width", image_widths[i]);
+            writer.writeScalar("image_height", image_heights[i]);
 
             // Camera matrix (3×3)
             writer.writeMatrix("camera_matrix", poses[i].K);
@@ -2199,6 +2208,18 @@ inline bool write_calibration(
         *status = "Wrote " + std::to_string(poses.size()) +
                   " calibration files to " + output_folder;
     return true;
+}
+
+// Broadcast wrapper for rigs where every camera shares one image size.
+inline bool write_calibration(
+    const std::vector<CameraPose> &poses,
+    const std::vector<std::string> &cam_names,
+    const std::string &output_folder, int image_width, int image_height,
+    std::string *status) {
+    return write_calibration(poses, cam_names, output_folder,
+                             std::vector<int>(poses.size(), image_width),
+                             std::vector<int>(poses.size(), image_height),
+                             status);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -3778,7 +3799,9 @@ inline CalibrationResult run_experimental_pipeline(
     }
     if(progress) progress->current_step.store(7, std::memory_order_relaxed);
     if(status)*status="Step 7: Writing files...";
-    if(!write_calibration(poses,config.cam_ordered,outf,result.image_width,result.image_height,status)){result.error=status?*status:"Write failed";return result;}
+    { std::vector<int> img_ws(nc), img_hs(nc);
+      for(int c=0;c<nc;c++){const auto&ci=intrinsics.at(config.cam_ordered[c]);img_ws[c]=ci.image_width;img_hs[c]=ci.image_height;}
+      if(!write_calibration(poses,config.cam_ordered,outf,img_ws,img_hs,status)){result.error=status?*status:"Write failed";return result;} }
     write_intermediate_output(config,intrinsics,landmarks,poses,points_3d,outf);
     // Collect final residuals and write database
     double te=0;int to=0;result.all_reproj_errors.clear();

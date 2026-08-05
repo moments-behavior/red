@@ -336,6 +336,7 @@ enum class CalibSubtype {
     PointSourceRefinement,   // Load existing YAML + PointSource videos → refine
     PointSourceFromScratch,  // YAML intrinsics-only + PointSource + global reg
     Telecentric,             // DLT with known landmarks
+    CroppedRefinement,       // Full-frame calib + posts → sensor-ROI crop refine
 };
 
 struct CalibProject {
@@ -401,6 +402,17 @@ struct CalibProject {
     int dlt_method = -1;                  // -1 = not run, 0/1/2 = Linear/k1/k1k2
     double dlt_mean_rmse = 0;
     std::vector<double> dlt_per_camera_rmse;
+
+    // Cropped-sensor refinement (CalibSubtype::CroppedRefinement).
+    // Stage-1 YAML input reuses `calibration_folder` above.
+    std::string posts_fullframe_media_folder; // stage-1b full-frame post videos
+    std::string cropped_media_folder;         // stage-2 cropped post videos
+    std::string posts_3d_file;                // triangulated posts CSV
+    std::string crop_info_file;               // imported/generated crop spec
+    std::string cropped_calibration_folder;   // crop-transform output
+    std::string cropped_refined_folder;       // stage-2 refined output
+    std::string orange_config_folder;         // orange {serial}.json configs to update
+    int posts_num = 6;                        // number of posts to click
 
     // Mode helpers
     bool has_aruco() const { return !config_file.empty() || !aruco_media_folder.empty(); }
@@ -474,6 +486,14 @@ inline void to_json(nlohmann::json &j, const CalibProject &p) {
                        {"dlt_method", p.dlt_method},
                        {"dlt_mean_rmse", p.dlt_mean_rmse},
                        {"dlt_per_camera_rmse", p.dlt_per_camera_rmse},
+                       {"posts_fullframe_media_folder", p.posts_fullframe_media_folder},
+                       {"cropped_media_folder", p.cropped_media_folder},
+                       {"posts_3d_file", p.posts_3d_file},
+                       {"crop_info_file", p.crop_info_file},
+                       {"cropped_calibration_folder", p.cropped_calibration_folder},
+                       {"cropped_refined_folder", p.cropped_refined_folder},
+                       {"orange_config_folder", p.orange_config_folder},
+                       {"posts_num", p.posts_num},
                        {"calibration_subtype", static_cast<int>(p.subtype)}};
 }
 
@@ -561,6 +581,14 @@ inline void from_json(const nlohmann::json &j, CalibProject &p) {
     p.dlt_method = j.value("dlt_method", -1);
     p.dlt_mean_rmse = j.value("dlt_mean_rmse", 0.0);
     p.dlt_per_camera_rmse = j.value("dlt_per_camera_rmse", std::vector<double>{});
+    p.posts_fullframe_media_folder = j.value("posts_fullframe_media_folder", std::string{});
+    p.cropped_media_folder = j.value("cropped_media_folder", std::string{});
+    p.posts_3d_file = j.value("posts_3d_file", std::string{});
+    p.crop_info_file = j.value("crop_info_file", std::string{});
+    p.cropped_calibration_folder = j.value("cropped_calibration_folder", std::string{});
+    p.cropped_refined_folder = j.value("cropped_refined_folder", std::string{});
+    p.orange_config_folder = j.value("orange_config_folder", std::string{});
+    p.posts_num = j.value("posts_num", 6);
 
     // Calibration subtype (backward-compatible: infer from fields if not present)
     int subtype_val = j.value("calibration_subtype", -1);

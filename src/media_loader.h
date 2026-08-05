@@ -383,6 +383,15 @@ load_videos(std::map<std::string, std::string> &selected_files,
         if (j < pm.camera_params.size() && pm.camera_params[j].image_width == 0) {
             pm.camera_params[j].image_width = scene->image_width[j];
             pm.camera_params[j].image_height = scene->image_height[j];
+        } else if (j < pm.camera_params.size() &&
+                   ((u32)pm.camera_params[j].image_width != scene->image_width[j] ||
+                    (u32)pm.camera_params[j].image_height != scene->image_height[j])) {
+            std::cerr << "[load_videos] WARNING: " << pm.camera_names[j]
+                      << " video is " << scene->image_width[j] << "x"
+                      << scene->image_height[j] << " but calibration says "
+                      << pm.camera_params[j].image_width << "x"
+                      << pm.camera_params[j].image_height
+                      << " — wrong calibration for this crop?" << std::endl;
         }
     }
     render_allocate_scene_memory(scene, label_buffer_size);

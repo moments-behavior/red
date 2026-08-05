@@ -1,5 +1,6 @@
 #pragma once
 #include "calib_tool_state.h"
+#include "crop_calibration.h"
 #include "app_context.h"
 #include "imgui.h"
 #include "gui/gui_helpers.h"
@@ -73,6 +74,12 @@ inline void DrawCalibCreateDialog(CalibrationToolState &state, AppContext &ctx,
                     "Calibrate telecentric cameras using known 3D landmarks.\n"
                     "Requires: 3D landmark coordinates + 2D labels per camera.",
                     CalibrationTool::CalibSubtype::Telecentric);
+
+                workflowBtn("Cropped-Sensor Refinement",
+                    "Two-stage: full-frame ChArUco calibration + posts, then refine\n"
+                    "for a sensor ROI crop. Requires: existing full-frame camera\n"
+                    "YAMLs + videos of fixed posts (full-frame and cropped).",
+                    CalibrationTool::CalibSubtype::CroppedRefinement);
 
                 ImGui::Spacing();
                 ImGui::End();
@@ -198,12 +205,14 @@ inline void DrawCalibCreateDialog(CalibrationToolState &state, AppContext &ctx,
                 if (!state.project.is_telecentric()) {
                 // ---- Projective mode fields ----
                 auto sub = state.project.subtype;
+                bool is_cropped = (sub == CalibrationTool::CalibSubtype::CroppedRefinement);
                 bool show_aruco = (sub == CalibrationTool::CalibSubtype::ArucoFull ||
                                    sub == CalibrationTool::CalibSubtype::ArucoAndPointSource);
                 bool show_calib_yamls = (sub == CalibrationTool::CalibSubtype::PointSourceRefinement ||
-                                         sub == CalibrationTool::CalibSubtype::ArucoAndPointSource);
-                bool show_ps_videos = (sub != CalibrationTool::CalibSubtype::ArucoFull);
-                bool show_global_reg = true;  // useful for all projective subtypes
+                                         sub == CalibrationTool::CalibSubtype::ArucoAndPointSource ||
+                                         is_cropped);
+                bool show_ps_videos = (sub != CalibrationTool::CalibSubtype::ArucoFull && !is_cropped);
+                bool show_global_reg = !is_cropped;  // stage-1 calibration is already registered
 
                 // ---- Config File (optional -- empty for laser-only) ----
                 if (show_aruco) {
@@ -334,9 +343,13 @@ inline void DrawCalibCreateDialog(CalibrationToolState &state, AppContext &ctx,
                 // ---- Initialize Calibration YAMLs (optional) ----
                 if (show_calib_yamls) {
                 ImGui::TableNextRow();
-                LabelCell("Initialize Calibration YAMLs",
-                    "Folder of Cam{serial}.yaml files from a prior calibration.\n"
-                    "PointSource refinement will improve these parameters.");
+                LabelCell(is_cropped ? "Stage-1 Calibration YAMLs"
+                                     : "Initialize Calibration YAMLs",
+                    is_cropped
+                        ? "Folder of Cam{serial}.yaml files from the full-frame\n"
+                          "ChArUco calibration (the aruco output folder works too)."
+                        : "Folder of Cam{serial}.yaml files from a prior calibration.\n"
+                          "PointSource refinement will improve these parameters.");
                 ImGui::TableSetColumnIndex(1);
                 ImGui::SetNextItemWidth(-FLT_MIN);
                 ImGui::InputText("##calib_yamlfolder",
@@ -358,6 +371,57 @@ inline void DrawCalibCreateDialog(CalibrationToolState &state, AppContext &ctx,
                 }
 
                 } // end show_calib_yamls
+
+                // ---- Cropped-sensor refinement inputs (optional at creation) ----
+                if (is_cropped) {
+                ImGui::TableNextRow();
+                LabelCell("Posts Videos (optional)",
+                    "Folder of FULL-FRAME Cam{serial}.mp4 videos showing the\n"
+                    "fixed posts. Can also be set later in the workflow.");
+                ImGui::TableSetColumnIndex(1);
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                ImGui::InputText("##calib_postsvid",
+                                 &state.project.posts_fullframe_media_folder);
+                ImGui::TableSetColumnIndex(2);
+                if (ImGui::Button("Browse##calib_postsvid")) {
+                    IGFD::FileDialogConfig cfg;
+                    cfg.countSelectionMax = 1;
+                    if (!state.project.posts_fullframe_media_folder.empty())
+                        cfg.path = state.project.posts_fullframe_media_folder;
+                    else if (!user_settings.default_media_root_path.empty())
+                        cfg.path = user_settings.default_media_root_path;
+                    else
+                        cfg.path = red_data_dir;
+                    cfg.flags = ImGuiFileDialogFlags_Modal;
+                    ImGuiFileDialog::Instance()->OpenDialog(
+                        "ChooseCalibPostsVidFolder",
+                        "Select Full-Frame Posts Video Folder", nullptr, cfg);
+                }
+
+                ImGui::TableNextRow();
+                LabelCell("Crop Info JSON (optional)",
+                    "crop_info.json with per-camera ROI offsets/sizes from the\n"
+                    "acquisition software. Can also be entered later by hand.");
+                ImGui::TableSetColumnIndex(1);
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                ImGui::InputText("##calib_cropinfo",
+                                 &state.project.crop_info_file);
+                ImGui::TableSetColumnIndex(2);
+                if (ImGui::Button("Browse##calib_cropinfo")) {
+                    IGFD::FileDialogConfig cfg;
+                    cfg.countSelectionMax = 1;
+                    if (!state.project.crop_info_file.empty())
+                        cfg.path = std::filesystem::path(
+                            state.project.crop_info_file).parent_path().string();
+                    else if (!user_settings.default_media_root_path.empty())
+                        cfg.path = user_settings.default_media_root_path;
+                    cfg.flags = ImGuiFileDialogFlags_Modal;
+                    ImGuiFileDialog::Instance()->OpenDialog(
+                        "ChooseCalibCropInfo", "Choose crop_info.json",
+                        ".json", cfg);
+                }
+
+                } // end is_cropped
 
                 // ---- PointSource Videos ----
                 if (show_ps_videos) {
@@ -589,6 +653,21 @@ inline void DrawCalibCreateDialog(CalibrationToolState &state, AppContext &ctx,
                         ImGuiFileDialog::Instance()->GetCurrentPath();
                 ImGuiFileDialog::Instance()->Close();
             }
+            // Cropped-sensor refinement file dialog handlers
+            if (ImGuiFileDialog::Instance()->Display(
+                    "ChooseCalibPostsVidFolder", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
+                if (ImGuiFileDialog::Instance()->IsOk())
+                    state.project.posts_fullframe_media_folder =
+                        ImGuiFileDialog::Instance()->GetCurrentPath();
+                ImGuiFileDialog::Instance()->Close();
+            }
+            if (ImGuiFileDialog::Instance()->Display(
+                    "ChooseCalibCropInfo", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
+                if (ImGuiFileDialog::Instance()->IsOk())
+                    state.project.crop_info_file =
+                        ImGuiFileDialog::Instance()->GetFilePathName();
+                ImGuiFileDialog::Instance()->Close();
+            }
             // Telecentric file dialog handlers
             if (ImGuiFileDialog::Instance()->Display(
                     "ChooseTeleVideoFolder", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
@@ -732,7 +811,14 @@ inline void DrawCalibCreateDialog(CalibrationToolState &state, AppContext &ctx,
 
             // Validation: name + root required, AND at least one calibration source
             bool create_ok = false;
-            if (!state.project.is_telecentric()) {
+            if (state.project.subtype ==
+                CalibrationTool::CalibSubtype::CroppedRefinement) {
+                // Requires the stage-1 (full-frame) calibration YAMLs
+                create_ok =
+                    !state.project.project_name.empty() &&
+                    !state.project.project_root_path.empty() &&
+                    !state.project.calibration_folder.empty();
+            } else if (!state.project.is_telecentric()) {
                 create_ok =
                     !state.project.project_name.empty() &&
                     !state.project.project_root_path.empty() &&
@@ -830,9 +916,11 @@ inline void DrawCalibCreateDialog(CalibrationToolState &state, AppContext &ctx,
                 if (state.project.config_file.empty() &&
                     !state.project.calibration_folder.empty() &&
                     state.project.camera_names.empty()) {
+                    // Resolve timestamped subfolders (aruco output roots)
                     state.project.camera_names =
                         CalibrationTool::derive_camera_names_from_yaml(
-                            state.project.calibration_folder);
+                            CropCalibration::resolve_calibration_folder(
+                                state.project.calibration_folder));
                 }
                 // No Init: derive from video filenames when no YAML folder
                 if (state.project.calibration_folder.empty() &&
@@ -940,7 +1028,14 @@ inline void DrawCalibCreateDialog(CalibrationToolState &state, AppContext &ctx,
                             }
 
                             // Status
-                            if (state.project.is_telecentric()) {
+                            if (state.project.subtype ==
+                                CalibrationTool::CalibSubtype::CroppedRefinement) {
+                                state.status =
+                                    "Project created: " +
+                                    std::to_string(
+                                        state.project.camera_names.size()) +
+                                    " cameras (cropped-sensor refinement)";
+                            } else if (state.project.is_telecentric()) {
                                 state.status =
                                     "Project created. Loading videos...";
                             } else if (state.config_loaded) {

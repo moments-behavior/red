@@ -1005,6 +1005,45 @@ if(APPLE)
         CXX_STANDARD_REQUIRED ON
     )
 
+    # Two-stage cropped-sensor calibration test (crop transform + refinement)
+    add_executable(test_crop_refinement
+        tests/test_crop_refinement.cpp
+        src/aruco_metal.mm
+        src/FFmpegDemuxer.cpp
+        src/vt_async_decoder.mm
+        src/superpoint_coreml.mm
+    )
+    target_include_directories(test_crop_refinement PRIVATE
+        src
+        lib/nvcodec
+        ${HOMEBREW_PREFIX}/include
+        ${HOMEBREW_PREFIX}/include/eigen3
+        ${FFMPEG_INCLUDE_DIRS}
+        ${TURBOJPEG_INCLUDE_DIRS}
+    )
+    target_link_directories(test_crop_refinement PRIVATE
+        ${FFMPEG_LIBRARY_DIRS} ${TURBOJPEG_LIBRARY_DIRS})
+    target_link_libraries(test_crop_refinement PRIVATE
+        Eigen3::Eigen
+        Ceres::ceres
+        ${FFMPEG_LIBRARIES}
+        ${TURBOJPEG_LIBRARIES}
+        "-framework Metal"
+        "-framework Foundation"
+        "-framework CoreGraphics"
+        "-framework CoreVideo"
+        "-framework CoreMedia"
+        "-framework VideoToolbox"
+        "-framework CoreML"
+        "-framework Accelerate"
+        "-framework IOKit"
+        pthread
+    )
+    set_target_properties(test_crop_refinement PROPERTIES
+        CXX_STANDARD 17
+        CXX_STANDARD_REQUIRED ON
+    )
+
     # DICT_5X5 detection test (rat calibration board)
     add_executable(test_dict5x5
         tests/test_dict5x5.cpp
