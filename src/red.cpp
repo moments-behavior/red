@@ -615,7 +615,16 @@ int main(int argc, char **argv) {
                     }
                 },
                 [&]() { return pm.plot_keypoints_flag; }});
-    panels.add({"Help", [&]() { DrawHelpWindow(win.show_help); }, nullptr});
+    panels.add({"Help", [&]() {
+                    help::Context hctx;
+                    hctx.project_open = !pm.project_path.empty();
+                    hctx.is_3d        = hctx.project_open && !project_is_2d(pm);
+                    hctx.bbox_on      = win.bbox.enabled;
+                    hctx.obb_on       = win.obb.enabled;
+                    hctx.sam_on       = win.sam_tool.enabled;
+                    hctx.midline_on   = win.midline.enabled;
+                    DrawHelpWindow(win.show_help, hctx);
+                }, nullptr});
     panels.add({"JARVIS Export",
                 [&]() { DrawJarvisExportWindow(win.jarvis_export, ctx); },
                 nullptr});
