@@ -183,6 +183,21 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
         if (ImGui::MenuItem("Bout Filter")) {
             win.bout_filter.show = true;
         }
+        if (ImGui::MenuItem("Pump Events")) {
+            win.pump_events.show = true;
+        }
+        {
+            // Jumps operate on the same filtered set the table shows, so a
+            // hidden pump is skipped here too.
+            auto &pe = win.pump_events;
+            ImGui::BeginDisabled(pe.events.empty());
+            if (ImGui::MenuItem("Next Pump Dispense", "]"))
+                pump_events_jump(pe, ctx.current_frame_num, true);
+            if (ImGui::MenuItem("Previous Pump Dispense", "["))
+                pump_events_jump(pe, ctx.current_frame_num, false);
+            ImGui::EndDisabled();
+        }
+        ImGui::Separator();
         if (ImGui::MenuItem("Help")) {
             show_help_window = true;
         }

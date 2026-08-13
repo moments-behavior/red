@@ -39,6 +39,10 @@ struct CameraTimestamps {
     std::map<std::string, std::vector<int64_t>> frame_ns;
     // orange only (hardware frame counter); empty for lab CSV.
     std::map<std::string, std::vector<int64_t>> frame_id;
+    // orange only: the `timestamp_sys` column (CLOCK_MONOTONIC on the acquiring
+    // host). Parallel to frame_ns. Kept as a fallback axis for correlating
+    // external event logs whose PTP timestamp was unavailable; empty for lab CSV.
+    std::map<std::string, std::vector<int64_t>> frame_sys_ns;
     // video frame count per camera, filled by the caller from a demux probe
     // (-1 = unknown). Used for the timestamp-rows vs. decoded-frames count check.
     std::map<std::string, int> video_frame_count;
@@ -182,15 +186,19 @@ inline int64_t parse_iso8601_ns(const std::string &s) {
 // Parse an orange "Cam{cam}_meta.csv": header frame_id,timestamp,timestamp_sys.
 // Fills frame_ns (from the PTP `timestamp` column) and frame_id. Returns false
 // if the file cannot be opened or the header is unexpected.
+// `out_sys` (optional) receives the third `timestamp_sys` column — a row missing
+// it contributes 0, so the vector stays index-parallel to out_ns.
 inline bool parse_orange_meta(const std::string &path,
                               std::vector<int64_t> &out_ns,
-                              std::vector<int64_t> &out_id) {
+                              std::vector<int64_t> &out_id,
+                              std::vector<int64_t> *out_sys = nullptr) {
     std::ifstream f(path);
     if (!f) return false;
     std::string line;
     if (!std::getline(f, line)) return false;
     if (line.find("frame_id") == std::string::npos) return false;
     out_ns.clear(); out_id.clear();
+    if (out_sys) out_sys->clear();
     while (std::getline(f, line)) {
         if (line.empty()) continue;
         const char *b = line.c_str(), *e = b + line.size();
@@ -201,6 +209,12 @@ inline bool parse_orange_meta(const std::string &path,
         if (r2.ec != std::errc()) continue;
         out_id.push_back(fid);
         out_ns.push_back(ts);
+        if (out_sys) {
+            int64_t sys = 0;
+            if (r2.ptr < e && *r2.ptr == ',')
+                std::from_chars(r2.ptr + 1, e, sys);  // 0 when absent/unparseable
+            out_sys->push_back(sys);
+        }
     }
     return !out_ns.empty();
 }
@@ -264,19 +278,21 @@ inline CameraTimestamps load(const std::string &folder,
 
     // 1) Orange: Cam{cam}_meta.csv
     {
-        std::map<std::string, std::vector<int64_t>> ns, ids;
+        std::map<std::string, std::vector<int64_t>> ns, ids, sys;
         int found = 0;
         for (const auto &cam : cam_ordered) {
             std::string p = (fs::path(folder) / ("Cam" + cam + "_meta.csv")).string();
-            std::vector<int64_t> a, b;
-            if (fs::exists(p) && parse_orange_meta(p, a, b)) {
-                ns[cam] = std::move(a); ids[cam] = std::move(b); ++found;
+            std::vector<int64_t> a, b, c;
+            if (fs::exists(p) && parse_orange_meta(p, a, b, &c)) {
+                ns[cam] = std::move(a); ids[cam] = std::move(b);
+                sys[cam] = std::move(c); ++found;
             }
         }
         if (found >= 2 || (found >= 1 && cam_ordered.size() == 1)) {
             out.format = Format::OrangePTP;
             out.frame_ns = std::move(ns);
             out.frame_id = std::move(ids);
+            out.frame_sys_ns = std::move(sys);
             return out;
         }
     }

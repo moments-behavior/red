@@ -56,6 +56,15 @@ struct ProjectManager {
     // changes what a frame index means: with the fix ON, labels/predictions
     // are keyed by canonical trigger slot, OFF by raw mp4 index.
     bool sync_fix_enabled = false;
+
+    // Pump Events (pump_events_core.h). Only the settings are stored, never the
+    // dispenses themselves: the log is re-read on open so anything pumpctl
+    // appended since is picked up. pump_log_path is an explicit override —
+    // empty means "auto-discover in the recording folder", the normal case.
+    std::string pump_log_path;
+    float pump_offset_ms = 0.0f;
+    bool pump_show_pulls = false;
+
     AnnotationConfig annotation_config; // annotation capabilities
 
     // JARVIS models imported into this project
@@ -140,6 +149,9 @@ inline void to_json(nlohmann::json &j, const ProjectManager &p) {
                        {"telecentric", p.telecentric},
                        {"annotation_2d", p.annotation_2d},
                        {"sync_fix_enabled", p.sync_fix_enabled},
+                       {"pump_log_path", p.pump_log_path},
+                       {"pump_offset_ms", p.pump_offset_ms},
+                       {"pump_show_pulls", p.pump_show_pulls},
                        {"annotation_config", p.annotation_config},
                        {"jarvis_models", p.jarvis_models},
                        {"active_jarvis_model", p.active_jarvis_model},
@@ -162,6 +174,9 @@ inline void from_json(const nlohmann::json &j, ProjectManager &p) {
     p.telecentric = j.value("telecentric", false);
     p.annotation_2d = j.value("annotation_2d", false);
     p.sync_fix_enabled = j.value("sync_fix_enabled", false);
+    p.pump_log_path = j.value("pump_log_path", std::string{});
+    p.pump_offset_ms = j.value("pump_offset_ms", 0.0f);
+    p.pump_show_pulls = j.value("pump_show_pulls", false);
     if (j.contains("annotation_config"))
         p.annotation_config = j["annotation_config"].get<AnnotationConfig>();
     if (j.contains("jarvis_models"))

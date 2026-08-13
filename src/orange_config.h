@@ -116,4 +116,75 @@ inline ExportResult update_orange_configs(
     return result;
 }
 
+struct ImportResult {
+    bool success = false;
+    std::string error;
+    std::vector<std::string> warnings;
+    // Loaded crops, one per matched {serial}.json
+    std::vector<CropCalibration::CameraCrop> cameras;
+};
+
+// Inverse of update_orange_configs: read width/height/offsetx/offsety from
+// each {serial}.json in the config folder. `serials` selects which cameras to
+// look for (missing files are warnings, not errors). A config without offset
+// keys yields offsets of 0 (orange's ROI is anchored at the sensor origin
+// until it is patched to consume offsets).
+inline ImportResult import_orange_configs(
+    const std::string &config_folder,
+    const std::vector<std::string> &serials) {
+    namespace fs = std::filesystem;
+    ImportResult result;
+
+    if (!fs::is_directory(config_folder)) {
+        result.error = "Not a directory: " + config_folder;
+        return result;
+    }
+    if (serials.empty()) {
+        result.error = "No camera serials to import";
+        return result;
+    }
+
+    for (const auto &serial : serials) {
+        std::string path = config_folder + "/" + serial + ".json";
+        if (!fs::exists(path)) {
+            result.warnings.push_back("No orange config for camera " + serial +
+                                      " (" + path + ") — skipped");
+            continue;
+        }
+        nlohmann::json j;
+        try {
+            std::ifstream f(path);
+            f >> j;
+        } catch (const std::exception &e) {
+            result.error = "Parse error in " + path + ": " + e.what();
+            return result;
+        }
+        if (!j.contains("width") || !j.contains("height")) {
+            result.warnings.push_back("Camera " + serial +
+                                      ": config has no width/height — skipped");
+            continue;
+        }
+        CropCalibration::CameraCrop crop;
+        crop.serial = serial;
+        crop.width = j.value("width", 0);
+        crop.height = j.value("height", 0);
+        crop.offset_x = j.value("offsetx", 0);
+        crop.offset_y = j.value("offsety", 0);
+        if (crop.width <= 0 || crop.height <= 0) {
+            result.warnings.push_back("Camera " + serial +
+                                      ": non-positive width/height — skipped");
+            continue;
+        }
+        result.cameras.push_back(std::move(crop));
+    }
+
+    if (result.cameras.empty()) {
+        result.error = "No usable orange configs matched any camera serial in " +
+                       config_folder;
+        return result;
+    }
+    result.success = true;
+    return result;
+}
+
 }  // namespace OrangeConfig

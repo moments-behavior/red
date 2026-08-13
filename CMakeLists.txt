@@ -2104,7 +2104,37 @@ else()
         target_link_options(${TEST_NAME} PRIVATE "-Wl,--disable-new-dtags")
     endforeach()
 
+    # ── Headless experimental-calibration CLI (images or --videos) ──────────
+    add_executable(run_experimental_calib tests/run_experimental_calib.cpp)
+    target_include_directories(run_experimental_calib PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+        ${DIR_NVCODEC}
+    )
+    target_link_libraries(run_experimental_calib PRIVATE
+        Eigen3::Eigen
+        Ceres::ceres
+        PkgConfig::FFMPEG
+        Threads::Threads
+        ${CMAKE_DL_LIBS}
+    )
+    set_target_properties(run_experimental_calib PROPERTIES
+        CXX_STANDARD 17
+        CXX_STANDARD_REQUIRED ON
+        BUILD_RPATH "${RED_RPATH_BUILD}"
+        INSTALL_RPATH "${RED_RPATH_INSTALL}"
+    )
+    target_link_options(run_experimental_calib PRIVATE "-Wl,--disable-new-dtags")
+
 endif()
 
 
 
+# ── Pump dispense log import (src/pump_events_core.h) ───────────────────────
+# Header-only with no deps beyond C++17 and src/json.hpp, so it builds on both
+# platforms outside the APPLE/else split above.
+add_executable(test_pump_events tests/test_pump_events.cpp)
+target_include_directories(test_pump_events PRIVATE src)
+set_target_properties(test_pump_events PROPERTIES
+    CXX_STANDARD 17
+    CXX_STANDARD_REQUIRED ON
+)

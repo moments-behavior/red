@@ -682,6 +682,9 @@ int main(int argc, char **argv) {
     panels.add({"Frame Drops",
                 [&]() { DrawFrameDropsWindow(win.frame_drops, ctx); },
                 nullptr});
+    panels.add({"Pump Events",
+                [&]() { DrawPumpEventsWindow(win.pump_events, ctx); },
+                nullptr});
     panels.add({"Bouts",
                 [&]() { DrawBoutsWindow(win.bouts, prediction_store,
                                         win.jarvis_predict.active_store_path,
@@ -820,6 +823,10 @@ int main(int argc, char **argv) {
             ImGui::SetWindowFocus("Labeling Tool");
         }
 
+        // pumpctl writes its dispense log into orange's recording folder, so
+        // pick it up whenever the loaded media changes. Cheap no-op otherwise.
+        pump_events_auto_load(win.pump_events, ctx);
+
         // Draw all registered panels
         panels.drawAll();
 
@@ -840,6 +847,19 @@ int main(int argc, char **argv) {
         if (win.frame_drops.seek_requested) {
             win.frame_drops.seek_requested = false;
             int tgt = win.frame_drops.seek_frame;
+            seek_all_cameras(scene, tgt, dc_context->video_fps, ps, true);
+            current_frame_num = tgt;
+            ps.pause_selected = 0;
+            ps.pause_seeked = true;
+            for (auto &[key, value] : window_need_decoding)
+                value.store(true);
+        }
+
+        // Pump Events: seek to a dispense (already in playback coordinates —
+        // the panel maps mp4 index -> canonical slot when the sync fix is on).
+        if (win.pump_events.seek_requested) {
+            win.pump_events.seek_requested = false;
+            int tgt = win.pump_events.seek_frame;
             seek_all_cameras(scene, tgt, dc_context->video_fps, ps, true);
             current_frame_num = tgt;
             ps.pause_selected = 0;
@@ -976,6 +996,19 @@ int main(int argc, char **argv) {
                                   jarvis_trt_state = JarvisTensorRTState{};
 #endif
                               });
+
+        // Jump to the next/previous pump dispense. Outside the paused-only
+        // block below so it also works during playback; the seek itself is
+        // performed by the seek_requested handler on the next iteration.
+        if (ps.video_loaded && !win.pump_events.events.empty() &&
+            !io.WantTextInput) {
+            if (ImGui::IsKeyPressed(ImGuiKey_RightBracket, false) &&
+                !pump_events_jump(win.pump_events, current_frame_num, true))
+                ctx.toasts.push("No later pump dispense");
+            if (ImGui::IsKeyPressed(ImGuiKey_LeftBracket, false) &&
+                !pump_events_jump(win.pump_events, current_frame_num, false))
+                ctx.toasts.push("No earlier pump dispense");
+        }
 
         static int select_corr_head = 0;
         if (ps.video_loaded && (!ps.play_video)) {

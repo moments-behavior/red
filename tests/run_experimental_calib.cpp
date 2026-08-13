@@ -16,15 +16,23 @@ simplelogger::Logger *logger =
 
 int main(int argc, char **argv) {
     if (argc < 2) {
-        std::cerr << "Usage: " << argv[0] << " <config.json> [--output DIR]\n";
+        std::cerr << "Usage: " << argv[0] << " <config.json> [--output DIR]"
+                     " [--videos FOLDER] [--frame-step N] [--no-sync]\n"
+                     "  --videos: run the video path (Cam<serial>.mp4 in FOLDER)\n"
+                     "  --no-sync: disable the per-frame timestamp remap\n";
         return 1;
     }
 
     std::string config_path = argv[1];
-    std::string output_dir;
+    std::string output_dir, videos_folder;
+    int frame_step = 1;
+    bool use_sync = true;
     for (int i = 2; i < argc; i++) {
-        if (std::string(argv[i]) == "--output" && i + 1 < argc)
-            output_dir = argv[++i];
+        std::string a = argv[i];
+        if (a == "--output" && i + 1 < argc) output_dir = argv[++i];
+        else if (a == "--videos" && i + 1 < argc) videos_folder = argv[++i];
+        else if (a == "--frame-step" && i + 1 < argc) frame_step = std::atoi(argv[++i]);
+        else if (a == "--no-sync") use_sync = false;
     }
 
     CalibrationTool::CalibConfig config;
@@ -40,6 +48,23 @@ int main(int argc, char **argv) {
         output_dir = std::filesystem::path(config_path).parent_path().string() +
                      "/aruco_image_experimental";
 
+    // Video-path setup: per-frame slot remap when sidecars allow it, else
+    // index pairing (the pipeline falls back on an empty map).
+    CalibrationPipeline::VideoFrameRange vfr;
+    bool is_video = !videos_folder.empty();
+    if (is_video) {
+        vfr.video_folder = videos_folder;
+        vfr.cam_ordered = config.cam_ordered;
+        vfr.frame_step = std::max(1, frame_step);
+        if (use_sync) {
+            std::string sync_status;
+            vfr.cam_slot_to_frame = CalibrationPipeline::build_calibration_slot_maps(
+                videos_folder, config.cam_ordered, "cam{cam}_timestamps_*.csv",
+                &sync_status);
+            std::cout << "Sync: " << sync_status << "\n";
+        }
+    }
+
     // Metal GPU acceleration
     aruco_detect::GpuThresholdFunc gpu_fn = nullptr;
     void *gpu_ctx = nullptr;
@@ -54,7 +79,7 @@ int main(int argc, char **argv) {
 
     std::string status;
     auto result = CalibrationPipeline::run_experimental_pipeline(
-        config, output_dir, &status, nullptr, gpu_fn, gpu_ctx);
+        config, output_dir, &status, is_video ? &vfr : nullptr, gpu_fn, gpu_ctx);
 
 #ifdef __APPLE__
     if (aruco_metal) aruco_metal_destroy(aruco_metal);

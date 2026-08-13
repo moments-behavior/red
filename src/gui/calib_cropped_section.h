@@ -251,6 +251,31 @@ inline void DrawCalibCroppedSection(CalibrationToolState &state,
             fa.kp3d.resize(proj.posts_num);
     };
 
+    // Load previously saved post labels: newest timestamped save under the
+    // step's labels dir ({project}/{labels_subdir}/{timestamp}/). Returns a
+    // status string. Sets up the skeleton first so clicks land in place.
+    auto load_posts_labels = [&](const char *labels_subdir) -> std::string {
+        namespace fs = std::filesystem;
+        setup_posts_skeleton(labels_subdir, false);
+        std::string latest;
+        std::error_code ec;
+        for (const auto &e : fs::directory_iterator(pm.keypoints_root_folder, ec)) {
+            if (!e.is_directory()) continue;
+            std::string name = e.path().filename().string();
+            if (fs::exists(e.path() / "keypoints3d.csv") && name > latest)
+                latest = name;
+        }
+        if (latest.empty())
+            return "No saved labels found in " + pm.keypoints_root_folder;
+        std::string folder = pm.keypoints_root_folder + "/" + latest;
+        std::string err;
+        if (AnnotationCSV::load_all(folder, ctx.annotations, ctx.skeleton.name,
+                                    ctx.skeleton.num_nodes, scene->num_cams,
+                                    pm.camera_names, err) != 0)
+            return "Load failed: " + err;
+        return "Labels loaded from " + folder;
+    };
+
     // Harvest clicked posts (ImPlot y-up -> OpenCV y-down, per-camera heights)
     auto collect_posts = [&]() {
         std::vector<int> img_hs(scene->num_cams);
@@ -286,6 +311,66 @@ inline void DrawCalibCroppedSection(CalibrationToolState &state,
         return;
 
     ImGui::Indent();
+
+    // ---- Stage-1 calibration source ----
+    // Everything in phase 2 (post triangulation, crop transform, verify)
+    // consumes this. Selectable here so a specific stage-1 run can be chosen
+    // (the default resolution picks the LATEST timestamped subfolder).
+    {
+        ImGui::Text("Stage-1 calibration:");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 160.0f);
+        if (ImGui::InputText("##crop_stage1_dir", &proj.calibration_folder))
+            save_project_now();
+        ImGui::SameLine();
+        if (ImGui::Button("Browse##crop_stage1")) {
+            IGFD::FileDialogConfig cfg;
+            cfg.countSelectionMax = 1;
+            if (!proj.calibration_folder.empty())
+                cfg.path = proj.calibration_folder;
+            cfg.flags = ImGuiFileDialogFlags_Modal;
+            ImGuiFileDialog::Instance()->OpenDialog(
+                "ChooseCropStage1Dir",
+                "Select Stage-1 Calibration (run folder or aruco root)",
+                nullptr, cfg);
+        }
+        if (ImGuiFileDialog::Instance()->Display(
+                "ChooseCropStage1Dir", ImGuiWindowFlags_NoCollapse,
+                ImVec2(680, 440))) {
+            if (ImGuiFileDialog::Instance()->IsOk()) {
+                proj.calibration_folder =
+                    ImGuiFileDialog::Instance()->GetCurrentPath();
+                save_project_now();
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+        ImGui::SameLine();
+        HelpMarker("The full-frame calibration phase 2 builds on: post\n"
+                   "triangulation, the crop transform, and verification all\n"
+                   "read Cam{serial}.yaml from here.\nAccepts a specific\n"
+                   "timestamped run folder or the aruco output root (the\n"
+                   "LATEST run is used then). Changing it after applying a\n"
+                   "crop requires re-applying the crop.");
+        if (!proj.calibration_folder.empty()) {
+            std::string resolved = CropCalibration::resolve_calibration_folder(
+                proj.calibration_folder);
+            int found = 0;
+            for (const auto &cam : proj.camera_names)
+                if (std::filesystem::exists(resolved + "/Cam" + cam + ".yaml"))
+                    found++;
+            bool ok = found == (int)proj.camera_names.size() &&
+                      !proj.camera_names.empty();
+            ImVec4 col = ok ? ImVec4(0.5f, 1.0f, 0.5f, 1.0f)
+                            : ImVec4(1.0f, 0.6f, 0.2f, 1.0f);
+            ImGui::TextColored(col, "Using: %s (%d/%d camera YAMLs)",
+                               resolved.c_str(), found,
+                               (int)proj.camera_names.size());
+        } else {
+            ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f),
+                               "No stage-1 calibration selected");
+        }
+    }
+    ImGui::Separator();
 
     // ════ Step 1: Posts at full frame ════
     if (ImGui::CollapsingHeader("1. Posts — Full Frame##crop",
@@ -346,6 +431,17 @@ inline void DrawCalibCroppedSection(CalibrationToolState &state,
             cs.status = "Skeleton created. Click " +
                 std::to_string(proj.posts_num) + " posts in each view.";
         }
+        ImGui::SameLine();
+        if (ImGui::Button("Load Labels##crop_ff_load")) {
+            cs.status = load_posts_labels("labeled_data_fullframe");
+            if (cs.status.rfind("Labels loaded", 0) == 0)
+                cs.fullframe_skeleton_ready = true;
+        }
+        ImGui::SameLine();
+        HelpMarker("Loads the most recent Save Labels snapshot from\n"
+                   "{project}/labeled_data_fullframe/ — no re-clicking\n"
+                   "needed when re-triangulating against a new stage-1\n"
+                   "calibration.");
         ImGui::EndDisabled();
         if (cs.fullframe_skeleton_ready) {
             ImGui::SameLine();
@@ -377,10 +473,14 @@ inline void DrawCalibCroppedSection(CalibrationToolState &state,
                 } else {
                     auto landmarks = collect_posts();
                     std::map<int, Eigen::Vector3d> posts_3d;
+                    // Flag clicks beyond the stage-1 calibration's observed
+                    // radius (distortion is extrapolated there).
+                    auto coverage = CropCalibration::load_coverage_radii(
+                        proj.calibration_folder, proj.camera_names, poses);
                     cs.post_report =
                         CropCalibration::triangulate_posts_with_report(
                             proj.camera_names, landmarks, poses,
-                            cs.post_accept_th, posts_3d);
+                            cs.post_accept_th, posts_3d, coverage);
                     std::string csv = proj.project_path + "/posts_3d.csv";
                     std::string werr;
                     if (!CropCalibration::write_posts_3d_csv(
@@ -407,13 +507,14 @@ inline void DrawCalibCroppedSection(CalibrationToolState &state,
 
         // Per-post quality table
         if (!cs.post_report.empty()) {
-            if (ImGui::BeginTable("crop_post_tab", 4,
+            if (ImGui::BeginTable("crop_post_tab", 5,
                     ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders |
                     ImGuiTableFlags_SizingFixedFit)) {
                 ImGui::TableSetupColumn("Post", 0, 50.0f);
                 ImGui::TableSetupColumn("Views", 0, 50.0f);
                 ImGui::TableSetupColumn("Mean (px)", 0, 80.0f);
                 ImGui::TableSetupColumn("Max (px)", 0, 80.0f);
+                ImGui::TableSetupColumn("Extrapolated", 0, 150.0f);
                 ImGui::TableHeadersRow();
                 for (const auto &r : cs.post_report) {
                     ImGui::TableNextRow();
@@ -428,11 +529,24 @@ inline void DrawCalibCroppedSection(CalibrationToolState &state,
                     ImGui::TextColored(col, "%.2f", r.mean_reproj);
                     ImGui::TableSetColumnIndex(3);
                     ImGui::Text("%.2f", r.max_reproj);
+                    ImGui::TableSetColumnIndex(4);
+                    if (!r.extrapolated_cams.empty()) {
+                        std::string s;
+                        for (const auto &c : r.extrapolated_cams)
+                            s += (s.empty() ? "" : " ") + c;
+                        ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f),
+                                           "%s", s.c_str());
+                    } else {
+                        ImGui::TextDisabled("-");
+                    }
                 }
                 ImGui::EndTable();
             }
             ImGui::TextDisabled(
-                "Red rows: bad clicks or <2 views — fix and re-triangulate.");
+                "Red rows: bad clicks or <2 views — fix and re-triangulate.\n"
+                "Extrapolated: click lies beyond the stage-1 calibration's "
+                "board coverage — distortion is unconstrained there; expect "
+                "elevated error for that camera, not a bad click.");
         }
         ImGui::Unindent();
     }
@@ -659,11 +773,51 @@ inline void DrawCalibCroppedSection(CalibrationToolState &state,
         }
         ImGui::EndDisabled();
         ImGui::SameLine();
-        HelpMarker("Rewrites width/height/offsetx/offsety in each "
-                   "{serial}.json, preserving all other keys.\nNOTE: orange "
-                   "currently only applies width/height (offsets are "
-                   "hardcoded to 0) — it must be patched to read "
-                   "offsetx/offsety.");
+        ImGui::BeginDisabled(proj.orange_config_folder.empty() ||
+                             cs.crop_spec.cameras.empty());
+        if (ImGui::Button("Import ROI##crop_orange")) {
+            std::vector<std::string> serials;
+            for (const auto &row : cs.crop_spec.cameras)
+                serials.push_back(row.serial);
+            auto ir = OrangeConfig::import_orange_configs(
+                proj.orange_config_folder, serials);
+            if (ir.success) {
+                // Merge by serial so row order follows the project
+                for (auto &row : cs.crop_spec.cameras)
+                    for (const auto &imp : ir.cameras)
+                        if (imp.serial == row.serial) row = imp;
+                // Shared dims follow the first imported camera; differing
+                // per-camera dims in the configs are surfaced as a warning
+                // (the designer enforces one shared crop size).
+                cs.crop_w = ir.cameras[0].width;
+                cs.crop_h = ir.cameras[0].height;
+                for (const auto &imp : ir.cameras)
+                    if (imp.width != cs.crop_w || imp.height != cs.crop_h)
+                        ir.warnings.push_back(
+                            "Camera " + imp.serial + " config is " +
+                            std::to_string(imp.width) + "x" +
+                            std::to_string(imp.height) + " — shared dims use " +
+                            std::to_string(cs.crop_w) + "x" +
+                            std::to_string(cs.crop_h));
+                apply_shared_dims();
+                cs.orange_status = "Imported " +
+                    std::to_string(ir.cameras.size()) + " ROI(s) from " +
+                    proj.orange_config_folder;
+                save_project_now();
+            } else {
+                cs.orange_status = "Import failed: " + ir.error;
+            }
+            for (const auto &w : ir.warnings)
+                cs.orange_status += "\n" + w;
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        HelpMarker("Export rewrites width/height/offsetx/offsety in each "
+                   "{serial}.json, preserving all other keys.\nImport loads "
+                   "them back into the crop table (offsets default to 0 when "
+                   "a config has no offset keys).\nNOTE: orange currently "
+                   "only applies width/height (offsets are hardcoded to 0) — "
+                   "it must be patched to read offsetx/offsety.");
         if (!cs.orange_status.empty())
             ImGui::TextWrapped("%s", cs.orange_status.c_str());
 
@@ -825,10 +979,19 @@ inline void DrawCalibCroppedSection(CalibrationToolState &state,
                 std::to_string(proj.posts_num) +
                 " posts in the SAME ORDER as step 1.";
         }
+        ImGui::SameLine();
+        if (ImGui::Button("Load Labels##crop_cr_load")) {
+            cs.status = load_posts_labels("labeled_data_cropped");
+            if (cs.status.rfind("Labels loaded", 0) == 0)
+                cs.cropped_skeleton_ready = true;
+        }
         ImGui::EndDisabled();
         ImGui::SameLine();
         HelpMarker("Post identity is the node index: post 3 in step 1 must\n"
-                   "be clicked as node 3 here too. Node colors/names match.");
+                   "be clicked as node 3 here too. Node colors/names match.\n"
+                   "Load Labels restores the most recent Save Labels snapshot\n"
+                   "from {project}/labeled_data_cropped/ (cropped-frame\n"
+                   "coordinates — do NOT load step-1 labels here).");
         if (cs.cropped_skeleton_ready) {
             ImGui::SameLine();
             ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f),

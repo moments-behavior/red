@@ -9,6 +9,7 @@
 #include "intrinsic_calibration.h"
 #include "opencv_yaml_io.h"
 #include "red_math.h"
+#include "sync_plan.h"
 
 #include "../lib/ImGuiFileDialog/stb/stb_image.h"
 #ifdef __APPLE__
@@ -111,6 +112,19 @@ struct VideoFrameRange {
     // + offset; detections are keyed by the shared reference index so all cameras
     // link to the same 3D board points. Empty => all-zero (index-based, default).
     std::vector<int> cam_frame_offset;
+    // Per-frame slot remap, outer vector parallel to cam_ordered, indexed by
+    // canonical trigger slot: value = mp4 frame index, or -1 if this camera
+    // has no frame for that slot. Takes precedence over cam_frame_offset.
+    //
+    // A constant offset can only align one contiguous run of frames. If a
+    // camera misses a trigger mid-recording, every frame after it shifts by
+    // one relative to the others, and no single integer describes the whole
+    // recording. This map handles each slot independently, so a dropped
+    // trigger becomes a *missing observation* for that camera rather than a
+    // silent one-frame misalignment for all subsequent frames.
+    //
+    // Empty => fall back to cam_frame_offset (unchanged legacy behavior).
+    std::vector<std::vector<int>> cam_slot_to_frame;
 };
 
 // Progress tracking for ArUco calibration (shared between pipeline thread and UI)
@@ -186,6 +200,148 @@ inline int get_video_frame_count(const std::string &path) {
         }
     }
     return 0;
+}
+
+// Build the per-frame slot remap for VideoFrameRange::cam_slot_to_frame.
+//
+// Delegates entirely to sync_plan.h, which already implements and unit-tests
+// this mapping for the viewer/decoder path (tests/test_sync_plan.cpp); the only
+// new work here is adapting its output to the calibration pipeline's indexing
+// and refusing anything it cannot fully validate.
+//
+// Returns an empty vector on any failure, which callers treat as "fall back to
+// the constant-offset path". Failing closed matters: a partially-correct slot
+// map would misalign cameras silently, which is strictly worse than the legacy
+// behavior the caller already knows how to handle.
+inline std::vector<std::vector<int>> build_calibration_slot_maps(
+    const std::string &media_folder, const std::vector<std::string> &cams,
+    const std::string &lab_pattern, std::string *status_out = nullptr) {
+    namespace fs = std::filesystem;
+    namespace ct = camera_timestamps;
+    auto fail = [&](const std::string &why) {
+        if (status_out) *status_out = why;
+        fprintf(stderr, "[CalibSync] per-frame remap unavailable: %s\n", why.c_str());
+        return std::vector<std::vector<int>>{};
+    };
+    if (media_folder.empty() || cams.empty()) return fail("no media/cameras");
+
+    // Decoded frame counts, used below to reject a plan that disagrees with the
+    // actual mp4s (a stale sync_plan.json, or a truncated recording).
+    std::map<std::string, int> counts;
+    auto vids = CalibrationTool::discover_aruco_videos(media_folder, cams);
+    for (const auto &c : cams) {
+        auto it = vids.find(c);
+        counts[c] = (it != vids.end()) ? get_video_frame_count(it->second) : -1;
+    }
+
+    sync_plan::SyncPlan plan;
+    fs::path plan_json = fs::path(media_folder) / "sync_plan.json";
+    if (fs::exists(plan_json)) {
+        plan = sync_plan::load_json(plan_json.string());
+        if (plan.valid) {
+            // Plans written by cluster_pose key cameras by full stem
+            // ("Cam<serial>"); calibration keys by bare serial. Re-key so the
+            // lookups below hit, and refuse if any camera is absent — an
+            // unmapped camera is exactly the silent-desync case to avoid.
+            std::map<std::string, sync_plan::SyncCam> rekeyed;
+            for (const auto &c : cams) {
+                const sync_plan::SyncCam *sc = plan.cam(c);
+                if (!sc) sc = plan.cam("Cam" + c);
+                if (!sc) return fail("camera " + c + " missing from sync_plan.json");
+                rekeyed[c] = *sc;
+            }
+            plan.cams = std::move(rekeyed);
+        }
+    } else {
+        // Sidecars usually sit beside the videos; lab CSVs often one level up.
+        ct::CameraTimestamps ts = ct::load(media_folder, cams, lab_pattern, counts);
+        if (ts.format == ct::Format::None) {
+            std::string parent = fs::path(media_folder).parent_path().string();
+            if (!parent.empty() && parent != media_folder)
+                ts = ct::load(parent, cams, lab_pattern, counts);
+        }
+        if (ts.format == ct::Format::None)
+            return fail("no timestamp metadata found");
+        plan = sync_plan::build(ts, cams);
+    }
+    if (!plan.valid) return fail(plan.error);
+    // Plan vs. reality: slot arithmetic must match the frames actually decodable.
+    if (!sync_plan::check_decoded_counts(plan, counts)) return fail(plan.error);
+    { // Mapping invariants (pos/slot_of_pos round-trip, monotonic, gapless).
+        std::string err;
+        if (!sync_plan::self_check(plan, &err))
+            return fail("plan self-check failed: " + err);
+    }
+
+    std::vector<std::vector<int>> maps(cams.size());
+    int64_t len = plan.canonical_len;
+    if (len <= 0) return fail("plan has no canonical slots");
+    for (size_t i = 0; i < cams.size(); i++) {
+        const sync_plan::SyncCam *sc = plan.cam(cams[i]);
+        if (!sc) return fail("camera " + cams[i] + " missing from plan");
+        maps[i].assign((size_t)len, -1);
+        for (int64_t t = 0; t < len; t++) {
+            if (!sc->has(t)) continue;   // dropped trigger => no observation
+            int64_t p = sc->pos(t);
+            if (p < 0 || p >= sc->decoded_len) continue;  // defensive
+            maps[i][(size_t)t] = (int)p;
+        }
+    }
+
+    // Per-camera drop report: the operator needs to see which camera is at
+    // fault, since heavy dropping is a hardware problem no remap can fix.
+    fprintf(stderr, "[CalibSync] plan reindex (%s): canonical_len=%lld\n",
+            plan.source.c_str(), (long long)len);
+    for (size_t i = 0; i < cams.size(); i++) {
+        const sync_plan::SyncCam *sc = plan.cam(cams[i]);
+        int64_t lost = 0;
+        for (const auto &g : sc->gaps) lost += g.lost;
+        std::string gaps;
+        for (const auto &g : sc->gaps)
+            gaps += " slot" + std::to_string((long long)g.slot) + "x" +
+                    std::to_string((long long)g.lost);
+        fprintf(stderr, "[CalibSync]   %-10s frames=%lld start_slot=%lld dropped=%lld%s\n",
+                cams[i].c_str(), (long long)sc->decoded_len,
+                (long long)sc->start_slot, (long long)lost, gaps.c_str());
+    }
+    if (status_out) {
+        int64_t total_lost = 0;
+        for (size_t i = 0; i < cams.size(); i++)
+            for (const auto &g : plan.cam(cams[i])->gaps) total_lost += g.lost;
+        *status_out = "per-frame remap active (" + std::to_string((long long)len) +
+                      " slots, " + std::to_string((long long)total_lost) +
+                      " dropped frames)";
+    }
+    return maps;
+}
+
+// Scale factor for the fixed pixel reprojection gates below.
+//
+// A reprojection error measured in pixels is not scale-free. For a lens of a
+// given field of view, the focal length in pixels is f = (width/2)/tan(hfov/2),
+// so a fixed angular misalignment produces a pixel error proportional to the
+// sensor's pixel extent. Every hardcoded gate in this file ("reject a pose over
+// 10 px", "drop observations over 20 px") was tuned against ~2 MP video, and
+// encodes an *angular* tolerance at that resolution. Applied unchanged to a
+// 57 MP sensor the same numbers admit ~4.9x less angular error, which rejects
+// data that is in fact as good as the data the gates were designed to keep.
+//
+// The diagonal is the right measure rather than width alone: reprojection
+// residuals have both x and y components and the board appears at arbitrary
+// orientations, so the isotropic image extent is what matters. Using the
+// diagonal also behaves correctly when aspect ratio differs from the 16:9
+// reference at equal pixel count.
+//
+// Clamped at 1.0 deliberately. Below the reference resolution the same argument
+// would tighten the gates, but tightening can only reject data that today's
+// code accepts — a silent behavior change for every existing small-sensor rig.
+// Loosening on large sensors merely restores the intended tolerance, so the
+// one-sided clamp keeps this a strict no-op at or below 1920x1080.
+inline double reproj_threshold_scale(int image_width, int image_height) {
+    if (image_width <= 0 || image_height <= 0) return 1.0;
+    const double ref_diag = std::hypot(1920.0, 1080.0);  // schedule tuning res
+    double diag = std::hypot((double)image_width, (double)image_height);
+    return std::max(1.0, diag / ref_diag);
 }
 
 struct PerCameraMetrics {
@@ -686,10 +842,19 @@ inline bool detect_and_calibrate_intrinsics_video(
         return false;
     }
 
-    // Probe frame count from first video
+    // Reference frame range. With a slot map, "frame index" downstream means
+    // canonical trigger slot, so the range is the plan's slot count — not any
+    // one camera's decoded length, which is short exactly for the camera that
+    // dropped frames. Without a map, probe the first video as before.
+    const bool have_slot_maps = !vfr.cam_slot_to_frame.empty();
     int total_video_frames = 0;
-    { auto first_it = video_files.begin();
-      total_video_frames = get_video_frame_count(first_it->second); }
+    if (have_slot_maps) {
+        for (const auto &m : vfr.cam_slot_to_frame)
+            total_video_frames = std::max(total_video_frames, (int)m.size());
+    } else {
+        auto first_it = video_files.begin();
+        total_video_frames = get_video_frame_count(first_it->second);
+    }
 
     // Build frame list
     int stop_fr = vfr.stop_frame;
@@ -746,6 +911,12 @@ inline bool detect_and_calibrate_intrinsics_video(
                 // for reference frame R is R + cam_off. Default 0 (index-based).
                 int cam_off = (cam_i < (int)vfr.cam_frame_offset.size())
                                   ? vfr.cam_frame_offset[cam_i] : 0;
+                // Per-frame remap, when built: slot_map[R] = mp4 frame index,
+                // -1 = this camera dropped that trigger. Takes precedence.
+                const std::vector<int> *slot_map =
+                    (cam_i < (int)vfr.cam_slot_to_frame.size() &&
+                     !vfr.cam_slot_to_frame[cam_i].empty())
+                        ? &vfr.cam_slot_to_frame[cam_i] : nullptr;
 
 #ifdef __APPLE__
                 // macOS: FFmpegDemuxer + VTAsyncDecoder + Metal GPU
@@ -767,9 +938,35 @@ inline bool detect_and_calibrate_intrinsics_video(
                 std::vector<uint8_t> gray(w * h);
 
                 int frame = 0;
-                // Per-camera decode bounds shifted by the sync offset.
-                int cam_start = std::max(0, vfr.start_frame + cam_off);
-                int cam_stop = stop_fr + cam_off;
+                // Per-camera decode bounds. With a slot map these come from the
+                // mp4 indices the requested slot range actually needs; the
+                // constant-offset shift is only valid without one.
+                // pos_to_slot inverts the map for the decode-driven loop below,
+                // which walks mp4 positions rather than slots.
+                std::vector<int> pos_to_slot;
+                int cam_start, cam_stop;
+                if (slot_map) {
+                    int max_pos = -1;
+                    for (int s = 0; s < (int)slot_map->size(); s++)
+                        max_pos = std::max(max_pos, (*slot_map)[s]);
+                    pos_to_slot.assign(std::max(0, max_pos + 1), -1);
+                    for (int s = 0; s < (int)slot_map->size(); s++) {
+                        int p = (*slot_map)[s];
+                        if (p >= 0) pos_to_slot[p] = s;
+                    }
+                    cam_start = -1; cam_stop = 0;
+                    for (int s = vfr.start_frame;
+                         s < std::min(stop_fr, (int)slot_map->size()); s++) {
+                        int p = (*slot_map)[s];
+                        if (p < 0) continue;
+                        if (cam_start < 0) cam_start = p;
+                        cam_stop = p + 1;
+                    }
+                    if (cam_start < 0) { cam_start = 0; cam_stop = 0; }
+                } else {
+                    cam_start = std::max(0, vfr.start_frame + cam_off);
+                    cam_stop = stop_fr + cam_off;
+                }
                 bool first_pkt_from_seek = false;
                 uint8_t *seek_pkt = nullptr; size_t seek_pkt_size = 0;
                 PacketData seek_pkt_info;
@@ -785,8 +982,13 @@ inline bool detect_and_calibrate_intrinsics_video(
                 // Unified process_frame: BGRA→gray then full-res detection
                 // (same pipeline as image path — proven REDv4 approach)
                 auto process_frame = [&](CVPixelBufferRef pb) {
-                    int ref_frame = frame - cam_off;  // shared reference frame
-                    bool should_detect = frame_to_idx.count(ref_frame) > 0;
+                    // Shared reference slot for this decoded mp4 frame.
+                    int ref_frame = slot_map
+                        ? ((frame >= 0 && frame < (int)pos_to_slot.size())
+                               ? pos_to_slot[frame] : -1)
+                        : frame - cam_off;
+                    bool should_detect =
+                        ref_frame >= 0 && frame_to_idx.count(ref_frame) > 0;
                     if (should_detect) {
                         CVPixelBufferLockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
                         const uint8_t *bgra = (const uint8_t *)CVPixelBufferGetBaseAddress(pb);
@@ -863,7 +1065,11 @@ inline bool detect_and_calibrate_intrinsics_video(
                 det.cam_data.image_width = w; det.cam_data.image_height = h;
                 std::vector<uint8_t> gray(w * h);
                 for (int frame_num : frame_numbers) {
-                    int actual = frame_num + cam_off;  // shift read by sync offset
+                    // mp4 index for this reference slot: per-frame map when
+                    // present (-1 = dropped), else the constant sync offset.
+                    int actual = slot_map
+                        ? ((frame_num < (int)slot_map->size()) ? (*slot_map)[frame_num] : -1)
+                        : frame_num + cam_off;
                     if (actual < 0) continue;          // no frame for this reference
                     const uint8_t *rgb = reader.readFrame(actual);
                     if (!rgb) continue;
@@ -3011,6 +3217,13 @@ inline bool initialize_extrinsics_pnp(
     }
     struct FramePose { Eigen::Matrix3d R; Eigen::Vector3d t; double reproj; };
     std::vector<std::map<int,FramePose>> pnp(num_cameras);
+    // Per-camera, because a rig may mix sensor sizes; a shared scale would be
+    // wrong for whichever camera does not match the one it was taken from.
+    std::vector<double> tscale(num_cameras, 1.0);
+    for (int ci=0;ci<num_cameras;ci++) {
+        const auto &ic = intrinsics.at(config.cam_ordered[ci]);
+        tscale[ci] = reproj_threshold_scale(ic.image_width, ic.image_height);
+    }
     for (int ci=0;ci<num_cameras;ci++) {
         const auto &intr = intrinsics.at(config.cam_ordered[ci]);
         for (const auto &[fi,corners] : intr.corners_per_image) {
@@ -3032,7 +3245,7 @@ inline bool initialize_extrinsics_pnp(
             auto pr=red_math::projectPoints(o3d,rv,tf,intr.K,intr.dist);
             double es=0; for(int i=0;i<(int)pr.size();i++) es+=(pr[i]-iraw[i]).norm();
             double me=es/pr.size();
-            if (me<10.0) pnp[ci][fi]={Rf,tf,me};
+            if (me<10.0*tscale[ci]) pnp[ci][fi]={Rf,tf,me};
         }
     }
     // Save board poses to database
@@ -3054,7 +3267,8 @@ inline bool initialize_extrinsics_pnp(
             int shared = 0;
             for (const auto &[fi, fp_a] : pnp[a]) {
                 auto it = pnp[b].find(fi);
-                if (it != pnp[b].end() && fp_a.reproj < 2.0 && it->second.reproj < 2.0)
+                if (it != pnp[b].end() && fp_a.reproj < 2.0*tscale[a] &&
+                    it->second.reproj < 2.0*tscale[b])
                     shared++;
             }
             if (shared > best_shared) { best_shared = shared; best_a = a; best_b = b; }
@@ -3076,7 +3290,8 @@ inline bool initialize_extrinsics_pnp(
         for (const auto &[fi, fp] : pnp[ci]) {
             auto it = pnp[bi].find(fi);
             if (it == pnp[bi].end()) continue;
-            if (fp.reproj >= 2.0 || it->second.reproj >= 2.0) continue;
+            if (fp.reproj >= 2.0*tscale[ci] ||
+                it->second.reproj >= 2.0*tscale[bi]) continue;
             Eigen::Matrix3d Rr = fp.R * it->second.R.transpose();
             Eigen::Vector3d tr = fp.t - Rr * it->second.t;
             cands.push_back({Rr, tr, fp.reproj + it->second.reproj});
@@ -3175,7 +3390,8 @@ inline bool initialize_extrinsics_pnp(
                 auto rvb = red_math::rotationMatrixToVector(poses[best_b].R);
                 double ea = (red_math::projectPoint(X, rva, poses[best_a].t, poses[best_a].K, poses[best_a].dist) - px_a).norm();
                 double eb = (red_math::projectPoint(X, rvb, poses[best_b].t, poses[best_b].K, poses[best_b].dist) - it->second).norm();
-                if (ea < 10.0 && eb < 10.0) init_points[global_id] = X;
+                if (ea < 10.0*tscale[best_a] && eb < 10.0*tscale[best_b])
+                    init_points[global_id] = X;
             }
         }
     }
@@ -3254,7 +3470,8 @@ inline bool initialize_extrinsics_pnp(
             for (const auto &[fi, fp_ci] : pnp[best_ci]) {
                 auto it = pnp[bi].find(fi);
                 if (it == pnp[bi].end()) continue;
-                if (fp_ci.reproj >= 2.0 || it->second.reproj >= 2.0) continue;
+                if (fp_ci.reproj >= 2.0*tscale[best_ci] ||
+                    it->second.reproj >= 2.0*tscale[bi]) continue;
                 // Relative pose ci→bi in board frame, then chain to world
                 Eigen::Matrix3d Rcb = fp_ci.R * it->second.R.transpose();
                 Eigen::Vector3d tcb = fp_ci.t - Rcb * it->second.t;
@@ -3347,7 +3564,7 @@ inline bool initialize_extrinsics_pnp(
                             auto X = red_math::triangulatePoints({ua, ub}, {Pa, Pb});
                             auto rva = red_math::rotationMatrixToVector(poses[best_ci].R);
                             double e = (red_math::projectPoint(X, rva, poses[best_ci].t, poses[best_ci].K, poses[best_ci].dist) - px_new).norm();
-                            if (e < 10.0) { init_points[global_id] = X; break; }
+                            if (e < 10.0*tscale[best_ci]) { init_points[global_id] = X; break; }
                         }
                         if (init_points.count(global_id)) break;
                     }
@@ -3397,6 +3614,12 @@ inline bool bundle_adjust_experimental(
     std::map<int,Eigen::Vector3d> &points_3d,
     CalibrationResult &result, std::string *status) {
     int nc=(int)config.cam_ordered.size();
+
+    // Per-camera scale for the fixed px gates in the pass schedule below. The
+    // poses carry no image size, so fall back to the pipeline-level dimensions;
+    // both are the same value on a uniform rig.
+    std::vector<double> tscale(nc, reproj_threshold_scale(result.image_width,
+                                                          result.image_height));
 
     // Helper: pack camera params from poses
     auto pack_cameras = [&](std::vector<std::array<double,15>> &cp) {
@@ -3622,9 +3845,11 @@ inline bool bundle_adjust_experimental(
             auto errors = compute_errors(observations,cp,pp);
             std::vector<Obs> inl;
             for(int i=0;i<(int)observations.size();i++)
-                if(errors[i]<bp.outlier_px) inl.push_back(observations[i]);
+                if(errors[i]<bp.outlier_px*tscale[observations[i].ci])
+                    inl.push_back(observations[i]);
             pass_outliers=(int)observations.size()-(int)inl.size();total_outliers+=pass_outliers;
-            fprintf(stderr,"[Experimental]   Outlier rejection: threshold=%.1f px removed=%d\n",bp.outlier_px,pass_outliers);
+            fprintf(stderr,"[Experimental]   Outlier rejection: threshold=%.1f px (x%.2f res scale) removed=%d\n",
+                bp.outlier_px,tscale.empty()?1.0:tscale[0],pass_outliers);
             if(pass_outliers>0) observations=std::move(inl);
         }
 
@@ -3707,9 +3932,10 @@ inline CalibrationResult run_experimental_pipeline(
     for(int ci=0;ci<nc;ci++){
         const auto &serial=config.cam_ordered[ci];
         auto &intr=intrinsics[serial];
-        if (intr.reproj_error > 1.0 && intr.corners_per_image.size() > 8) {
-            fprintf(stderr,"[Experimental]   Quality gate: %s reproj=%.2f px > 1.0, re-calibrating with best 50%% frames\n",
-                serial.c_str(), intr.reproj_error);
+        double qscale = reproj_threshold_scale(intr.image_width, intr.image_height);
+        if (intr.reproj_error > 1.0*qscale && intr.corners_per_image.size() > 8) {
+            fprintf(stderr,"[Experimental]   Quality gate: %s reproj=%.2f px > %.2f, re-calibrating with best 50%% frames\n",
+                serial.c_str(), intr.reproj_error, 1.0*qscale);
             // Compute per-frame reproj and keep only the best 50%
             // Re-run intrinsic calibration on remaining corners
             // We need obj_points and img_points from the detection — reconstruct from corners_per_image
@@ -3780,8 +4006,9 @@ inline CalibrationResult run_experimental_pipeline(
     if(progress) progress->current_step.store(4, std::memory_order_relaxed);
     if(status)*status="Step 4: Triangulation...";
     std::map<int,Eigen::Vector3d> points_3d;
-    int np=triangulate_landmarks_multiview(config,landmarks,poses,points_3d,50.0);
-    fprintf(stderr,"[Experimental] Triangulated %d landmarks (threshold=50px)\n",np);
+    double tri_thresh = 50.0 * reproj_threshold_scale(result.image_width, result.image_height);
+    int np=triangulate_landmarks_multiview(config,landmarks,poses,points_3d,tri_thresh);
+    fprintf(stderr,"[Experimental] Triangulated %d landmarks (threshold=%.0fpx)\n",np,tri_thresh);
     if(np<10){result.error="Too few points ("+std::to_string(np)+")";return result;}
     if(progress) progress->current_step.store(5, std::memory_order_relaxed);
     if(status)*status="Step 5: Bundle adjustment...";

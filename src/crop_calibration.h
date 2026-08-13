@@ -315,23 +315,65 @@ shift_landmarks_to_crop(
 struct PostReport {
     int id = 0;                 // post id == skeleton node index
     int n_views = 0;            // cameras with a click for this post
-    double mean_reproj = 0.0;   // px, across contributing cameras
+    double mean_reproj = 0.0;   // px, across contributing cameras (refined)
     double max_reproj = 0.0;    // px
+    double dlt_mean_reproj = 0.0;  // px, before nonlinear refinement
     std::map<std::string, double> per_cam_reproj;
+    // Cameras whose click lies beyond the stage-1 calibration's observed
+    // radius — the distortion model is EXTRAPOLATED there, so a large
+    // residual means "uncalibrated image region", not "bad click".
+    std::vector<std::string> extrapolated_cams;
     bool accepted = false;      // triangulated and mean_reproj <= max_reproj threshold
 };
 
+// Reprojection cost for refining a single post's 3D position (cameras fixed).
+struct PostPointCost {
+    double obs_x, obs_y;
+    Eigen::Matrix3d R;
+    Eigen::Vector3d t;
+    Eigen::Matrix3d K;
+    Eigen::Matrix<double, 5, 1> dist;
+    PostPointCost(const Eigen::Vector2d &obs,
+                  const CalibrationPipeline::CameraPose &cam)
+        : obs_x(obs.x()), obs_y(obs.y()), R(cam.R), t(cam.t), K(cam.K),
+          dist(cam.dist) {}
+    template <typename T>
+    bool operator()(const T *X, T *res) const {
+        T p[3];
+        for (int i = 0; i < 3; i++)
+            p[i] = T(R(i, 0)) * X[0] + T(R(i, 1)) * X[1] + T(R(i, 2)) * X[2] +
+                   T(t(i));
+        T xp = p[0] / p[2], yp = p[1] / p[2];
+        T r2 = xp * xp + yp * yp, r4 = r2 * r2, r6 = r4 * r2;
+        T radial = T(1) + T(dist(0)) * r2 + T(dist(1)) * r4 + T(dist(4)) * r6;
+        T xpp = xp * radial + T(2) * T(dist(2)) * xp * yp +
+                T(dist(3)) * (r2 + T(2) * xp * xp);
+        T ypp = yp * radial + T(dist(2)) * (r2 + T(2) * yp * yp) +
+                T(2) * T(dist(3)) * xp * yp;
+        res[0] = T(K(0, 0)) * xpp + T(K(0, 2)) - T(obs_x);
+        res[1] = T(K(1, 1)) * ypp + T(K(1, 2)) - T(obs_y);
+        return true;
+    }
+};
+
 // Triangulate hand-clicked posts (landmarks: cam serial -> post id -> pixel,
-// OpenCV y-down) with the stage-1 calibration, reporting per-post per-camera
-// reprojection residuals so bad clicks are caught. Posts with < 2 views are
-// reported but not triangulated. All triangulated posts land in posts_3d;
-// `accepted` flags whether the post passed the max_reproj threshold.
+// OpenCV y-down) with the stage-1 calibration: linear DLT for the initial
+// estimate, then per-post robust nonlinear refinement (Huber) — the DLT
+// minimizes an algebraic proxy and weights all views equally, so one bad
+// view (defocus, misclick) drags the whole post; the robust ML refinement
+// downweights it instead. Per-post per-camera residuals are reported so bad
+// clicks are caught. Posts with < 2 views are reported but not triangulated.
+// All triangulated posts land in posts_3d; `accepted` flags the threshold.
+// coverage_radius_px (optional, parallel to cam_names, <=0 = unknown): the
+// stage-1 calibration's maximum observed radius per camera; clicks beyond it
+// are flagged as extrapolated.
 inline std::vector<PostReport> triangulate_posts_with_report(
     const std::vector<std::string> &cam_names,
     const std::map<std::string, std::map<int, Eigen::Vector2d>> &landmarks,
     const std::vector<CalibrationPipeline::CameraPose> &poses,
     double max_reproj,
-    std::map<int, Eigen::Vector3d> &posts_3d) {
+    std::map<int, Eigen::Vector3d> &posts_3d,
+    const std::vector<double> &coverage_radius_px = {}) {
 
     posts_3d.clear();
     int nc = (int)cam_names.size();
@@ -369,6 +411,38 @@ inline std::vector<PostReport> triangulate_posts_with_report(
             continue;
         }
 
+        auto mean_err = [&](const Eigen::Vector3d &pt) {
+            double s = 0.0;
+            for (const auto &[ci, px] : obs) {
+                auto rv = red_math::rotationMatrixToVector(poses[ci].R);
+                s += (red_math::projectPoint(pt, rv, poses[ci].t, poses[ci].K,
+                                             poses[ci].dist) - px).norm();
+            }
+            return s / obs.size();
+        };
+        rep.dlt_mean_reproj = mean_err(X);
+
+        // Robust nonlinear refinement of X (cameras fixed)
+        {
+            double Xp[3] = {X.x(), X.y(), X.z()};
+            ceres::Problem problem;
+            for (const auto &[ci, px] : obs)
+                problem.AddResidualBlock(
+                    new ceres::AutoDiffCostFunction<PostPointCost, 2, 3>(
+                        new PostPointCost(px, poses[ci])),
+                    new ceres::HuberLoss(2.0), Xp);
+            ceres::Solver::Options opt;
+            opt.linear_solver_type = ceres::DENSE_QR;
+            opt.max_num_iterations = 50;
+            opt.minimizer_progress_to_stdout = false;
+            ceres::Solver::Summary sum;
+            ceres::Solve(opt, &problem, &sum);
+            Eigen::Vector3d Xr(Xp[0], Xp[1], Xp[2]);
+            if (Xr.allFinite() && sum.IsSolutionUsable() &&
+                mean_err(Xr) <= rep.dlt_mean_reproj)
+                X = Xr;
+        }
+
         double sum = 0.0;
         for (const auto &[ci, px] : obs) {
             auto rv = red_math::rotationMatrixToVector(poses[ci].R);
@@ -378,6 +452,13 @@ inline std::vector<PostReport> triangulate_posts_with_report(
             rep.per_cam_reproj[cam_names[ci]] = e;
             rep.max_reproj = std::max(rep.max_reproj, e);
             sum += e;
+            if (ci < (int)coverage_radius_px.size() &&
+                coverage_radius_px[ci] > 0) {
+                double r = (px - Eigen::Vector2d(poses[ci].K(0, 2),
+                                                 poses[ci].K(1, 2))).norm();
+                if (r > coverage_radius_px[ci])
+                    rep.extrapolated_cams.push_back(cam_names[ci]);
+            }
         }
         rep.mean_reproj = sum / obs.size();
         rep.accepted = rep.mean_reproj <= max_reproj;
@@ -385,6 +466,44 @@ inline std::vector<PostReport> triangulate_posts_with_report(
         reports.push_back(rep);
     }
     return reports;
+}
+
+// Per-camera maximum observed corner radius (px from the principal point) of
+// a stage-1 calibration — from calibration_data.json's residual pixel
+// coordinates. The distortion model is only CONSTRAINED inside this radius;
+// beyond it, it extrapolates. Returns empty when the data is unavailable
+// (old runs without obs_x/obs_y export).
+inline std::vector<double> load_coverage_radii(
+    const std::string &stage1_folder,
+    const std::vector<std::string> &cam_names,
+    const std::vector<CalibrationPipeline::CameraPose> &poses) {
+    std::string src = resolve_calibration_folder(stage1_folder);
+    std::ifstream f(src + "/calibration_data.json");
+    if (!f.is_open()) return {};
+    nlohmann::json j;
+    try { f >> j; } catch (...) { return {}; }
+    if (!j.contains("residuals") || !j.contains("camera_names")) return {};
+    const auto &r = j["residuals"];
+    if (!r.contains("obs_x") || !r.contains("camera_idx")) return {};
+    auto run_cams = j["camera_names"].get<std::vector<std::string>>();
+    auto cam_idx = r["camera_idx"].get<std::vector<int>>();
+    auto obs_x = r["obs_x"].get<std::vector<double>>();
+    auto obs_y = r["obs_y"].get<std::vector<double>>();
+
+    std::vector<double> radii(cam_names.size(), 0.0);
+    for (size_t c = 0; c < cam_names.size(); c++) {
+        int ri = -1;
+        for (size_t k = 0; k < run_cams.size(); k++)
+            if (run_cams[k] == cam_names[c]) { ri = (int)k; break; }
+        if (ri < 0 || c >= poses.size()) continue;
+        double cx = poses[c].K(0, 2), cy = poses[c].K(1, 2), rmax = 0.0;
+        for (size_t k = 0; k < cam_idx.size(); k++) {
+            if (cam_idx[k] != ri) continue;
+            rmax = std::max(rmax, std::hypot(obs_x[k] - cx, obs_y[k] - cy));
+        }
+        radii[c] = rmax;
+    }
+    return radii;
 }
 
 // posts_3d.csv: header "x,y,z", row index == post id (skeleton node index).
@@ -442,8 +561,11 @@ inline bool write_posts_report_json(const std::string &path,
                          {"n_views", r.n_views},
                          {"mean_reproj", r.mean_reproj},
                          {"max_reproj", r.max_reproj},
+                         {"dlt_mean_reproj", r.dlt_mean_reproj},
                          {"accepted", r.accepted}};
         j["per_cam_reproj"] = r.per_cam_reproj;
+        if (!r.extrapolated_cams.empty())
+            j["extrapolated_cams"] = r.extrapolated_cams;
         arr.push_back(j);
     }
     std::ofstream f(path);
