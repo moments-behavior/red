@@ -99,11 +99,14 @@ inline void DrawKeypointsWindow(AppContext &ctx) {
                                     fa.cameras[row].active_id == (u32)node;
                                 ImVec4 node_color = ImVec4(0, 0, 0, 0);
 
-                                if (is_active) {
-                                    node_color = active_kp_color; // user-selected
-                                } else if (row < (int)fa.cameras.size() &&
-                                           node < (int)fa.cameras[row].keypoints.size() &&
-                                           fa.cameras[row].keypoints[node].labeled) {
+                                // Fill shows placement status regardless of
+                                // active state: the node color once the keypoint
+                                // is labeled, else transparent. The active
+                                // keypoint is drawn as an outline below, so
+                                // whether it has been placed stays visible.
+                                if (row < (int)fa.cameras.size() &&
+                                    node < (int)fa.cameras[row].keypoints.size() &&
+                                    fa.cameras[row].keypoints[node].labeled) {
                                     node_color =
                                         skeleton.node_colors[node];
                                     node_color.w = 0.9f;
@@ -125,6 +128,22 @@ inline void DrawKeypointsWindow(AppContext &ctx) {
                                         ImVec2(cell_w, ImGui::GetFrameHeight()))) {
                                     if (row < (int)fa.cameras.size())
                                         fa.cameras[row].active_id = (u32)node;
+                                }
+                                // Active keypoint: outline the cell (in the
+                                // user's "Active Keypoint" color) rather than
+                                // filling it, so its placement color stays
+                                // visible. Expand to the cell-bg edges by the
+                                // cell padding. Matches the Labeling Tool's
+                                // highlight-outline style.
+                                if (is_active) {
+                                    const ImVec2 cp = ImGui::GetStyle().CellPadding;
+                                    const ImVec2 rmin = ImGui::GetItemRectMin();
+                                    const ImVec2 rmax = ImGui::GetItemRectMax();
+                                    ImGui::GetWindowDrawList()->AddRect(
+                                        ImVec2(rmin.x - cp.x, rmin.y - cp.y),
+                                        ImVec2(rmax.x + cp.x, rmax.y + cp.y),
+                                        ImGui::GetColorU32(active_kp_color),
+                                        0.0f, 0, 3.0f);
                                 }
                                 if (ImGui::IsItemHovered() &&
                                     node < (int)skeleton.node_names.size() &&
