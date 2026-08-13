@@ -499,6 +499,8 @@ int main(int argc, char **argv) {
                 pm = loaded;
                 if (setup_project(pm, skeleton, skeleton_map, &err)) {
                     on_project_loaded(ctx, print_metadata, print_summary);
+                    // Reopen the JARVIS Predict panel if it was open last time.
+                    win.jarvis_predict.show = pm.show_jarvis_predict;
                 } else
                     popups.pushError(err);
             }

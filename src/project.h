@@ -56,6 +56,11 @@ struct ProjectManager {
     // changes what a frame index means: with the fix ON, labels/predictions
     // are keyed by canonical trigger slot, OFF by raw mp4 index.
     bool sync_fix_enabled = false;
+    // Restore the JARVIS Predict panel's open state when the project is
+    // reopened: persisted here, applied to WindowStates on load, and updated
+    // whenever the user opens/closes the panel. The panel's docking geometry
+    // persists separately via the project's imgui_layout.ini.
+    bool show_jarvis_predict = false;
     AnnotationConfig annotation_config; // annotation capabilities
 
     // JARVIS models imported into this project
@@ -140,6 +145,7 @@ inline void to_json(nlohmann::json &j, const ProjectManager &p) {
                        {"telecentric", p.telecentric},
                        {"annotation_2d", p.annotation_2d},
                        {"sync_fix_enabled", p.sync_fix_enabled},
+                       {"show_jarvis_predict", p.show_jarvis_predict},
                        {"annotation_config", p.annotation_config},
                        {"jarvis_models", p.jarvis_models},
                        {"active_jarvis_model", p.active_jarvis_model},
@@ -162,6 +168,7 @@ inline void from_json(const nlohmann::json &j, ProjectManager &p) {
     p.telecentric = j.value("telecentric", false);
     p.annotation_2d = j.value("annotation_2d", false);
     p.sync_fix_enabled = j.value("sync_fix_enabled", false);
+    p.show_jarvis_predict = j.value("show_jarvis_predict", false);
     if (j.contains("annotation_config"))
         p.annotation_config = j["annotation_config"].get<AnnotationConfig>();
     if (j.contains("jarvis_models"))
