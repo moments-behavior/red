@@ -173,6 +173,9 @@ inline void bbox_handle_input(BBoxToolState &state, AnnotationMap &amap,
         }
     }
 
+    // Keyboard shortcuts below must not fire while typing in a text field.
+    if (ImGui::GetIO().WantTextInput) return;
+
     // F key: delete hovered bbox from this camera
     if (state.hovered && ImGui::IsKeyPressed(ImGuiKey_F)) {
         auto &fa = amap[frame];
