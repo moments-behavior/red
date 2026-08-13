@@ -1684,8 +1684,16 @@ int main(int argc, char **argv) {
                                 is_view_focused[j] = false;
                             }
 
+                            // Hold P while hovering a view to hide its label
+                            // overlay (manual keypoints + prediction overlay) and
+                            // peek at the raw image underneath. Per-view: affects
+                            // only the hovered image; release to restore.
+                            bool peek_raw = ImPlot::IsPlotHovered() &&
+                                            ImGui::IsKeyDown(ImGuiKey_P) &&
+                                            !io.WantTextInput;
+
                             if (keypoints_find && skeleton.has_skeleton &&
-                                display.show_keypoints) {
+                                display.show_keypoints && !peek_raw) {
                                 gui_plot_keypoints(
                                     annotations.at(current_frame_num),
                                     &skeleton, j, scene->num_cams,
@@ -1698,7 +1706,7 @@ int main(int argc, char **argv) {
                             // hand-labeled) so the automatic prediction doesn't
                             // linger once a frame has manual/human-owned data.
                             if (!keypoints_find && skeleton.has_skeleton &&
-                                display.show_keypoints &&
+                                display.show_keypoints && !peek_raw &&
                                 win.jarvis_predict.show_prediction_overlay &&
                                 prediction_store.is_open() &&
                                 (int)prediction_store.num_keypoints() ==

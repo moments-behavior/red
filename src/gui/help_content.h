@@ -91,6 +91,7 @@ inline const std::vector<Group> &shortcut_groups() {
             {"T", "Triangulate the current frame", Gate::Need3D,
                  "Needs the same keypoint in \xE2\x89\xA5 2 cameras"},
             {"2", "Open the image context menu (fit axes, toggle keypoint/mask/bbox layers)"},
+            {"P  (hold)", "Hide this view's labels to peek at the raw image underneath"},
         }},
         {"Labeling \xE2\x80\x94 hovering a keypoint", "Hover an existing (drawn) keypoint", Gate::Always, {
             {"Click", "Activate that keypoint for this camera (does not create one)"},
