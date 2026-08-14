@@ -411,14 +411,17 @@ inline std::vector<PostReport> triangulate_posts_with_report(
             continue;
         }
 
+        // MSVC rejects capturing a structured binding in a lambda under
+        // C++17 (error C3493), so alias `obs` before capturing it.
+        const auto &obs_ref = obs;
         auto mean_err = [&](const Eigen::Vector3d &pt) {
             double s = 0.0;
-            for (const auto &[ci, px] : obs) {
+            for (const auto &[ci, px] : obs_ref) {
                 auto rv = red_math::rotationMatrixToVector(poses[ci].R);
                 s += (red_math::projectPoint(pt, rv, poses[ci].t, poses[ci].K,
                                              poses[ci].dist) - px).norm();
             }
-            return s / obs.size();
+            return s / obs_ref.size();
         };
         rep.dlt_mean_reproj = mean_err(X);
 
