@@ -3,6 +3,7 @@
 #include "annotation.h"
 #include "annotation_csv.h"
 #include "gui/gui_keypoints.h"
+#include "gui/shortcuts.h"
 #include "IconsForkAwesome.h"
 #include "implot.h"
 #include "implot_internal.h"
@@ -594,10 +595,7 @@ inline void DrawLabelingToolWindow(
     ImGui::End();
 
     // Ctrl+S save handling
-    if (pm.plot_keypoints_flag &&
-        ImGui::GetIO().KeyCtrl &&
-        ImGui::IsKeyPressed(ImGuiKey_S, false) &&
-        !ImGui::GetIO().WantTextInput) {
+    if (pm.plot_keypoints_flag && keys::pressed(keys::Sc::SaveLabels)) {
         state.save_requested = true;
     }
 

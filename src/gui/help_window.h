@@ -61,6 +61,13 @@ inline void key_chip(const char *txt) {
     ImGui::Dummy(ImVec2(ts.x + pad.x * 2, ts.y + pad.y * 2));
 }
 
+// Key label for a shortcut row: derived from the binding table (single source
+// of truth) for bound keys, or the literal string for mouse/multi-step rows.
+inline std::string sc_label(const help::Shortcut &s) {
+    return (s.sc != keys::Sc::COUNT) ? keys::display(s.sc)
+                                     : std::string(s.lit ? s.lit : "");
+}
+
 // Render one shortcut group as a table. Returns whether it drew anything.
 inline bool draw_group(const help::Group &g, const help::Context &c,
                        const std::string &q, bool active_badge) {
@@ -68,7 +75,7 @@ inline bool draw_group(const help::Group &g, const help::Context &c,
     std::vector<const help::Shortcut *> rows;
     for (const auto &s : g.items)
         if (gate_ok(s.gate, c) &&
-            (match_any(q, {g.title, s.keys, s.action, s.note})))
+            (match_any(q, {g.title, sc_label(s).c_str(), s.action, s.note})))
             rows.push_back(&s);
     if (rows.empty()) return false;
 
@@ -86,7 +93,7 @@ inline bool draw_group(const help::Group &g, const help::Context &c,
         for (const auto *s : rows) {
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
-            key_chip(s->keys);
+            key_chip(sc_label(*s).c_str());
             ImGui::TableNextColumn();
             ImGui::TextWrapped("%s", s->action);
             if (s->note && s->note[0]) {

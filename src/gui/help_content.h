@@ -9,6 +9,7 @@
 // All content was audited against the code (2026-08); notes on overloaded keys
 // (F/T/Backspace) and the calibration-vs-body 3D rotate convention reflect the
 // current, real behavior.
+#include "gui/shortcuts.h"
 #include <string>
 #include <vector>
 
@@ -36,7 +37,8 @@ enum class Gate {
 };
 
 struct Shortcut {
-    const char *keys;
+    keys::Sc sc;                 // a bound key: label is derived from shortcuts.h
+    const char *lit;             // literal label when sc == keys::Sc::COUNT
     const char *action;
     Gate gate = Gate::Always;
     const char *note = "";       // caveat / overload note (optional)
@@ -67,64 +69,67 @@ struct Concept  { const char *term; const char *def; };
 // ---------------------------------------------------------------------------
 
 inline const std::vector<Group> &shortcut_groups() {
+    using S = keys::Sc;
     static const std::vector<Group> g = {
         {"Global", "Available any time", Gate::Always, {
-            {"H", "Toggle this Help window"},
-            {"Space", "Play / pause"},
-            {"\xE2\x86\x90  /  \xE2\x86\x92", "Step one frame back / forward"},
-            {"Shift + \xE2\x86\x90 / \xE2\x86\x92", "Jump 10 frames"},
-            {"[  /  ]", "Previous / next pump dispense", Gate::Always,
+            {S::ToggleHelp, nullptr, "Toggle this Help window"},
+            {S::PlayPause, nullptr, "Play / pause"},
+            {S::SeekBack, nullptr, "Step back one frame", Gate::Always, "Hold Shift for x10"},
+            {S::SeekFwd, nullptr, "Step forward one frame", Gate::Always, "Hold Shift for x10"},
+            {S::COUNT, "[  /  ]", "Previous / next pump dispense", Gate::Always,
                  "Needs a loaded pumpctl log; skips pumps hidden in the Pump Events filter"},
-            {"Ctrl + S", "Save labels (writes a new timestamped labeled_data folder)"},
-            {"6", "Run JARVIS prediction on the current frame", Gate::Need3D,
+            {S::SaveLabels, nullptr, "Save labels (writes a new timestamped labeled_data folder)"},
+            {S::PredictCurrent, nullptr, "Run JARVIS prediction on the current frame", Gate::Need3D,
                  "Paused, with a JARVIS model loaded"},
         }},
         {"When paused", "Stepping through the frame buffer", Gate::Always, {
-            {",", "Previous buffered frame"},
-            {".", "Next buffered frame"},
+            {S::BufferPrev, nullptr, "Previous buffered frame"},
+            {S::BufferNext, nullptr, "Next buffered frame"},
         }},
         {"Labeling \xE2\x80\x94 hovering an image", "With a skeleton loaded; hover a camera view", Gate::Always, {
-            {"B", "Create the keypoint set for this frame"},
-            {"W", "Place the active keypoint at the cursor, then advance to the next node"},
-            {"A  /  D", "Previous / next active keypoint"},
-            {"Q  /  E", "Jump active keypoint to the first / last node"},
-            {"Backspace", "Delete all keypoints on this frame",
-                 Gate::Always, "While SAM has prompts, Backspace undoes a SAM point instead"},
-            {"T", "Triangulate the current frame", Gate::Need3D,
+            {S::CreateFrame, nullptr, "Create the keypoint set for this frame"},
+            {S::PlaceKeypoint, nullptr, "Place the active keypoint at the cursor, then advance to the next node"},
+            {S::ActivePrev, nullptr, "Previous active keypoint"},
+            {S::ActiveNext, nullptr, "Next active keypoint"},
+            {S::ActiveFirst, nullptr, "Jump active keypoint to the first node"},
+            {S::ActiveLast, nullptr, "Jump active keypoint to the last node"},
+            {S::DeleteAllKp, nullptr, "Delete all keypoints on this frame", Gate::Always,
+                 "While SAM has prompts, Backspace undoes a SAM point instead"},
+            {S::Triangulate, nullptr, "Triangulate the current frame", Gate::Need3D,
                  "Needs the same keypoint in \xE2\x89\xA5 2 cameras"},
-            {"2", "Open the image context menu (fit axes, toggle keypoint/mask/bbox layers)"},
-            {"P  (hold)", "Hide this view's labels to peek at the raw image underneath"},
+            {S::PlotMenu, nullptr, "Open the image context menu (fit axes, toggle keypoint/mask/bbox layers)"},
+            {S::PeekRaw, nullptr, "Hide this view's labels to peek at the raw image underneath"},
         }},
         {"Labeling \xE2\x80\x94 hovering a keypoint", "Hover an existing (drawn) keypoint", Gate::Always, {
-            {"Click", "Activate that keypoint for this camera (does not create one)"},
-            {"Left-drag", "Move the keypoint (clears its triangulated 3D)"},
-            {"R", "Delete this keypoint on this camera"},
-            {"F", "Delete this keypoint on all cameras"},
+            {S::COUNT, "Click", "Activate that keypoint for this camera (does not create one)"},
+            {S::COUNT, "Left-drag", "Move the keypoint (clears its triangulated 3D)"},
+            {S::COUNT, "R", "Delete this keypoint on this camera"},
+            {S::COUNT, "F", "Delete this keypoint on all cameras"},
         }},
         {"Bbox tool", "When the Bbox tool is enabled", Gate::ToolBbox, {
-            {"Shift + drag", "Draw a box (committed when you release Shift)"},
-            {"F", "Delete the hovered box on this camera"},
-            {"O", "Delete the hovered box on all cameras"},
-            {"Z  /  X", "Previous / next class"},
-            {"N", "New class"},
-            {"C  /  V", "Previous / next instance id"},
+            {S::COUNT, "Shift + drag", "Draw a box (committed when you release Shift)"},
+            {S::COUNT, "F", "Delete the hovered box on this camera"},
+            {S::COUNT, "O", "Delete the hovered box on all cameras"},
+            {S::COUNT, "Z  /  X", "Previous / next class"},
+            {S::COUNT, "N", "New class"},
+            {S::COUNT, "C  /  V", "Previous / next instance id"},
         }},
         {"OBB tool", "When the OBB tool is enabled", Gate::ToolObb, {
-            {"G  (\xC3\x97""3)", "Place axis point 1, axis point 2, then the corner"},
-            {"Esc", "Cancel the current box"},
-            {"Delete", "Delete the hovered box"},
+            {S::COUNT, "G  (\xC3\x97""3)", "Place axis point 1, axis point 2, then the corner"},
+            {S::COUNT, "Esc", "Cancel the current box"},
+            {S::COUNT, "Delete", "Delete the hovered box"},
         }},
         {"SAM Assist", "When SAM Assist is enabled (needs ONNX Runtime)", Gate::ToolSam, {
-            {"Left-click", "Add a foreground point"},
-            {"Right-click", "Add a background point"},
-            {"Shift + scroll", "Cycle mask candidates"},
-            {"Enter", "Accept the mask"},
-            {"Backspace", "Undo the last point"},
-            {"Esc", "Clear all prompts"},
+            {S::COUNT, "Left-click", "Add a foreground point"},
+            {S::COUNT, "Right-click", "Add a background point"},
+            {S::COUNT, "Shift + scroll", "Cycle mask candidates"},
+            {S::COUNT, "Enter", "Accept the mask"},
+            {S::COUNT, "Backspace", "Undo the last point"},
+            {S::COUNT, "Esc", "Clear all prompts"},
         }},
         {"Midline tool", "When the Midline tool is enabled", Gate::ToolMidline, {
-            {"Click, click", "Place the two line endpoints (in the line camera)"},
-            {"W", "Label the midline keypoints in the side camera (as usual)"},
+            {S::COUNT, "Click, click", "Place the two line endpoints (in the line camera)"},
+            {S::COUNT, "W", "Label the midline keypoints in the side camera (as usual)"},
         }},
     };
     return g;
