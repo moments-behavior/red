@@ -32,6 +32,10 @@ inline void DrawKeypointsWindow(AppContext &ctx) {
             float table_height = ImGui::GetContentRegionAvail().y;
             ImVec2 table_size(0.0f, table_height);
 
+            // Top of the table on screen = top of the angled-header band; used
+            // below to detect clicks on the (header-row-less) angled headers.
+            const float band_top = ImGui::GetCursorScreenPos().y;
+
             if (ImGui::BeginTable("table_angled_headers", columns_count,
                                   table_flags, table_size)) {
                 ImGui::TableSetupColumn(
@@ -45,9 +49,16 @@ inline void DrawKeypointsWindow(AppContext &ctx) {
                             ImGuiTableColumnFlags_WidthFixed);
                 }
 
-                ImGui::TableSetupScrollFreeze(1, 2);
+                // Freeze the single angled-header row. We deliberately do NOT
+                // call TableHeadersRow(): its horizontal cells duplicated the
+                // angled labels. Clicking a keypoint's angled header is handled
+                // after the body rows, gated to the header Y-band.
+                ImGui::TableSetupScrollFreeze(1, 1);
                 ImGui::TableAngledHeadersRow();
-                ImGui::TableHeadersRow();
+
+                // Lower edge of the angled-header band (top of the first body
+                // row), captured while rendering the first row below.
+                float first_body_top = -1.0f;
 
                 // Find focused row
                 int focused_row = -1;
@@ -72,6 +83,8 @@ inline void DrawKeypointsWindow(AppContext &ctx) {
                     }
 
                     ImGui::TableSetColumnIndex(0);
+                    if (first_body_top < 0.0f)
+                        first_body_top = ImGui::GetCursorScreenPos().y;
                     ImGui::AlignTextToFramePadding();
                     ImGui::Text("%s", row < (int)pm.camera_names.size()
                         ? pm.camera_names[row].c_str() : "?");
@@ -86,11 +99,14 @@ inline void DrawKeypointsWindow(AppContext &ctx) {
                                     fa.cameras[row].active_id == (u32)node;
                                 ImVec4 node_color = ImVec4(0, 0, 0, 0);
 
-                                if (is_active) {
-                                    node_color = active_kp_color; // user-selected
-                                } else if (row < (int)fa.cameras.size() &&
-                                           node < (int)fa.cameras[row].keypoints.size() &&
-                                           fa.cameras[row].keypoints[node].labeled) {
+                                // Fill shows placement status regardless of
+                                // active state: the node color once the keypoint
+                                // is labeled, else transparent. The active
+                                // keypoint is drawn as an outline below, so
+                                // whether it has been placed stays visible.
+                                if (row < (int)fa.cameras.size() &&
+                                    node < (int)fa.cameras[row].keypoints.size() &&
+                                    fa.cameras[row].keypoints[node].labeled) {
                                     node_color =
                                         skeleton.node_colors[node];
                                     node_color.w = 0.9f;
@@ -112,6 +128,22 @@ inline void DrawKeypointsWindow(AppContext &ctx) {
                                         ImVec2(cell_w, ImGui::GetFrameHeight()))) {
                                     if (row < (int)fa.cameras.size())
                                         fa.cameras[row].active_id = (u32)node;
+                                }
+                                // Active keypoint: outline the cell (in the
+                                // user's "Active Keypoint" color) rather than
+                                // filling it, so its placement color stays
+                                // visible. Expand to the cell-bg edges by the
+                                // cell padding. Matches the Labeling Tool's
+                                // highlight-outline style.
+                                if (is_active) {
+                                    const ImVec2 cp = ImGui::GetStyle().CellPadding;
+                                    const ImVec2 rmin = ImGui::GetItemRectMin();
+                                    const ImVec2 rmax = ImGui::GetItemRectMax();
+                                    ImGui::GetWindowDrawList()->AddRect(
+                                        ImVec2(rmin.x - cp.x, rmin.y - cp.y),
+                                        ImVec2(rmax.x + cp.x, rmax.y + cp.y),
+                                        ImGui::GetColorU32(active_kp_color),
+                                        0.0f, 0, 3.0f);
                                 }
                                 if (ImGui::IsItemHovered() &&
                                     node < (int)skeleton.node_names.size() &&
@@ -150,6 +182,29 @@ inline void DrawKeypointsWindow(AppContext &ctx) {
                     if (row == focused_row)
                         continue;
                     render_row(row);
+                }
+
+                // Angled-header interaction: the header band is the strip
+                // between band_top and the first body row. TableGetHoveredColumn
+                // gives the column under the cursor (accounting for horizontal
+                // scroll); a click there sets that keypoint active in EVERY
+                // camera view at once.
+                if (first_body_top > 0.0f) {
+                    const int hc = ImGui::TableGetHoveredColumn();
+                    const float my = ImGui::GetIO().MousePos.y;
+                    const bool in_header =
+                        hc >= 1 && hc < columns_count &&
+                        my >= band_top && my < first_body_top;
+                    if (in_header && (hc - 1) < (int)skeleton.node_names.size())
+                        ImGui::SetTooltip("Set active in all cameras: %s",
+                                          skeleton.node_names[hc - 1].c_str());
+                    if (in_header && keypoints_find &&
+                        ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                        const int node = hc - 1;
+                        auto &fa = annotations.at(current_frame_num);
+                        for (auto &cam : fa.cameras)
+                            cam.active_id = (u32)node;
+                    }
                 }
 
                 ImGui::EndTable();

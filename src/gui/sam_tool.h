@@ -216,6 +216,9 @@ inline void sam_handle_input(SamToolState &state, SamState &sam,
         }
     }
 
+    // Keyboard shortcuts below must not fire while typing in a text field.
+    if (ImGui::GetIO().WantTextInput) return;
+
     // Enter: accept mask -> store in annotation
     // Normalize from image coords (Y=0 top) to ImPlot coords (Y=0 bottom)
     // so that mask_polygons match the same convention as keypoints.

@@ -64,6 +64,15 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
             win.switch_skeleton.initialized = false;
         }
         ImGui::EndDisabled();
+        ImGui::Separator();
+        // Save Labels — same action as the toolbar floppy icon and the Labeling
+        // Tool's Save button: ctx.save_requested is forwarded to the labeling
+        // tool, which writes the per-camera and 3D label CSVs.
+        ImGui::BeginDisabled(!pm.plot_keypoints_flag);
+        if (ImGui::MenuItem("Save Labels")) {
+            ctx.save_requested = true;
+        }
+        ImGui::EndDisabled();
         ImGui::EndMenu();
     }
 

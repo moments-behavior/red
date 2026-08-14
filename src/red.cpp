@@ -500,6 +500,8 @@ int main(int argc, char **argv) {
                 pm = loaded;
                 if (setup_project(pm, skeleton, skeleton_map, &err)) {
                     on_project_loaded(ctx, print_metadata, print_summary);
+                    // Reopen the JARVIS Predict panel if it was open last time.
+                    win.jarvis_predict.show = pm.show_jarvis_predict;
                 } else
                     popups.pushError(err);
             }
@@ -614,7 +616,16 @@ int main(int argc, char **argv) {
                     }
                 },
                 [&]() { return pm.plot_keypoints_flag; }});
-    panels.add({"Help", [&]() { DrawHelpWindow(win.show_help); }, nullptr});
+    panels.add({"Help", [&]() {
+                    help::Context hctx;
+                    hctx.project_open = !pm.project_path.empty();
+                    hctx.is_3d        = hctx.project_open && !project_is_2d(pm);
+                    hctx.bbox_on      = win.bbox.enabled;
+                    hctx.obb_on       = win.obb.enabled;
+                    hctx.sam_on       = win.sam_tool.enabled;
+                    hctx.midline_on   = win.midline.enabled;
+                    DrawHelpWindow(win.show_help, hctx);
+                }, nullptr});
     panels.add({"JARVIS Export",
                 [&]() { DrawJarvisExportWindow(win.jarvis_export, ctx); },
                 nullptr});
@@ -1707,8 +1718,16 @@ int main(int argc, char **argv) {
                                 is_view_focused[j] = false;
                             }
 
+                            // Hold P while hovering a view to hide its label
+                            // overlay (manual keypoints + prediction overlay) and
+                            // peek at the raw image underneath. Per-view: affects
+                            // only the hovered image; release to restore.
+                            bool peek_raw = ImPlot::IsPlotHovered() &&
+                                            ImGui::IsKeyDown(ImGuiKey_P) &&
+                                            !io.WantTextInput;
+
                             if (keypoints_find && skeleton.has_skeleton &&
-                                display.show_keypoints) {
+                                display.show_keypoints && !peek_raw) {
                                 gui_plot_keypoints(
                                     annotations.at(current_frame_num),
                                     &skeleton, j, scene->num_cams,
@@ -1721,7 +1740,7 @@ int main(int argc, char **argv) {
                             // hand-labeled) so the automatic prediction doesn't
                             // linger once a frame has manual/human-owned data.
                             if (!keypoints_find && skeleton.has_skeleton &&
-                                display.show_keypoints &&
+                                display.show_keypoints && !peek_raw &&
                                 win.jarvis_predict.show_prediction_overlay &&
                                 prediction_store.is_open() &&
                                 (int)prediction_store.num_keypoints() ==

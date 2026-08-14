@@ -1632,4 +1632,18 @@ inline void DrawJarvisPredictWindow(JarvisPredictState &state, JarvisState &jarv
             }
         },
         ImVec2(480, 600));
+
+    // Persist the panel's open/closed state per-project so it reopens
+    // automatically the next time this project is loaded. DrawPanel flips
+    // state.show to false when the user closes the window (X); the menu sets it
+    // true. On any change vs the saved value, rewrite the .redproj. (Dock
+    // geometry is saved separately in the project's imgui_layout.ini.)
+    if (!ctx.pm.project_path.empty() &&
+        ctx.pm.show_jarvis_predict != state.show) {
+        ctx.pm.show_jarvis_predict = state.show;
+        std::filesystem::path redproj =
+            std::filesystem::path(ctx.pm.project_path) /
+            (ctx.pm.project_name + ".redproj");
+        save_project_manager_json(ctx.pm, redproj);
+    }
 }
