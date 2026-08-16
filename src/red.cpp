@@ -71,6 +71,15 @@ int main(int argc, char **argv) {
     bool keypoints_find = false;
     std::map<std::string, SkeletonPrimitive> skeleton_map = skeleton_get_all();
 
+    // Background "Project 3D -> 2D" worker (auto-fires after Load 3D Only).
+    // The worker mutates kp2d; the render loop reads kp2d. We rely on the
+    // modal progress popup to discourage interactive editing during the run.
+    std::atomic<int> projection_progress{0};
+    std::atomic<int> projection_total{0};
+    std::atomic<bool> projection_running{false};
+    std::thread projection_worker;
+    bool projection_popup_open = false;
+
     // others
     ImVec4 clear_color = ImVec4(0.0f, 0.0f, 0.0f, 1.00f);
     ImGuiIO &io = ImGui::GetIO();
@@ -2620,6 +2629,7 @@ int main(int argc, char **argv) {
                                          &skeleton, pm.camera_params, scene);
                         }
                     }
+
                 } else {
                     // Display message when skeleton is not properly loaded
                     ImGui::Text("Please load a skeleton to view keypoints.");
@@ -2770,6 +2780,17 @@ int main(int argc, char **argv) {
                     ImGuiFileDialog::Instance()->OpenDialog(
                         "LoadFromSelected", "Load from selected", nullptr,
                         config);
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Load 3D Only")) {
+                    IGFD::FileDialogConfig config;
+                    config.countSelectionMax = 1;
+                    config.path = pm.keypoints_root_folder;
+                    config.flags = ImGuiFileDialogFlags_Modal;
+                    ImGuiFileDialog::Instance()->OpenDialog(
+                        "Load3DOnly",
+                        "Select keypoints3d.csv (skip per-camera 2D)",
+                        ".csv", config);
                 }
 
                 ImGui::Separator();
@@ -3144,6 +3165,55 @@ int main(int argc, char **argv) {
             }
             // close
             ImGuiFileDialog::Instance()->Close();
+        }
+
+        if (ImGuiFileDialog::Instance()->Display("Load3DOnly")) {
+            if (ImGuiFileDialog::Instance()->IsOk()) {
+                std::string selected_file =
+                    ImGuiFileDialog::Instance()->GetFilePathName();
+                free_all_keypoints(keypoints_map, scene);
+                if (load_keypoints_3d_only(selected_file, keypoints_map,
+                                           &skeleton, scene, error_message)) {
+                    free_all_keypoints(keypoints_map, scene);
+                    show_error = true;
+                } else if (scene->num_cams > 0 && !keypoints_map.empty()) {
+                    // Auto-fire batched 3D -> 2D projection in the background.
+                    if (projection_worker.joinable())
+                        projection_worker.join();
+                    projection_progress.store(0);
+                    projection_total.store(scene->num_cams);
+                    projection_running.store(true);
+                    projection_popup_open = true;
+                    projection_worker = std::thread([&]() {
+                        project_3d_to_2d_all_frames_batched(
+                            keypoints_map, &skeleton, pm.camera_params,
+                            scene, &projection_progress);
+                        projection_running.store(false);
+                    });
+                }
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        // Modal progress popup for the background projection worker.
+        if (projection_popup_open) {
+            ImGui::OpenPopup("Projecting 3D -> 2D");
+            projection_popup_open = false;
+        }
+        if (ImGui::BeginPopupModal("Projecting 3D -> 2D", nullptr,
+                                   ImGuiWindowFlags_AlwaysAutoResize)) {
+            int done = projection_progress.load();
+            int total = projection_total.load();
+            float frac = total > 0 ? float(done) / float(total) : 0.0f;
+            ImGui::Text("Projecting all loaded 3D keypoints to each camera.");
+            ImGui::ProgressBar(frac, ImVec2(360, 0));
+            ImGui::Text("camera %d / %d", done, total);
+            if (!projection_running.load()) {
+                if (projection_worker.joinable())
+                    projection_worker.join();
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
         }
 
         // YOLO Export Tool Dialog Handlers
@@ -3982,6 +4052,8 @@ int main(int argc, char **argv) {
     // wait for threads to join
     for (auto &t : decoder_threads)
         t.join();
+    if (projection_worker.joinable())
+        projection_worker.join();
 
     return 0;
 }

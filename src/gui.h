@@ -5,6 +5,7 @@
 #include "render.h"
 #include "skeleton.h"
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -172,6 +173,101 @@ bool is_in_camera_fov(cv::Mat point_world, const cv::Mat &rvec,
         return true;
     }
     return false;
+}
+
+// Project ALL triangulated 3D keypoints across ALL frames onto every camera
+// view in one go. The inverse of `reprojection` (which goes 2D → 3D and
+// then projects back). Use this after loading a `keypoints3d.csv` produced
+// by an external pipeline to derive RED-loadable 2D labels without
+// per-camera CSVs.
+//
+// Batched per camera: one cv::projectPoints call covers all (frame, node)
+// triangulated points for that camera (with a second call for the
+// linear-FOV pre-check). Orders-of-magnitude faster than projecting one
+// point at a time.
+//
+// Per-camera progress is reported via the optional `progress` atomic
+// (incremented once per camera) — pair with an atomic `total` set to
+// `scene->num_cams` for a progress bar.
+//
+// Preserves `last_position` / `last_is_labeled` so RED's "previous frame"
+// machinery still works. Untriangulated or out-of-FOV nodes are cleared
+// (is_labeled = false).
+static void project_3d_to_2d_all_frames_batched(
+    std::map<u32, KeyPoints *> &keypoints_map, SkeletonContext *skeleton,
+    std::vector<CameraParams> &camera_params, RenderScene *scene,
+    std::atomic<int> *progress = nullptr) {
+
+    u32 N_nodes = (u32)skeleton->num_nodes;
+    u32 N_cams = (u32)scene->num_cams;
+
+    // Snapshot last_* and clear is_labeled for everything; we then overwrite
+    // only the cells whose 3D is triangulated AND projects inside the FOV.
+    for (auto &kv : keypoints_map) {
+        KeyPoints *kp = kv.second;
+        for (u32 v = 0; v < N_cams; v++) {
+            for (u32 n = 0; n < N_nodes; n++) {
+                kp->kp2d[v][n].last_position = kp->kp2d[v][n].position;
+                kp->kp2d[v][n].last_is_labeled = kp->kp2d[v][n].is_labeled;
+                kp->kp2d[v][n].is_labeled = false;
+            }
+        }
+    }
+
+    cv::Mat zero_dist = cv::Mat::zeros(5, 1, CV_64F);
+
+    for (u32 v = 0; v < N_cams; v++) {
+        // Collect all triangulated 3D points for this camera in one pass.
+        std::vector<cv::Point3d> pts;
+        std::vector<std::pair<u32, u32>> mapping;  // (frame_id, node)
+        pts.reserve(keypoints_map.size() * N_nodes);
+        mapping.reserve(keypoints_map.size() * N_nodes);
+        for (auto &kv : keypoints_map) {
+            u32 frame_id = kv.first;
+            KeyPoints *kp = kv.second;
+            for (u32 n = 0; n < N_nodes; n++) {
+                if (kp->kp3d[n].is_triangulated) {
+                    pts.emplace_back(kp->kp3d[n].position.x,
+                                     kp->kp3d[n].position.y,
+                                     kp->kp3d[n].position.z);
+                    mapping.emplace_back(frame_id, n);
+                }
+            }
+        }
+
+        if (!pts.empty()) {
+            // Linear FOV pre-check (no distortion).
+            std::vector<cv::Point2d> proj_lin;
+            cv::projectPoints(pts, camera_params[v].rvec,
+                              camera_params[v].tvec, camera_params[v].k,
+                              zero_dist, proj_lin);
+            // Distorted projection — final values + bounds check.
+            std::vector<cv::Point2d> proj_nl;
+            cv::projectPoints(pts, camera_params[v].rvec,
+                              camera_params[v].tvec, camera_params[v].k,
+                              camera_params[v].dist_coeffs, proj_nl);
+
+            double W = (double)scene->image_width[v];
+            double H = (double)scene->image_height[v];
+            for (size_t i = 0; i < pts.size(); i++) {
+                double xl = proj_lin[i].x;
+                double yl = H - proj_lin[i].y;
+                if (!(xl > 0 && xl < W && yl > 0 && yl < H))
+                    continue;
+                double xn = proj_nl[i].x;
+                double yn = H - proj_nl[i].y;
+                if (!(xn > 0 && xn < W && yn > 0 && yn < H))
+                    continue;
+                auto [frame_id, n] = mapping[i];
+                KeyPoints *kp = keypoints_map[frame_id];
+                kp->kp2d[v][n].position.x = xn;
+                kp->kp2d[v][n].position.y = yn;
+                kp->kp2d[v][n].is_labeled = true;
+            }
+        }
+
+        if (progress) progress->fetch_add(1);
+    }
 }
 
 static void reprojection(KeyPoints *keypoints, SkeletonContext *skeleton,
@@ -997,6 +1093,98 @@ int find_most_recent_labels(std::string root_dir, std::string &most_recent_file,
     sort(filenames.begin(), filenames.end());
     most_recent_file = filenames.back();
     std::cout << most_recent_file << std::endl;
+    return 0;
+}
+
+// Load only a single 3D keypoints CSV (`keypoints3d.csv` produced by an
+// external pipeline, or any file in the same format) into `keypoints_map`.
+// Unlike `load_keypoints`, this skips per-camera 2D CSVs entirely — use it
+// when you only have 3D data and want to derive 2D in RED via the
+// "Project 3D -> 2D" button.
+//
+// Parsing logic mirrors the 3D block in `load_keypoints` so the file format
+// stays in sync.
+int load_keypoints_3d_only(std::string kp_3d_file,
+                           std::map<u32, KeyPoints *> &keypoints_map,
+                           SkeletonContext *skeleton, RenderScene *scene,
+                           std::string &error_message) {
+    if (!skeleton->has_skeleton) {
+        error_message = "Skeleton does not support 3D keypoints.";
+        return 1;
+    }
+    std::ifstream fin(kp_3d_file);
+    if (!fin) {
+        error_message = "Failed to open: " + kp_3d_file;
+        return 1;
+    }
+
+    std::string line;
+    std::string delimeter = ",";
+    size_t pos = 0;
+    std::string token;
+
+    int line_num = 0;
+    while (!fin.eof()) {
+        fin >> line;
+        while ((pos = line.find(delimeter)) != std::string::npos) {
+            token = line.substr(0, pos);
+            if (line_num == 0) {
+                if (token.compare(skeleton->name) != 0) {
+                    error_message = "3D keypoints failed loading, skeleton "
+                                    "doesn't match.";
+                    error_message += skeleton->name + ":" + token;
+                    return 1;
+                }
+                line.erase(0, pos + delimeter.length());
+            } else {
+                uint frame_num = stoul(token);
+                if (keypoints_map.find(frame_num) == keypoints_map.end()) {
+                    KeyPoints *keypoints =
+                        (KeyPoints *)malloc(sizeof(KeyPoints));
+                    allocate_keypoints(keypoints, scene, skeleton);
+                    keypoints_map[frame_num] = keypoints;
+                }
+                line.erase(0, pos + delimeter.length());
+
+                while ((pos = line.find(delimeter)) != std::string::npos) {
+                    token = line.substr(0, pos);
+                    int node = stoi(token);
+                    line.erase(0, pos + delimeter.length());
+
+                    pos = line.find(delimeter);
+                    token = line.substr(0, pos);
+                    double x = stod(token);
+                    line.erase(0, pos + delimeter.length());
+
+                    pos = line.find(delimeter);
+                    token = line.substr(0, pos);
+                    double y = stod(token);
+                    line.erase(0, pos + delimeter.length());
+
+                    pos = line.find(delimeter);
+                    token = line.substr(0, pos);
+                    double z = stod(token);
+                    line.erase(0, pos + delimeter.length());
+
+                    keypoints_map[frame_num]->kp3d[node].position.x = x;
+                    keypoints_map[frame_num]->kp3d[node].position.y = y;
+                    keypoints_map[frame_num]->kp3d[node].position.z = z;
+
+                    if (x == 1E7 || y == 1E7 || z == 1E7) {
+                        keypoints_map[frame_num]
+                            ->kp3d[node]
+                            .is_triangulated = false;
+                    } else {
+                        keypoints_map[frame_num]
+                            ->kp3d[node]
+                            .is_triangulated = true;
+                    }
+                }
+            }
+        }
+        line_num++;
+    }
+    fin.close();
     return 0;
 }
 
