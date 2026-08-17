@@ -34,6 +34,10 @@ enum class Sc {
     Triangulate,
     PlotMenu,
     PeekRaw,
+    SelectAllKeypoints, // Keypoints window: select every keypoint column (toggle)
+    CopyKeypoints,    // Keypoints window: copy the selected node set
+    PasteKeypoints,   // Keypoints window: paste the copied node set onto this frame
+    DeleteKeypoint,   // Keypoints window: delete (hovered cell / hovered column / selection)
     COUNT  // sentinel: "no single bound key" (help rows that use a literal label)
 };
 
@@ -67,6 +71,10 @@ inline const Binding &binding(Sc s) {
         /* Triangulate    */ {ImGuiKey_T, false, false, false, false},
         /* PlotMenu       */ {ImGuiKey_2, false, false, false, false},
         /* PeekRaw        */ {ImGuiKey_P, false, false, false, true},
+        /* SelectAllKeypoints */ {ImGuiKey_A, true, false, false, false},
+        /* CopyKeypoints  */ {ImGuiKey_C, true, false, false, false},
+        /* PasteKeypoints */ {ImGuiKey_V, true, false, false, false},
+        /* DeleteKeypoint */ {ImGuiKey_Delete, false, false, false, false},
     };
     static_assert(sizeof(table) / sizeof(table[0]) == (size_t)Sc::COUNT,
                   "keys::binding table is out of sync with enum Sc");
