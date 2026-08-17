@@ -3,6 +3,7 @@
 #include "annotation.h"
 #include "annotation_csv.h"
 #include "gui/gui_keypoints.h"
+#include "gui/keypoint_clipboard.h"
 #include "gui/shortcuts.h"
 #include "IconsForkAwesome.h"
 #include "implot.h"
@@ -191,6 +192,56 @@ inline void DrawLabelingToolWindow(
             annotations[current_frame_num] = std::move(new_fa);
         }
         ImGui::EndDisabled();
+
+        // Copy / Paste a SELECTED set of keypoints (selection is built in the
+        // Keypoints window by clicking column names). Overwrite on paste.
+        // Mirrors the Ctrl+C / Ctrl+V hotkeys handled in the Keypoints window.
+        {
+            KeypointClipboard &kc = keypoint_clipboard();
+            ImGui::SameLine();
+            ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
+            ImGui::SameLine();
+
+            int sel = kc.count();
+            ImGui::BeginDisabled(!(keypoints_find && sel > 0));
+            char copy_id[32];
+            snprintf(copy_id, sizeof(copy_id), "Copy Sel (%d)", sel);
+            if (ImGui::Button(copy_id)) {
+                int n = copy_selected_keypoints(
+                    kc, annotations.at(current_frame_num),
+                    skeleton.num_nodes, scene->num_cams, skeleton.name);
+                if (n == 0)
+                    toasts.push("None of the selected keypoints are labeled here",
+                                Toast::Warning, 4.0f);
+                else
+                    toasts.pushSuccess("Copied " + std::to_string(n) +
+                                       " keypoint(s)");
+            }
+            ImGui::EndDisabled();
+
+            ImGui::SameLine();
+            ImGui::BeginDisabled(!kc.has_clip());
+            char paste_id[32];
+            snprintf(paste_id, sizeof(paste_id), "Paste (%d)",
+                     (int)kc.clip.size());
+            if (ImGui::Button(paste_id)) {
+                if (!paste_identity_ok(kc, skeleton.num_nodes, scene->num_cams,
+                                       skeleton.name)) {
+                    toasts.push("Clipboard is from a different skeleton \xE2\x80\x94 "
+                                "cannot paste",
+                                Toast::Warning, 5.0f);
+                } else {
+                    FrameAnnotation &fa = get_or_create_frame(
+                        annotations, (u32)current_frame_num,
+                        skeleton.num_nodes, scene->num_cams);
+                    int n = paste_keypoints(kc, fa, skeleton.num_nodes,
+                                            scene->num_cams);
+                    toasts.pushSuccess("Pasted " + std::to_string(n) +
+                                       " keypoint(s)");
+                }
+            }
+            ImGui::EndDisabled();
+        }
 
         if (state.last_saved != static_cast<std::time_t>(-1)) {
             char time_buf[32];
