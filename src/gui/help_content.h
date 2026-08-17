@@ -106,6 +106,17 @@ inline const std::vector<Group> &shortcut_groups() {
             {S::COUNT, "R", "Delete this keypoint on this camera"},
             {S::COUNT, "F", "Delete this keypoint on all cameras"},
         }},
+        {"Keypoints window", "Selecting, copying & deleting keypoint columns", Gate::Always, {
+            {S::COUNT, "Click a name", "Select that keypoint column (and set it active in all cameras)"},
+            {S::COUNT, "Shift / Ctrl + click", "Range-select / toggle keypoint columns in the set"},
+            {S::SelectAllKeypoints, nullptr, "Select all keypoint columns (press again to clear)", Gate::Always,
+                 "Then Ctrl+C copies the whole frame; Ctrl+V pastes it onto another"},
+            {S::CopyKeypoints, nullptr, "Copy the selected keypoints from this frame"},
+            {S::PasteKeypoints, nullptr, "Paste the copied keypoints onto this frame", Gate::Always,
+                 "Overwrites those keypoints on the target frame"},
+            {S::DeleteKeypoint, nullptr, "Delete keypoints", Gate::Always,
+                 "Over a cell: that camera. Over a name: all cameras. Otherwise: the whole selection, all cameras"},
+        }},
         {"Bbox tool", "When the Bbox tool is enabled", Gate::ToolBbox, {
             {S::COUNT, "Shift + drag", "Draw a box (committed when you release Shift)"},
             {S::COUNT, "F", "Delete the hovered box on this camera"},
