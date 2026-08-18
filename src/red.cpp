@@ -37,6 +37,7 @@
 #include "gui/prediction_overlay.h"
 #include "gui/bout_filter_preview.h"
 #include "gui/annotation_dialog.h"
+#include "gui/body_parts_window.h"
 #include "gui/calibration_tool_window.h"
 #include "gui/crop_designer.h"
 #include "gui/labeling_tool_window.h"
@@ -614,6 +615,9 @@ int main(int argc, char **argv) {
                         }
                     }
                 },
+                [&]() { return pm.plot_keypoints_flag; }});
+    panels.add({"Body Parts",
+                [&]() { DrawBodyPartsWindow(ctx); },
                 [&]() { return pm.plot_keypoints_flag; }});
     panels.add({"Help", [&]() {
                     help::Context hctx;
