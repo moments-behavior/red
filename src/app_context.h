@@ -276,6 +276,7 @@ inline void close_project(AppContext &ctx) {
     ctx.skeleton.node_colors.clear();
     ctx.skeleton.edges.clear();
     ctx.skeleton.node_names.clear();
+    ctx.skeleton.groups.clear();
 
     // 6. Reset ProjectManager (preserve nothing)
     ctx.pm.project_path.clear();

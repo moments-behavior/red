@@ -50,6 +50,35 @@ void load_skeleton_json(std::string file_name, SkeletonContext *skeleton) {
             (ImVec4)ImColor::HSV(i / (float)skeleton->num_nodes, 1.0f, 1.0f);
         skeleton->node_colors.push_back(color);
     }
+
+    // Optional anatomical body-part groups. Each group's "nodes" may be node
+    // names (resolved against node_names) or integer indices. Unknown names
+    // and out-of-range indices are skipped; empty/nameless groups are dropped.
+    skeleton->groups.clear();
+    if (s_config.contains("groups")) {
+        for (const auto &jg : s_config["groups"]) {
+            KeypointGroup g;
+            g.name = jg.value("name", std::string());
+            if (jg.contains("nodes")) {
+                for (const auto &jn : jg["nodes"]) {
+                    if (jn.is_number_integer()) {
+                        int idx = jn.get<int>();
+                        if (idx >= 0 && idx < skeleton->num_nodes)
+                            g.nodes.push_back(idx);
+                    } else if (jn.is_string()) {
+                        std::string nm = jn.get<std::string>();
+                        for (int i = 0; i < (int)skeleton->node_names.size(); ++i)
+                            if (skeleton->node_names[i] == nm) {
+                                g.nodes.push_back(i);
+                                break;
+                            }
+                    }
+                }
+            }
+            if (!g.name.empty() && !g.nodes.empty())
+                skeleton->groups.push_back(std::move(g));
+        }
+    }
 }
 
 void skeleton_initialize(std::string name, SkeletonContext *skeleton,
@@ -311,6 +340,20 @@ void skeleton_initialize(std::string name, SkeletonContext *skeleton,
             {33, 34}, {34, 35}, {35, 36}, {36, 37}, {38, 39}, {39, 40},
             {40, 41}, {41, 42}, {42, 43}, {44, 45}, {45, 46}, {46, 47},
             {47, 48}, {48, 49}};
+        // Anatomical body-part groups (10) for the Body Parts window. Scutellum
+        // (a thorax landmark, no Thorax group) is grouped with Head.
+        skeleton->groups = {
+            {"Head",    {0, 1, 2, 3}},
+            {"Abdomen", {4, 5}},
+            {"WingL",   {6, 7, 8}},
+            {"T1L",     {9, 10, 11, 12, 13, 14, 15}},
+            {"T2L",     {16, 17, 18, 19, 20, 21}},
+            {"T3L",     {22, 23, 24, 25, 26, 27}},
+            {"WingR",   {28, 29, 30}},
+            {"T1R",     {31, 32, 33, 34, 35, 36, 37}},
+            {"T2R",     {38, 39, 40, 41, 42, 43}},
+            {"T3R",     {44, 45, 46, 47, 48, 49}},
+        };
         break;
 
     case Box4:
