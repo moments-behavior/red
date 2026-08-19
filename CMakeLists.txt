@@ -796,12 +796,3 @@ else()
 endif()
 
 
-# ── Pump dispense log import (src/pump_events_core.h) ───────────────────────
-# Header-only with no deps beyond C++17 and src/json.hpp, so it builds on both
-# platforms outside the APPLE/else split above.
-add_executable(test_pump_events tests/test_pump_events.cpp)
-target_include_directories(test_pump_events PRIVATE src)
-set_target_properties(test_pump_events PROPERTIES
-    CXX_STANDARD 17
-    CXX_STANDARD_REQUIRED ON
-)

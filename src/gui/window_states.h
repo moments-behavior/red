@@ -7,7 +7,6 @@
 #include "gui/jarvis_import_window.h"
 #include "gui/pose_stats_window.h"
 #include "gui/frame_drops_window.h"
-#include "gui/pump_events_window.h"
 #include "gui/export_window.h"
 #include "gui/group_export_window.h"
 #include "gui/bbox_tool.h"
@@ -27,7 +26,6 @@ struct WindowStates {
     JarvisImportState jarvis_import;
     PoseStatsState pose_stats;
     FrameDropsState frame_drops;
-    PumpEventsState pump_events;
     ExportWindowState export_win;
     GroupExportState group_export;
     BBoxToolState bbox;
@@ -66,7 +64,6 @@ struct WindowStates {
         jarvis_import.store_to_load.clear();
         pose_stats = PoseStatsState{};
         frame_drops = FrameDropsState{};
-        pump_events = PumpEventsState{};
         export_win.show = false;
         export_win.format_idx = 0;
         export_win.include_video_index = false;

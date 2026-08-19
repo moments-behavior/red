@@ -73,8 +73,6 @@ inline const std::vector<Group> &shortcut_groups() {
             {S::PlayPause, nullptr, "Play / pause"},
             {S::SeekBack, nullptr, "Step back one frame", Gate::Always, "Hold Shift for x10"},
             {S::SeekFwd, nullptr, "Step forward one frame", Gate::Always, "Hold Shift for x10"},
-            {S::COUNT, "[  /  ]", "Previous / next pump dispense", Gate::Always,
-                 "Needs a loaded pumpctl log; skips pumps hidden in the Pump Events filter"},
             {S::SaveLabels, nullptr, "Save labels (writes a new timestamped labeled_data folder)"},
         }},
         {"When paused", "Stepping through the frame buffer", Gate::Always, {
@@ -185,8 +183,6 @@ inline const std::vector<Tool> &tools() {
                 "Confidence over time for the active prediction store; promote a frame to fix it.", Gate::Always, "An active prediction store"},
             {"Frame Drops", "View > Frame Drops",
                 "Visualize dropped frames and the camera sync plan.", Gate::Always, "Sync metadata (Cam*_meta.csv)"},
-            {"Pump Events", "View > Pump Events",
-                "Place pumpctl dispenses on the video timeline; click a row to seek, or jump with [ / ].", Gate::Always, "A pumpctl dispense log + frame timestamps"},
             {"Triangulation Diagnostics", "Tools > Triangulation Diagnostics",
                 "Per-keypoint reprojection-error report (read-only).", Gate::Need3D, "Calibration + labeled frames"},
             // Settings
@@ -231,8 +227,6 @@ inline const std::vector<Concept> &concepts() {
             "A 3D point exists only once the same keypoint is labeled in \xE2\x89\xA5 2 cameras. Press T, or it auto-triangulates."},
         {"Camera alignment (desync fix)",
             "Cameras are hardware-triggered off a shared clock; a dropped frame desyncs everything after it. The transport bar reports the condition \xE2\x80\x94 Aligned, Uneven Ends, or Dropped Frames \xE2\x80\x94 and its Realign checkbox remaps frame index i to the same trigger instant across all cameras."},
-        {"Pump dispense alignment",
-            "pumpctl stamps each dispense with the same PTP hardware clock the cameras write into Cam*_meta.csv, so a dispense maps to a frame by lookup, not by fitting. The Offset (ms) slider is for rig latency (tubing, valve), not clock drift."},
         {"Prediction stores (.rpred)",
             "Read-only, on-disk 3D + confidence, kept separate from manual labels so a whole-video import never floods the Labeling Tool. They power the overlay and Pose Stats; \"Fix this frame\" promotes one frame into editable labels."},
         {"Scale factor",
