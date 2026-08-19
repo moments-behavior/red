@@ -8,19 +8,23 @@
 #if defined(__APPLE__) || defined(_WIN32)
 #include <turbojpeg.h>
 #endif
+#include <algorithm>
+#include <cstdint>
+#include <cstring>
 
 void decoder_clear_buffer_with_constant_image(unsigned char *image_pt,
                                               int width, int height) {
-    int counter = 0;
-    for (int i = 0; i < height; i++) {
-        for (int j = 0; j < width; j++) {
-            *(image_pt + counter) = 45;
-            *(image_pt + counter + 1) = 85;
-            *(image_pt + counter + 2) = 255;
-            *(image_pt + counter + 3) = 255;
-            counter += 4;
-        }
-    }
+    // One 32-bit store per pixel rather than four byte stores. This runs for
+    // every slot of every camera's ring buffer on project load
+    // (num_cams x size_of_buffer x w x h pixels), so on a 17-camera rig it is
+    // several GB of writes and the byte-wise version dominated load time.
+    // memcpy builds the pattern so the byte order stays correct on any endian.
+    const unsigned char px[4] = {45, 85, 255, 255};
+    std::uint32_t v;
+    std::memcpy(&v, px, sizeof(v));
+    std::fill_n(reinterpret_cast<std::uint32_t *>(image_pt),
+                static_cast<std::size_t>(width) * static_cast<std::size_t>(height),
+                v);
 }
 
 void decoder_print_one_display_buffer(unsigned char *image_pt, int width,

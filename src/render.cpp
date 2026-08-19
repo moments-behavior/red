@@ -51,19 +51,22 @@ void render_allocate_scene_memory(RenderScene *scene, u32 size_of_buffer) {
 #ifdef __APPLE__
             // macOS: CPU frame buffer still needed for image_loader path.
             // Video decode path (Phase 2/3) uses pixel_buffer instead.
+            // calloc, not malloc + clear: at these sizes the allocator mmaps,
+            // and the kernel already hands back zeroed pages, so calloc skips
+            // the memset entirely and nothing is touched until the decoder
+            // writes a frame. Explicitly clearing forced a first-touch page
+            // fault over every byte of every slot -- on a 17-camera rig that
+            // is several GB and dominated project load time.
             scene->display_buffer[j][i].frame =
-                (unsigned char *)malloc(size_pic);
-            decoder_clear_buffer_with_constant_image(
-                scene->display_buffer[j][i].frame, scene->image_width[j],
-                scene->image_height[j]);
+                (unsigned char *)calloc(size_pic, 1);
             scene->display_buffer[j][i].pixel_buffer = nullptr;
 #else
             if (scene->use_cpu_buffer) {
+                // See the macOS branch above: calloc leaves the pages
+                // untouched, so allocation costs address space rather than
+                // several GB of writes.
                 scene->display_buffer[j][i].frame =
-                    (unsigned char *)malloc(size_pic);
-                decoder_clear_buffer_with_constant_image(
-                    scene->display_buffer[j][i].frame, scene->image_width[j],
-                    scene->image_height[j]);
+                    (unsigned char *)calloc(size_pic, 1);
             } else {
                 // gpu buffer
                 cudaMalloc((void **)&scene->display_buffer[j][i].frame,

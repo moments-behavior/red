@@ -466,9 +466,20 @@ load_videos(std::map<std::string, std::string> &selected_files,
     // Decoders run async from here: this measures spawning them, NOT the wait
     // for the first frames to appear on screen.
     if (load_timing::enabled())
+    {
+        // Frame-buffer footprint: cameras x buffer slots x w*h*4. This is what
+        // `alloc` is actually spending its time on (malloc + first-touch clear),
+        // so print it alongside the timing to make the cost legible.
+        double gb = 0;
+        for (u32 j = 0; j < scene->num_cams; j++)
+            gb += (double)scene->image_width[j] * scene->image_height[j] * 4.0 *
+                  (double)scene->size_of_buffer;
+        gb /= (1024.0 * 1024.0 * 1024.0);
         std::printf("[load-timing] videos: %d cam(s) | open %.0f | keyframe "
-                    "%.0f | alloc %.0f | sync-plan %.0f | spawn %.0f | TOTAL "
-                    "%.0f ms\n",
-                    (int)scene->num_cams, t_open, t_keyframe, t_alloc, t_sync,
-                    t_threads, load_timing::ms(t_videos_start));
+                    "%.0f | alloc %.0f (%d slots/cam, %.2f GB) | sync-plan %.0f "
+                    "| spawn %.0f | TOTAL %.0f ms\n",
+                    (int)scene->num_cams, t_open, t_keyframe, t_alloc,
+                    (int)scene->size_of_buffer, gb, t_sync, t_threads,
+                    load_timing::ms(t_videos_start));
+    }
 }
