@@ -1055,7 +1055,16 @@ int main(int argc, char **argv) {
                             // labeling (keypoints)
                             // OBB tool uses G key (not W), so no keypoint conflict
                             if (ImPlot::IsPlotHovered()) {
-                                is_view_focused[j] = true;
+                                // Focus is sticky: the last view the cursor
+                                // entered stays focused until another view is
+                                // entered. It must NOT clear on hover-exit --
+                                // keypoints are ImPlot::DragPoint items, and
+                                // hovering one makes IsPlotHovered() false, so
+                                // clearing here would un-float this camera's row
+                                // in the Keypoints table exactly while the user
+                                // is working on a keypoint in it.
+                                for (int v = 0; v < (int)is_view_focused.size(); ++v)
+                                    is_view_focused[v] = (v == j);
                                 if (keys::pressed(keys::Sc::CreateFrame)) {
                                     // create frame annotation
                                     if (!keypoints_find) {
@@ -1111,8 +1120,6 @@ int main(int argc, char **argv) {
                                         keypoints_find = false;
                                     }
                                 }
-                            } else {
-                                is_view_focused[j] = false;
                             }
 
                             // Hold P while hovering a view to hide its label
