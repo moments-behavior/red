@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <chrono>
 #include <climits>
+#include <cmath>
 
 struct TransportBarState {
     // Cmd+click on slider: replace slider with InputInt, pause playback.
@@ -31,9 +32,9 @@ struct TransportBarState {
 // user is looking at, not the remedy the plan applies.
 inline const char *sync_status_label(sync_plan::Status s) {
     switch (s) {
-        case sync_plan::Status::Clean:   return "aligned";
-        case sync_plan::Status::Trim:    return "uneven ends";
-        case sync_plan::Status::Reindex: return "dropped frames";
+        case sync_plan::Status::Clean:   return "Aligned";
+        case sync_plan::Status::Trim:    return "Uneven Ends";
+        case sync_plan::Status::Reindex: return "Dropped Frames";
     }
     return "unknown";
 }
@@ -289,14 +290,60 @@ inline void DrawTransportBar(TransportBarState &state, AppContext &ctx) {
     std::string total_str = format_time(total_time_sec);
     ImGui::Text("%s / %s", current_str.c_str(), total_str.c_str());
 
-    // === Playback + Display controls ===
+    // === Playback rate ===
     ImGui::SameLine(0, spacing * 3);
     ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
     ImGui::SameLine(0, spacing * 3);
 
-    ImGui::TextColored(label_col, "RT");
+    // One control for playback rate. Two things are really being chosen --
+    // whether the wall clock drives frame selection (ps.realtime_playback) and
+    // how far below real time to run (ps.set_playback_speed) -- but from the
+    // user's side that is a single question, and splitting it invited "if I
+    // slow it down, is it still realtime?". "Every frame" is the tick-based
+    // mode: no clock, one frame per render tick, nothing skipped.
+    struct SpeedChoice { const char *label; float speed; bool clock_paced; };
+    static const SpeedChoice kSpeeds[] = {
+        {"1x (real time)", 1.0f,        true},
+        {"1/2x",           1.0f / 2.0f,  true},
+        {"1/4x",           1.0f / 4.0f,  true},
+        {"1/8x",           1.0f / 8.0f,  true},
+        {"1/16x",          1.0f / 16.0f, true},
+        {"Every frame",    1.0f,         false},
+    };
+    constexpr int kNumSpeeds = (int)(sizeof(kSpeeds) / sizeof(kSpeeds[0]));
+
+    // Map current state onto the list: tick mode always shows "Every frame",
+    // otherwise pick the nearest speed so a value restored from settings (which
+    // is continuous) still selects something sensible.
+    int speed_idx = kNumSpeeds - 1;
+    if (ps.realtime_playback) {
+        float best = 1e9f;
+        for (int i = 0; i < kNumSpeeds - 1; ++i) {
+            float d = fabsf(kSpeeds[i].speed - ps.set_playback_speed);
+            if (d < best) { best = d; speed_idx = i; }
+        }
+    }
+
+    ImGui::TextColored(label_col, "Playback Speed");
     ImGui::SameLine(0, spacing);
-    ImGui::Checkbox("##realtime", &ps.realtime_playback);
+    ImGui::SetNextItemWidth(130.0f);
+    if (ImGui::BeginCombo("##playbackspeed", kSpeeds[speed_idx].label)) {
+        for (int i = 0; i < kNumSpeeds; ++i) {
+            if (ImGui::Selectable(kSpeeds[i].label, i == speed_idx)) {
+                ps.realtime_playback = kSpeeds[i].clock_paced;
+                if (kSpeeds[i].clock_paced)
+                    ps.set_playback_speed = kSpeeds[i].speed;
+            }
+            if (i == speed_idx) ImGui::SetItemDefaultFocus();
+        }
+        ImGui::EndCombo();
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip(
+            "1x and the fractions play to the wall clock, so timing is "
+            "accurate and frames are skipped if decoding lags.\n"
+            "\"Every frame\" shows every decoded frame instead \xE2\x80\x94 nothing is "
+            "skipped, but the rate depends on decoding speed.");
 
     // === Desync fix (canonical trigger timeline) ===
     // Only shown when a usable sync plan exists for the loaded videos.
@@ -385,25 +432,6 @@ inline void DrawTransportBar(TransportBarState &state, AppContext &ctx) {
                     "frame i is the same instant in all views.");
         }
     }
-
-    ImGui::SameLine(0, spacing);
-    ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
-    ImGui::SameLine(0, spacing);
-
-    ImGui::BeginDisabled(!ps.realtime_playback);
-    ImGui::TextColored(label_col, "Set Play Speed");
-    ImGui::SameLine(0, spacing);
-    char speed_label[16];
-    int denom = (int)roundf(1.0f / ps.set_playback_speed);
-    if (denom <= 1)
-        snprintf(speed_label, sizeof(speed_label), "1x");
-    else
-        snprintf(speed_label, sizeof(speed_label), "1/%dx", denom);
-    ImGui::SetNextItemWidth(80.0f);
-    ImGui::SliderFloat("##speed", &ps.set_playback_speed,
-                        1.0f / 16.0f, 1.0f, speed_label,
-                        ImGuiSliderFlags_Logarithmic);
-    ImGui::EndDisabled();
 
     ImGui::SameLine(0, spacing * 2);
     ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);

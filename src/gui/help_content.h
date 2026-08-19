@@ -232,7 +232,7 @@ inline const std::vector<Concept> &concepts() {
         {"Triangulation",
             "A 3D point exists only once the same keypoint is labeled in \xE2\x89\xA5 2 cameras. Press T, or it auto-triangulates."},
         {"Camera alignment (desync fix)",
-            "Cameras are hardware-triggered off a shared clock; a dropped frame desyncs everything after it. The transport bar reports the condition \xE2\x80\x94 aligned, uneven ends, or dropped frames \xE2\x80\x94 and its checkbox remaps frame index i to the same trigger instant across all cameras."},
+            "Cameras are hardware-triggered off a shared clock; a dropped frame desyncs everything after it. The transport bar reports the condition \xE2\x80\x94 Aligned, Uneven Ends, or Dropped Frames \xE2\x80\x94 and its Realign checkbox remaps frame index i to the same trigger instant across all cameras."},
         {"Pump dispense alignment",
             "pumpctl stamps each dispense with the same PTP hardware clock the cameras write into Cam*_meta.csv, so a dispense maps to a frame by lookup, not by fitting. The Offset (ms) slider is for rig latency (tubing, valve), not clock drift."},
         {"Prediction stores (.rpred)",

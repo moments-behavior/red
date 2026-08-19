@@ -7,6 +7,7 @@
 #include "keypoint_colors.h"
 #include <ImGuiFileDialog.h>
 #include <misc/cpp/imgui_stdlib.h>
+#include <cmath>
 
 struct SettingsState {
     bool show = false;
@@ -112,18 +113,44 @@ inline void DrawSettingsWindow(SettingsState &state, AppContext &ctx) {
 
         // --- Playback ---
         if (ImGui::CollapsingHeader("Playback Defaults")) {
-            char speed_label[16];
-            int denom = (int)roundf(1.0f / s.default_playback_speed);
-            if (denom <= 1)
-                snprintf(speed_label, sizeof(speed_label), "1x");
-            else
-                snprintf(speed_label, sizeof(speed_label), "1/%dx", denom);
-            if (ImGui::SliderFloat("Playback Speed", &s.default_playback_speed,
-                                   1.0f / 16.0f, 1.0f, speed_label,
-                                   ImGuiSliderFlags_Logarithmic))
-                playback_changed = true;
-            if (ImGui::Checkbox("Realtime Playback", &s.default_realtime_playback))
-                playback_changed = true;
+            // Same single control as the transport bar: one question ("how
+            // fast?") rather than a mode checkbox plus a rate slider.
+            struct DefSpeed { const char *label; float speed; bool clock_paced; };
+            static const DefSpeed kDefSpeeds[] = {
+                {"1x (real time)", 1.0f,        true},
+                {"1/2x",           1.0f / 2.0f,  true},
+                {"1/4x",           1.0f / 4.0f,  true},
+                {"1/8x",           1.0f / 8.0f,  true},
+                {"1/16x",          1.0f / 16.0f, true},
+                {"Every frame",    1.0f,         false},
+            };
+            constexpr int kNumDefSpeeds =
+                (int)(sizeof(kDefSpeeds) / sizeof(kDefSpeeds[0]));
+            int def_idx = kNumDefSpeeds - 1;
+            if (s.default_realtime_playback) {
+                float best = 1e9f;
+                for (int i = 0; i < kNumDefSpeeds - 1; ++i) {
+                    float d = fabsf(kDefSpeeds[i].speed - s.default_playback_speed);
+                    if (d < best) { best = d; def_idx = i; }
+                }
+            }
+            if (ImGui::BeginCombo("Playback Speed", kDefSpeeds[def_idx].label)) {
+                for (int i = 0; i < kNumDefSpeeds; ++i) {
+                    if (ImGui::Selectable(kDefSpeeds[i].label, i == def_idx)) {
+                        s.default_realtime_playback = kDefSpeeds[i].clock_paced;
+                        if (kDefSpeeds[i].clock_paced)
+                            s.default_playback_speed = kDefSpeeds[i].speed;
+                        playback_changed = true;
+                    }
+                    if (i == def_idx) ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndCombo();
+            }
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip(
+                    "1x and the fractions play to the wall clock (accurate "
+                    "timing, skips frames if decoding lags).\n"
+                    "\"Every frame\" shows every decoded frame instead.");
             ImGui::InputInt("Buffer Size", &s.default_buffer_size);
             // No propagation needed — takes effect on next video load
         }
