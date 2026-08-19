@@ -15,7 +15,6 @@ struct AnnotationConfig {
     bool enable_keypoints    = true;  // default on (existing behavior)
     bool enable_bboxes       = false;
     bool enable_obbs         = false;
-    bool enable_segmentation = false;
     std::vector<std::string> class_names = {"animal"};
 };
 
@@ -24,14 +23,12 @@ inline void to_json(nlohmann::json &j, const AnnotationConfig &a) {
         {"enable_keypoints", a.enable_keypoints},
         {"enable_bboxes", a.enable_bboxes},
         {"enable_obbs", a.enable_obbs},
-        {"enable_segmentation", a.enable_segmentation},
         {"class_names", a.class_names}};
 }
 inline void from_json(const nlohmann::json &j, AnnotationConfig &a) {
     a.enable_keypoints    = j.value("enable_keypoints", true);
     a.enable_bboxes       = j.value("enable_bboxes", false);
     a.enable_obbs         = j.value("enable_obbs", false);
-    a.enable_segmentation = j.value("enable_segmentation", false);
     a.class_names         = j.value("class_names", std::vector<std::string>{"animal"});
 }
 

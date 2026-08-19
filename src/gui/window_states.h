@@ -17,15 +17,11 @@
 #include "gui/bbox_tool.h"
 #include "gui/obb_tool.h"
 #include "gui/midline_tool.h"
-#include "gui/sam_tool.h"
 #include "gui/triangulation_diagnostics_window.h"
 #include "gui/switch_skeleton_window.h"
-#ifdef RED_HAS_MUJOCO
-#include "gui/body_model_window.h"
-#endif
 
 // Bundle of all tool-window states.  Inference-engine states (JarvisState,
-// JarvisCoreMLState, SamState) are intentionally excluded — those are
+// JarvisCoreMLState) are intentionally excluded — those are
 // heavyweight runtime objects, not UI window states.
 struct WindowStates {
     LabelingToolState labeling;
@@ -46,12 +42,8 @@ struct WindowStates {
     BBoxToolState bbox;
     OBBToolState obb;
     MidlineToolState midline;
-    SamToolState sam_tool;
     TriangulationDiagnosticsState triangulation_diag;
     SwitchSkeletonState switch_skeleton;
-#ifdef RED_HAS_MUJOCO
-    BodyModelState body_model;
-#endif
     bool show_help = false;
 
     // Reset all tool window state for project switching.
@@ -240,33 +232,6 @@ struct WindowStates {
         // Reset midline tool but keep any user default cam selection re-derived
         // on next project open (inited=false forces re-pick).
         midline = MidlineToolState{};
-#ifdef RED_HAS_MUJOCO
-        if (body_model.renderer) {
-            mujoco_renderer_destroy(body_model.renderer);
-            body_model.renderer = nullptr;
-        }
-        body_model.show = false;
-        body_model.auto_solve = false;
-        body_model.last_solved_frame = -1;
-        body_model.model_path.clear();
-        body_model.show_site_markers = true;
-        body_model.show_arena = true;
-        body_model.cam_initialized = false;
-        mujoco_ik_reset(body_model.ik_state);
-#endif
-        sam_tool.show = false;
-        sam_tool.enabled = false;
-        sam_tool.fg_points.clear();
-        sam_tool.bg_points.clear();
-        sam_tool.multi_mask = {};
-        sam_tool.selected_mask = 0;
-        sam_tool.current_polygons.clear();
-        sam_tool.has_pending_mask = false;
-        sam_tool.prompt_frame = 0;
-        sam_tool.prompt_cam = -1;
-        sam_tool.model_idx = 0;
-        sam_tool.encoder_path = "models/mobilesam/mobile_sam_encoder.onnx";
-        sam_tool.decoder_path = "models/mobilesam/mobile_sam_decoder.onnx";
         triangulation_diag = TriangulationDiagnosticsState{};
         switch_skeleton = SwitchSkeletonState{};
         show_help = false;

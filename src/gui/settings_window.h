@@ -165,7 +165,6 @@ inline void DrawSettingsWindow(SettingsState &state, AppContext &ctx) {
             ImGui::Checkbox("Keypoints", &ac.enable_keypoints);
             ImGui::Checkbox("Bounding Boxes", &ac.enable_bboxes);
             ImGui::Checkbox("Oriented Bounding Boxes", &ac.enable_obbs);
-            ImGui::Checkbox("Segmentation (SAM)", &ac.enable_segmentation);
             ImGui::TextDisabled("Enable tools to show their panels in the Tools menu.");
         }
 

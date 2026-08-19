@@ -104,10 +104,6 @@ struct CameraExtras {
     // Oriented bounding box
     double obb_cx = 0, obb_cy = 0, obb_w = 0, obb_h = 0, obb_angle = 0;
     bool has_obb = false;
-
-    // Segmentation mask as polygon contours
-    std::vector<std::vector<tuple_d>> mask_polygons;
-    bool has_mask = false;
 };
 
 // ── Per-camera annotation for one frame ──
@@ -115,7 +111,7 @@ struct CameraAnnotation {
     std::vector<Keypoint2D> keypoints;   // [num_nodes]
     u32 active_id = 0;                   // UI state: selected keypoint index
 
-    // Extras (bbox/OBB/mask) — lazily allocated
+    // Extras (bbox/OBB) — lazily allocated
     std::unique_ptr<CameraExtras> extras;
 
     // Default + move constructors work. Copy must deep-copy extras.
@@ -148,7 +144,6 @@ struct CameraAnnotation {
     // Convenience queries
     bool has_bbox() const { return extras && extras->has_bbox; }
     bool has_obb()  const { return extras && extras->has_obb;  }
-    bool has_mask() const { return extras && extras->has_mask;  }
 };
 
 // ── Single-view midline constraint ──
@@ -226,12 +221,12 @@ inline FrameAnnotation &get_or_create_frame(AnnotationMap &amap, u32 frame,
     return fa;
 }
 
-// Check if the frame has any annotation data (keypoints, masks, or bboxes)
+// Check if the frame has any annotation data (keypoints or bboxes)
 inline bool frame_has_any_labels(const FrameAnnotation &fa) {
     for (const auto &cam : fa.cameras) {
         for (const auto &kp : cam.keypoints)
             if (kp.labeled) return true;
-        if (cam.has_mask() || cam.has_bbox() || cam.has_obb()) return true;
+        if (cam.has_bbox() || cam.has_obb()) return true;
     }
     return false;
 }
@@ -263,13 +258,6 @@ inline bool frame_has_any_manual_labels(const FrameAnnotation &fa) {
 inline bool project_has_any_manual_labels(const AnnotationMap &amap) {
     for (const auto &[frame, fa] : amap)
         if (frame_has_any_manual_labels(fa)) return true;
-    return false;
-}
-
-// Check if any camera has a mask on this frame
-inline bool frame_has_any_masks(const FrameAnnotation &fa) {
-    for (const auto &cam : fa.cameras)
-        if (cam.has_mask()) return true;
     return false;
 }
 
@@ -308,7 +296,7 @@ inline nlohmann::json annotations_to_json(const AnnotationMap &amap) {
         // OR a single-view midline constraint.
         bool has_extended = fa.needs_improvement || fa.midline.has_line;
         for (const auto &cam : fa.cameras) {
-            if (cam.has_bbox() || cam.has_obb() || cam.has_mask()) {
+            if (cam.has_bbox() || cam.has_obb()) {
                 has_extended = true;
                 break;
             }
@@ -346,16 +334,6 @@ inline nlohmann::json annotations_to_json(const AnnotationMap &amap) {
             }
             if (ext.has_obb) {
                 jc["obb"] = {ext.obb_cx, ext.obb_cy, ext.obb_w, ext.obb_h, ext.obb_angle};
-            }
-            if (ext.has_mask) {
-                nlohmann::json polys = nlohmann::json::array();
-                for (const auto &poly : ext.mask_polygons) {
-                    nlohmann::json pts = nlohmann::json::array();
-                    for (const auto &pt : poly)
-                        pts.push_back({pt.x, pt.y});
-                    polys.push_back(pts);
-                }
-                jc["mask"] = polys;
             }
 
             if (jc.size() > 1) // more than just "cam"
@@ -419,16 +397,6 @@ inline void annotations_from_json(const nlohmann::json &root, AnnotationMap &ama
                 ext.obb_cx = o[0]; ext.obb_cy = o[1];
                 ext.obb_w = o[2]; ext.obb_h = o[3]; ext.obb_angle = o[4];
                 ext.has_obb = true;
-            }
-            if (jc.contains("mask")) {
-                ext.mask_polygons.clear();
-                for (const auto &jpoly : jc["mask"]) {
-                    std::vector<tuple_d> poly;
-                    for (const auto &jpt : jpoly)
-                        poly.push_back({jpt[0].get<double>(), jpt[1].get<double>()});
-                    ext.mask_polygons.push_back(std::move(poly));
-                }
-                ext.has_mask = !ext.mask_polygons.empty();
             }
         }
     }

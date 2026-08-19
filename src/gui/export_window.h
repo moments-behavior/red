@@ -142,20 +142,10 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
                     pm.media_folder.empty() ? "(none — images will not be extracted)" : pm.media_folder.c_str());
         ImGui::Text("Cameras:      %d", (int)pm.camera_names.size());
 
-        int kp_count = 0, mask_count = 0, total_count = 0;
-        for (const auto &[f, fa] : amap) {
-            bool has_kp = frame_has_any_keypoints(fa);
-            bool has_mask = frame_has_any_masks(fa);
-            if (has_kp) ++kp_count;
-            if (has_mask) ++mask_count;
-            if (has_kp || has_mask) ++total_count;
-        }
-        ImGui::Text("Annotated:    %d frames", total_count);
-        if (kp_count > 0)
-            ImGui::Text("  Keypoints:  %d frames", kp_count);
-        if (mask_count > 0)
-            ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.3f, 1.0f),
-                "  Masks:      %d frames", mask_count);
+        int kp_count = 0;
+        for (const auto &[f, fa] : amap)
+            if (frame_has_any_keypoints(fa)) ++kp_count;
+        ImGui::Text("Annotated:    %d frames", kp_count);
 
         ImGui::SeparatorText("Output");
 

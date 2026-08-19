@@ -40,7 +40,6 @@ inline bool tool_active(help::Gate g, const help::Context &c) {
     switch (g) {
         case help::Gate::ToolBbox:    return c.bbox_on;
         case help::Gate::ToolObb:     return c.obb_on;
-        case help::Gate::ToolSam:     return c.sam_on;
         case help::Gate::ToolMidline: return c.midline_on;
         default:                      return false;
     }
@@ -233,14 +232,9 @@ inline void tab_about() {
     feature("JARVIS HybridNet (TensorRT)", false);
 #endif
 #if defined(RED_HAS_ONNXRUNTIME)
-    feature("ONNX Runtime (JARVIS 2-stage / SAM)", true);
+    feature("ONNX Runtime (JARVIS 2-stage)", true);
 #else
-    feature("ONNX Runtime (JARVIS 2-stage / SAM)", false);
-#endif
-#if defined(RED_HAS_MUJOCO)
-    feature("MuJoCo body-model IK", true);
-#else
-    feature("MuJoCo body-model IK", false);
+    feature("ONNX Runtime (JARVIS 2-stage)", false);
 #endif
 }
 

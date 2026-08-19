@@ -30,7 +30,6 @@ Developed at the [Johnson Lab](https://www.janelia.org/lab/johnson-lab), HHMI Ja
 - **Integrated multi-camera calibration** -- ArUco/ChArUco board detection, laser refinement, and telecentric DLT calibration, all without OpenCV
 - **2D keypoint annotation with automatic 3D triangulation** -- label keypoints in any camera view and triangulate 3D positions in real time via Eigen-based DLT
 - **AI-assisted labeling via JARVIS pose estimation** -- top-down pose estimation with native CoreML inference on Apple Silicon and ONNX Runtime as a cross-platform fallback
-- **SAM (Segment Anything) assisted segmentation** -- MobileSAM integration for interactive segmentation masks via click prompts
 - **Bounding box and oriented bounding box annotation** -- axis-aligned and rotated bounding box tools for detection tasks
 - **Active learning loop** -- label, export, train, predict, correct: iteratively improve model accuracy with minimal manual effort
 - **Native Apple Silicon support** -- Metal GPU rendering, VideoToolbox hardware decode, CoreML inference (6-20 ms/frame)
@@ -181,9 +180,9 @@ cmake --build release -j$(nproc)
 | Storage   | SSD recommended for video playback      | SSD recommended for video playback      |
 | Display   | 1920x1080 minimum                      | 1920x1080 minimum                       |
 
-### Optional: ONNX Runtime (SAM / JARVIS ONNX inference)
+### Optional: ONNX Runtime (JARVIS ONNX inference)
 
-Download the [ONNX Runtime release](https://github.com/microsoft/onnxruntime/releases) and extract it to `lib/onnxruntime/` in the source tree. The build system detects it automatically and enables SAM inference and ONNX-based JARVIS prediction.
+Download the [ONNX Runtime release](https://github.com/microsoft/onnxruntime/releases) and extract it to `lib/onnxruntime/` in the source tree. The build system detects it automatically and enables ONNX-based JARVIS prediction.
 
 ---
 
@@ -227,7 +226,7 @@ From **File > New Project**:
 - Choose a project directory and name.
 - Select a skeleton preset (e.g., `Rat20` for a 20-keypoint rat skeleton) or load a custom skeleton JSON file.
 - Point to an existing calibration folder (produced by the calibration pipeline above).
-- Enable optional annotation types: bounding boxes, oriented bounding boxes, segmentation masks.
+- Enable optional annotation types: bounding boxes, oriented bounding boxes.
 
 ### 2. Load Videos
 
@@ -240,15 +239,7 @@ From **File > New Project**:
 - When the same keypoint is labeled in two or more cameras, RED triangulates the 3D position automatically using DLT and displays it in the 3D viewer.
 - Navigate frames with the transport bar (play/pause, frame step, seek slider, direct frame number entry via Cmd+click).
 
-### 4. SAM-Assisted Segmentation
-
-If ONNX Runtime is available and a MobileSAM model is present in `models/mobilesam/`:
-
-- Open the **SAM Tool** window.
-- Click a point in a camera view to generate a segmentation mask.
-- The mask is stored as polygon contours in the annotation data.
-
-### 5. Export Training Data
+### 4. Export Training Data
 
 Use the built-in JARVIS/COCO exporter (**File > Export**) or the Python scripts in `data_exporter/` to export annotations in standard formats:
 
@@ -336,7 +327,7 @@ FFmpeg demux --> NVDEC hardware decode --> CUDA NV12-to-RGB kernel
 The annotation data model centers on two structures:
 
 - **`AnnotationMap`** (`std::map<u32, FrameAnnotation>`) -- maps frame numbers to per-frame annotation data.
-- **`FrameAnnotation`** -- contains per-camera 2D keypoints, triangulated 3D keypoints, and optional extras (bounding boxes, oriented bounding boxes, segmentation masks) behind `std::unique_ptr` for lightweight allocation.
+- **`FrameAnnotation`** -- contains per-camera 2D keypoints, triangulated 3D keypoints, and optional extras (bounding boxes, oriented bounding boxes) behind `std::unique_ptr` for lightweight allocation.
 
 Label provenance is tracked per keypoint (`Manual`, `Predicted`, `Imported`).
 
@@ -362,58 +353,7 @@ Label provenance is tracked per keypoint (`Manual`, `Predicted`, `Imported`).
 | `src/jarvis_coreml.h` / `.mm` | Native CoreML inference on Apple Silicon              |
 | `src/jarvis_inference.h`    | ONNX Runtime inference                                   |
 | `src/jarvis_export.h`       | JARVIS/COCO export                                       |
-| `src/sam_inference.h`       | Segment Anything (MobileSAM) integration                 |
 | `src/gui/`                  | 25 modular GUI files (ImGui windows, menus, panels)      |
-
----
-
-## Body Model & Inverse Kinematics (MuJoCo)
-
-RED integrates MuJoCo body models for inverse kinematics, allowing you to fit articulated 3D body models to labeled keypoints.
-
-### Supported Models
-
-| Model | Skeleton | Sites | Source |
-|-------|----------|-------|--------|
-| Rodent (dm_control) | `Rat24Target` (24 keypoints) | 24 `_kpsite` markers | Included in `models/rodent/` |
-| Fruitfly v2.1 | `Fly50` (50 keypoints) | 50 joint markers | [janelia-anibody/fruitfly](https://github.com/janelia-anibody/fruitfly) |
-
-### Rodent Model
-
-The rodent model is included in the repository and works out of the box:
-
-- `models/rodent/rodent_no_collision.xml` — IK model with 24 keypoint sites
-- `models/rodent/rodent.xml` — variant with skin mesh for visualization
-- `models/rodent/rodent_walker_skin.skn` — skin mesh (auto-loaded when present)
-
-### Fruitfly Model (Build Required)
-
-The fruitfly model requires a one-time build step because the model uses OBJ mesh files that need the Python MuJoCo decoder:
-
-```bash
-pip install mujoco
-python3 scripts/build_fly_model.py
-```
-
-This script:
-1. Clones [janelia-anibody/fruitfly](https://github.com/janelia-anibody/fruitfly) to `lib/fruitfly/`
-2. Adds 50 keypoint sites matching the `Fly50` skeleton (site definitions from [TuragaLab/fly-body-tuning](https://github.com/TuragaLab/fly-body-tuning))
-3. Compiles and saves to `models/fruitfly/fruitfly_fly50.mjb` (~103 MB)
-
-Load the generated `.mjb` file in the Body Model panel.
-
-### IK Features
-
-- **IK_dm_control** — gradient descent with momentum on analytical site Jacobians, following the `qpos_from_site_xpos` algorithm from dm_control
-- **STAC site calibration** — iteratively adjusts keypoint site positions on the body model to minimize aggregate IK residual across many frames (Wu et al. 2013, talmolab/stac-mjx)
-- **Symmetric KP Sites** — enforces bilateral symmetry during STAC calibration (midline sites stay on midline, L/R pairs get mirrored offsets)
-- **Arena alignment** — SVD Procrustes alignment from labeled arena corners to the MuJoCo arena
-- **Parallel qpos export** — multi-threaded batch IK solve with full metadata for reproducibility
-- **Camera view overlay** — render the MuJoCo scene through calibration camera perspectives with video background for alignment verification
-
-### MuJoCo Dependency
-
-RED requires MuJoCo 3.6.0 as a macOS framework in `lib/mujoco.framework/`. This is an optional dependency — RED compiles and runs without it, but the Body Model panel is disabled.
 
 ---
 
@@ -544,7 +484,6 @@ The `.redproj` file contains:
         "enable_keypoints": true,
         "enable_bboxes": false,
         "enable_obbs": false,
-        "enable_segmentation": false,
         "class_names": ["animal"]
     },
     "jarvis_models": [],

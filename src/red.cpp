@@ -13,11 +13,6 @@
 #include "gui/bbox_tool.h"
 #include "gui/obb_tool.h"
 #include "gui/midline_tool.h"
-#include "gui/sam_tool.h"
-#ifdef RED_HAS_MUJOCO
-#include "mujoco_context.h"
-#include "gui/body_model_window.h"
-#endif
 #include "jarvis_inference.h"
 #ifdef __APPLE__
 #include "jarvis_coreml.h"
@@ -373,11 +368,7 @@ int main(int argc, char **argv) {
     win.export_win.jpeg_quality = user_settings.jarvis_jpeg_quality;
 
     // Inference engine states (not window states — kept separate)
-    SamState sam_state;
     JarvisState jarvis_state;
-#ifdef RED_HAS_MUJOCO
-    MujocoContext mujoco_ctx;
-#endif
 #ifdef __APPLE__
     JarvisCoreMLState jarvis_coreml_state;
 #elif defined(_WIN32)
@@ -388,26 +379,6 @@ int main(int argc, char **argv) {
     JarvisHybridNetState jarvis_hn_state;
 #endif
 #endif
-
-    // Default SAM model paths: look relative to exe (../models/mobilesam/)
-    // and in the source tree. User can override in SAM Assist panel.
-    {
-        std::string exe = window->exe_dir;
-        std::vector<std::string> search = {
-            exe + "/../models/mobilesam",   // build tree (release/)
-            exe + "/models/mobilesam",      // installed
-            exe + "/../share/red/models/mobilesam", // Homebrew
-        };
-        for (const auto &dir : search) {
-            std::string enc = dir + "/mobile_sam_encoder.onnx";
-            std::string dec = dir + "/mobile_sam_decoder.onnx";
-            if (std::filesystem::exists(enc) && std::filesystem::exists(dec)) {
-                win.sam_tool.encoder_path = std::filesystem::canonical(enc).string();
-                win.sam_tool.decoder_path = std::filesystem::canonical(dec).string();
-                break;
-            }
-        }
-    }
 
     // Default SuperPoint model path: look relative to exe (../models/superpoint/)
     {
@@ -564,11 +535,7 @@ int main(int argc, char **argv) {
         close_project(ctx);
         win.reset();
         // Nuke inference engines (different project may use different models)
-        sam_state = SamState{};
         jarvis_state = JarvisState{};
-#ifdef RED_HAS_MUJOCO
-        mujoco_ctx.unload();
-#endif
 #ifdef __APPLE__
         jarvis_coreml_state = JarvisCoreMLState{};
 #elif defined(_WIN32)
@@ -625,7 +592,6 @@ int main(int argc, char **argv) {
                     hctx.is_3d        = hctx.project_open && !project_is_2d(pm);
                     hctx.bbox_on      = win.bbox.enabled;
                     hctx.obb_on       = win.obb.enabled;
-                    hctx.sam_on       = win.sam_tool.enabled;
                     hctx.midline_on   = win.midline.enabled;
                     DrawHelpWindow(win.show_help, hctx);
                 }, nullptr});
@@ -656,18 +622,10 @@ int main(int argc, char **argv) {
     panels.add({"Midline Tool",
                 [&]() { DrawMidlineToolWindow(win.midline, ctx); },
                 [&]() { return pm.plot_keypoints_flag; }});
-    panels.add({"SAM Assist",
-                [&]() { DrawSamToolWindow(win.sam_tool, sam_state, ctx); },
-                nullptr});
     panels.add({"Triangulation Diagnostics",
                 [&]() { DrawTriangulationDiagnosticsWindow(
                             win.triangulation_diag, ctx); },
                 nullptr});
-#ifdef RED_HAS_MUJOCO
-    panels.add({"Body Model",
-                [&]() { DrawBodyModelWindow(win.body_model, mujoco_ctx, ctx); },
-                nullptr});
-#endif
     panels.add({"Welcome",
                 [&]() { DrawWelcomeWindow(ctx, win); },
                 [&]() { return pm.project_path.empty() && !ps.video_loaded &&
@@ -999,11 +957,7 @@ int main(int argc, char **argv) {
         HandleMainMenuDialogs(ctx, win, media_root_dir,
                               print_metadata, print_summary,
                               [&]() {
-                                  sam_state = SamState{};
                                   jarvis_state = JarvisState{};
-#ifdef RED_HAS_MUJOCO
-                                  mujoco_ctx.unload();
-#endif
 #ifdef __APPLE__
                                   jarvis_coreml_state = JarvisCoreMLState{};
 #elif defined(_WIN32)
@@ -1588,25 +1542,6 @@ int main(int argc, char **argv) {
                                           annotations.end());
                     }
 
-                    // When SAM mask cycling is active THIS FRAME
-                    // (Shift held + pending mask), temporarily set
-                    // ImPlot's ZoomMod to require Ctrl so that
-                    // Shift+scroll does NOT zoom.  Default ZoomMod =
-                    // ImGuiMod_None means scroll always zooms, stealing
-                    // the event from SAM.  We only override when Shift
-                    // is actually held to preserve normal scroll-to-zoom.
-                    bool sam_override_zoom = false;
-                    int saved_zoom_mod = 0;
-                    if (win.sam_tool.enabled &&
-                        win.sam_tool.has_pending_mask &&
-                        !win.sam_tool.multi_mask.masks.empty() &&
-                        ImGui::GetIO().KeyShift) {
-                        auto &imap = ImPlot::GetInputMap();
-                        saved_zoom_mod = imap.ZoomMod;
-                        imap.ZoomMod = ImGuiMod_Ctrl;
-                        sam_override_zoom = true;
-                    }
-
                     if (ImPlot::BeginPlot("##no_plot_name", avail_size,
                                           ImPlotFlags_Equal |
                                               ImPlotFlags_Crosshairs |
@@ -1695,11 +1630,7 @@ int main(int argc, char **argv) {
                                     }
 
                                     // delete all keypoints on a frame
-                                    // (skip if SAM has active prompts — Backspace is SAM undo)
-                                    if (keys::pressed(keys::Sc::DeleteAllKp) &&
-                                        !(win.sam_tool.enabled &&
-                                          (!win.sam_tool.fg_points.empty() ||
-                                           !win.sam_tool.bg_points.empty()))) {
+                                    if (keys::pressed(keys::Sc::DeleteAllKp)) {
                                         annotations.erase(current_frame_num);
                                         keypoints_find = false;
                                     }
@@ -1796,47 +1727,9 @@ int main(int argc, char **argv) {
                                                      frame, j);
                             }
 
-                            // Accepted mask overlays (stored in AnnotationMap)
-                            if (display.show_masks) {
-                                draw_accepted_masks(annotations, frame, j, iw, ih);
-                            }
-
-                            // SAM assist
-                            if (win.sam_tool.enabled) {
-                                const uint8_t *sam_rgb = nullptr;
-#ifdef __APPLE__
-                                // Extract RGB from CVPixelBuffer on click
-                                // (lazy — only when SAM needs to run)
-                                static std::vector<uint8_t> sam_rgb_buf;
-                                static int sam_rgb_frame = -1;
-                                static int sam_rgb_cam = -1;
-                                bool need_rgb = ImPlot::IsPlotHovered() &&
-                                    (ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
-                                     ImGui::IsMouseClicked(ImGuiMouseButton_Right));
-                                if (need_rgb || (sam_rgb_frame == (int)frame && sam_rgb_cam == j)) {
-                                    if (sam_rgb_frame != (int)frame || sam_rgb_cam != j) {
-                                        int mh = ps.play_video ? ps.read_head : select_corr_head;
-                                        CVPixelBufferRef pb = scene->display_buffer[j][mh].pixel_buffer;
-                                        if (pb) {
-                                            extract_rgb_from_cvpixelbuf(pb, sam_rgb_buf, iw, ih);
-                                            sam_rgb_frame = (int)frame;
-                                            sam_rgb_cam = j;
-                                        }
-                                    }
-                                    if (sam_rgb_frame == (int)frame && sam_rgb_cam == j)
-                                        sam_rgb = sam_rgb_buf.data();
-                                }
-#endif
-                                sam_handle_input(win.sam_tool, sam_state,
-                                                 annotations, frame, j,
-                                                 nn, nc, iw, ih, sam_rgb);
-                            }
-                            if (display.show_masks)
-                                sam_draw_overlay(win.sam_tool, j, iw, ih);
                         }
 
                         // Plot context menu: press 1 key while hovering
-                        // (right-click reserved for SAM background points)
                         if (ImPlot::IsPlotHovered() &&
                             keys::pressed(keys::Sc::PlotMenu)) {
                             ImGui::OpenPopup("##plot_settings");
@@ -1853,17 +1746,11 @@ int main(int argc, char **argv) {
                             }
                             ImGui::SeparatorText("Visibility");
                             ImGui::Checkbox("Keypoints", &display.show_keypoints);
-                            ImGui::Checkbox("Masks / Contours", &display.show_masks);
                             ImGui::Checkbox("Bounding Boxes", &display.show_bboxes);
                             ImGui::EndPopup();
                         }
 
                         ImPlot::EndPlot();
-                    }
-
-                    // Restore ImPlot zoom modifier if we overrode it
-                    if (sam_override_zoom) {
-                        ImPlot::GetInputMap().ZoomMod = saved_zoom_mod;
                     }
 
                     ImGui::EndChild();

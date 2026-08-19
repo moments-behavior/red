@@ -22,7 +22,6 @@ struct Context {
     bool is_3d        = false;  // calibrated multi-camera (triangulation live)
     bool bbox_on      = false;  // Bbox tool enabled
     bool obb_on       = false;  // OBB tool enabled
-    bool sam_on       = false;  // SAM Assist enabled
     bool midline_on   = false;  // Midline tool enabled
 };
 
@@ -32,7 +31,6 @@ enum class Gate {
     Need3D,       // only meaningful for a calibrated 3D project
     ToolBbox,     // belongs to a tool mode: always listed in its own group, and
     ToolObb,      // that group floats to the top of Shortcuts when the tool is on
-    ToolSam,
     ToolMidline,
 };
 
@@ -130,14 +128,6 @@ inline const std::vector<Group> &shortcut_groups() {
             {S::COUNT, "Esc", "Cancel the current box"},
             {S::COUNT, "Delete", "Delete the hovered box"},
         }},
-        {"SAM Assist", "When SAM Assist is enabled (needs ONNX Runtime)", Gate::ToolSam, {
-            {S::COUNT, "Left-click", "Add a foreground point"},
-            {S::COUNT, "Right-click", "Add a background point"},
-            {S::COUNT, "Shift + scroll", "Cycle mask candidates"},
-            {S::COUNT, "Enter", "Accept the mask"},
-            {S::COUNT, "Backspace", "Undo the last point"},
-            {S::COUNT, "Esc", "Clear all prompts"},
-        }},
         {"Midline tool", "When the Midline tool is enabled", Gate::ToolMidline, {
             {S::COUNT, "Click, click", "Place the two line endpoints (in the line camera)"},
             {S::COUNT, "W", "Label the midline keypoints in the side camera (as usual)"},
@@ -163,12 +153,6 @@ inline const std::vector<MouseGroup> &mouse_groups() {
             {"Scroll / Middle-drag", "Zoom"},
             {"Click a camera or point", "Select / isolate it"},
             {"Double-click (empty)", "Deselect and reset the view"},
-        }},
-        {"3D body-model viewport", "MuJoCo body-model view", {
-            {"Left-drag", "Orbit / rotate", "Matches MuJoCo's native viewer; the calibration viewers rotate on right-drag"},
-            {"Right-drag", "Pan"},
-            {"Middle-drag / Scroll", "Zoom"},
-            {"Double-click", "Reset the view"},
         }},
         {"Timelines & plots", "Labeling strip, Pose Stats, Frame Drops, transport slider, frame buffer", {
             {"Click", "Seek to that frame"},
@@ -202,8 +186,6 @@ inline const std::vector<Tool> &tools() {
                 "Oriented (rotated) bounding boxes via 3-click construction."},
             {"Midline Tool", "Tools \xE2\x86\x92 Midline Tool",
                 "Reconstruct a midline (e.g. a proboscis) from one side camera + one line camera.", Gate::Need3D, "Calibrated project"},
-            {"SAM Assist", "Tools \xE2\x86\x92 SAM Assist",
-                "Point-prompt segmentation (MobileSAM / SAM 2.1).", Gate::Always, "Built with ONNX Runtime + a model"},
             // Prediction / JARVIS
             {"JARVIS Predict", "Tools \xE2\x86\x92 JARVIS Predict",
                 "Load a trained model and run pose inference (current frame or batch).", Gate::Need3D, "Calibrated project + a model"},
@@ -233,10 +215,6 @@ inline const std::vector<Tool> &tools() {
             {"Settings", "View \xE2\x86\x92 Settings",
                 "Paths, display, keypoint colors, playback, hardware, and which annotation tools are enabled.", Gate::Always, "\xE2\x80\x94"},
         };
-#ifdef RED_HAS_MUJOCO
-        t.push_back({"Body Model", "Tools \xE2\x86\x92 Body Model",
-            "Fit a MuJoCo body model to the project's 3D keypoints via inverse kinematics.", Gate::Need3D, "A model file + triangulated 3D"});
-#endif
         return t;
     }();
     return v;

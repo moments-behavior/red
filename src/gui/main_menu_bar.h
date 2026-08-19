@@ -13,7 +13,6 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
     auto &export_state     = win.export_win;
     auto &bbox_state       = win.bbox;
     auto &obb_state        = win.obb;
-    auto &sam_tool_state   = win.sam_tool;
     auto &jarvis_predict_state = win.jarvis_predict;
     auto &triangulation_diag_state = win.triangulation_diag;
     auto &show_help_window = win.show_help;
@@ -150,9 +149,6 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
         if (ImGui::MenuItem("OBB Tool")) {
             obb_state.show = true;
         }
-        if (ImGui::MenuItem("SAM Assist")) {
-            sam_tool_state.show = true;
-        }
         ImGui::BeginDisabled(is_2d);
         if (ImGui::MenuItem("Midline Tool")) {
             win.midline.show = true;
@@ -165,14 +161,6 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
             triangulation_diag_state.show = true;
         }
         ImGui::EndDisabled();
-#ifdef RED_HAS_MUJOCO
-        ImGui::Separator();
-        ImGui::BeginDisabled(is_2d);
-        if (ImGui::MenuItem("Body Model")) {
-            win.body_model.show = true;
-        }
-        ImGui::EndDisabled();
-#endif
         ImGui::EndMenu();
     }
 

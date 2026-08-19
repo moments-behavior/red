@@ -32,11 +32,11 @@ consult the deeper docs linked at the bottom for whichever area you're touching.
    and the in-repo math/calibration headers instead. If you find yourself reaching
    for `cv::`, stop. The pre-rewrite Linux block that referenced OpenCV/LibTorch
    has been replaced — current `CMakeLists.txt else()` block (Linux, ~line 1643+)
-   uses Eigen + Ceres + bundled ORT/cuDNN/MuJoCo with RPATH isolation.
+   uses Eigen + Ceres + bundled ORT/cuDNN with RPATH isolation.
 2. **Orange toolchain is read-only.** Driver 535.x, CUDA 12.2 at `/usr/local/cuda`,
    custom FFmpeg at `$HOME/nvidia/ffmpeg`, TensorRT at `$HOME/nvidia/TensorRT-8.6.1.6`.
    Red links against these read-only; it never installs into them, never upgrades them.
-   Red's own ML libs (ONNX Runtime, cuDNN, MuJoCo) live under `lib/` with RPATH
+   Red's own ML libs (ONNX Runtime, cuDNN) live under `lib/` with RPATH
    `$ORIGIN/../lib/...` so they cannot collide.
 3. **Don't break Mac or Windows when extending Linux** (and vice versa). The three
    platforms branch via `if(APPLE) / elseif(WIN32) / else()` in `CMakeLists.txt` and
@@ -100,23 +100,17 @@ red/
 │   ├── jarvis_coreml.{h,mm}       # CoreML inference (macOS only)
 │   ├── jarvis_inference.h         # ONNX Runtime inference (cross-platform)
 │   ├── jarvis_tensorrt.h          # optional Windows TensorRT
-│   ├── learned_ik_coreml.{h,mm}   # learned IK via CoreML (macOS only)
-│   ├── sam_inference.h            # MobileSAM via ONNX Runtime
-│   ├── mujoco_*.{h,cpp,mm}        # MuJoCo IK + renderers (Metal on mac, OpenGL elsewhere)
 │   ├── imgui_impl_glfw_patched.cpp # patched GLFW backend (mac modifier-key + Win fixes)
 │   ├── kernel.cu / ColorSpace.cu / create_image_cuda.cu   # CUDA kernels (Linux/Win)
 │   └── gui/                       # ~38 modular window/panel files (state + Draw())
 ├── lib/                    # bundled deps; submodules + optional ML libs
 │   ├── imgui/ implot/ implot3d/ ImGuiFileDialog/ IconFontCppHeaders/   # submodules
 │   ├── FFmpeg/ GL/ GLFW/ nvcodec/                                      # Windows headers
-│   ├── onnxruntime/        # OPTIONAL (auto-detected) — drop release here for SAM/JARVIS
-│   ├── cudnn/              # OPTIONAL (Linux/Windows) — bundled for ORT CUDA EP
-│   ├── mujoco/             # OPTIONAL (Linux/Windows) — bundled MuJoCo
-│   └── mujoco.framework/   # OPTIONAL (macOS) — official framework release
+│   ├── onnxruntime/        # OPTIONAL (auto-detected) — drop release here for JARVIS
+│   └── cudnn/              # OPTIONAL (Linux/Windows) — bundled for ORT CUDA EP
 ├── tests/                  # ~30 test files; 2 main binaries: test_gui, test_annotation
-├── scripts/                # Python helpers: pth_to_coreml, build_fly_model, ik trainers, …
+├── scripts/                # Python helpers: pth_to_coreml, nerfstudio_export, …
 ├── tools/                  # convert_labels_v1_to_v2 (one-off CSV migration)
-├── models/                 # rodent/ included; fruitfly/ built via scripts/build_fly_model.py
 ├── packaging/              # Homebrew formula and friends
 ├── dev_docs/               # RedPortToWindows.md (full Windows port log)
 ├── mac_dev.md              # macOS development summary (rob_ui_overhaul history)
@@ -137,7 +131,7 @@ brew install eigen ffmpeg glfw jpeg-turbo pkg-config ceres-solver
 cmake -S . -B release -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=/opt/homebrew
 cmake --build release -j$(sysctl -n hw.ncpu)
 ```
-Binary: `release/red`. Optional `lib/onnxruntime/`, `lib/mujoco.framework/` auto-detected.
+Binary: `release/red`. Optional `lib/onnxruntime/` auto-detected.
 
 ### Linux — two supported targets
 
@@ -157,7 +151,7 @@ Common to both:
 - Custom CUDA FFmpeg at `$HOME/nvidia/ffmpeg/build/lib/pkgconfig` (shared with
   orange) is preferred over any system FFmpeg — don't install a system one.
 - Optional bundled libs (auto-detected, RPATH-isolated via
-  `$ORIGIN/../lib/...`): `lib/onnxruntime/`, `lib/cudnn/`, `lib/mujoco/`.
+  `$ORIGIN/../lib/...`): `lib/onnxruntime/`, `lib/cudnn/`.
 - Binaries: `release/red`, `release/test_gui`, `release/test_annotation`.
   Run tests headless: `DISPLAY= ./release/test_annotation` (673) /
   `DISPLAY= ./release/test_gui` (178).
@@ -191,7 +185,7 @@ The three 24.04/CUDA-13 build fixes (all backward-compatible, in `d9d2a09`):
 
 The CUDA-13 source hazards (cuCtxCreate `_v4`, NPP `_Ctx`, NVTX) were already
 handled in red, so no source porting was needed beyond fix #1. ML inference
-(JARVIS/SAM) is still compiled out on the 24.04 box — see the runbook in the
+(JARVIS) is still compiled out on the 24.04 box — see the runbook in the
 `moments_setup` repo (`RED_2404_NOTES.md`) for the full build path and the
 Phase-B (TensorRT) inference plan, including running JARVIS on the Blackwell
 via TensorRT 10.
@@ -208,7 +202,7 @@ The two main test binaries auto-build with `red`:
 - `release/test_annotation` — ~673 tests covering the v2 annotation/CSV layer
 
 Plus targeted binaries: `test_pipeline_run`, `test_calib_*`, `test_aruco_*`,
-`test_mujoco_*`, `test_jarvis_*`, `test_ort_*`, `test_cuda_*`, etc. Run headless on
+`test_jarvis_*`, `test_ort_*`, `test_cuda_*`, etc. Run headless on
 Linux with `DISPLAY= ./release/<binary>`.
 
 ---
@@ -225,7 +219,7 @@ Linux with `DISPLAY= ./release/<binary>`.
   `__APPLE__ / _WIN32 / __linux__` in C++. CUDA `.cu` files are only compiled on
   Linux/Windows.
 - **Optional features** are gated by CMake `HAS_*` flags that map to
-  `RED_HAS_ONNXRUNTIME`, `RED_HAS_MUJOCO`, `USE_CUDA_POINTSOURCE`, `USE_TENSORRT`
+  `RED_HAS_ONNXRUNTIME`, `USE_CUDA_POINTSOURCE`, `USE_TENSORRT`
   compile definitions. Code paths use `#ifdef` guards so the build stays green when
   optional libs are missing.
 - **Comments:** minimal. Only when the *why* is non-obvious. No multi-paragraph

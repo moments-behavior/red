@@ -237,9 +237,8 @@ inline nlohmann::json build_coco_json(
         for (size_t k = 0; k < cam.keypoints.size(); ++k)
             if (cam.keypoints[k].labeled) ++num_visible;
 
-        // Skip frames with no keypoints AND no masks
-        bool has_mask = cam.has_mask() && !cam.extras->mask_polygons.empty();
-        if (num_visible == 0 && !has_mask) { img_id++; continue; }
+        // Skip frames with no keypoints
+        if (num_visible == 0) { img_id++; continue; }
 
         // Build flat keypoints array [x,y,v, x,y,v, ...]
         nlohmann::json kp_flat = nlohmann::json::array();
@@ -256,37 +255,14 @@ inline nlohmann::json build_coco_json(
             }
         }
 
-        // Segmentation (mask polygons if available)
+        // Segmentation: always empty (COCO schema compatibility)
         nlohmann::json seg = nlohmann::json::array();
-        if (has_mask) {
-            for (const auto &poly : cam.extras->mask_polygons) {
-                nlohmann::json flat_poly = nlohmann::json::array();
-                for (const auto &pt : poly) {
-                    flat_poly.push_back(pt.x);
-                    flat_poly.push_back(img_h - pt.y); // ImPlot → image coords
-                }
-                seg.push_back(flat_poly);
-            }
-        }
 
-        // Bbox: from explicit bbox, mask bounds, or keypoint bounds + margin
+        // Bbox: from explicit bbox, or keypoint bounds + margin
         double bx, by, bw, bh;
         if (cam.has_bbox()) {
             bx = cam.extras->bbox_x; by = cam.extras->bbox_y;
             bw = cam.extras->bbox_w; bh = cam.extras->bbox_h;
-        } else if (has_mask && num_visible == 0) {
-            // Mask-only frame: derive bbox from mask polygon bounds
-            double mx_min = 1e9, mx_max = -1e9, my_min = 1e9, my_max = -1e9;
-            for (const auto &poly : cam.extras->mask_polygons)
-                for (const auto &pt : poly) {
-                    double py = img_h - pt.y; // ImPlot → image
-                    mx_min = std::min(mx_min, pt.x); mx_max = std::max(mx_max, pt.x);
-                    my_min = std::min(my_min, py); my_max = std::max(my_max, py);
-                }
-            bx = std::max(mx_min - cfg.bbox_margin, 0.0);
-            by = std::max(my_min - cfg.bbox_margin, 0.0);
-            bw = std::min(mx_max + cfg.bbox_margin, (double)img_w) - bx;
-            bh = std::min(my_max + cfg.bbox_margin, (double)img_h) - by;
         } else {
             bx = std::max(x_min - cfg.bbox_margin, 0.0);
             by = std::max(y_min - cfg.bbox_margin, 0.0);
@@ -294,20 +270,8 @@ inline nlohmann::json build_coco_json(
             bh = std::min(y_max + cfg.bbox_margin, (double)img_h) - by;
         }
 
-        // Compute area from mask polygon (shoelace formula) or bbox
+        // Area from the bbox
         double area = bw * bh;
-        if (has_mask && !cam.extras->mask_polygons.empty()) {
-            double poly_area = 0;
-            for (const auto &poly : cam.extras->mask_polygons) {
-                double a = 0;
-                for (size_t i = 0; i < poly.size(); ++i) {
-                    size_t j = (i + 1) % poly.size();
-                    a += poly[i].x * poly[j].y - poly[j].x * poly[i].y;
-                }
-                poly_area += std::abs(a) * 0.5;
-            }
-            if (poly_area > 0) area = poly_area;
-        }
 
         nlohmann::json ann;
         ann["id"] = ann_id++;

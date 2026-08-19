@@ -36,27 +36,16 @@ if(APPLE)
     pkg_check_modules(TURBOJPEG REQUIRED libturbojpeg)
     find_package(Ceres REQUIRED)
 
-    # Optional ONNX Runtime for SAM inference (use official release, not Homebrew)
+    # Optional ONNX Runtime for JARVIS inference (use official release, not Homebrew)
     set(ONNXRUNTIME_DIR "${CMAKE_SOURCE_DIR}/lib/onnxruntime")
     if(EXISTS "${ONNXRUNTIME_DIR}/include/onnxruntime_cxx_api.h")
         set(HAS_ONNXRUNTIME TRUE)
         message(STATUS "ONNX Runtime found at ${ONNXRUNTIME_DIR}")
     else()
         set(HAS_ONNXRUNTIME FALSE)
-        message(STATUS "ONNX Runtime not found — SAM inference disabled")
+        message(STATUS "ONNX Runtime not found — JARVIS prediction disabled")
     endif()
 
-    # Optional MuJoCo for body model IK (use official macOS framework release)
-    set(MUJOCO_FRAMEWORK_DIR "${CMAKE_SOURCE_DIR}/lib/mujoco.framework")
-    set(MUJOCO_DYLIB_VERSION "3.6.0")
-    set(MUJOCO_DYLIB "${MUJOCO_FRAMEWORK_DIR}/Versions/A/libmujoco.${MUJOCO_DYLIB_VERSION}.dylib")
-    if(EXISTS "${MUJOCO_FRAMEWORK_DIR}/Headers/mujoco.h")
-        set(HAS_MUJOCO TRUE)
-        message(STATUS "MuJoCo framework found at ${MUJOCO_FRAMEWORK_DIR}")
-    else()
-        set(HAS_MUJOCO FALSE)
-        message(STATUS "MuJoCo not found — body model IK disabled")
-    endif()
 
     set(DIR_IMGUI "${CMAKE_SOURCE_DIR}/lib/imgui")
     set(DIR_IMPLOT "${CMAKE_SOURCE_DIR}/lib/implot")
@@ -132,21 +121,13 @@ if(APPLE)
     )
     # Removed: Vulkan::Vulkan (Accelerate still used by superpoint_coreml.mm / jarvis_coreml.mm)
 
-    # Optional ONNX Runtime for SAM inference
+    # Optional ONNX Runtime for JARVIS inference
     if(HAS_ONNXRUNTIME)
         target_compile_definitions(red PRIVATE RED_HAS_ONNXRUNTIME)
         target_include_directories(red PRIVATE "${ONNXRUNTIME_DIR}/include")
         target_link_libraries(red PRIVATE "${ONNXRUNTIME_DIR}/lib/libonnxruntime.dylib")
     endif()
 
-    # Optional MuJoCo for body model IK
-    if(HAS_MUJOCO)
-        target_compile_definitions(red PRIVATE RED_HAS_MUJOCO)
-        target_include_directories(red PRIVATE "${MUJOCO_FRAMEWORK_DIR}/Headers")
-        target_link_libraries(red PRIVATE "${MUJOCO_DYLIB}")
-        # Set rpath so the binary finds the MuJoCo dylib at runtime
-        set_target_properties(red PROPERTIES BUILD_RPATH "${CMAKE_SOURCE_DIR}/lib")
-    endif()
 
     # Enable ARC for all Objective-C++ translation units
     set_source_files_properties(
@@ -219,12 +200,6 @@ if(APPLE)
         target_link_libraries(test_gui PRIVATE "${ONNXRUNTIME_DIR}/lib/libonnxruntime.dylib")
     endif()
 
-    if(HAS_MUJOCO)
-        target_compile_definitions(test_gui PRIVATE RED_HAS_MUJOCO)
-        target_include_directories(test_gui PRIVATE "${MUJOCO_FRAMEWORK_DIR}/Headers")
-        target_link_libraries(test_gui PRIVATE "${MUJOCO_DYLIB}")
-        set_target_properties(test_gui PROPERTIES BUILD_RPATH "${CMAKE_SOURCE_DIR}/lib")
-    endif()
 
     set_target_properties(test_gui PROPERTIES
         CXX_STANDARD 17
@@ -276,63 +251,7 @@ if(APPLE)
         target_include_directories(test_annotation PRIVATE "${ONNXRUNTIME_DIR}/include")
         target_link_libraries(test_annotation PRIVATE "${ONNXRUNTIME_DIR}/lib/libonnxruntime.dylib")
     endif()
-    if(HAS_MUJOCO)
-        target_compile_definitions(test_annotation PRIVATE RED_HAS_MUJOCO)
-        target_include_directories(test_annotation PRIVATE "${MUJOCO_FRAMEWORK_DIR}/Headers")
-        target_link_libraries(test_annotation PRIVATE "${MUJOCO_DYLIB}")
-        set_target_properties(test_annotation PROPERTIES BUILD_RPATH "${CMAKE_SOURCE_DIR}/lib")
-    endif()
     set_target_properties(test_annotation PROPERTIES
-        CXX_STANDARD 17
-        CXX_STANDARD_REQUIRED ON
-    )
-
-    # SAM integration test: same deps as test_annotation
-    add_executable(test_sam_integration
-        ${TEST_GUI_SRC_FILES}
-        ${MM_SRC_FILES}
-        ${IMGUI_SRC}
-        ${IMPLOT_SRC}
-        ${IMPLOT3D_SRC}
-        tests/test_sam_integration.cpp
-    )
-    target_include_directories(test_sam_integration PRIVATE
-        src
-        ${DIR_IMGUI}
-        ${DIR_IMGUI}/backends
-        ${DIR_IMPLOT}
-        ${DIR_IMPLOT3D}
-        ${DIR_FILEBROWSER}
-        lib/nvcodec
-        lib/IconFontCppHeaders
-        ${FFMPEG_INCLUDE_DIRS}
-        ${HOMEBREW_PREFIX}/include
-        ${HOMEBREW_PREFIX}/include/eigen3
-    )
-    target_link_directories(test_sam_integration PRIVATE ${FFMPEG_LIBRARY_DIRS} ${TURBOJPEG_LIBRARY_DIRS})
-    target_link_libraries(test_sam_integration PRIVATE
-        Eigen3::Eigen
-        glfw
-        "-framework Metal"
-        "-framework QuartzCore"
-        "-framework VideoToolbox"
-        "-framework CoreMedia"
-        "-framework CoreFoundation"
-        "-framework CoreVideo"
-        "-framework CoreML"
-        "-framework Accelerate"
-        "-framework Cocoa"
-        ${FFMPEG_LIBRARIES}
-        ${TURBOJPEG_LIBRARIES}
-        Ceres::ceres
-        pthread
-    )
-    if(HAS_ONNXRUNTIME)
-        target_compile_definitions(test_sam_integration PRIVATE RED_HAS_ONNXRUNTIME)
-        target_include_directories(test_sam_integration PRIVATE "${ONNXRUNTIME_DIR}/include")
-        target_link_libraries(test_sam_integration PRIVATE "${ONNXRUNTIME_DIR}/lib/libonnxruntime.dylib")
-    endif()
-    set_target_properties(test_sam_integration PROPERTIES
         CXX_STANDARD 17
         CXX_STANDARD_REQUIRED ON
     )
@@ -415,131 +334,6 @@ if(APPLE)
         CXX_STANDARD_REQUIRED ON
     )
 
-    # MuJoCo IK integration tests
-    if(HAS_MUJOCO)
-        # Unit/scale diagnostics
-        add_executable(test_mujoco_units
-            tests/test_mujoco_units.cpp
-            src/skeleton.cpp
-            ${DIR_IMGUI}/imgui.cpp ${DIR_IMGUI}/imgui_draw.cpp
-            ${DIR_IMGUI}/imgui_tables.cpp ${DIR_IMGUI}/imgui_widgets.cpp
-        )
-        target_include_directories(test_mujoco_units PRIVATE
-            src ${DIR_IMGUI} ${DIR_IMGUI}/backends ${DIR_IMPLOT} ${DIR_IMPLOT3D}
-            lib/nvcodec lib/IconFontCppHeaders
-            ${HOMEBREW_PREFIX}/include ${HOMEBREW_PREFIX}/include/eigen3
-            ${FFMPEG_INCLUDE_DIRS} "${MUJOCO_FRAMEWORK_DIR}/Headers"
-        )
-        target_link_libraries(test_mujoco_units PRIVATE Eigen3::Eigen
-            "${MUJOCO_DYLIB}")
-        target_compile_definitions(test_mujoco_units PRIVATE RED_HAS_MUJOCO)
-        set_target_properties(test_mujoco_units PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON
-            BUILD_RPATH "${CMAKE_SOURCE_DIR}/lib")
-
-        # Geometry integrity test (joints don't break after IK)
-        add_executable(test_mujoco_geometry
-            tests/test_mujoco_geometry.cpp
-            src/skeleton.cpp
-            ${DIR_IMGUI}/imgui.cpp ${DIR_IMGUI}/imgui_draw.cpp
-            ${DIR_IMGUI}/imgui_tables.cpp ${DIR_IMGUI}/imgui_widgets.cpp
-        )
-        target_include_directories(test_mujoco_geometry PRIVATE
-            src ${DIR_IMGUI} ${DIR_IMGUI}/backends ${DIR_IMPLOT} ${DIR_IMPLOT3D}
-            lib/nvcodec lib/IconFontCppHeaders
-            ${HOMEBREW_PREFIX}/include ${HOMEBREW_PREFIX}/include/eigen3
-            ${FFMPEG_INCLUDE_DIRS} "${MUJOCO_FRAMEWORK_DIR}/Headers"
-        )
-        target_link_libraries(test_mujoco_geometry PRIVATE Eigen3::Eigen
-            "${MUJOCO_DYLIB}")
-        target_compile_definitions(test_mujoco_geometry PRIVATE RED_HAS_MUJOCO)
-        set_target_properties(test_mujoco_geometry PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON
-            BUILD_RPATH "${CMAKE_SOURCE_DIR}/lib")
-
-        # Joint connectivity test
-        add_executable(test_mujoco_joints
-            tests/test_mujoco_joints.cpp
-            src/skeleton.cpp
-            ${DIR_IMGUI}/imgui.cpp ${DIR_IMGUI}/imgui_draw.cpp
-            ${DIR_IMGUI}/imgui_tables.cpp ${DIR_IMGUI}/imgui_widgets.cpp
-        )
-        target_include_directories(test_mujoco_joints PRIVATE
-            src ${DIR_IMGUI} ${DIR_IMGUI}/backends ${DIR_IMPLOT} ${DIR_IMPLOT3D}
-            lib/nvcodec lib/IconFontCppHeaders
-            ${HOMEBREW_PREFIX}/include ${HOMEBREW_PREFIX}/include/eigen3
-            ${FFMPEG_INCLUDE_DIRS} "${MUJOCO_FRAMEWORK_DIR}/Headers"
-        )
-        target_link_libraries(test_mujoco_joints PRIVATE Eigen3::Eigen
-            "${MUJOCO_DYLIB}")
-        target_compile_definitions(test_mujoco_joints PRIVATE RED_HAS_MUJOCO)
-        set_target_properties(test_mujoco_joints PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON
-            BUILD_RPATH "${CMAKE_SOURCE_DIR}/lib")
-
-        # Full IK test suite
-        add_executable(test_mujoco_ik
-            tests/test_mujoco_ik.cpp
-            src/skeleton.cpp
-            ${DIR_IMGUI}/imgui.cpp
-            ${DIR_IMGUI}/imgui_draw.cpp
-            ${DIR_IMGUI}/imgui_tables.cpp
-            ${DIR_IMGUI}/imgui_widgets.cpp
-        )
-        target_include_directories(test_mujoco_ik PRIVATE
-            src
-            ${DIR_IMGUI}
-            ${DIR_IMGUI}/backends
-            ${DIR_IMPLOT}
-            ${DIR_IMPLOT3D}
-            lib/nvcodec
-            lib/IconFontCppHeaders
-            ${HOMEBREW_PREFIX}/include
-            ${HOMEBREW_PREFIX}/include/eigen3
-            ${FFMPEG_INCLUDE_DIRS}
-            "${MUJOCO_FRAMEWORK_DIR}/Headers"
-        )
-        target_link_libraries(test_mujoco_ik PRIVATE
-            Eigen3::Eigen
-            "${MUJOCO_DYLIB}"
-        )
-        target_compile_definitions(test_mujoco_ik PRIVATE RED_HAS_MUJOCO)
-        set_target_properties(test_mujoco_ik PROPERTIES
-            CXX_STANDARD 17
-            CXX_STANDARD_REQUIRED ON
-            BUILD_RPATH "${CMAKE_SOURCE_DIR}/lib"
-        )
-
-        # STAC comparison test: IK_dm_control vs IK+STAC
-        add_executable(test_stac_comparison
-            tests/test_stac_comparison.cpp
-            src/skeleton.cpp
-            ${DIR_IMGUI}/imgui.cpp
-            ${DIR_IMGUI}/imgui_draw.cpp
-            ${DIR_IMGUI}/imgui_tables.cpp
-            ${DIR_IMGUI}/imgui_widgets.cpp
-        )
-        target_include_directories(test_stac_comparison PRIVATE
-            src
-            ${DIR_IMGUI}
-            ${DIR_IMGUI}/backends
-            ${DIR_IMPLOT}
-            ${DIR_IMPLOT3D}
-            lib/nvcodec
-            lib/IconFontCppHeaders
-            ${HOMEBREW_PREFIX}/include
-            ${HOMEBREW_PREFIX}/include/eigen3
-            ${FFMPEG_INCLUDE_DIRS}
-            "${MUJOCO_FRAMEWORK_DIR}/Headers"
-        )
-        target_link_libraries(test_stac_comparison PRIVATE
-            Eigen3::Eigen
-            "${MUJOCO_DYLIB}"
-        )
-        target_compile_definitions(test_stac_comparison PRIVATE RED_HAS_MUJOCO)
-        set_target_properties(test_stac_comparison PROPERTIES
-            CXX_STANDARD 17
-            CXX_STANDARD_REQUIRED ON
-            BUILD_RPATH "${CMAKE_SOURCE_DIR}/lib"
-        )
-    endif()
 
     # Full pipeline test: runs all 7 steps, validates reproj error
     add_executable(test_pipeline_run
@@ -1496,28 +1290,10 @@ elseif(WIN32)
         message(WARNING "ONNX Runtime not found in lib/onnxruntime/ — JARVIS prediction disabled")
     endif()
 
-    # Optional MuJoCo for body model IK (Windows: DLL release in lib/mujoco/)
-    # Supports both layouts: include/mujoco/mujoco.h (official) and include/mujoco.h (flat)
-    set(MUJOCO_DIR "${CMAKE_SOURCE_DIR}/lib/mujoco")
-    if(EXISTS "${MUJOCO_DIR}/include/mujoco/mujoco.h")
-        set(HAS_MUJOCO TRUE)
-        set(MUJOCO_INCLUDE_DIR "${MUJOCO_DIR}/include/mujoco")
-        message(STATUS "MuJoCo found at ${MUJOCO_DIR} (standard layout)")
-    elseif(EXISTS "${MUJOCO_DIR}/include/mujoco.h")
-        set(HAS_MUJOCO TRUE)
-        set(MUJOCO_INCLUDE_DIR "${MUJOCO_DIR}/include")
-        message(STATUS "MuJoCo found at ${MUJOCO_DIR} (flat layout)")
-    else()
-        set(HAS_MUJOCO FALSE)
-        message(STATUS "MuJoCo not found in lib/mujoco/ — body model IK disabled")
-    endif()
 
     target_compile_definitions(red PRIVATE NOMINMAX _USE_MATH_DEFINES USE_CUDA_POINTSOURCE)
     if(HAS_ONNXRUNTIME)
         target_compile_definitions(red PRIVATE RED_HAS_ONNXRUNTIME)
-    endif()
-    if(HAS_MUJOCO)
-        target_compile_definitions(red PRIVATE RED_HAS_MUJOCO)
     endif()
     target_compile_options(red PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/bigobj /EHsc>)
 
@@ -1542,9 +1318,6 @@ elseif(WIN32)
     endif()
     if(HAS_ONNXRUNTIME)
         target_include_directories(red PRIVATE "${ONNXRUNTIME_DIR}/include")
-    endif()
-    if(HAS_MUJOCO)
-        target_include_directories(red PRIVATE "${MUJOCO_DIR}/include" "${MUJOCO_DIR}/include/mujoco")
     endif()
 
     # Link libraries
@@ -1588,10 +1361,6 @@ elseif(WIN32)
         target_link_libraries(red PRIVATE "${ONNXRUNTIME_DIR}/lib/onnxruntime.lib")
     endif()
 
-    # MuJoCo body model IK
-    if(HAS_MUJOCO)
-        target_link_libraries(red PRIVATE "${MUJOCO_DIR}/lib/mujoco.lib")
-    endif()
 
     # Windows system libraries
     target_link_libraries(red PRIVATE
@@ -1618,14 +1387,6 @@ elseif(WIN32)
         endforeach()
     endif()
 
-    # Copy MuJoCo DLL to build directory
-    if(HAS_MUJOCO)
-        file(GLOB MUJOCO_DLLS "${MUJOCO_DIR}/bin/*.dll")
-        foreach(dll ${MUJOCO_DLLS})
-            add_custom_command(TARGET red POST_BUILD
-                COMMAND ${CMAKE_COMMAND} -E copy_if_different "${dll}" "$<TARGET_FILE_DIR:red>")
-        endforeach()
-    endif()
 
     # vcpkg automatically copies dependent DLLs via its toolchain
 
@@ -1697,18 +1458,13 @@ elseif(WIN32)
             target_include_directories(${TEST_NAME} PRIVATE "${ONNXRUNTIME_DIR}/include")
             target_link_libraries(${TEST_NAME} PRIVATE "${ONNXRUNTIME_DIR}/lib/onnxruntime.lib")
         endif()
-        if(HAS_MUJOCO)
-            target_compile_definitions(${TEST_NAME} PRIVATE RED_HAS_MUJOCO)
-            target_include_directories(${TEST_NAME} PRIVATE "${MUJOCO_DIR}/include" "${MUJOCO_DIR}/include/mujoco")
-            target_link_libraries(${TEST_NAME} PRIVATE "${MUJOCO_DIR}/lib/mujoco.lib")
-        endif()
         set_target_properties(${TEST_NAME} PROPERTIES
             CXX_STANDARD 17
             CXX_STANDARD_REQUIRED ON
         )
     endforeach()
 
-    # Windows default 1MB stack is too small for MuJoCo XML parsing
+    # Windows default 1MB stack is too small for deep recursive parsing
     # (complex rodent/fly models) and STB image static initializers.
     # Use 64MB stack for all targets.
     target_link_options(red PRIVATE /STACK:67108864)
@@ -1874,20 +1630,6 @@ else()
         message(STATUS "  ${_trt_ver_line}")
     endif()
 
-    # Optional MuJoCo for body-model IK (bundled at lib/mujoco/)
-    set(MUJOCO_DIR "${CMAKE_SOURCE_DIR}/lib/mujoco")
-    if(EXISTS "${MUJOCO_DIR}/include/mujoco/mujoco.h")
-        set(HAS_MUJOCO TRUE)
-        set(MUJOCO_INCLUDE_DIR "${MUJOCO_DIR}/include/mujoco")
-        message(STATUS "MuJoCo found at ${MUJOCO_DIR} (standard layout)")
-    elseif(EXISTS "${MUJOCO_DIR}/include/mujoco.h")
-        set(HAS_MUJOCO TRUE)
-        set(MUJOCO_INCLUDE_DIR "${MUJOCO_DIR}/include")
-        message(STATUS "MuJoCo found at ${MUJOCO_DIR} (flat layout)")
-    else()
-        set(HAS_MUJOCO FALSE)
-        message(STATUS "MuJoCo not found in lib/mujoco/ — body model IK disabled")
-    endif()
 
     target_compile_definitions(red PRIVATE USE_CUDA_POINTSOURCE)
     if(HAS_ONNXRUNTIME)
@@ -1895,9 +1637,6 @@ else()
     endif()
     if(HAS_TENSORRT_HN)
         target_compile_definitions(red PRIVATE RED_HAS_TENSORRT_HN)
-    endif()
-    if(HAS_MUJOCO)
-        target_compile_definitions(red PRIVATE RED_HAS_MUJOCO)
     endif()
 
     target_include_directories(red PRIVATE
@@ -1915,9 +1654,6 @@ else()
     endif()
     if(HAS_TENSORRT_HN)
         target_include_directories(red PRIVATE "${TENSORRT_INCLUDE_DIR}")
-    endif()
-    if(HAS_MUJOCO)
-        target_include_directories(red PRIVATE "${MUJOCO_DIR}/include" "${MUJOCO_DIR}/include/mujoco")
     endif()
 
     # Link libraries
@@ -1960,9 +1696,6 @@ else()
             "${TENSORRT_PLUGIN_LIB}"
             "-Wl,--as-needed")
     endif()
-    if(HAS_MUJOCO)
-        target_link_libraries(red PRIVATE "${MUJOCO_DIR}/lib/libmujoco.so")
-    endif()
 
     # RPATH: isolate bundled ML libs from system / orange's toolchain.
     # $ORIGIN so the installed binary finds them relative to itself; build
@@ -2004,10 +1737,6 @@ else()
                                 "at runtime to enable CUDA EP")
             endif()
         endif()
-    endif()
-    if(HAS_MUJOCO)
-        list(APPEND RED_RPATH_BUILD "${MUJOCO_DIR}/lib")
-        list(APPEND RED_RPATH_INSTALL "$ORIGIN/../lib/mujoco/lib")
     endif()
     # TensorRT: build-tree RPATH only — read-only orange-shared install.
     # Users running `cmake --install` should set LD_LIBRARY_PATH at runtime
@@ -2088,11 +1817,6 @@ else()
                 "${TENSORRT_PLUGIN_LIB}"
                 "-Wl,--as-needed")
         endif()
-        if(HAS_MUJOCO)
-            target_compile_definitions(${TEST_NAME} PRIVATE RED_HAS_MUJOCO)
-            target_include_directories(${TEST_NAME} PRIVATE "${MUJOCO_DIR}/include" "${MUJOCO_DIR}/include/mujoco")
-            target_link_libraries(${TEST_NAME} PRIVATE "${MUJOCO_DIR}/lib/libmujoco.so")
-        endif()
         set_target_properties(${TEST_NAME} PROPERTIES
             CXX_STANDARD 17
             CXX_STANDARD_REQUIRED ON
@@ -2126,7 +1850,6 @@ else()
     target_link_options(run_experimental_calib PRIVATE "-Wl,--disable-new-dtags")
 
 endif()
-
 
 
 # ── Pump dispense log import (src/pump_events_core.h) ───────────────────────

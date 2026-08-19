@@ -7,7 +7,6 @@
 // Parse-check the JarvisHybridNet header so any syntax errors surface in CI
 // before red.cpp wires it up. The header is no-op on Apple.
 #include "../src/jarvis_hybridnet.h"
-//   - sam_inference.h: mask-to-polygon conversion
 //   - bbox_tool.h: color generation
 //
 // Pure logic tests — no ImGui/ImPlot/GPU context needed.
@@ -27,7 +26,6 @@
 #include "gui/bbox_tool.h"
 #include "gui/keypoint_clipboard.h"
 #include "gui/obb_tool.h"
-#include "sam_inference.h"
 #include "project.h"
 #include <cassert>
 #include <cmath>
@@ -276,35 +274,6 @@ static void test_json_roundtrip_bbox() {
     EXPECT_NEAR(fa2.cameras[1].extras->obb_w, 40.0, 0.001);
     EXPECT_NEAR(fa2.cameras[1].extras->obb_h, 30.0, 0.001);
     EXPECT_NEAR(fa2.cameras[1].extras->obb_angle, 0.785, 0.001);
-}
-
-static void test_json_roundtrip_mask() {
-    printf("  test_json_roundtrip_mask...\n");
-
-    AnnotationMap amap;
-    auto &fa = get_or_create_frame(amap, 7, 1, 2);
-
-    // Set mask on camera 0
-    auto &ext = fa.cameras[0].get_extras();
-    ext.mask_polygons = {
-        {{10.0, 20.0}, {30.0, 20.0}, {30.0, 40.0}, {10.0, 40.0}},
-        {{50.0, 60.0}, {70.0, 60.0}, {70.0, 80.0}}
-    };
-    ext.has_mask = true;
-
-    auto j = annotations_to_json(amap);
-
-    AnnotationMap amap2;
-    get_or_create_frame(amap2, 7, 1, 2);
-    annotations_from_json(j, amap2);
-
-    auto &cam = amap2[7].cameras[0];
-    EXPECT_TRUE(cam.has_mask());
-    EXPECT_EQ((int)cam.extras->mask_polygons.size(), 2);
-    EXPECT_EQ((int)cam.extras->mask_polygons[0].size(), 4);
-    EXPECT_EQ((int)cam.extras->mask_polygons[1].size(), 3);
-    EXPECT_NEAR(cam.extras->mask_polygons[0][0].x, 10.0, 0.001);
-    EXPECT_NEAR(cam.extras->mask_polygons[1][2].y, 80.0, 0.001);
 }
 
 static void test_json_empty_extended_data() {
@@ -724,98 +693,6 @@ static void test_obb_contains_rotated() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// sam_inference.h: Tests
-// ═══════════════════════════════════════════════════════════════════════════
-
-static void test_sam_mask_to_polygon_empty() {
-    printf("  test_sam_mask_to_polygon_empty...\n");
-
-    SamMask mask;
-    mask.valid = false;
-    auto polys = sam_mask_to_polygon(mask);
-    EXPECT_TRUE(polys.empty());
-}
-
-static void test_sam_mask_to_polygon_empty_data() {
-    printf("  test_sam_mask_to_polygon_empty_data...\n");
-
-    SamMask mask;
-    mask.valid = true;
-    mask.width = 10;
-    mask.height = 10;
-    // Empty data
-    auto polys = sam_mask_to_polygon(mask);
-    EXPECT_TRUE(polys.empty());
-}
-
-static void test_sam_mask_to_polygon_all_zero() {
-    printf("  test_sam_mask_to_polygon_all_zero...\n");
-
-    SamMask mask;
-    mask.valid = true;
-    mask.width = 10;
-    mask.height = 10;
-    mask.data.resize(100, 0); // all zero
-    auto polys = sam_mask_to_polygon(mask);
-    EXPECT_TRUE(polys.empty()); // no foreground pixels
-}
-
-static void test_sam_mask_to_polygon_rect() {
-    printf("  test_sam_mask_to_polygon_rect...\n");
-
-    SamMask mask;
-    mask.valid = true;
-    mask.width = 20;
-    mask.height = 20;
-    mask.data.resize(400, 0);
-
-    // Fill a 10x5 rectangle at (3,4)-(12,8)
-    for (int y = 4; y <= 8; ++y)
-        for (int x = 3; x <= 12; ++x)
-            mask.data[y * 20 + x] = 255;
-
-    auto polys = sam_mask_to_polygon(mask);
-    EXPECT_EQ((int)polys.size(), 1);
-    EXPECT_TRUE((int)polys[0].size() >= 4); // boundary polygon (simplified)
-
-    // Check that polygon covers the rectangle region:
-    // all points should be within or on the boundary of (3,4)-(12,8)
-    for (const auto &pt : polys[0]) {
-        EXPECT_TRUE(pt.x >= 2.5 && pt.x <= 12.5);
-        EXPECT_TRUE(pt.y >= 3.5 && pt.y <= 8.5);
-    }
-}
-
-static void test_sam_init_no_onnx() {
-    printf("  test_sam_init_no_onnx...\n");
-
-    SamState s;
-    bool ok = sam_init(s, SamModel::MobileSAM, "encoder.onnx", "decoder.onnx");
-
-#ifndef RED_HAS_ONNXRUNTIME
-    EXPECT_FALSE(ok);
-    EXPECT_FALSE(s.available);
-    EXPECT_FALSE(s.loaded);
-#else
-    // Models don't exist at these paths → load fails
-    EXPECT_FALSE(ok);
-    EXPECT_TRUE(s.available);
-    EXPECT_FALSE(s.loaded);
-#endif
-}
-
-static void test_sam_segment_not_loaded() {
-    printf("  test_sam_segment_not_loaded...\n");
-
-    SamState s;
-    std::vector<tuple_d> fg = {{10, 10}};
-    std::vector<tuple_d> bg;
-    uint8_t rgb[3] = {128, 128, 128};
-    auto mask = sam_segment(s, rgb, 1, 1, fg, bg);
-    EXPECT_FALSE(mask.valid);
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
 // bbox_tool.h: Tests
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -853,7 +730,6 @@ static void test_annotation_config_defaults() {
     EXPECT_TRUE(cfg.enable_keypoints);
     EXPECT_FALSE(cfg.enable_bboxes);
     EXPECT_FALSE(cfg.enable_obbs);
-    EXPECT_FALSE(cfg.enable_segmentation);
     EXPECT_EQ((int)cfg.class_names.size(), 1);
     EXPECT_TRUE(cfg.class_names[0] == "animal");
 }
@@ -863,7 +739,7 @@ static void test_annotation_config_json_roundtrip() {
 
     AnnotationConfig cfg;
     cfg.enable_bboxes = true;
-    cfg.enable_segmentation = true;
+    cfg.enable_obbs = true;
     cfg.class_names = {"rat", "mouse", "fly"};
 
     nlohmann::json j;
@@ -874,8 +750,7 @@ static void test_annotation_config_json_roundtrip() {
 
     EXPECT_TRUE(cfg2.enable_keypoints);
     EXPECT_TRUE(cfg2.enable_bboxes);
-    EXPECT_FALSE(cfg2.enable_obbs);
-    EXPECT_TRUE(cfg2.enable_segmentation);
+    EXPECT_TRUE(cfg2.enable_obbs);
     EXPECT_EQ((int)cfg2.class_names.size(), 3);
     EXPECT_TRUE(cfg2.class_names[0] == "rat");
     EXPECT_TRUE(cfg2.class_names[1] == "mouse");
@@ -1306,37 +1181,6 @@ static void test_build_coco_json_with_explicit_bbox() {
     EXPECT_NEAR(bbox[3].get<double>(), 200.0, 0.1);
 }
 
-static void test_build_coco_json_with_mask() {
-    printf("  test_build_coco_json_with_mask...\n");
-
-    AnnotationMap amap;
-    auto &fa = get_or_create_frame(amap, 1, 2, 1);
-
-    fa.cameras[0].keypoints[0].x = 100.0; fa.cameras[0].keypoints[0].y = 400.0;
-    fa.cameras[0].keypoints[0].labeled = true;
-
-    // Set mask polygons
-    auto &ext = fa.cameras[0].get_extras();
-    ext.mask_polygons = {
-        {{10.0, 20.0}, {100.0, 20.0}, {100.0, 100.0}, {10.0, 100.0}}
-    };
-    ext.has_mask = true;
-
-    ExportFormats::ExportConfig cfg;
-    cfg.node_names = {"a", "b"};
-    cfg.bbox_margin = 10.0f;
-
-    std::vector<u32> frames = {1};
-    auto j = ExportFormats::build_coco_json(amap, frames, cfg, 0, "cam0", 640, 480);
-
-    auto &seg = j["annotations"][0]["segmentation"];
-    EXPECT_EQ((int)seg.size(), 1); // one polygon
-    EXPECT_EQ((int)seg[0].size(), 8); // 4 points × 2 coords
-
-    // Y should be flipped: original y=20 → 480-20=460
-    EXPECT_NEAR(seg[0][1].get<double>(), 460.0, 0.1);
-}
-
 // ═══════════════════════════════════════════════════════════════════════════
 // Integration: Save/Load Roundtrip through AnnotationMap
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1586,122 +1430,9 @@ static void test_dlc_y_flip() {
 // SAM preprocessing unit tests (no ONNX needed)
 // ═══════════════════════════════════════════════════════════════════════════
 
-static void test_sam_preprocess_mobilesam() {
-    printf("  test_sam_preprocess_mobilesam...\n");
-    // 4x3 white image (RGB=255)
-    const int w = 4, h = 3;
-    uint8_t rgb[w * h * 3];
-    memset(rgb, 255, sizeof(rgb));
-
-    float scale; int pad_x, pad_y;
-    auto result = sam_detail::preprocess_mobilesam(rgb, w, h, scale, pad_x, pad_y);
-
-    // Output shape: 3 * 1024 * 1024
-    EXPECT_EQ((int)result.size(), 3 * 1024 * 1024);
-
-    // Scale = 1024 / max(4,3) = 256
-    EXPECT_NEAR(scale, 1024.0f / 4.0f, 0.1f);
-
-    // Check normalization: pixel 255, mean=123.675, std=58.395
-    // Normalized = (255 - 123.675) / 58.395 ≈ 2.249
-    // The resized region should have roughly this value
-    float v = result[0]; // First pixel of R channel
-    EXPECT_NEAR(v, (255.0f - 123.675f) / 58.395f, 0.1f);
-
-    // Padding region (outside resized area) should be ~= (0-mean)/std = negative
-    // For R channel: (0 - 123.675) / 58.395 ≈ -2.118
-    // Pixel at bottom-right corner (1023, 1023) in R channel is padded → 0
-    // Actually padding uses 0.0f directly (no normalization of zeros)
-    // The code initializes to 0.0f and only writes the resized region
-    float padded = result[0 * 1024 * 1024 + 1023 * 1024 + 1023];
-    EXPECT_NEAR(padded, 0.0f, 0.001f);
-}
-
-static void test_sam_preprocess_sam2() {
-    printf("  test_sam_preprocess_sam2...\n");
-    // 8x8 mid-gray image (RGB=128)
-    const int w = 8, h = 8;
-    uint8_t rgb[w * h * 3];
-    memset(rgb, 128, sizeof(rgb));
-
-    auto result = sam_detail::preprocess_sam2(rgb, w, h);
-
-    // Output shape: 3 * 1024 * 1024
-    EXPECT_EQ((int)result.size(), 3 * 1024 * 1024);
-
-    // SAM2 normalizes to 0-1 first: pixel/255 = 128/255 ≈ 0.502
-    // Then (0.502 - mean) / std
-    // R channel: (0.502 - 0.485) / 0.229 ≈ 0.074
-    float v = result[0]; // First pixel of R channel
-    double expected_r = (128.0 / 255.0 - 0.485) / 0.229;
-    EXPECT_NEAR(v, expected_r, 0.05);
-
-    // G channel: (0.502 - 0.456) / 0.224 ≈ 0.205
-    float v_g = result[1 * 1024 * 1024];
-    double expected_g = (128.0 / 255.0 - 0.456) / 0.224;
-    EXPECT_NEAR(v_g, expected_g, 0.05);
-}
-
-static void test_sam_bilinear_resize() {
-    printf("  test_sam_bilinear_resize...\n");
-    // 2x2 gradient source → 4x4 output
-    float src[4] = {0.0f, 0.5f, 0.5f, 1.0f}; // smooth gradient
-    auto dst = sam_detail::bilinear_resize(src, 2, 2, 4, 4);
-
-    EXPECT_EQ((int)dst.size(), 16);
-
-    // Output should be finite (half-pixel centering can slightly overshoot
-    // source range for some patterns, so just check finiteness)
-    for (float v : dst) {
-        EXPECT_TRUE(std::isfinite(v));
-    }
-
-    // Larger resize: 3x3 → 6x6 (output shape correctness)
-    float src2[9] = {0, 1, 2, 3, 4, 5, 6, 7, 8};
-    auto dst2 = sam_detail::bilinear_resize(src2, 3, 3, 6, 6);
-    EXPECT_EQ((int)dst2.size(), 36);
-}
-
 // ═══════════════════════════════════════════════════════════════════════════
 // Contour extraction for complex shapes
 // ═══════════════════════════════════════════════════════════════════════════
-
-static void test_sam_contour_l_shape() {
-    printf("  test_sam_contour_l_shape...\n");
-    // 10x10 mask with L-shape
-    const int w = 10, h = 10;
-    uint8_t mask[w * h];
-    memset(mask, 0, sizeof(mask));
-
-    // L-shape: rows 1-8 col 1-3, rows 6-8 col 1-7
-    for (int y = 1; y <= 8; ++y)
-        for (int x = 1; x <= 3; ++x)
-            mask[y * w + x] = 255;
-    for (int y = 6; y <= 8; ++y)
-        for (int x = 4; x <= 7; ++x)
-            mask[y * w + x] = 255;
-
-    auto contours = sam_detail::extract_contours(mask, w, h);
-    EXPECT_TRUE(!contours.empty());
-    // Concave L-shape should have more than 4 points
-    EXPECT_TRUE(contours[0].size() > 4);
-}
-
-static void test_sam_contour_single_pixel() {
-    printf("  test_sam_contour_single_pixel...\n");
-    // 5x5 mask with single pixel
-    const int w = 5, h = 5;
-    uint8_t mask[w * h];
-    memset(mask, 0, sizeof(mask));
-    mask[2 * w + 2] = 255; // single pixel at (2,2)
-
-    // Should not crash
-    auto contours = sam_detail::extract_contours(mask, w, h);
-    // Single pixel = single boundary pixel, can't form a closed contour with 3+ points
-    // Graceful: either empty or a small contour
-    // (no crash is the main assertion)
-    EXPECT_TRUE(true); // survived without crash
-}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Export schema validation
@@ -2328,32 +2059,8 @@ static void test_json_obb_roundtrip() {
     EXPECT_NEAR(cam2.extras->obb_angle, 0.785, 0.001);
 }
 
-static void test_json_multiple_masks() {
-    printf("  test_json_multiple_masks...\n");
-    AnnotationMap amap;
-    auto &fa = get_or_create_frame(amap, 3, 1, 1);
-    auto &ext = fa.cameras[0].get_extras();
-    ext.has_mask = true;
-    ext.mask_polygons = {
-        {{10.0, 20.0}, {30.0, 40.0}, {50.0, 20.0}},
-        {{100.0, 100.0}, {120.0, 130.0}, {140.0, 100.0}, {120.0, 70.0}}
-    };
-
-    auto j = annotations_to_json(amap);
-    AnnotationMap amap2;
-    get_or_create_frame(amap2, 3, 1, 1);
-    annotations_from_json(j, amap2);
-
-    auto &cam2 = amap2[3].cameras[0];
-    EXPECT_TRUE(cam2.has_mask());
-    EXPECT_EQ((int)cam2.extras->mask_polygons.size(), 2);
-    EXPECT_EQ((int)cam2.extras->mask_polygons[0].size(), 3);
-    EXPECT_EQ((int)cam2.extras->mask_polygons[1].size(), 4);
-    EXPECT_NEAR(cam2.extras->mask_polygons[1][3].y, 70.0, 0.001);
-}
-
-static void test_json_combined_bbox_obb_mask() {
-    printf("  test_json_combined_bbox_obb_mask...\n");
+static void test_json_combined_bbox_obb() {
+    printf("  test_json_combined_bbox_obb...\n");
     AnnotationMap amap;
     auto &fa = get_or_create_frame(amap, 1, 1, 2);
     auto &ext0 = fa.cameras[0].get_extras();
@@ -2362,8 +2069,6 @@ static void test_json_combined_bbox_obb_mask() {
     auto &ext1 = fa.cameras[1].get_extras();
     ext1.has_obb = true;
     ext1.obb_cx = 50; ext1.obb_cy = 60; ext1.obb_w = 40; ext1.obb_h = 20; ext1.obb_angle = 1.0;
-    ext1.has_mask = true;
-    ext1.mask_polygons = {{{0, 0}, {10, 10}, {20, 0}}};
 
     auto j = annotations_to_json(amap);
     AnnotationMap amap2;
@@ -2373,7 +2078,6 @@ static void test_json_combined_bbox_obb_mask() {
     EXPECT_TRUE(amap2[1].cameras[0].has_bbox());
     EXPECT_FALSE(amap2[1].cameras[0].has_obb());
     EXPECT_TRUE(amap2[1].cameras[1].has_obb());
-    EXPECT_TRUE(amap2[1].cameras[1].has_mask());
     EXPECT_NEAR(amap2[1].cameras[0].extras->bbox_w, 100.0, 0.001);
 }
 
@@ -2409,19 +2113,6 @@ static void test_make_frame_sizes_match() {
 // ═══════════════════════════════════════════════════════════════════════════
 // SAM cache sentinel test
 // ═══════════════════════════════════════════════════════════════════════════
-
-static void test_sam_cache_sentinel_default() {
-    printf("  test_sam_cache_sentinel_default...\n");
-    // Verify SamState defaults prevent false cache hits
-    SamState s;
-    EXPECT_EQ(s.cached_frame, -1);
-    EXPECT_EQ(s.cached_cam, -1);
-
-    // With defaults of -1, the sentinel guard should prevent cache hit
-    // even if sam_encode is called with frame_num=-1, cam_idx=-1
-    // (This tests the design, not the ONNX path)
-    EXPECT_FALSE(s.loaded); // not loaded → encode would fail anyway
-}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Main
@@ -2529,7 +2220,6 @@ int main() {
 
     printf("\n--- JSON Persistence ---\n");
     test_json_roundtrip_bbox();
-    test_json_roundtrip_mask();
     test_json_empty_extended_data();
     test_json_missing_frame_in_amap();
     test_json_camera_index_out_of_bounds();
@@ -2559,12 +2249,6 @@ int main() {
     test_obb_contains_rotated();
 
     printf("\n--- SAM Inference ---\n");
-    test_sam_mask_to_polygon_empty();
-    test_sam_mask_to_polygon_empty_data();
-    test_sam_mask_to_polygon_all_zero();
-    test_sam_mask_to_polygon_rect();
-    test_sam_init_no_onnx();
-    test_sam_segment_not_loaded();
 
     printf("\n--- Bbox Tool ---\n");
     test_bbox_next_class_color();
@@ -2577,7 +2261,6 @@ int main() {
     printf("\n--- Export Pipeline: COCO ---\n");
     test_export_coco_full_pipeline();
     test_build_coco_json_with_explicit_bbox();
-    test_build_coco_json_with_mask();
 
     printf("\n--- Export Pipeline: YOLO ---\n");
     test_export_yolo_pose_full_pipeline();
@@ -2600,13 +2283,8 @@ int main() {
     test_dlc_y_flip();
 
     printf("\n--- SAM Preprocessing ---\n");
-    test_sam_preprocess_mobilesam();
-    test_sam_preprocess_sam2();
-    test_sam_bilinear_resize();
 
     printf("\n--- Contour Extraction ---\n");
-    test_sam_contour_l_shape();
-    test_sam_contour_single_pixel();
 
     printf("\n--- Export Schema Validation ---\n");
     test_coco_json_schema();
@@ -2636,8 +2314,7 @@ int main() {
 
     printf("\n--- JSON Persistence (extended) ---\n");
     test_json_obb_roundtrip();
-    test_json_multiple_masks();
-    test_json_combined_bbox_obb_mask();
+    test_json_combined_bbox_obb();
 
     printf("\n--- Data Model Edge Cases ---\n");
     test_get_or_create_frame_idempotent();
@@ -2647,7 +2324,6 @@ int main() {
     test_keypoint_clipboard_ops();
 
     printf("\n--- SAM Cache Sentinel ---\n");
-    test_sam_cache_sentinel_default();
 
     printf("\n=== Results: %d passed, %d failed ===\n", g_pass, g_fail);
     return g_fail > 0 ? 1 : 0;

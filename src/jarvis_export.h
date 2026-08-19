@@ -980,18 +980,8 @@ inline nlohmann::json generate_annotation_json_from_amap(
                     keypoints_flat.push_back(1);
                 }
 
-                // Segmentation from mask polygons (if available)
+                // Segmentation: always empty (COCO schema compatibility)
                 nlohmann::json seg = nlohmann::json::array();
-                if (cam.has_mask()) {
-                    for (const auto &poly : cam.extras->mask_polygons) {
-                        nlohmann::json flat = nlohmann::json::array();
-                        for (const auto &pt : poly) {
-                            flat.push_back(pt.x);
-                            flat.push_back(img_h - pt.y); // ImPlot → image coords
-                        }
-                        seg.push_back(flat);
-                    }
-                }
 
                 annotation_entry["bbox"] = {x_min, y_min, x_size, y_size};
                 annotation_entry["category_id"] = 1; // JARVIS convention

@@ -313,14 +313,6 @@ inline void DrawLabelingToolWindow(
                 labeled_frames.push_back({(int)fnum, state});
         }
 
-        // === Collect SAM mask frames ===
-        struct MaskFrameInfo { int frame; };
-        std::vector<MaskFrameInfo> mask_frames;
-        for (const auto &[fnum, fa] : annotations) {
-            if (frame_has_any_masks(fa))
-                mask_frames.push_back({(int)fnum});
-        }
-
         // === Collect bounding box frames ===
         struct BBoxFrameInfo { int frame; bool has_bbox; bool has_obb; };
         std::vector<BBoxFrameInfo> bbox_frames;
@@ -350,7 +342,6 @@ inline void DrawLabelingToolWindow(
 
         // Grid cell PushID offsets (max ~10k frames per section before collision)
         constexpr int kKpIdOffset      = 0;
-        constexpr int kSamIdOffset     = 10000;
         constexpr int kBBoxIdOffset    = 20000;
         constexpr int kNeedsFixIdOffset = 30000;
 
@@ -469,35 +460,7 @@ inline void DrawLabelingToolWindow(
             }
         }
 
-        // ─── Section 2: SAM Labels ───
-        if (!mask_frames.empty()) {
-            ImGui::Spacing();
-            auto mask_pn = find_prev_next([](const FrameAnnotation &fa) {
-                return frame_has_any_masks(fa);
-            });
-            ImGui::Text("SAM Labels (%zu)", mask_frames.size());
-            ImGui::SameLine();
-            jump_buttons(mask_pn, "sam");
-
-            ImU32 orange_u32 = ImGui::ColorConvertFloat4ToU32(color_orange);
-
-            for (size_t i = 0; i < mask_frames.size(); ++i) {
-                auto &mf = mask_frames[i];
-                char tip[64];
-                snprintf(tip, sizeof(tip), "Frame %d", mf.frame);
-
-                grid_cell(kSamIdOffset + (int)i, mf.frame, tip,
-                    [orange_u32](ImDrawList *dl, ImVec2 mn, ImVec2 mx) {
-                        float cx = (mn.x + mx.x) * 0.5f;
-                        float cy = (mn.y + mx.y) * 0.5f;
-                        float r  = (mx.x - mn.x) * 0.5f - 1.0f;
-                        dl->AddCircleFilled(ImVec2(cx, cy), r, orange_u32, 16);
-                    });
-                grid_wrap(i, mask_frames.size());
-            }
-        }
-
-        // ─── Section 3: Bounding Box Labels ───
+        // ─── Section 2: Bounding Box Labels ───
         if (!bbox_frames.empty()) {
             ImGui::Spacing();
             auto bbox_pn = find_prev_next([](const FrameAnnotation &fa) {

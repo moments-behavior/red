@@ -682,7 +682,6 @@ if (gpu_ctx) gpu_destroy(gpu_ctx);
 | ArUco calibration | Board images (ChArUco, multi-camera) |
 | PointSource calibration | Green LED images (multi-camera) |
 | JARVIS prediction | `.onnx` model files + multi-camera video |
-| SAM Assist | MobileSAM/SAM2.1 `.onnx` model |
 | Annotation workflow | Multi-camera video project |
 | NVDEC decode | Any multi-camera video footage |
 
