@@ -25,6 +25,19 @@ struct TransportBarState {
 // through the reference camera's mapping), then re-baselines every decoder
 // with an accurate seek — the seek is the epoch boundary at which decoders
 // re-sample the mode.
+// Display label for a sync status. Deliberately separate from
+// sync_plan::status_name(), which is the on-disk vocabulary parsed back by
+// load_json() and printed in [sync-fix] logs -- these name the CONDITION the
+// user is looking at, not the remedy the plan applies.
+inline const char *sync_status_label(sync_plan::Status s) {
+    switch (s) {
+        case sync_plan::Status::Clean:   return "aligned";
+        case sync_plan::Status::Trim:    return "uneven ends";
+        case sync_plan::Status::Reindex: return "dropped frames";
+    }
+    return "unknown";
+}
+
 inline void sync_fix_toggle(AppContext &ctx, bool enable) {
     auto *dc = ctx.dc_context;
     const sync_plan::SyncPlan &plan = g_sync_fix.plan;
@@ -295,25 +308,25 @@ inline void DrawTransportBar(TransportBarState &state, AppContext &ctx) {
         ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
         ImGui::SameLine(0, spacing);
 
-        ImGui::TextColored(label_col, "Sync");
+        ImGui::TextColored(label_col, "Cameras");
         ImGui::SameLine(0, spacing);
-        bool sync_active = dc->sync_fix_active.load();
-        ImGui::BeginDisabled(clean);
-        if (ImGui::Checkbox("##syncfix", &sync_active))
-            sync_fix_toggle(ctx, sync_active);
-        ImGui::EndDisabled();
 
-        ImGui::SameLine(0, spacing);
+        // Diagnosis first, then the action. The checkbox carries its own
+        // "Realign" label: an unlabelled one sitting before the status read as
+        // though the status WERE its label ("[x] uneven ends"), i.e. asserting
+        // the problem rather than fixing it.
+        bool sync_active = dc->sync_fix_active.load();
         ImVec4 status_col = clean ? green_col
                             : plan.status == sync_plan::Status::Trim
                                 ? ImVec4(0.9f, 0.9f, 0.4f, 1.0f)
                                 : ImVec4(1.0f, 0.6f, 0.2f, 1.0f);
-        ImGui::TextColored(status_col, "%s", sync_plan::status_name(plan.status));
+        ImGui::TextColored(status_col, "%s", sync_status_label(plan.status));
         if (ImGui::IsItemHovered()) {
             ImGui::BeginTooltip();
             if (clean) {
                 ImGui::TextUnformatted(
-                    "Cameras are already aligned — nothing to fix.");
+                    "Every camera's frame i is the same trigger instant — "
+                    "nothing to fix.");
             } else {
                 ImGui::Text("Plan source: %s", plan.source.c_str());
                 ImGui::Text("Canonical timeline: %lld trigger slots",
@@ -357,6 +370,19 @@ inline void DrawTransportBar(TransportBarState &state, AppContext &ctx) {
                           "Enable to view on the canonical trigger timeline.");
             }
             ImGui::EndTooltip();
+        }
+
+        // Only shown when there is something to toggle: on a clean plan the
+        // remap is the identity, so a permanently-disabled checkbox would just
+        // read as broken.
+        if (!clean) {
+            ImGui::SameLine(0, spacing);
+            if (ImGui::Checkbox("Realign", &sync_active))
+                sync_fix_toggle(ctx, sync_active);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip(
+                    "Remap every camera onto the canonical trigger timeline so "
+                    "frame i is the same instant in all views.");
         }
     }
 
