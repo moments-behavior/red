@@ -634,6 +634,48 @@ int main(int argc, char **argv) {
 
         ImGui::DockSpaceOverViewport(0x00000001);
 
+        // Dock cameras into the central node as tabs -- but only when the
+        // project has no camera layout of its own.
+        //
+        // SetNextWindowDockID(..., FirstUseEver) cannot do this alone:
+        // switch_ini_to_path() reloads the .ini in a preframe callback, and
+        // LoadIniSettingsFromDisk undocks every live window (DockId = 0). It
+        // then restores only windows that HAVE an .ini entry, which the
+        // sidebar panels do and camera windows do not -- so cameras were
+        // undocked on every load and ended up floating. This pass runs after
+        // that reload, so it has the last word.
+        //
+        // Skipped as soon as the project's .ini has any entry for a camera
+        // window: that project already has a remembered arrangement, and
+        // silently re-tabbing it would destroy the user's layout AND get
+        // written back to the .ini on exit. Only projects that have never
+        // placed their cameras get the default tab layout. Keyed on the camera
+        // list so it evaluates once per project rather than every frame.
+        if (ps.video_loaded && scene->num_cams > 0) {
+            const int ncam = std::min((int)scene->num_cams,
+                                      (int)pm.camera_names.size());
+            std::string cam_signature;
+            for (int j = 0; j < ncam; ++j)
+                cam_signature += pm.camera_names[j] + "|";
+            static std::string docked_signature;
+            if (cam_signature != docked_signature) {
+                docked_signature = cam_signature;
+                bool has_saved_layout = false;
+                for (int j = 0; j < ncam && !has_saved_layout; ++j) {
+                    ImGuiID wid = ImHashStr(pm.camera_names[j].c_str());
+                    has_saved_layout =
+                        ImGui::FindWindowSettingsByID(wid) != nullptr;
+                }
+                const ImGuiID central = 0x00000005;
+                if (!has_saved_layout && ImGui::DockBuilderGetNode(central)) {
+                    for (int j = 0; j < ncam; ++j)
+                        ImGui::DockBuilderDockWindow(
+                            pm.camera_names[j].c_str(), central);
+                    ImGui::DockBuilderFinish(0x00000001);
+                }
+            }
+        }
+
         // Draw all registered panels
         panels.drawAll();
 
@@ -802,14 +844,11 @@ int main(int argc, char **argv) {
             for (int j = 0; j < scene->num_cams; j++) {
                 const std::string &win_name = pm.camera_names[j];
 
-                // Dock cameras into the 2x2 grid from default layout.
-                // Dock IDs 0x05..0x08 map to TL, BL, TR, BR quadrants.
-                {
-                    static const ImGuiID quad_ids[4] = {
-                        0x00000005, 0x00000006, 0x00000007, 0x00000008};
-                    ImGui::SetNextWindowDockID(quad_ids[j % 4],
-                                               ImGuiCond_FirstUseEver);
-                }
+                // Dock every camera into the central node from the default
+                // layout, so they arrive as tabs in one pane rather than
+                // spread across a 2x2 grid. FirstUseEver, so a project whose
+                // saved .ini already places them keeps its own arrangement.
+                ImGui::SetNextWindowDockID(0x00000005, ImGuiCond_FirstUseEver);
                 ImGui::SetNextWindowSize(ImVec2(500, 400),
                                          ImGuiCond_FirstUseEver);
                 bool is_visible = ImGui::Begin(win_name.c_str());
