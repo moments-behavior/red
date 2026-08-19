@@ -12,6 +12,9 @@ struct UserSettings {
     std::string default_media_root_path;
 
     // Display defaults
+    // UI text scale. ImGui 1.92+ re-rasterises at the scaled size, so this is
+    // crisp at any value rather than stretching existing glyphs.
+    float ui_text_scale = 1.0f;
     int default_brightness = 0;
     float default_contrast = 1.0f;
     bool default_pivot_midgray = true;
@@ -76,6 +79,7 @@ inline void to_json(nlohmann::json &j, const UserSettings &s) {
     j = nlohmann::json{
         {"default_project_root_path", s.default_project_root_path},
         {"default_media_root_path", s.default_media_root_path},
+        {"ui_text_scale", s.ui_text_scale},
         {"default_brightness", s.default_brightness},
         {"default_contrast", s.default_contrast},
         {"default_pivot_midgray", s.default_pivot_midgray},
@@ -98,6 +102,7 @@ inline void from_json(const nlohmann::json &j, UserSettings &s) {
         j.value("default_project_root_path", std::string{});
     s.default_media_root_path =
         j.value("default_media_root_path", std::string{});
+    s.ui_text_scale = j.value("ui_text_scale", 1.0f);
     s.default_brightness = j.value("default_brightness", 0);
     s.default_contrast = j.value("default_contrast", 1.0f);
     s.default_pivot_midgray = j.value("default_pivot_midgray", true);

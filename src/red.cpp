@@ -323,6 +323,10 @@ int main(int argc, char **argv) {
     ImPlotStyle &style = ImPlot::GetStyle();
     ImVec4 *colors = style.Colors;
 
+    // Apply the persisted UI text scale. ImGui 1.92+ re-rasterises glyphs at
+    // the scaled size, so this stays sharp instead of stretching the atlas.
+    ImGui::GetStyle().FontScaleMain = user_settings.ui_text_scale;
+
     // Initialize window states from user settings
     win.jarvis_export.margin = user_settings.jarvis_margin;
     win.jarvis_export.train_ratio = user_settings.jarvis_train_ratio;

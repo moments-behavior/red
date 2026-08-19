@@ -57,6 +57,19 @@ inline void DrawSettingsWindow(SettingsState &state, AppContext &ctx) {
 
         // --- Display ---
         if (ImGui::CollapsingHeader("Display Defaults")) {
+            // Applied live to style.FontScaleMain by the main loop; ImGui 1.92+
+            // re-rasterises glyphs at the scaled size, so text stays sharp.
+            if (ImGui::SliderFloat("UI Text Size", &s.ui_text_scale,
+                                   0.7f, 2.0f, "%.2fx")) {
+                ImGui::GetStyle().FontScaleMain = s.ui_text_scale;
+                other_changed = true;
+            }
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Reset##textscale")) {
+                s.ui_text_scale = 1.0f;
+                ImGui::GetStyle().FontScaleMain = 1.0f;
+                other_changed = true;
+            }
             if (ImGui::SliderInt("Brightness", &s.default_brightness, -150, 150))
                 display_changed = true;
             if (ImGui::SliderFloat("Contrast", &s.default_contrast, 0.0f, 3.0f, "%.2f"))
