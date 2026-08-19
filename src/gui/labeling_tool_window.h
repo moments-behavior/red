@@ -335,7 +335,6 @@ inline void DrawLabelingToolWindow(
         // Annotation type colors (shared between grid cells and timeline ticks)
         const ImVec4 color_green(0.2f, 0.8f, 0.3f, 1.0f);
         const ImVec4 color_yellow(0.95f, 0.85f, 0.15f, 1.0f);
-        const ImVec4 color_orange(0.9f, 0.55f, 0.12f, 1.0f);
         const ImVec4 color_purple(0.63f, 0.35f, 0.86f, 1.0f);
         const ImVec4 color_lilac(0.78f, 0.59f, 1.0f, 1.0f);
         const ImVec4 color_red(0.90f, 0.28f, 0.28f, 1.0f);
@@ -517,7 +516,7 @@ inline void DrawLabelingToolWindow(
         // === Timeline minimap (ImPlot — all annotation types) ===
         ImGui::Spacing();
         int total_frames = dc_context->estimated_num_frames;
-        bool has_any_annotations = !labeled_frames.empty() || !mask_frames.empty() || !bbox_frames.empty();
+        bool has_any_annotations = !labeled_frames.empty() || !bbox_frames.empty();
         if (total_frames > 0 && has_any_annotations) {
 
             // Reserve space for rotated "Timeline" label on the left
@@ -539,7 +538,7 @@ inline void DrawLabelingToolWindow(
             }
 
             // Build tick arrays for each annotation type
-            std::vector<double> kp_yellow_x, kp_purple_x, green_x, orange_x,
+            std::vector<double> kp_yellow_x, kp_purple_x, green_x,
                 purple_x, lilac_x;
             for (auto &lf : labeled_frames) {
                 if (lf.state == KP_GREEN) green_x.push_back((double)lf.frame);
@@ -547,8 +546,6 @@ inline void DrawLabelingToolWindow(
                     kp_purple_x.push_back((double)lf.frame);
                 else kp_yellow_x.push_back((double)lf.frame);
             }
-            for (auto &mf : mask_frames)
-                orange_x.push_back((double)mf.frame);
             for (auto &bf : bbox_frames) {
                 if (bf.has_bbox) purple_x.push_back((double)bf.frame);
                 if (bf.has_obb) lilac_x.push_back((double)bf.frame);
@@ -557,7 +554,6 @@ inline void DrawLabelingToolWindow(
             // Collect all annotated frames for click-to-seek
             std::vector<int> all_annotated_frames;
             for (auto &lf : labeled_frames) all_annotated_frames.push_back(lf.frame);
-            for (auto &mf : mask_frames) all_annotated_frames.push_back(mf.frame);
             for (auto &bf : bbox_frames) all_annotated_frames.push_back(bf.frame);
             std::sort(all_annotated_frames.begin(), all_annotated_frames.end());
             all_annotated_frames.erase(
@@ -604,12 +600,6 @@ inline void DrawLabelingToolWindow(
                 if (!green_x.empty()) {
                     ImPlot::SetNextLineStyle(color_green, 2.0f);
                     ImPlot::PlotInfLines("##green", green_x.data(), (int)green_x.size());
-                }
-
-                // SAM mask ticks (orange)
-                if (!orange_x.empty()) {
-                    ImPlot::SetNextLineStyle(color_orange, 2.0f);
-                    ImPlot::PlotInfLines("##sam", orange_x.data(), (int)orange_x.size());
                 }
 
                 // BBox ticks (purple)

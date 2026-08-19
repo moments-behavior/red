@@ -199,8 +199,8 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
                 dispatch_fmt = ExportFormats::JARVIS_TR;
 
             if (ImGui::Button("Start Export")) {
-                if (state.label_folder.empty() && total_count == 0 && !is_nerfstudio) {
-                    validation_error = "No annotations found (keypoints or masks)";
+                if (state.label_folder.empty() && kp_count == 0 && !is_nerfstudio) {
+                    validation_error = "No annotations found";
                 } else if (!project_is_2d(pm) && pm.calibration_folder.empty()) {
                     validation_error = "No calibration folder set";
                 } else if (is_jarvis && pm.media_folder.empty()) {
@@ -234,7 +234,7 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
 
                     // Compute total expected images for progress bar
                     state.images_saved.store(0, std::memory_order_relaxed);
-                    state.images_total = total_count * (int)pm.camera_names.size();
+                    state.images_total = kp_count * (int)pm.camera_names.size();
                     state.in_progress.store(true, std::memory_order_relaxed);
                     state.status = "Exporting...";
 
