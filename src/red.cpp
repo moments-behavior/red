@@ -9,28 +9,18 @@
 #include "gui/help_window.h"
 #include "gui/shortcuts.h"
 #include "gui/jarvis_export_window.h"
+#include "gui/jarvis_import_window.h"
+#include "gui/pose_stats_window.h"
+#include "gui/prediction_overlay.h"
+#include "prediction_store.h"
 #include "gui/export_window.h"
 #include "gui/bbox_tool.h"
 #include "gui/obb_tool.h"
 #include "gui/midline_tool.h"
-#include "jarvis_inference.h"
 #ifdef __APPLE__
-#include "jarvis_coreml.h"
 #include <CoreGraphics/CoreGraphics.h>
-#elif defined(_WIN32)
-#include "jarvis_tensorrt.h"
 #endif
-#if defined(__linux__) || defined(_WIN32)
-#include "jarvis_hybridnet.h"
-#endif
-#include "gui/jarvis_predict_window.h"
-#include "jarvis_predict_export.h"
-#include "jarvis_predict_import.h"
-#include "prediction_store.h"
-#include "prediction_merge.h"
 #include "gui/switch_skeleton_window.h"
-#include "gui/prediction_overlay.h"
-#include "gui/bout_filter_preview.h"
 #include "gui/annotation_dialog.h"
 #include "gui/body_parts_window.h"
 #include "gui/labeling_tool_window.h"
@@ -319,13 +309,11 @@ int main(int argc, char **argv) {
     // Annotation model
     AnnotationMap annotations;
 
-    // Separate prediction store (Batch Predict → Store mode). Kept out of
-    // `annotations` so predicting large sections never floods the Labeling
-    // Tool. `prediction_writer` streams to a .rpred file during a batch;
-    // `prediction_store` mmaps the finished file for the read-only overlay
-    // and (later) Pose Stats.
-    predstore::PredictionWriter prediction_writer;
+    // Predictions live in a separate, memory-mapped store rather than in
+    // `annotations`, so importing a whole video never floods the Labeling Tool.
+    // Frames are promoted into `annotations` one at a time via Pose Stats.
     predstore::PredictionReader prediction_store;
+    std::string active_store_path;
 
     // others
     ImVec4 clear_color = ImVec4(0.0f, 0.0f, 0.0f, 1.00f);
@@ -346,18 +334,6 @@ int main(int argc, char **argv) {
     win.export_win.seed = user_settings.jarvis_seed;
     win.export_win.jpeg_quality = user_settings.jarvis_jpeg_quality;
 
-    // Inference engine states (not window states — kept separate)
-    JarvisState jarvis_state;
-#ifdef __APPLE__
-    JarvisCoreMLState jarvis_coreml_state;
-#elif defined(_WIN32)
-    JarvisTensorRTState jarvis_trt_state;
-#endif
-#if defined(__linux__) || defined(_WIN32)
-#if defined(RED_HAS_ONNXRUNTIME) || defined(RED_HAS_TENSORRT_HN)
-    JarvisHybridNetState jarvis_hn_state;
-#endif
-#endif
 
     win.annotation.video_folder = user_settings.default_media_root_path.empty()
                                      ? media_root_dir
@@ -436,8 +412,6 @@ int main(int argc, char **argv) {
                 pm = loaded;
                 if (setup_project(pm, skeleton, skeleton_map, &err)) {
                     on_project_loaded(ctx, print_metadata, print_summary);
-                    // Reopen the JARVIS Predict panel if it was open last time.
-                    win.jarvis_predict.show = pm.show_jarvis_predict;
                 } else
                     popups.pushError(err);
             }
@@ -462,18 +436,8 @@ int main(int argc, char **argv) {
         // Validation passed — now safe to close old project
         close_project(ctx);
         win.reset();
-        // Nuke inference engines (different project may use different models)
-        jarvis_state = JarvisState{};
-#ifdef __APPLE__
-        jarvis_coreml_state = JarvisCoreMLState{};
-#elif defined(_WIN32)
-        jarvis_trt_state = JarvisTensorRTState{};
-#endif
-#if defined(__linux__) || defined(_WIN32)
-#if defined(RED_HAS_ONNXRUNTIME) || defined(RED_HAS_TENSORRT_HN)
-        jarvis_hybridnet_unload(jarvis_hn_state);
-#endif
-#endif
+        prediction_store.close();
+        active_store_path.clear();
         pm_ref = new_pm;
         // Re-initialize skeleton after close_project() cleared it.
         // (close_project resets ctx.skeleton; we must re-run setup_project
@@ -526,7 +490,7 @@ int main(int argc, char **argv) {
     panels.add({"JARVIS Export",
                 [&]() { DrawJarvisExportWindow(win.jarvis_export, ctx); },
                 nullptr});
-    panels.add({"JARVIS Import",
+    panels.add({"Import JARVIS Predictions",
                 [&]() { DrawJarvisImportWindow(win.jarvis_import, ctx); },
                 nullptr});
     panels.add({"Settings",
@@ -556,25 +520,10 @@ int main(int argc, char **argv) {
                 [&]() { return pm.project_path.empty() && !ps.video_loaded &&
                                 !win.annotation.show &&
                                 !ImGuiFileDialog::Instance()->IsOpened(); }});
-    panels.add({"JARVIS Predict",
-                [&]() { DrawJarvisPredictWindow(win.jarvis_predict, jarvis_state,
-#ifdef __APPLE__
-                                                 jarvis_coreml_state,
-#elif defined(_WIN32)
-                                                 jarvis_trt_state,
-#endif
-#if defined(__linux__) || defined(_WIN32)
-#if defined(RED_HAS_ONNXRUNTIME) || defined(RED_HAS_TENSORRT_HN)
-                                                 jarvis_hn_state,
-#endif
-#endif
-                                                 ctx); },
-                nullptr});
     panels.add({"Pose Stats",
                 [&]() { DrawPoseStatsWindow(win.pose_stats, prediction_store,
-                                            win.jarvis_predict.active_store_path,
-                                            skeleton, current_frame_num,
-                                            win.bouts, &win.bout_filter); },
+                                            active_store_path, skeleton,
+                                            current_frame_num); },
                 nullptr});
     panels.add({"Frame Drops",
                 [&]() { DrawFrameDropsWindow(win.frame_drops, ctx); },
@@ -582,20 +531,8 @@ int main(int argc, char **argv) {
     panels.add({"Pump Events",
                 [&]() { DrawPumpEventsWindow(win.pump_events, ctx); },
                 nullptr});
-    panels.add({"Bouts",
-                [&]() { DrawBoutsWindow(win.bouts, prediction_store,
-                                        win.jarvis_predict.active_store_path,
-                                        skeleton); },
-                nullptr});
-    panels.add({"Bout Filter",
-                [&]() { DrawBoutFilterWindow(win.bout_filter, prediction_store,
-                                             win.jarvis_predict.active_store_path,
-                                             skeleton, ctx); },
-                nullptr});
     panels.add({"Switch Skeleton",
-                [&]() { DrawSwitchSkeletonWindow(win.switch_skeleton, ctx,
-                                                 prediction_store, win.jarvis_predict,
-                                                 win.bout_filter); },
+                [&]() { DrawSwitchSkeletonWindow(win.switch_skeleton, ctx); },
                 nullptr});
 
     // Helper: find the first visible camera index (for frame-buffer display).
@@ -711,115 +648,52 @@ int main(int argc, char **argv) {
         // Draw all registered panels
         panels.drawAll();
 
-        // Pose Stats: double-click-to-seek request.
-        if (win.pose_stats.seek_requested) {
-            win.pose_stats.seek_requested = false;
-            int tgt = win.pose_stats.seek_frame;
-            seek_all_cameras(scene, tgt, dc_context->video_fps, ps, true);
-            current_frame_num = tgt;
-            ps.pause_selected = 0;
-            ps.pause_seeked = true;
-            for (auto &[key, value] : window_need_decoding)
-                value.store(true);
+        // A fresh import asks for its store to be activated. Done here (after
+        // the panels have run) so the reader is swapped outside any draw call
+        // that might already hold a pointer into the old mmap.
+        if (!win.jarvis_import.store_to_load.empty()) {
+            std::string p = win.jarvis_import.store_to_load;
+            win.jarvis_import.store_to_load.clear();
+            prediction_store.close();
+            if (prediction_store.open(p)) {
+                if ((int)prediction_store.num_keypoints() != skeleton.num_nodes) {
+                    ctx.toasts.pushError(
+                        "Store has " +
+                        std::to_string(prediction_store.num_keypoints()) +
+                        " keypoints, skeleton has " +
+                        std::to_string(skeleton.num_nodes) + " — not activated.");
+                    prediction_store.close();
+                    active_store_path.clear();
+                } else {
+                    active_store_path = p;
+                    win.pose_stats.show = true;
+                }
+            } else {
+                ctx.toasts.pushError("Could not open store: " + p);
+                active_store_path.clear();
+            }
         }
 
-        // Frame Drops: double-click-to-seek request (already mapped to
-        // playback coordinates by the window).
-        if (win.frame_drops.seek_requested) {
-            win.frame_drops.seek_requested = false;
-            int tgt = win.frame_drops.seek_frame;
-            seek_all_cameras(scene, tgt, dc_context->video_fps, ps, true);
-            current_frame_num = tgt;
-            ps.pause_selected = 0;
-            ps.pause_seeked = true;
-            for (auto &[key, value] : window_need_decoding)
-                value.store(true);
+        // A skeleton switch re-indexes keypoints, so a store written at the old
+        // node count can never display again — release it instead of leaving a
+        // live mmap that every consumer silently skips.
+        if (prediction_store.is_open() &&
+            (int)prediction_store.num_keypoints() != skeleton.num_nodes) {
+            prediction_store.close();
+            active_store_path.clear();
+            ctx.toasts.push("Prediction store closed (skeleton changed)");
         }
 
-        // Pump Events: seek to a dispense (already in playback coordinates —
-        // the panel maps mp4 index -> canonical slot when the sync fix is on).
-        if (win.pump_events.seek_requested) {
-            win.pump_events.seek_requested = false;
-            int tgt = win.pump_events.seek_frame;
-            seek_all_cameras(scene, tgt, dc_context->video_fps, ps, true);
-            current_frame_num = tgt;
-            ps.pause_selected = 0;
-            ps.pause_seeked = true;
-            for (auto &[key, value] : window_need_decoding)
-                value.store(true);
-        }
-
-        // Bouts: seek to a bout, or export bouts to CSV next to the store.
-        if (win.bouts.seek_requested) {
-            win.bouts.seek_requested = false;
-            int tgt = win.bouts.seek_frame;
-            seek_all_cameras(scene, tgt, dc_context->video_fps, ps, true);
-            current_frame_num = tgt;
-            ps.pause_selected = 0;
-            ps.pause_seeked = true;
-            for (auto &[key, value] : window_need_decoding)
-                value.store(true);
-        }
-        if (win.bouts.export_requested) {
-            win.bouts.export_requested = false;
-            uint32_t fps = prediction_store.is_open() ? prediction_store.fps() : 0;
-            win.bouts.export_status = bouts_export_csv(
-                win.bouts, win.jarvis_predict.active_store_path, fps);
-            printf("[Bouts] %s\n", win.bouts.export_status.c_str());
-        }
-
-        // Bout Filter: seek to a bout, or export the filtered bout list.
-        if (win.bout_filter.seek_requested) {
-            win.bout_filter.seek_requested = false;
-            int tgt = win.bout_filter.seek_frame;
-            // Preload ~50 frames before the bout start so the user can scrub
-            // backward (e.g. while nudging the start via "Adjust...") without
-            // waiting on a fresh decode. The buffer fills forward from the
-            // seek target, so seek early and offset display via pause_selected
-            // to land on the actual bout start frame.
-            const int kBoutPreloadFrames = 50;
-            int preload_from = std::max(0, tgt - kBoutPreloadFrames);
-            seek_all_cameras(scene, preload_from, dc_context->video_fps, ps, true);
-            current_frame_num = tgt;
-            ps.pause_selected = tgt - preload_from;
-            ps.pause_seeked = true;
-            for (auto &[key, value] : window_need_decoding)
-                value.store(true);
-            // Arm the bout boundary: playback either wraps back to the bout
-            // start or pauses at its end when it reaches loop_end, depending
-            // on the "Loop bout" checkbox (checked live at the wrap site).
-            // seek_all_cameras above cleared loop_bout; re-arm it here with
-            // this bout's range. Any later manual seek clears it.
-            // loop_start stays pinned to the real bout start, not preload_from.
-            ps.loop_bout  = true;
-            ps.loop_start = tgt;
-            ps.loop_end   = win.bout_filter.seek_frame_end;
-        }
-        if (win.bout_filter.export_requested) {
-            win.bout_filter.export_requested = false;
-            win.bout_filter.export_status = bout_filter_export_csv(
-                win.bout_filter, win.jarvis_predict.active_store_path);
-            printf("[Bout Filter] %s\n", win.bout_filter.export_status.c_str());
-        }
-        // Persist the manual-edit overlay whenever it changed (kept off the
-        // draw/hot path; writes only when edits actually mutate).
-        if (win.bout_filter.edits_save_requested) {
-            win.bout_filter.edits_save_requested = false;
-            std::string err = bout_filter_save_edits(
-                win.bout_filter, win.jarvis_predict.active_store_path);
-            if (!err.empty()) printf("[Bout Filter] %s\n", err.c_str());
-        }
-
-        // Pose Stats: promote a predicted frame into the Labeling Tool so the
-        // user can manually correct it. Reprojects the store's 3D pose to each
-        // camera as editable (Predicted-source) keypoints, keeps the 3D, and
-        // flags the frame Needs-Improvement so it lands in that section and is
-        // protected from a later Batch Predict overwrite.
+        // Pose Stats "Fix this frame": promote one predicted frame into the
+        // editable Labeling Tool. Reprojects the stored 3D to each camera as
+        // Predicted-source keypoints, keeps the 3D, and flags the frame
+        // Needs-Improvement so it lands in that section of the labeling strip.
         if (win.pose_stats.promote_requested) {
             win.pose_stats.promote_requested = false;
             int pf = win.pose_stats.promote_frame;
             const float *pose = prediction_store.frame((uint32_t)pf);
-            if (pose && (int)prediction_store.num_keypoints() == skeleton.num_nodes &&
+            if (pose &&
+                (int)prediction_store.num_keypoints() == skeleton.num_nodes &&
                 scene->num_cams > 0) {
                 FrameAnnotation &fa = get_or_create_frame(
                     annotations, (u32)pf, skeleton.num_nodes, scene->num_cams);
@@ -854,25 +728,48 @@ int main(int argc, char **argv) {
                     value.store(true);
                 pm.plot_keypoints_flag = true;  // reveal the Labeling Tool
                 ctx.toasts.pushSuccess("Frame " + std::to_string(pf) +
-                    " → Needs Improvement (" + std::to_string(placed_3d) +
-                    " keypoints)");
+                    " \xE2\x86\x92 Needs Improvement (" +
+                    std::to_string(placed_3d) + " keypoints)");
             } else {
                 ctx.toasts.pushError("Could not promote frame " +
                     std::to_string(pf) + " (no matching prediction).");
             }
         }
 
+
+        // Frame Drops: double-click-to-seek request (already mapped to
+        // playback coordinates by the window).
+        if (win.frame_drops.seek_requested) {
+            win.frame_drops.seek_requested = false;
+            int tgt = win.frame_drops.seek_frame;
+            seek_all_cameras(scene, tgt, dc_context->video_fps, ps, true);
+            current_frame_num = tgt;
+            ps.pause_selected = 0;
+            ps.pause_seeked = true;
+            for (auto &[key, value] : window_need_decoding)
+                value.store(true);
+        }
+
+        // Pump Events: seek to a dispense (already in playback coordinates —
+        // the panel maps mp4 index -> canonical slot when the sync fix is on).
+        if (win.pump_events.seek_requested) {
+            win.pump_events.seek_requested = false;
+            int tgt = win.pump_events.seek_frame;
+            seek_all_cameras(scene, tgt, dc_context->video_fps, ps, true);
+            current_frame_num = tgt;
+            ps.pause_selected = 0;
+            ps.pause_seeked = true;
+            for (auto &[key, value] : window_need_decoding)
+                value.store(true);
+        }
+
+
+
+
         // Handle main menu file dialogs
         HandleMainMenuDialogs(ctx, win, media_root_dir,
                               print_metadata, print_summary,
-                              [&]() {
-                                  jarvis_state = JarvisState{};
-#ifdef __APPLE__
-                                  jarvis_coreml_state = JarvisCoreMLState{};
-#elif defined(_WIN32)
-                                  jarvis_trt_state = JarvisTensorRTState{};
-#endif
-                              });
+                              [&]() {});
 
         // Jump to the next/previous pump dispense. Outside the paused-only
         // block below so it also works during playback; the seek itself is
@@ -1258,14 +1155,12 @@ int main(int argc, char **argv) {
                                     active_keypoint_color(user_settings));
                             }
 
-                            // Read-only overlay of JARVIS predictions from the
-                            // separate store. Skipped once the frame has its own
-                            // annotation entry (promoted for correction, or
-                            // hand-labeled) so the automatic prediction doesn't
-                            // linger once a frame has manual/human-owned data.
+                            // Read-only prediction overlay. Skipped once the
+                            // frame has its own annotation entry (promoted or
+                            // hand-labeled) so it doesn't linger over data the
+                            // user now owns.
                             if (!keypoints_find && skeleton.has_skeleton &&
                                 display.show_keypoints && !peek_raw &&
-                                win.jarvis_predict.show_prediction_overlay &&
                                 prediction_store.is_open() &&
                                 (int)prediction_store.num_keypoints() ==
                                     skeleton.num_nodes) {
@@ -1273,19 +1168,10 @@ int main(int argc, char **argv) {
                                     (uint32_t)current_frame_num);
                                 if (pose)
                                     gui_plot_prediction_overlay(
-                                        pose, j, &skeleton, pm.camera_params, scene,
-                                        win.jarvis_predict.confidence_threshold);
+                                        pose, j, &skeleton, pm.camera_params,
+                                        scene);
                             }
-                        }
 
-                        // Bout Filter threshold-plane live preview —
-                        // independent of keypoint display / skeleton presence.
-                        if (win.bout_filter.inputs_valid &&
-                            (win.bout_filter.show_floor_preview ||
-                             win.bout_filter.show_ywall_preview ||
-                             win.bout_filter.show_xwall_preview)) {
-                            bout_filter_draw_wall_preview(
-                                win.bout_filter, j, pm.camera_params, scene);
                         }
 
                         // --- Annotation tool overlays + input (bbox, OBB, SAM) ---
@@ -1358,8 +1244,7 @@ int main(int argc, char **argv) {
                 ImGui::End();
             }
 
-            if (keys::pressed(keys::Sc::PlayPause) &&
-                !win.jarvis_predict.batch_running) {
+            if (keys::pressed(keys::Sc::PlayPause)) {
                 ps.play_video = !ps.play_video;
                 if (ps.play_video) {
                     ps.pause_seeked = false;
@@ -1373,1507 +1258,11 @@ int main(int argc, char **argv) {
             }
 
 
-            // Hotkey 6: Run JARVIS prediction on current frame
-            bool jarvis_predict_trigger =
-                keys::pressed(keys::Sc::PredictCurrent) ||
-                win.jarvis_predict.predict_requested;
-            win.jarvis_predict.predict_requested = false;
-
-            bool jarvis_any_loaded = jarvis_state.loaded;
-#ifdef __APPLE__
-            jarvis_any_loaded = jarvis_any_loaded || jarvis_coreml_state.loaded;
-#elif defined(_WIN32)
-            jarvis_any_loaded = jarvis_any_loaded || jarvis_trt_state.loaded;
-#endif
-#if defined(__linux__) || defined(_WIN32)
-#if defined(RED_HAS_ONNXRUNTIME) || defined(RED_HAS_TENSORRT_HN)
-            jarvis_any_loaded = jarvis_any_loaded || jarvis_hn_state.loaded;
-#endif
-#endif
-            if (jarvis_predict_trigger && !ps.play_video &&
-                jarvis_any_loaded && scene->num_cams > 0) {
-#ifdef __APPLE__
-                int mh = ps.play_video ? ps.read_head : select_corr_head;
-                std::vector<int> widths(scene->num_cams), heights(scene->num_cams);
-                for (int c = 0; c < (int)scene->num_cams; ++c) {
-                    widths[c] = (int)scene->image_width[c];
-                    heights[c] = (int)scene->image_height[c];
-                }
-
-                // "All" mode: ensure every camera has the current frame
-                if (win.jarvis_predict.predict_from_all) {
-                    // Check if any camera is missing a valid pixel buffer
-                    bool needs_seek = false;
-                    for (int c = 0; c < (int)scene->num_cams; ++c) {
-                        auto &slot = scene->display_buffer[c][mh];
-                        if (!slot.pixel_buffer ||
-                            slot.frame_number.load() != current_frame_num) {
-                            needs_seek = true;
-                            break;
-                        }
-                    }
-                    if (needs_seek) {
-                        seek_all_cameras(scene, current_frame_num,
-                                         dc_context->video_fps, ps, true);
-                        ps.pause_selected = 0;
-                        for (auto &[key, value] : window_need_decoding)
-                            value.store(true);
-                        mh = (ps.pause_selected + ps.read_head) % scene->size_of_buffer;
-                        // Wait for all cameras to fill slot (up to ~2s)
-                        for (int wait = 0; wait < 2000; ++wait) {
-                            bool ready = true;
-                            for (int c = 0; c < (int)scene->num_cams; ++c) {
-                                auto &slot = scene->display_buffer[c][0];
-                                if (slot.available_to_write.load() || !slot.pixel_buffer) {
-                                    ready = false;
-                                    break;
-                                }
-                            }
-                            if (ready) break;
-                            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                        }
-                        mh = 0; // seek resets to slot 0
-                        select_corr_head = mh;
-                    }
-                }
-
-                // Build pixel buffer array, filtering by mode
-                auto cam_included = [&](int c) -> bool {
-                    if (win.jarvis_predict.predict_from_all) return true;
-                    // "Shown" mode: only cameras visible AND with fresh frames
-                    if (c < (int)pm.camera_names.size() &&
-                        window_is_visible.count(pm.camera_names[c]) &&
-                        window_is_visible[pm.camera_names[c]]) {
-                        auto &slot = scene->display_buffer[c][mh];
-                        return slot.pixel_buffer &&
-                               slot.frame_number.load() == current_frame_num;
-                    }
-                    return false;
-                };
-
-                // Prefer CoreML (GPU/ANE) over ONNX Runtime (CPU)
-                if (jarvis_coreml_state.loaded) {
-                    std::vector<CVPixelBufferRef> pbs(scene->num_cams, nullptr);
-                    int cams_used = 0;
-                    for (int c = 0; c < (int)scene->num_cams; ++c) {
-                        if (cam_included(c)) {
-                            pbs[c] = scene->display_buffer[c][mh].pixel_buffer;
-                            if (pbs[c]) cams_used++;
-                        }
-                    }
-
-                    jarvis_coreml_predict_frame(jarvis_coreml_state, annotations,
-                        (u32)current_frame_num, pbs, widths, heights,
-                        skeleton, (int)scene->num_cams, pm.camera_params,
-                        win.jarvis_predict.confidence_threshold);
-                    // HybridNet writes 3D directly; only 2D path needs triangulation
-                    // (reprojection is in gui_keypoints.h, only in this TU).
-                    if (!jarvis_coreml_state.hybridnet)
-                        reprojection(annotations.at(current_frame_num),
-                                     &skeleton, pm.camera_params, scene);
-                    printf("[JARVIS CoreML] %s (%d/%d cameras)\n",
-                           jarvis_coreml_state.status.c_str(),
-                           cams_used, (int)scene->num_cams);
-                } else if (jarvis_state.loaded) {
-                    // Fallback: ONNX Runtime (CPU) with BGRA→RGB conversion
-                    std::vector<const uint8_t *> rgb_bufs(scene->num_cams, nullptr);
-                    std::vector<std::vector<uint8_t>> rgb_storage(scene->num_cams);
-                    for (int c = 0; c < (int)scene->num_cams; ++c) {
-                        if (!cam_included(c)) continue;
-                        CVPixelBufferRef pb = scene->display_buffer[c][mh].pixel_buffer;
-                        if (!pb) continue;
-                        extract_rgb_from_cvpixelbuf(pb, rgb_storage[c], widths[c], heights[c]);
-                        rgb_bufs[c] = rgb_storage[c].data();
-                    }
-                    jarvis_predict_frame(jarvis_state, annotations,
-                        (u32)current_frame_num, rgb_bufs, widths, heights,
-                        skeleton, pm.camera_params, scene,
-                        win.jarvis_predict.confidence_threshold);
-                    printf("[JARVIS ONNX] %s\n", jarvis_state.status.c_str());
-                }
-#elif defined(_WIN32) || defined(__linux__)
-                // Windows: TensorRT (GPU) preferred, ONNX (GPU/CPU) fallback
-                // Linux: ONNX Runtime only (TensorRT isolated to orange toolchain)
-                int mh = ps.play_video ? ps.read_head : select_corr_head;
-                std::vector<int> widths(scene->num_cams), heights(scene->num_cams);
-                for (int c = 0; c < (int)scene->num_cams; ++c) {
-                    widths[c] = (int)scene->image_width[c];
-                    heights[c] = (int)scene->image_height[c];
-                }
-
-                // HybridNet needs all N cams (model has a fixed input shape);
-                // the 2D + DLT path can work on whatever's visible.
-#if defined(RED_HAS_ONNXRUNTIME) || defined(RED_HAS_TENSORRT_HN)
-                const bool hn_active = jarvis_hn_state.loaded;
-#else
-                const bool hn_active = false;
-#endif
-
-#if defined(RED_HAS_ONNXRUNTIME) || defined(RED_HAS_TENSORRT_HN)
-                // Force a global seek + decoder-wake when HN predict is about
-                // to fire and some cam doesn't yet have the current frame in
-                // its ring buffer. Mirrors the macOS Predict-from-All path.
-                // Without this, hidden camera tabs keep their decoder threads
-                // paused (window_need_decoding=false) and HN predict bails
-                // with "decoder hasn't caught up yet" — even with All selected.
-                if (hn_active) {
-                    auto has_target_frame = [&](int c) -> bool {
-                        for (int s = 0; s < (int)scene->size_of_buffer; ++s) {
-                            auto &cand = scene->display_buffer[c][s];
-                            if (!cand.available_to_write.load() &&
-                                cand.frame_number.load() == (int)current_frame_num)
-                                return true;
-                        }
-                        return false;
-                    };
-                    bool any_missing = false;
-                    for (int c = 0; c < (int)scene->num_cams; ++c) {
-                        if (!has_target_frame(c)) { any_missing = true; break; }
-                    }
-                    if (any_missing) {
-                        fprintf(stderr,
-                            "[HN dispatch] forcing decode-all to reach frame %d "
-                            "(some cams hidden / decoders paused)\n",
-                            (int)current_frame_num);
-                        seek_all_cameras(scene, current_frame_num,
-                                         dc_context->video_fps, ps, true);
-                        ps.pause_selected = 0;
-                        for (auto &[key, value] : window_need_decoding)
-                            value.store(true);
-                        // Wait up to ~2 s for every cam to land the target
-                        // frame in some slot of its ring buffer.
-                        bool all_ready = false;
-                        for (int wait = 0; wait < 2000; ++wait) {
-                            all_ready = true;
-                            for (int c = 0; c < (int)scene->num_cams; ++c) {
-                                if (!has_target_frame(c)) { all_ready = false; break; }
-                            }
-                            if (all_ready) break;
-                            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                        }
-                        if (!all_ready) {
-                            fprintf(stderr,
-                                "[HN dispatch] decode-all wait timed out (>2s) — "
-                                "some cams still missing frame %d; predict may skip\n",
-                                (int)current_frame_num);
-                        }
-                        // seek_all_cameras resets ring buffers to slot 0.
-                        mh = 0;
-                        select_corr_head = mh;
-                    }
-                }
-#endif
-
-                auto cam_included = [&](int c) -> bool {
-                    if (hn_active || win.jarvis_predict.predict_from_all) return true;
-                    if (c < (int)pm.camera_names.size() &&
-                        window_is_visible.count(pm.camera_names[c]) &&
-                        window_is_visible[pm.camera_names[c]]) {
-                        auto &slot = scene->display_buffer[c][mh];
-                        return !slot.available_to_write &&
-                               slot.frame_number.load() == current_frame_num;
-                    }
-                    return false;
-                };
-
-                // Extract RGBA→RGB from GPU frame buffers
-                std::vector<const uint8_t *> rgb_bufs(scene->num_cams, nullptr);
-                std::vector<std::vector<uint8_t>> rgb_storage(scene->num_cams);
-                // Per-cam slot index: when HN is active, search each cam's
-                // ring buffer for the slot whose frame_number matches the
-                // target. The display's shared `mh` index works for cams
-                // that happen to be synced, but at a seek target only a
-                // subset of decoders may have caught up to current_frame_num,
-                // and other cams' slot[mh] still holds stale data from when
-                // the ring last wrapped through that index. Without this, HN
-                // tries to fuse multi-view detections from different time
-                // points and produces nonsense 3D.
-                std::vector<int> mh_per_cam(scene->num_cams, mh);
-                bool hn_can_proceed = true;
-#if defined(RED_HAS_ONNXRUNTIME) || defined(RED_HAS_TENSORRT_HN)
-                if (hn_active) {
-                    const char *hn_verbose_env = std::getenv("RED_HN_VERBOSE");
-                    const bool hn_verbose = (hn_verbose_env && hn_verbose_env[0] == '1');
-                    for (int c = 0; c < (int)scene->num_cams; ++c) {
-                        int found = -1;
-                        for (int s = 0; s < (int)scene->size_of_buffer; ++s) {
-                            auto &cand = scene->display_buffer[c][s];
-                            if (!cand.available_to_write.load() &&
-                                cand.frame_number.load() == (int)current_frame_num) {
-                                found = s; break;
-                            }
-                        }
-                        if (found < 0) {
-                            // Abort reason — always logged so the user sees why
-                            // predict was skipped (decoders out of sync).
-                            fprintf(stderr,
-                                "[HN dispatch] cam %d: no slot has frame %d "
-                                "(decoder hasn't caught up yet); skipping predict\n",
-                                c, (int)current_frame_num);
-                            hn_can_proceed = false;
-                            break;
-                        }
-                        mh_per_cam[c] = found;
-                    }
-                    if (hn_can_proceed && hn_verbose) {
-                        fprintf(stderr, "[HN dispatch] target frame=%d, mh_per_cam={",
-                                (int)current_frame_num);
-                        for (int c = 0; c < (int)scene->num_cams; ++c)
-                            fprintf(stderr, "%s%d", c ? "," : "", mh_per_cam[c]);
-                        fprintf(stderr, "}\n");
-                    }
-                }
-#endif
-                // Device-resident RGBA32 pointers for the HN+TRT device path.
-                // Always collected (zero cost — just pointer copies). The host
-                // RGB extraction below is skipped when we'll use the device path,
-                // saving ~30 ms of cudaMemcpy + alpha-strip per predict.
-                std::vector<const uint8_t *> rgba_device_bufs(scene->num_cams, nullptr);
-                for (int c = 0; c < (int)scene->num_cams; ++c) {
-                    if (!cam_included(c)) continue;
-                    auto &slot = scene->display_buffer[c][mh_per_cam[c]];
-                    if (slot.frame) rgba_device_bufs[c] = slot.frame;
-                }
-#ifdef RED_HAS_TENSORRT_HN
-                // Device kernel path is only valid when (a) HN is loaded and
-                // (b) the frame buffers are actually device memory.
-                // scene->use_cpu_buffer is a runtime-toggleable flag that can
-                // be out of sync with how the buffers were allocated, so we
-                // probe the actual cam 0 frame and let cudaPointerAttributes
-                // be the authority.
-                bool hn_device_path = hn_active;
-                if (hn_device_path) {
-                    // Pick the first valid frame pointer to probe.
-                    const uint8_t *probe = nullptr;
-                    for (int c = 0; c < (int)scene->num_cams; ++c) {
-                        if (rgba_device_bufs[c]) { probe = rgba_device_bufs[c]; break; }
-                    }
-                    if (probe) {
-                        cudaPointerAttributes a{};
-                        cudaError_t err = cudaPointerGetAttributes(&a, probe);
-                        if (err != cudaSuccess || a.type != cudaMemoryTypeDevice) {
-                            hn_device_path = false;
-                        }
-                    } else {
-                        hn_device_path = false;
-                    }
-                }
-#else
-                const bool hn_device_path = false;
-#endif
-                if (!hn_device_path) {
-                    for (int c = 0; c < (int)scene->num_cams; ++c) {
-                        if (!cam_included(c)) continue;
-                        auto &slot = scene->display_buffer[c][mh_per_cam[c]];
-                        if (!slot.frame) continue;
-                        int w = widths[c], h = heights[c];
-                        // slot.frame is RGBA32 in GPU memory — copy to CPU, strip α.
-                        // cudaMemcpyDefault lets the runtime resolve the source device
-                        // (NVDEC decoders can land buffers on different devices on
-                        // multi-GPU boxes). Only needed for non-TRT paths now.
-                        std::vector<uint8_t> rgba(w * h * 4);
-                        cudaMemcpy(rgba.data(), slot.frame, w * h * 4, cudaMemcpyDefault);
-                        rgb_storage[c].resize(w * h * 3);
-                        for (int i = 0; i < w * h; ++i) {
-                            rgb_storage[c][i * 3 + 0] = rgba[i * 4 + 0]; // R
-                            rgb_storage[c][i * 3 + 1] = rgba[i * 4 + 1]; // G
-                            rgb_storage[c][i * 3 + 2] = rgba[i * 4 + 2]; // B
-                        }
-                        rgb_bufs[c] = rgb_storage[c].data();
-                    }
-                }
-
-#if defined(RED_HAS_ONNXRUNTIME) || defined(RED_HAS_TENSORRT_HN)
-                if (jarvis_hn_state.loaded) {
-                    // HybridNet handles the full 3-stage pipeline internally
-                    // (CenterDetect → DLT triangulate → effTrack → Hybrid3D)
-                    // and writes both 3D and per-cam 2D back-projections to
-                    // AnnotationMap. No separate reprojection() call needed.
-                    // Outer try/catch in addition to predict_frame's own:
-                    // an exception escaping from a TRT internal thread or
-                    // destructor unwinding becomes a logged failure here,
-                    // not a process abort.
-                    bool ok = false;
-                    if (!hn_can_proceed) {
-                        fprintf(stderr,
-                            "[JARVIS HybridNet] skipped: not all cams have frame %d "
-                            "loaded yet (try \"Predict from All\" mode to force "
-                            "decode, or wait/scrub until the 3D viewer shows all "
-                            "cams synced)\n", (int)current_frame_num);
-                    } else try {
-                        if (hn_device_path) {
-                            // GPU-buffer mode + TRT: kernels do Stages 1+3 on GPU.
-                            ok = jarvis_hybridnet_predict_frame_device(
-                                jarvis_hn_state, rgba_device_bufs,
-                                widths, heights, pm.camera_params,
-                                annotations, skeleton, (u32)current_frame_num);
-                        } else {
-                            // CPU-buffer mode: host RGB extracted above.
-                            ok = jarvis_hybridnet_predict_frame(
-                                jarvis_hn_state, rgb_bufs, widths, heights,
-                                pm.camera_params, annotations, skeleton,
-                                (u32)current_frame_num);
-                        }
-                    } catch (const std::exception &e) {
-                        fprintf(stderr, "[JARVIS HybridNet] uncaught exception "
-                                "in predict_frame: %s\n", e.what());
-                    } catch (...) {
-                        fprintf(stderr, "[JARVIS HybridNet] uncaught non-std "
-                                "exception in predict_frame\n");
-                    }
-                    printf("[JARVIS HybridNet] %s  total=%.0fms  cams=%d/%d\n",
-                           ok ? "ok" : "failed",
-                           jarvis_hn_state.last_center_ms +
-                           jarvis_hn_state.last_efftrack_ms +
-                           jarvis_hn_state.last_hybrid3d_ms,
-                           jarvis_hn_state.last_center_cams_used,
-                           (int)scene->num_cams);
-                } else
-#endif
-#ifdef _WIN32
-                if (jarvis_trt_state.loaded) {
-                    jarvis_tensorrt_predict_frame(jarvis_trt_state, annotations,
-                        (u32)current_frame_num, rgb_bufs, widths, heights,
-                        skeleton, (int)scene->num_cams,
-                        win.jarvis_predict.confidence_threshold);
-                    if (!pm.camera_params.empty())
-                        reprojection(annotations.at(current_frame_num),
-                                     &skeleton, pm.camera_params, scene);
-                    printf("[JARVIS TensorRT] %s\n", jarvis_trt_state.status.c_str());
-                } else
-#endif
-                if (jarvis_state.loaded) {
-                    jarvis_predict_frame(jarvis_state, annotations,
-                        (u32)current_frame_num, rgb_bufs, widths, heights,
-                        skeleton, pm.camera_params, scene,
-                        win.jarvis_predict.confidence_threshold);
-                    printf("[JARVIS ONNX] %s\n", jarvis_state.status.c_str());
-                }
-#endif
-
-                // Optional: mirror this single predicted frame into a
-                // JARVIS-CLI-compatible Predictions_3D_<ts>/ folder (data3D.csv
-                // + info.yaml), in addition to the in-red labeled frame. A
-                // one-frame export: frame_start = current frame, count = 1.
-                if (win.jarvis_predict.export_predictions3D &&
-                    !pm.project_path.empty()) {
-                    std::string dir = jarvis_make_predictions_dir(pm.project_path);
-                    JarvisExportResult er = jarvis_export_predictions3D(
-                        dir, annotations, skeleton, pm,
-                        (int)current_frame_num, 1);
-                    win.jarvis_predict.export_status = er.message;
-                    printf("[JARVIS export] %s\n", er.message.c_str());
-                }
-            }
-
-            // --- Prediction store: load-on-request + auto-open newest ---
-            {
-                auto &jp = win.jarvis_predict;
-                // On project change, drop the active store and auto-open the
-                // newest saved store for the new project (if any).
-                static std::string last_store_project = "\x01";  // != any real path
-                if (last_store_project != pm.project_path) {
-                    last_store_project = pm.project_path;
-                    jp.store_list_dirty = true;
-                    jp.active_store_path.clear();
-                    jp.store_status.clear();
-                    prediction_store.close();
-                    if (!pm.project_path.empty()) {
-                        std::filesystem::path dir =
-                            std::filesystem::path(pm.project_path) /
-                            "predictions" / "red_store";
-                        std::error_code ec;
-                        std::string newest;
-                        if (std::filesystem::is_directory(dir, ec)) {
-                            for (auto &e :
-                                 std::filesystem::directory_iterator(dir, ec)) {
-                                if (e.path().extension() != ".rpred") continue;
-                                if (e.path().string() <= newest) continue;
-                                // Skip files with an unreadable/invalid header
-                                // (e.g. a half-written cluster import) so we
-                                // auto-open the newest VALID store.
-                                if (predstore::read_store_header(
-                                        e.path().string()).ok)
-                                    newest = e.path().string();
-                            }
-                        }
-                        if (!newest.empty()) jp.load_store_request = newest;
-                    }
-                }
-
-                // Import a JARVIS-CLI 3D prediction folder (data3D.csv +
-                // info.yaml) into this project's store, then load it through the
-                // normal guarded path below. Never import mid-batch (the writer
-                // would collide with the batch's own store).
-                if (!jp.import_request.empty() && !jp.batch_running) {
-                    std::string src = jp.import_request;
-                    jp.import_request.clear();
-                    if (pm.project_path.empty()) {
-                        jp.import_status = "Open a project before importing.";
-                    } else {
-                        std::string store_dir =
-                            (std::filesystem::path(pm.project_path) /
-                             "predictions" / "red_store").string();
-                        std::string model_name;
-                        if (pm.active_jarvis_model >= 0 &&
-                            pm.active_jarvis_model < (int)pm.jarvis_models.size())
-                            model_name =
-                                pm.jarvis_models[pm.active_jarvis_model].name;
-                        int fps_hint = (int)std::lround(
-                            dc_context->video_fps > 0 ? dc_context->video_fps : 0);
-                        int total_hint =
-                            (dc_context->total_num_frame > 0 &&
-                             dc_context->total_num_frame != INT_MAX)
-                                ? dc_context->total_num_frame
-                                : 0;
-                        JarvisImportResult ir = jarvis_import_predictions3D(
-                            src, store_dir, pm.media_folder, model_name,
-                            pm.skeleton_name, fps_hint, total_hint);
-                        jp.import_status = ir.message;
-                        printf("[Import] %s\n", ir.message.c_str());
-                        if (ir.ok) {
-                            jp.store_list_dirty = true;
-                            if (ir.num_keypoints != skeleton.num_nodes)
-                                jp.import_status +=
-                                    "  (⚠ " + std::to_string(ir.num_keypoints) +
-                                    " keypoints vs skeleton's " +
-                                    std::to_string(skeleton.num_nodes) + ")";
-                            else
-                                jp.load_store_request = ir.store_path;  // auto-open
-                        }
-                    }
-                }
-
-                // The 3D-label importer (Import 3D Predictions) writes a .rpred
-                // alongside the editable labels; activate it through the same
-                // guarded path so Bouts / Pose Stats pick it up.
-                if (!win.jarvis_import.store_to_load.empty()) {
-                    jp.load_store_request = win.jarvis_import.store_to_load;
-                    jp.store_list_dirty = true;   // refresh Saved Predictions list
-                    win.jarvis_import.store_to_load.clear();
-                }
-
-                // Consume a load request (picker click or auto-open). Never
-                // load while a batch is writing its own store.
-                if (!jp.load_store_request.empty() && !jp.batch_running) {
-                    std::string p = jp.load_store_request;
-                    jp.load_store_request.clear();
-                    prediction_store.close();
-                    if (prediction_store.open(p)) {
-                        int nkp = (int)prediction_store.num_keypoints();
-                        if (nkp != skeleton.num_nodes) {
-                            // A store whose keypoint count doesn't match the
-                            // active skeleton must NOT stay active: Pose Stats /
-                            // Bouts would read past each frame's block. Close it
-                            // and leave no active store.
-                            prediction_store.close();
-                            jp.active_store_path.clear();
-                            jp.store_status = "⚠ store has " +
-                                std::to_string(nkp) + " keypoints, skeleton has " +
-                                std::to_string(skeleton.num_nodes) +
-                                " — not loaded";
-                        } else {
-                            jp.active_store_path = p;
-                            jp.store_status = "Loaded " +
-                                std::to_string(prediction_store.stored_frames()) +
-                                " frames from " +
-                                std::filesystem::path(p).filename().string();
-                        }
-                        printf("[Store] %s\n", jp.store_status.c_str());
-                    } else {
-                        jp.active_store_path.clear();
-                        jp.store_status = "Failed to open store: " +
-                            std::filesystem::path(p).filename().string();
-                    }
-                }
-            }
-
-            // --- Batch prediction (non-blocking state machine) ---
-            // Processes one frame per render iteration so the UI stays
-            // responsive and camera viewports update live.
-            {
-                auto &bp = win.jarvis_predict;
-                using Phase = JarvisPredictState::BatchPhase;
-                using PredDest = JarvisPredictState::PredDest;
-                int buf_size = (int)scene->size_of_buffer;
-
-                // Extract frame's 3D+conf from `annotations` into a
-                // 4*num_nodes float buffer (NaN where a keypoint has no valid
-                // 3D). Returns true if at least one keypoint is valid.
-                auto extract_pred_row = [&](u32 frame,
-                                            std::vector<float> &buf) -> bool {
-                    const int nn = skeleton.num_nodes;
-                    buf.assign((size_t)nn * 4,
-                               std::numeric_limits<float>::quiet_NaN());
-                    auto it = annotations.find(frame);
-                    if (it == annotations.end()) return false;
-                    const auto &kp3d = it->second.kp3d;
-                    bool any = false;
-                    for (int jn = 0; jn < nn && jn < (int)kp3d.size(); ++jn) {
-                        const auto &p = kp3d[jn];
-                        if (p.source != Kp3DSource::None && p.x != UNLABELED) {
-                            buf[jn * 4 + 0] = (float)p.x;
-                            buf[jn * 4 + 1] = (float)p.y;
-                            buf[jn * 4 + 2] = (float)p.z;
-                            buf[jn * 4 + 3] = p.confidence;
-                            any = true;
-                        }
-                    }
-                    return any;
-                };
-
-                // In Store mode: pull the just-predicted frame's 3D into the
-                // store writer, then erase it from `annotations` so it never
-                // reaches the Labeling Tool. No-op in LabelingTool mode.
-                auto stash_prediction = [&](u32 frame) {
-                    if (bp.batch_prediction_dest != PredDest::Store) return;
-                    // Store the prediction if the writer is healthy, then ALWAYS
-                    // erase the frame from `annotations` — in Store mode a
-                    // prediction must never leak into the Labeling Tool, even if
-                    // the writer failed to open or a write errored mid-batch.
-                    if (prediction_writer.is_open()) {
-                        std::vector<float> buf;
-                        if (extract_pred_row(frame, buf))
-                            prediction_writer.add_frame(frame, buf.data());
-                    }
-                    annotations.erase(frame);
-                };
-#ifdef __APPLE__
-                // Keep the live HybridNet center-camera count in sync with the
-                // persisted user setting (predict clamps to [2, num_cameras]).
-                jarvis_coreml_state.hn_center_cams = user_settings.jarvis_center_cams;
-#endif
-
-                // --- Initialize ---
-                if (bp.batch_requested && !bp.batch_running) {
-                    bp.batch_requested = false;
-                    bp.batch_running = true;
-                    bp.batch_current = bp.batch_start;
-                    bp.batch_completed = 0;
-                    bp.batch_skipped = 0;
-                    bp.batch_total = (bp.batch_end - bp.batch_start) / bp.batch_step + 1;
-                    bp.batch_status = "Running...";
-                    bp.batch_predict_ms = 0;
-                    bp.batch_seek_ms = 0;
-                    bp.batch_decode_ms = 0;
-                    bp.batch_chunks = 0;
-                    bp.batch_cancel_requested = false;
-                    bp.batch_cancelled = false;
-                    bp.batch_t0 = std::chrono::steady_clock::now();
-
-                    // Store mode: open a fresh .rpred store to stream this
-                    // batch's predictions into (kept out of the Labeling Tool).
-                    bp.store_status.clear();
-                    prediction_store.close();  // release any prior mmap
-                    if (bp.batch_prediction_dest == PredDest::Store &&
-                        !pm.project_path.empty() && skeleton.num_nodes > 0) {
-                        std::error_code sec;
-                        std::filesystem::path store_dir =
-                            std::filesystem::path(pm.project_path) /
-                            "predictions" / "red_store";
-                        std::filesystem::create_directories(store_dir, sec);
-                        std::time_t t = std::time(nullptr);
-                        std::tm tmb{};
-#ifdef _WIN32
-                        localtime_s(&tmb, &t);
-#else
-                        localtime_r(&t, &tmb);
-#endif
-                        char ts[32];
-                        std::strftime(ts, sizeof(ts), "%Y%m%d-%H%M%S", &tmb);
-                        // A model-set pass points the writer at a private temp
-                        // store it merges + deletes later; otherwise a fresh
-                        // timestamped store per batch.
-                        bp.store_path = !bp.store_path_override.empty()
-                            ? bp.store_path_override
-                            : (store_dir / (std::string("pred_") + ts + ".rpred"))
-                                  .string();
-                        if (!prediction_writer.open(bp.store_path,
-                                                    skeleton.num_nodes)) {
-                            // Can't write the store — fall back to loading
-                            // predictions as labeled frames rather than silently
-                            // dropping them (stash erases in Store mode).
-                            bp.batch_prediction_dest = PredDest::LabelingTool;
-                            bp.store_status =
-                                "Could not open prediction store — predictions "
-                                "will load as labeled frames instead";
-                            bp.store_path.clear();
-                        }
-                    }
-#ifdef __APPLE__
-                    bp.batch_phase = bp.batch_streaming ? Phase::STREAM_SEEK : Phase::SEEK;
-#else
-                    bp.batch_phase = Phase::SEEK;   // streaming path is macOS-only
-#endif
-                    bp.batch_chunk_start = bp.batch_start;
-                    ps.play_video = false;
-                    printf("[Batch] Starting: frames %d-%d step %d (%d frames)\n",
-                           bp.batch_start, bp.batch_end, bp.batch_step, bp.batch_total);
-                }
-
-                // --- Per-frame state machine tick ---
-                if (bp.batch_running && jarvis_any_loaded && scene->num_cams > 0) {
-                    // Cancel is routed here so cleanup (decoder stop) runs via
-                    // FINISHING rather than being skipped by a bare running=false.
-                    if (bp.batch_cancel_requested) {
-                        bp.batch_cancel_requested = false;
-                        bp.batch_cancelled = true;
-                        bp.batch_phase = Phase::FINISHING;
-                    }
-                    switch (bp.batch_phase) {
-
-                    case Phase::SEEK: {
-                        // Seek to current chunk start. Blocking (~3-5s) but
-                        // only happens once per 64-frame buffer fill. MUST be an
-                        // ACCURATE seek: a keyframe-aligned (fast) seek lands the
-                        // ring buffer on the nearest preceding keyframe, so slot 0
-                        // would be an EARLIER frame than batch_chunk_start and every
-                        // prediction would be stored against the wrong frame.
-                        bp.chunk_seek_t0 = std::chrono::steady_clock::now();
-                        seek_all_cameras(scene, bp.batch_chunk_start,
-                                         dc_context->video_fps, ps, true);
-                        bp.batch_seek_ms += std::chrono::duration<float, std::milli>(
-                            std::chrono::steady_clock::now() - bp.chunk_seek_t0).count();
-                        current_frame_num = bp.batch_chunk_start;
-                        // Force all decoders to fill the buffer
-                        for (auto &[key, value] : window_need_decoding)
-                            value.store(true);
-
-                        int frames_needed = std::min(buf_size,
-                            bp.batch_end - bp.batch_chunk_start + 1);
-                        bp.batch_chunk_last_slot = frames_needed - 1;
-                        bp.batch_wait_frames = 0;
-                        bp.chunk_wait_t0 = std::chrono::steady_clock::now();
-                        bp.batch_phase = Phase::WAIT_BUFFER;
-                        printf("[Batch] Seeking to frame %d (need %d buffer slots)...\n",
-                               bp.batch_chunk_start, frames_needed);
-                        break;
-                    }
-
-                    case Phase::WAIT_BUFFER: {
-                        // Check if all cameras have filled the last needed slot.
-                        // Returns to the render loop each iteration (~16ms) to
-                        // keep UI responsive while decoders fill in background.
-                        bool ready = true;
-                        for (int c = 0; c < (int)scene->num_cams; c++) {
-                            auto &slot = scene->display_buffer[c][bp.batch_chunk_last_slot];
-#ifdef __APPLE__
-                            if (slot.available_to_write || !slot.pixel_buffer) {
-#else
-                            if (slot.available_to_write) {
-#endif
-                                ready = false;
-                                break;
-                            }
-                        }
-                        if (ready) {
-                            float decode_ms = std::chrono::duration<float, std::milli>(
-                                std::chrono::steady_clock::now() - bp.chunk_wait_t0).count();
-                            bp.batch_decode_ms += decode_ms;
-                            bp.batch_chunks++;
-                            printf("[Batch] Buffer filled (waited %d frames, %.0f ms decode)\n",
-                                   bp.batch_wait_frames, decode_ms);
-                            // Stop decoder threads to free CPU cores for CoreML
-                            for (auto &[key, value] : window_need_decoding)
-                                value.store(false);
-                            bp.batch_phase = Phase::PREDICT;
-                        } else {
-                            bp.batch_wait_frames++;
-                            if (bp.batch_wait_frames > 900) { // ~15s at 60fps
-                                bp.batch_status = "Error: buffer fill timeout";
-                                bp.batch_running = false;
-                                printf("[Batch] Timeout waiting for buffer fill\n");
-                            }
-                        }
-                        break;
-                    }
-
-                    case Phase::PREDICT: {
-                        // Process all target frames in this chunk in a tight
-                        // loop (no Metal render between them). This avoids
-                        // IOSurface lock contention from Metal viewport blits.
-#if defined(__APPLE__) || defined(_WIN32) || defined(__linux__)
-                        int nc_pred = (int)scene->num_cams;
-                        std::vector<int> w_b(nc_pred), h_b(nc_pred);
-                        for (int c = 0; c < nc_pred; ++c) {
-                            w_b[c] = (int)scene->image_width[c];
-                            h_b[c] = (int)scene->image_height[c];
-                        }
-#ifdef __APPLE__
-                        std::vector<CVPixelBufferRef> pbs(nc_pred, nullptr);
-#endif
-#endif
-                        while (bp.batch_current <= bp.batch_end && bp.batch_running) {
-                            int slot = bp.batch_current - bp.batch_chunk_start;
-                            if (slot >= buf_size) {
-                                // Need a new buffer chunk
-                                bp.batch_chunk_start = bp.batch_current;
-                                bp.batch_phase = Phase::SEEK;
-                                // Re-enable decoders for next chunk fill
-                                for (auto &[key, value] : window_need_decoding)
-                                    value.store(true);
-                                break;
-                            }
-
-                            u32 frame = (u32)bp.batch_current;
-
-                            // Guard against buffer/frame misalignment. The decoder
-                            // stamps each slot with its true frame_number; if the
-                            // expected slot doesn't hold `frame` (e.g. a seek landed
-                            // the ring on a different frame), find the correct slot,
-                            // and if `frame` isn't in this chunk at all, re-seek a
-                            // fresh chunk starting here. Mirrors the macOS streaming
-                            // path's frame_number match — without it, predictions get
-                            // silently stored against the wrong (offset) frame.
-                            if (scene->num_cams > 0 &&
-                                scene->display_buffer[0][slot].frame_number.load() != (int)frame) {
-                                int found = -1;
-                                for (int s = 0; s < buf_size; ++s)
-                                    if (scene->display_buffer[0][s].frame_number.load() == (int)frame) {
-                                        found = s; break;
-                                    }
-                                if (found < 0) {
-                                    bp.batch_chunk_start = bp.batch_current;
-                                    bp.batch_phase = Phase::SEEK;
-                                    for (auto &[key, value] : window_need_decoding)
-                                        value.store(true);
-                                    break;
-                                }
-                                slot = found;
-                            }
-
-                            // Skip frames with manual labels
-                            bool has_manual = false;
-                            if (annotations.count(frame)) {
-                                const auto &fa = annotations.at(frame);
-                                // Protect manual labels AND promoted "needs
-                                // improvement" frames from being overwritten.
-                                if (fa.needs_improvement) has_manual = true;
-                                for (const auto &cam : fa.cameras) {
-                                    for (const auto &kp : cam.keypoints)
-                                        if (kp.labeled && kp.source == LabelSource::Manual) {
-                                            has_manual = true; break;
-                                        }
-                                    if (has_manual) break;
-                                }
-                            }
-
-                            if (has_manual) {
-                                bp.batch_skipped++;
-                            } else {
-#ifdef __APPLE__
-                                auto tp0 = std::chrono::steady_clock::now();
-                                for (int c = 0; c < nc_pred; ++c)
-                                    pbs[c] = scene->display_buffer[c][slot].pixel_buffer;
-                                jarvis_coreml_predict_frame(jarvis_coreml_state,
-                                    annotations, frame, pbs, w_b, h_b,
-                                    skeleton, (int)scene->num_cams, pm.camera_params,
-                                    bp.confidence_threshold);
-                                if (!jarvis_coreml_state.hybridnet &&
-                                    !pm.camera_params.empty())
-                                    reprojection(annotations.at(frame),
-                                                 &skeleton, pm.camera_params, scene);
-                                auto tp1 = std::chrono::steady_clock::now();
-                                bp.batch_predict_ms += std::chrono::duration<float, std::milli>(tp1 - tp0).count();
-                                bp.batch_completed++;
-                                printf("[Batch] Frame %u (slot %d): %.0f ms  [%d/%d]\n",
-                                       frame, slot, jarvis_coreml_state.last_total_ms,
-                                       bp.batch_completed, bp.batch_total);
-#elif defined(_WIN32) || defined(__linux__)
-                                {
-#ifdef _WIN32
-                                    const bool trt_loaded = jarvis_trt_state.loaded;
-#else
-                                    const bool trt_loaded = false;
-#endif
-#if defined(RED_HAS_ONNXRUNTIME) || defined(RED_HAS_TENSORRT_HN)
-                                    const bool hn_loaded = jarvis_hn_state.loaded;
-#else
-                                    const bool hn_loaded = false;
-#endif
-                                if (trt_loaded || jarvis_state.loaded || hn_loaded) {
-                                    auto tp0 = std::chrono::steady_clock::now();
-                                    // Extract RGB from RGBA GPU frame buffers
-                                    std::vector<const uint8_t *> rgb_bufs(nc_pred, nullptr);
-                                    std::vector<std::vector<uint8_t>> rgb_storage(nc_pred);
-                                    for (int c = 0; c < nc_pred; ++c) {
-                                        auto &s = scene->display_buffer[c][slot];
-                                        if (!s.frame) continue;
-                                        int w = w_b[c], h = h_b[c];
-                                        std::vector<uint8_t> rgba(w * h * 4);
-                                        // cudaMemcpyDefault so this works whether
-                                        // s.frame is device memory (GPU Buffer) or
-                                        // host memory (CPU Buffer). Previously
-                                        // hardcoded D2H would crash under CPU Buffer.
-                                        cudaMemcpy(rgba.data(), s.frame, w * h * 4, cudaMemcpyDefault);
-                                        rgb_storage[c].resize(w * h * 3);
-                                        for (int i = 0; i < w * h; ++i) {
-                                            rgb_storage[c][i*3+0] = rgba[i*4+0];
-                                            rgb_storage[c][i*3+1] = rgba[i*4+1];
-                                            rgb_storage[c][i*3+2] = rgba[i*4+2];
-                                        }
-                                        rgb_bufs[c] = rgb_storage[c].data();
-                                    }
-#if defined(RED_HAS_ONNXRUNTIME) || defined(RED_HAS_TENSORRT_HN)
-                                    if (hn_loaded) {
-                                        // HybridNet handles 3D + per-cam 2D internally;
-                                        // skip the separate reprojection() call.
-                                        try {
-                                            jarvis_hybridnet_predict_frame(jarvis_hn_state,
-                                                rgb_bufs, w_b, h_b, pm.camera_params,
-                                                annotations, skeleton, frame);
-                                        } catch (const std::exception &e) {
-                                            fprintf(stderr, "[Batch HybridNet] frame %u: %s\n",
-                                                    frame, e.what());
-                                        } catch (...) {
-                                            fprintf(stderr, "[Batch HybridNet] frame %u: non-std exception\n", frame);
-                                        }
-                                    } else
-#endif
-#ifdef _WIN32
-                                    if (trt_loaded) {
-                                        jarvis_tensorrt_predict_frame(jarvis_trt_state,
-                                            annotations, frame, rgb_bufs, w_b, h_b,
-                                            skeleton, nc_pred, bp.confidence_threshold);
-                                        if (!pm.camera_params.empty())
-                                            reprojection(annotations.at(frame),
-                                                         &skeleton, pm.camera_params, scene);
-                                    } else
-#endif
-                                    {
-                                        jarvis_predict_frame(jarvis_state, annotations,
-                                            frame, rgb_bufs, w_b, h_b,
-                                            skeleton, pm.camera_params, scene,
-                                            bp.confidence_threshold);
-                                        if (!pm.camera_params.empty())
-                                            reprojection(annotations.at(frame),
-                                                         &skeleton, pm.camera_params, scene);
-                                    }
-                                    auto tp1 = std::chrono::steady_clock::now();
-                                    bp.batch_predict_ms += std::chrono::duration<float, std::milli>(tp1 - tp0).count();
-                                    bp.batch_completed++;
-#ifdef _WIN32
-                                    float last_ms = trt_loaded ?
-                                        jarvis_trt_state.last_total_ms : jarvis_state.last_total_ms;
-#else
-                                    float last_ms = jarvis_state.last_total_ms;
-#endif
-                                    printf("[Batch] Frame %u (slot %d): %.0f ms  [%d/%d]\n",
-                                           frame, slot, last_ms,
-                                           bp.batch_completed, bp.batch_total);
-                                }
-                                }
-#else
-                                bp.batch_completed++;
-                                printf("[Batch] Frame %u (slot %d)  [%d/%d]\n",
-                                       frame, slot,
-                                       bp.batch_completed, bp.batch_total);
-#endif
-                                // Store mode: move this frame's 3D into the
-                                // prediction store, out of the Labeling Tool.
-                                stash_prediction((u32)frame);
-                            }
-
-                            bp.batch_current += bp.batch_step;
-                        }
-
-                        // Show last predicted frame in viewports
-                        int last_slot = std::min(bp.batch_current - bp.batch_step - bp.batch_chunk_start,
-                                                  buf_size - 1);
-                        ps.pause_selected = last_slot;
-                        ps.pause_seeked = true;
-                        current_frame_num = bp.batch_current - bp.batch_step;
-
-                        if (bp.batch_current > bp.batch_end)
-                            bp.batch_phase = Phase::FINISHING;
-                        break;
-                    }
-
-                    case Phase::STREAM_SEEK: {
-                        // Streaming: seek ONCE to the batch start, then keep the
-                        // decoders filling the ring continuously ahead of the
-                        // predict cursor (no per-chunk re-seek, decode overlaps
-                        // predict). seek_all_cameras puts batch_start in slot 0.
-                        bp.chunk_seek_t0 = std::chrono::steady_clock::now();
-                        seek_all_cameras(scene, bp.batch_start,
-                                         dc_context->video_fps, ps, false);
-                        bp.batch_seek_ms += std::chrono::duration<float, std::milli>(
-                            std::chrono::steady_clock::now() - bp.chunk_seek_t0).count();
-                        current_frame_num = bp.batch_start;
-                        bp.stream_read_head = 0;
-                        bp.batch_current = bp.batch_start;
-                        bp.batch_chunks = 1;              // one seek for the whole batch
-                        bp.batch_wait_frames = 0;
-                        ps.pause_seeked = true;           // suppress visibility re-seek
-                        for (auto &[key, value] : window_need_decoding)
-                            value.store(true);            // decoders run for the whole batch
-                        bp.batch_phase = Phase::STREAM_RUN;
-                        printf("[Batch] Streaming from frame %d (single seek)...\n",
-                               bp.batch_start);
-                        break;
-                    }
-
-                    case Phase::STREAM_RUN: {
-#ifdef __APPLE__
-                        int nc_pred = (int)scene->num_cams;
-                        std::vector<int> w_b(nc_pred), h_b(nc_pred);
-                        for (int c = 0; c < nc_pred; ++c) {
-                            w_b[c] = (int)scene->image_width[c];
-                            h_b[c] = (int)scene->image_height[c];
-                        }
-                        std::vector<CVPixelBufferRef> pbs(nc_pred, nullptr);
-
-                        // Consume a bounded number of frames per tick, then yield
-                        // to the render loop (progress/cancel). Decoders keep
-                        // filling in the background — they stay well ahead since
-                        // decode (~26ms/frame) is far faster than predict.
-                        const int kStreamYield = 20;
-                        int processed = 0;
-                        while (bp.batch_current <= bp.batch_end && bp.batch_running &&
-                               processed < kStreamYield) {
-                            int frame = bp.batch_current;
-                            int slot = bp.stream_read_head;
-
-                            // Stop cleanly at end of video (total_num_frame is
-                            // INT_MAX until a decoder hits EOF, then the real
-                            // count) — avoids the ~15s not-ready timeout below.
-                            if (frame >= dc_context->total_num_frame) {
-                                printf("[Batch] Reached end of video (%d frames) "
-                                       "at frame %d\n", dc_context->total_num_frame, frame);
-                                bp.batch_phase = Phase::FINISHING;
-                                break;
-                            }
-
-                            // Wait until every camera has THIS frame in the slot.
-                            // available_to_write is published last by the decoder,
-                            // so false ⇒ pixel_buffer + frame_number are valid;
-                            // match frame_number as the source of truth.
-                            bool ready = true;
-                            for (int c = 0; c < nc_pred; ++c) {
-                                auto &sl = scene->display_buffer[c][slot];
-                                if (sl.available_to_write.load() ||
-                                    sl.frame_number.load() != frame ||
-                                    !sl.pixel_buffer) { ready = false; break; }
-                            }
-                            if (!ready) {
-                                // Decoder hasn't caught up (start-up, or EOF).
-                                bp.batch_wait_frames++;
-                                if (bp.batch_wait_frames > 900) {   // ~15s → EOF/stall
-                                    printf("[Batch] Streaming stopped at frame %d "
-                                           "(decoder idle / end of video)\n", frame);
-                                    bp.batch_phase = Phase::FINISHING;
-                                }
-                                break;   // yield; decoders keep filling
-                            }
-                            bp.batch_wait_frames = 0;
-
-                            // Predict step-matched frames; consume/release every
-                            // slot regardless so the ring keeps streaming.
-                            if (((frame - bp.batch_start) % bp.batch_step) == 0) {
-                                bool has_manual = false;
-                                if (annotations.count((u32)frame)) {
-                                    const auto &fa = annotations.at((u32)frame);
-                                    if (fa.needs_improvement) has_manual = true;
-                                    for (const auto &cam : fa.cameras) {
-                                        for (const auto &kp : cam.keypoints)
-                                            if (kp.labeled && kp.source == LabelSource::Manual) {
-                                                has_manual = true; break;
-                                            }
-                                        if (has_manual) break;
-                                    }
-                                }
-                                if (has_manual) {
-                                    bp.batch_skipped++;
-                                } else {
-                                    auto tp0 = std::chrono::steady_clock::now();
-                                    for (int c = 0; c < nc_pred; ++c)
-                                        pbs[c] = scene->display_buffer[c][slot].pixel_buffer;
-                                    jarvis_coreml_predict_frame(jarvis_coreml_state,
-                                        annotations, (u32)frame, pbs, w_b, h_b,
-                                        skeleton, (int)scene->num_cams, pm.camera_params,
-                                        bp.confidence_threshold);
-                                    if (!jarvis_coreml_state.hybridnet &&
-                                        !pm.camera_params.empty())
-                                        reprojection(annotations.at((u32)frame),
-                                                     &skeleton, pm.camera_params, scene);
-                                    bp.batch_predict_ms += std::chrono::duration<float, std::milli>(
-                                        std::chrono::steady_clock::now() - tp0).count();
-                                    bp.batch_completed++;
-                                    printf("[Batch] Frame %d (slot %d): %.0f ms  [%d/%d]\n",
-                                           frame, slot, jarvis_coreml_state.last_total_ms,
-                                           bp.batch_completed, bp.batch_total);
-                                    // Store mode: move 3D into the store, out of
-                                    // the Labeling Tool.
-                                    stash_prediction((u32)frame);
-                                }
-                            }
-
-                            // Release the slot back to the decoder (mandatory —
-                            // otherwise the ring fills and the decoder stalls).
-                            for (int c = 0; c < nc_pred; ++c) {
-                                auto &sl = scene->display_buffer[c][slot];
-                                if (sl.pixel_buffer) {
-                                    CFRelease(sl.pixel_buffer);
-                                    sl.pixel_buffer = nullptr;
-                                }
-                                sl.available_to_write = true;
-                            }
-                            bp.stream_read_head = (bp.stream_read_head + 1) % buf_size;
-                            bp.batch_current += 1;
-                            current_frame_num = frame;
-                            processed++;
-                        }
-                        if (bp.batch_current > bp.batch_end)
-                            bp.batch_phase = Phase::FINISHING;
-#else
-                        // Streaming is a macOS (CVPixelBuffer) optimization; other
-                        // platforms are never routed here (init keeps them chunked).
-                        bp.batch_phase = Phase::FINISHING;
-#endif
-                        break;
-                    }
-
-                    case Phase::FINISHING: {
-                        auto t1 = std::chrono::steady_clock::now();
-                        float total_ms = std::chrono::duration<float, std::milli>(t1 - bp.batch_t0).count();
-                        bp.batch_running = false;
-                        bp.batch_phase = Phase::IDLE;
-#ifdef __APPLE__
-                        // macOS: decoders idle post-batch; the render loop re-enables
-                        // the visible camera on the next interaction (streaming path).
-                        for (auto &[key, value] : window_need_decoding)
-                            value.store(false);
-#else
-                        // Linux/Windows (chunked path): RE-ENABLE decoding so the app
-                        // returns to the normal interactive state. If left disabled,
-                        // a subsequent seek (e.g. clicking a Keypoint Labels square)
-                        // calls seek_all_cameras(), which spins the UI thread waiting
-                        // on the decoders' seek-ack that never comes — a hard hang.
-                        // Also lets spacebar playback resume. Decoders fill the ring
-                        // then park (1ms sleep) when paused, so this is cheap.
-                        for (auto &[key, value] : window_need_decoding)
-                            value.store(true);
-                        ps.pause_seeked = false;  // allow the render loop to resync
-#endif
-                        bp.batch_status = (bp.batch_cancelled ? "Cancelled: " : "Complete: ") +
-                            std::to_string(bp.batch_completed) + " frames in " +
-                            std::to_string((int)(total_ms / 1000.0f)) + "s (" +
-                            std::to_string((int)(total_ms / std::max(1, bp.batch_completed))) +
-                            " ms/frame)";
-                        if (bp.batch_skipped > 0)
-                            bp.batch_status += " (" + std::to_string(bp.batch_skipped) +
-                                " skipped)";
-                        bp.batch_cancelled = false;
-                        printf("[Batch] %s\n", bp.batch_status.c_str());
-
-                        // Store mode: finalize the .rpred store and mmap it for
-                        // the read-only overlay + Pose Stats.
-                        if (prediction_writer.is_open()) {
-                            uint32_t total_v =
-                                (dc_context->total_num_frame > 0 &&
-                                 dc_context->total_num_frame != INT_MAX)
-                                    ? (uint32_t)dc_context->total_num_frame
-                                    : (uint32_t)(bp.batch_end + 1);
-                            uint32_t stored = prediction_writer.stored_frames();
-                            uint32_t fps = (uint32_t)std::lround(
-                                dc_context->video_fps > 0 ? dc_context->video_fps : 0);
-                            if (prediction_writer.finalize(total_v, fps) &&
-                                prediction_store.open(bp.store_path)) {
-                                bp.store_status = "Prediction store: " +
-                                    std::to_string(stored) + " frames → " +
-                                    std::filesystem::path(bp.store_path)
-                                        .filename().string();
-                                printf("[Store] %s\n", bp.store_status.c_str());
-                                bp.active_store_path = bp.store_path;
-                                bp.store_list_dirty = true;  // show in picker
-
-                                // Provenance sidecar (<store>.json): which video
-                                // / model / frame range these predictions are for.
-                                std::string model_name;
-                                if (pm.active_jarvis_model >= 0 &&
-                                    pm.active_jarvis_model < (int)pm.jarvis_models.size())
-                                    model_name = pm.jarvis_models[pm.active_jarvis_model].name;
-                                nlohmann::json meta = {
-                                    {"store_file", std::filesystem::path(bp.store_path)
-                                                       .filename().string()},
-                                    {"media_folder", pm.media_folder},
-                                    {"model_name", model_name},
-                                    {"skeleton", pm.skeleton_name},
-                                    {"num_keypoints", (int)skeleton.num_nodes},
-                                    {"frame_start", bp.batch_start},
-                                    {"frame_end", bp.batch_end},
-                                    {"n_stored", (int)stored},
-                                    {"fps", (int)fps},
-                                };
-                                std::filesystem::path side = bp.store_path;
-                                side.replace_extension(".json");
-                                std::ofstream sf(side);
-                                if (sf) sf << meta.dump(2) << "\n";
-                            } else {
-                                bp.store_status = "Failed to finalize prediction store";
-                            }
-                        }
-
-                        // Optional: write the batch's whole [start, end] range to
-                        // a JARVIS-CLI-compatible Predictions_3D_<ts>/ folder.
-                        // Frames skipped by Step (or never predicted, e.g. after a
-                        // cancel) are NaN rows, so row index == frame - start, as
-                        // the CLI expects. In Store mode the frames were moved out
-                        // of `annotations` into the store, so read them from there.
-                        if (bp.export_predictions3D && !pm.project_path.empty()) {
-                            int fstart = bp.batch_start;
-                            int nframes = bp.batch_end - bp.batch_start + 1;
-                            std::string dir =
-                                jarvis_make_predictions_dir(pm.project_path);
-                            JarvisExportResult er =
-                                (bp.batch_prediction_dest == PredDest::Store &&
-                                 prediction_store.is_open())
-                                    ? jarvis_export_predictions3D_from_reader(
-                                          dir, prediction_store, skeleton, pm,
-                                          fstart, nframes)
-                                    : jarvis_export_predictions3D(
-                                          dir, annotations, skeleton, pm,
-                                          fstart, nframes);
-                            bp.export_status = er.message;
-                            printf("[JARVIS export] %s\n", er.message.c_str());
-                        }
-                        // I/O breakdown: predict is the useful work; seek+decode
-                        // is per-chunk overhead the 370ms/frame number hides.
-                        float io_ms = bp.batch_seek_ms + bp.batch_decode_ms;
-                        printf("[Batch] Wall %.1fs = predict %.1fs + seek %.1fs + "
-                               "decode %.1fs (+%.1fs other) | %d chunks, I/O overhead %.0f%%\n",
-                               total_ms / 1000.f, bp.batch_predict_ms / 1000.f,
-                               bp.batch_seek_ms / 1000.f, bp.batch_decode_ms / 1000.f,
-                               (total_ms - bp.batch_predict_ms - io_ms) / 1000.f,
-                               bp.batch_chunks, 100.f * io_ms / std::max(1.f, total_ms));
-                        break;
-                    }
-
-                    case Phase::IDLE:
-                        break;
-                    }
-                }
-            }
-
-            // --- Multi-model "set" batch controller ---
-            // Runs the active model set as a sequence of single-model batches
-            // (each into a private temp store), then merges those stores into
-            // one combined store and switches the project to a concatenated
-            // skeleton so the merged result displays. Sits on top of the batch
-            // state machine above, which it drives one pass at a time.
-            {
-                auto &jp = win.jarvis_predict;
-                auto &bp = win.jarvis_predict;   // same struct; alias for clarity
-                using SetPhase = JarvisPredictState::SetPhase;
-                using PredDest = JarvisPredictState::PredDest;
-
-                auto any_loaded = [&]() -> bool {
-                    bool a = jarvis_state.loaded;
-#ifdef __APPLE__
-                    a = a || jarvis_coreml_state.loaded;
-#elif defined(_WIN32)
-                    a = a || jarvis_trt_state.loaded;
-#endif
-#if defined(__linux__) || defined(_WIN32)
-#if defined(RED_HAS_ONNXRUNTIME) || defined(RED_HAS_TENSORRT_HN)
-                    a = a || jarvis_hn_state.loaded;
-#endif
-#endif
-                    return a;
-                };
-                auto load_model = [&](int model_index) -> bool {
-                    if (model_index < 0 ||
-                        model_index >= (int)pm.jarvis_models.size())
-                        return false;
-                    std::string base = pm.project_path + "/" +
-                        pm.jarvis_models[model_index].relative_path;
-                    jarvis_load_from_dir(base, jarvis_state
-#ifdef __APPLE__
-                        , jarvis_coreml_state
-#elif defined(_WIN32)
-                        , jarvis_trt_state
-#endif
-#if defined(__linux__) || defined(_WIN32)
-#if defined(RED_HAS_ONNXRUNTIME) || defined(RED_HAS_TENSORRT_HN)
-                        , jarvis_hn_state
-#endif
-#endif
-                    );
-                    return any_loaded();
-                };
-                auto store_dir = [&]() {
-                    return std::filesystem::path(pm.project_path) /
-                           "predictions" / "red_store";
-                };
-                auto set_abort = [&](const std::string &msg) {
-                    jp.set_status = msg;
-                    printf("[Set] %s\n", msg.c_str());
-                    // Best-effort cleanup of any temp stores written so far.
-                    std::error_code ec;
-                    for (auto &p : jp.set_passes) {
-                        if (p.store_path.empty()) continue;
-                        std::filesystem::remove(p.store_path, ec);
-                        std::filesystem::path side = p.store_path;
-                        side.replace_extension(".json");
-                        std::filesystem::remove(side, ec);
-                    }
-                    jp.export_predictions3D = jp.set_saved_export;
-                    jp.store_path_override.clear();
-                    jp.set_passes.clear();
-                    jp.set_running = false;
-                    jp.set_phase = SetPhase::IDLE;
-                };
-
-                // --- Start a set run: validate + build the pass list ---
-                if (jp.set_requested && !jp.set_running && !bp.batch_running) {
-                    jp.set_requested = false;
-                    if (pm.active_jarvis_model_set < 0 ||
-                        pm.active_jarvis_model_set >=
-                            (int)pm.jarvis_model_sets.size()) {
-                        jp.set_status = "No model set selected.";
-                    } else if (pm.jarvis_model_sets[pm.active_jarvis_model_set]
-                                   .members.empty()) {
-                        jp.set_status = "Selected model set has no members.";
-                    } else if (pm.project_path.empty() || !ps.video_loaded) {
-                        jp.set_status = "Open a project and load video first.";
-                    } else if (project_has_any_manual_labels(annotations)) {
-                        jp.set_status =
-                            "Project has manual labels — a model set switches "
-                            "skeletons between passes, which would re-index them. "
-                            "Clear/export manual labels first.";
-                    } else {
-                        const auto &set =
-                            pm.jarvis_model_sets[pm.active_jarvis_model_set];
-                        jp.set_passes.clear();
-                        std::string err;
-                        bool ok = true;
-                        for (const auto &m : set.members) {
-                            if (m.model_index < 0 ||
-                                m.model_index >= (int)pm.jarvis_models.size()) {
-                                err = "member references an unknown model";
-                                ok = false; break;
-                            }
-                            SkeletonContext sk;
-                            if (!resolve_member_skeleton(m, skeleton_map, sk, &err)) {
-                                ok = false; break;
-                            }
-                            JarvisPredictState::SetPass pass;
-                            pass.model_index = m.model_index;
-                            pass.skel_json = m.skeleton_from_json;
-                            pass.skel_file = m.skeleton_file;
-                            pass.skel_name = m.skeleton_name;
-                            pass.num_kp = sk.num_nodes;
-                            jp.set_passes.push_back(std::move(pass));
-                        }
-                        if (!ok) {
-                            jp.set_status = "Cannot start set: " + err;
-                            jp.set_passes.clear();
-                        } else {
-                            jp.set_name = set.name;
-                            jp.set_pass_idx = 0;
-                            jp.set_batch_start = bp.batch_start;
-                            jp.set_batch_end = bp.batch_end;
-                            jp.set_batch_step = bp.batch_step;
-                            jp.set_saved_export = bp.export_predictions3D;
-                            jp.set_cancel_requested = false;
-                            jp.set_running = true;
-                            jp.set_phase = SetPhase::START_PASS;
-                            jp.set_status = "Running set '" + set.name + "' (" +
-                                std::to_string(jp.set_passes.size()) + " models)...";
-                            printf("[Set] %s\n", jp.set_status.c_str());
-                        }
-                    }
-                }
-
-                if (jp.set_running) {
-                    switch (jp.set_phase) {
-                    case SetPhase::START_PASS: {
-                        int idx = jp.set_pass_idx;
-                        auto &pass = jp.set_passes[idx];
-                        // Switch to this model's skeleton (clears annotations +
-                        // closes any open store — safe, no manual labels).
-                        std::string err;
-                        if (!switch_project_skeleton(
-                                ctx, prediction_store, jp, win.bout_filter,
-                                pass.skel_json, pass.skel_file, pass.skel_name,
-                                &err)) {
-                            set_abort("Set failed switching skeleton: " + err);
-                            break;
-                        }
-                        if (!load_model(pass.model_index)) {
-                            set_abort("Set failed loading model '" +
-                                pm.jarvis_models[pass.model_index].name + "'.");
-                            break;
-                        }
-                        // Configure the underlying batch for this pass.
-                        std::error_code ec;
-                        std::filesystem::create_directories(store_dir(), ec);
-                        std::string tmp = (store_dir() /
-                            ("pred_set_tmp_" + std::to_string(idx) + ".rpred"))
-                            .string();
-                        pass.store_path = tmp;
-                        bp.store_path_override = tmp;
-                        bp.batch_prediction_dest = PredDest::Store;
-                        bp.export_predictions3D = false;  // export the merged store, not each pass
-                        bp.batch_start = jp.set_batch_start;
-                        bp.batch_end = jp.set_batch_end;
-                        bp.batch_step = jp.set_batch_step;
-                        bp.batch_requested = true;
-                        jp.set_pass_seen_running = false;
-                        jp.set_phase = SetPhase::WAIT_PASS;
-                        printf("[Set] Pass %d/%d: model '%s' (%d kp)\n",
-                               idx + 1, (int)jp.set_passes.size(),
-                               pm.jarvis_models[pass.model_index].name.c_str(),
-                               pass.num_kp);
-                        break;
-                    }
-                    case SetPhase::WAIT_PASS: {
-                        if (bp.batch_running) {
-                            jp.set_pass_seen_running = true;
-                            break;
-                        }
-                        if (!jp.set_pass_seen_running) break;  // not started yet
-                        // Pass finished. store_path_override already recorded in
-                        // pass.store_path during START_PASS.
-                        bp.store_path_override.clear();
-                        if (jp.set_cancel_requested) {
-                            set_abort("Set cancelled.");
-                            break;
-                        }
-                        jp.set_pass_idx++;
-                        jp.set_phase = (jp.set_pass_idx < (int)jp.set_passes.size())
-                            ? SetPhase::START_PASS : SetPhase::MERGE;
-                        break;
-                    }
-                    case SetPhase::MERGE: {
-                        // Build the concatenated skeleton from the members.
-                        std::vector<SkeletonContext> parts;
-                        std::string err;
-                        bool ok = true;
-                        for (auto &pass : jp.set_passes) {
-                            ProjectManager::JarvisModelSetMember m;
-                            m.model_index = pass.model_index;
-                            m.skeleton_from_json = pass.skel_json;
-                            m.skeleton_file = pass.skel_file;
-                            m.skeleton_name = pass.skel_name;
-                            SkeletonContext sk;
-                            if (!resolve_member_skeleton(m, skeleton_map, sk, &err)) {
-                                ok = false; break;
-                            }
-                            parts.push_back(std::move(sk));
-                        }
-                        if (!ok) { set_abort("Set merge failed: " + err); break; }
-
-                        SkeletonContext combined;
-                        std::string comb_name = jp.set_name.empty()
-                            ? "combined" : (jp.set_name + "_combined");
-                        build_combined_skeleton(parts, comb_name, combined);
-
-                        std::error_code ec;
-                        std::filesystem::path skel_dir =
-                            std::filesystem::path(pm.project_path) / "skeletons";
-                        std::filesystem::create_directories(skel_dir, ec);
-                        std::string skel_path =
-                            (skel_dir / (comb_name + ".json")).string();
-                        if (!write_skeleton_json(combined, skel_path, &err)) {
-                            set_abort("Set merge failed: " + err); break;
-                        }
-                        // Switch the project to the combined skeleton (closes the
-                        // per-pass store, clears annotations, persists .redproj).
-                        if (!switch_project_skeleton(
-                                ctx, prediction_store, jp, win.bout_filter,
-                                /*json*/ true, skel_path, comb_name, &err)) {
-                            set_abort("Set merge failed switching to combined "
-                                      "skeleton: " + err);
-                            break;
-                        }
-
-                        // Merge the per-pass temp stores into a timestamped store.
-                        std::vector<std::string> inputs;
-                        for (auto &p : jp.set_passes)
-                            if (!p.store_path.empty()) inputs.push_back(p.store_path);
-                        std::time_t t = std::time(nullptr);
-                        std::tm tmb{};
-#ifdef _WIN32
-                        localtime_s(&tmb, &t);
-#else
-                        localtime_r(&t, &tmb);
-#endif
-                        char ts[32];
-                        std::strftime(ts, sizeof(ts), "%Y%m%d-%H%M%S", &tmb);
-                        std::string final_path =
-                            (store_dir() / (std::string("pred_") + ts + ".rpred"))
-                            .string();
-                        if (!predstore::merge_concat(inputs, final_path, &err)) {
-                            set_abort("Set merge failed: " + err); break;
-                        }
-                        // Delete the temp per-pass stores + sidecars.
-                        for (auto &p : jp.set_passes) {
-                            if (p.store_path.empty()) continue;
-                            std::filesystem::remove(p.store_path, ec);
-                            std::filesystem::path side = p.store_path;
-                            side.replace_extension(".json");
-                            std::filesystem::remove(side, ec);
-                        }
-                        // Open the combined store as active.
-                        if (!prediction_store.open(final_path)) {
-                            set_abort("Set merge wrote store but could not open "
-                                      "it: " + final_path);
-                            break;
-                        }
-                        jp.active_store_path = final_path;
-                        jp.store_path = final_path;
-                        uint32_t stored = prediction_store.stored_frames();
-                        // Provenance sidecar (model_name = set name).
-                        nlohmann::json meta = {
-                            {"store_file",
-                             std::filesystem::path(final_path).filename().string()},
-                            {"media_folder", pm.media_folder},
-                            {"model_name", jp.set_name},
-                            {"skeleton", comb_name},
-                            {"num_keypoints", (int)combined.num_nodes},
-                            {"frame_start", jp.set_batch_start},
-                            {"frame_end", jp.set_batch_end},
-                            {"n_stored", (int)stored},
-                            {"fps", (int)prediction_store.fps()},
-                            {"model_set", true},
-                        };
-                        std::filesystem::path side = final_path;
-                        side.replace_extension(".json");
-                        std::ofstream sf(side);
-                        if (sf) sf << meta.dump(2) << "\n";
-
-                        jp.export_predictions3D = jp.set_saved_export;
-                        jp.store_path_override.clear();
-                        jp.store_list_dirty = true;
-                        jp.set_status = "Model set '" + jp.set_name +
-                            "' complete: " + std::to_string(stored) +
-                            " frames, " + std::to_string(combined.num_nodes) +
-                            " keypoints → " +
-                            std::filesystem::path(final_path).filename().string();
-                        printf("[Set] %s\n", jp.set_status.c_str());
-                        jp.set_phase = SetPhase::DONE;
-                        break;
-                    }
-                    case SetPhase::DONE: {
-                        jp.set_passes.clear();
-                        jp.set_running = false;
-                        jp.set_phase = SetPhase::IDLE;
-                        break;
-                    }
-                    case SetPhase::IDLE:
-                        break;
-                    }
-                }
-            }
-
-            if (keys::pressed(keys::Sc::SeekBack) &&
-                !win.jarvis_predict.batch_running) {
+            if (keys::pressed(keys::Sc::SeekBack)) {
                 seek_relative(ImGui::GetIO().KeyShift ? -10 : -1);
             }
 
-            if (keys::pressed(keys::Sc::SeekFwd) &&
-                !win.jarvis_predict.batch_running) {
+            if (keys::pressed(keys::Sc::SeekFwd)) {
                 seek_relative(ImGui::GetIO().KeyShift ? 10 : 1);
             }
 
@@ -2946,26 +1335,6 @@ int main(int argc, char **argv) {
                 frame_to_show = std::min(frame_to_show, min_decoded_frame);
                 frame_to_show =
                     std::min(frame_to_show, dc_context->total_num_frame - 1);
-                bool at_bout_end = ps.loop_bout && frame_to_show > ps.loop_end;
-                if (at_bout_end && win.bout_filter.loop_bout_enabled) {
-                    // Reached the end of the looped bout: wrap to its start.
-                    // seek_all_cameras clears loop_bout, so re-arm afterward
-                    // (loop_start/loop_end are untouched by the seek).
-                    seek_all_cameras(scene, ps.loop_start,
-                                     dc_context->video_fps, ps, true);
-                    ps.loop_bout = true;
-                    current_frame_num = ps.loop_start;
-                    for (auto &[key, value] : window_need_decoding)
-                        value.store(true);
-                } else {
-                if (at_bout_end) {
-                    // Looping is disabled: stop at the bout's end frame
-                    // instead of playing past it. Clear loop_bout so a
-                    // subsequent manual "play" isn't clamped here again.
-                    frame_to_show = ps.loop_end;
-                    ps.play_video = false;
-                    ps.loop_bout = false;
-                }
                 int frame_delta = frame_to_show - ps.to_display_frame_number;
                 if (frame_delta > 0) {
                     ps.to_display_frame_number = frame_to_show;
@@ -2988,7 +1357,6 @@ int main(int argc, char **argv) {
                         (ps.read_head + frame_delta) % scene->size_of_buffer;
                     if (!ps.slider_text_editing)
                         ps.slider_frame_number = ps.to_display_frame_number;
-                }
                 }
             }
         }

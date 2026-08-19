@@ -41,7 +41,7 @@ struct FrameDropsState {
     int64_t total_lost = 0;
 
     // Click-to-seek request, consumed by the main loop (same scheme as
-    // PoseStatsState; see pose_stats_window.h). pending_seek_slot is canonical
+    // pending_seek_slot is canonical
     // and is mapped to a playback frame only when the seek commits.
     bool seek_requested = false;
     int  seek_frame = 0;

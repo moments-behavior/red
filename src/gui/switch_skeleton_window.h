@@ -10,10 +10,7 @@
 #include "annotation.h"
 #include "annotation_csv.h"
 #include "project.h"
-#include "prediction_store.h"
 #include "gui/panel.h"
-#include "gui/jarvis_predict_window.h"   // JarvisPredictState
-#include "gui/bout_filter_window.h"      // BoutFilterState
 
 #include <ImGuiFileDialog.h>
 #include <misc/cpp/imgui_stdlib.h>
@@ -36,13 +33,10 @@ struct SwitchSkeletonState {
 
 // Applies a staged skeleton selection to an already-open project: reloads
 // the SkeletonContext, clears everything indexed by the old node layout
-// (annotations, open prediction store, cached Bout Filter inputs), and
+// (annotations), and
 // persists the change to the .redproj immediately. Caller must have already
 // verified project_has_any_manual_labels(ctx.annotations) == false.
 inline bool switch_project_skeleton(AppContext &ctx,
-                                    predstore::PredictionReader &prediction_store,
-                                    JarvisPredictState &jarvis_predict,
-                                    BoutFilterState &bout_filter,
                                     bool new_load_from_json,
                                     const std::string &new_skeleton_file,
                                     const std::string &new_skeleton_name,
@@ -67,13 +61,6 @@ inline bool switch_project_skeleton(AppContext &ctx,
 
     // Clear everything indexed by the old skeleton's node layout.
     ctx.annotations.clear();
-    prediction_store.close();
-    jarvis_predict.active_store_path.clear();
-    jarvis_predict.store_status.clear();
-    bout_filter.cached_store_path.clear();
-    bout_filter.cached_profile.clear();
-    bout_filter.inputs_valid = false;
-    bout_filter.dirty = true;
 
     // Persist immediately — no explicit "Save Project" step, matching
     // transport_bar.h's sync_fix_enabled toggle.
@@ -84,10 +71,7 @@ inline bool switch_project_skeleton(AppContext &ctx,
     return true;
 }
 
-inline void DrawSwitchSkeletonWindow(SwitchSkeletonState &st, AppContext &ctx,
-                                     predstore::PredictionReader &prediction_store,
-                                     JarvisPredictState &jarvis_predict,
-                                     BoutFilterState &bout_filter) {
+inline void DrawSwitchSkeletonWindow(SwitchSkeletonState &st, AppContext &ctx) {
     auto &pm = ctx.pm;
     auto &skeleton = ctx.skeleton;
     auto &skeleton_map = ctx.skeleton_map;
@@ -182,8 +166,7 @@ inline void DrawSwitchSkeletonWindow(SwitchSkeletonState &st, AppContext &ctx,
         ImGui::BeginDisabled(unchanged || incomplete);
         if (ImGui::Button("Apply")) {
             std::string err;
-            if (switch_project_skeleton(ctx, prediction_store, jarvis_predict,
-                                        bout_filter, st.load_from_json,
+            if (switch_project_skeleton(ctx, st.load_from_json,
                                         st.skeleton_file, st.skeleton_name, &err)) {
                 st.status = "Switched to '" + ctx.skeleton.name + "' (" +
                            std::to_string(ctx.skeleton.num_nodes) + " nodes).";

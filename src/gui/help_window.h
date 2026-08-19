@@ -219,23 +219,6 @@ inline void tab_about() {
     ImGui::TextWrapped("Help adapts to your project: 3D-only entries are hidden "
                        "for 2D projects, and the shortcuts for an enabled tool "
                        "are floated to the top of the Shortcuts tab.");
-    ImGui::Spacing();
-    ImGui::SeparatorText("This build includes");
-    auto feature = [](const char *name, bool on) {
-        ImGui::TextColored(on ? ImVec4(0.35f, 0.80f, 0.45f, 1.0f)
-                              : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled),
-                           "%s %s", on ? "\xE2\x9C\x93" : "\xE2\x80\x94", name);
-    };
-#if defined(RED_HAS_TENSORRT_HN)
-    feature("JARVIS HybridNet (TensorRT)", true);
-#else
-    feature("JARVIS HybridNet (TensorRT)", false);
-#endif
-#if defined(RED_HAS_ONNXRUNTIME)
-    feature("ONNX Runtime (JARVIS 2-stage)", true);
-#else
-    feature("ONNX Runtime (JARVIS 2-stage)", false);
-#endif
 }
 
 } // namespace help_ui

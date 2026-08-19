@@ -66,7 +66,6 @@ struct ProjectManager {
     // reopened: persisted here, applied to WindowStates on load, and updated
     // whenever the user opens/closes the panel. The panel's docking geometry
     // persists separately via the project's imgui_layout.ini.
-    bool show_jarvis_predict = false;
     AnnotationConfig annotation_config; // annotation capabilities
 
     // JARVIS models imported into this project
@@ -154,7 +153,6 @@ inline void to_json(nlohmann::json &j, const ProjectManager &p) {
                        {"pump_log_path", p.pump_log_path},
                        {"pump_offset_ms", p.pump_offset_ms},
                        {"pump_show_pulls", p.pump_show_pulls},
-                       {"show_jarvis_predict", p.show_jarvis_predict},
                        {"annotation_config", p.annotation_config},
                        {"jarvis_models", p.jarvis_models},
                        {"active_jarvis_model", p.active_jarvis_model},
@@ -180,7 +178,6 @@ inline void from_json(const nlohmann::json &j, ProjectManager &p) {
     p.pump_log_path = j.value("pump_log_path", std::string{});
     p.pump_offset_ms = j.value("pump_offset_ms", 0.0f);
     p.pump_show_pulls = j.value("pump_show_pulls", false);
-    p.show_jarvis_predict = j.value("show_jarvis_predict", false);
     if (j.contains("annotation_config"))
         p.annotation_config = j["annotation_config"].get<AnnotationConfig>();
     if (j.contains("jarvis_models"))

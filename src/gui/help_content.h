@@ -76,8 +76,6 @@ inline const std::vector<Group> &shortcut_groups() {
             {S::COUNT, "[  /  ]", "Previous / next pump dispense", Gate::Always,
                  "Needs a loaded pumpctl log; skips pumps hidden in the Pump Events filter"},
             {S::SaveLabels, nullptr, "Save labels (writes a new timestamped labeled_data folder)"},
-            {S::PredictCurrent, nullptr, "Run JARVIS prediction on the current frame", Gate::Need3D,
-                 "Paused, with a JARVIS model loaded"},
         }},
         {"When paused", "Stepping through the frame buffer", Gate::Always, {
             {S::BufferPrev, nullptr, "Previous buffered frame"},
@@ -145,7 +143,7 @@ inline const std::vector<MouseGroup> &mouse_groups() {
             {"Drag a keypoint", "Move it", "Clears its triangulated 3D"},
             {"Hover a keypoint", "Show its 3D coordinate (if triangulated)"},
         }},
-        {"Timelines & plots", "Labeling strip, Pose Stats, Frame Drops, transport slider, frame buffer", {
+        {"Timelines & plots", "Labeling strip, Frame Drops, transport slider, frame buffer", {
             {"Click", "Seek to that frame"},
             {"Drag", "Pan the plot"},
             {"Scroll", "Zoom"},
@@ -177,22 +175,16 @@ inline const std::vector<Tool> &tools() {
                 "Oriented (rotated) bounding boxes via 3-click construction."},
             {"Midline Tool", "Tools \xE2\x86\x92 Midline Tool",
                 "Reconstruct a midline (e.g. a proboscis) from one side camera + one line camera.", Gate::Need3D, "Calibrated project"},
-            // Prediction / JARVIS
-            {"JARVIS Predict", "Tools \xE2\x86\x92 JARVIS Predict",
-                "Load a trained model and run pose inference (current frame or batch).", Gate::Need3D, "Calibrated project + a model"},
+            // Export
             {"Export Tool", "Tools \xE2\x86\x92 Export Tool",
                 "Export labels: JARVIS, COCO, DeepLabCut, YOLO Pose/Detection, Nerfstudio.", Gate::Always, "Labeled frames"},
             {"Group JARVIS Export", "Tools \xE2\x86\x92 Group JARVIS Export",
                 "Merge many projects/datasets into one JARVIS dataset (shared keypoints).", Gate::Always, "\xE2\x80\x94"},
-            {"Import 3D Predictions", "Tools \xE2\x86\x92 Import 3D Predictions",
-                "Stream a cluster keypoints3d.csv into a read-only prediction store.", Gate::Need3D, "Calibrated project"},
+            {"Import JARVIS Predictions", "Tools \xE2\x86\x92 Import JARVIS Predictions",
+                "Read a JARVIS data3D.csv into a read-only prediction store, or straight into editable labels.", Gate::Need3D, "Calibrated project"},
             // Analysis
             {"Pose Stats", "View \xE2\x86\x92 Pose Stats",
-                "Confidence over time for a prediction store; promote frames to fix.", Gate::Always, "An active prediction store"},
-            {"Bouts", "View \xE2\x86\x92 Bouts",
-                "Segment the video into contiguous well-tracked ranges.", Gate::Always, "An active prediction store"},
-            {"Bout Filter", "View \xE2\x86\x92 Bout Filter",
-                "Validated walking-bout pipeline with a per-candidate accept/reject reason.", Gate::Always, "An active store + a profile"},
+                "Confidence over time for the active prediction store; promote a frame to fix it.", Gate::Always, "An active prediction store"},
             {"Frame Drops", "View \xE2\x86\x92 Frame Drops",
                 "Visualize dropped frames and the camera sync plan.", Gate::Always, "Sync metadata (Cam*_meta.csv)"},
             {"Pump Events", "View \xE2\x86\x92 Pump Events",
@@ -224,19 +216,6 @@ inline const std::vector<Workflow> &workflows() {
             "Prev/Next jump between labeled frames; Copy Prev seeds from the previous labeled frame.",
             "Ctrl+S saves labels to a new timestamped labeled_data folder.",
         }},
-        {"Run JARVIS prediction", {
-            "Tools \xE2\x86\x92 JARVIS Predict \xE2\x86\x92 Import Model (RED auto-detects the backend from the files).",
-            "Import to Project copies + registers the model; pick it under Project Models.",
-            "Predict Current Frame (key 6), or Batch Predict a range \xE2\x86\x92 a prediction store.",
-            "Toggle the video overlay; review in Pose Stats / Bouts.",
-            "Promote a frame to editable labels via Pose Stats \xE2\x80\x9C" "Fix this frame\xE2\x80\x9D, correct, re-export.",
-        }},
-        {"Find behavior bouts", {
-            "Batch Predict a range with Send to: Predictions store.",
-            "Open Bouts (generic good-tracking) or Bout Filter (validated walking bouts).",
-            "Tune thresholds; each candidate shows why it was accepted/rejected.",
-            "Export CSV.",
-        }},
         {"Export training data", {
             "Tools \xE2\x86\x92 Export Tool.",
             "Pick a format (JARVIS, COCO, DeepLabCut, YOLO, Nerfstudio).",
@@ -257,13 +236,9 @@ inline const std::vector<Concept> &concepts() {
         {"Pump dispense alignment",
             "pumpctl stamps each dispense with the same PTP hardware clock the cameras write into Cam*_meta.csv, so a dispense maps to a frame by lookup, not by fitting. The Offset (ms) slider is for rig latency (tubing, valve), not clock drift."},
         {"Prediction stores (.rpred)",
-            "Read-only, on-disk 3D + confidence, kept separate from manual labels so whole-video prediction never floods the Labeling Tool. They power the overlay, Pose Stats, and Bouts."},
-        {"Model sets",
-            "Several models, each covering a different keypoint group, run over the same frames and are concatenated into one combined-skeleton store."},
+            "Read-only, on-disk 3D + confidence, kept separate from manual labels so a whole-video import never floods the Labeling Tool. They power the overlay and Pose Stats; \"Fix this frame\" promotes one frame into editable labels."},
         {"Scale factor",
             "JARVIS's voxel grid is integer-mm, too coarse for a ~3 mm fly. Exports inflate world units \xC3\x97N so the animal resolves; divide predicted 3D back down by N."},
-        {"Bout vs Bout Filter",
-            "Bouts = generic ranges of good tracking. Bout Filter = a validated walking-bout pipeline with arena geometry and a rejection reason per candidate."},
     };
     return c;
 }

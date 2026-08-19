@@ -36,15 +36,6 @@ if(APPLE)
     pkg_check_modules(TURBOJPEG REQUIRED libturbojpeg)
     find_package(Ceres REQUIRED)
 
-    # Optional ONNX Runtime for JARVIS inference (use official release, not Homebrew)
-    set(ONNXRUNTIME_DIR "${CMAKE_SOURCE_DIR}/lib/onnxruntime")
-    if(EXISTS "${ONNXRUNTIME_DIR}/include/onnxruntime_cxx_api.h")
-        set(HAS_ONNXRUNTIME TRUE)
-        message(STATUS "ONNX Runtime found at ${ONNXRUNTIME_DIR}")
-    else()
-        set(HAS_ONNXRUNTIME FALSE)
-        message(STATUS "ONNX Runtime not found — JARVIS prediction disabled")
-    endif()
 
 
     set(DIR_IMGUI "${CMAKE_SOURCE_DIR}/lib/imgui")
@@ -110,7 +101,6 @@ if(APPLE)
         "-framework VideoToolbox"
         "-framework CoreMedia"
         "-framework CoreFoundation"
-        "-framework CoreML"
         "-framework Accelerate"
         "-framework CoreVideo"
         "-framework Cocoa"
@@ -119,14 +109,8 @@ if(APPLE)
         Ceres::ceres
         pthread
     )
-    # Removed: Vulkan::Vulkan (Accelerate still used by jarvis_coreml.mm)
+    # Removed: Vulkan::Vulkan
 
-    # Optional ONNX Runtime for JARVIS inference
-    if(HAS_ONNXRUNTIME)
-        target_compile_definitions(red PRIVATE RED_HAS_ONNXRUNTIME)
-        target_include_directories(red PRIVATE "${ONNXRUNTIME_DIR}/include")
-        target_link_libraries(red PRIVATE "${ONNXRUNTIME_DIR}/lib/libonnxruntime.dylib")
-    endif()
 
 
     # Enable ARC for all Objective-C++ translation units
@@ -179,7 +163,6 @@ if(APPLE)
         "-framework CoreMedia"
         "-framework CoreFoundation"
         "-framework CoreVideo"
-        "-framework CoreML"
         "-framework Accelerate"
         "-framework Cocoa"
         ${FFMPEG_LIBRARIES}
@@ -194,11 +177,6 @@ if(APPLE)
         PROPERTIES COMPILE_FLAGS "-fobjc-arc"
     )
 
-    if(HAS_ONNXRUNTIME)
-        target_compile_definitions(test_gui PRIVATE RED_HAS_ONNXRUNTIME)
-        target_include_directories(test_gui PRIVATE "${ONNXRUNTIME_DIR}/include")
-        target_link_libraries(test_gui PRIVATE "${ONNXRUNTIME_DIR}/lib/libonnxruntime.dylib")
-    endif()
 
 
     set_target_properties(test_gui PROPERTIES
@@ -238,7 +216,6 @@ if(APPLE)
         "-framework CoreMedia"
         "-framework CoreFoundation"
         "-framework CoreVideo"
-        "-framework CoreML"
         "-framework Accelerate"
         "-framework Cocoa"
         ${FFMPEG_LIBRARIES}
@@ -246,65 +223,11 @@ if(APPLE)
         Ceres::ceres
         pthread
     )
-    if(HAS_ONNXRUNTIME)
-        target_compile_definitions(test_annotation PRIVATE RED_HAS_ONNXRUNTIME)
-        target_include_directories(test_annotation PRIVATE "${ONNXRUNTIME_DIR}/include")
-        target_link_libraries(test_annotation PRIVATE "${ONNXRUNTIME_DIR}/lib/libonnxruntime.dylib")
-    endif()
     set_target_properties(test_annotation PROPERTIES
         CXX_STANDARD 17
         CXX_STANDARD_REQUIRED ON
     )
 
-    # JARVIS golden-file comparison test: same deps as test_annotation
-    add_executable(test_jarvis_golden
-        ${TEST_GUI_SRC_FILES}
-        ${MM_SRC_FILES}
-        ${IMGUI_SRC}
-        ${IMPLOT_SRC}
-        ${IMPLOT3D_SRC}
-        tests/test_jarvis_golden.cpp
-    )
-    target_include_directories(test_jarvis_golden PRIVATE
-        src
-        ${DIR_IMGUI}
-        ${DIR_IMGUI}/backends
-        ${DIR_IMPLOT}
-        ${DIR_IMPLOT3D}
-        ${DIR_FILEBROWSER}
-        lib/nvcodec
-        lib/IconFontCppHeaders
-        ${FFMPEG_INCLUDE_DIRS}
-        ${HOMEBREW_PREFIX}/include
-        ${HOMEBREW_PREFIX}/include/eigen3
-    )
-    target_link_directories(test_jarvis_golden PRIVATE ${FFMPEG_LIBRARY_DIRS} ${TURBOJPEG_LIBRARY_DIRS})
-    target_link_libraries(test_jarvis_golden PRIVATE
-        Eigen3::Eigen
-        glfw
-        "-framework Metal"
-        "-framework QuartzCore"
-        "-framework VideoToolbox"
-        "-framework CoreMedia"
-        "-framework CoreFoundation"
-        "-framework CoreVideo"
-        "-framework CoreML"
-        "-framework Accelerate"
-        "-framework Cocoa"
-        ${FFMPEG_LIBRARIES}
-        ${TURBOJPEG_LIBRARIES}
-        Ceres::ceres
-        pthread
-    )
-    if(HAS_ONNXRUNTIME)
-        target_compile_definitions(test_jarvis_golden PRIVATE RED_HAS_ONNXRUNTIME)
-        target_include_directories(test_jarvis_golden PRIVATE "${ONNXRUNTIME_DIR}/include")
-        target_link_libraries(test_jarvis_golden PRIVATE "${ONNXRUNTIME_DIR}/lib/libonnxruntime.dylib")
-    endif()
-    set_target_properties(test_jarvis_golden PROPERTIES
-        CXX_STANDARD 17
-        CXX_STANDARD_REQUIRED ON
-    )
 
 
     # Sync-plan unit test: header-only logic, stdlib + vendored json.hpp only
@@ -316,41 +239,13 @@ if(APPLE)
     )
 
 
+
     set_source_files_properties(
         src/vt_async_decoder.mm
         PROPERTIES COMPILE_FLAGS "-fobjc-arc"
     )
 
-    # JARVIS import test: header-only Eigen math (no OpenCV, no GUI, no Metal)
-    add_executable(test_jarvis_import tests/test_jarvis_import.cpp)
-    target_include_directories(test_jarvis_import PRIVATE
-        ${CMAKE_SOURCE_DIR}/src
-        ${HOMEBREW_PREFIX}/include
-        ${HOMEBREW_PREFIX}/include/eigen3
-    )
-    target_link_libraries(test_jarvis_import PRIVATE
-        Eigen3::Eigen
-    )
-    set_target_properties(test_jarvis_import PROPERTIES
-        CXX_STANDARD 17
-        CXX_STANDARD_REQUIRED ON
-    )
 
-    # CPU (hn_reproject) vs Metal (HNMetalReproject) reprojection parity.
-    # Enforces the "bit-exact" claim shared by jarvis_hn_reproject.h and
-    # jarvis_hn_metal.mm. Metal-only, so Apple-block only.
-    add_executable(test_jarvis_hn_parity
-        tests/test_jarvis_hn_parity.mm
-        src/jarvis_hn_metal.mm
-    )
-    target_include_directories(test_jarvis_hn_parity PRIVATE ${CMAKE_SOURCE_DIR}/src)
-    target_link_libraries(test_jarvis_hn_parity PRIVATE
-        "-framework Metal" "-framework Foundation" "-framework CoreGraphics"
-    )
-    set_target_properties(test_jarvis_hn_parity PROPERTIES
-        CXX_STANDARD 17
-        CXX_STANDARD_REQUIRED ON
-    )
 
     set_source_files_properties(
         src/vt_async_decoder.mm
@@ -450,53 +345,7 @@ if(APPLE)
     )
 
 
-    # JARVIS inference pipeline benchmark (ONNX Runtime only, no GUI deps)
-    if(HAS_ONNXRUNTIME)
-        add_executable(bench_jarvis tests/bench_jarvis.cpp)
-        target_include_directories(bench_jarvis PRIVATE
-            src
-            ${DIR_FILEBROWSER}
-            "${ONNXRUNTIME_DIR}/include"
-            ${HOMEBREW_PREFIX}/include
-            ${HOMEBREW_PREFIX}/include/eigen3
-        )
-        target_compile_definitions(bench_jarvis PRIVATE RED_HAS_ONNXRUNTIME)
-        target_link_libraries(bench_jarvis PRIVATE
-            "${ONNXRUNTIME_DIR}/lib/libonnxruntime.dylib"
-        )
-        set_target_properties(bench_jarvis PROPERTIES
-            CXX_STANDARD 17
-            CXX_STANDARD_REQUIRED ON
-        )
-    endif()
 
-    # CoreML vs ONNX accuracy comparison benchmark
-    if(HAS_ONNXRUNTIME)
-        add_executable(bench_coreml_accuracy tests/bench_coreml_accuracy.mm)
-        target_include_directories(bench_coreml_accuracy PRIVATE
-            src
-            ${DIR_FILEBROWSER}
-            "${ONNXRUNTIME_DIR}/include"
-            ${HOMEBREW_PREFIX}/include
-            ${HOMEBREW_PREFIX}/include/eigen3
-        )
-        target_compile_definitions(bench_coreml_accuracy PRIVATE RED_HAS_ONNXRUNTIME)
-        target_link_libraries(bench_coreml_accuracy PRIVATE
-            "${ONNXRUNTIME_DIR}/lib/libonnxruntime.dylib"
-            "-framework CoreML"
-            "-framework CoreVideo"
-            "-framework Accelerate"
-            "-framework Foundation"
-        )
-        set_target_properties(bench_coreml_accuracy PROPERTIES
-            CXX_STANDARD 17
-            CXX_STANDARD_REQUIRED ON
-        )
-        set_source_files_properties(
-            tests/bench_coreml_accuracy.mm
-            PROPERTIES COMPILE_FLAGS "-fobjc-arc"
-        )
-    endif()
 
 elseif(WIN32)
     # Windows build with NVIDIA CUDA support (RTX 3090)
@@ -578,7 +427,6 @@ elseif(WIN32)
         src/create_image_cuda.cu
         src/ColorSpace.cu
         src/kernel.cu
-        src/jarvis_hybridnet_cuda.cu
     )
 
     # Main executable
@@ -590,20 +438,9 @@ elseif(WIN32)
         ${CUDA_SRC_FILES}
     )
 
-    # ONNX Runtime (GPU build with CUDA execution provider)
-    set(ONNXRUNTIME_DIR "${CMAKE_SOURCE_DIR}/lib/onnxruntime")
-    if(EXISTS "${ONNXRUNTIME_DIR}/include/onnxruntime_cxx_api.h")
-        set(HAS_ONNXRUNTIME TRUE)
-    else()
-        set(HAS_ONNXRUNTIME FALSE)
-        message(WARNING "ONNX Runtime not found in lib/onnxruntime/ — JARVIS prediction disabled")
-    endif()
 
 
     target_compile_definitions(red PRIVATE NOMINMAX _USE_MATH_DEFINES)
-    if(HAS_ONNXRUNTIME)
-        target_compile_definitions(red PRIVATE RED_HAS_ONNXRUNTIME)
-    endif()
     target_compile_options(red PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/bigobj /EHsc>)
 
     # Use vcpkg GLFW and GLEW (version-matched headers + DLLs)
@@ -624,9 +461,6 @@ elseif(WIN32)
     )
     if(TURBOJPEG_INCLUDE)
         target_include_directories(red PRIVATE ${TURBOJPEG_INCLUDE})
-    endif()
-    if(HAS_ONNXRUNTIME)
-        target_include_directories(red PRIVATE "${ONNXRUNTIME_DIR}/include")
     endif()
 
     # Link libraries
@@ -665,10 +499,6 @@ elseif(WIN32)
         target_link_libraries(red PRIVATE ${TURBOJPEG_LIB})
     endif()
 
-    # ONNX Runtime (GPU with CUDA EP)
-    if(HAS_ONNXRUNTIME)
-        target_link_libraries(red PRIVATE "${ONNXRUNTIME_DIR}/lib/onnxruntime.lib")
-    endif()
 
 
     # Windows system libraries
@@ -677,24 +507,7 @@ elseif(WIN32)
         ole32
     )
 
-    # Copy ONNX Runtime DLLs to build directory
-    if(HAS_ONNXRUNTIME)
-        file(GLOB ORT_DLLS "${ONNXRUNTIME_DIR}/lib/*.dll")
-        foreach(dll ${ORT_DLLS})
-            add_custom_command(TARGET red POST_BUILD
-                COMMAND ${CMAKE_COMMAND} -E copy_if_different "${dll}" "$<TARGET_FILE_DIR:red>")
-        endforeach()
-    endif()
 
-    # Copy cuDNN DLLs to build directory (needed by ONNX Runtime CUDA EP)
-    set(CUDNN_DIR "${CMAKE_SOURCE_DIR}/lib/cudnn")
-    if(EXISTS "${CUDNN_DIR}/bin/cudnn64_9.dll")
-        file(GLOB CUDNN_DLLS "${CUDNN_DIR}/bin/*.dll")
-        foreach(dll ${CUDNN_DLLS})
-            add_custom_command(TARGET red POST_BUILD
-                COMMAND ${CMAKE_COMMAND} -E copy_if_different "${dll}" "$<TARGET_FILE_DIR:red>")
-        endforeach()
-    endif()
 
 
     # vcpkg automatically copies dependent DLLs via its toolchain
@@ -708,7 +521,7 @@ elseif(WIN32)
     set(TEST_GUI_SRC_FILES ${SRC_FILES})
     list(REMOVE_ITEM TEST_GUI_SRC_FILES "${CMAKE_SOURCE_DIR}/src/red.cpp")
 
-    foreach(TEST_NAME test_gui test_annotation test_jarvis_hybridnet_smoke)
+    foreach(TEST_NAME test_gui test_annotation)
         add_executable(${TEST_NAME}
             ${TEST_GUI_SRC_FILES}
             ${IMGUI_SRC}
@@ -762,11 +575,6 @@ elseif(WIN32)
         elseif(TURBOJPEG_LIB)
             target_link_libraries(${TEST_NAME} PRIVATE ${TURBOJPEG_LIB})
         endif()
-        if(HAS_ONNXRUNTIME)
-            target_compile_definitions(${TEST_NAME} PRIVATE RED_HAS_ONNXRUNTIME)
-            target_include_directories(${TEST_NAME} PRIVATE "${ONNXRUNTIME_DIR}/include")
-            target_link_libraries(${TEST_NAME} PRIVATE "${ONNXRUNTIME_DIR}/lib/onnxruntime.lib")
-        endif()
         set_target_properties(${TEST_NAME} PROPERTIES
             CXX_STANDARD 17
             CXX_STANDARD_REQUIRED ON
@@ -787,11 +595,7 @@ else()
     # Coexists with the orange app (same machine): uses the same CUDA 12.2
     # at /usr/local/cuda, the same custom FFmpeg at $HOME/nvidia/ffmpeg, and
     # the same driver 535.x. Orange's toolchain is UNTOUCHED — red just
-    # links read-only against those shared installs. ML inference libs
-    # (ONNX Runtime, cuDNN) are bundled in red/lib/ with RPATH isolation so
-    # they cannot collide with orange's TensorRT 8.6 / cuDNN 8.9. The JARVIS
-    # HybridNet path links read-only against orange's shared TRT install at
-    # $HOME/nvidia/TensorRT-8.6.1.6 (build-tree RPATH only — never bundled).
+    # links read-only against those shared installs.
     # No OpenCV, no LibTorch.
     # ────────────────────────────────────────────────────────────────────────
     project(red LANGUAGES CXX CUDA)
@@ -863,7 +667,6 @@ else()
         src/create_image_cuda.cu
         src/ColorSpace.cu
         src/kernel.cu
-        src/jarvis_hybridnet_cuda.cu
     )
 
     add_executable(red
@@ -874,77 +677,10 @@ else()
         ${CUDA_SRC_FILES}
     )
 
-    # Optional ONNX Runtime (GPU, CUDA EP) bundled at lib/onnxruntime/
-    set(ONNXRUNTIME_DIR "${CMAKE_SOURCE_DIR}/lib/onnxruntime")
-    if(EXISTS "${ONNXRUNTIME_DIR}/include/onnxruntime_cxx_api.h")
-        set(HAS_ONNXRUNTIME TRUE)
-        message(STATUS "ONNX Runtime found at ${ONNXRUNTIME_DIR}")
-    else()
-        set(HAS_ONNXRUNTIME FALSE)
-        message(STATUS "ONNX Runtime not found in lib/onnxruntime/ — JARVIS prediction disabled")
-    endif()
 
-    # Optional TensorRT for JARVIS HybridNet direct-runtime inference.
-    # Engine files for the loaded JARVIS model are compiled offline via
-    # scripts/compile_tensorrt_engines.sh. At runtime, jarvis_hybridnet.h
-    # uses TRT when .engine files are present and falls back to the ORT CUDA EP.
-    #
-    # Two install layouts are supported (tried in this order):
-    #   1. Self-contained tarball — the 22.04 reference box: TRT 8.6.1.6 under
-    #      $HOME/nvidia/TensorRT-8.6.1.6 (read-only, orange-shared, never
-    #      bundled/modified), or any dir passed via -DTENSORRT_DIR=. Layout:
-    #      <dir>/include/NvInfer.h + <dir>/lib/libnvinfer.so.
-    #   2. System / apt install — the 24.04 / CUDA-13 boxes (e.g. flyrig): TRT
-    #      10 from the NVIDIA CUDA apt repo, headers in /usr/include/<triplet>,
-    #      libs in /usr/lib/<triplet>. Found via find_path/find_library.
-    # red only loads prebuilt .engine files (no ONNX parsing, no builder at
-    # runtime) and uses the modern name-based API (createInferRuntime,
-    # deserializeCudaEngine, enqueueV3, setTensorAddress, setInputShape,
-    # getTensorShape, getIOTensorName) shared across TRT 8.5–11 — none of the
-    # binding-index APIs TRT 10 removed — so either TRT major works unchanged.
-    set(TENSORRT_DIR "$ENV{HOME}/nvidia/TensorRT-8.6.1.6" CACHE PATH
-        "TensorRT tarball root; tried before the system/apt install")
-    set(HAS_TENSORRT_HN FALSE)
-    if(EXISTS "${TENSORRT_DIR}/include/NvInfer.h" AND
-       EXISTS "${TENSORRT_DIR}/lib/libnvinfer.so")
-        # Layout 1: self-contained tarball.
-        set(HAS_TENSORRT_HN TRUE)
-        set(TENSORRT_INCLUDE_DIR "${TENSORRT_DIR}/include")
-        set(TENSORRT_LIB         "${TENSORRT_DIR}/lib/libnvinfer.so")
-        set(TENSORRT_PLUGIN_LIB  "${TENSORRT_DIR}/lib/libnvinfer_plugin.so")
-        set(TENSORRT_LIB_DIR     "${TENSORRT_DIR}/lib")
-        message(STATUS "TensorRT found at ${TENSORRT_DIR} (tarball; HybridNet direct runtime enabled)")
-    else()
-        # Layout 2: system / apt (e.g. TRT 10 from the CUDA repo).
-        find_path(TENSORRT_INCLUDE_DIR NAMES NvInfer.h PATH_SUFFIXES x86_64-linux-gnu)
-        find_library(TENSORRT_LIB NAMES nvinfer)
-        find_library(TENSORRT_PLUGIN_LIB NAMES nvinfer_plugin)
-        if(TENSORRT_INCLUDE_DIR AND TENSORRT_LIB AND TENSORRT_PLUGIN_LIB)
-            set(HAS_TENSORRT_HN TRUE)
-            get_filename_component(TENSORRT_LIB_DIR "${TENSORRT_LIB}" DIRECTORY)
-            message(STATUS "TensorRT found in system paths: ${TENSORRT_LIB} "
-                           "(HybridNet direct runtime enabled)")
-        else()
-            message(STATUS "TensorRT not found (tarball ${TENSORRT_DIR} or system paths) "
-                           "— JARVIS HybridNet will use ORT CUDA EP only")
-        endif()
-    endif()
-    # Report the detected TRT major version (informational — the app is
-    # version-agnostic across the modern API described above).
-    if(HAS_TENSORRT_HN AND EXISTS "${TENSORRT_INCLUDE_DIR}/NvInferVersion.h")
-        file(STRINGS "${TENSORRT_INCLUDE_DIR}/NvInferVersion.h" _trt_ver_line
-             REGEX "define +NV_TENSORRT_MAJOR")
-        message(STATUS "  ${_trt_ver_line}")
-    endif()
 
 
     target_compile_definitions(red PRIVATE)
-    if(HAS_ONNXRUNTIME)
-        target_compile_definitions(red PRIVATE RED_HAS_ONNXRUNTIME)
-    endif()
-    if(HAS_TENSORRT_HN)
-        target_compile_definitions(red PRIVATE RED_HAS_TENSORRT_HN)
-    endif()
 
     target_include_directories(red PRIVATE
         ${CMAKE_SOURCE_DIR}/src
@@ -956,12 +692,6 @@ else()
         ${DIR_ICONFONT}
         ${DIR_NVCODEC}
     )
-    if(HAS_ONNXRUNTIME)
-        target_include_directories(red PRIVATE "${ONNXRUNTIME_DIR}/include")
-    endif()
-    if(HAS_TENSORRT_HN)
-        target_include_directories(red PRIVATE "${TENSORRT_INCLUDE_DIR}")
-    endif()
 
     # Link libraries
     target_link_libraries(red PRIVATE
@@ -987,71 +717,12 @@ else()
         ${CMAKE_DL_LIBS}
     )
 
-    if(HAS_ONNXRUNTIME)
-        target_link_libraries(red PRIVATE "${ONNXRUNTIME_DIR}/lib/libonnxruntime.so")
-    endif()
-    if(HAS_TENSORRT_HN)
-        # libnvinfer_plugin.so is wrapped in --no-as-needed because red has no
-        # direct symbol references to it — initLibNvInferPlugins is called via
-        # an inline helper in jarvis_hybridnet.h, which is reachable but the
-        # linker's default --as-needed drops the DT_NEEDED entry. Without the
-        # plugin lib loaded, hybrid3d.engine deserialization fails with
-        # "getPluginCreator could not find plugin: InstanceNormalization_TRT".
-        target_link_libraries(red PRIVATE
-            "${TENSORRT_LIB}"
-            "-Wl,--no-as-needed"
-            "${TENSORRT_PLUGIN_LIB}"
-            "-Wl,--as-needed")
-    endif()
 
     # RPATH: isolate bundled ML libs from system / orange's toolchain.
     # $ORIGIN so the installed binary finds them relative to itself; build
     # rpath points at the absolute bundle paths for running from build/.
     set(RED_RPATH_BUILD "")
     set(RED_RPATH_INSTALL "$ORIGIN")
-    if(HAS_ONNXRUNTIME)
-        list(APPEND RED_RPATH_BUILD "${ONNXRUNTIME_DIR}/lib")
-        list(APPEND RED_RPATH_INSTALL "$ORIGIN/../lib/onnxruntime/lib")
-    endif()
-    # cuDNN 9 for ONNX Runtime CUDA EP (bundled, never system-installed)
-    set(CUDNN_DIR "${CMAKE_SOURCE_DIR}/lib/cudnn")
-    if(EXISTS "${CUDNN_DIR}/lib")
-        list(APPEND RED_RPATH_BUILD "${CUDNN_DIR}/lib")
-        list(APPEND RED_RPATH_INSTALL "$ORIGIN/../lib/cudnn/lib")
-
-        # ORT's CUDA provider library is dlopen'd at runtime by libonnxruntime.so
-        # and doesn't inherit red's RUNPATH. Without a patched RPATH on the
-        # provider .so itself, libcudnn.so.9 fails to resolve and ORT silently
-        # falls back to CPU EP. Patch idempotently with patchelf if available.
-        set(ORT_CUDA_PROVIDER "${ONNXRUNTIME_DIR}/lib/libonnxruntime_providers_cuda.so")
-        if(HAS_ONNXRUNTIME AND EXISTS "${ORT_CUDA_PROVIDER}")
-            find_program(PATCHELF_EXE patchelf)
-            if(PATCHELF_EXE)
-                execute_process(
-                    COMMAND "${PATCHELF_EXE}" --set-rpath
-                            "\$ORIGIN:\$ORIGIN/../../cudnn/lib:/usr/local/cuda/lib64"
-                            "${ORT_CUDA_PROVIDER}"
-                    RESULT_VARIABLE PATCHELF_RESULT
-                    OUTPUT_QUIET ERROR_QUIET)
-                if(PATCHELF_RESULT EQUAL 0)
-                    message(STATUS "Patched ORT CUDA provider RPATH to find bundled cuDNN")
-                else()
-                    message(WARNING "patchelf on libonnxruntime_providers_cuda.so failed; "
-                                    "set LD_LIBRARY_PATH=${CUDNN_DIR}/lib at runtime")
-                endif()
-            else()
-                message(WARNING "patchelf not found; set LD_LIBRARY_PATH=${CUDNN_DIR}/lib "
-                                "at runtime to enable CUDA EP")
-            endif()
-        endif()
-    endif()
-    # TensorRT: build-tree RPATH only — read-only orange-shared install.
-    # Users running `cmake --install` should set LD_LIBRARY_PATH at runtime
-    # (or symlink the install to a fixed location) since the absolute path
-    # under $HOME is not portable.
-    if(HAS_TENSORRT_HN)
-        list(APPEND RED_RPATH_BUILD "${TENSORRT_LIB_DIR}")
-    endif()
 
     set_target_properties(red PROPERTIES
         CXX_STANDARD 17
@@ -1071,7 +742,7 @@ else()
     set(TEST_GUI_SRC_FILES ${SRC_FILES})
     list(REMOVE_ITEM TEST_GUI_SRC_FILES "${CMAKE_SOURCE_DIR}/src/red.cpp")
 
-    foreach(TEST_NAME test_gui test_annotation test_jarvis_hybridnet_smoke)
+    foreach(TEST_NAME test_gui test_annotation)
         add_executable(${TEST_NAME}
             ${TEST_GUI_SRC_FILES}
             ${IMGUI_SRC}
@@ -1110,20 +781,6 @@ else()
             Threads::Threads
             ${CMAKE_DL_LIBS}
         )
-        if(HAS_ONNXRUNTIME)
-            target_compile_definitions(${TEST_NAME} PRIVATE RED_HAS_ONNXRUNTIME)
-            target_include_directories(${TEST_NAME} PRIVATE "${ONNXRUNTIME_DIR}/include")
-            target_link_libraries(${TEST_NAME} PRIVATE "${ONNXRUNTIME_DIR}/lib/libonnxruntime.so")
-        endif()
-        if(HAS_TENSORRT_HN)
-            target_compile_definitions(${TEST_NAME} PRIVATE RED_HAS_TENSORRT_HN)
-            target_include_directories(${TEST_NAME} PRIVATE "${TENSORRT_INCLUDE_DIR}")
-            target_link_libraries(${TEST_NAME} PRIVATE
-                "${TENSORRT_LIB}"
-                "-Wl,--no-as-needed"
-                "${TENSORRT_PLUGIN_LIB}"
-                "-Wl,--as-needed")
-        endif()
         set_target_properties(${TEST_NAME} PROPERTIES
             CXX_STANDARD 17
             CXX_STANDARD_REQUIRED ON

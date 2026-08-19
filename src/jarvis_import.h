@@ -1,15 +1,13 @@
 #pragma once
 /*  jarvis_import.h  — Import JARVIS predictions into RED label format
  *
- *  Reads JARVIS data3D.csv (3D keypoints + per-keypoint confidence),
- *  projects to 2D per camera, and writes RED-format label CSVs compatible
- *  with the v2 annotation format (AnnotationCSV).
+ *  Reads JARVIS data3D.csv (3D keypoints + per-keypoint confidence) into
+ *  Prediction3D records. Callers decide where they go: gui/jarvis_import_window.h
+ *  streams them into a .rpred prediction store, or reprojects them straight
+ *  into the AnnotationMap as editable labels.
  */
 
-#include "camera.h"
-#include "red_math.h"
 #include <Eigen/Core>
-#include <filesystem>
 #include <fstream>
 #include <map>
 #include <sstream>
@@ -94,179 +92,6 @@ read_jarvis_predictions(const std::string &csv_path,
 
         frame_id++;
         line_num++;
-    }
-
-    return result;
-}
-
-// ---------------------------------------------------------------------------
-// Project 3D predictions to 2D for a single camera
-// Returns 2D points in image coordinates (top-left origin)
-// ---------------------------------------------------------------------------
-inline std::map<int, std::vector<Eigen::Vector2d>>
-project_to_camera(const std::map<int, Prediction3D> &preds,
-                  const CameraParams &cam) {
-    std::map<int, std::vector<Eigen::Vector2d>> result;
-    for (const auto &[fid, pred] : preds) {
-        std::vector<Eigen::Vector2d> pts2d;
-        pts2d.reserve(pred.positions.size());
-        for (const auto &pt3d : pred.positions) {
-            // Use matrix-based projection (safe for det(R)=-1 from Z-flip)
-            Eigen::Vector2d pt2d = red_math::projectPointR(
-                pt3d, cam.r, cam.tvec, cam.k, cam.dist_coeffs);
-            pts2d.push_back(pt2d);
-        }
-        result[fid] = std::move(pts2d);
-    }
-    return result;
-}
-
-// ---------------------------------------------------------------------------
-// Write RED-format label CSVs:
-//   keypoints3d.csv + <camera>.csv per camera + confidence.csv
-// Output matches the CSV format used by AnnotationCSV::load_all().
-// ---------------------------------------------------------------------------
-inline bool
-write_prediction_csvs(const std::string &output_folder,
-                      const std::string &skeleton_name,
-                      const std::map<int, Prediction3D> &preds,
-                      const std::vector<CameraParams> &cameras,
-                      const std::vector<std::string> &camera_names,
-                      int img_height,
-                      std::string *error = nullptr) {
-    namespace fs = std::filesystem;
-    std::error_code ec;
-    fs::create_directories(output_folder, ec);
-    if (ec) {
-        if (error) *error = "Failed to create directory: " + output_folder;
-        return false;
-    }
-
-    // --- keypoints3d.csv ---
-    {
-        std::ofstream f(output_folder + "/keypoints3d.csv");
-        if (!f) {
-            if (error) *error = "Failed to write keypoints3d.csv";
-            return false;
-        }
-        f << skeleton_name << "\n";
-        for (const auto &[fid, pred] : preds) {
-            f << fid;
-            for (int j = 0; j < (int)pred.positions.size(); j++) {
-                f << "," << j
-                  << "," << pred.positions[j].x()
-                  << "," << pred.positions[j].y()
-                  << "," << pred.positions[j].z();
-            }
-            f << "\n";
-        }
-    }
-
-    // --- Per-camera 2D CSVs ---
-    for (int c = 0; c < (int)cameras.size(); c++) {
-        auto pts2d_map = project_to_camera(preds, cameras[c]);
-        std::ofstream f(output_folder + "/" + camera_names[c] + ".csv");
-        if (!f) {
-            if (error) *error = "Failed to write " + camera_names[c] + ".csv";
-            return false;
-        }
-        f << skeleton_name << "\n";
-        for (const auto &[fid, pts2d] : pts2d_map) {
-            f << fid;
-            for (int j = 0; j < (int)pts2d.size(); j++) {
-                // Y-flip: image coords (top-left) → ImPlot coords (bottom-left)
-                double x = pts2d[j].x();
-                double y = (double)img_height - pts2d[j].y();
-                f << "," << j << "," << x << "," << y;
-            }
-            f << "\n";
-        }
-    }
-
-    // --- confidence.csv ---
-    {
-        std::ofstream f(output_folder + "/confidence.csv");
-        if (!f) {
-            if (error) *error = "Failed to write confidence.csv";
-            return false;
-        }
-        f << "frame_id";
-        if (!preds.empty()) {
-            int nj = (int)preds.begin()->second.confidences.size();
-            for (int j = 0; j < nj; j++) f << ",kp" << j;
-        }
-        f << "\n";
-        for (const auto &[fid, pred] : preds) {
-            f << fid;
-            for (float c : pred.confidences) f << "," << c;
-            f << "\n";
-        }
-    }
-
-    return true;
-}
-
-// ---------------------------------------------------------------------------
-// Full import: read data3D.csv → write RED CSVs → ready for AnnotationCSV::load_all()
-// ---------------------------------------------------------------------------
-struct ImportResult {
-    int frames_imported = 0;
-    int frames_filtered = 0;
-    int num_keypoints = 0;
-    float mean_confidence = 0;
-    std::string output_folder;
-    std::string error;
-};
-
-inline ImportResult
-import_jarvis_predictions(const std::string &data3d_csv_path,
-                          const std::string &predictions_root,
-                          const std::string &skeleton_name,
-                          const std::vector<CameraParams> &cameras,
-                          const std::vector<std::string> &camera_names,
-                          int img_height,
-                          float conf_threshold = 0.0f) {
-    ImportResult result;
-
-    // Read predictions
-    auto all_preds = read_jarvis_predictions(data3d_csv_path, 0.0f,
-                                              &result.error);
-    if (!result.error.empty()) return result;
-
-    int total = (int)all_preds.size();
-
-    // Filter by confidence
-    std::map<int, Prediction3D> filtered;
-    float conf_sum = 0;
-    for (auto &[fid, pred] : all_preds) {
-        float mean = 0;
-        for (float c : pred.confidences) mean += c;
-        mean /= (float)pred.confidences.size();
-        if (mean >= conf_threshold) {
-            conf_sum += mean;
-            filtered[fid] = std::move(pred);
-        }
-    }
-
-    result.frames_imported = (int)filtered.size();
-    result.frames_filtered = total - result.frames_imported;
-    if (!filtered.empty()) {
-        result.num_keypoints = (int)filtered.begin()->second.positions.size();
-        result.mean_confidence = conf_sum / (float)filtered.size();
-    }
-
-    // Generate timestamped output folder
-    auto now = std::chrono::system_clock::now();
-    auto t = std::chrono::system_clock::to_time_t(now);
-    char buf[32];
-    std::strftime(buf, sizeof(buf), "%Y_%m_%d_%H_%M_%S", std::localtime(&t));
-    result.output_folder = predictions_root + "/" + std::string(buf);
-
-    // Write CSVs
-    if (!write_prediction_csvs(result.output_folder, skeleton_name,
-                                filtered, cameras, camera_names,
-                                img_height, &result.error)) {
-        return result;
     }
 
     return result;

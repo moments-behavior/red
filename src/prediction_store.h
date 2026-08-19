@@ -6,9 +6,9 @@
 // Only 3D + confidence is stored (the video overlay reprojects 3D->2D on the
 // fly), so a frame is 4*num_keypoints float32 = 800 B for 50 keypoints. The
 // store is SPARSE: frames where the subject is out of view / prediction failed
-// are simply absent (frame() returns nullptr), which is the common case for the
-// bout workflow. mmap gives out-of-core access — a 1 hr @ 800 fps video (~2.15 GB
-// dense) pages in only the frames currently on screen.
+// are simply absent (frame() returns nullptr). mmap gives out-of-core access —
+// a 1 hr @ 800 fps video (~2.15 GB dense) pages in only the frames currently
+// on screen.
 //
 // File format (little-endian; native on x86/arm64):
 //   Header (page 0, first 40 bytes used):

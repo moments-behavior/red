@@ -5,9 +5,6 @@
 #include "gui/transport_bar.h"
 #include "gui/jarvis_export_window.h"
 #include "gui/jarvis_import_window.h"
-#include "gui/jarvis_predict_window.h"
-#include "gui/bouts_window.h"
-#include "gui/bout_filter_window.h"
 #include "gui/pose_stats_window.h"
 #include "gui/frame_drops_window.h"
 #include "gui/pump_events_window.h"
@@ -19,9 +16,7 @@
 #include "gui/triangulation_diagnostics_window.h"
 #include "gui/switch_skeleton_window.h"
 
-// Bundle of all tool-window states.  Inference-engine states (JarvisState,
-// JarvisCoreMLState) are intentionally excluded — those are
-// heavyweight runtime objects, not UI window states.
+// Bundle of all tool-window states.
 struct WindowStates {
     LabelingToolState labeling;
     AnnotationDialogState annotation;
@@ -29,12 +24,9 @@ struct WindowStates {
     TransportBarState transport;
     JarvisExportState jarvis_export;
     JarvisImportState jarvis_import;
-    JarvisPredictState jarvis_predict;
     PoseStatsState pose_stats;
     FrameDropsState frame_drops;
     PumpEventsState pump_events;
-    BoutState bouts;
-    BoutFilterState bout_filter;
     ExportWindowState export_win;
     GroupExportState group_export;
     BBoxToolState bbox;
@@ -63,52 +55,14 @@ struct WindowStates {
         jarvis_export.label_display.clear();
         jarvis_export.label_cache_key.clear();
         jarvis_import.show = false;
-        jarvis_import.keypoints3d_path.clear();
+        jarvis_import.data3d_path.clear();
         jarvis_import.done = false;
-        jarvis_import.result = {};
-        jarvis_import.store_to_load.clear();
+        jarvis_import.summary.clear();
         jarvis_import.error.clear();
-        jarvis_predict.show = false;
-        jarvis_predict.predict_requested = false;
-        jarvis_predict.models_folder.clear();
-        jarvis_predict.confidence_threshold = 0.1f;
-        jarvis_predict.convert_job.reset();
-        jarvis_predict.convert_status.clear();
-        jarvis_predict.cached_models_folder.clear();
-        jarvis_predict.cached_has_onnx = false;
-        jarvis_predict.cached_has_pth = false;
-        jarvis_predict.cached_has_coreml = false;
-        jarvis_predict.cached_center_path.clear();
-        jarvis_predict.cached_keypoint_path.clear();
-        jarvis_predict.cached_info_path.clear();
-        jarvis_predict.model_dir_display.clear();
-        jarvis_predict.active_store_path.clear();
-        jarvis_predict.load_store_request.clear();
-        jarvis_predict.import_request.clear();
-        jarvis_predict.import_status.clear();
-        jarvis_predict.store_list.clear();
-        jarvis_predict.store_list_dirty = true;
-        jarvis_predict.store_status.clear();
+        jarvis_import.store_to_load.clear();
         pose_stats = PoseStatsState{};
         frame_drops = FrameDropsState{};
         pump_events = PumpEventsState{};
-        bouts = BoutState{};
-        // Keep scanned profiles + current selection; clear per-store results.
-        bout_filter.inputs = boutfilter::Inputs{};
-        bout_filter.inputs_valid = false;
-        bout_filter.cached_store_path.clear();
-        bout_filter.cached_profile.clear();
-        bout_filter.auto_result = boutfilter::Result{};
-        bout_filter.result = boutfilter::Result{};
-        bout_filter.dirty = true;
-        bout_filter.build_error.clear();
-        bout_filter.export_status.clear();
-        // Clear the manual-edit overlay; it reloads from the new store's
-        // sidecar on the next draw (a store change re-triggers the load).
-        bout_filter.edits = boutfilter::BoutEdits{};
-        bout_filter.edits_dirty = true;
-        bout_filter.edits_save_requested = false;
-        bout_filter.selected_ids.clear();
         export_win.show = false;
         export_win.format_idx = 0;
         export_win.include_video_index = false;

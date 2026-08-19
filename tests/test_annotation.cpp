@@ -3,10 +3,6 @@
 //   - annotation.h: data model, migration, JSON persistence
 //   - export_formats.h: COCO, YOLO, DLC export logic
 //   - obb_tool.h: OBB geometry (calculate, corners, contains)
-
-// Parse-check the JarvisHybridNet header so any syntax errors surface in CI
-// before red.cpp wires it up. The header is no-op on Apple.
-#include "../src/jarvis_hybridnet.h"
 //   - bbox_tool.h: color generation
 //
 // Pure logic tests — no ImGui/ImPlot/GPU context needed.

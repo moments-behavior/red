@@ -61,7 +61,7 @@ struct PumpEventsState {
     std::string status;
     int placed = 0;
 
-    // Consumed by the main loop (same scheme as BoutState).
+    // Consumed by the main loop.
     bool seek_requested = false;
     int  seek_frame = 0;
 };

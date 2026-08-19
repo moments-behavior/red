@@ -8,11 +8,9 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
     auto &annot_state      = win.annotation;
     auto &settings_state   = win.settings;
     auto &jarvis_export_state = win.jarvis_export;
-    auto &jarvis_import_state = win.jarvis_import;
     auto &export_state     = win.export_win;
     auto &bbox_state       = win.bbox;
     auto &obb_state        = win.obb;
-    auto &jarvis_predict_state = win.jarvis_predict;
     auto &triangulation_diag_state = win.triangulation_diag;
     auto &show_help_window = win.show_help;
     auto &pm = ctx.pm;
@@ -111,8 +109,8 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
         if (ImGui::MenuItem("JARVIS Export Tool")) {
             jarvis_export_state.show = true;
         }
-        if (ImGui::MenuItem("Import 3D Predictions")) {
-            jarvis_import_state.show = true;
+        if (ImGui::MenuItem("Import JARVIS Predictions")) {
+            win.jarvis_import.show = true;
         }
         ImGui::EndDisabled();
         ImGui::Separator();
@@ -125,9 +123,6 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
         ImGui::BeginDisabled(is_2d);
         if (ImGui::MenuItem("Midline Tool")) {
             win.midline.show = true;
-        }
-        if (ImGui::MenuItem("JARVIS Predict")) {
-            jarvis_predict_state.show = true;
         }
         ImGui::Separator();
         if (ImGui::MenuItem("Triangulation Diagnostics")) {
@@ -146,12 +141,6 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
         }
         if (ImGui::MenuItem("Frame Drops")) {
             win.frame_drops.show = true;
-        }
-        if (ImGui::MenuItem("Bouts")) {
-            win.bouts.show = true;
-        }
-        if (ImGui::MenuItem("Bout Filter")) {
-            win.bout_filter.show = true;
         }
         if (ImGui::MenuItem("Pump Events")) {
             win.pump_events.show = true;

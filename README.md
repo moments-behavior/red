@@ -13,7 +13,7 @@ Developed at the [Johnson Lab](https://www.janelia.org/lab/johnson-lab), HHMI Ja
 - [Installation](#installation)
 - [Calibration Input](#calibration-input)
 - [Annotation Workflow](#annotation-workflow)
-- [AI-Assisted Labeling (JARVIS)](#ai-assisted-labeling-jarvis)
+- [Training-Data Export](#training-data-export)
 - [Architecture Overview](#architecture-overview)
 - [Supported Animals and Skeletons](#supported-animals-and-skeletons)
 - [Building from Source](#building-from-source)
@@ -28,10 +28,8 @@ Developed at the [Johnson Lab](https://www.janelia.org/lab/johnson-lab), HHMI Ja
 
 - **GPU-accelerated real-time multi-camera playback** -- simultaneous decoding and display of 6-16+ synchronized camera views at full frame rate
 - **2D keypoint annotation with automatic 3D triangulation** -- label keypoints in any camera view and triangulate 3D positions in real time via Eigen-based DLT
-- **AI-assisted labeling via JARVIS pose estimation** -- top-down pose estimation with native CoreML inference on Apple Silicon and ONNX Runtime as a cross-platform fallback
 - **Bounding box and oriented bounding box annotation** -- axis-aligned and rotated bounding box tools for detection tasks
-- **Active learning loop** -- label, export, train, predict, correct: iteratively improve model accuracy with minimal manual effort
-- **Native Apple Silicon support** -- Metal GPU rendering, VideoToolbox hardware decode, CoreML inference (6-20 ms/frame)
+- **Native Apple Silicon support** -- Metal GPU rendering, VideoToolbox hardware decode
 - **Linux support with NVIDIA NVDEC + CUDA pipeline** -- hardware-accelerated decode and NV12-to-RGB conversion on NVIDIA GPUs with OpenGL rendering
 - **Project management** -- switch between projects without restarting the application; per-project layout persistence
 - **Preset skeletons** -- built-in skeleton definitions for rats (4-24 keypoints) and flies (50 keypoints), plus custom JSON skeleton import
@@ -119,7 +117,6 @@ brew install --HEAD JohnsonLabJanelia/red/red
 | `red` binary | `/opt/homebrew/bin/red` | Main application |
 | Font files (4) | `/opt/homebrew/share/red/fonts/` | UI fonts (Roboto, FontAwesome) |
 | `default_imgui_layout.ini` | `/opt/homebrew/share/red/` | Default window layout |
-| `pth_to_coreml.py` | `/opt/homebrew/share/red/scripts/` | PyTorch to CoreML model converter |
 
 ### macOS (Build from Source)
 
@@ -157,7 +154,6 @@ Additional dependencies installed manually:
 | Dependency    | Location                         |
 |---------------|----------------------------------|
 | FFmpeg        | `~/nvidia/ffmpeg/build`          |
-| TensorRT      | `~/nvidia/TensorRT-8.6.1.6`     |
 | LibTorch      | `lib/libtorch` (in source tree)  |
 | CUDA toolkit  | `/usr/local/cuda`                |
 
@@ -179,9 +175,7 @@ cmake --build release -j$(nproc)
 | Storage   | SSD recommended for video playback      | SSD recommended for video playback      |
 | Display   | 1920x1080 minimum                      | 1920x1080 minimum                       |
 
-### Optional: ONNX Runtime (JARVIS ONNX inference)
-
-Download the [ONNX Runtime release](https://github.com/microsoft/onnxruntime/releases) and extract it to `lib/onnxruntime/` in the source tree. The build system detects it automatically and enables ONNX-based JARVIS prediction.
+---
 
 ## Calibration Input
 
@@ -232,50 +226,23 @@ Use the built-in JARVIS/COCO exporter (**File > Export**) or the Python scripts 
 | YOLO          | `data_exporter/yolo_export.py`       | YOLO detection/pose format                    |
 | DLC CSV       | `data_exporter/dlc_export.py`        | DeepLabCut-compatible CSV                     |
 
----
+## Training-Data Export
 
-## AI-Assisted Labeling (JARVIS)
-
-RED integrates JARVIS, a top-down pose estimation framework, to accelerate annotation through an active learning loop.
-
-### The Active Learning Loop
+RED is a labeling and export tool: it produces training data for external
+pose-estimation frameworks but does not run inference itself.
 
 ```
-Label seed frames (manual)
+Label frames in RED (manual)
         |
         v
-Export training data (JARVIS/COCO format)
+Export training data (JARVIS / COCO / DeepLabCut / YOLO / Nerfstudio)
         |
         v
-Train JARVIS model (external)
-        |
-        v
-Import model into RED project
-        |
-        v
-Run predictions on unlabeled frames
-        |
-        v
-Review and correct predictions (manual)
-        |
-        v
-Re-export with corrections --> iterate
+Train a model + run inference (external)
 ```
 
-### Model Formats
-
-| Format   | Platform                | Inference Engine       | Typical Speed       |
-|----------|-------------------------|------------------------|---------------------|
-| CoreML   | macOS (Apple Silicon)   | Native CoreML          | 6-20 ms/frame       |
-| ONNX     | macOS, Linux            | ONNX Runtime           | Varies by hardware   |
-
-CoreML is the preferred backend on Apple Silicon. Models are stored per-project under a `jarvis_models/` subdirectory and registered in the `.redproj` file.
-
-### Using JARVIS in RED
-
-1. **Import a model** -- from the JARVIS Predict window, select a model directory containing the CoreML or ONNX model files and a `config.json` describing the model architecture (number of joints, input sizes).
-2. **Run predictions** -- choose a frame range and click Predict. RED runs the center detector and keypoint estimator on each frame.
-3. **Review results** -- predicted keypoints appear with a confidence score. Accept, adjust, or delete predictions frame by frame.
+See [Export Training Data](#4-export-training-data) for the format table and
+**Tools → Group JARVIS Export** for merging several projects into one dataset.
 
 ---
 
@@ -331,8 +298,6 @@ Label provenance is tracked per keypoint (`Manual`, `Predicted`, `Imported`).
 | `src/vt_async_decoder.h` / `.mm` | Async VideoToolbox decoder with PTS reorder queue  |
 | `src/decoder.h` / `.cpp`    | NVIDIA NVDEC hardware decoder (Linux)                    |
 | `src/render.h` / `.cpp`     | Texture/PBO pipeline (Metal on macOS, OpenGL on Linux)   |
-| `src/jarvis_coreml.h` / `.mm` | Native CoreML inference on Apple Silicon              |
-| `src/jarvis_inference.h`    | ONNX Runtime inference                                   |
 | `src/jarvis_export.h`       | JARVIS/COCO export                                       |
 | `src/gui/`                  | 25 modular GUI files (ImGui windows, menus, panels)      |
 
@@ -395,7 +360,6 @@ Load it in the New Project dialog by selecting "Load from JSON" and pointing to 
 | GLEW            | Not needed (Metal backend)  | `apt install libglew-dev`          |
 | OpenCV          | Not needed                  | `apt install libopencv-dev`        |
 | CUDA toolkit    | Not needed                  | NVIDIA CUDA toolkit                |
-| TensorRT        | Not needed                  | `~/nvidia/TensorRT-8.6.1.6`       |
 
 ### Build Commands
 
@@ -439,10 +403,6 @@ my_project/
     cam1_frame_0001.csv    # Per-frame CSV with 2D/3D keypoints
     cam1_frame_0002.csv
     ...
-  jarvis_models/           # Imported JARVIS models (optional)
-    mouseJan30/
-      config.json
-      model.mlpackage/     # CoreML model
   imgui_layout.ini         # Per-project UI layout
 ```
 

@@ -195,7 +195,6 @@ void seek_all_cameras(RenderScene *scene, int frame_number, double video_fps,
     state.last_frame_num_playspeed = frame_number;
     state.last_wall_time_playspeed = std::chrono::steady_clock::now();
 
-    state.loop_bout = false;  // any seek cancels bout looping; re-armed by the caller if intended
 }
 
 std::vector<std::string> string_split(std::string s, std::string delimiter) {
