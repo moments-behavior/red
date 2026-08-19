@@ -149,15 +149,18 @@ inline void DrawKeypointsWindow(AppContext &ctx) {
                     ImGui::PushID(row);
                     ImGui::TableNextRow();
 
-                    if (row < (int)is_view_focused.size() &&
-                        is_view_focused[row] && keypoints_find) {
-                        ImU32 row_bg_color = ImGui::GetColorU32(
-                            ImVec4(0.7f, 0.3f, 0.3f, 0.65f));
-                        ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,
-                                               row_bg_color);
-                    }
+                    const bool row_focused =
+                        row < (int)is_view_focused.size() &&
+                        is_view_focused[row] && keypoints_find;
 
                     ImGui::TableSetColumnIndex(0);
+                    // Highlight only the camera-name cell, not the whole row:
+                    // tinting every column fights with the per-cell keypoint
+                    // state colors drawn below.
+                    if (row_focused)
+                        ImGui::TableSetBgColor(
+                            ImGuiTableBgTarget_CellBg,
+                            ImGui::GetColorU32(ImVec4(0.7f, 0.3f, 0.3f, 0.65f)));
                     if (first_body_top < 0.0f)
                         first_body_top = ImGui::GetCursorScreenPos().y;
                     ImGui::AlignTextToFramePadding();
