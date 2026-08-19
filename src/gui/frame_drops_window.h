@@ -18,6 +18,17 @@
 
 #include "imgui.h"
 #include "implot.h"
+
+// ImPlot v1.0 obsoleted SetNextLineStyle()/SetNextMarkerStyle(); item styling is
+// now passed per-call via ImPlotSpec. Built here in a C++17-friendly way
+// (designated initialisers would need C++20).
+static inline ImPlotSpec red_line_spec(const ImVec4 &col, float weight) {
+    ImPlotSpec s;
+    s.LineColor = col;
+    s.LineWeight = weight;
+    return s;
+}
+
 #include "app_context.h"
 #include "global.h"
 #include "gui/panel.h"
@@ -276,8 +287,8 @@ inline void DrawFrameDropsWindow(FrameDropsState &st, AppContext &ctx) {
 
                 // Current-frame cursor.
                 double cf = (double)cursor_slot;
-                ImPlot::SetNextLineStyle(ImVec4(1.0f, 0.85f, 0.2f, 0.9f), 1.5f);
-                ImPlot::PlotInfLines("##current", &cf, 1);
+                ImPlot::PlotInfLines("##current", &cf, 1,
+                                     red_line_spec(ImVec4(1.0f, 0.85f, 0.2f, 0.9f), 1.5f));
 
                 // Hover tooltip: which camera lane, which gap (with slop for
                 // the 2 px minimum mark width).
@@ -334,20 +345,20 @@ inline void DrawFrameDropsWindow(FrameDropsState &st, AppContext &ctx) {
                                   ImPlotAxisFlags_AutoFit);
                 ImPlot::SetupLegend(ImPlotLocation_NorthEast);
 
-                ImPlot::SetNextLineStyle(ImVec4(1, 1, 1, 1), 2.0f);
                 ImPlot::PlotLine("All", st.bucket_x.data(),
-                                 st.agg_lost.data(), st.num_buckets);
+                                 st.agg_lost.data(), st.num_buckets,
+                                     red_line_spec(ImVec4(1, 1, 1, 1), 2.0f));
                 for (int i = 0; i < n_cams; ++i) {
-                    ImPlot::SetNextLineStyle(ImPlot::GetColormapColor(i), 1.0f);
                     ImPlot::PlotLine(
                         st.cam_names[i].c_str(), st.bucket_x.data(),
                         st.per_cam_lost.data() + (size_t)i * st.num_buckets,
-                        st.num_buckets);
+                        st.num_buckets,
+                                         red_line_spec(ImPlot::GetColormapColor(i), 1.0f));
                 }
 
                 double cf = (double)cursor_slot;
-                ImPlot::SetNextLineStyle(ImVec4(1.0f, 0.85f, 0.2f, 0.9f), 1.5f);
-                ImPlot::PlotInfLines("##current", &cf, 1);
+                ImPlot::PlotInfLines("##current", &cf, 1,
+                                     red_line_spec(ImVec4(1.0f, 0.85f, 0.2f, 0.9f), 1.5f));
 
                 frame_drops_plot_input(st, plan.canonical_len);
                 ImPlot::EndPlot();

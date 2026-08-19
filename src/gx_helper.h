@@ -5,7 +5,6 @@
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "implot.h"
-#include "implot3d.h"
 #include "types.h"
 #include <cstdio>
 #include <filesystem>
@@ -105,7 +104,6 @@ inline void gx_imgui_init(gx_context *context) {
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImPlotContext *implotCtx = ImPlot::CreateContext();
-    ImPlot3D::CreateContext();
 
     ImGuiIO &io = ImGui::GetIO();
     (void)io;
@@ -123,7 +121,8 @@ inline void gx_imgui_init(gx_context *context) {
     ImGui_ImplGlfw_InitForOther(context->render_target, true);
     metal_init_imgui();
     // Note: macOS screen recording modifier key fix is in
-    // imgui_impl_glfw_patched.cpp (CoreGraphics hardware key state query).
+    // mac_modifier_fix.h (CoreGraphics hardware key state query, applied each
+    // frame between ImGui_ImplGlfw_NewFrame() and ImGui::NewFrame()).
 
     // Override GLFW focus callback to prevent macOS screen recording
     // (Cmd+Shift+5) from corrupting ImGui state. The focus-lost event

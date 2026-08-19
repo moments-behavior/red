@@ -1,6 +1,7 @@
 #define IMGUI_DEFINE_MATH_OPERATORS
 #include "imgui.h"
 #include "imgui_internal.h"
+#include "mac_modifier_fix.h"
 #include "IconsForkAwesome.h"
 #include "camera.h"
 #include "filesystem"
@@ -595,6 +596,11 @@ int main(int argc, char **argv) {
         ImGui_ImplOpenGL3_NewFrame();
 #endif
         ImGui_ImplGlfw_NewFrame();
+
+        // Override the backend's cached modifier state with the real hardware
+        // state (macOS only; no-op elsewhere). Must sit between the backend's
+        // NewFrame and ImGui::NewFrame so these events are queued last and win.
+        red_sync_mac_modifiers();
 
         ImGui::NewFrame();
 

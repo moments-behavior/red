@@ -127,9 +127,9 @@ inline void obb_draw_overlays(OBBToolState &state, const BBoxToolState &bbox_sta
                 double xs[5], ys[5];
                 obb_get_corners(plot_cx, plot_cy, cam.extras->obb_w, cam.extras->obb_h, angle, xs, ys);
 
-                ImPlot::PushStyleColor(ImPlotCol_Line, color);
-                ImPlot::PlotLine("##obb", xs, ys, 5);
-                ImPlot::PopStyleColor();
+                ImPlotSpec ospec;
+                ospec.LineColor = color;
+                ImPlot::PlotLine("##obb", xs, ys, 5, ospec);
 
                 if (bbox_state.show_ids) {
                     char label[64];
@@ -150,13 +150,14 @@ draw_construction:
         ImPlotPoint mouse = ImPlot::GetPlotMousePos();
         double xs[] = {state.ax1_x, mouse.x};
         double ys[] = {state.ax1_y, mouse.y};
-        ImPlot::PushStyleColor(ImPlotCol_Line, ImVec4(1, 0.3f, 0.3f, 1));
-        ImPlot::PlotLine("##obb_ax", xs, ys, 2);
-        ImPlot::PopStyleColor();
+        ImPlotSpec axspec;
+        axspec.LineColor = ImVec4(1, 0.3f, 0.3f, 1);
+        ImPlot::PlotLine("##obb_ax", xs, ys, 2, axspec);
         // Marker at first point
-        ImPlot::PushStyleColor(ImPlotCol_MarkerFill, ImVec4(1, 0, 0, 1));
-        ImPlot::PlotScatter("##obb_p1", &state.ax1_x, &state.ax1_y, 1);
-        ImPlot::PopStyleColor();
+        ImPlotSpec p1spec;
+        p1spec.Marker = ImPlotMarker_Circle;
+        p1spec.MarkerFillColor = ImVec4(1, 0, 0, 1);
+        ImPlot::PlotScatter("##obb_p1", &state.ax1_x, &state.ax1_y, 1, p1spec);
     }
     else if (state.draw_state == OBBDrawState::SecondPoint) {
         // Show both axis points + axis line + rectangle preview
@@ -165,9 +166,9 @@ draw_construction:
         // Axis line
         double ax_xs[] = {state.ax1_x, state.ax2_x};
         double ax_ys[] = {state.ax1_y, state.ax2_y};
-        ImPlot::PushStyleColor(ImPlotCol_Line, ImVec4(0.3f, 1, 0.3f, 1));
-        ImPlot::PlotLine("##obb_axis", ax_xs, ax_ys, 2);
-        ImPlot::PopStyleColor();
+        ImPlotSpec axis_spec;
+        axis_spec.LineColor = ImVec4(0.3f, 1, 0.3f, 1);
+        ImPlot::PlotLine("##obb_axis", ax_xs, ax_ys, 2, axis_spec);
 
         // Preview rectangle
         double cx, cy, w, h, angle;
@@ -178,17 +179,18 @@ draw_construction:
         if (w > 0 && h > 0) {
             double xs[5], ys[5];
             obb_get_corners(cx, cy, w, h, angle, xs, ys);
-            ImPlot::PushStyleColor(ImPlotCol_Line, ImVec4(1, 1, 0, 0.7f));
-            ImPlot::PlotLine("##obb_preview", xs, ys, 5);
-            ImPlot::PopStyleColor();
+            ImPlotSpec pvspec;
+            pvspec.LineColor = ImVec4(1, 1, 0, 0.7f);
+            ImPlot::PlotLine("##obb_preview", xs, ys, 5, pvspec);
         }
 
         // Markers
         double mx[] = {state.ax1_x, state.ax2_x};
         double my[] = {state.ax1_y, state.ax2_y};
-        ImPlot::PushStyleColor(ImPlotCol_MarkerFill, ImVec4(0, 1, 0, 1));
-        ImPlot::PlotScatter("##obb_pts", mx, my, 2);
-        ImPlot::PopStyleColor();
+        ImPlotSpec ptspec;
+        ptspec.Marker = ImPlotMarker_Circle;
+        ptspec.MarkerFillColor = ImVec4(0, 1, 0, 1);
+        ImPlot::PlotScatter("##obb_pts", mx, my, 2, ptspec);
     }
 }
 

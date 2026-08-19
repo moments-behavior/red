@@ -8,6 +8,17 @@
 #include "IconsForkAwesome.h"
 #include "implot.h"
 #include "implot_internal.h"
+
+// ImPlot v1.0 obsoleted SetNextLineStyle()/SetNextMarkerStyle(); item styling is
+// now passed per-call via ImPlotSpec. Built here in a C++17-friendly way
+// (designated initialisers would need C++20).
+static inline ImPlotSpec red_line_spec(const ImVec4 &col, float weight) {
+    ImPlotSpec s;
+    s.LineColor = col;
+    s.LineWeight = weight;
+    return s;
+}
+
 #include <imgui.h>
 #include <ctime>
 
@@ -582,36 +593,36 @@ inline void DrawLabelingToolWindow(
 
                 // Current frame indicator
                 double cf = (double)current_frame_num;
-                ImPlot::SetNextLineStyle(ImVec4(1, 1, 1, 0.4f), 1.0f);
-                ImPlot::PlotInfLines("##current", &cf, 1);
+                ImPlot::PlotInfLines("##current", &cf, 1,
+                                     red_line_spec(ImVec4(1, 1, 1, 0.4f), 1.0f));
 
                 // Keypoint ticks: yellow=some untriangulated, purple=all placed
                 // triangulated, green=complete.
                 if (!kp_yellow_x.empty()) {
-                    ImPlot::SetNextLineStyle(color_yellow, 2.0f);
                     ImPlot::PlotInfLines("##kp_yellow", kp_yellow_x.data(),
-                                         (int)kp_yellow_x.size());
+                                         (int)kp_yellow_x.size(),
+                                         red_line_spec(color_yellow, 2.0f));
                 }
                 if (!kp_purple_x.empty()) {
-                    ImPlot::SetNextLineStyle(color_purple, 2.0f);
                     ImPlot::PlotInfLines("##kp_purple", kp_purple_x.data(),
-                                         (int)kp_purple_x.size());
+                                         (int)kp_purple_x.size(),
+                                         red_line_spec(color_purple, 2.0f));
                 }
                 if (!green_x.empty()) {
-                    ImPlot::SetNextLineStyle(color_green, 2.0f);
-                    ImPlot::PlotInfLines("##green", green_x.data(), (int)green_x.size());
+                    ImPlot::PlotInfLines("##green", green_x.data(), (int)green_x.size(),
+                                         red_line_spec(color_green, 2.0f));
                 }
 
                 // BBox ticks (purple)
                 if (!purple_x.empty()) {
-                    ImPlot::SetNextLineStyle(color_purple, 2.0f);
-                    ImPlot::PlotInfLines("##bbox", purple_x.data(), (int)purple_x.size());
+                    ImPlot::PlotInfLines("##bbox", purple_x.data(), (int)purple_x.size(),
+                                         red_line_spec(color_purple, 2.0f));
                 }
 
                 // OBB ticks (lilac)
                 if (!lilac_x.empty()) {
-                    ImPlot::SetNextLineStyle(color_lilac, 2.0f);
-                    ImPlot::PlotInfLines("##obb", lilac_x.data(), (int)lilac_x.size());
+                    ImPlot::PlotInfLines("##obb", lilac_x.data(), (int)lilac_x.size(),
+                                         red_line_spec(color_lilac, 2.0f));
                 }
 
                 // Double-click to reset to full video range

@@ -86,16 +86,19 @@ inline void midline_draw_overlay(MidlineToolState &state, const AnnotationMap &a
     ImVec4 col(1.0f, 0.55f, 0.1f, 1.0f);
     if (m.has_line) {
         double xs[2]{m.p1x, m.p2x}, ys[2]{m.p1y, m.p2y};
-        ImPlot::PushStyleColor(ImPlotCol_Line, col);
-        ImPlot::PlotLine("##midline_seg", xs, ys, 2);
-        ImPlot::PopStyleColor();
+        ImPlotSpec seg_spec;
+        seg_spec.LineColor = col;
+        ImPlot::PlotLine("##midline_seg", xs, ys, 2, seg_spec);
     }
     double ex[2]{m.p1x, m.p2x}, ey[2]{m.p1y, m.p2y};
-    ImPlot::PushStyleColor(ImPlotCol_MarkerFill, col);
-    ImPlot::PushStyleColor(ImPlotCol_MarkerOutline, col);
-    ImPlot::SetNextMarkerStyle(ImPlotMarker_Circle, 5.0f);
-    ImPlot::PlotScatter("##midline_ends", ex, ey, m.has_line ? 2 : 1);
-    ImPlot::PopStyleColor(2);
+    // ImPlot v1.0: marker styling and item colors both moved into ImPlotSpec
+    // (SetNextMarkerStyle and ImPlotCol_Marker* are gone).
+    ImPlotSpec mspec;
+    mspec.Marker = ImPlotMarker_Circle;
+    mspec.MarkerSize = 5.0f;
+    mspec.MarkerFillColor = col;
+    mspec.MarkerLineColor = col;
+    ImPlot::PlotScatter("##midline_ends", ex, ey, m.has_line ? 2 : 1, mspec);
 }
 
 // Settings panel for the midline tool.

@@ -70,12 +70,14 @@ inline void bbox_draw_overlays(BBoxToolState &state, const AnnotationMap &amap,
     double y1_plot = img_h - y2_img;
     double y2_plot = img_h - y1_img;
 
-    ImPlot::PushStyleColor(ImPlotCol_Fill, ImVec4(color.x, color.y, color.z, 0.15f));
-    ImPlot::PushStyleColor(ImPlotCol_Line, color);
+    // ImPlot v1.0: item colors moved from PushStyleColor(ImPlotCol_Line/Fill)
+    // to a per-call ImPlotSpec.
     double xs[] = {x1, x2, x2, x1, x1};
     double ys[] = {y1_plot, y1_plot, y2_plot, y2_plot, y1_plot};
-    ImPlot::PlotLine("##bbox", xs, ys, 5);
-    ImPlot::PopStyleColor(2);
+    ImPlotSpec bspec;
+    bspec.LineColor = color;
+    bspec.FillColor = ImVec4(color.x, color.y, color.z, 0.15f);
+    ImPlot::PlotLine("##bbox", xs, ys, 5, bspec);
 
     // Label
     if (state.show_ids) {
@@ -92,9 +94,9 @@ inline void bbox_draw_overlays(BBoxToolState &state, const AnnotationMap &amap,
         double dxs[] = {state.start_x, mouse.x, mouse.x, state.start_x, state.start_x};
         double dys[] = {state.start_y, state.start_y, mouse.y, mouse.y, state.start_y};
         ImVec4 c = state.class_colors[state.current_class];
-        ImPlot::PushStyleColor(ImPlotCol_Line, c);
-        ImPlot::PlotLine("##bbox_new", dxs, dys, 5);
-        ImPlot::PopStyleColor();
+        ImPlotSpec nspec;
+        nspec.LineColor = c;
+        ImPlot::PlotLine("##bbox_new", dxs, dys, 5, nspec);
     }
 }
 

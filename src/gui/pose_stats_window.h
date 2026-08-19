@@ -14,6 +14,17 @@
 
 #include "imgui.h"
 #include "implot.h"
+
+// ImPlot v1.0 obsoleted SetNextLineStyle()/SetNextMarkerStyle(); item styling is
+// now passed per-call via ImPlotSpec. Built here in a C++17-friendly way
+// (designated initialisers would need C++20).
+static inline ImPlotSpec red_line_spec(const ImVec4 &col, float weight) {
+    ImPlotSpec s;
+    s.LineColor = col;
+    s.LineWeight = weight;
+    return s;
+}
+
 #include "skeleton.h"
 #include "prediction_store.h"
 #include "gui/panel.h"
@@ -233,9 +244,9 @@ inline void DrawPoseStatsWindow(PoseStatsState &st,
             ImPlot::SetupAxisLimits(ImAxis_Y1, 0.0, 1.0, ImPlotCond_Always);
 
             // Overall mean (bold white).
-            ImPlot::SetNextLineStyle(ImVec4(1, 1, 1, 1), 2.0f);
             ImPlot::PlotLine("Mean", st.bucket_x.data(),
-                             st.overall_mean.data(), st.num_buckets);
+                             st.overall_mean.data(), st.num_buckets,
+                                 red_line_spec(ImVec4(1, 1, 1, 1), 2.0f));
 
             // Selected per-keypoint lines, in their skeleton colors.
             for (int k = 0; k < st.num_kp; ++k) {
@@ -246,16 +257,16 @@ inline void DrawPoseStatsWindow(PoseStatsState &st,
                 std::string name = (k < (int)skel.node_names.size())
                                        ? skel.node_names[k]
                                        : ("kp" + std::to_string(k));
-                ImPlot::SetNextLineStyle(col, 1.0f);
                 ImPlot::PlotLine(name.c_str(), st.bucket_x.data(),
                                  st.per_kp_mean.data() + (size_t)k * st.num_buckets,
-                                 st.num_buckets);
+                                 st.num_buckets,
+                                     red_line_spec(col, 1.0f));
             }
 
             // Current-frame marker.
             double cf = (double)current_frame_num;
-            ImPlot::SetNextLineStyle(ImVec4(1.0f, 0.85f, 0.2f, 0.9f), 1.5f);
-            ImPlot::PlotInfLines("##current", &cf, 1);
+            ImPlot::PlotInfLines("##current", &cf, 1,
+                                 red_line_spec(ImVec4(1.0f, 0.85f, 0.2f, 0.9f), 1.5f));
 
             // Single click (no drag) seeks; a second click while that seek is
             // still pending is a double-click → reset the view to full range;

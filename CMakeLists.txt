@@ -40,7 +40,6 @@ if(APPLE)
 
     set(DIR_IMGUI "${CMAKE_SOURCE_DIR}/lib/imgui")
     set(DIR_IMPLOT "${CMAKE_SOURCE_DIR}/lib/implot")
-    set(DIR_IMPLOT3D "${CMAKE_SOURCE_DIR}/lib/implot3d")
 
     # Use 32-bit vertex indices for ImGui/ImPlot3D to support large meshes.
     # Default 16-bit indices cap at 65K vertices — with circle markers (~50
@@ -59,21 +58,18 @@ if(APPLE)
 
     file(GLOB IMGUI_SRC
         ${DIR_IMGUI}/*.cpp
-        ${CMAKE_SOURCE_DIR}/src/imgui_impl_glfw_patched.cpp  # patched: macOS modifier key fix
+        ${DIR_IMGUI}/backends/imgui_impl_glfw.cpp
         ${DIR_IMGUI}/backends/imgui_impl_metal.mm
         ${DIR_IMGUI}/misc/cpp/imgui_stdlib.cpp
         ${DIR_FILEBROWSER}/ImGuiFileDialog.cpp
     )
     file(GLOB IMPLOT_SRC ${DIR_IMPLOT}/*.cpp)
-    file(GLOB IMPLOT3D_SRC ${DIR_IMPLOT3D}/*.cpp)
-    list(REMOVE_ITEM IMPLOT3D_SRC "${DIR_IMPLOT3D}/implot3d_demo.cpp")
 
     add_executable(red
         ${SRC_FILES}
         ${MM_SRC_FILES}
         ${IMGUI_SRC}
         ${IMPLOT_SRC}
-        ${IMPLOT3D_SRC}
     )
 
     target_include_directories(red PRIVATE
@@ -81,7 +77,6 @@ if(APPLE)
         ${DIR_IMGUI}
         ${DIR_IMGUI}/backends
         ${DIR_IMPLOT}
-        ${DIR_IMPLOT3D}
         ${DIR_FILEBROWSER}
         lib/nvcodec
         lib/IconFontCppHeaders
@@ -103,6 +98,10 @@ if(APPLE)
         "-framework CoreFoundation"
         "-framework Accelerate"
         "-framework CoreVideo"
+        # Explicit: red.cpp calls CGEventSourceFlagsState() via
+        # mac_modifier_fix.h. It previously resolved transitively through
+        # Cocoa, which is fragile to rely on.
+        "-framework CoreGraphics"
         "-framework Cocoa"
         ${FFMPEG_LIBRARIES}
         ${TURBOJPEG_LIBRARIES}
@@ -134,7 +133,6 @@ if(APPLE)
         ${MM_SRC_FILES}
         ${IMGUI_SRC}
         ${IMPLOT_SRC}
-        ${IMPLOT3D_SRC}
         tests/test_gui.cpp
     )
 
@@ -143,7 +141,6 @@ if(APPLE)
         ${DIR_IMGUI}
         ${DIR_IMGUI}/backends
         ${DIR_IMPLOT}
-        ${DIR_IMPLOT3D}
         ${DIR_FILEBROWSER}
         lib/nvcodec
         lib/IconFontCppHeaders
@@ -190,7 +187,6 @@ if(APPLE)
         ${MM_SRC_FILES}
         ${IMGUI_SRC}
         ${IMPLOT_SRC}
-        ${IMPLOT3D_SRC}
         tests/test_annotation.cpp
     )
     target_include_directories(test_annotation PRIVATE
@@ -198,7 +194,6 @@ if(APPLE)
         ${DIR_IMGUI}
         ${DIR_IMGUI}/backends
         ${DIR_IMPLOT}
-        ${DIR_IMPLOT3D}
         ${DIR_FILEBROWSER}
         lib/nvcodec
         lib/IconFontCppHeaders
@@ -403,7 +398,6 @@ elseif(WIN32)
     # ImGui / ImPlot / etc
     set(DIR_IMGUI "${CMAKE_SOURCE_DIR}/lib/imgui")
     set(DIR_IMPLOT "${CMAKE_SOURCE_DIR}/lib/implot")
-    set(DIR_IMPLOT3D "${CMAKE_SOURCE_DIR}/lib/implot3d")
     set(DIR_FILEBROWSER "${CMAKE_SOURCE_DIR}/lib/ImGuiFileDialog")
     set(DIR_ICONFONT "${CMAKE_SOURCE_DIR}/lib/IconFontCppHeaders")
 
@@ -412,15 +406,12 @@ elseif(WIN32)
 
     file(GLOB IMGUI_SRC
         ${DIR_IMGUI}/*.cpp
-        # Use patched GLFW backend from src/ (picked up by SRC_FILES glob)
-        # instead of stock imgui_impl_glfw.cpp — has Windows + macOS fixes
+        ${DIR_IMGUI}/backends/imgui_impl_glfw.cpp
         ${DIR_IMGUI}/backends/imgui_impl_opengl3.cpp
         ${DIR_IMGUI}/misc/cpp/imgui_stdlib.cpp
         ${DIR_FILEBROWSER}/ImGuiFileDialog.cpp
     )
     file(GLOB IMPLOT_SRC ${DIR_IMPLOT}/*.cpp)
-    file(GLOB IMPLOT3D_SRC ${DIR_IMPLOT3D}/*.cpp)
-    list(REMOVE_ITEM IMPLOT3D_SRC "${DIR_IMPLOT3D}/implot3d_demo.cpp")
 
     # CUDA source files
     set(CUDA_SRC_FILES
@@ -434,7 +425,6 @@ elseif(WIN32)
         ${SRC_FILES}
         ${IMGUI_SRC}
         ${IMPLOT_SRC}
-        ${IMPLOT3D_SRC}
         ${CUDA_SRC_FILES}
     )
 
@@ -452,7 +442,6 @@ elseif(WIN32)
         ${DIR_IMGUI}
         ${DIR_IMGUI}/backends
         ${DIR_IMPLOT}
-        ${DIR_IMPLOT3D}
         ${DIR_FILEBROWSER}
         ${DIR_ICONFONT}
         ${DIR_NVCODEC}
@@ -526,7 +515,6 @@ elseif(WIN32)
             ${TEST_GUI_SRC_FILES}
             ${IMGUI_SRC}
             ${IMPLOT_SRC}
-            ${IMPLOT3D_SRC}
             ${CUDA_SRC_FILES}
             tests/${TEST_NAME}.cpp
         )
@@ -537,7 +525,6 @@ elseif(WIN32)
             ${DIR_IMGUI}
             ${DIR_IMGUI}/backends
             ${DIR_IMPLOT}
-            ${DIR_IMPLOT3D}
             ${DIR_FILEBROWSER}
             ${DIR_ICONFONT}
             ${DIR_NVCODEC}
@@ -644,7 +631,6 @@ else()
     # Bundled third-party sources
     set(DIR_IMGUI "${CMAKE_SOURCE_DIR}/lib/imgui")
     set(DIR_IMPLOT "${CMAKE_SOURCE_DIR}/lib/implot")
-    set(DIR_IMPLOT3D "${CMAKE_SOURCE_DIR}/lib/implot3d")
     set(DIR_FILEBROWSER "${CMAKE_SOURCE_DIR}/lib/ImGuiFileDialog")
     set(DIR_ICONFONT "${CMAKE_SOURCE_DIR}/lib/IconFontCppHeaders")
     set(DIR_NVCODEC "${CMAKE_SOURCE_DIR}/lib/nvcodec")
@@ -654,14 +640,12 @@ else()
 
     file(GLOB IMGUI_SRC
         ${DIR_IMGUI}/*.cpp
-        # Patched GLFW backend picked up via src/*.cpp glob
+        ${DIR_IMGUI}/backends/imgui_impl_glfw.cpp
         ${DIR_IMGUI}/backends/imgui_impl_opengl3.cpp
         ${DIR_IMGUI}/misc/cpp/imgui_stdlib.cpp
         ${DIR_FILEBROWSER}/ImGuiFileDialog.cpp
     )
     file(GLOB IMPLOT_SRC ${DIR_IMPLOT}/*.cpp)
-    file(GLOB IMPLOT3D_SRC ${DIR_IMPLOT3D}/*.cpp)
-    list(REMOVE_ITEM IMPLOT3D_SRC "${DIR_IMPLOT3D}/implot3d_demo.cpp")
 
     set(CUDA_SRC_FILES
         src/create_image_cuda.cu
@@ -673,7 +657,6 @@ else()
         ${SRC_FILES}
         ${IMGUI_SRC}
         ${IMPLOT_SRC}
-        ${IMPLOT3D_SRC}
         ${CUDA_SRC_FILES}
     )
 
@@ -687,7 +670,6 @@ else()
         ${DIR_IMGUI}
         ${DIR_IMGUI}/backends
         ${DIR_IMPLOT}
-        ${DIR_IMPLOT3D}
         ${DIR_FILEBROWSER}
         ${DIR_ICONFONT}
         ${DIR_NVCODEC}
@@ -747,7 +729,6 @@ else()
             ${TEST_GUI_SRC_FILES}
             ${IMGUI_SRC}
             ${IMPLOT_SRC}
-            ${IMPLOT3D_SRC}
             ${CUDA_SRC_FILES}
             tests/${TEST_NAME}.cpp
         )
@@ -757,7 +738,6 @@ else()
             ${DIR_IMGUI}
             ${DIR_IMGUI}/backends
             ${DIR_IMPLOT}
-            ${DIR_IMPLOT3D}
             ${DIR_FILEBROWSER}
             ${DIR_ICONFONT}
             ${DIR_NVCODEC}

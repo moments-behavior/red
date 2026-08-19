@@ -92,7 +92,7 @@ red/
 │   ├── metal_context.{h,mm}       # Metal context + texture cache (macOS only)
 │   ├── jarvis_export.h            # JARVIS/COCO training-data export
 │   ├── export_formats.h           # COCO / DLC / YOLO / Nerfstudio export
-│   ├── imgui_impl_glfw_patched.cpp # patched GLFW backend (mac modifier-key + Win fixes)
+│   ├── mac_modifier_fix.h         # macOS stuck-modifier fix (no backend fork)
 │   ├── kernel.cu / ColorSpace.cu / create_image_cuda.cu   # CUDA kernels (Linux/Win)
 │   └── gui/                       # ~38 modular window/panel files (state + Draw())
 ├── lib/                    # bundled deps (submodules)
