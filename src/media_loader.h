@@ -4,6 +4,9 @@
 #include "render.h"
 #include "utils.h"
 #include <algorithm>
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <map>
 #include <string>
@@ -14,6 +17,25 @@
 #include <CoreFoundation/CoreFoundation.h>
 #endif
 #include "../lib/ImGuiFileDialog/stb/stb_image.h"
+
+
+// ── Load timing instrumentation ────────────────────────────────────────────
+// Project load is synchronous (no frames are presented while it runs), so the
+// only way to know where the wait goes is to measure it. Each stage prints one
+// line; set RED_LOAD_TIMING=0 in the environment to silence them.
+namespace load_timing {
+using Clock = std::chrono::steady_clock;
+inline double ms(Clock::time_point t0) {
+    return std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
+}
+inline bool enabled() {
+    static const bool on = [] {
+        const char *e = std::getenv("RED_LOAD_TIMING");
+        return !(e && e[0] == '0');
+    }();
+    return on;
+}
+}  // namespace load_timing
 
 // Tear down existing media (decoder threads, demuxers, scene memory)
 // so that load_images or load_videos can be called cleanly.
@@ -303,6 +325,10 @@ load_videos(std::map<std::string, std::string> &selected_files,
     // camera_names stays in sync with demuxers after skipping failures.
     std::vector<std::string> loaded_cam_names;
 
+    const auto t_videos_start = load_timing::Clock::now();
+    double t_open = 0, t_keyframe = 0, t_alloc = 0, t_sync = 0, t_threads = 0;
+    auto t_stage = load_timing::Clock::now();
+
     if (selected_files.empty()) {
         for (const auto &cam_string : pm.camera_names) {
             std::map<std::string, std::string> m;
@@ -327,12 +353,15 @@ load_videos(std::map<std::string, std::string> &selected_files,
                           << "': " << e.what() << std::endl;
             }
         }
+        t_open = load_timing::ms(t_stage);
+        t_stage = load_timing::Clock::now();
         // Use the first successfully loaded demuxer for seek_interval/fps
         if (!demuxers.empty()) {
             dc_context->seek_interval =
                 (int)demuxers[0]->FindKeyFrameInterval();
             dc_context->video_fps = demuxers[0]->GetFramerate();
         }
+        t_keyframe = load_timing::ms(t_stage);
         pm.camera_names = loaded_cam_names;
     } else {
         for (const auto &elem : selected_files) {
@@ -359,11 +388,14 @@ load_videos(std::map<std::string, std::string> &selected_files,
                           << std::endl;
             }
         }
+        t_open = load_timing::ms(t_stage);
+        t_stage = load_timing::Clock::now();
         if (!demuxers.empty()) {
             dc_context->seek_interval =
                 (int)demuxers[0]->FindKeyFrameInterval();
             dc_context->video_fps = demuxers[0]->GetFramerate();
         }
+        t_keyframe = load_timing::ms(t_stage);
         pm.camera_names = loaded_cam_names;
     }
 
@@ -394,13 +426,17 @@ load_videos(std::map<std::string, std::string> &selected_files,
                       << " — wrong calibration for this crop?" << std::endl;
         }
     }
+    t_stage = load_timing::Clock::now();
     render_allocate_scene_memory(scene, label_buffer_size);
+    t_alloc = load_timing::ms(t_stage);
 
     // Desync fix: build/import the sync plan and apply the persisted toggle
     // BEFORE the decoder threads spawn (they sample the mode at start).
     // A clean plan is an identity mapping — leave the fix off so playback
     // keeps fast (non-accurate) seeks.
+    t_stage = load_timing::Clock::now();
     sync_fix_load_plan(pm.media_folder, pm.camera_names, demuxers);
+    t_sync = load_timing::ms(t_stage);
     const sync_plan::SyncPlan &splan = g_sync_fix.plan;
     bool sync_enable = pm.sync_fix_enabled && splan.usable() &&
                        splan.status != sync_plan::Status::Clean;
@@ -414,6 +450,7 @@ load_videos(std::map<std::string, std::string> &selected_files,
         dc_context->video_fps = 1e9 / (double)splan.delta_ns;
     }
 
+    t_stage = load_timing::Clock::now();
     for (int i = 0; i < scene->num_cams; i++) {
         const sync_plan::SyncCam *sync_cam =
             splan.usable() ? splan.cam(pm.camera_names[i]) : nullptr;
@@ -423,5 +460,15 @@ load_videos(std::map<std::string, std::string> &selected_files,
             &scene->seek_context[i], scene->use_cpu_buffer, sync_cam));
         is_view_focused.push_back(false);
     }
+    t_threads = load_timing::ms(t_stage);
     ps.video_loaded = true;
+
+    // Decoders run async from here: this measures spawning them, NOT the wait
+    // for the first frames to appear on screen.
+    if (load_timing::enabled())
+        std::printf("[load-timing] videos: %d cam(s) | open %.0f | keyframe "
+                    "%.0f | alloc %.0f | sync-plan %.0f | spawn %.0f | TOTAL "
+                    "%.0f ms\n",
+                    (int)scene->num_cams, t_open, t_keyframe, t_alloc, t_sync,
+                    t_threads, load_timing::ms(t_videos_start));
 }

@@ -325,20 +325,29 @@ inline void on_project_loaded(AppContext &ctx,
     // Note: close_project() should be called BEFORE this function for
     // project switching. It handles unload_media + annotations.clear.
     // For the startup path (no prior project), unload_media is a no-op.
+    const auto t_proj_start = load_timing::Clock::now();
+    auto t_stage = load_timing::Clock::now();
     if (ctx.ps.video_loaded) {
         unload_media(ctx.ps, ctx.pm, ctx.demuxers, ctx.dc_context,
                      ctx.scene, ctx.decoder_threads,
                      ctx.is_view_focused, ctx.window_was_decoding);
     }
     ctx.annotations.clear();
+    // unload_media join()s every decoder thread, so this is a real wait when
+    // switching projects (zero on the first load).
+    const double t_unload = load_timing::ms(t_stage);
 
+    t_stage = load_timing::Clock::now();
     switch_ini_to_project(ctx);
+    const double t_ini = load_timing::ms(t_stage);
     int expected_cameras = (int)ctx.pm.camera_names.size();
     std::map<std::string, std::string> empty_selected_files;
+    t_stage = load_timing::Clock::now();
     load_videos(empty_selected_files, ctx.ps, ctx.pm,
                 ctx.window_was_decoding, ctx.demuxers, ctx.dc_context,
                 ctx.scene, ctx.label_buffer_size, ctx.decoder_threads,
                 ctx.is_view_focused);
+    const double t_videos = load_timing::ms(t_stage);
     if (print_metadata_fn) print_metadata_fn();
     // The desync fix was requested by the project but the plan could not be
     // built/validated (load_videos already logged why) — playback continues
@@ -359,6 +368,7 @@ inline void on_project_loaded(AppContext &ctx,
     }
     std::string label_err;
     std::string most_recent_folder;
+    t_stage = load_timing::Clock::now();
     if (!AnnotationCSV::find_most_recent_labels(ctx.pm.keypoints_root_folder,
                                                  most_recent_folder, label_err)) {
         // Check for v1 format and convert if needed
@@ -385,6 +395,15 @@ inline void on_project_loaded(AppContext &ctx,
             ctx.annotations.clear();
         }
     }
+    const double t_labels = load_timing::ms(t_stage);
+
+    if (load_timing::enabled())
+        std::printf("[load-timing] project '%s': unload %.0f | ini %.0f | "
+                    "videos %.0f | labels %.0f (%d frames) | TOTAL %.0f ms\n",
+                    ctx.pm.project_name.c_str(), t_unload, t_ini, t_videos,
+                    t_labels, (int)ctx.annotations.size(),
+                    load_timing::ms(t_proj_start));
+
     if (print_summary_fn) print_summary_fn(most_recent_folder);
 
     // Track in recent projects
