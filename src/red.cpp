@@ -767,6 +767,17 @@ int main(int argc, char **argv) {
                               print_metadata, print_summary,
                               [&]() {});
 
+        // Recent Projects click: the path is already known, so load it straight
+        // through the shared loader instead of routing back through the file
+        // dialog. Handled here (not in the panel) because close_project() +
+        // win.reset() must not run while the Welcome window is mid-draw.
+        if (!win.load_project_request.empty()) {
+            std::filesystem::path req = win.load_project_request;
+            win.load_project_request.clear();
+            load_project_from_path(ctx, win, req, print_metadata, print_summary,
+                                   [&]() {});
+        }
+
         // Jump to the next/previous pump dispense. Outside the paused-only
         // block below so it also works during playback; the seek itself is
         // performed by the seek_requested handler on the next iteration.

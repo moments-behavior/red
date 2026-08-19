@@ -15,6 +15,7 @@
 #include "gui/midline_tool.h"
 #include "gui/triangulation_diagnostics_window.h"
 #include "gui/switch_skeleton_window.h"
+#include <string>
 
 // Bundle of all tool-window states.
 struct WindowStates {
@@ -35,6 +36,9 @@ struct WindowStates {
     TriangulationDiagnosticsState triangulation_diag;
     SwitchSkeletonState switch_skeleton;
     bool show_help = false;
+    // Set by the Welcome window's Recent Projects list; consumed by the
+    // main loop, which has the load callbacks in scope.
+    std::string load_project_request;
 
     // Reset all tool window state for project switching.
     // Waits on async futures, joins threads, clears all project-specific data.
@@ -108,5 +112,6 @@ struct WindowStates {
         triangulation_diag = TriangulationDiagnosticsState{};
         switch_skeleton = SwitchSkeletonState{};
         show_help = false;
+        load_project_request.clear();
     }
 };

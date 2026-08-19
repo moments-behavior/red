@@ -128,19 +128,10 @@ inline void DrawWelcomeWindow(AppContext &ctx, WindowStates &win) {
             ImGui::PushID(ri);  // unique ID per button
             ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0, 0.5f));
             if (ImGui::Button(display.c_str(), ImVec2(-1, 0))) {
-                // Route through the standard load dialog so all initialization
-                // happens via the existing, tested load handlers.
-                IGFD::FileDialogConfig cfg;
-                cfg.countSelectionMax = 1;
-                cfg.flags = ImGuiFileDialogFlags_Modal;
-                cfg.path = p.parent_path().string();
-                cfg.fileName = p.filename().string();
-                // Use ChooseProject — the handler in main_menu_dialogs.h
-                // loads the annotation project and reports an error for
-                // legacy calibration projects.
-                ImGuiFileDialog::Instance()->OpenDialog(
-                    "ChooseProject", "Load Project",
-                    "Red Project{.redproj}", cfg);
+                // The path is already known, so load it directly rather than
+                // re-asking for it through a file dialog. The main loop picks
+                // this up and runs the same loader the dialog uses.
+                win.load_project_request = path;
             }
             ImGui::PopStyleVar();
             if (ImGui::IsItemHovered())

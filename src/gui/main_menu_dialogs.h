@@ -4,6 +4,53 @@
 #include <ImGuiFileDialog.h>
 #include <filesystem>
 
+// Load a .redproj from an explicit path. Shared by the Load Project dialog and
+// the Welcome window's Recent Projects list, so both take exactly the same code
+// path -- a recent-project click should not have to round-trip through a file
+// dialog just to reach the tested loader.
+inline void load_project_from_path(
+    AppContext &ctx, WindowStates &win, const std::filesystem::path &cfg_path,
+    std::function<void()> print_metadata_fn,
+    std::function<void(const std::string &)> print_summary_fn,
+    std::function<void()> nuke_inference_fn = nullptr) {
+    auto &pm = ctx.pm;
+
+    // Legacy calibration projects share the .redproj extension; detect them so
+    // the failure is explicit rather than a confusing parse error from the
+    // annotation loader.
+    if (cfg_path.extension() == ".redproj") {
+        try {
+            std::ifstream probe(cfg_path, std::ios::binary);
+            if (probe) {
+                nlohmann::json j;
+                probe >> j;
+                std::string type = j.value("type", std::string{});
+                if (type == "calibration" || type == "laser_calibration") {
+                    ctx.popups.pushError(
+                        "Calibration projects are no longer supported.\n"
+                        "Open an annotation project instead.");
+                    return;
+                }
+            }
+        } catch (...) {}
+    }
+
+    ProjectManager loaded;
+    std::string err;
+    if (!load_project_manager_json(&loaded, cfg_path, &err)) {
+        ctx.popups.pushError(err);
+        return;
+    }
+    close_project(ctx);
+    win.reset();
+    if (nuke_inference_fn) nuke_inference_fn();
+    pm = loaded;
+    if (setup_project(pm, ctx.skeleton, ctx.skeleton_map, &err))
+        on_project_loaded(ctx, print_metadata_fn, print_summary_fn);
+    else
+        ctx.popups.pushError(err);
+}
+
 // Handle all main-menu-originated file dialogs. Called once per frame.
 inline void HandleMainMenuDialogs(
     AppContext &ctx,
@@ -118,42 +165,8 @@ inline void HandleMainMenuDialogs(
                         ImGuiFileDialog::Instance()->GetCurrentPath());
             }
 
-            // Check if this is a calibration project (.redproj with type=calibration)
-            bool is_calib_project = false;
-            if (cfg_path.extension() == ".redproj") {
-                try {
-                    std::ifstream probe(cfg_path, std::ios::binary);
-                    if (probe) {
-                        nlohmann::json j;
-                        probe >> j;
-                        std::string type = j.value("type", std::string{});
-                        if (type == "calibration" || type == "laser_calibration")
-                            is_calib_project = true;
-                    }
-                } catch (...) {}
-            }
-
-            if (is_calib_project) {
-                // Calibration projects are no longer supported — the
-                // calibration tooling was removed. Point RED at an
-                // annotation project instead.
-                popups.pushError("Calibration projects are no longer supported.\nOpen an annotation project instead.");
-            } else {
-                ProjectManager loaded;
-                std::string err;
-                if (!load_project_manager_json(&loaded, cfg_path, &err)) {
-                    popups.pushError(err);
-                } else {
-                    close_project(ctx);
-                    win.reset();
-                    if (nuke_inference_fn) nuke_inference_fn();
-                    pm = loaded;
-                    if (setup_project(pm, skeleton, skeleton_map, &err)) {
-                        on_project_loaded(ctx, print_metadata_fn, print_summary_fn);
-                    } else
-                        popups.pushError(err);
-                }
-            }
+            load_project_from_path(ctx, win, cfg_path, print_metadata_fn,
+                                   print_summary_fn, nuke_inference_fn);
         }
         ImGuiFileDialog::Instance()->Close();
     }
