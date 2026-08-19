@@ -3,6 +3,16 @@
 #include "implot.h"
 #include <algorithm>
 
+// ImPlot v1.0 obsoleted SetNextLineStyle(); item styling is now passed per-call
+// via ImPlotSpec. This builds the common line-colour/weight case in a
+// C++17-friendly way (designated initialisers would need C++20).
+inline ImPlotSpec red_line_spec(const ImVec4 &col, float weight) {
+    ImPlotSpec s;
+    s.LineColor = col;
+    s.LineWeight = weight;
+    return s;
+}
+
 // Optional: tiny helper for inline help tooltips
 inline void HelpMarker(const char *desc) {
     ImGui::TextDisabled("(?)");

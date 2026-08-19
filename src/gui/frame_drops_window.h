@@ -17,17 +17,8 @@
 // convention sync_fix_toggle uses.
 
 #include "imgui.h"
+#include "gui/gui_helpers.h"
 #include "implot.h"
-
-// ImPlot v1.0 obsoleted SetNextLineStyle()/SetNextMarkerStyle(); item styling is
-// now passed per-call via ImPlotSpec. Built here in a C++17-friendly way
-// (designated initialisers would need C++20).
-static inline ImPlotSpec red_line_spec(const ImVec4 &col, float weight) {
-    ImPlotSpec s;
-    s.LineColor = col;
-    s.LineWeight = weight;
-    return s;
-}
 
 #include "app_context.h"
 #include "global.h"
