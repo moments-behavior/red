@@ -28,22 +28,12 @@ struct KeyPoints {
     u32 *active_id;
 };
 
-// Anatomical body-part group: a named set of keypoint (node) indices, used by
-// the Body Parts window to select/copy/paste/delete a whole limb at once.
-// Optional — populated for the built-in Fly50 primitive and read from a
-// skeleton JSON's "groups" field when present.
-struct KeypointGroup {
-    std::string name;
-    std::vector<int> nodes;  // node indices into node_names
-};
-
 struct SkeletonContext {
     int num_nodes;
     int num_edges;
     std::vector<ImVec4> node_colors;
     std::vector<tuple_i> edges;
     std::vector<std::string> node_names;
-    std::vector<KeypointGroup> groups;  // optional body-part groups
     std::string name;
     bool has_skeleton;
 };

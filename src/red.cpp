@@ -22,7 +22,6 @@
 #endif
 #include "gui/switch_skeleton_window.h"
 #include "gui/annotation_dialog.h"
-#include "gui/body_parts_window.h"
 #include "gui/labeling_tool_window.h"
 #include "gui/project_window.h"
 #include "gui/settings_window.h"
@@ -474,9 +473,6 @@ int main(int argc, char **argv) {
                         }
                     }
                 },
-                [&]() { return pm.plot_keypoints_flag; }});
-    panels.add({"Body Parts",
-                [&]() { DrawBodyPartsWindow(ctx); },
                 [&]() { return pm.plot_keypoints_flag; }});
     panels.add({"Help", [&]() {
                     help::Context hctx;

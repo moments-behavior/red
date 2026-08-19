@@ -167,8 +167,6 @@ inline const std::vector<Tool> &tools() {
             // Annotation
             {"Labeling Tool", "Always-on panel",
                 "The core keypoint panel: save, triangulate, jump between labeled frames, copy previous.", Gate::Always, "An open project"},
-            {"Body Parts", "Panel (keypoint projects)",
-                "Checkboxes for anatomical groups (Head, wings, legs) that select whole limbs for copy/paste/delete.", Gate::Always, "A skeleton with defined groups (e.g. Fly50)"},
             {"Bbox Tool", "Tools > Bbox Tool",
                 "Axis-aligned bounding boxes with multi-class and instance ids."},
             {"OBB Tool", "Tools > OBB Tool",
