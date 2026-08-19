@@ -84,6 +84,10 @@ void load_skeleton_json(std::string file_name, SkeletonContext *skeleton) {
 void skeleton_initialize(std::string name, SkeletonContext *skeleton,
                          SkeletonPrimitive skeleton_type) {
     skeleton->has_skeleton = true;
+    // Groups are only defined for some primitives (Fly50); clear any stale
+    // ones so a re-init (e.g. Alignment Mode -> ArenaCorners4) doesn't keep
+    // the previous skeleton's body-part groups.
+    skeleton->groups.clear();
 
     switch (skeleton_type) {
     case Table3Corners:

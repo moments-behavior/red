@@ -351,9 +351,12 @@ inline void DrawKeypointsWindow(AppContext &ctx) {
             // ── Select All (Ctrl+A): toggle every keypoint column. Scoped to
             //    the Keypoints window so it never clashes with the image-view
             //    'A' (previous active keypoint), which only fires over a plot. ──
-            if ((ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows) ||
-                 ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) &&
-                keys::pressed(keys::Sc::SelectAllKeypoints)) {
+            // Copy / Paste below share the same scope so a stray Ctrl+V over
+            // an image view or another panel never overwrites labels.
+            const bool kp_win_active =
+                ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows) ||
+                ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
+            if (kp_win_active && keys::pressed(keys::Sc::SelectAllKeypoints)) {
                 if (kc.count() >= skeleton.num_nodes) {
                     kc.clear_selection();
                 } else {
@@ -394,7 +397,7 @@ inline void DrawKeypointsWindow(AppContext &ctx) {
             }
 
             // ── Copy (Ctrl+C): snapshot the selected node set ──
-            if (keys::pressed(keys::Sc::CopyKeypoints)) {
+            if (kp_win_active && keys::pressed(keys::Sc::CopyKeypoints)) {
                 if (!kc.any()) {
                     ctx.toasts.push(
                         "Select keypoint columns first (click a name above)",
@@ -423,7 +426,7 @@ inline void DrawKeypointsWindow(AppContext &ctx) {
             }
 
             // ── Paste (Ctrl+V): overwrite the copied node set onto this frame ──
-            if (keys::pressed(keys::Sc::PasteKeypoints)) {
+            if (kp_win_active && keys::pressed(keys::Sc::PasteKeypoints)) {
                 if (!kc.has_clip()) {
                     ctx.toasts.push(
                         "Clipboard is empty (copy with Ctrl+C first)",
