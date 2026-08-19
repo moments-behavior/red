@@ -29,7 +29,7 @@ consult the deeper docs linked at the bottom for whichever area you're touching.
 ## Non-Negotiable Constraints
 
 1. **No OpenCV — ever** (all three platforms). Use `stb_image`, `Eigen`, `Ceres`,
-   and the in-repo math/calibration headers instead. If you find yourself reaching
+   and the in-repo math headers instead. If you find yourself reaching
    for `cv::`, stop. The pre-rewrite Linux block that referenced OpenCV/LibTorch
    has been replaced — current `CMakeLists.txt else()` block (Linux, ~line 1643+)
    uses Eigen + Ceres + bundled ORT/cuDNN with RPATH isolation.
@@ -84,15 +84,10 @@ red/
 │   ├── annotation.h        # AnnotationMap, FrameAnnotation (v2 data model)
 │   ├── annotation_csv.h    # `#red_csv v2` persistence
 │   ├── project.h           # .redproj JSON load/save, ProjectManager
-│   ├── skeleton.{h,cpp}    # presets (Rat4..Rat24Target, Fly50, Table3Corners, …)
+│   ├── skeleton.{h,cpp}    # presets (Rat4..Rat24Target, Fly50, …)
 │   ├── camera.h            # CameraParams (Eigen-based on all platforms now)
 │   ├── red_math.h          # DLT triangulation + camera math
-│   ├── calibration_pipeline.h     # ArUco + bundle adjustment
-│   ├── aruco_detect.h             # OpenCV-free ChArUco detector (CPU)
-│   ├── aruco_metal.{h,mm}         # macOS Metal compute path
-│   ├── aruco_cuda.{cu,h}          # Linux/Windows CUDA path
-│   ├── pointsource_{metal,cuda}.* # laser refinement (per-platform compute)
-│   ├── telecentric_dlt.h          # MATLAB-ported telecentric calibration
+│   ├── opencv_yaml_io.h    # OpenCV-format YAML reader (no OpenCV dependency)
 │   ├── decoder.{h,cpp} + NvDecoder.{h,cpp} + FFmpegDemuxer.{h,cpp}   # NVDEC (Linux/Win)
 │   ├── vt_async_decoder.{h,mm}    # VideoToolbox async decoder (macOS only)
 │   ├── render.{h,cpp}             # OpenGL render path
@@ -201,8 +196,8 @@ The two main test binaries auto-build with `red`:
 - `release/test_gui` — ~178 tests covering GUI infrastructure
 - `release/test_annotation` — ~673 tests covering the v2 annotation/CSV layer
 
-Plus targeted binaries: `test_pipeline_run`, `test_calib_*`, `test_aruco_*`,
-`test_jarvis_*`, `test_ort_*`, `test_cuda_*`, etc. Run headless on
+Plus targeted binaries: `test_jarvis_*`, `test_ort_*`, `test_sync_plan`,
+`test_nerfstudio_export`, `test_pump_events`. Run headless on
 Linux with `DISPLAY= ./release/<binary>`.
 
 ---
@@ -219,7 +214,7 @@ Linux with `DISPLAY= ./release/<binary>`.
   `__APPLE__ / _WIN32 / __linux__` in C++. CUDA `.cu` files are only compiled on
   Linux/Windows.
 - **Optional features** are gated by CMake `HAS_*` flags that map to
-  `RED_HAS_ONNXRUNTIME`, `USE_CUDA_POINTSOURCE`, `USE_TENSORRT`
+  `RED_HAS_ONNXRUNTIME`, `USE_TENSORRT`
   compile definitions. Code paths use `#ifdef` guards so the build stays green when
   optional libs are missing.
 - **Comments:** minimal. Only when the *why* is non-obvious. No multi-paragraph

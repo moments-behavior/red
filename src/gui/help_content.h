@@ -7,8 +7,7 @@
 // cannot drift apart.
 //
 // All content was audited against the code (2026-08); notes on overloaded keys
-// (F/T/Backspace) and the calibration-vs-body 3D rotate convention reflect the
-// current, real behavior.
+// (F/T/Backspace) reflect the current, real behavior.
 #include "gui/shortcuts.h"
 #include <string>
 #include <vector>
@@ -91,11 +90,10 @@ inline const std::vector<Group> &shortcut_groups() {
             {S::ActiveNext, nullptr, "Next active keypoint"},
             {S::ActiveFirst, nullptr, "Jump active keypoint to the first node"},
             {S::ActiveLast, nullptr, "Jump active keypoint to the last node"},
-            {S::DeleteAllKp, nullptr, "Delete all keypoints on this frame", Gate::Always,
-                 "While SAM has prompts, Backspace undoes a SAM point instead"},
+            {S::DeleteAllKp, nullptr, "Delete all keypoints on this frame"},
             {S::Triangulate, nullptr, "Triangulate the current frame", Gate::Need3D,
                  "Needs the same keypoint in \xE2\x89\xA5 2 cameras"},
-            {S::PlotMenu, nullptr, "Open the image context menu (fit axes, toggle keypoint/mask/bbox layers)"},
+            {S::PlotMenu, nullptr, "Open the image context menu (fit axes, toggle keypoint/bbox layers)"},
             {S::PeekRaw, nullptr, "Hide this view's labels to peek at the raw image underneath"},
         }},
         {"Labeling \xE2\x80\x94 hovering a keypoint", "Hover an existing (drawn) keypoint", Gate::Always, {
@@ -147,13 +145,6 @@ inline const std::vector<MouseGroup> &mouse_groups() {
             {"Drag a keypoint", "Move it", "Clears its triangulated 3D"},
             {"Hover a keypoint", "Show its 3D coordinate (if triangulated)"},
         }},
-        {"3D calibration viewers", "Calibration / Telecentric 3D scenes", {
-            {"Right-drag", "Rotate the scene"},
-            {"Left-drag", "Pan"},
-            {"Scroll / Middle-drag", "Zoom"},
-            {"Click a camera or point", "Select / isolate it"},
-            {"Double-click (empty)", "Deselect and reset the view"},
-        }},
         {"Timelines & plots", "Labeling strip, Pose Stats, Frame Drops, transport slider, frame buffer", {
             {"Click", "Seek to that frame"},
             {"Drag", "Pan the plot"},
@@ -172,7 +163,7 @@ inline const std::vector<Tool> &tools() {
             {"Create Annotation Project", "Annotate menu / Welcome",
                 "Define a new project over per-camera videos: skeleton, camera model, calibration.", Gate::Always, "A loaded video/folder"},
             {"Load Project", "File \xE2\x86\x92 Load Project",
-                "Open a .redproj (auto-routes calibration vs annotation projects).", Gate::Always, "\xE2\x80\x94"},
+                "Open an annotation .redproj.", Gate::Always, "\xE2\x80\x94"},
             {"Switch Skeleton", "File \xE2\x86\x92 Switch Skeleton\xE2\x80\xA6",
                 "Change an open project's skeleton.", Gate::Always, "No manual labels yet (re-indexes keypoints)"},
             // Annotation
@@ -208,9 +199,6 @@ inline const std::vector<Tool> &tools() {
                 "Place pumpctl dispenses on the video timeline; click a row to seek, or jump with [ / ].", Gate::Always, "A pumpctl dispense log + frame timestamps"},
             {"Triangulation Diagnostics", "Tools \xE2\x86\x92 Triangulation Diagnostics",
                 "Per-keypoint reprojection-error report (read-only).", Gate::Need3D, "Calibration + labeled frames"},
-            // Calibration
-            {"Calibration Tool", "Calibrate menu / Welcome",
-                "Produce multi-camera calibration: ArUco, PointSource, Telecentric DLT, SuperPoint, Manual.", Gate::Always, "\xE2\x80\x94"},
             // Settings
             {"Settings", "View \xE2\x86\x92 Settings",
                 "Paths, display, keypoint colors, playback, hardware, and which annotation tools are enabled.", Gate::Always, "\xE2\x80\x94"},
@@ -226,7 +214,7 @@ inline const std::vector<Workflow> &workflows() {
             "Welcome \xE2\x86\x92 Create Annotation Project (or Annotate menu).",
             "Pick the video folder \xE2\x80\x94 RED auto-discovers one .mp4 per camera.",
             "Set project name, root path, and skeleton (preset or a .json file).",
-            "For multi-camera: choose the camera model (Projective or Telecentric) and a calibration folder.",
+            "For multi-camera: choose the camera model (Projective or Telecentric) and an existing calibration folder.",
             "Create Project \xE2\x80\x94 videos load, one decoder per camera.",
         }},
         {"Label a frame", {
@@ -242,12 +230,6 @@ inline const std::vector<Workflow> &workflows() {
             "Predict Current Frame (key 6), or Batch Predict a range \xE2\x86\x92 a prediction store.",
             "Toggle the video overlay; review in Pose Stats / Bouts.",
             "Promote a frame to editable labels via Pose Stats \xE2\x80\x9C" "Fix this frame\xE2\x80\x9D, correct, re-export.",
-        }},
-        {"Calibrate cameras", {
-            "Calibrate \xE2\x86\x92 Create Calibration Project (or a Welcome button) and pick a method.",
-            "Provide the media (ChArUco board / light-wand / landmarks) the method needs.",
-            "Run the pipeline and check the reprojection error (< 3 px excellent, 3\xE2\x80\x93" "8 ok).",
-            "Calibration YAML/DLT files are written into the project for triangulation.",
         }},
         {"Find behavior bouts", {
             "Batch Predict a range with Send to: Predictions store.",

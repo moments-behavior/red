@@ -119,7 +119,7 @@ if(APPLE)
         Ceres::ceres
         pthread
     )
-    # Removed: Vulkan::Vulkan (Accelerate still used by superpoint_coreml.mm / jarvis_coreml.mm)
+    # Removed: Vulkan::Vulkan (Accelerate still used by jarvis_coreml.mm)
 
     # Optional ONNX Runtime for JARVIS inference
     if(HAS_ONNXRUNTIME)
@@ -306,25 +306,6 @@ if(APPLE)
         CXX_STANDARD_REQUIRED ON
     )
 
-    # Calibration debug test: Eigen + Ceres only (no OpenCV)
-    add_executable(test_calib_debug tests/test_calib_debug.cpp)
-    target_include_directories(test_calib_debug PRIVATE
-        src
-        ${HOMEBREW_PREFIX}/include
-        ${HOMEBREW_PREFIX}/include/eigen3
-        ${TURBOJPEG_INCLUDE_DIRS}
-    )
-    target_link_directories(test_calib_debug PRIVATE ${TURBOJPEG_LIBRARY_DIRS})
-    target_link_libraries(test_calib_debug PRIVATE
-        Eigen3::Eigen
-        Ceres::ceres
-        ${TURBOJPEG_LIBRARIES}
-        pthread
-    )
-    set_target_properties(test_calib_debug PROPERTIES
-        CXX_STANDARD 17
-        CXX_STANDARD_REQUIRED ON
-    )
 
     # Sync-plan unit test: header-only logic, stdlib + vendored json.hpp only
     add_executable(test_sync_plan tests/test_sync_plan.cpp)
@@ -335,45 +316,9 @@ if(APPLE)
     )
 
 
-    # Full pipeline test: runs all 7 steps, validates reproj error
-    add_executable(test_pipeline_run
-        tests/test_pipeline_run.cpp
-        src/aruco_metal.mm
-        src/FFmpegDemuxer.cpp
-        src/vt_async_decoder.mm
-    )
-    target_include_directories(test_pipeline_run PRIVATE
-        src
-        lib/nvcodec
-        ${HOMEBREW_PREFIX}/include
-        ${HOMEBREW_PREFIX}/include/eigen3
-        ${FFMPEG_INCLUDE_DIRS}
-        ${TURBOJPEG_INCLUDE_DIRS}
-    )
-    target_link_directories(test_pipeline_run PRIVATE
-        ${FFMPEG_LIBRARY_DIRS} ${TURBOJPEG_LIBRARY_DIRS})
-    target_link_libraries(test_pipeline_run PRIVATE
-        Eigen3::Eigen
-        Ceres::ceres
-        ${FFMPEG_LIBRARIES}
-        ${TURBOJPEG_LIBRARIES}
-        "-framework Metal"
-        "-framework Foundation"
-        "-framework CoreGraphics"
-        "-framework CoreVideo"
-        "-framework CoreMedia"
-        "-framework VideoToolbox"
-        "-framework IOKit"
-        pthread
-    )
     set_source_files_properties(
-        src/aruco_metal.mm
         src/vt_async_decoder.mm
         PROPERTIES COMPILE_FLAGS "-fobjc-arc"
-    )
-    set_target_properties(test_pipeline_run PROPERTIES
-        CXX_STANDARD 17
-        CXX_STANDARD_REQUIRED ON
     )
 
     # JARVIS import test: header-only Eigen math (no OpenCV, no GUI, no Metal)
@@ -407,45 +352,9 @@ if(APPLE)
         CXX_STANDARD_REQUIRED ON
     )
 
-    # Video pipeline test: tests video-based aruco calibration
-    add_executable(test_video_pipeline
-        tests/test_video_pipeline.cpp
-        src/aruco_metal.mm
-        src/FFmpegDemuxer.cpp
-        src/vt_async_decoder.mm
-    )
-    target_include_directories(test_video_pipeline PRIVATE
-        src
-        lib/nvcodec
-        ${HOMEBREW_PREFIX}/include
-        ${HOMEBREW_PREFIX}/include/eigen3
-        ${FFMPEG_INCLUDE_DIRS}
-        ${TURBOJPEG_INCLUDE_DIRS}
-    )
-    target_link_directories(test_video_pipeline PRIVATE
-        ${FFMPEG_LIBRARY_DIRS} ${TURBOJPEG_LIBRARY_DIRS})
-    target_link_libraries(test_video_pipeline PRIVATE
-        Eigen3::Eigen
-        Ceres::ceres
-        ${FFMPEG_LIBRARIES}
-        ${TURBOJPEG_LIBRARIES}
-        "-framework Metal"
-        "-framework Foundation"
-        "-framework CoreGraphics"
-        "-framework CoreVideo"
-        "-framework CoreMedia"
-        "-framework VideoToolbox"
-        "-framework IOKit"
-        pthread
-    )
     set_source_files_properties(
-        src/aruco_metal.mm
         src/vt_async_decoder.mm
         PROPERTIES COMPILE_FLAGS "-fobjc-arc"
-    )
-    set_target_properties(test_video_pipeline PROPERTIES
-        CXX_STANDARD 17
-        CXX_STANDARD_REQUIRED ON
     )
 
     # Nerfstudio / 3DGS export test: extracts frames + writes transforms.json
@@ -487,657 +396,59 @@ if(APPLE)
         CXX_STANDARD_REQUIRED ON
     )
 
-    # Detection timing benchmark
-    add_executable(test_detect_timing
-        tests/test_detect_timing.cpp
-        src/aruco_metal.mm
-    )
-    target_include_directories(test_detect_timing PRIVATE
-        src
-        ${HOMEBREW_PREFIX}/include
-        ${HOMEBREW_PREFIX}/include/eigen3
-        ${TURBOJPEG_INCLUDE_DIRS}
-    )
-    target_link_directories(test_detect_timing PRIVATE ${TURBOJPEG_LIBRARY_DIRS})
-    target_link_libraries(test_detect_timing PRIVATE
-        Eigen3::Eigen
-        Ceres::ceres
-        ${TURBOJPEG_LIBRARIES}
-        "-framework Metal"
-        "-framework Foundation"
-        "-framework CoreGraphics"
-        "-framework IOKit"
-        "-framework CoreVideo"
-        pthread
-    )
     set_source_files_properties(
-        src/aruco_metal.mm
         PROPERTIES COMPILE_FLAGS "-fobjc-arc"
     )
-    set_target_properties(test_detect_timing PROPERTIES
-        CXX_STANDARD 17
-        CXX_STANDARD_REQUIRED ON
-    )
 
 
-    # Granular detection timing benchmark
-    add_executable(test_detect_granular
-        tests/test_detect_granular.cpp
-        src/aruco_metal.mm
-    )
-    target_include_directories(test_detect_granular PRIVATE
-        src
-        ${HOMEBREW_PREFIX}/include
-        ${HOMEBREW_PREFIX}/include/eigen3
-        ${TURBOJPEG_INCLUDE_DIRS}
-    )
-    target_link_directories(test_detect_granular PRIVATE ${TURBOJPEG_LIBRARY_DIRS})
-    target_link_libraries(test_detect_granular PRIVATE
-        Eigen3::Eigen
-        Ceres::ceres
-        ${TURBOJPEG_LIBRARIES}
-        "-framework Metal"
-        "-framework Foundation"
-        "-framework CoreGraphics"
-        "-framework IOKit"
-        "-framework CoreVideo"
-        pthread
-    )
     set_source_files_properties(
-        src/aruco_metal.mm
         PROPERTIES COMPILE_FLAGS "-fobjc-arc"
     )
-    set_target_properties(test_detect_granular PROPERTIES
-        CXX_STANDARD 17
-        CXX_STANDARD_REQUIRED ON
-    )
 
-    # Calibration reload roundtrip test (rat dataset)
-    add_executable(test_calib_reload
-        tests/test_calib_reload.cpp
-        src/aruco_metal.mm
-        src/FFmpegDemuxer.cpp
-        src/vt_async_decoder.mm
-    )
-    target_include_directories(test_calib_reload PRIVATE
-        src
-        lib/nvcodec
-        ${HOMEBREW_PREFIX}/include
-        ${HOMEBREW_PREFIX}/include/eigen3
-        ${FFMPEG_INCLUDE_DIRS}
-        ${TURBOJPEG_INCLUDE_DIRS}
-    )
-    target_link_directories(test_calib_reload PRIVATE
-        ${FFMPEG_LIBRARY_DIRS} ${TURBOJPEG_LIBRARY_DIRS})
-    target_link_libraries(test_calib_reload PRIVATE
-        Eigen3::Eigen
-        Ceres::ceres
-        ${FFMPEG_LIBRARIES}
-        ${TURBOJPEG_LIBRARIES}
-        "-framework Metal"
-        "-framework Foundation"
-        "-framework CoreGraphics"
-        "-framework CoreVideo"
-        "-framework CoreMedia"
-        "-framework VideoToolbox"
-        "-framework IOKit"
-        pthread
-    )
     set_source_files_properties(
-        src/aruco_metal.mm
         src/vt_async_decoder.mm
         PROPERTIES COMPILE_FLAGS "-fobjc-arc"
     )
-    set_target_properties(test_calib_reload PROPERTIES
-        CXX_STANDARD 17
-        CXX_STANDARD_REQUIRED ON
-    )
 
-    # SuperPoint unified pipeline test
-    add_executable(test_superpoint_pipeline
-        tests/test_superpoint_pipeline.cpp
-        src/aruco_metal.mm
-        src/FFmpegDemuxer.cpp
-        src/vt_async_decoder.mm
-        src/superpoint_coreml.mm
-    )
-    target_include_directories(test_superpoint_pipeline PRIVATE
-        src
-        lib/nvcodec
-        ${HOMEBREW_PREFIX}/include
-        ${HOMEBREW_PREFIX}/include/eigen3
-        ${FFMPEG_INCLUDE_DIRS}
-        ${TURBOJPEG_INCLUDE_DIRS}
-    )
-    target_link_directories(test_superpoint_pipeline PRIVATE
-        ${FFMPEG_LIBRARY_DIRS} ${TURBOJPEG_LIBRARY_DIRS})
-    target_link_libraries(test_superpoint_pipeline PRIVATE
-        Eigen3::Eigen
-        Ceres::ceres
-        ${FFMPEG_LIBRARIES}
-        ${TURBOJPEG_LIBRARIES}
-        "-framework Metal"
-        "-framework Foundation"
-        "-framework CoreGraphics"
-        "-framework CoreVideo"
-        "-framework CoreMedia"
-        "-framework VideoToolbox"
-        "-framework CoreML"
-        "-framework Accelerate"
-        "-framework IOKit"
-        pthread
-    )
     set_source_files_properties(
-        src/aruco_metal.mm
         src/vt_async_decoder.mm
-        src/superpoint_coreml.mm
         PROPERTIES COMPILE_FLAGS "-fobjc-arc"
     )
-    set_target_properties(test_superpoint_pipeline PROPERTIES
-        CXX_STANDARD 17
-        CXX_STANDARD_REQUIRED ON
-    )
 
-    # SuperPoint native pipeline benchmark (full end-to-end)
-    add_executable(bench_superpoint_native
-        tests/bench_superpoint_native.cpp
-        src/aruco_metal.mm
-        src/FFmpegDemuxer.cpp
-        src/vt_async_decoder.mm
-        src/superpoint_coreml.mm
-    )
-    target_include_directories(bench_superpoint_native PRIVATE
-        src
-        lib/nvcodec
-        ${HOMEBREW_PREFIX}/include
-        ${HOMEBREW_PREFIX}/include/eigen3
-        ${FFMPEG_INCLUDE_DIRS}
-        ${TURBOJPEG_INCLUDE_DIRS}
-    )
-    target_link_directories(bench_superpoint_native PRIVATE
-        ${FFMPEG_LIBRARY_DIRS} ${TURBOJPEG_LIBRARY_DIRS})
-    target_link_libraries(bench_superpoint_native PRIVATE
-        Eigen3::Eigen
-        Ceres::ceres
-        ${FFMPEG_LIBRARIES}
-        ${TURBOJPEG_LIBRARIES}
-        "-framework Metal"
-        "-framework Foundation"
-        "-framework CoreGraphics"
-        "-framework CoreVideo"
-        "-framework CoreMedia"
-        "-framework VideoToolbox"
-        "-framework CoreML"
-        "-framework Accelerate"
-        "-framework IOKit"
-        pthread
-    )
     set_source_files_properties(
-        src/aruco_metal.mm
         src/vt_async_decoder.mm
-        src/superpoint_coreml.mm
         PROPERTIES COMPILE_FLAGS "-fobjc-arc"
     )
-    set_target_properties(bench_superpoint_native PROPERTIES
-        CXX_STANDARD 17
-        CXX_STANDARD_REQUIRED ON
-    )
 
-    # Run experimental calibration from CLI
-    add_executable(run_experimental_calib
-        tests/run_experimental_calib.cpp
-        src/aruco_metal.mm src/FFmpegDemuxer.cpp src/vt_async_decoder.mm src/superpoint_coreml.mm
-    )
-    target_include_directories(run_experimental_calib PRIVATE
-        src lib/nvcodec ${HOMEBREW_PREFIX}/include ${HOMEBREW_PREFIX}/include/eigen3
-        ${FFMPEG_INCLUDE_DIRS} ${TURBOJPEG_INCLUDE_DIRS}
-    )
-    target_link_directories(run_experimental_calib PRIVATE ${FFMPEG_LIBRARY_DIRS} ${TURBOJPEG_LIBRARY_DIRS})
-    target_link_libraries(run_experimental_calib PRIVATE
-        Eigen3::Eigen Ceres::ceres ${FFMPEG_LIBRARIES} ${TURBOJPEG_LIBRARIES}
-        "-framework Metal" "-framework Foundation" "-framework CoreGraphics"
-        "-framework CoreVideo" "-framework CoreMedia" "-framework VideoToolbox"
-        "-framework CoreML" "-framework Accelerate" "-framework IOKit" pthread
-    )
     set_source_files_properties(
-        src/aruco_metal.mm src/vt_async_decoder.mm src/superpoint_coreml.mm
+        src/vt_async_decoder.mm
         PROPERTIES COMPILE_FLAGS "-fobjc-arc"
     )
-    set_target_properties(run_experimental_calib PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
 
-    # Calibration evaluation tool (global consistency + per-board reproj)
-    add_executable(eval_calibration
-        tests/eval_calibration.cpp
-        src/aruco_metal.mm src/FFmpegDemuxer.cpp src/vt_async_decoder.mm src/superpoint_coreml.mm
-    )
-    target_include_directories(eval_calibration PRIVATE
-        src lib/nvcodec ${HOMEBREW_PREFIX}/include ${HOMEBREW_PREFIX}/include/eigen3
-        ${FFMPEG_INCLUDE_DIRS} ${TURBOJPEG_INCLUDE_DIRS}
-    )
-    target_link_directories(eval_calibration PRIVATE ${FFMPEG_LIBRARY_DIRS} ${TURBOJPEG_LIBRARY_DIRS})
-    target_link_libraries(eval_calibration PRIVATE
-        Eigen3::Eigen Ceres::ceres ${FFMPEG_LIBRARIES} ${TURBOJPEG_LIBRARIES}
-        "-framework Metal" "-framework Foundation" "-framework CoreGraphics"
-        "-framework CoreVideo" "-framework CoreMedia" "-framework VideoToolbox"
-        "-framework CoreML" "-framework Accelerate" "-framework IOKit" pthread
-    )
     set_source_files_properties(
-        src/aruco_metal.mm src/vt_async_decoder.mm src/superpoint_coreml.mm
+        src/vt_async_decoder.mm
         PROPERTIES COMPILE_FLAGS "-fobjc-arc"
     )
-    set_target_properties(eval_calibration PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
 
-    # Holdout cross-validation comparison test
-    add_executable(test_holdout_compare
-        tests/test_holdout_compare.cpp
-        src/aruco_metal.mm
-        src/FFmpegDemuxer.cpp
-        src/vt_async_decoder.mm
-        src/superpoint_coreml.mm
-    )
-    target_include_directories(test_holdout_compare PRIVATE
-        src lib/nvcodec
-        ${HOMEBREW_PREFIX}/include ${HOMEBREW_PREFIX}/include/eigen3
-        ${FFMPEG_INCLUDE_DIRS} ${TURBOJPEG_INCLUDE_DIRS}
-    )
-    target_link_directories(test_holdout_compare PRIVATE
-        ${FFMPEG_LIBRARY_DIRS} ${TURBOJPEG_LIBRARY_DIRS})
-    target_link_libraries(test_holdout_compare PRIVATE
-        Eigen3::Eigen Ceres::ceres ${FFMPEG_LIBRARIES} ${TURBOJPEG_LIBRARIES}
-        "-framework Metal" "-framework Foundation" "-framework CoreGraphics"
-        "-framework CoreVideo" "-framework CoreMedia" "-framework VideoToolbox"
-        "-framework CoreML" "-framework Accelerate" "-framework IOKit" pthread
-    )
     set_source_files_properties(
-        src/aruco_metal.mm src/vt_async_decoder.mm src/superpoint_coreml.mm
+        src/vt_async_decoder.mm
         PROPERTIES COMPILE_FLAGS "-fobjc-arc"
     )
-    set_target_properties(test_holdout_compare PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
 
-    # Feature-based calibration refinement test
-    add_executable(test_feature_refinement
-        tests/test_feature_refinement.cpp
-        src/aruco_metal.mm
-        src/FFmpegDemuxer.cpp
-        src/vt_async_decoder.mm
-        src/superpoint_coreml.mm
-    )
-    target_include_directories(test_feature_refinement PRIVATE
-        src
-        lib/nvcodec
-        ${HOMEBREW_PREFIX}/include
-        ${HOMEBREW_PREFIX}/include/eigen3
-        ${FFMPEG_INCLUDE_DIRS}
-        ${TURBOJPEG_INCLUDE_DIRS}
-    )
-    target_link_directories(test_feature_refinement PRIVATE
-        ${FFMPEG_LIBRARY_DIRS} ${TURBOJPEG_LIBRARY_DIRS})
-    target_link_libraries(test_feature_refinement PRIVATE
-        Eigen3::Eigen
-        Ceres::ceres
-        ${FFMPEG_LIBRARIES}
-        ${TURBOJPEG_LIBRARIES}
-        "-framework Metal"
-        "-framework Foundation"
-        "-framework CoreGraphics"
-        "-framework CoreVideo"
-        "-framework CoreMedia"
-        "-framework VideoToolbox"
-        "-framework CoreML"
-        "-framework Accelerate"
-        "-framework IOKit"
-        pthread
-    )
     set_source_files_properties(
-        src/aruco_metal.mm
         src/vt_async_decoder.mm
-        src/superpoint_coreml.mm
         PROPERTIES COMPILE_FLAGS "-fobjc-arc"
     )
-    set_target_properties(test_feature_refinement PROPERTIES
-        CXX_STANDARD 17
-        CXX_STANDARD_REQUIRED ON
-    )
 
-    # Two-stage cropped-sensor calibration test (crop transform + refinement)
-    add_executable(test_crop_refinement
-        tests/test_crop_refinement.cpp
-        src/aruco_metal.mm
-        src/FFmpegDemuxer.cpp
-        src/vt_async_decoder.mm
-        src/superpoint_coreml.mm
-    )
-    target_include_directories(test_crop_refinement PRIVATE
-        src
-        lib/nvcodec
-        ${HOMEBREW_PREFIX}/include
-        ${HOMEBREW_PREFIX}/include/eigen3
-        ${FFMPEG_INCLUDE_DIRS}
-        ${TURBOJPEG_INCLUDE_DIRS}
-    )
-    target_link_directories(test_crop_refinement PRIVATE
-        ${FFMPEG_LIBRARY_DIRS} ${TURBOJPEG_LIBRARY_DIRS})
-    target_link_libraries(test_crop_refinement PRIVATE
-        Eigen3::Eigen
-        Ceres::ceres
-        ${FFMPEG_LIBRARIES}
-        ${TURBOJPEG_LIBRARIES}
-        "-framework Metal"
-        "-framework Foundation"
-        "-framework CoreGraphics"
-        "-framework CoreVideo"
-        "-framework CoreMedia"
-        "-framework VideoToolbox"
-        "-framework CoreML"
-        "-framework Accelerate"
-        "-framework IOKit"
-        pthread
-    )
-    set_target_properties(test_crop_refinement PROPERTIES
-        CXX_STANDARD 17
-        CXX_STANDARD_REQUIRED ON
-    )
 
-    # DICT_5X5 detection test (rat calibration board)
-    add_executable(test_dict5x5
-        tests/test_dict5x5.cpp
-        src/aruco_metal.mm
-    )
-    target_include_directories(test_dict5x5 PRIVATE
-        src lib
-        ${HOMEBREW_PREFIX}/include
-        ${HOMEBREW_PREFIX}/include/eigen3
-        ${TURBOJPEG_INCLUDE_DIRS}
-    )
-    target_link_directories(test_dict5x5 PRIVATE ${TURBOJPEG_LIBRARY_DIRS})
-    target_link_libraries(test_dict5x5 PRIVATE
-        Eigen3::Eigen
-        Ceres::ceres
-        ${TURBOJPEG_LIBRARIES}
-        "-framework Metal"
-        "-framework Foundation"
-        "-framework CoreGraphics"
-        "-framework IOKit"
-        "-framework CoreVideo"
-        pthread
-    )
     set_source_files_properties(
-        src/aruco_metal.mm
         PROPERTIES COMPILE_FLAGS "-fobjc-arc"
     )
-    set_target_properties(test_dict5x5 PROPERTIES
-        CXX_STANDARD 17
-        CXX_STANDARD_REQUIRED ON
-    )
 
-    # Contour finding drill-down benchmark
-    add_executable(test_contour_drill
-        tests/test_contour_drill.cpp
-        src/aruco_metal.mm
-    )
-    target_include_directories(test_contour_drill PRIVATE
-        src
-        ${HOMEBREW_PREFIX}/include
-        ${HOMEBREW_PREFIX}/include/eigen3
-        ${TURBOJPEG_INCLUDE_DIRS}
-    )
-    target_link_directories(test_contour_drill PRIVATE ${TURBOJPEG_LIBRARY_DIRS})
-    target_link_libraries(test_contour_drill PRIVATE
-        Eigen3::Eigen
-        Ceres::ceres
-        ${TURBOJPEG_LIBRARIES}
-        "-framework Metal"
-        "-framework Foundation"
-        "-framework CoreGraphics"
-        "-framework IOKit"
-        "-framework CoreVideo"
-        pthread
-    )
     set_source_files_properties(
-        src/aruco_metal.mm
         PROPERTIES COMPILE_FLAGS "-fobjc-arc"
     )
-    set_target_properties(test_contour_drill PROPERTIES
-        CXX_STANDARD 17
-        CXX_STANDARD_REQUIRED ON
-    )
-    # Cross-validation: laser-refined vs ChArUco landmarks (Eigen-only, no OpenCV)
-    add_executable(test_calib_crossval tests/test_calib_crossval.cpp)
-    target_include_directories(test_calib_crossval PRIVATE
-        src
-        ${HOMEBREW_PREFIX}/include
-        ${HOMEBREW_PREFIX}/include/eigen3
-    )
-    target_link_libraries(test_calib_crossval PRIVATE
-        Eigen3::Eigen
-    )
-    set_target_properties(test_calib_crossval PROPERTIES
-        CXX_STANDARD 17
-        CXX_STANDARD_REQUIRED ON
-    )
 
-    # Personal experiment targets with sources outside the repo — only
-    # buildable on the machine that has /Users/johnsonr/red_dev.
-    if(EXISTS "/Users/johnsonr/red_dev")
-    # Cross-validate laser modes against aruco detections
-    add_executable(test_crossval_modes /Users/johnsonr/red_dev/quan_v_rob_calib/test_crossval_modes.cpp)
-    target_include_directories(test_crossval_modes PRIVATE
-        src
-        ${HOMEBREW_PREFIX}/include
-        ${HOMEBREW_PREFIX}/include/eigen3
-    )
-    target_link_libraries(test_crossval_modes PRIVATE Eigen3::Eigen)
-    set_target_properties(test_crossval_modes PROPERTIES
-        CXX_STANDARD 17
-        CXX_STANDARD_REQUIRED ON
-    )
-
-    # Laser refinement mode comparison test
-    add_executable(test_laser_modes
-        /Users/johnsonr/red_dev/quan_v_rob_calib/test_laser_modes.cpp
-        src/pointsource_metal.mm
-        src/vt_async_decoder.mm
-        src/FFmpegDemuxer.cpp)
-    target_include_directories(test_laser_modes PRIVATE
-        src
-        ${HOMEBREW_PREFIX}/include
-        ${HOMEBREW_PREFIX}/include/eigen3
-        ${FFMPEG_INCLUDE_DIRS}
-    )
-    target_link_directories(test_laser_modes PRIVATE ${FFMPEG_LIBRARY_DIRS})
-    target_link_libraries(test_laser_modes PRIVATE
-        Eigen3::Eigen
-        Ceres::ceres
-        ${FFMPEG_LIBRARIES}
-        "-L/opt/homebrew/opt/jpeg-turbo/lib" "-lturbojpeg"
-        "-framework VideoToolbox"
-        "-framework CoreMedia"
-        "-framework CoreVideo"
-        "-framework CoreFoundation"
-        "-framework Metal"
-        "-framework Foundation"
-    )
-    set_target_properties(test_laser_modes PROPERTIES
-        CXX_STANDARD 17
-        CXX_STANDARD_REQUIRED ON
-    )
-
-    add_executable(test_smart_blob_v2
-        /Users/johnsonr/red_dev/Mar25_fulltest/test_smart_blob_v2.cpp
-        src/pointsource_metal.mm
-        src/vt_async_decoder.mm
-        src/FFmpegDemuxer.cpp)
-    target_include_directories(test_smart_blob_v2 PRIVATE
-        src
-        ${HOMEBREW_PREFIX}/include
-        ${HOMEBREW_PREFIX}/include/eigen3
-        ${FFMPEG_INCLUDE_DIRS}
-    )
-    target_link_directories(test_smart_blob_v2 PRIVATE ${FFMPEG_LIBRARY_DIRS})
-    target_link_libraries(test_smart_blob_v2 PRIVATE
-        Eigen3::Eigen
-        Ceres::ceres
-        ${FFMPEG_LIBRARIES}
-        "-L/opt/homebrew/opt/jpeg-turbo/lib" "-lturbojpeg"
-        "-framework VideoToolbox"
-        "-framework CoreMedia"
-        "-framework CoreVideo"
-        "-framework CoreFoundation"
-        "-framework Metal"
-        "-framework Foundation"
-    )
-    set_target_properties(test_smart_blob_v2 PROPERTIES
-        CXX_STANDARD 17
-        CXX_STANDARD_REQUIRED ON
-    )
-
-    add_executable(test_all_opt_modes
-        /Users/johnsonr/red_dev/Mar25_fulltest/test_all_opt_modes.cpp
-        src/pointsource_metal.mm
-        src/vt_async_decoder.mm
-        src/FFmpegDemuxer.cpp)
-    target_include_directories(test_all_opt_modes PRIVATE
-        src
-        ${HOMEBREW_PREFIX}/include
-        ${HOMEBREW_PREFIX}/include/eigen3
-        ${FFMPEG_INCLUDE_DIRS}
-    )
-    target_link_directories(test_all_opt_modes PRIVATE ${FFMPEG_LIBRARY_DIRS})
-    target_link_libraries(test_all_opt_modes PRIVATE
-        Eigen3::Eigen
-        Ceres::ceres
-        ${FFMPEG_LIBRARIES}
-        "-L/opt/homebrew/opt/jpeg-turbo/lib" "-lturbojpeg"
-        "-framework VideoToolbox"
-        "-framework CoreMedia"
-        "-framework CoreVideo"
-        "-framework CoreFoundation"
-        "-framework Metal"
-        "-framework Foundation"
-    )
-    set_target_properties(test_all_opt_modes PROPERTIES
-        CXX_STANDARD 17
-        CXX_STANDARD_REQUIRED ON
-    )
-
-    add_executable(test_ps_scratch_v3
-        /Users/johnsonr/red_dev/Mar25_fulltest/test_ps_scratch_v3.cpp
-        src/pointsource_metal.mm
-        src/vt_async_decoder.mm
-        src/FFmpegDemuxer.cpp)
-    target_include_directories(test_ps_scratch_v3 PRIVATE
-        src ${HOMEBREW_PREFIX}/include ${HOMEBREW_PREFIX}/include/eigen3 ${FFMPEG_INCLUDE_DIRS})
-    target_link_directories(test_ps_scratch_v3 PRIVATE ${FFMPEG_LIBRARY_DIRS})
-    target_link_libraries(test_ps_scratch_v3 PRIVATE
-        Eigen3::Eigen Ceres::ceres ${FFMPEG_LIBRARIES}
-        "-L/opt/homebrew/opt/jpeg-turbo/lib" "-lturbojpeg"
-        "-framework VideoToolbox" "-framework CoreMedia" "-framework CoreVideo"
-        "-framework CoreFoundation" "-framework Metal" "-framework Foundation")
-    set_target_properties(test_ps_scratch_v3 PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
-
-    add_executable(test_ps_sweep
-        /Users/johnsonr/red_dev/Mar25_fulltest/test_ps_sweep.cpp
-        src/pointsource_metal.mm
-        src/vt_async_decoder.mm
-        src/FFmpegDemuxer.cpp)
-    target_include_directories(test_ps_sweep PRIVATE
-        src ${HOMEBREW_PREFIX}/include ${HOMEBREW_PREFIX}/include/eigen3 ${FFMPEG_INCLUDE_DIRS})
-    target_link_directories(test_ps_sweep PRIVATE ${FFMPEG_LIBRARY_DIRS})
-    target_link_libraries(test_ps_sweep PRIVATE
-        Eigen3::Eigen Ceres::ceres ${FFMPEG_LIBRARIES}
-        "-L/opt/homebrew/opt/jpeg-turbo/lib" "-lturbojpeg"
-        "-framework VideoToolbox" "-framework CoreMedia" "-framework CoreVideo"
-        "-framework CoreFoundation" "-framework Metal" "-framework Foundation")
-    set_target_properties(test_ps_sweep PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
-
-    add_executable(test_no_init_ui
-        /Users/johnsonr/red_dev/Mar24/test_no_init_ui.cpp
-        src/pointsource_metal.mm
-        src/vt_async_decoder.mm
-        src/FFmpegDemuxer.cpp)
-    target_include_directories(test_no_init_ui PRIVATE
-        src ${HOMEBREW_PREFIX}/include ${HOMEBREW_PREFIX}/include/eigen3 ${FFMPEG_INCLUDE_DIRS})
-    target_link_directories(test_no_init_ui PRIVATE ${FFMPEG_LIBRARY_DIRS})
-    target_link_libraries(test_no_init_ui PRIVATE
-        Eigen3::Eigen Ceres::ceres ${FFMPEG_LIBRARIES}
-        "-L/opt/homebrew/opt/jpeg-turbo/lib" "-lturbojpeg"
-        "-framework VideoToolbox" "-framework CoreMedia" "-framework CoreVideo"
-        "-framework CoreFoundation" "-framework Metal" "-framework Foundation")
-    set_target_properties(test_no_init_ui PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
-
-    add_executable(test_detection_diag
-        /Users/johnsonr/red_dev/Mar22/test_detection_diag.cpp
-        src/pointsource_metal.mm
-        src/vt_async_decoder.mm
-        src/FFmpegDemuxer.cpp)
-    target_include_directories(test_detection_diag PRIVATE
-        src ${HOMEBREW_PREFIX}/include ${HOMEBREW_PREFIX}/include/eigen3 ${FFMPEG_INCLUDE_DIRS})
-    target_link_directories(test_detection_diag PRIVATE ${FFMPEG_LIBRARY_DIRS})
-    target_link_libraries(test_detection_diag PRIVATE
-        Eigen3::Eigen Ceres::ceres ${FFMPEG_LIBRARIES}
-        "-L/opt/homebrew/opt/jpeg-turbo/lib" "-lturbojpeg"
-        "-framework VideoToolbox" "-framework CoreMedia" "-framework CoreVideo"
-        "-framework CoreFoundation" "-framework Metal" "-framework Foundation")
-    set_target_properties(test_detection_diag PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
-
-    add_executable(test_no_init
-        /Users/johnsonr/red_dev/Mar22/test_no_init.cpp
-        src/pointsource_metal.mm
-        src/vt_async_decoder.mm
-        src/FFmpegDemuxer.cpp)
-    target_include_directories(test_no_init PRIVATE
-        src
-        ${HOMEBREW_PREFIX}/include
-        ${HOMEBREW_PREFIX}/include/eigen3
-        ${FFMPEG_INCLUDE_DIRS}
-    )
-    target_link_directories(test_no_init PRIVATE ${FFMPEG_LIBRARY_DIRS})
-    target_link_libraries(test_no_init PRIVATE
-        Eigen3::Eigen
-        Ceres::ceres
-        ${FFMPEG_LIBRARIES}
-        "-L/opt/homebrew/opt/jpeg-turbo/lib" "-lturbojpeg"
-        "-framework VideoToolbox"
-        "-framework CoreMedia"
-        "-framework CoreVideo"
-        "-framework CoreFoundation"
-        "-framework Metal"
-        "-framework Foundation"
-    )
-    set_target_properties(test_no_init PROPERTIES
-        CXX_STANDARD 17
-        CXX_STANDARD_REQUIRED ON
-    )
-
-    add_executable(test_loose_init
-        /Users/johnsonr/red_dev/Mar22/test_loose_init.cpp
-        src/pointsource_metal.mm
-        src/vt_async_decoder.mm
-        src/FFmpegDemuxer.cpp)
-    target_include_directories(test_loose_init PRIVATE
-        src
-        ${HOMEBREW_PREFIX}/include
-        ${HOMEBREW_PREFIX}/include/eigen3
-        ${FFMPEG_INCLUDE_DIRS}
-    )
-    target_link_directories(test_loose_init PRIVATE ${FFMPEG_LIBRARY_DIRS})
-    target_link_libraries(test_loose_init PRIVATE
-        Eigen3::Eigen
-        Ceres::ceres
-        ${FFMPEG_LIBRARIES}
-        "-L/opt/homebrew/opt/jpeg-turbo/lib" "-lturbojpeg"
-        "-framework VideoToolbox"
-        "-framework CoreMedia"
-        "-framework CoreVideo"
-        "-framework CoreFoundation"
-        "-framework Metal"
-        "-framework Foundation"
-    )
-    set_target_properties(test_loose_init PROPERTIES
-        CXX_STANDARD 17
-        CXX_STANDARD_REQUIRED ON
-    )
-    endif()  # EXISTS /Users/johnsonr/red_dev
 
     # JARVIS inference pipeline benchmark (ONNX Runtime only, no GUI deps)
     if(HAS_ONNXRUNTIME)
@@ -1267,8 +578,6 @@ elseif(WIN32)
         src/create_image_cuda.cu
         src/ColorSpace.cu
         src/kernel.cu
-        src/aruco_cuda.cu
-        src/pointsource_cuda.cu
         src/jarvis_hybridnet_cuda.cu
     )
 
@@ -1291,7 +600,7 @@ elseif(WIN32)
     endif()
 
 
-    target_compile_definitions(red PRIVATE NOMINMAX _USE_MATH_DEFINES USE_CUDA_POINTSOURCE)
+    target_compile_definitions(red PRIVATE NOMINMAX _USE_MATH_DEFINES)
     if(HAS_ONNXRUNTIME)
         target_compile_definitions(red PRIVATE RED_HAS_ONNXRUNTIME)
     endif()
@@ -1408,7 +717,7 @@ elseif(WIN32)
             ${CUDA_SRC_FILES}
             tests/${TEST_NAME}.cpp
         )
-        target_compile_definitions(${TEST_NAME} PRIVATE NOMINMAX _USE_MATH_DEFINES USE_CUDA_POINTSOURCE)
+        target_compile_definitions(${TEST_NAME} PRIVATE NOMINMAX _USE_MATH_DEFINES)
         target_compile_options(${TEST_NAME} PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/bigobj /EHsc>)
         target_include_directories(${TEST_NAME} PRIVATE
             ${CMAKE_SOURCE_DIR}/src
@@ -1554,8 +863,6 @@ else()
         src/create_image_cuda.cu
         src/ColorSpace.cu
         src/kernel.cu
-        src/aruco_cuda.cu
-        src/pointsource_cuda.cu
         src/jarvis_hybridnet_cuda.cu
     )
 
@@ -1631,7 +938,7 @@ else()
     endif()
 
 
-    target_compile_definitions(red PRIVATE USE_CUDA_POINTSOURCE)
+    target_compile_definitions(red PRIVATE)
     if(HAS_ONNXRUNTIME)
         target_compile_definitions(red PRIVATE RED_HAS_ONNXRUNTIME)
     endif()
@@ -1773,7 +1080,7 @@ else()
             ${CUDA_SRC_FILES}
             tests/${TEST_NAME}.cpp
         )
-        target_compile_definitions(${TEST_NAME} PRIVATE USE_CUDA_POINTSOURCE)
+        target_compile_definitions(${TEST_NAME} PRIVATE)
         target_include_directories(${TEST_NAME} PRIVATE
             ${CMAKE_SOURCE_DIR}/src
             ${DIR_IMGUI}
@@ -1828,26 +1135,6 @@ else()
         target_link_options(${TEST_NAME} PRIVATE "-Wl,--disable-new-dtags")
     endforeach()
 
-    # ── Headless experimental-calibration CLI (images or --videos) ──────────
-    add_executable(run_experimental_calib tests/run_experimental_calib.cpp)
-    target_include_directories(run_experimental_calib PRIVATE
-        ${CMAKE_SOURCE_DIR}/src
-        ${DIR_NVCODEC}
-    )
-    target_link_libraries(run_experimental_calib PRIVATE
-        Eigen3::Eigen
-        Ceres::ceres
-        PkgConfig::FFMPEG
-        Threads::Threads
-        ${CMAKE_DL_LIBS}
-    )
-    set_target_properties(run_experimental_calib PROPERTIES
-        CXX_STANDARD 17
-        CXX_STANDARD_REQUIRED ON
-        BUILD_RPATH "${RED_RPATH_BUILD}"
-        INSTALL_RPATH "${RED_RPATH_INSTALL}"
-    )
-    target_link_options(run_experimental_calib PRIVATE "-Wl,--disable-new-dtags")
 
 endif()
 

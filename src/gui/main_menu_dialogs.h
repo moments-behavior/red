@@ -12,7 +12,6 @@ inline void HandleMainMenuDialogs(
     std::function<void()> print_metadata_fn,
     std::function<void(const std::string &)> print_summary_fn,
     std::function<void()> nuke_inference_fn = nullptr) {
-    auto &calib_state = win.calibration;
     auto &annot_state = win.annotation;
     auto &pm = ctx.pm;
     auto &user_settings = ctx.user_settings;
@@ -46,7 +45,6 @@ inline void HandleMainMenuDialogs(
             std::string chosen =
                 ImGuiFileDialog::Instance()->GetCurrentPath();
             user_settings.default_project_root_path = chosen;
-            calib_state.project.project_root_path = chosen;
             pm.project_root_path = chosen;
             save_user_settings(user_settings);
         }
@@ -60,14 +58,9 @@ inline void HandleMainMenuDialogs(
         if (ImGuiFileDialog::Instance()->IsOk()) {
             std::string chosen =
                 ImGuiFileDialog::Instance()->GetCurrentPath();
-            std::string old_media_root =
-                user_settings.default_media_root_path;
             user_settings.default_media_root_path = chosen;
             pm.media_folder = chosen;
             annot_state.video_folder = chosen;
-            if (calib_state.project.config_file.empty() ||
-                calib_state.project.config_file == old_media_root)
-                calib_state.project.config_file = chosen;
             save_user_settings(user_settings);
         }
         ImGuiFileDialog::Instance()->Close();
@@ -141,58 +134,10 @@ inline void HandleMainMenuDialogs(
             }
 
             if (is_calib_project) {
-                // Nuke old project state before loading calibration project
-                close_project(ctx);
-                win.reset();
-                if (nuke_inference_fn) nuke_inference_fn();
-
-                // Route to Calibration Tool loader
-                auto &calib_state = win.calibration;
-                CalibrationTool::CalibProject loaded;
-                std::string err;
-                if (CalibrationTool::load_project(&loaded, cfg_path.string(), &err)) {
-                    calib_state.project = loaded;
-                    if (calib_state.project.has_aruco()) {
-                        if (!calib_state.project.config_file.empty()) {
-                            // Config file provided — parse it
-                            calib_state.config_path = calib_state.project.config_file;
-                            if (CalibrationTool::parse_config(
-                                    calib_state.config_path, calib_state.config, err)) {
-                                calib_state.config_loaded = true;
-                                calib_state.init_camera_enabled();
-                                calib_state.images_loaded = false;
-                                calib_state.aruco_done = false;
-                            } else {
-                                calib_state.config_loaded = false;
-                                calib_state.status = "Error parsing config: " + err;
-                            }
-                        } else if (!calib_state.project.camera_names.empty()) {
-                            // Config-free project — synthesize from persisted fields
-                            calib_state.config.cam_ordered =
-                                calib_state.project.camera_names;
-                            calib_state.config.charuco_setup =
-                                calib_state.project.charuco_setup;
-                            calib_state.config.img_path =
-                                calib_state.project.aruco_media_folder;
-                            calib_state.config_loaded = true;
-                            calib_state.init_camera_enabled();
-                            calib_state.images_loaded = false;
-                            calib_state.aruco_done = false;
-                        }
-                    }
-                    calib_state.project_loaded = true;
-                    calib_state.dock_pending = true;
-                    calib_state.show_create_dialog = false;
-                    calib_state.show = true;
-                    calib_state.status = "Project loaded: " +
-                        calib_state.project.project_name;
-
-                    // Track in recent projects
-                    ctx.user_settings.push_recent_project(cfg_path.string());
-                    save_user_settings(ctx.user_settings);
-                } else {
-                    popups.pushError(err);
-                }
+                // Calibration projects are no longer supported — the
+                // calibration tooling was removed. Point RED at an
+                // annotation project instead.
+                popups.pushError("Calibration projects are no longer supported.\nOpen an annotation project instead.");
             } else {
                 ProjectManager loaded;
                 std::string err;

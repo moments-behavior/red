@@ -2,7 +2,6 @@
 #include "imgui.h"
 #include "app_context.h"
 #include "gui/window_states.h"
-#include "calibration_tool.h"
 #include <ImGuiFileDialog.h>
 #include <filesystem>
 
@@ -84,52 +83,6 @@ inline void DrawWelcomeWindow(AppContext &ctx, WindowStates &win) {
     ImGui::Separator();
     ImGui::Spacing();
 
-    // Calibrate section
-    ImGui::TextColored(ImVec4(0.6f, 0.8f, 0.6f, 1.0f), "Calibrate");
-    ImGui::Spacing();
-
-    auto calibButton = [&](const char *label, const char *desc,
-                           CalibrationTool::CalibSubtype subtype) {
-        ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0, 0.5f));
-        if (ImGui::Button(label, ImVec2(-1, 0))) {
-            win.calibration.show = true;
-            win.calibration.show_create_dialog = true;
-            win.calibration.project = CalibrationTool::CalibProject{};
-            win.calibration.project.subtype = subtype;
-            win.calibration.config = CalibrationTool::CalibConfig{};
-            win.calibration.config_loaded = false;
-            win.calibration.calib_aruco_media_info = {};
-            win.calibration.calib_global_reg_info = {};
-            win.calibration.subtype_chosen = true;
-            if (subtype == CalibrationTool::CalibSubtype::Telecentric)
-                win.calibration.project.camera_model = CalibrationTool::CameraModel::Telecentric;
-        }
-        ImGui::PopStyleVar();
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("%s", desc);
-    };
-
-    calibButton("ArUco Calibration",
-                "Calibrate cameras from ChArUco board images or videos",
-                CalibrationTool::CalibSubtype::ArucoFull);
-    calibButton("PointSource Refinement",
-                "Refine an existing calibration with light wand data",
-                CalibrationTool::CalibSubtype::PointSourceRefinement);
-    calibButton("PointSource From Scratch",
-                "Calibrate from ChArUco board + light wand (no prior calibration needed)",
-                CalibrationTool::CalibSubtype::PointSourceFromScratch);
-    calibButton("Telecentric DLT",
-                "Calibrate telecentric cameras from known 3D landmarks",
-                CalibrationTool::CalibSubtype::Telecentric);
-    calibButton("Cropped-Sensor Refinement",
-                "Two-stage: full-frame ChArUco calibration + posts, then refine "
-                "intrinsics for a sensor ROI crop",
-                CalibrationTool::CalibSubtype::CroppedRefinement);
-
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
-
     // Annotate section
     ImGui::TextColored(ImVec4(0.8f, 0.6f, 0.6f, 1.0f), "Annotate");
     ImGui::Spacing();
@@ -183,7 +136,8 @@ inline void DrawWelcomeWindow(AppContext &ctx, WindowStates &win) {
                 cfg.path = p.parent_path().string();
                 cfg.fileName = p.filename().string();
                 // Use ChooseProject — the handler in main_menu_dialogs.h
-                // detects calibration vs annotation from JSON and routes correctly.
+                // loads the annotation project and reports an error for
+                // legacy calibration projects.
                 ImGuiFileDialog::Instance()->OpenDialog(
                     "ChooseProject", "Load Project",
                     "Red Project{.redproj}", cfg);

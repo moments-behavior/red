@@ -1,6 +1,5 @@
 #pragma once
 #include "gui/labeling_tool_window.h"
-#include "gui/calib_tool_state.h"
 #include "gui/annotation_dialog.h"
 #include "gui/settings_window.h"
 #include "gui/transport_bar.h"
@@ -25,7 +24,6 @@
 // heavyweight runtime objects, not UI window states.
 struct WindowStates {
     LabelingToolState labeling;
-    CalibrationToolState calibration;
     AnnotationDialogState annotation;
     SettingsState settings;
     TransportBarState transport;
@@ -50,85 +48,6 @@ struct WindowStates {
     // Waits on async futures, joins threads, clears all project-specific data.
     void reset() {
         labeling = LabelingToolState{};
-        // CalibrationToolState has futures + thread — wait then clear fields
-        if (calibration.pointsource_viz.worker.joinable())
-            calibration.pointsource_viz.worker.join();
-        calibration.pointsource_viz.ready.clear();
-        calibration.pointsource_viz.pending.clear();
-        // Note: future destructors from std::async block until complete
-        calibration.show = false;
-        calibration.project_loaded = false;
-        calibration.show_create_dialog = true;
-        calibration.subtype_chosen = false;
-        calibration.config_loaded = false;
-        calibration.images_loaded = false;
-        // Unified aruco pipeline
-        calibration.aruco_running_flag = false;
-        calibration.aruco_done = false;
-        calibration.aruco_media_loaded = false;
-        // PointSource refinement
-        calibration.pointsource_ready = false;
-        calibration.pointsource_running = false;
-        calibration.pointsource_done = false;
-        calibration.pointsource_status.clear();
-        calibration.pointsource_show_detection = false;
-        // SuperPoint
-        calibration.sp_running = false;
-        calibration.sp_done = false;
-        calibration.sp_status.clear();
-        // Manual keypoint
-        calibration.kp_skeleton_ready = false;
-        calibration.kp_running = false;
-        calibration.kp_refine_done = false;
-        calibration.kp_videos_loaded = false;
-        calibration.kp_status.clear();
-        // Telecentric
-        calibration.tele_videos_loaded = false;
-        calibration.tele_dlt_running = false;
-        calibration.tele_dlt_done = false;
-        calibration.tele_dlt_status.clear();
-        calibration.tele_run_history.clear();
-        calibration.tele_deferred_label_frames = 0;
-        // General
-        calibration.status.clear();
-        // Clear stale result data (can be large)
-        calibration.aruco_result = {};
-        calibration.tele_dlt_result = {};
-        calibration.pointsource_result = {};
-        calibration.loaded_result = {};
-        // Null raw pointers to prevent dangling references
-        calibration.tele_viewer.show = false;
-        calibration.tele_viewer.dlt_result = nullptr;
-        calibration.tele_viewer.landmarks_3d.clear();
-        calibration.calib_viewer.show = false;
-        calibration.calib_viewer.result = nullptr;
-        // Clear stale project/config data
-        calibration.project = {};
-        calibration.config = {};
-        calibration.config_path.clear();
-        calibration.pointsource_config = {};
-        calibration.dock_pending = false;
-        calibration.request_dock_labeling = false;
-        calibration.aruco_start_frame = 0;
-        calibration.aruco_stop_frame = 0;
-        calibration.aruco_frame_step = 10;
-        calibration.aruco_total_frames = 0;
-        calibration.aruco_video_count = 0;
-        calibration.aruco_sync_by_timestamp = false;
-        calibration.aruco_ts_pattern = "cam{cam}_timestamps_*.csv";
-        calibration.aruco_sync_status.clear();
-        calibration.aruco_sync_ok = false;
-        calibration.aruco_ba_lock_focal = false;
-        calibration.aruco_ba_lock_principal = false;
-        calibration.aruco_ba_lock_distortion = false;
-        calibration.tele_flip_y = true;
-        calibration.tele_square_pixels = false;
-        calibration.tele_zero_skew = false;
-        calibration.tele_do_ba = true;
-        calibration.tele_method = 0;
-        calibration.pointsource_total_frames = 0;
-        calibration.pointsource_focus_window = false;
-        calibration.pointsource_progress = std::make_shared<PointSourceCalibration::DetectionProgress>();
         annotation.show = false;
         annotation.video_folder.clear();
         annotation.discovered_cameras.clear();

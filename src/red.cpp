@@ -33,8 +33,6 @@
 #include "gui/bout_filter_preview.h"
 #include "gui/annotation_dialog.h"
 #include "gui/body_parts_window.h"
-#include "gui/calibration_tool_window.h"
-#include "gui/crop_designer.h"
 #include "gui/labeling_tool_window.h"
 #include "gui/project_window.h"
 #include "gui/settings_window.h"
@@ -67,22 +65,10 @@
 #include "render.h"
 #include "skeleton.h"
 #include "utils.h"
-#include "calibration_tool.h"
-#include "calibration_pipeline.h"
 #include "app_context.h"
 #include "deferred_queue.h"
 #include "user_settings.h"
 #include "jarvis_export.h"
-#include "pointsource_calibration.h"
-#ifdef __APPLE__
-#include "aruco_metal.h"
-#include "pointsource_metal.h"
-#elif defined(_WIN32) || defined(__linux__)
-#include "aruco_cuda.h"
-#if defined(USE_CUDA_POINTSOURCE)
-#include "pointsource_cuda.h"
-#endif
-#endif
 #include <ImGuiFileDialog.h>
 #include <algorithm>
 #include <climits>                        // INT_MAX (only pulled in via a __linux__-guarded <limits.h> otherwise)
@@ -355,13 +341,6 @@ int main(int argc, char **argv) {
     win.jarvis_export.seed = user_settings.jarvis_seed;
     win.jarvis_export.jpeg_quality = user_settings.jarvis_jpeg_quality;
 
-    win.calibration.project.project_root_path =
-        user_settings.default_project_root_path.empty()
-            ? red_data_dir
-            : user_settings.default_project_root_path;
-    if (!user_settings.default_media_root_path.empty())
-        win.calibration.project.config_file = user_settings.default_media_root_path;
-
     win.export_win.margin = user_settings.jarvis_margin;
     win.export_win.train_ratio = user_settings.jarvis_train_ratio;
     win.export_win.seed = user_settings.jarvis_seed;
@@ -379,22 +358,6 @@ int main(int argc, char **argv) {
     JarvisHybridNetState jarvis_hn_state;
 #endif
 #endif
-
-    // Default SuperPoint model path: look relative to exe (../models/superpoint/)
-    {
-        std::string exe = window->exe_dir;
-        std::vector<std::string> search = {
-            exe + "/../models/superpoint/superpoint.mlpackage",   // build tree
-            exe + "/models/superpoint/superpoint.mlpackage",      // installed
-            exe + "/../share/red/models/superpoint/superpoint.mlpackage", // Homebrew
-        };
-        for (const auto &path : search) {
-            if (std::filesystem::exists(path)) {
-                win.calibration.sp_model_path = std::filesystem::canonical(path).string();
-                break;
-            }
-        }
-    }
 
     win.annotation.video_folder = user_settings.default_media_root_path.empty()
                                      ? media_root_dir
@@ -481,41 +444,6 @@ int main(int argc, char **argv) {
         }
     }
 
-    // Calibration Tool callbacks
-    CalibrationToolCallbacks calib_cb;
-    calib_cb.load_images = [&ctx](std::map<std::string, std::string> &files) {
-        load_images(files, ctx.ps, ctx.pm, ctx.imgs_names, ctx.scene,
-                    ctx.dc_context, ctx.label_buffer_size,
-                    ctx.decoder_threads, ctx.is_view_focused,
-                    ctx.window_was_decoding);
-        ctx.input_is_imgs = true;
-    };
-    calib_cb.load_videos = [&ctx]() {
-        std::map<std::string, std::string> empty_selected_files;
-        load_videos(empty_selected_files, ctx.ps, ctx.pm,
-                    ctx.window_was_decoding, ctx.demuxers, ctx.dc_context,
-                    ctx.scene, ctx.label_buffer_size, ctx.decoder_threads,
-                    ctx.is_view_focused);
-        ctx.input_is_imgs = false;
-    };
-    calib_cb.unload_media = [&ctx]() {
-        unload_media(ctx.ps, ctx.pm, ctx.demuxers, ctx.dc_context,
-                     ctx.scene, ctx.decoder_threads,
-                     ctx.is_view_focused, ctx.window_was_decoding);
-    };
-    calib_cb.copy_default_layout = [&ctx](const std::string &proj_path) {
-        copy_default_layout_to_project(ctx, proj_path);
-    };
-    calib_cb.switch_ini = [&ctx](const std::string &proj_path) {
-        // Use the shared robust ini-switch (with dock-node fixup) so calibration
-        // projects get a correct layout on a mid-session load -- same machinery
-        // the annotation path uses. The bare LoadIniSettingsFromDisk used here
-        // previously left the dock tree scrambled (labeling windows orphaned).
-        switch_ini_to_path(ctx, proj_path);
-    };
-    calib_cb.print_metadata = print_metadata;
-    calib_cb.deferred = &deferred;
-
     // Annotation create callback (shared by annotation dialog panel)
     AnnotationCreateCallback annot_create_cb =
         [&](ProjectManager &pm_ref, std::string &err) -> bool {
@@ -601,9 +529,6 @@ int main(int argc, char **argv) {
     panels.add({"JARVIS Import",
                 [&]() { DrawJarvisImportWindow(win.jarvis_import, ctx); },
                 nullptr});
-    panels.add({"Calibration Tool",
-                [&]() { DrawCalibrationToolWindow(win.calibration, ctx, calib_cb); },
-                nullptr});
     panels.add({"Settings",
                 [&]() { DrawSettingsWindow(win.settings, ctx); },
                 nullptr});
@@ -629,7 +554,7 @@ int main(int argc, char **argv) {
     panels.add({"Welcome",
                 [&]() { DrawWelcomeWindow(ctx, win); },
                 [&]() { return pm.project_path.empty() && !ps.video_loaded &&
-                                !win.calibration.show && !win.annotation.show &&
+                                !win.annotation.show &&
                                 !ImGuiFileDialog::Instance()->IsOpened(); }});
     panels.add({"JARVIS Predict",
                 [&]() { DrawJarvisPredictWindow(win.jarvis_predict, jarvis_state,
@@ -778,22 +703,6 @@ int main(int argc, char **argv) {
         DrawTransportBar(win.transport, ctx);
 
         ImGui::DockSpaceOverViewport(0x00000001);
-
-        // "Label Landmarks" request: dock the Keypoints + Labeling Tool windows
-        // into a fresh left sidebar and focus them. Done here (right after the
-        // dockspace node exists, before panels submit) via DockBuilder so the
-        // placement is deterministic -- it does not depend on the .ini layout,
-        // which can be corrupted by a mid-session reload on a fresh project.
-        if (win.calibration.request_dock_labeling) {
-            win.calibration.request_dock_labeling = false;
-            ImGuiID root = 0x00000001;
-            ImGuiID left = 0;
-            ImGui::DockBuilderSplitNode(root, ImGuiDir_Left, 0.20f, &left, &root);
-            ImGui::DockBuilderDockWindow("Keypoints", left);
-            ImGui::DockBuilderDockWindow("Labeling Tool", left);
-            ImGui::DockBuilderFinish(0x00000001);
-            ImGui::SetWindowFocus("Labeling Tool");
-        }
 
         // pumpctl writes its dispense log into orange's recording folder, so
         // pick it up whenever the loaded media changes. Cheap no-op otherwise.
@@ -1017,267 +926,6 @@ int main(int argc, char **argv) {
 
         // Render a video frame
         if (ps.video_loaded) {
-#ifdef __APPLE__
-            // --- Laser detection viz: dispatch once before camera loop ---
-            // This must run before per-camera iteration so that hidden cameras
-            // (not in a visible ImGui window) still get processed.
-            if (win.calibration.pointsource_show_detection && win.calibration.pointsource_ready) {
-                auto &lv = win.calibration.pointsource_viz;
-                auto &lc = win.calibration.pointsource_config;
-                int mac_head_dispatch = ps.play_video ? ps.read_head : select_corr_head;
-                int fn0 = scene->display_buffer[0][mac_head_dispatch].frame_number;
-
-                // Collect results from background thread
-                if (!lv.computing.load(std::memory_order_acquire) &&
-                    !lv.pending.empty()) {
-                    if (lv.worker.joinable())
-                        lv.worker.join();
-                    lv.ready = std::move(lv.pending);
-                    lv.pending.clear();
-                    // Mark all as needing GPU upload
-                    for (auto &cr : lv.ready)
-                        cr.uploaded = false;
-                }
-
-                // Check if we need new work
-                bool params_changed =
-                    lc.green_threshold != lv.last_green_th ||
-                    lc.green_dominance != lv.last_green_dom ||
-                    lc.min_blob_pixels != lv.last_min_blob ||
-                    lc.max_blob_pixels != lv.last_max_blob;
-                bool frame_changed = lv.ready.empty() ||
-                    fn0 != lv.ready[0].frame_num;
-                bool need_dispatch = (frame_changed || params_changed) &&
-                    !lv.computing.load(std::memory_order_relaxed);
-
-                if (need_dispatch) {
-                    if (lv.worker.joinable())
-                        lv.worker.join();
-
-                    // Lazy-init Metal context for GPU viz
-                    if (!lv.metal_ctx)
-                        lv.metal_ctx = pointsource_metal_create();
-
-                    // Retain CVPixelBuffers for background thread
-                    struct CamInput {
-                        CVPixelBufferRef pixel_buffer;
-                        int width, height, frame_num;
-                        bool needs_rgba;  // visible cameras need RGBA for texture upload
-                    };
-                    auto inputs = std::make_shared<std::vector<CamInput>>(scene->num_cams);
-                    for (int ci = 0; ci < scene->num_cams; ci++) {
-                        auto &inp = (*inputs)[ci];
-                        inp.width = scene->image_width[ci];
-                        inp.height = scene->image_height[ci];
-                        inp.frame_num = scene->display_buffer[ci][mac_head_dispatch].frame_number;
-                        const std::string &cam_name = pm.camera_names[ci];
-                        inp.needs_rgba = window_is_visible.count(cam_name) &&
-                                         window_is_visible.at(cam_name);
-                        CVPixelBufferRef cpb = scene->display_buffer[ci][mac_head_dispatch].pixel_buffer;
-                        if (cpb) {
-                            CVPixelBufferRetain(cpb);
-                            inp.pixel_buffer = cpb;
-                        } else {
-                            inp.pixel_buffer = nullptr;
-                        }
-                    }
-
-                    int green_th = lc.green_threshold;
-                    int green_dom = lc.green_dominance;
-                    int min_blob = lc.min_blob_pixels;
-                    int max_blob = lc.max_blob_pixels;
-                    bool smart_blob = lc.smart_blob;
-                    int ncams = scene->num_cams;
-
-                    lv.computing.store(true, std::memory_order_release);
-                    lv.last_green_th = green_th;
-                    lv.last_green_dom = green_dom;
-                    lv.last_min_blob = min_blob;
-                    lv.last_max_blob = max_blob;
-
-                    auto metal_ctx = lv.metal_ctx;
-                    lv.worker = std::thread(
-                        [inputs, ncams, green_th, green_dom,
-                         min_blob, max_blob, smart_blob, metal_ctx, &lv]() {
-                            std::vector<PointSourceVizState::CamResult> results(ncams);
-
-                            // Phase 1: ALL cameras in parallel via fast detect (for stats)
-                            {
-                                std::vector<std::thread> threads;
-                                for (int ci = 0; ci < ncams; ci++) {
-                                    auto &inp = (*inputs)[ci];
-                                    if (!inp.pixel_buffer) continue;
-                                    threads.emplace_back([&inp, &results, ci,
-                                        metal_ctx, green_th, green_dom, min_blob, max_blob, smart_blob]() {
-                                        auto &res = results[ci];
-                                        res.frame_num = inp.frame_num;
-                                        auto spot = pointsource_metal_detect(
-                                            metal_ctx, inp.pixel_buffer,
-                                            green_th, green_dom, min_blob, max_blob, smart_blob);
-                                        if (spot.found) {
-                                            res.num_blobs = 1;
-                                        } else if (spot.pixel_count > 0) {
-                                            res.num_blobs = -1; // ambiguous
-                                        }
-                                        res.total_mask_pixels = spot.pixel_count;
-                                    });
-                                }
-                                for (auto &t : threads) t.join();
-                            }
-
-                            // Phase 2: visible cameras get RGBA overlay (sequential, shared ctx)
-                            for (int ci = 0; ci < ncams; ci++) {
-                                auto &inp = (*inputs)[ci];
-                                if (!inp.pixel_buffer || !inp.needs_rgba) {
-                                    if (inp.pixel_buffer) CVPixelBufferRelease(inp.pixel_buffer);
-                                    continue;
-                                }
-                                auto &res = results[ci];
-                                res.rgba.resize(inp.width * inp.height * 4);
-                                pointsource_metal_detect_viz(
-                                    metal_ctx, inp.pixel_buffer,
-                                    green_th, green_dom, min_blob, max_blob,
-                                    res.rgba.data());
-                                // Stats already populated by Phase 1 — don't overwrite
-                                CVPixelBufferRelease(inp.pixel_buffer);
-                            }
-
-                            lv.pending = std::move(results);
-                            lv.computing.store(false, std::memory_order_release);
-                        });
-                }
-            }
-#elif (defined(_WIN32) || defined(__linux__)) && defined(USE_CUDA_POINTSOURCE)
-            // --- Windows/Linux: Laser detection viz dispatch (CUDA) ---
-            if (win.calibration.pointsource_show_detection && win.calibration.pointsource_ready) {
-                auto &lv = win.calibration.pointsource_viz;
-                auto &lc = win.calibration.pointsource_config;
-                int win_head = ps.play_video ? ps.read_head : select_corr_head;
-                int fn0 = scene->display_buffer[0][win_head].frame_number;
-
-                // Collect results from background thread
-                if (!lv.computing.load(std::memory_order_acquire) &&
-                    !lv.pending.empty()) {
-                    if (lv.worker.joinable())
-                        lv.worker.join();
-                    lv.ready = std::move(lv.pending);
-                    lv.pending.clear();
-                    for (auto &cr : lv.ready)
-                        cr.uploaded = false;
-                }
-
-                // Check if we need new work
-                bool params_changed =
-                    lc.green_threshold != lv.last_green_th ||
-                    lc.green_dominance != lv.last_green_dom ||
-                    lc.min_blob_pixels != lv.last_min_blob ||
-                    lc.max_blob_pixels != lv.last_max_blob;
-                bool frame_changed = lv.ready.empty() ||
-                    fn0 != lv.ready[0].frame_num;
-                bool need_dispatch = (frame_changed || params_changed) &&
-                    !lv.computing.load(std::memory_order_relaxed);
-
-                if (need_dispatch) {
-                    if (lv.worker.joinable())
-                        lv.worker.join();
-
-                    // Lazy-init CUDA context for GPU viz
-                    if (!lv.cuda_ctx)
-                        lv.cuda_ctx = pointsource_cuda_create();
-
-                    // Snapshot RGBA frame data for background thread.
-                    // Display buffer is RGBA (from Nv12ToColor32<RGBA32>).
-                    // The CUDA kernels work with RGBA: G is at offset 1 in both
-                    // RGBA and BGRA, and the R/B threshold checks are symmetric.
-                    struct CamInput {
-                        std::vector<uint8_t> rgba_cpu;  // CPU copy of frame
-                        int width, height, frame_num;
-                        bool needs_rgba;  // visible cameras need viz overlay
-                    };
-                    int ncams = scene->num_cams;
-                    auto inputs = std::make_shared<std::vector<CamInput>>(ncams);
-                    for (int ci = 0; ci < ncams; ci++) {
-                        auto &inp = (*inputs)[ci];
-                        int w = scene->image_width[ci];
-                        int h = scene->image_height[ci];
-                        inp.width = w;
-                        inp.height = h;
-                        inp.frame_num = scene->display_buffer[ci][win_head].frame_number;
-                        const std::string &cam_name = pm.camera_names[ci];
-                        inp.needs_rgba = window_is_visible.count(cam_name) &&
-                                         window_is_visible.at(cam_name);
-
-                        // Copy frame to CPU for background processing
-                        size_t frame_bytes = (size_t)w * h * 4;
-                        inp.rgba_cpu.resize(frame_bytes);
-                        unsigned char *src_frame = scene->display_buffer[ci][win_head].frame;
-                        if (src_frame) {
-                            if (scene->use_cpu_buffer) {
-                                memcpy(inp.rgba_cpu.data(), src_frame, frame_bytes);
-                            } else {
-                                cudaMemcpy(inp.rgba_cpu.data(), src_frame, frame_bytes,
-                                           cudaMemcpyDeviceToHost);
-                            }
-                        }
-                    }
-
-                    int green_th = lc.green_threshold;
-                    int green_dom = lc.green_dominance;
-                    int min_blob = lc.min_blob_pixels;
-                    int max_blob = lc.max_blob_pixels;
-                    bool smart_blob = lc.smart_blob;
-
-                    lv.computing.store(true, std::memory_order_release);
-                    lv.last_green_th = green_th;
-                    lv.last_green_dom = green_dom;
-                    lv.last_min_blob = min_blob;
-                    lv.last_max_blob = max_blob;
-
-                    auto cuda_ctx = lv.cuda_ctx;
-                    lv.worker = std::thread(
-                        [inputs, ncams, green_th, green_dom,
-                         min_blob, max_blob, smart_blob, cuda_ctx, &lv]() {
-                            std::vector<PointSourceVizState::CamResult> results(ncams);
-
-                            // Phase 1: detect spots on all cameras (stats)
-                            for (int ci = 0; ci < ncams; ci++) {
-                                auto &inp = (*inputs)[ci];
-                                if (inp.rgba_cpu.empty()) continue;
-                                auto &res = results[ci];
-                                res.frame_num = inp.frame_num;
-                                int stride = inp.width * 4;
-                                auto spot = pointsource_cuda_detect(
-                                    cuda_ctx, inp.rgba_cpu.data(),
-                                    inp.width, inp.height, stride,
-                                    green_th, green_dom, min_blob, max_blob, smart_blob);
-                                if (spot.found) {
-                                    res.num_blobs = 1;
-                                } else if (spot.pixel_count > 0) {
-                                    res.num_blobs = -1; // ambiguous
-                                }
-                                res.total_mask_pixels = spot.pixel_count;
-                            }
-
-                            // Phase 2: visible cameras get RGBA overlay
-                            for (int ci = 0; ci < ncams; ci++) {
-                                auto &inp = (*inputs)[ci];
-                                if (inp.rgba_cpu.empty() || !inp.needs_rgba) continue;
-                                auto &res = results[ci];
-                                res.rgba.resize(inp.width * inp.height * 4);
-                                int stride = inp.width * 4;
-                                pointsource_cuda_detect_viz(
-                                    cuda_ctx, inp.rgba_cpu.data(),
-                                    inp.width, inp.height, stride,
-                                    green_th, green_dom, min_blob, max_blob,
-                                    res.rgba.data());
-                            }
-
-                            lv.pending = std::move(results);
-                            lv.computing.store(false, std::memory_order_release);
-                        });
-                }
-            }
-#endif // __APPLE__ / _WIN32
 
             for (int j = 0; j < scene->num_cams; j++) {
                 const std::string &win_name = pm.camera_names[j];
@@ -1318,8 +966,7 @@ int main(int argc, char **argv) {
                 }
 
                 if (ps.play_video) {
-                    window_need_decoding[win_name].store(
-                        is_visible || (win.calibration.pointsource_show_detection && win.calibration.pointsource_ready));
+                    window_need_decoding[win_name].store(is_visible);
                 };
 
                 if (is_visible) {
@@ -1339,30 +986,7 @@ int main(int argc, char **argv) {
                         uint32_t h = scene->image_height[j];
                         bool did_upload = false;
 
-                        if (win.calibration.pointsource_show_detection && win.calibration.pointsource_ready) {
-                            // Upload ready result for this camera if available
-                            auto &lv = win.calibration.pointsource_viz;
-                            if (j < (int)lv.ready.size() &&
-                                !lv.ready[j].rgba.empty() &&
-                                !lv.ready[j].uploaded) {
-                                metal_upload_texture(j,
-                                    lv.ready[j].rgba.data(), w, h);
-                                lv.ready[j].uploaded = true;
-                                mac_last_uploaded_frame[j] = -1; // force re-upload when viz off
-                                did_upload = true;
-                            } else if (fn != mac_last_uploaded_frame[j] && lv.ready.empty()) {
-                                // No results yet — show normal frame
-                                CVPixelBufferRef pb =
-                                    scene->display_buffer[j][mac_head].pixel_buffer;
-                                if (pb)
-                                    metal_upload_pixelbuf(j, pb, w, h);
-                                else
-                                    metal_upload_texture(j,
-                                        scene->display_buffer[j][mac_head].frame, w, h);
-                                mac_last_uploaded_frame[j] = fn;
-                                did_upload = true;
-                            }
-                        } else if (fn != mac_last_uploaded_frame[j]) {
+                        if (fn != mac_last_uploaded_frame[j]) {
                             CVPixelBufferRef pb =
                                 scene->display_buffer[j][mac_head].pixel_buffer;
                             if (pb) {
@@ -1408,27 +1032,7 @@ int main(int argc, char **argv) {
                                 &scene->pbo_cuda[j].cuda_resource);
                         }
 
-                        bool viz_uploaded = false;
-#ifdef USE_CUDA_POINTSOURCE
-                        // Check for PointSource viz overlay data
-                        if (win.calibration.pointsource_show_detection &&
-                            win.calibration.pointsource_ready) {
-                            auto &lv = win.calibration.pointsource_viz;
-                            if (j < (int)lv.ready.size() &&
-                                !lv.ready[j].rgba.empty() &&
-                                !lv.ready[j].uploaded) {
-                                // Upload viz overlay (CPU RGBA) to PBO
-                                ck(cudaMemcpy(
-                                    scene->pbo_cuda[j].cuda_buffer,
-                                    lv.ready[j].rgba.data(),
-                                    scene->image_width[j] * scene->image_height[j] * 4,
-                                    cudaMemcpyHostToDevice));
-                                lv.ready[j].uploaded = true;
-                                viz_uploaded = true;
-                            }
-                        }
-#endif
-                        if (!viz_uploaded) {
+                        {
                             // Shared by play + paused branches below. The
                             // contrast/brightness kernel is a no-op at
                             // identity (alpha=1, beta=0); skip when defaults
@@ -1691,10 +1295,6 @@ int main(int argc, char **argv) {
                             u32 frame = (u32)current_frame_num;
                             int nn = skeleton.num_nodes;
                             int nc = (int)scene->num_cams;
-
-                            // Crop designer (cropped-sensor calibration wizard)
-                            crop_designer_draw(win.calibration, annotations,
-                                               j, iw, ih);
 
                             // Bbox tool
                             if (win.bbox.enabled) {

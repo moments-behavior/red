@@ -5,7 +5,6 @@
 #include <ImGuiFileDialog.h>
 
 inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
-    auto &calib_state      = win.calibration;
     auto &annot_state      = win.annotation;
     auto &settings_state   = win.settings;
     auto &jarvis_export_state = win.jarvis_export;
@@ -89,32 +88,6 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
             cfg.flags = ImGuiFileDialogFlags_Modal;
             ImGuiFileDialog::Instance()->OpenDialog(
                 "LoadAnnotProject", "Load Annotation Project",
-                "Red Project{.redproj}", cfg);
-        }
-        ImGui::EndMenu();
-    }
-
-    if (ImGui::BeginMenu("Calibrate")) {
-        if (ImGui::MenuItem("Create Calibration Project")) {
-            calib_state.show = true;
-            calib_state.show_create_dialog = true;
-            // Reset project fields for a fresh dialog
-            calib_state.project = CalibrationTool::CalibProject{};
-            calib_state.config = CalibrationTool::CalibConfig{};
-            calib_state.config_loaded = false;
-            calib_state.calib_aruco_media_info = {};
-            calib_state.calib_global_reg_info = {};
-        }
-        if (ImGui::MenuItem("Load Calibration Project")) {
-            IGFD::FileDialogConfig cfg;
-            cfg.countSelectionMax = 1;
-            cfg.path =
-                user_settings.default_project_root_path.empty()
-                    ? ctx.red_data_dir
-                    : user_settings.default_project_root_path;
-            cfg.flags = ImGuiFileDialogFlags_Modal;
-            ImGuiFileDialog::Instance()->OpenDialog(
-                "LoadCalibProject", "Load Calibration Project",
                 "Red Project{.redproj}", cfg);
         }
         ImGui::EndMenu();
