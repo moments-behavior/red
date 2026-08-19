@@ -133,9 +133,6 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
     }
 
     if (ImGui::BeginMenu("View")) {
-        if (ImGui::MenuItem("Settings")) {
-            settings_state.show = true;
-        }
         if (ImGui::MenuItem("Pose Stats")) {
             win.pose_stats.show = true;
         }
@@ -182,6 +179,13 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
         ImGui::SetTooltip("Save Labels");
     ImGui::EndDisabled();
+
+    // Settings
+    if (ImGui::MenuItem(ICON_FK_COG "##toolbar_settings")) {
+        settings_state.show = true;
+    }
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+        ImGui::SetTooltip("Settings");
 
     // --- Right-aligned project name ---
     if (!pm.project_name.empty()) {
