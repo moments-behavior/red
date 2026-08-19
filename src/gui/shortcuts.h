@@ -10,6 +10,7 @@
 // Scope: the shortcuts handled in red.cpp + Ctrl+S + the peek key. The
 // tool-mode keys (bbox/OBB/SAM) are migrated in a later pass; until then they
 // keep literal labels in help_content.h.
+#include "IconsForkAwesome.h"
 #include <imgui.h>
 #include <string>
 
@@ -115,10 +116,13 @@ inline std::string key_name(ImGuiKey k) {
     if (k >= ImGuiKey_0 && k <= ImGuiKey_9)
         return std::string(1, (char)('0' + (k - ImGuiKey_0)));
     switch (k) {
-        case ImGuiKey_LeftArrow:  return "\xE2\x86\x90"; // <-
-        case ImGuiKey_RightArrow: return "\xE2\x86\x92"; // ->
-        case ImGuiKey_UpArrow:    return "\xE2\x86\x91";
-        case ImGuiKey_DownArrow:  return "\xE2\x86\x93";
+        // Arrow keys use the ForkAwesome glyphs: Roboto has no U+2190-2193
+        // block, but the icon font is merged into the same atlas (gx_helper.h),
+        // so these render as real arrows rather than the fallback '?'.
+        case ImGuiKey_LeftArrow:  return ICON_FK_ARROW_LEFT;
+        case ImGuiKey_RightArrow: return ICON_FK_ARROW_RIGHT;
+        case ImGuiKey_UpArrow:    return ICON_FK_ARROW_UP;
+        case ImGuiKey_DownArrow:  return ICON_FK_ARROW_DOWN;
         case ImGuiKey_Comma:      return ",";
         case ImGuiKey_Period:     return ".";
         case ImGuiKey_Space:      return "Space";

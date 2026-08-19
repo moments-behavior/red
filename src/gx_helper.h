@@ -181,7 +181,20 @@ inline void gx_imgui_init(gx_context *context) {
                 context->exe_dir.c_str());
         font_dir = context->exe_dir + "/../fonts"; // best-effort fallback
     }
-    io.Fonts->AddFontFromFileTTF((font_dir + "/Roboto-Regular.ttf").c_str(), 15.0f);
+    // Roboto's glyph range. Without this ImGui uses GetGlyphRangesDefault()
+    // (Basic Latin + Latin-1, 0x20-0xFF) and every codepoint above it renders
+    // as the fallback '?' -- which is what the em dashes in the UI text did.
+    // Only blocks Roboto actually covers are listed; it has no Arrows block
+    // (U+2190-21FF), so menu paths use ASCII '>' rather than an arrow glyph.
+    // Must be static: ImGui keeps the pointer and reads it at atlas-build time.
+    static const ImWchar roboto_ranges[] = {
+        0x0020, 0x00FF,  // Basic Latin + Latin-1 Supplement
+        0x2000, 0x206F,  // General Punctuation (em dash U+2014, ellipsis U+2026)
+        0x2200, 0x22FF,  // Mathematical Operators (>= U+2265)
+        0,
+    };
+    io.Fonts->AddFontFromFileTTF((font_dir + "/Roboto-Regular.ttf").c_str(), 15.0f,
+                                 nullptr, roboto_ranges);
     static const ImWchar icons_ranges[] = {ICON_MIN_FK, ICON_MAX_16_FK, 0};
     ImFontConfig icons_config;
     icons_config.MergeMode = true;

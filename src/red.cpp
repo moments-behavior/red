@@ -728,7 +728,7 @@ int main(int argc, char **argv) {
                     value.store(true);
                 pm.plot_keypoints_flag = true;  // reveal the Labeling Tool
                 ctx.toasts.pushSuccess("Frame " + std::to_string(pf) +
-                    " \xE2\x86\x92 Needs Improvement (" +
+                    " -> Needs Improvement (" +
                     std::to_string(placed_3d) + " keypoints)");
             } else {
                 ctx.toasts.pushError("Could not promote frame " +

@@ -128,7 +128,7 @@ inline void DrawPoseStatsWindow(PoseStatsState &st,
         if (!store.is_open() || active_store_path.empty()) {
             ImGui::TextDisabled("No prediction store loaded.");
             ImGui::TextWrapped(
-                "Import predictions with Tools \xE2\x86\x92 Import JARVIS "
+                "Import predictions with Tools > Import JARVIS "
                 "Predictions, sending them to a prediction store.");
             st.cached_store_path.clear();
             return;
