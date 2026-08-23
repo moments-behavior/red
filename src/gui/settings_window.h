@@ -5,6 +5,7 @@
 #include "global.h"
 #include "gui/panel.h"
 #include "keypoint_colors.h"
+#include "gui/label_palette.h"
 #include <ImGuiFileDialog.h>
 #include <misc/cpp/imgui_stdlib.h>
 
@@ -110,6 +111,27 @@ inline void DrawSettingsWindow(SettingsState &state, AppContext &ctx) {
                 "Applies to all camera views and the Keypoints table.");
         }
 
+        // --- Label Colors ---
+        if (ImGui::CollapsingHeader("Label Colors")) {
+            ImGui::TextDisabled(
+                "Frame-state colors in the Labeling Tool grid & timeline and "
+                "the Frame Buffer window.");
+            LabelPalette &lp = label_palette();
+            for (const auto &role : label_palette_roles()) {
+                ImVec4 &c = lp.*role.color;
+                if (ImGui::ColorEdit3(role.label, (float *)&c)) {
+                    c.w = 1.0f;
+                    s.label_colors[role.key] = {c.x, c.y, c.z};
+                    other_changed = true;
+                }
+            }
+            if (ImGui::SmallButton("Reset Label Colors")) {
+                lp = LabelPalette{};
+                s.label_colors.clear();
+                other_changed = true;
+            }
+        }
+
         // --- Playback ---
         if (ImGui::CollapsingHeader("Playback Defaults")) {
             char speed_label[16];
@@ -192,6 +214,7 @@ inline void DrawSettingsWindow(SettingsState &state, AppContext &ctx) {
             defaults.default_project_root_path = s.default_project_root_path;
             defaults.default_media_root_path = s.default_media_root_path;
             s = defaults;
+            label_palette() = LabelPalette{};
             g_keypoint_colormap = s.keypoint_colormap;
             apply_keypoint_colormap(ctx.skeleton, g_keypoint_colormap);
             display_changed = playback_changed = other_changed = true;

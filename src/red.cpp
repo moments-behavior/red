@@ -38,6 +38,7 @@
 #include "gui/bout_filter_preview.h"
 #include "gui/annotation_dialog.h"
 #include "gui/body_parts_window.h"
+#include "gui/label_palette.h"
 #include "gui/calibration_tool_window.h"
 #include "gui/crop_designer.h"
 #include "gui/labeling_tool_window.h"
@@ -308,6 +309,9 @@ int main(int argc, char **argv) {
     std::string media_root_dir;
     prepare_application_folders(red_data_dir, media_root_dir);
     UserSettings user_settings = load_user_settings();
+    // Apply any persisted label-state color overrides to the shared palette
+    // before the first frame renders (gui/label_palette.h).
+    apply_label_color_overrides(user_settings.label_colors);
     // Honor the persisted buffer mode (default GPU Buffer on first launch).
     // Frame buffers are allocated later in media_loader::render_allocate_scene_memory
     // based on this flag, so it must be set before any project is loaded.
