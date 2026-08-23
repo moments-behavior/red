@@ -140,7 +140,8 @@ inline std::string resolve_calibration_folder(const std::string &folder) {
     if (has_calib_files(folder)) return folder;
 
     std::string latest;
-    for (const auto &entry : fs::directory_iterator(folder)) {
+    std::error_code ec;
+    for (const auto &entry : fs::directory_iterator(folder, ec)) {
         if (!entry.is_directory()) continue;
         std::string name = entry.path().filename().string();
         // Timestamped folders look like YYYY_MM_DD[_HH_MM_SS]
@@ -484,14 +485,29 @@ inline std::vector<double> load_coverage_radii(
     std::ifstream f(src + "/calibration_data.json");
     if (!f.is_open()) return {};
     nlohmann::json j;
-    try { f >> j; } catch (...) { return {}; }
-    if (!j.contains("residuals") || !j.contains("camera_names")) return {};
-    const auto &r = j["residuals"];
-    if (!r.contains("obs_x") || !r.contains("camera_idx")) return {};
-    auto run_cams = j["camera_names"].get<std::vector<std::string>>();
-    auto cam_idx = r["camera_idx"].get<std::vector<int>>();
-    auto obs_x = r["obs_x"].get<std::vector<double>>();
-    auto obs_y = r["obs_y"].get<std::vector<double>>();
+    std::vector<std::string> run_cams;
+    std::vector<int> cam_idx;
+    std::vector<double> obs_x, obs_y;
+    // Whole parse inside the try: a malformed/partial file (wrong types,
+    // obs_x without obs_y) must degrade to "no coverage data", not throw
+    // into the calling button handler.
+    try {
+        f >> j;
+        if (!j.contains("residuals") || !j.contains("camera_names"))
+            return {};
+        const auto &r = j["residuals"];
+        if (!r.contains("obs_x") || !r.contains("obs_y") ||
+            !r.contains("camera_idx"))
+            return {};
+        run_cams = j["camera_names"].get<std::vector<std::string>>();
+        cam_idx = r["camera_idx"].get<std::vector<int>>();
+        obs_x = r["obs_x"].get<std::vector<double>>();
+        obs_y = r["obs_y"].get<std::vector<double>>();
+    } catch (...) {
+        return {};
+    }
+    if (obs_x.size() != cam_idx.size() || obs_y.size() != cam_idx.size())
+        return {};
 
     std::vector<double> radii(cam_names.size(), 0.0);
     for (size_t c = 0; c < cam_names.size(); c++) {

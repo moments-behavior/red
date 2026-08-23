@@ -2745,15 +2745,22 @@ inline void write_calibration_database(const CalibrationDatabase &db,
     if (!db.residuals.empty()) {
         nlohmann::json res_j;
         std::vector<int> cam_idxs, lm_ids;
-        std::vector<float> errors;
+        std::vector<float> errors, obs_xs, obs_ys;
         for (const auto &r : db.residuals) {
             cam_idxs.push_back(r.camera_idx);
             lm_ids.push_back(r.landmark_id);
             errors.push_back(r.error);
+            obs_xs.push_back(r.obs_x);
+            obs_ys.push_back(r.obs_y);
         }
         res_j["camera_idx"] = cam_idxs;
         res_j["landmark_id"] = lm_ids;
         res_j["error"] = errors;
+        // Observed pixel coords: consumed by CropCalibration::
+        // load_coverage_radii to flag posts beyond the board coverage
+        // (distortion is extrapolated there).
+        res_j["obs_x"] = obs_xs;
+        res_j["obs_y"] = obs_ys;
         res_j["count"] = (int)db.residuals.size();
         j["residuals"] = res_j;
     }

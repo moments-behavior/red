@@ -388,10 +388,13 @@ load_videos(std::map<std::string, std::string> &selected_files,
                     (u32)pm.camera_params[j].image_height != scene->image_height[j])) {
             std::cerr << "[load_videos] WARNING: " << pm.camera_names[j]
                       << " video is " << scene->image_width[j] << "x"
-                      << scene->image_height[j] << " but calibration says "
+                      << scene->image_height[j] << " but the calibration expects "
                       << pm.camera_params[j].image_width << "x"
                       << pm.camera_params[j].image_height
-                      << " — wrong calibration for this crop?" << std::endl;
+                      << " — wrong calibration for this crop?\n"
+                      << "  (If the calibration file carries no image size, "
+                      << "the expected dims were back-filled from the first "
+                      << "media loaded.)" << std::endl;
         }
     }
     render_allocate_scene_memory(scene, label_buffer_size);
