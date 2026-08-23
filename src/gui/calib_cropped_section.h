@@ -214,12 +214,21 @@ inline void DrawCalibCroppedSection(CalibrationToolState &state,
             }
             cb.print_metadata();
 
+            // The stages are mutually exclusive: full-frame actions
+            // (Setup/Triangulate/Auto-center/Export ROI/Verify) read the
+            // CURRENTLY loaded media's dims, so loading cropped media must
+            // retire the full-frame readiness flags (and vice versa) or
+            // those buttons would y-flip/shift with the wrong dims.
             if (cropped_stage) {
                 cs2.cropped_videos_loaded = true;
                 cs2.cropped_skeleton_ready = false;
+                cs2.fullframe_videos_loaded = false;
+                cs2.fullframe_skeleton_ready = false;
             } else {
                 cs2.fullframe_videos_loaded = true;
                 cs2.fullframe_skeleton_ready = false;
+                cs2.cropped_videos_loaded = false;
+                cs2.cropped_skeleton_ready = false;
             }
             if (cs2.status.empty() || cs2.status.rfind("WARNING", 0) != 0)
                 cs2.status = std::string(info.type == "videos" ? "Videos"
@@ -352,12 +361,24 @@ inline void DrawCalibCroppedSection(CalibrationToolState &state,
                    "LATEST run is used then). Changing it after applying a\n"
                    "crop requires re-applying the crop.");
         if (!proj.calibration_folder.empty()) {
-            std::string resolved = CropCalibration::resolve_calibration_folder(
-                proj.calibration_folder);
-            int found = 0;
-            for (const auto &cam : proj.camera_names)
-                if (std::filesystem::exists(resolved + "/Cam" + cam + ".yaml"))
-                    found++;
+            // Resolve + YAML-count hit the filesystem; cache and refresh
+            // every ~60 frames or when the folder changes.
+            int fc = ImGui::GetFrameCount();
+            if (cs.resolved_cache_src != proj.calibration_folder ||
+                fc - cs.resolved_last_frame > 60) {
+                cs.resolved_cache_src = proj.calibration_folder;
+                cs.resolved_last_frame = fc;
+                cs.resolved_cache = CropCalibration::resolve_calibration_folder(
+                    proj.calibration_folder);
+                cs.resolved_found = 0;
+                std::error_code res_ec;
+                for (const auto &cam : proj.camera_names)
+                    if (std::filesystem::exists(
+                            cs.resolved_cache + "/Cam" + cam + ".yaml", res_ec))
+                        cs.resolved_found++;
+            }
+            const std::string &resolved = cs.resolved_cache;
+            int found = cs.resolved_found;
             bool ok = found == (int)proj.camera_names.size() &&
                       !proj.camera_names.empty();
             ImVec4 col = ok ? ImVec4(0.5f, 1.0f, 0.5f, 1.0f)
@@ -574,6 +595,30 @@ inline void DrawCalibCroppedSection(CalibrationToolState &state,
             cs.crop_spec.cameras = seeded.cameras;
         }
 
+        // Restore the saved/imported crop spec once per session. Without
+        // this a reopened project shows all-zero offsets while "Cropped
+        // calibration ready" is displayed below — and re-applying would
+        // overwrite cropped_calibration/ with an UNSHIFTED copy.
+        if (!cs.spec_autoloaded && !proj.crop_info_file.empty() &&
+            !cs.crop_spec.cameras.empty()) {
+            cs.spec_autoloaded = true;
+            CropCalibration::CropSpec spec;
+            std::string err;
+            if (CropCalibration::load_crop_spec(proj.crop_info_file, spec,
+                                                &err)) {
+                for (auto &row : cs.crop_spec.cameras)
+                    for (const auto &imp : spec.cameras)
+                        if (imp.serial == row.serial) row = imp;
+                if (!spec.cameras.empty()) {
+                    cs.crop_w = spec.cameras[0].width;
+                    cs.crop_h = spec.cameras[0].height;
+                }
+                cs.status = "Restored crop spec from " + proj.crop_info_file;
+            } else {
+                cs.status = "Could not restore crop spec: " + err;
+            }
+        }
+
         // Write the shared crop dims into every camera row (snapped/clamped).
         auto apply_shared_dims = [&]() {
             cs.crop_w = std::max(16, crop_snap16(cs.crop_w));
@@ -584,6 +629,32 @@ inline void DrawCalibCroppedSection(CalibrationToolState &state,
                 row.offset_x = std::max(0, crop_snap16(row.offset_x));
                 row.offset_y = std::max(0, crop_snap16(row.offset_y));
             }
+        };
+
+        // What apply_shared_dims WOULD rewrite. Apply / Apply+Verify /
+        // Export ROI use this so an imported spec (per-camera dims, offsets
+        // off the 16 grid) is never silently snapped — the user confirms
+        // via the "Snap crop spec?" modal instead.
+        auto spec_snap_changes = [&]() {
+            std::vector<std::string> out;
+            int w = std::max(16, crop_snap16(cs.crop_w));
+            int h = std::max(16, crop_snap16(cs.crop_h));
+            for (const auto &row : cs.crop_spec.cameras) {
+                int ox = std::max(0, crop_snap16(row.offset_x));
+                int oy = std::max(0, crop_snap16(row.offset_y));
+                if (row.width != w || row.height != h ||
+                    row.offset_x != ox || row.offset_y != oy)
+                    out.push_back(
+                        "Cam" + row.serial + ": offset " +
+                        std::to_string(row.offset_x) + "," +
+                        std::to_string(row.offset_y) + " dims " +
+                        std::to_string(row.width) + "x" +
+                        std::to_string(row.height) + "  ->  offset " +
+                        std::to_string(ox) + "," + std::to_string(oy) +
+                        " dims " + std::to_string(w) + "x" +
+                        std::to_string(h));
+            }
+            return out;
         };
 
         // ---- Interactive designer ----
@@ -606,7 +677,8 @@ inline void DrawCalibCroppedSection(CalibrationToolState &state,
         if (ImGui::InputInt("Crop H##crop", &cs.crop_h, 16))
             apply_shared_dims();
         ImGui::SameLine();
-        ImGui::BeginDisabled(scene->num_cams == 0);
+        ImGui::BeginDisabled(scene->num_cams == 0 ||
+                             !cs.fullframe_videos_loaded);
         if (ImGui::Button("Auto-center on posts##crop")) {
             apply_shared_dims();
             auto it = ctx.annotations.find(0);
@@ -749,11 +821,8 @@ inline void DrawCalibCroppedSection(CalibrationToolState &state,
             }
             ImGuiFileDialog::Instance()->Close();
         }
-        ImGui::SameLine();
-        ImGui::BeginDisabled(proj.orange_config_folder.empty() ||
-                             cs.crop_spec.cameras.empty());
-        if (ImGui::Button("Export ROI##crop_orange")) {
-            apply_shared_dims();
+        auto do_export_roi = [&]() {
+            apply_shared_dims();  // no-op unless the user confirmed snapping
             std::vector<int> full_ws(scene->num_cams), full_hs(scene->num_cams);
             for (u32 c = 0; c < scene->num_cams; c++) {
                 full_ws[c] = (int)scene->image_width[c];
@@ -770,6 +839,21 @@ inline void DrawCalibCroppedSection(CalibrationToolState &state,
             }
             for (const auto &w : er.warnings)
                 cs.orange_status += "\n" + w;
+        };
+        ImGui::SameLine();
+        // Full-frame media must be loaded: the export clamps against the
+        // full sensor dims read from the currently loaded scene.
+        ImGui::BeginDisabled(proj.orange_config_folder.empty() ||
+                             cs.crop_spec.cameras.empty() ||
+                             !cs.fullframe_videos_loaded);
+        if (ImGui::Button("Export ROI##crop_orange")) {
+            cs.pending_snap_changes = spec_snap_changes();
+            if (cs.pending_snap_changes.empty()) {
+                do_export_roi();
+            } else {
+                cs.pending_snap_action = 3;
+                ImGui::OpenPopup("Snap crop spec?##crop");
+            }
         }
         ImGui::EndDisabled();
         ImGui::SameLine();
@@ -845,8 +929,29 @@ inline void DrawCalibCroppedSection(CalibrationToolState &state,
             return false;
         };
 
+        // Warn when the spec is suspiciously unshifted but a cropped
+        // calibration already exists (e.g. restore failed): Apply would
+        // overwrite it with an unshifted copy.
+        {
+            bool all_zero = true;
+            for (const auto &c : cs.crop_spec.cameras)
+                if (c.offset_x != 0 || c.offset_y != 0) all_zero = false;
+            if (all_zero && !cs.crop_applied &&
+                !proj.cropped_calibration_folder.empty())
+                ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f),
+                    "All offsets are 0 but a cropped calibration exists — "
+                    "applying now would overwrite it with an unshifted copy.");
+        }
         ImGui::BeginDisabled(!spec_ok || proj.calibration_folder.empty());
-        if (ImGui::Button("Apply Crop##crop")) do_apply_crop();
+        if (ImGui::Button("Apply Crop##crop")) {
+            cs.pending_snap_changes = spec_snap_changes();
+            if (cs.pending_snap_changes.empty()) {
+                do_apply_crop();
+            } else {
+                cs.pending_snap_action = 1;
+                ImGui::OpenPopup("Snap crop spec?##crop");
+            }
+        }
         ImGui::EndDisabled();
 
         // Apply + Verify: shift the full-frame post clicks into the crop and
@@ -856,29 +961,35 @@ inline void DrawCalibCroppedSection(CalibrationToolState &state,
         bool can_verify = spec_ok && !proj.calibration_folder.empty() &&
                           cs.fullframe_skeleton_ready &&
                           !proj.posts_3d_file.empty() && !cs.verify_running;
+        auto start_verify = [&]() {
+            auto full_lm = collect_posts();
+            cs.verify_dropped.clear();
+            auto crop_lm = CropCalibration::shift_landmarks_to_crop(
+                full_lm, cs.crop_spec, cs.verify_dropped);
+
+            CroppedRefinement::RefineConfig cfg;
+            cfg.calibration_folder = proj.cropped_calibration_folder;
+            cfg.posts_3d_csv = proj.posts_3d_file;
+            cfg.output_folder = proj.project_path + "/cropped_verified";
+            cfg.camera_names = proj.camera_names;
+            cfg.free_focal = false;
+
+            cs.verify_running = true;
+            cs.verify_done = false;
+            cs.status = "Verifying cropped calibration...";
+            cs.verify_future = std::async(
+                std::launch::async, [cfg, lm = crop_lm]() {
+                    return CroppedRefinement::run_cropped_refinement(cfg, lm);
+                });
+        };
         ImGui::BeginDisabled(!can_verify);
         if (ImGui::Button("Apply Crop + Verify##crop")) {
-            if (do_apply_crop()) {
-                auto full_lm = collect_posts();
-                cs.verify_dropped.clear();
-                auto crop_lm = CropCalibration::shift_landmarks_to_crop(
-                    full_lm, cs.crop_spec, cs.verify_dropped);
-
-                CroppedRefinement::RefineConfig cfg;
-                cfg.calibration_folder = proj.cropped_calibration_folder;
-                cfg.posts_3d_csv = proj.posts_3d_file;
-                cfg.output_folder = proj.project_path + "/cropped_verified";
-                cfg.camera_names = proj.camera_names;
-                cfg.free_focal = false;
-
-                cs.verify_running = true;
-                cs.verify_done = false;
-                cs.status = "Verifying cropped calibration...";
-                cs.verify_future = std::async(
-                    std::launch::async, [cfg, lm = crop_lm]() {
-                        return CroppedRefinement::run_cropped_refinement(cfg,
-                                                                         lm);
-                    });
+            cs.pending_snap_changes = spec_snap_changes();
+            if (cs.pending_snap_changes.empty()) {
+                if (do_apply_crop()) start_verify();
+            } else {
+                cs.pending_snap_action = 2;
+                ImGui::OpenPopup("Snap crop spec?##crop");
             }
         }
         ImGui::EndDisabled();
@@ -922,6 +1033,44 @@ inline void DrawCalibCroppedSection(CalibrationToolState &state,
         for (const auto &d : cs.verify_dropped)
             ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f), "%s",
                                d.c_str());
+
+        // Snap-confirmation modal: opened by Apply / Apply+Verify /
+        // Export ROI when the spec doesn't already satisfy the shared-dims
+        // + snap-16 convention (e.g. it was imported from acquisition).
+        // Snapping shifts the principal point baked into the cropped
+        // calibration, so it must never happen silently.
+        if (ImGui::BeginPopupModal("Snap crop spec?##crop", nullptr,
+                                   ImGuiWindowFlags_AlwaysAutoResize)) {
+            ImGui::TextWrapped(
+                "The crop spec doesn't match the shared-dims / multiple-of-16 "
+                "convention. Continuing will rewrite %d row(s):",
+                (int)cs.pending_snap_changes.size());
+            for (const auto &c : cs.pending_snap_changes)
+                ImGui::BulletText("%s", c.c_str());
+            ImGui::TextWrapped(
+                "Snapping changes the principal-point shift baked into the "
+                "cropped calibration. Cancel to keep the spec verbatim and "
+                "edit or re-import it instead.");
+            ImGui::Separator();
+            if (ImGui::Button("Snap & Continue##snap_ok")) {
+                int act = cs.pending_snap_action;
+                cs.pending_snap_action = 0;
+                if (act == 1) {
+                    do_apply_crop();
+                } else if (act == 2) {
+                    if (do_apply_crop()) start_verify();
+                } else if (act == 3) {
+                    do_export_roi();
+                }
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel##snap_cancel")) {
+                cs.pending_snap_action = 0;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
         ImGui::Unindent();
     }
 

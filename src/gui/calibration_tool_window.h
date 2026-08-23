@@ -533,6 +533,14 @@ inline void DrawCalibrationToolWindow(
         state.tele_dlt_status.clear();
         state.tele_run_history.clear();
         state.tele_deferred_label_frames = 0;
+        // Cropped-sensor wizard. The refine worker holds a pointer to
+        // state.cropped.status, so in-flight futures must complete before
+        // the state can be reset (they are seconds-long Ceres solves).
+        if (state.cropped.refine_future.valid())
+            state.cropped.refine_future.wait();
+        if (state.cropped.verify_future.valid())
+            state.cropped.verify_future.wait();
+        state.cropped = {};
         // General
         state.status.clear();
         state.project.camera_names.clear();

@@ -259,7 +259,19 @@ struct CalibrationToolState {
         // Step 2: crop transform
         CropCalibration::CropSpec crop_spec;
         bool crop_applied = false;
+        bool spec_autoloaded = false;  // one-shot restore from proj.crop_info_file
         std::vector<std::string> crop_warnings;
+
+        // Snap-confirmation modal (Apply / Apply+Verify / Export ROI when the
+        // spec has values the shared-dims/snap-16 convention would rewrite)
+        int pending_snap_action = 0;  // 0=none 1=apply 2=apply+verify 3=export
+        std::vector<std::string> pending_snap_changes;
+
+        // Cached stage-1 folder resolution (recomputed every ~60 frames —
+        // resolve_calibration_folder walks the directory, too slow per frame)
+        std::string resolved_cache_src, resolved_cache;
+        int resolved_found = 0;
+        int resolved_last_frame = -1000000;
 
         // Step 2: interactive crop designer (fixed-size rect on camera views)
         bool designer_enabled = false;
