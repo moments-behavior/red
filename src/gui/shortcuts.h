@@ -37,7 +37,8 @@ enum class Sc {
     SelectAllKeypoints, // Keypoints window: select every keypoint column (toggle)
     CopyKeypoints,    // Keypoints window: copy the selected node set
     PasteKeypoints,   // Keypoints window: paste the copied node set onto this frame
-    DeleteKeypoint,   // Keypoints window: delete (hovered cell / hovered column / selection)
+    DeleteKeypoint,   // Keypoints window: delete (hovered cell / hovered column / single selection)
+    DeleteSelectedKp, // Keypoints window: Shift+Delete removes the whole selected set (all cameras)
     COUNT  // sentinel: "no single bound key" (help rows that use a literal label)
 };
 
@@ -75,6 +76,7 @@ inline const Binding &binding(Sc s) {
         /* CopyKeypoints  */ {ImGuiKey_C, true, false, false, false},
         /* PasteKeypoints */ {ImGuiKey_V, true, false, false, false},
         /* DeleteKeypoint */ {ImGuiKey_Delete, false, false, false, false},
+        /* DeleteSelectedKp */ {ImGuiKey_Delete, false, true, false, false},
     };
     static_assert(sizeof(table) / sizeof(table[0]) == (size_t)Sc::COUNT,
                   "keys::binding table is out of sync with enum Sc");

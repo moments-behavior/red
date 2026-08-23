@@ -236,6 +236,9 @@ inline void DrawLabelingToolWindow(
                         skeleton.num_nodes, scene->num_cams);
                     int n = paste_keypoints(kc, fa, skeleton.num_nodes,
                                             scene->num_cams);
+                    // Match the Ctrl+V hotkey: disarm the selection so a
+                    // later Delete can't wipe the set (clipboard is kept).
+                    kc.clear_selection();
                     toasts.pushSuccess("Pasted " + std::to_string(n) +
                                        " keypoint(s)");
                 }

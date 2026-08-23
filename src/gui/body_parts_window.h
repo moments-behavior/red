@@ -69,7 +69,7 @@ inline void DrawBodyPartsWindow(AppContext &ctx) {
 
             ImGui::Spacing();
             ImGui::TextDisabled(
-                "In the Keypoints window: Ctrl+C copy, Ctrl+V paste, Delete\n"
+                "In the Keypoints window: Ctrl+C copy, Ctrl+V paste, Shift+Delete\n"
                 "removes the set (or use the Labeling Tool's Copy Sel / Paste).");
         }
     }

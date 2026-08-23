@@ -236,7 +236,8 @@ inline void DrawKeypointsWindow(AppContext &ctx) {
                                         if (kc.count() >= 2)
                                             ImGui::SetTooltip(
                                                 "%s / %s\n"
-                                                "Click: set active   Delete: remove selected set (%d)",
+                                                "Click: set active   Delete: this camera   "
+                                                "Shift+Delete: selected set (%d)",
                                                 pm.camera_names[row].c_str(),
                                                 skeleton.node_names[node].c_str(),
                                                 kc.count());
@@ -300,7 +301,7 @@ inline void DrawKeypointsWindow(AppContext &ctx) {
                             ImGui::SetTooltip(
                                 "%s\n"
                                 "Click: select   Shift/Ctrl: multi-select   "
-                                "Delete: remove selected set (%d)",
+                                "Delete: all cameras   Shift+Delete: selected set (%d)",
                                 skeleton.node_names[hc - 1].c_str(),
                                 kc.count());
                         else
@@ -365,10 +366,13 @@ inline void DrawKeypointsWindow(AppContext &ctx) {
                 }
             }
 
-            // ── Delete key (precedence: hovered cell -> hovered header ->
-            //    selection over the window) ──
-            if (keypoints_find &&
-                keys::pressed(keys::Sc::DeleteKeypoint)) {
+            // ── Delete key. Plain Delete targets what's hovered (cell ->
+            //    that camera, header name -> all cameras) or a single selected
+            //    column. Removing a 2+ multi-selection is destructive enough
+            //    (those keypoints on all cameras, no undo — and the selection
+            //    may be stale from an earlier copy) that it requires
+            //    Shift+Delete; plain Delete just shows a reminder. ──
+            if (keypoints_find && keys::pressed(keys::Sc::DeleteKeypoint)) {
                 auto &fa = annotations.at(current_frame_num);
                 const bool win_hovered = ImGui::IsWindowHovered(
                     ImGuiHoveredFlags_RootAndChildWindows);
@@ -380,19 +384,24 @@ inline void DrawKeypointsWindow(AppContext &ctx) {
                             "Deleted " + std::to_string(n) +
                             " keypoint(s) from all cameras");
                 };
-                if (win_hovered && kc.count() >= 2) {
-                    // A built-up multi-selection takes priority over whatever is
-                    // hovered, so Delete works right where you finished
-                    // selecting (over a name or a cell) — no need to move the
-                    // cursor to an empty spot first.
+                if (keys::pressed(keys::Sc::DeleteSelectedKp) && win_hovered &&
+                    kc.any()) {
                     delete_selection();
-                } else if (hover_row >= 0 && hover_node >= 0) {
-                    delete_node_from_camera(fa, hover_node, hover_row);
-                } else if (hover_header_node >= 0) {
-                    delete_node_all_cameras(fa, hover_header_node,
-                                            scene->num_cams);
-                } else if (win_hovered && kc.any()) {
-                    delete_selection();
+                } else if (!ImGui::GetIO().KeyShift) {
+                    if (hover_row >= 0 && hover_node >= 0) {
+                        delete_node_from_camera(fa, hover_node, hover_row);
+                    } else if (hover_header_node >= 0) {
+                        delete_node_all_cameras(fa, hover_header_node,
+                                                scene->num_cams);
+                    } else if (win_hovered && kc.count() == 1) {
+                        delete_selection();
+                    } else if (win_hovered && kc.count() >= 2) {
+                        ctx.toasts.push(
+                            "Shift+Delete removes the " +
+                                std::to_string(kc.count()) +
+                                " selected keypoint(s) from all cameras",
+                            Toast::Warning, 4.0f);
+                    }
                 }
             }
 
@@ -443,6 +452,10 @@ inline void DrawKeypointsWindow(AppContext &ctx) {
                         skeleton.num_nodes, scene->num_cams);
                     int n = paste_keypoints(kc, fa, skeleton.num_nodes,
                                             scene->num_cams);
+                    // Disarm the multi-selection so a later Delete can't
+                    // wipe the whole set by surprise (clipboard is kept, so
+                    // pasting onto more frames still works).
+                    kc.clear_selection();
                     ctx.toasts.pushSuccess(
                         "Pasted " + std::to_string(n) + " keypoint(s)");
                 }
