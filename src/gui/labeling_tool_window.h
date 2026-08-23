@@ -4,6 +4,7 @@
 #include "annotation_csv.h"
 #include "gui/gui_keypoints.h"
 #include "gui/keypoint_clipboard.h"
+#include "gui/label_palette.h"
 #include "gui/shortcuts.h"
 #include "IconsForkAwesome.h"
 #include "implot.h"
@@ -263,23 +264,25 @@ inline void DrawLabelingToolWindow(
         // === Collect labeled frames (shared by grid + timeline) ===
         // needs_improvement frames (promoted predictions awaiting a manual fix)
         // are collected separately so they get their own section below.
-        // Keypoint-label state, used to color the grid squares and timeline
-        // ticks:
-        //   GREEN  = every keypoint placed on every camera AND fully triangulated
-        //   PURPLE = not complete, but every placed keypoint IS triangulated
-        //   YELLOW = some placed keypoint is not (yet) triangulated
-        // (2D projects have no triangulation: complete -> GREEN, else YELLOW.)
-        enum KpLabelState { KP_YELLOW = 0, KP_PURPLE = 1, KP_GREEN = 2 };
-        auto classify_kp_state = [&](const FrameAnnotation &fa) -> int {
+        // Keypoint-label state of a frame, used to color the grid squares and
+        // timeline ticks (colors + descriptions live in kp_state_style below;
+        // the colors themselves come from label_palette()):
+        //   Complete           = every keypoint placed on every camera AND fully triangulated
+        //   AllTriangulated    = not complete, but every placed keypoint IS triangulated
+        //   NeedsTriangulation = some placed keypoint is not (yet) triangulated
+        // (2D projects have no triangulation: Complete or NeedsTriangulation.)
+        enum class KpState { NeedsTriangulation = 0, AllTriangulated, Complete, COUNT };
+        auto classify_kp_state = [&](const FrameAnnotation &fa) -> KpState {
             if (!skeleton.has_skeleton)
-                return KP_YELLOW;
+                return KpState::NeedsTriangulation;
             if (project_is_2d(pm))
-                return frame_is_complete(fa) ? KP_GREEN : KP_YELLOW;
-            bool green = scene->num_cams > 1 && frame_is_complete(fa) &&
-                         frame_is_fully_triangulated(fa, skeleton.num_nodes);
-            if (green)
-                return KP_GREEN;
-            // Purple iff every placed node (labeled in >=1 camera) is
+                return frame_is_complete(fa) ? KpState::Complete
+                                             : KpState::NeedsTriangulation;
+            bool complete = scene->num_cams > 1 && frame_is_complete(fa) &&
+                            frame_is_fully_triangulated(fa, skeleton.num_nodes);
+            if (complete)
+                return KpState::Complete;
+            // AllTriangulated iff every placed node (labeled in >=1 camera) is
             // triangulated. Triangulated implies placed, so this means the
             // placed and triangulated sets coincide.
             int placed = 0, placed_untriangulated = 0;
@@ -299,17 +302,17 @@ inline void DrawLabelingToolWindow(
                 }
             }
             if (placed > 0 && placed_untriangulated == 0)
-                return KP_PURPLE;
-            return KP_YELLOW;
+                return KpState::AllTriangulated;
+            return KpState::NeedsTriangulation;
         };
 
-        struct LabeledFrameInfo { int frame; int state; };
+        struct LabeledFrameInfo { int frame; KpState state; };
         std::vector<LabeledFrameInfo> labeled_frames;
         std::vector<LabeledFrameInfo> needs_fix_frames;
         for (const auto &[fnum, fa] : annotations) {
             if (!frame_has_any_keypoints(fa))
                 continue;
-            int state = classify_kp_state(fa);
+            KpState state = classify_kp_state(fa);
             if (fa.needs_improvement)
                 needs_fix_frames.push_back({(int)fnum, state});
             else
@@ -343,13 +346,25 @@ inline void DrawLabelingToolWindow(
         const float avail_w = ImGui::GetContentRegionAvail().x;
         const ImU32 white = IM_COL32(255, 255, 255, 255);
 
-        // Annotation type colors (shared between grid cells and timeline ticks)
-        const ImVec4 color_green(0.2f, 0.8f, 0.3f, 1.0f);
-        const ImVec4 color_yellow(0.95f, 0.85f, 0.15f, 1.0f);
-        const ImVec4 color_orange(0.9f, 0.55f, 0.12f, 1.0f);
-        const ImVec4 color_purple(0.63f, 0.35f, 0.86f, 1.0f);
-        const ImVec4 color_lilac(0.78f, 0.59f, 1.0f, 1.0f);
-        const ImVec4 color_red(0.90f, 0.28f, 0.28f, 1.0f);
+        // Annotation type colors (shared between grid cells and timeline
+        // ticks) are looked up by role in the shared palette.
+        const LabelPalette &pal = label_palette();
+
+        // Keypoint-state appearance: one row per KpState, indexed by state.
+        // Everything that renders a state (grid fill, tooltip, timeline tick)
+        // reads this table, so adding a state = one enum entry + one row.
+        struct KpStateStyle { ImVec4 color; const char *desc; const char *tick_id; };
+        const KpStateStyle kp_state_style[] = {
+            /* NeedsTriangulation */ {pal.kp_needs_triangulation,
+                "some keypoints not triangulated", "##kp_needs_tri"},
+            /* AllTriangulated    */ {pal.kp_all_triangulated,
+                "all placed keypoints triangulated", "##kp_all_tri"},
+            /* Complete           */ {pal.kp_complete,
+                "complete (all placed & triangulated)", "##kp_complete"},
+        };
+        static_assert(sizeof(kp_state_style) / sizeof(kp_state_style[0]) ==
+                          (size_t)KpState::COUNT,
+                      "kp_state_style is out of sync with enum KpState");
 
         // Grid cell PushID offsets (max ~10k frames per section before collision)
         constexpr int kKpIdOffset      = 0;
@@ -427,14 +442,15 @@ inline void DrawLabelingToolWindow(
                                       "current frame (moves it to Keypoint Labels).");
             }
 
-            ImU32 red_u32 = ImGui::ColorConvertFloat4ToU32(color_red);
+            ImU32 needs_fix_u32 =
+                ImGui::ColorConvertFloat4ToU32(pal.needs_improvement);
             for (size_t i = 0; i < needs_fix_frames.size(); ++i) {
                 auto &nf = needs_fix_frames[i];
                 char tip[64];
                 snprintf(tip, sizeof(tip), "Frame %d — needs fixing", nf.frame);
                 grid_cell(kNeedsFixIdOffset + (int)i, nf.frame, tip,
-                    [red_u32](ImDrawList *dl, ImVec2 mn, ImVec2 mx) {
-                        dl->AddRectFilled(mn, mx, red_u32);
+                    [needs_fix_u32](ImDrawList *dl, ImVec2 mn, ImVec2 mx) {
+                        dl->AddRectFilled(mn, mx, needs_fix_u32);
                     });
                 grid_wrap(i, needs_fix_frames.size());
             }
@@ -445,24 +461,13 @@ inline void DrawLabelingToolWindow(
         ImGui::Text("Keypoint Labels (%zu)", labeled_frames.size());
 
         if (!labeled_frames.empty()) {
-            ImU32 yellow_u32 = ImGui::ColorConvertFloat4ToU32(color_yellow);
-            ImU32 purple_u32 = ImGui::ColorConvertFloat4ToU32(color_purple);
-            ImU32 green_u32  = ImGui::ColorConvertFloat4ToU32(color_green);
-
             for (size_t i = 0; i < labeled_frames.size(); ++i) {
                 auto &lf = labeled_frames[i];
-                ImU32 fill = lf.state == KP_GREEN    ? green_u32
-                             : lf.state == KP_PURPLE ? purple_u32
-                                                     : yellow_u32;
-                const char *desc =
-                    lf.state == KP_GREEN
-                        ? "complete (all placed & triangulated)"
-                        : lf.state == KP_PURPLE
-                              ? "all placed keypoints triangulated"
-                              : "some keypoints not triangulated";
+                const KpStateStyle &st = kp_state_style[(int)lf.state];
+                ImU32 fill = ImGui::ColorConvertFloat4ToU32(st.color);
                 char tip[96];
                 snprintf(tip, sizeof(tip), "Frame %d \xE2\x80\x94 %s", lf.frame,
-                         desc);
+                         st.desc);
 
                 grid_cell(kKpIdOffset + (int)i, lf.frame, tip,
                     [fill](ImDrawList *dl, ImVec2 mn, ImVec2 mx) {
@@ -482,7 +487,7 @@ inline void DrawLabelingToolWindow(
             ImGui::SameLine();
             jump_buttons(mask_pn, "sam");
 
-            ImU32 orange_u32 = ImGui::ColorConvertFloat4ToU32(color_orange);
+            ImU32 mask_u32 = ImGui::ColorConvertFloat4ToU32(pal.mask);
 
             for (size_t i = 0; i < mask_frames.size(); ++i) {
                 auto &mf = mask_frames[i];
@@ -490,11 +495,11 @@ inline void DrawLabelingToolWindow(
                 snprintf(tip, sizeof(tip), "Frame %d", mf.frame);
 
                 grid_cell(kSamIdOffset + (int)i, mf.frame, tip,
-                    [orange_u32](ImDrawList *dl, ImVec2 mn, ImVec2 mx) {
+                    [mask_u32](ImDrawList *dl, ImVec2 mn, ImVec2 mx) {
                         float cx = (mn.x + mx.x) * 0.5f;
                         float cy = (mn.y + mx.y) * 0.5f;
                         float r  = (mx.x - mn.x) * 0.5f - 1.0f;
-                        dl->AddCircleFilled(ImVec2(cx, cy), r, orange_u32, 16);
+                        dl->AddCircleFilled(ImVec2(cx, cy), r, mask_u32, 16);
                     });
                 grid_wrap(i, mask_frames.size());
             }
@@ -512,8 +517,8 @@ inline void DrawLabelingToolWindow(
             ImGui::SameLine();
             jump_buttons(bbox_pn, "bbox");
 
-            ImU32 purple_u32  = ImGui::ColorConvertFloat4ToU32(color_purple);
-            ImU32 lilac_u32   = ImGui::ColorConvertFloat4ToU32(color_lilac);
+            ImU32 bbox_u32 = ImGui::ColorConvertFloat4ToU32(pal.bbox);
+            ImU32 obb_u32  = ImGui::ColorConvertFloat4ToU32(pal.obb);
 
             for (size_t i = 0; i < bbox_frames.size(); ++i) {
                 auto &bf = bbox_frames[i];
@@ -527,15 +532,15 @@ inline void DrawLabelingToolWindow(
 
                 bool has_bb = bf.has_bbox, has_ob = bf.has_obb;
                 grid_cell(kBBoxIdOffset + (int)i, bf.frame, tip,
-                    [purple_u32, lilac_u32, has_bb, has_ob](ImDrawList *dl, ImVec2 mn, ImVec2 mx) {
-                        // BBox: purple square outline (inset 1px for clarity)
+                    [bbox_u32, obb_u32, has_bb, has_ob](ImDrawList *dl, ImVec2 mn, ImVec2 mx) {
+                        // BBox: square outline (inset 1px for clarity)
                         if (has_bb) {
                             dl->AddRect(
                                 ImVec2(mn.x + 1, mn.y + 1),
                                 ImVec2(mx.x - 1, mx.y - 1),
-                                purple_u32, 0.0f, 0, 1.5f);
+                                bbox_u32, 0.0f, 0, 1.5f);
                         }
-                        // OBB: lighter purple diamond outline
+                        // OBB: diamond outline
                         if (has_ob) {
                             float cx = (mn.x + mx.x) * 0.5f;
                             float cy = (mn.y + mx.y) * 0.5f;
@@ -547,7 +552,7 @@ inline void DrawLabelingToolWindow(
                                 ImVec2(cx, cy + hy),   // bottom
                                 ImVec2(cx - hx, cy),   // left
                             };
-                            dl->AddPolyline(pts, 4, lilac_u32, ImDrawFlags_Closed, 1.5f);
+                            dl->AddPolyline(pts, 4, obb_u32, ImDrawFlags_Closed, 1.5f);
                         }
                     });
                 grid_wrap(i, bbox_frames.size());
@@ -578,20 +583,17 @@ inline void DrawLabelingToolWindow(
                 ImGui::SameLine();
             }
 
-            // Build tick arrays for each annotation type
-            std::vector<double> kp_yellow_x, kp_purple_x, green_x, orange_x,
-                purple_x, lilac_x;
-            for (auto &lf : labeled_frames) {
-                if (lf.state == KP_GREEN) green_x.push_back((double)lf.frame);
-                else if (lf.state == KP_PURPLE)
-                    kp_purple_x.push_back((double)lf.frame);
-                else kp_yellow_x.push_back((double)lf.frame);
-            }
+            // Build tick arrays for each annotation type (keypoint ticks are
+            // bucketed per KpState, in kp_state_style order)
+            std::vector<double> kp_tick_x[(size_t)KpState::COUNT];
+            std::vector<double> mask_x, bbox_x, obb_x;
+            for (auto &lf : labeled_frames)
+                kp_tick_x[(int)lf.state].push_back((double)lf.frame);
             for (auto &mf : mask_frames)
-                orange_x.push_back((double)mf.frame);
+                mask_x.push_back((double)mf.frame);
             for (auto &bf : bbox_frames) {
-                if (bf.has_bbox) purple_x.push_back((double)bf.frame);
-                if (bf.has_obb) lilac_x.push_back((double)bf.frame);
+                if (bf.has_bbox) bbox_x.push_back((double)bf.frame);
+                if (bf.has_obb) obb_x.push_back((double)bf.frame);
             }
 
             // Collect all annotated frames for click-to-seek
@@ -629,39 +631,31 @@ inline void DrawLabelingToolWindow(
                 ImPlot::SetNextLineStyle(ImVec4(1, 1, 1, 0.4f), 1.0f);
                 ImPlot::PlotInfLines("##current", &cf, 1);
 
-                // Keypoint ticks: yellow=some untriangulated, purple=all placed
-                // triangulated, green=complete.
-                if (!kp_yellow_x.empty()) {
-                    ImPlot::SetNextLineStyle(color_yellow, 2.0f);
-                    ImPlot::PlotInfLines("##kp_yellow", kp_yellow_x.data(),
-                                         (int)kp_yellow_x.size());
-                }
-                if (!kp_purple_x.empty()) {
-                    ImPlot::SetNextLineStyle(color_purple, 2.0f);
-                    ImPlot::PlotInfLines("##kp_purple", kp_purple_x.data(),
-                                         (int)kp_purple_x.size());
-                }
-                if (!green_x.empty()) {
-                    ImPlot::SetNextLineStyle(color_green, 2.0f);
-                    ImPlot::PlotInfLines("##green", green_x.data(), (int)green_x.size());
+                // Keypoint ticks, one series per KpState (style table order)
+                for (int st = 0; st < (int)KpState::COUNT; ++st) {
+                    if (kp_tick_x[st].empty()) continue;
+                    ImPlot::SetNextLineStyle(kp_state_style[st].color, 2.0f);
+                    ImPlot::PlotInfLines(kp_state_style[st].tick_id,
+                                         kp_tick_x[st].data(),
+                                         (int)kp_tick_x[st].size());
                 }
 
-                // SAM mask ticks (orange)
-                if (!orange_x.empty()) {
-                    ImPlot::SetNextLineStyle(color_orange, 2.0f);
-                    ImPlot::PlotInfLines("##sam", orange_x.data(), (int)orange_x.size());
+                // SAM mask ticks
+                if (!mask_x.empty()) {
+                    ImPlot::SetNextLineStyle(pal.mask, 2.0f);
+                    ImPlot::PlotInfLines("##sam", mask_x.data(), (int)mask_x.size());
                 }
 
-                // BBox ticks (purple)
-                if (!purple_x.empty()) {
-                    ImPlot::SetNextLineStyle(color_purple, 2.0f);
-                    ImPlot::PlotInfLines("##bbox", purple_x.data(), (int)purple_x.size());
+                // BBox ticks
+                if (!bbox_x.empty()) {
+                    ImPlot::SetNextLineStyle(pal.bbox, 2.0f);
+                    ImPlot::PlotInfLines("##bbox", bbox_x.data(), (int)bbox_x.size());
                 }
 
-                // OBB ticks (lilac)
-                if (!lilac_x.empty()) {
-                    ImPlot::SetNextLineStyle(color_lilac, 2.0f);
-                    ImPlot::PlotInfLines("##obb", lilac_x.data(), (int)lilac_x.size());
+                // OBB ticks
+                if (!obb_x.empty()) {
+                    ImPlot::SetNextLineStyle(pal.obb, 2.0f);
+                    ImPlot::PlotInfLines("##obb", obb_x.data(), (int)obb_x.size());
                 }
 
                 // Double-click to reset to full video range
