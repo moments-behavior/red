@@ -52,6 +52,7 @@
 #include "implot.h"
 #include "implot_internal.h"
 #include "project.h"
+#include "frame_ops.h"
 #include "render.h"
 #include "skeleton.h"
 #include "utils.h"
@@ -75,7 +76,7 @@
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
 #ifndef __APPLE__
-#include "kernel.cuh"
+#include "kernel.cuh"  // CUDA display kernels; empty without RED_HAVE_CUDA
 #endif
 #include "keypoints_table.h"
 
@@ -275,6 +276,7 @@ int main(int argc, char **argv) {
     // read before buffer allocation so behavior is deterministic. Default
     // CPU Buffer — see UserSettings::use_cpu_buffer for rationale.
     scene->use_cpu_buffer = true;
+    scene->gpu_upload = false; // set for real in render_allocate_scene_memory
     std::string red_data_dir;
     std::string media_root_dir;
     prepare_application_folders(red_data_dir, media_root_dir);
@@ -377,6 +379,16 @@ int main(int argc, char **argv) {
 #ifdef __APPLE__
     // Per-camera last-uploaded frame number for Metal (skip redundant uploads)
     std::vector<int> mac_last_uploaded_frame(MAX_VIEWS, -1);
+#else
+    // Software-backend display adjustment (frame_ops.h). One scratch buffer
+    // shared by every camera -- each frame is uploaded before the next camera
+    // overwrites it -- plus a cached contrast table, rebuilt only when the
+    // sliders actually move. Unused when scene->gpu_upload is true.
+    std::vector<unsigned char> sw_scratch;
+    uint8_t sw_lut[256];
+    float sw_lut_contrast = -1.0f;   // sentinel: no table built yet
+    int sw_lut_brightness = 0;
+    bool sw_lut_pivot = false;
 #endif
 
     // Build AppContext — a reference bundle for all shared state
@@ -925,7 +937,52 @@ int main(int argc, char **argv) {
                                 (float)display.brightness, display.pivot_midgray);
                     }
 #else
-                    {
+                    if (!scene->gpu_upload) {
+                        // Software backend: the decoder already produced RGBA
+                        // in host memory, so there is no PBO and no CUDA
+                        // context -- upload straight into the texture.
+                        if (ps.play_video)
+                            current_frame_num = ps.to_display_frame_number;
+                        const int sw_head =
+                            ps.play_video ? ps.read_head : select_corr_head;
+                        const unsigned char *sw_src =
+                            scene->display_buffer[j][sw_head].frame;
+                        const u32 sw_w = scene->image_width[j];
+                        const u32 sw_h = scene->image_height[j];
+                        const bool sw_contrast_identity =
+                            display.contrast == 1.0f && display.brightness == 0;
+                        if (sw_src && !sw_contrast_identity) {
+                            // Rebuild the table only when the sliders move; at
+                            // 16 cameras this otherwise runs 16x per frame for
+                            // an identical 256-entry result.
+                            if (display.contrast != sw_lut_contrast ||
+                                display.brightness != sw_lut_brightness ||
+                                display.pivot_midgray != sw_lut_pivot) {
+                                build_contrast_lut(sw_lut, display.contrast,
+                                                   (float)display.brightness,
+                                                   display.pivot_midgray);
+                                sw_lut_contrast = display.contrast;
+                                sw_lut_brightness = display.brightness;
+                                sw_lut_pivot = display.pivot_midgray;
+                            }
+                            // One scratch buffer reused across cameras: the
+                            // upload happens before the next camera touches it,
+                            // and the ring slot must stay pristine for the next
+                            // redraw at different slider values.
+                            const size_t sw_bytes = (size_t)sw_w * sw_h * 4;
+                            if (sw_scratch.size() < sw_bytes)
+                                sw_scratch.resize(sw_bytes);
+                            apply_contrast_lut(sw_scratch.data(), sw_src,
+                                               (int)sw_w, (int)sw_h, sw_lut);
+                            sw_src = sw_scratch.data();
+                        }
+                        if (sw_src)
+                            upload_image_host_to_texture(
+                                &scene->image_texture[j], sw_src, (int)sw_w,
+                                (int)sw_h);
+                    }
+#if defined(RED_HAVE_CUDA)
+                    else {
                         // CUDA-GL interop sync: only re-map/unmap the PBO
                         // around CUDA writes WHEN the contrast/brightness
                         // kernel actually runs. The kernel's mid-stream
@@ -1047,13 +1104,14 @@ int main(int argc, char **argv) {
                                 &scene->pbo_cuda[j].cuda_pbo_storage_buffer_size,
                                 &scene->pbo_cuda[j].cuda_resource);
                         }
+                        bind_pbo(&scene->pbo_cuda[j].pbo);
+                        bind_texture(&scene->image_texture[j]);
+                        upload_image_pbo_to_texture(scene->image_width[j],
+                                                    scene->image_height[j]);
+                        unbind_pbo();
+                        unbind_texture();
                     }
-                    bind_pbo(&scene->pbo_cuda[j].pbo);
-                    bind_texture(&scene->image_texture[j]);
-                    upload_image_pbo_to_texture(scene->image_width[j],
-                                                scene->image_height[j]);
-                    unbind_pbo();
-                    unbind_texture();
+#endif // RED_HAVE_CUDA
 #endif // __APPLE__
 
                     std::string scene_name = "scene view" + std::to_string(j);

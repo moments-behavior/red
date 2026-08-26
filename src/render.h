@@ -6,9 +6,11 @@
 struct PBO_CUDA {
 #ifndef __APPLE__
     GLuint pbo;
+#if defined(RED_HAVE_CUDA)
     unsigned char *cuda_buffer;
     cudaGraphicsResource_t cuda_resource;
     size_t cuda_pbo_storage_buffer_size;
+#endif
 #endif
 };
 
@@ -26,6 +28,12 @@ struct RenderScene {
     PictureBuffer **display_buffer;
     SeekInfo *seek_context;
     bool use_cpu_buffer;
+    // False on the software backend: frames arrive in host memory, there is no
+    // CUDA context to register a PBO with, and upload is a plain
+    // glTexSubImage2D. Resolved once in render_allocate_scene_memory and read
+    // by the render loop and the teardown path, which must agree with it --
+    // freeing a calloc'd buffer with cudaFree is the failure mode here.
+    bool gpu_upload;
 };
 
 void render_initialize_target(gx_context *context);

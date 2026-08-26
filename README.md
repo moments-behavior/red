@@ -70,6 +70,28 @@ with the `win64-lgpl-shared` build from
 `build.bat` locates Visual Studio, CUDA, vcpkg and FFmpeg itself. Set
 `VCPKG_ROOT` if vcpkg is not on `PATH` or at `%USERPROFILE%\vcpkg`.
 
+### Running without a GPU
+
+Decode and render use the GPU by default — NVDEC + CUDA on Linux and Windows,
+VideoToolbox + Metal on macOS. There is also an FFmpeg software path, chosen
+automatically when no usable GPU is found. Expect a large frame-rate drop with
+many cameras.
+
+```bash
+RED_DECODE_BACKEND=sw ./release/red     # force software (works on macOS too)
+RED_SW_DECODE_THREADS=2 ./release/red   # decode threads per camera
+```
+
+A machine with *no* NVIDIA driver needs a build without CUDA — `libcuda.so.1`
+and `libnvcuvid.so.1` are `DT_NEEDED`, so the loader fails before the runtime
+probe ever runs:
+
+```bash
+cmake -S . -B release -DRED_ENABLE_CUDA=OFF
+```
+
+Windows does not need this; the default build delay-loads those DLLs.
+
 ## Authors
 
 **Red** is developed by Jinyao Yan, with contributions from Wilson Chen, Diptodip Deb, Ratan Othayoth, and Rob Johnson.

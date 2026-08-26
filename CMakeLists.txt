@@ -1,5 +1,19 @@
 cmake_minimum_required(VERSION 3.18...3.31)
 
+# Build the NVDEC + CUDA-GL interop path (Windows/Linux; ignored on macOS,
+# which uses VideoToolbox + Metal).
+#
+# ON  -- default, unchanged behavior: NVDEC decode, CUDA NV12->RGB, CUDA-GL
+#        interop upload. Falls back to FFmpeg at RUNTIME when no usable GPU is
+#        found (see src/decode_backend.h).
+# OFF -- no CUDA language, no .cu sources, and critically no libcuda/libnvcuvid
+#        link. Those are DT_NEEDED, so a default build will not even load on a
+#        machine with no NVIDIA driver -- the loader fails before main() and the
+#        runtime probe never gets to run. This is the build for such machines.
+#
+#   cmake -S . -B release -DRED_ENABLE_CUDA=OFF
+option(RED_ENABLE_CUDA "Build the NVDEC + CUDA-GL interop path" ON)
+
 # Default to an optimized build. Without this the build type is empty and the
 # compiler runs at -O0, which cripples hot host loops (e.g. the HybridNet
 # reprojection: 3200ms at -O0 vs ~450ms at -O3). Respects an explicit
@@ -235,6 +249,48 @@ if(APPLE)
 
 
 
+    # Decoder backend conformance test: same deps as test_gui
+    add_executable(test_decoder
+        ${TEST_GUI_SRC_FILES}
+        ${MM_SRC_FILES}
+        ${IMGUI_SRC}
+        ${IMPLOT_SRC}
+        tests/test_decoder.cpp
+    )
+    target_include_directories(test_decoder PRIVATE
+        src
+        ${DIR_IMGUI}
+        ${DIR_IMGUI}/backends
+        ${DIR_IMPLOT}
+        ${DIR_FILEBROWSER}
+        lib/nvcodec
+        lib/IconFontCppHeaders
+        ${FFMPEG_INCLUDE_DIRS}
+        ${HOMEBREW_PREFIX}/include
+        ${HOMEBREW_PREFIX}/include/eigen3
+    )
+    target_link_directories(test_decoder PRIVATE ${FFMPEG_LIBRARY_DIRS} ${TURBOJPEG_LIBRARY_DIRS})
+    target_link_libraries(test_decoder PRIVATE
+        Eigen3::Eigen
+        glfw
+        "-framework Metal"
+        "-framework QuartzCore"
+        "-framework VideoToolbox"
+        "-framework CoreMedia"
+        "-framework CoreFoundation"
+        "-framework CoreVideo"
+        "-framework Accelerate"
+        "-framework Cocoa"
+        ${FFMPEG_LIBRARIES}
+        ${TURBOJPEG_LIBRARIES}
+        Ceres::ceres
+        pthread
+    )
+    set_target_properties(test_decoder PROPERTIES
+        CXX_STANDARD 17
+        CXX_STANDARD_REQUIRED ON
+    )
+
     # Sync-plan unit test: header-only logic, stdlib + vendored json.hpp only
     add_executable(test_sync_plan tests/test_sync_plan.cpp)
     target_include_directories(test_sync_plan PRIVATE src)
@@ -354,10 +410,13 @@ if(APPLE)
 
 elseif(WIN32)
     # Windows build with NVIDIA CUDA support (RTX 3090)
-    project(red LANGUAGES CXX CUDA)
-
-    # CUDA architecture: 86 for RTX 3090 (Ampere)
-    set(CMAKE_CUDA_ARCHITECTURES 86)
+    if(RED_ENABLE_CUDA)
+        project(red LANGUAGES CXX CUDA)
+        # CUDA architecture: 86 for RTX 3090 (Ampere)
+        set(CMAKE_CUDA_ARCHITECTURES 86)
+    else()
+        project(red LANGUAGES CXX)
+    endif()
     set(CMAKE_CXX_STANDARD 17)
     set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -421,12 +480,46 @@ elseif(WIN32)
     )
     file(GLOB IMPLOT_SRC ${DIR_IMPLOT}/*.cpp)
 
-    # CUDA source files
-    set(CUDA_SRC_FILES
-        src/create_image_cuda.cu
-        src/ColorSpace.cu
-        src/kernel.cu
-    )
+    # CUDA source files. Empty without RED_ENABLE_CUDA, and NvDecoder.cpp goes
+    # with them -- it is pure NVDEC and will not compile without cuviddec.
+    if(RED_ENABLE_CUDA)
+        set(CUDA_SRC_FILES
+            src/create_image_cuda.cu
+            src/ColorSpace.cu
+            src/kernel.cu
+        )
+        set(RED_CUDA_LIBS
+            "${CUDA_DIR}/lib/x64/cudart.lib"
+            "${CUDA_DIR}/lib/x64/cuda.lib"
+            "${CUDA_DIR}/lib/x64/nppc.lib"
+            "${CUDA_DIR}/lib/x64/nppicc.lib"
+            "${CUDA_DIR}/lib/x64/nppidei.lib"
+            "${CUDA_DIR}/lib/x64/nppig.lib"
+            "${CUDA_DIR}/lib/x64/nppial.lib"
+            "${DIR_NVCODEC}/x64/nvcuvid.lib"
+            "${DIR_NVCODEC}/x64/nvencodeapi.lib"
+            # Required by /DELAYLOAD below.
+            delayimp.lib
+        )
+        # nvcuda.dll and nvcuvid.dll ship with the NVIDIA driver, not with the
+        # app. Delay-loading them means a machine with no driver still reaches
+        # main(), where decode_backend() probes and falls back to FFmpeg --
+        # without this the loader fails first and the app vanishes with no
+        # message at all.
+        #
+        # nvEncodeAPI64.dll is deliberately absent: nvencodeapi.lib is on the
+        # link line but no NVENC symbol is referenced anywhere in src/, so no
+        # import is emitted and naming it here would only earn an LNK4199.
+        set(RED_DELAYLOAD_OPTS
+            /DELAYLOAD:nvcuda.dll
+            /DELAYLOAD:nvcuvid.dll
+        )
+    else()
+        set(CUDA_SRC_FILES "")
+        set(RED_CUDA_LIBS "")
+        set(RED_DELAYLOAD_OPTS "")
+        list(REMOVE_ITEM SRC_FILES "${CMAKE_SOURCE_DIR}/src/NvDecoder.cpp")
+    endif()
 
     # Main executable
     add_executable(red
@@ -439,6 +532,9 @@ elseif(WIN32)
 
 
     target_compile_definitions(red PRIVATE NOMINMAX _USE_MATH_DEFINES)
+    if(NOT RED_ENABLE_CUDA)
+        target_compile_definitions(red PRIVATE RED_NO_CUDA)
+    endif()
     target_compile_options(red PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/bigobj /EHsc>)
 
     # Use vcpkg GLFW and GLEW (version-matched headers + DLLs)
@@ -469,17 +565,8 @@ elseif(WIN32)
         GLEW::GLEW
         # System OpenGL
         opengl32
-        # CUDA
-        "${CUDA_DIR}/lib/x64/cudart.lib"
-        "${CUDA_DIR}/lib/x64/cuda.lib"
-        "${CUDA_DIR}/lib/x64/nppc.lib"
-        "${CUDA_DIR}/lib/x64/nppicc.lib"
-        "${CUDA_DIR}/lib/x64/nppidei.lib"
-        "${CUDA_DIR}/lib/x64/nppig.lib"
-        "${CUDA_DIR}/lib/x64/nppial.lib"
-        # Bundled NVDEC
-        "${DIR_NVCODEC}/x64/nvcuvid.lib"
-        "${DIR_NVCODEC}/x64/nvencodeapi.lib"
+        # CUDA + bundled NVDEC (empty without RED_ENABLE_CUDA)
+        ${RED_CUDA_LIBS}
     )
 
     # FFmpeg libraries
@@ -518,7 +605,7 @@ elseif(WIN32)
     set(TEST_GUI_SRC_FILES ${SRC_FILES})
     list(REMOVE_ITEM TEST_GUI_SRC_FILES "${CMAKE_SOURCE_DIR}/src/red.cpp")
 
-    foreach(TEST_NAME test_gui test_annotation)
+    foreach(TEST_NAME test_gui test_annotation test_decoder)
         add_executable(${TEST_NAME}
             ${TEST_GUI_SRC_FILES}
             ${IMGUI_SRC}
@@ -527,6 +614,9 @@ elseif(WIN32)
             tests/${TEST_NAME}.cpp
         )
         target_compile_definitions(${TEST_NAME} PRIVATE NOMINMAX _USE_MATH_DEFINES)
+        if(NOT RED_ENABLE_CUDA)
+            target_compile_definitions(${TEST_NAME} PRIVATE RED_NO_CUDA)
+        endif()
         target_compile_options(${TEST_NAME} PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/bigobj /EHsc>)
         target_include_directories(${TEST_NAME} PRIVATE
             ${CMAKE_SOURCE_DIR}/src
@@ -548,18 +638,11 @@ elseif(WIN32)
             glfw
             GLEW::GLEW
             opengl32
-            "${CUDA_DIR}/lib/x64/cudart.lib"
-            "${CUDA_DIR}/lib/x64/cuda.lib"
-            "${CUDA_DIR}/lib/x64/nppc.lib"
-            "${CUDA_DIR}/lib/x64/nppicc.lib"
-            "${CUDA_DIR}/lib/x64/nppidei.lib"
-            "${CUDA_DIR}/lib/x64/nppig.lib"
-            "${CUDA_DIR}/lib/x64/nppial.lib"
-            "${DIR_NVCODEC}/x64/nvcuvid.lib"
-            "${DIR_NVCODEC}/x64/nvencodeapi.lib"
+            ${RED_CUDA_LIBS}
             shell32
             ole32
         )
+        target_link_options(${TEST_NAME} PRIVATE ${RED_DELAYLOAD_OPTS})
         if(FFMPEG_FOUND AND TARGET PkgConfig::FFMPEG)
             target_link_libraries(${TEST_NAME} PRIVATE PkgConfig::FFMPEG)
         else()
@@ -579,9 +662,10 @@ elseif(WIN32)
     # Windows default 1MB stack is too small for deep recursive parsing
     # (complex rodent/fly models) and STB image static initializers.
     # Use 64MB stack for all targets.
-    target_link_options(red PRIVATE /STACK:67108864)
+    target_link_options(red PRIVATE /STACK:67108864 ${RED_DELAYLOAD_OPTS})
     target_link_options(test_gui PRIVATE /STACK:67108864)
     target_link_options(test_annotation PRIVATE /STACK:67108864)
+    target_link_options(test_decoder PRIVATE /STACK:67108864)
 
 else()
     # ────────────────────────────────────────────────────────────────────────
@@ -593,12 +677,15 @@ else()
     # links read-only against those shared installs.
     # No OpenCV, no LibTorch.
     # ────────────────────────────────────────────────────────────────────────
-    project(red LANGUAGES CXX CUDA)
-
-    # CUDA arch: 86 = A16 (Ampere), 89 = RTX 4000 Ada. Override with
-    # -DCMAKE_CUDA_ARCHITECTURES=... on the cmake command line if needed.
-    if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
-        set(CMAKE_CUDA_ARCHITECTURES 86 89)
+    if(RED_ENABLE_CUDA)
+        project(red LANGUAGES CXX CUDA)
+        # CUDA arch: 86 = A16 (Ampere), 89 = RTX 4000 Ada. Override with
+        # -DCMAKE_CUDA_ARCHITECTURES=... on the cmake command line if needed.
+        if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+            set(CMAKE_CUDA_ARCHITECTURES 86 89)
+        endif()
+    else()
+        project(red LANGUAGES CXX)
     endif()
     set(CMAKE_CXX_STANDARD 17)
     set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -616,7 +703,9 @@ else()
     find_package(glfw3 REQUIRED)
     find_package(GLEW REQUIRED)
     find_package(Threads REQUIRED)
-    find_package(CUDAToolkit REQUIRED)
+    if(RED_ENABLE_CUDA)
+        find_package(CUDAToolkit REQUIRED)
+    endif()
     find_package(PkgConfig REQUIRED)
 
     # CBLAS provider (used by descriptor_matcher.h). Ubuntu 22.04 ships a literal
@@ -655,11 +744,34 @@ else()
     )
     file(GLOB IMPLOT_SRC ${DIR_IMPLOT}/*.cpp)
 
-    set(CUDA_SRC_FILES
-        src/create_image_cuda.cu
-        src/ColorSpace.cu
-        src/kernel.cu
-    )
+    # CUDA sources and the libcuda/libnvcuvid link. Empty without
+    # RED_ENABLE_CUDA -- that is the whole point of the option: those two are
+    # DT_NEEDED entries, and a binary carrying them will not load at all on a
+    # machine with no NVIDIA driver. NvDecoder.cpp goes with them; it is pure
+    # NVDEC and will not compile without cuviddec.
+    if(RED_ENABLE_CUDA)
+        set(CUDA_SRC_FILES
+            src/create_image_cuda.cu
+            src/ColorSpace.cu
+            src/kernel.cu
+        )
+        set(RED_CUDA_LIBS
+            # CUDA runtime + NPP (imaging primitives)
+            CUDA::cudart
+            CUDA::cuda_driver
+            CUDA::nppc
+            CUDA::nppicc
+            CUDA::nppidei
+            CUDA::nppig
+            CUDA::nppial
+            # NVDEC (driver-provided: libnvcuvid.so from /usr/lib/x86_64-linux-gnu)
+            nvcuvid
+        )
+    else()
+        set(CUDA_SRC_FILES "")
+        set(RED_CUDA_LIBS "")
+        list(REMOVE_ITEM SRC_FILES "${CMAKE_SOURCE_DIR}/src/NvDecoder.cpp")
+    endif()
 
     add_executable(red
         ${SRC_FILES}
@@ -671,7 +783,11 @@ else()
 
 
 
-    target_compile_definitions(red PRIVATE)
+    if(RED_ENABLE_CUDA)
+        target_compile_definitions(red PRIVATE)
+    else()
+        target_compile_definitions(red PRIVATE RED_NO_CUDA)
+    endif()
 
     target_include_directories(red PRIVATE
         ${CMAKE_SOURCE_DIR}/src
@@ -691,16 +807,7 @@ else()
         GLEW::GLEW
         OpenGL::GL
         PkgConfig::FFMPEG
-        # CUDA runtime + NPP (imaging primitives)
-        CUDA::cudart
-        CUDA::cuda_driver
-        CUDA::nppc
-        CUDA::nppicc
-        CUDA::nppidei
-        CUDA::nppig
-        CUDA::nppial
-        # NVDEC (driver-provided: libnvcuvid.so from /usr/lib/x86_64-linux-gnu)
-        nvcuvid
+        ${RED_CUDA_LIBS}
         # cblas: used by descriptor_matcher.h on non-Windows/non-Mac
         ${RED_CBLAS_LIB}
         Threads::Threads
@@ -732,7 +839,7 @@ else()
     set(TEST_GUI_SRC_FILES ${SRC_FILES})
     list(REMOVE_ITEM TEST_GUI_SRC_FILES "${CMAKE_SOURCE_DIR}/src/red.cpp")
 
-    foreach(TEST_NAME test_gui test_annotation)
+    foreach(TEST_NAME test_gui test_annotation test_decoder)
         add_executable(${TEST_NAME}
             ${TEST_GUI_SRC_FILES}
             ${IMGUI_SRC}
@@ -740,7 +847,11 @@ else()
             ${CUDA_SRC_FILES}
             tests/${TEST_NAME}.cpp
         )
-        target_compile_definitions(${TEST_NAME} PRIVATE)
+        if(RED_ENABLE_CUDA)
+            target_compile_definitions(${TEST_NAME} PRIVATE)
+        else()
+            target_compile_definitions(${TEST_NAME} PRIVATE RED_NO_CUDA)
+        endif()
         target_include_directories(${TEST_NAME} PRIVATE
             ${CMAKE_SOURCE_DIR}/src
             ${DIR_IMGUI}
@@ -757,14 +868,7 @@ else()
             GLEW::GLEW
             OpenGL::GL
             PkgConfig::FFMPEG
-            CUDA::cudart
-            CUDA::cuda_driver
-            CUDA::nppc
-            CUDA::nppicc
-            CUDA::nppidei
-            CUDA::nppig
-            CUDA::nppial
-            nvcuvid
+            ${RED_CUDA_LIBS}
             ${RED_CBLAS_LIB}
             Threads::Threads
             ${CMAKE_DL_LIBS}

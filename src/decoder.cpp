@@ -1,7 +1,9 @@
 #include "decoder.h"
+#include "decode_backend.h"
 #include "global.h"
+#include "sw_decoder.h"
 #include "sync_plan.h"
-#if !defined(__APPLE__)
+#if defined(RED_HAVE_CUDA)
 #include "AppDecUtils.h"
 #endif
 #include "../lib/ImGuiFileDialog/stb/stb_image.h"  // all platforms: PNG/non-JPEG fallback
@@ -51,7 +53,7 @@ inline void decoder_check_input_files(const char *sz_in_file_path) {
     }
 }
 
-#ifndef __APPLE__
+#if defined(RED_HAVE_CUDA)
 
 void decoder_get_image_from_gpu(CUdeviceptr dpSrc, uint8_t *pDst, int nWidth,
                                 int nHeight) {
@@ -67,11 +69,12 @@ void decoder_get_image_from_gpu(CUdeviceptr dpSrc, uint8_t *pDst, int nWidth,
     cuMemcpy2D(&m);
 }
 
-void decoder_process(DecoderContext *dc_context, FFmpegDemuxer *demuxer,
-                     std::string cam_name, PictureBuffer *display_buffer,
-                     int size_of_buffer, SeekInfo *seek_info,
-                     bool use_cpu_buffer,
-                     const sync_plan::SyncCam *sync_cam) {
+static void nvdec_decoder_process(DecoderContext *dc_context,
+                                 FFmpegDemuxer *demuxer, std::string cam_name,
+                                 PictureBuffer *display_buffer,
+                                 int size_of_buffer, SeekInfo *seek_info,
+                                 bool use_cpu_buffer,
+                                 const sync_plan::SyncCam *sync_cam) {
   try {
     CUdeviceptr pTmpImage = 0;
     ck(cuInit(0));
@@ -379,7 +382,7 @@ void decoder_process(DecoderContext *dc_context, FFmpegDemuxer *demuxer,
   }
 }
 
-#else // __APPLE__
+#elif defined(__APPLE__)
 
 // macOS decoder: Phase 3 — async VideoToolbox via VTAsyncDecoder.
 // Phases 2+3: decoded frames are stored as CVPixelBufferRef (IOSurface-backed)
@@ -397,11 +400,12 @@ static inline void mac_release_pixbuf_slot(PictureBuffer &slot) {
     }
 }
 
-void decoder_process(DecoderContext *dc_context, FFmpegDemuxer *demuxer,
-                     std::string cam_name, PictureBuffer *display_buffer,
-                     int size_of_buffer, SeekInfo *seek_info,
-                     bool /*use_cpu_buffer*/,
-                     const sync_plan::SyncCam *sync_cam) {
+static void vt_decoder_process(DecoderContext *dc_context,
+                              FFmpegDemuxer *demuxer, std::string cam_name,
+                              PictureBuffer *display_buffer,
+                              int size_of_buffer, SeekInfo *seek_info,
+                              bool /*use_cpu_buffer*/,
+                              const sync_plan::SyncCam *sync_cam) {
   try {
     // Run on performance cores
     pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
@@ -713,7 +717,34 @@ void decoder_process(DecoderContext *dc_context, FFmpegDemuxer *demuxer,
   }
 }
 
-#endif // __APPLE__
+#endif // RED_HAVE_CUDA / __APPLE__
+
+// ---------------------------------------------------------------------------
+// decoder_process -- entry point for every camera thread. Forwards to whichever
+// backend red::decode_backend() resolved, which is decided once per process, so
+// all cameras necessarily agree and the ring slots hold one kind of memory.
+// ---------------------------------------------------------------------------
+void decoder_process(DecoderContext *dc_context, FFmpegDemuxer *demuxer,
+                     std::string cam_name, PictureBuffer *display_buffer,
+                     int size_of_buffer, SeekInfo *seek_info,
+                     bool use_cpu_buffer,
+                     const sync_plan::SyncCam *sync_cam) {
+#if defined(RED_HAVE_CUDA) || defined(__APPLE__)
+    if (red::decode_backend() == red::DecodeBackend::Hardware) {
+#if defined(RED_HAVE_CUDA)
+        nvdec_decoder_process(dc_context, demuxer, cam_name, display_buffer,
+                              size_of_buffer, seek_info, use_cpu_buffer,
+                              sync_cam);
+#else
+        vt_decoder_process(dc_context, demuxer, cam_name, display_buffer,
+                           size_of_buffer, seek_info, use_cpu_buffer, sync_cam);
+#endif
+        return;
+    }
+#endif
+    sw_decoder_process(dc_context, demuxer, cam_name, display_buffer,
+                       size_of_buffer, seek_info, use_cpu_buffer, sync_cam);
+}
 
 // Helper: load image as RGBA into display buffer slot
 static inline bool load_image_rgba(const std::string &file_name,

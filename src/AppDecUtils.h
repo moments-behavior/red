@@ -15,7 +15,8 @@
 //---------------------------------------------------------------------------
 
 #pragma once
-#ifndef __APPLE__
+#include "red_build_config.h"
+#if defined(RED_HAVE_CUDA)
 #include <sstream>
 #include <iostream>
 

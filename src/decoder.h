@@ -1,9 +1,10 @@
 #ifndef RED_DECODER
 #define RED_DECODER
+#include "red_build_config.h"
 #include "ColorSpace.h"
 #include "FFmpegDemuxer.h"
 #include "NvCodecUtils.h"
-#if !defined(__APPLE__)
+#if defined(RED_HAVE_CUDA)
 #include "NvDecoder.h"
 #include <cuda.h>
 #endif
@@ -27,7 +28,18 @@ struct SeekInfo {
     bool seek_accurate;
 };
 
+// Byte order of PictureBuffer::frame. There is no single convention here --
+// each platform's uploader dictates one, and a producer that guesses wrong
+// shows up as swapped red and blue rather than as a crash:
+//   macOS   metal_upload_texture() replaceRegion's straight into an
+//           MTLPixelFormatBGRA8Unorm texture, so the bytes must be BGRA.
+//   GL      render.cpp uploads GL_RGBA, matching NVDEC's Nv12ToColor32<RGBA32>.
+#if defined(__APPLE__)
+#define RED_FRAME_BGRA 1
+#endif
+
 struct PictureBuffer {
+    // RGBA, or BGRA where RED_FRAME_BGRA is defined -- see above.
     unsigned char *frame;
     std::atomic<int> frame_number;
     std::atomic<bool> available_to_write;
@@ -60,7 +72,7 @@ struct DecoderContext {
     int64_t sync_canonical_len;
 };
 
-#ifndef __APPLE__
+#if defined(RED_HAVE_CUDA)
 void decoder_get_image_from_gpu(CUdeviceptr dpSrc, uint8_t *pDst, int nWidth,
                                 int nHeight);
 #endif

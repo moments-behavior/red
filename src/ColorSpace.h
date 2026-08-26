@@ -1,11 +1,13 @@
 #pragma once
+#include "red_build_config.h"
 #include <stdint.h>
-#if !defined(__APPLE__) && !defined(__CUDACC__)
+#if defined(RED_HAVE_CUDA) && !defined(__CUDACC__)
 // When compiling C++ files (not .cu), include cuda_runtime.h for vector types.
 // MSVC needs this to be after stdint.h.
 #include <cuda_runtime.h>
-#elif defined(__APPLE__)
-// macOS: no CUDA — provide minimal replacements
+#elif !defined(__CUDACC__)
+// No CUDA headers here (macOS, or -DRED_ENABLE_CUDA=OFF) — provide minimal
+// replacements. nvcc defines these itself, hence the __CUDACC__ exclusion.
 struct uchar4 { uint8_t x, y, z, w; };
 struct ushort4 { uint16_t x, y, z, w; };
 #endif

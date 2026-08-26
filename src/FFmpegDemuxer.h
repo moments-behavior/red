@@ -20,7 +20,7 @@ extern "C" {
 #include "libavformat/avio.h"
 }
 
-#ifndef __APPLE__
+#if defined(RED_HAVE_CUDA)
 #include "cuviddec.h"
 #include "nvcuvid.h"
 #endif
@@ -233,7 +233,7 @@ class FFmpegDemuxer {
 #endif
 };
 
-#ifndef __APPLE__
+#if defined(RED_HAVE_CUDA)
 inline cudaVideoCodec FFmpeg2NvCodecId(AVCodecID id) {
     switch (id) {
     case AV_CODEC_ID_MPEG1VIDEO:

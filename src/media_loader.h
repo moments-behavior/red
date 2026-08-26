@@ -1,4 +1,5 @@
 #pragma once
+#include "decode_backend.h"
 #include "global.h"
 #include "project.h"
 #include "render.h"
@@ -76,10 +77,15 @@ unload_media(PlaybackState &ps, ProjectManager &pm,
                         scene->display_buffer[j][i].pixel_buffer = nullptr;
                     }
 #else
+                    // Must mirror render_allocate_scene_memory exactly: on the
+                    // software backend use_cpu_buffer was forced true there, so
+                    // every slot is calloc'd and cudaFree would be wrong.
                     if (scene->use_cpu_buffer)
                         free(scene->display_buffer[j][i].frame);
+#if defined(RED_HAVE_CUDA)
                     else
                         cudaFree(scene->display_buffer[j][i].frame);
+#endif
 #endif
                 }
                 delete[] scene->display_buffer[j];
@@ -98,14 +104,19 @@ unload_media(PlaybackState &ps, ProjectManager &pm,
     scene->seek_context = nullptr;
 
 #ifndef __APPLE__
-    // Free Linux GPU resources (PBOs, CUDA mappings, GL textures)
-    if (scene->pbo_cuda) {
+    // Free Linux GPU resources (PBOs, CUDA mappings, GL textures).
+    // Only the hardware path ever created these -- on the software backend
+    // PBO_CUDA was left untouched, so deleting from it would hand GL a
+    // garbage buffer name.
+#if defined(RED_HAVE_CUDA)
+    if (scene->pbo_cuda && scene->gpu_upload) {
         for (u32 j = 0; j < scene->num_cams; j++) {
             unmap_cuda_resource(&scene->pbo_cuda[j].cuda_resource);
             cudaGraphicsUnregisterResource(scene->pbo_cuda[j].cuda_resource);
             glDeleteBuffers(1, &scene->pbo_cuda[j].pbo);
         }
     }
+#endif
     if (scene->image_texture) {
         for (u32 j = 0; j < scene->num_cams; j++)
             glDeleteTextures(1, &scene->image_texture[j]);
@@ -451,6 +462,9 @@ load_videos(std::map<std::string, std::string> &selected_files,
     }
 
     t_stage = load_timing::Clock::now();
+    // Software decode sizes each camera's libavcodec thread pool off this;
+    // must be set before the first decoder thread starts.
+    red::sw_decode_set_camera_count(scene->num_cams);
     for (int i = 0; i < scene->num_cams; i++) {
         const sync_plan::SyncCam *sync_cam =
             splan.usable() ? splan.cam(pm.camera_names[i]) : nullptr;

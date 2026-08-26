@@ -1,6 +1,7 @@
 #ifndef GX_HELPER
 #define GX_HELPER
 
+#include "red_build_config.h"
 #include "IconsForkAwesome.h"
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
@@ -19,7 +20,9 @@
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
 #include "imgui_impl_opengl3.h"
+#if defined(RED_HAVE_CUDA)
 #include <cuda_gl_interop.h>
+#endif
 #endif
 
 typedef struct gx_context {
@@ -220,6 +223,7 @@ static void bind_pbo(GLuint *pbo) {
 
 static void unbind_pbo() { glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0); }
 
+#if defined(RED_HAVE_CUDA)
 static void register_pbo_to_cuda(GLuint *pbo,
                                  cudaGraphicsResource_t *cuda_resource) {
     cudaGraphicsGLRegisterBuffer(cuda_resource, *pbo,
@@ -240,10 +244,23 @@ static void cuda_pointer_from_resource(unsigned char **cuda_buffer_p,
 static void unmap_cuda_resource(cudaGraphicsResource_t *cuda_resource) {
     cudaGraphicsUnmapResources(1, cuda_resource);
 }
+#endif // RED_HAVE_CUDA
 
 static void upload_image_pbo_to_texture(int image_width, int img_height) {
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, image_width, img_height, 0, GL_RGBA,
                  GL_UNSIGNED_BYTE, 0);
+}
+
+// Host memory straight to the texture, for the software backend. Unlike
+// upload_texture below this reuses the existing storage instead of
+// reallocating it every frame.
+static void upload_image_host_to_texture(GLuint *image_texture,
+                                         const unsigned char *frame,
+                                         int image_width, int img_height) {
+    bind_texture(image_texture);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, image_width, img_height, GL_RGBA,
+                    GL_UNSIGNED_BYTE, frame);
+    unbind_texture();
 }
 
 static void upload_texture(GLuint *image_texture, unsigned char *frame,

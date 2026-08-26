@@ -1,4 +1,5 @@
 #include "render.h"
+#include "decode_backend.h"
 #ifdef __APPLE__
 #include "metal_context.h"
 #endif
@@ -28,18 +29,32 @@ void render_allocate_scene_memory(RenderScene *scene, u32 size_of_buffer) {
         scene->display_buffer[j] = new PictureBuffer[size_of_buffer]();
     }
 
+    // The backend decides the whole upload path, so resolve it once here and
+    // let the render loop and unload_media read scene->gpu_upload rather than
+    // asking again -- the three must not be able to disagree.
+    scene->gpu_upload = !red::decode_backend_is_software();
+#ifdef __APPLE__
+    scene->gpu_upload = false; // Metal owns its own upload path
+#endif
+    // Software decode writes host memory, so GPU ring slots are not an option
+    // whatever the user picked in Settings.
+    if (!scene->gpu_upload)
+        scene->use_cpu_buffer = true;
+
     scene->pbo_cuda = (PBO_CUDA *)malloc(sizeof(PBO_CUDA) * num_cams);
-#ifndef __APPLE__
-    for (u32 j = 0; j < num_cams; j++) {
-        create_pbo(&scene->pbo_cuda[j].pbo, scene->image_width[j],
-                   scene->image_height[j]);
-        register_pbo_to_cuda(&scene->pbo_cuda[j].pbo,
-                             &scene->pbo_cuda[j].cuda_resource);
-        map_cuda_resource(&scene->pbo_cuda[j].cuda_resource);
-        cuda_pointer_from_resource(
-            &scene->pbo_cuda[j].cuda_buffer,
-            &scene->pbo_cuda[j].cuda_pbo_storage_buffer_size,
-            &scene->pbo_cuda[j].cuda_resource);
+#if defined(RED_HAVE_CUDA)
+    if (scene->gpu_upload) {
+        for (u32 j = 0; j < num_cams; j++) {
+            create_pbo(&scene->pbo_cuda[j].pbo, scene->image_width[j],
+                       scene->image_height[j]);
+            register_pbo_to_cuda(&scene->pbo_cuda[j].pbo,
+                                 &scene->pbo_cuda[j].cuda_resource);
+            map_cuda_resource(&scene->pbo_cuda[j].cuda_resource);
+            cuda_pointer_from_resource(
+                &scene->pbo_cuda[j].cuda_buffer,
+                &scene->pbo_cuda[j].cuda_pbo_storage_buffer_size,
+                &scene->pbo_cuda[j].cuda_resource);
+        }
     }
 #endif
 
@@ -67,11 +82,14 @@ void render_allocate_scene_memory(RenderScene *scene, u32 size_of_buffer) {
                 // several GB of writes.
                 scene->display_buffer[j][i].frame =
                     (unsigned char *)calloc(size_pic, 1);
-            } else {
+            }
+#if defined(RED_HAVE_CUDA)
+            else {
                 // gpu buffer
                 cudaMalloc((void **)&scene->display_buffer[j][i].frame,
                            size_pic);
             }
+#endif
 #endif
             scene->display_buffer[j][i].frame_number = -1;
             scene->display_buffer[j][i].available_to_write = true;
