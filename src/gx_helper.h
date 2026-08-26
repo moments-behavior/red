@@ -1,17 +1,26 @@
 #ifndef GX_HELPER
 #define GX_HELPER
+
 #include "IconsForkAwesome.h"
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
-#include "imgui_impl_opengl3.h"
 #include "implot.h"
 #include "types.h"
-#include <GL/glew.h>
-#include <GLFW/glfw3.h>
 #include <cstdio>
-#include <cuda_gl_interop.h>
+#include <filesystem>
 #include <stdio.h>
 #include <stdlib.h>
+
+#ifdef __APPLE__
+#include <GLFW/glfw3.h>
+#include "metal_context.h"
+// imgui_impl_metal.h is ObjC-only; all Metal ImGui calls go through metal_context.mm
+#else
+#include <GL/glew.h>
+#include <GLFW/glfw3.h>
+#include "imgui_impl_opengl3.h"
+#include <cuda_gl_interop.h>
+#endif
 
 typedef struct gx_context {
     u32 swap_interval;
@@ -19,100 +28,184 @@ typedef struct gx_context {
     u32 height;
     GLFWwindow *render_target;
     char *render_target_title;
-    char *glsl_version;
+    char *glsl_version;  // unused on macOS/Metal, kept for Linux compat
+    std::string exe_dir; // absolute path to directory containing the binary
 } gx_context;
 
 static void gx_glfw_error_callback(int error, const char *description) {
     fprintf(stderr, "Glfw Error %d: %s\n", error, description);
 }
 
+#ifndef __APPLE__
 static void gx_glew_error_callback(GLenum glew_error) {
     if (GLEW_OK != glew_error) {
         printf("GLEW error: %s\n", glewGetErrorString(glew_error));
     }
 }
+#endif
 
 inline void gx_init(gx_context *context, GLFWwindow *render_target) {
     context->render_target = render_target;
+#ifdef __APPLE__
+    metal_init(render_target);
+#else
     glfwMakeContextCurrent(render_target);
     gx_glew_error_callback(glewInit());
-    glfwSwapInterval(context->swap_interval); // Enable vsync
+    glfwSwapInterval(context->swap_interval);
+#endif
 }
 
-inline GLFWwindow *gx_glfw_init_render_target(u32 marjor_version,
+inline GLFWwindow *gx_glfw_init_render_target(u32 major_version,
                                               u32 minor_version, u32 width,
                                               u32 height, const char *title,
                                               char *glsl_version) {
-    // Setup window
     glfwSetErrorCallback(gx_glfw_error_callback);
     if (!glfwInit()) {
         printf("Could not initialize glfw!");
         exit(EXIT_FAILURE);
     }
+
+#ifdef __APPLE__
+    // Metal: no OpenGL context needed; CAMetalLayer handles presentation
+    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+#else
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
-    // local_glsl_version = "#version 330";
     strcpy(glsl_version, "#version 130");
+#endif
 
-    // Create window with graphics context
     GLFWwindow *window = glfwCreateWindow(1920, 1080, title, NULL, NULL);
     if (!window) {
         printf("Could not initialize window!");
         glfwTerminate();
         exit(EXIT_FAILURE);
-    };
+    }
+
+    // Launch filling the screen instead of a small 1920x1080 window. Size to the
+    // monitor work area first (honored even by WMs that ignore maximize), then
+    // request maximize last (proper maximized state where supported; otherwise
+    // the work-area size still fills the screen). Order matters — sizing after
+    // maximizing would un-maximize it.
+    GLFWmonitor *monitor = glfwGetPrimaryMonitor();
+    if (monitor != NULL) {
+        int mx = 0, my = 0, mw = 0, mh = 0;
+        glfwGetMonitorWorkarea(monitor, &mx, &my, &mw, &mh);
+        if (mw > 0 && mh > 0) {
+            glfwSetWindowPos(window, mx, my);
+            glfwSetWindowSize(window, mw, mh);
+        }
+    }
+    glfwMaximizeWindow(window);
 
     return window;
 }
 
 inline void gx_imgui_init(gx_context *context) {
-    // ************* Dear Imgui ********************//
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImPlotContext *implotCtx = ImPlot::CreateContext();
 
     ImGuiIO &io = ImGui::GetIO();
     (void)io;
-    // io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;       // Enable
-    // Keyboard Controls io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad; //
-    // Enable Gamepad Controls
-    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable; // Enable Docking
-    // io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;         // Enable
-    // Multi-Viewport / Platform Windows
+    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 
-    // Setup Dear ImGui style
     ImGui::StyleColorsClassic();
 
-    // When viewports are enabled we tweak WindowRounding/WindowBg so platform
-    // windows can look identical to regular ones.
     ImGuiStyle &style = ImGui::GetStyle();
     if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
         style.WindowRounding = 0.0f;
         style.Colors[ImGuiCol_WindowBg].w = 1.0f;
     }
 
-    // Setup Platform/Renderer backends
+#ifdef __APPLE__
+    ImGui_ImplGlfw_InitForOther(context->render_target, true);
+    metal_init_imgui();
+    // Note: macOS screen recording modifier key fix is in
+    // mac_modifier_fix.h (CoreGraphics hardware key state query, applied each
+    // frame between ImGui_ImplGlfw_NewFrame() and ImGui::NewFrame()).
+
+    // Override GLFW focus callback to prevent macOS screen recording
+    // (Cmd+Shift+5) from corrupting ImGui state. The focus-lost event
+    // leaves modifier keys stuck and widgets unresponsive.
+    {
+        // Save ImGui's focus callback so we can forward focus-gained events
+        static GLFWwindowfocusfun imgui_focus_cb = nullptr;
+        imgui_focus_cb = glfwSetWindowFocusCallback(context->render_target,
+            [](GLFWwindow *w, int focused) {
+                // Always forward focus-gained; silently drop focus-lost
+                if (focused && imgui_focus_cb)
+                    imgui_focus_cb(w, focused);
+            });
+    }
+#else
     ImGui_ImplGlfw_InitForOpenGL(context->render_target, true);
     ImGui_ImplOpenGL3_Init(context->glsl_version);
+#endif
 
-    // Load a nice font
-    io.Fonts->AddFontFromFileTTF("fonts/Roboto-Regular.ttf", 15.0f);
-    // merge in icons from Font Awesome
+    // Use absolute paths so fonts and ini work regardless of cwd
+    static std::string ini_path;
+    ini_path = context->exe_dir + "/imgui.ini";
+
+    // Always reset to the shipped default layout on launch so that new projects
+    // start with a clean arrangement rather than inheriting stale window positions.
+    // Per-project layouts are handled separately by switch_ini_to_project().
+    for (const auto &candidate : {
+            context->exe_dir + "/../default_imgui_layout.ini",           // dev build
+            context->exe_dir + "/../share/red/default_imgui_layout.ini", // Homebrew
+        }) {
+        if (std::filesystem::exists(candidate)) {
+            std::filesystem::copy_file(candidate, ini_path,
+                std::filesystem::copy_options::overwrite_existing);
+            break;
+        }
+    }
+
+    io.IniFilename = ini_path.c_str();
+
+    // Search for the fonts directory in candidate locations so the binary
+    // works both from a development build (./release/red → ./fonts) and
+    // from a Homebrew install (/opt/homebrew/bin/red → /opt/homebrew/share/red/fonts).
+    std::string font_dir;
+    for (const auto &candidate : {
+            context->exe_dir + "/../fonts",            // dev build
+            context->exe_dir + "/../share/red/fonts",  // Homebrew install
+        }) {
+        if (std::filesystem::exists(candidate + "/Roboto-Regular.ttf")) {
+            font_dir = candidate;
+            break;
+        }
+    }
+    if (font_dir.empty()) {
+        fprintf(stderr, "[RED] Could not find fonts directory (searched relative to %s)\n",
+                context->exe_dir.c_str());
+        font_dir = context->exe_dir + "/../fonts"; // best-effort fallback
+    }
+    // Roboto's glyph range. Without this ImGui uses GetGlyphRangesDefault()
+    // (Basic Latin + Latin-1, 0x20-0xFF) and every codepoint above it renders
+    // as the fallback '?' -- which is what the em dashes in the UI text did.
+    // Only blocks Roboto actually covers are listed; it has no Arrows block
+    // (U+2190-21FF), so menu paths use ASCII '>' rather than an arrow glyph.
+    // Must be static: ImGui keeps the pointer and reads it at atlas-build time.
+    static const ImWchar roboto_ranges[] = {
+        0x0020, 0x00FF,  // Basic Latin + Latin-1 Supplement
+        0x2000, 0x206F,  // General Punctuation (em dash U+2014, ellipsis U+2026)
+        0x2200, 0x22FF,  // Mathematical Operators (>= U+2265)
+        0,
+    };
+    io.Fonts->AddFontFromFileTTF((font_dir + "/Roboto-Regular.ttf").c_str(), 15.0f,
+                                 nullptr, roboto_ranges);
     static const ImWchar icons_ranges[] = {ICON_MIN_FK, ICON_MAX_16_FK, 0};
     ImFontConfig icons_config;
     icons_config.MergeMode = true;
     icons_config.PixelSnapH = true;
-    io.Fonts->AddFontFromFileTTF("fonts/forkawesome-webfont.ttf", 15.0f,
+    io.Fonts->AddFontFromFileTTF((font_dir + "/forkawesome-webfont.ttf").c_str(), 15.0f,
                                  &icons_config, icons_ranges);
-    // use FONT_ICON_FILE_NAME_FAR if you want regular instead of solid
 }
 
+#ifndef __APPLE__
 static void create_texture(GLuint *texture) {
-    // Create a OpenGL texture identifier
     glGenTextures(1, texture);
     glBindTexture(GL_TEXTURE_2D, *texture);
-
-    // Setup filtering parameters for display
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 }
@@ -160,9 +253,6 @@ static void unmap_cuda_resource(cudaGraphicsResource_t *cuda_resource) {
 }
 
 static void upload_image_pbo_to_texture(int image_width, int img_height) {
-    // Assume PBO is bound before this, therefore the last
-    // argument is an offset into the PBO, not a pointer to a
-    // buffer stored in CPU memory
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, image_width, img_height, 0, GL_RGBA,
                  GL_UNSIGNED_BYTE, 0);
 }
@@ -173,6 +263,7 @@ static void upload_texture(GLuint *image_texture, unsigned char *frame,
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA,
                  GL_UNSIGNED_BYTE, frame);
     unbind_texture();
-};
+}
+#endif // !__APPLE__
 
-#endif
+#endif // GX_HELPER

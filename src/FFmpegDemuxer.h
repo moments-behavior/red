@@ -20,8 +20,10 @@ extern "C" {
 #include "libavformat/avio.h"
 }
 
+#ifndef __APPLE__
 #include "cuviddec.h"
 #include "nvcuvid.h"
+#endif
 #include <map>
 #include <string>
 #include <vector>
@@ -32,6 +34,7 @@ struct PacketData {
     uint64_t pos;
     uint64_t bsl;
     uint64_t duration;
+    int flags; // AVPacket flags, e.g. AV_PKT_FLAG_KEY for keyframes
 };
 
 enum SeekMode {
@@ -221,8 +224,16 @@ class FFmpegDemuxer {
     void Flush();
 
     static int ReadPacket(void *opaque, uint8_t *pBuf, int nBuf);
+
+#ifdef __APPLE__
+    // Extradata (SPS/PPS in AVCC/HVCC format) needed for direct VT decode.
+    // The pointer is valid for the lifetime of this FFmpegDemuxer.
+    uint8_t *GetExtradata() const;
+    int      GetExtradataSize() const;
+#endif
 };
 
+#ifndef __APPLE__
 inline cudaVideoCodec FFmpeg2NvCodecId(AVCodecID id) {
     switch (id) {
     case AV_CODEC_ID_MPEG1VIDEO:
@@ -247,3 +258,4 @@ inline cudaVideoCodec FFmpeg2NvCodecId(AVCodecID id) {
         return cudaVideoCodec_NumCodecs;
     }
 }
+#endif // !__APPLE__

@@ -187,6 +187,7 @@ void seek_all_cameras(RenderScene *scene, int frame_number, double video_fps,
     state.to_display_frame_number = scene->seek_context[0].seek_frame;
     state.pause_selected = 0;
     state.read_head = 0;
+    state.pause_selected = 0;  // reset buffer offset so display starts at seeked frame
     state.just_seeked = true;
     state.slider_frame_number = state.to_display_frame_number;
 
@@ -194,6 +195,7 @@ void seek_all_cameras(RenderScene *scene, int frame_number, double video_fps,
     state.last_play_time_start = std::chrono::steady_clock::now();
     state.last_frame_num_playspeed = frame_number;
     state.last_wall_time_playspeed = std::chrono::steady_clock::now();
+
 }
 
 std::vector<std::string> string_split(std::string s, std::string delimiter) {
@@ -214,27 +216,6 @@ std::vector<std::string> string_split(std::string s, std::string delimiter) {
 bool string_ends_with(const std::string &str, const std::string &suffix) {
     return str.size() >= suffix.size() &&
            str.compare(str.size() - suffix.size(), suffix.size(), suffix) == 0;
-}
-
-bool numerical_compare_substr(const std::string &s1, const std::string &s2) {
-
-    std::size_t s1_start = s1.find("Cam") + 3;
-    std::size_t s2_start = s2.find("Cam") + 3;
-
-    std::size_t s1_end = s1.find("mp4");
-    std::size_t s2_end = s2.find("mp4");
-
-    std::string s1_substr = s1.substr(s1_start, s1_end - s1_start - 1);
-    std::string s2_substr = s2.substr(s2_start, s2_end - s2_start - 1);
-
-    std::cout << s1_substr << " , " << s2_substr << std::endl;
-
-    int s1_int = std::stoi(s1_substr);
-    int s2_int = std::stoi(s2_substr);
-
-    std::cout << s1_int << " , " << s2_int << std::endl;
-
-    return s1_int < s2_int;
 }
 
 std::string format_time(float t_seconds) {

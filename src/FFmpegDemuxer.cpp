@@ -52,13 +52,20 @@ uint32_t FFmpegDemuxer::GetNumFrames() const { return nb_frames; }
 
 double FFmpegDemuxer::GetDuration() const { return fduration; }
 
-double FFmpegDemuxer::GetFramerate() const { return framerate; }
+double FFmpegDemuxer::GetFramerate() const { return avg_framerate; }
 
 double FFmpegDemuxer::GetAvgFramerate() const { return avg_framerate; }
 
 double FFmpegDemuxer::GetTimebase() const { return timebase; }
 
-bool FFmpegDemuxer::IsVFR() const { return framerate != avg_framerate; }
+// r_frame_rate can be 2x avg_frame_rate for H.264 (field-level timing).
+// Only flag as VFR if the ratio is not close to 1:1 or 2:1.
+bool FFmpegDemuxer::IsVFR() const {
+    if (avg_framerate <= 0) return false;
+    double ratio = framerate / avg_framerate;
+    // Accept 1:1 or 2:1 (H.264 doubling) as CFR
+    return std::abs(ratio - 1.0) > 0.01 && std::abs(ratio - 2.0) > 0.01;
+}
 
 uint32_t FFmpegDemuxer::GetVideoStreamIndex() const { return videoStream; }
 
@@ -154,9 +161,11 @@ bool FFmpegDemuxer::Demux(uint8_t *&pVideo, size_t &rVideoBytes,
 
             // Extract SEI NAL units from packet;
             auto pCopyPacket = av_packet_clone(&pktSrc);
-            appendBytes(seiBytes, *pCopyPacket, pktSei, bsfc_sei, videoStream,
-                        true);
-            av_packet_free(&pCopyPacket);
+            if (pCopyPacket) {
+                appendBytes(seiBytes, *pCopyPacket, pktSei, bsfc_sei, videoStream,
+                            true);
+                av_packet_free(&pCopyPacket);
+            }
         }
 
         /* Unref non-desired packets as we don't support them yet;
@@ -193,6 +202,7 @@ bool FFmpegDemuxer::Demux(uint8_t *&pVideo, size_t &rVideoBytes,
     last_packet_data.dts = pktDst.dts;
     last_packet_data.pos = pktDst.pos;
     last_packet_data.duration = pktDst.duration;
+    last_packet_data.flags = pktSrc.flags;
 
     pktData = last_packet_data;
 
@@ -208,6 +218,15 @@ void FFmpegDemuxer::Flush() {
     avio_flush(fmtc->pb);
     avformat_flush(fmtc);
 }
+
+#ifdef __APPLE__
+uint8_t *FFmpegDemuxer::GetExtradata() const {
+    return fmtc->streams[videoStream]->codecpar->extradata;
+}
+int FFmpegDemuxer::GetExtradataSize() const {
+    return fmtc->streams[videoStream]->codecpar->extradata_size;
+}
+#endif
 
 int64_t FFmpegDemuxer::TsFromTime(double ts_sec) {
     /* Internal timestamp representation is integer, so multiply to AV_TIME_BASE
@@ -269,8 +288,8 @@ int64_t FFmpegDemuxer::FindKeyFrameInterval() {
                 eof = true;
                 break;
             } else {
-                LOG(FATAL) << "Error: av_read_frame failed with "
-                           << AVERROR(ret);
+                cerr << "Error: av_read_frame failed with "
+                     << AvErrorToString(ret) << endl;
             }
             break;
         }
@@ -282,95 +301,16 @@ int64_t FFmpegDemuxer::FindKeyFrameInterval() {
             ++cnt;
         }
 
-        auto pCopyPacket = av_packet_clone(&pktSrc);
-        av_packet_free(&pCopyPacket);
-
         if (keyframe_encounter == 2) {
             break;
         }
     }
-    std::cout << "identified seek interval: " << cnt - 1 << std::endl;
-    return cnt - 1;
+    // Seek demuxer back to start — FindKeyFrameInterval consumed packets
+    // that camera 0's decoder thread will need.
+    av_seek_frame(fmtc, videoStream, 0, AVSEEK_FLAG_BACKWARD);
+
+    return (cnt > 0) ? cnt - 1 : 1;
 }
-
-// int64_t FFmpegDemuxer::FindKeyFrameInterval() {
-//     int ret = 0;
-//     int64_t decoded_frame_count = 0;
-//     int keyframe_count = 0;
-//     bool eof = false;
-
-//     AVCodecParameters *codecpar = fmtc->streams[videoStream]->codecpar;
-//     const AVCodec *decoder = avcodec_find_decoder(codecpar->codec_id);
-//     if (!decoder) {
-//         LOG(FATAL) << "Could not find decoder";
-//     }
-
-//     AVCodecContext *codec_ctx = avcodec_alloc_context3(decoder);
-//     if (!codec_ctx) {
-//         LOG(FATAL) << "Could not allocate codec context";
-//     }
-
-//     if ((ret = avcodec_parameters_to_context(codec_ctx, codecpar)) < 0) {
-//         LOG(FATAL) << "Failed to copy codec params: " << AVERROR(ret);
-//     }
-
-//     if ((ret = avcodec_open2(codec_ctx, decoder, nullptr)) < 0) {
-//         LOG(FATAL) << "Failed to open decoder: " << AVERROR(ret);
-//     }
-
-//     AVPacket *pkt = av_packet_alloc();
-//     AVFrame *frame = av_frame_alloc();
-
-//     while (!eof) {
-//         ret = av_read_frame(fmtc, pkt);
-//         if (ret < 0) {
-//             if (ret == AVERROR_EOF) {
-//                 eof = true;
-//                 break;
-//             } else {
-//                 LOG(FATAL) << "Error reading packet: " << AVERROR(ret);
-//             }
-//         }
-
-//         if (pkt->stream_index == videoStream) {
-//             ret = avcodec_send_packet(codec_ctx, pkt);
-//             if (ret < 0 && ret != AVERROR(EAGAIN)) {
-//                 LOG(FATAL) << "Error sending packet: " << AVERROR(ret);
-//             }
-
-//             while (ret >= 0) {
-//                 ret = avcodec_receive_frame(codec_ctx, frame);
-//                 if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
-//                     break;
-//                 else if (ret < 0) {
-//                     LOG(FATAL) << "Error receiving frame: " << AVERROR(ret);
-//                 }
-
-//                 decoded_frame_count++;
-
-//                 if (frame->key_frame) {
-//                     keyframe_count++;
-//                     if (keyframe_count == 2) {
-//                         goto done;
-//                     }
-//                 }
-
-//                 av_frame_unref(frame);
-//             }
-//         }
-
-//         av_packet_unref(pkt);
-//     }
-
-// done:
-//     av_frame_free(&frame);
-//     av_packet_free(&pkt);
-//     avcodec_free_context(&codec_ctx);
-
-//     std::cout << "Identified GOP interval (decoded frames): "
-//               << decoded_frame_count - 1 << std::endl;
-//     return decoded_frame_count - 1;
-// }
 
 bool FFmpegDemuxer::Seek(SeekContext &seekCtx, uint8_t *&pVideo,
                          size_t &rVideoBytes, PacketData &pktData,
@@ -394,7 +334,8 @@ bool FFmpegDemuxer::Seek(SeekContext &seekCtx, uint8_t *&pVideo,
                   << std::endl;
     }
 
-    // Seek for single frame;
+    // Seek for single frame; returns false on error instead of throwing.
+    bool seek_error = false;
     auto seek_frame = [&](SeekContext const &seek_ctx, int flags) {
         bool seek_backward = false;
         int64_t timestamp = 0;
@@ -416,12 +357,14 @@ bool FFmpegDemuxer::Seek(SeekContext &seekCtx, uint8_t *&pVideo,
                                               : flags);
             break;
         default:
-            throw runtime_error("Invalid seek mode");
+            cerr << "Invalid seek criteria" << endl;
+            seek_error = true;
+            return;
         }
 
         if (ret < 0) {
-            throw runtime_error("Error seeking for frame: " +
-                                AvErrorToString(ret));
+            cerr << "Error seeking for frame: " << AvErrorToString(ret) << endl;
+            seek_error = true;
         }
     };
 
@@ -437,8 +380,8 @@ bool FFmpegDemuxer::Seek(SeekContext &seekCtx, uint8_t *&pVideo,
             target_ts = TsFromTime(seek_ctx.seek_frame);
             break;
         default:
-            throw runtime_error("Invalid seek criteria");
-            break;
+            cerr << "Invalid seek criteria" << endl;
+            return 0;  // treat as done to stop the loop
         }
 
         if (pkt_data.dts == target_ts) {
@@ -457,6 +400,7 @@ bool FFmpegDemuxer::Seek(SeekContext &seekCtx, uint8_t *&pVideo,
         // Repetititive seek until seek condition is satisfied;
         SeekContext tmp_ctx(seek_ctx.seek_frame);
         seek_frame(tmp_ctx, AVSEEK_FLAG_ANY);
+        if (seek_error) return;
 
         int condition = 0;
         do {
@@ -469,6 +413,7 @@ bool FFmpegDemuxer::Seek(SeekContext &seekCtx, uint8_t *&pVideo,
             if (condition > 0) {
                 tmp_ctx.seek_frame--;
                 seek_frame(tmp_ctx, AVSEEK_FLAG_ANY);
+                if (seek_error) return;
             }
             // Need to read more frames until we reach requested number;
             else if (condition < 0) {
@@ -484,6 +429,7 @@ bool FFmpegDemuxer::Seek(SeekContext &seekCtx, uint8_t *&pVideo,
     auto seek_for_prev_key_frame = [&](PacketData &pkt_data,
                                        SeekContext &seek_ctx) {
         seek_frame(seek_ctx, AVSEEK_FLAG_BACKWARD);
+        if (seek_error) return;
 
         Demux(pVideo, rVideoBytes, pkt_data, ppSEI, pSEIBytes);
         seek_ctx.out_frame_pts = pkt_data.pts;
@@ -498,11 +444,11 @@ bool FFmpegDemuxer::Seek(SeekContext &seekCtx, uint8_t *&pVideo,
         seek_for_prev_key_frame(pktData, seekCtx);
         break;
     default:
-        throw runtime_error("Unsupported seek mode");
-        break;
+        cerr << "Unsupported seek mode" << endl;
+        return false;
     }
 
-    return true;
+    return !seek_error;
 }
 
 int FFmpegDemuxer::ReadPacket(void *opaque, uint8_t *pBuf, int nBuf) {
@@ -518,12 +464,15 @@ FFmpegDemuxer::~FFmpegDemuxer() {
     if (pktDst.data) {
         av_packet_unref(&pktDst);
     }
+    if (pktSei.data) {
+        av_packet_unref(&pktSei);
+    }
 
     if (bsfc_annexb) {
         av_bsf_free(&bsfc_annexb);
     }
 
-    if (bsfc_annexb) {
+    if (bsfc_sei) {
         av_bsf_free(&bsfc_sei);
     }
 
@@ -553,8 +502,17 @@ FFmpegDemuxer::CreateFormatContext(const char *szFilePath,
         }
     }
 
-    AVFormatContext *ctx = nullptr;
-    // av_register_all();
+    AVFormatContext *ctx = avformat_alloc_context();
+    if (!ctx) {
+        cerr << "Can't allocate AVFormatContext\n";
+        return nullptr;
+    }
+
+    // Some high-framerate MP4s have broken headers that cause
+    // analyzeduration to default to 0, preventing stream probing.
+    // Ensure FFmpeg always analyzes at least 5 seconds of data.
+    ctx->max_analyze_duration = 5 * AV_TIME_BASE;
+
     auto err = avformat_open_input(&ctx, szFilePath, nullptr, &options);
     if (err < 0 || nullptr == ctx) {
         cerr << "Can't open " << szFilePath << ": " << AvErrorToString(err)
@@ -661,5 +619,5 @@ FFmpegDemuxer::FFmpegDemuxer(AVFormatContext *fmtcx) : fmtc(fmtcx) {
 
     /* Some inputs doesn't allow seek functionality.
      * Check this ahead of time. */
-    is_seekable = fmtc->iformat->read_seek || fmtc->iformat->read_seek2;
+    is_seekable = fmtc->pb && (fmtc->pb->seekable & AVIO_SEEKABLE_NORMAL);
 }

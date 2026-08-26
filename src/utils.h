@@ -1,5 +1,4 @@
-#ifndef RED_UTILS
-#define RED_UTILS
+#pragma once
 #include "render.h"
 #include "skeleton.h"
 #include <chrono>
@@ -28,20 +27,20 @@ struct PlaybackState {
         std::chrono::steady_clock::now();
     bool video_loaded = false;
     bool realtime_playback = true;
+    float set_playback_speed = 1.0f;
+    double inst_speed = 1.0;
+    bool slider_text_editing = false;  // true while user is typing in slider
 };
 
 bool string_ends_with(const std::string &str, const std::string &suffix);
 std::vector<std::string> string_split(std::string s, std::string delimiter);
-bool numerical_compare_substr(const std::string &s1, const std::string &s2);
 std::string format_time(float t_seconds);
 void seek_all_cameras(RenderScene *scene, int frame_number, double video_fps,
                       PlaybackState &state, bool seek_accurate);
-bool has_labeled_frames(const std::map<u32, KeyPoints *> &keypoints_map,
-                        SkeletonContext *skeleton);
 void prepare_application_folders(std::string &red_data_dir,
                                  std::string &media_dir);
 std::string dir_difference(const std::filesystem::path &a,
                            const std::filesystem::path &b);
 bool ensure_dir_exists(std::string path_string, std::string *err);
 bool ends_with_ci(std::string_view s, std::string_view suffix);
-#endif
+std::string get_home_directory();

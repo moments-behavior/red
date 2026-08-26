@@ -1,4 +1,4 @@
-# based on some functions in https://github.com/JohnsonLabJanelia/red/data_exporter/utils.py  
+# based on some functions in https://github.com/moments-behavior/red/data_exporter/utils.py  
 
 import cv2 as cv
 import os

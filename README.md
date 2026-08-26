@@ -6,23 +6,46 @@ A 3D multi-camera labeling tool for fast review and triangulation across many sy
 
 ## Overview
 
-`red` is the labeling counterpart to [orange](https://github.com/moments-behavior/orange). It takes multi-view video (typically recorded with `orange`) and lets you label keypoints across all camera views simultaneously, with real-time GPU decoding (h264 / hevc), synchronized playback across all cameras, and multi-view triangulation. Labeled data can be exported for downstream training (YOLO detection, YOLO pose, JARVIS).
+`red` is the labeling counterpart to [orange](https://github.com/moments-behavior/orange). It takes multi-view video (typically recorded with `orange`) and lets you label keypoints across all camera views simultaneously, with real-time hardware-accelerated decoding of h264 / hevc (NVDEC + CUDA on Linux and Windows, VideoToolbox + Metal on macOS), synchronized playback across all cameras, and multi-view triangulation. Labeled data can be exported for downstream training (YOLO detection, YOLO pose, JARVIS).
 
 ## Documentation
 
-Full documentation — installation, configuration, data export — lives at the [moments-behavior docs site](https://moments-behavior.github.io/docs/red/).
+Full documentation — installation, configuration, data export — lives at the [moments-behavior docs site](https://moments-behavior.github.io/docs/red/). The site currently documents the Linux build; for macOS use the Homebrew install below.
 
 [Video demo](https://www.youtube.com/watch?v=9eOJaadE1Nc)
 
+## Install
+
+**macOS** (Apple Silicon) — Metal rendering with VideoToolbox hardware decode:
+
+```bash
+brew tap moments-behavior/red
+brew install --HEAD moments-behavior/red/red
+```
+
 ## Quick build
 
-Linux-only. Requires NVIDIA GPU with CUDA + cuDNN. See the docs for full system requirements and the dependency install walkthrough.
+Apple Silicon on macOS; an NVIDIA GPU with NVDEC (GTX 1060+) on Linux and
+Windows. See the docs for full system requirements and the dependency install
+walkthrough.
+
+**macOS / Linux**
 
 ```bash
 git clone --recursive https://github.com/moments-behavior/red.git
 cd red
 ./build.sh    # builds release/red
 ./run.sh
+```
+
+**Windows** — needs Visual Studio 2022 (or Build Tools) with the C++ toolset,
+the CUDA Toolkit 12.x, and [vcpkg](https://vcpkg.io). `build.bat` locates all
+three; set `VCPKG_ROOT` if vcpkg is not at `%USERPROFILE%\vcpkg`.
+
+```bat
+git clone --recursive https://github.com/moments-behavior/red.git
+cd red
+build.bat     REM builds build_win\red.exe
 ```
 
 ## Authors
