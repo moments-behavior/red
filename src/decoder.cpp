@@ -746,7 +746,33 @@ void decoder_process(DecoderContext *dc_context, FFmpegDemuxer *demuxer,
                        size_of_buffer, seek_info, use_cpu_buffer, sync_cam);
 }
 
-// Helper: load image as RGBA into display buffer slot
+// PictureBuffer::frame byte order is platform-dependent (see decoder.h): macOS
+// uploads it straight into a BGRA Metal texture, the GL path uploads it as
+// RGBA. Both loaders below default to RGBA, so the macOS build has to ask for
+// the other one -- getting this wrong is silent, and shows as swapped red and
+// blue rather than as any kind of error.
+#if defined(RED_FRAME_BGRA)
+static constexpr int kLoadPixelFormat = TJPF_BGRA;
+#elif defined(__APPLE__) || defined(_WIN32)
+static constexpr int kLoadPixelFormat = TJPF_RGBA;
+#endif
+
+// stb_image only ever returns RGBA, so where the display wants BGRA the red
+// and blue channels have to be swapped after the fact. Compiles away entirely
+// on the RGBA platforms.
+static inline void load_image_fix_channel_order(unsigned char *buf,
+                                                size_t pixel_count) {
+#if defined(RED_FRAME_BGRA)
+    for (size_t i = 0; i < pixel_count; ++i)
+        std::swap(buf[i * 4 + 0], buf[i * 4 + 2]);
+#else
+    (void)buf;
+    (void)pixel_count;
+#endif
+}
+
+// Helper: load one image into a display buffer slot, in this platform's
+// PictureBuffer::frame byte order.
 static inline bool load_image_rgba(const std::string &file_name,
                                    unsigned char *dst_buf,
                                    size_t *out_size) {
@@ -773,7 +799,7 @@ static inline bool load_image_rgba(const std::string &file_name,
                     if (tjDecompressHeader3(tj, jpeg_buf.data(), fsize,
                                             &w, &h, &tj_subsamp, &tj_cs) == 0) {
                         if (tjDecompress2(tj, jpeg_buf.data(), fsize,
-                                          dst_buf, w, 0, h, TJPF_RGBA,
+                                          dst_buf, w, 0, h, kLoadPixelFormat,
                                           TJFLAG_FASTDCT) == 0) {
                             if (out_size) *out_size = (size_t)w * h * 4;
                             tjDestroy(tj);
@@ -794,6 +820,7 @@ static inline bool load_image_rgba(const std::string &file_name,
     size_t buf_size = (size_t)w * h * 4;
     memcpy(dst_buf, data, buf_size);
     stbi_image_free(data);
+    load_image_fix_channel_order(dst_buf, (size_t)w * h);
     if (out_size) *out_size = buf_size;
     return true;
 #else
@@ -804,6 +831,7 @@ static inline bool load_image_rgba(const std::string &file_name,
     size_t buf_size = (size_t)w * h * 4;
     memcpy(dst_buf, data, buf_size);
     stbi_image_free(data);
+    load_image_fix_channel_order(dst_buf, (size_t)w * h);
     if (out_size) *out_size = buf_size;
     return true;
 #endif

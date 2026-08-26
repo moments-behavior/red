@@ -28,6 +28,9 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include "../lib/ImGuiFileDialog/stb/stb_image.h"
 #undef STB_IMAGE_IMPLEMENTATION
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "../src/stb_image_write.h"
+#undef STB_IMAGE_WRITE_IMPLEMENTATION
 
 #include "../src/FFmpegDemuxer.h"
 #include "../src/decode_backend.h"
@@ -36,6 +39,7 @@
 
 #include <chrono>
 #include <cstdio>
+#include <filesystem>
 #include <cstdlib>
 #include <cstring>
 #include <map>
@@ -161,6 +165,111 @@ void do_seek(SeekInfo &si, int frame, bool accurate) {
         std::this_thread::sleep_for(std::chrono::microseconds(100));
     }
     si.seek_done = false;
+}
+
+
+// ---------------------------------------------------------------------------
+// Image-sequence path. image_loader() feeds the same ring from stills rather
+// than a video, through load_image_rgba() -- a separate loader with its own
+// channel-order decision, which is exactly where a red/blue swap hid.
+// JPEG and PNG take different code paths (turbojpeg vs stb_image), so both are
+// covered.
+// ---------------------------------------------------------------------------
+constexpr int kImgCount = 12;
+constexpr int kImgBlue = 160;
+
+bool write_fixture_image(const std::string &path, int idx, int w, int h,
+                         bool jpeg) {
+    std::vector<unsigned char> rgb((size_t)w * h * 3);
+    const unsigned char r = (unsigned char)((idx % 8) * 32);
+    const unsigned char g = (unsigned char)((idx / 8) * 32);
+    for (size_t p = 0; p < (size_t)w * h; ++p) {
+        rgb[p * 3 + 0] = r;
+        rgb[p * 3 + 1] = g;
+        rgb[p * 3 + 2] = (unsigned char)kImgBlue;
+    }
+    if (jpeg)
+        return stbi_write_jpg(path.c_str(), w, h, 3, rgb.data(), 95) != 0;
+    return stbi_write_png(path.c_str(), w, h, 3, rgb.data(), w * 3) != 0;
+}
+
+void run_image_loader_test(const std::string &dir, const char *ext, bool jpeg,
+                           int w, int h) {
+    printf("\n[image sequence: .%s]\n", ext);
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+
+    const std::string cam = "imgcam";
+    std::vector<std::string> names;
+    for (int i = 0; i < kImgCount; i++) {
+        char stem[32];
+        snprintf(stem, sizeof(stem), "%06d", i);
+        names.emplace_back(stem);
+        const std::string path = dir + "/" + cam + "_" + stem + "." + ext;
+        if (!write_fixture_image(path, i, w, h, jpeg)) {
+            fprintf(stderr, "FAIL: could not write %s\n", path.c_str());
+            ++g_fail;
+            return;
+        }
+    }
+
+    window_need_decoding[cam].store(true);
+    latest_decoded_frame[cam].store(0);
+
+    PictureBuffer *ring = new PictureBuffer[kRing]();
+    for (int i = 0; i < kRing; i++) {
+        ring[i].frame = (unsigned char *)calloc((size_t)w * h * 4, 1);
+        ring[i].frame_number = -1;
+        ring[i].available_to_write = true;
+        ring[i].dropped = false;
+#ifdef __APPLE__
+        ring[i].pixel_buffer = nullptr;
+#endif
+    }
+
+    DecoderContext dc{};
+    SeekInfo si{};
+    si.use_seek = false;
+    si.seek_done = false;
+    si.seek_frame = 0;
+    si.seek_accurate = false;
+
+    std::thread loader(image_loader, &dc, std::cref(names), ring, kRing, &si,
+                       true, cam, dir, std::string(ext));
+
+    int head = 0;
+    for (int expected = 0; expected < kImgCount; expected++) {
+        if (!wait_slot(ring, head)) {
+            fprintf(stderr, "FAIL: image %d never arrived\n", expected);
+            ++g_fail;
+            break;
+        }
+        const int label = ring[head].frame_number.load();
+        const int from_pixels = index_from_pixel(ring[head], w, h);
+        int rgb[3] = {-1, -1, -1};
+        const bool readable = read_center_rgb(ring[head], w, h, rgb);
+        if (label != expected || from_pixels != expected) {
+            fprintf(stderr, "FAIL: image slot %d -> label %d, pixels %d "
+                            "(want %d)\n", head, label, from_pixels, expected);
+            ++g_fail;
+        } else if (!readable || std::abs(rgb[2] - kImgBlue) > 12) {
+            fprintf(stderr,
+                    "FAIL: image %d blue=%d want %d (rgb %d,%d,%d) -- "
+                    "channel order wrong?\n",
+                    expected, rgb[2], kImgBlue, rgb[0], rgb[1], rgb[2]);
+            ++g_fail;
+        } else {
+            ++g_pass;
+        }
+        release(ring, head);
+        head = (head + 1) % kRing;
+    }
+    printf("  %d images checked\n", kImgCount);
+
+    dc.stop_flag = true;
+    loader.join();
+    for (int i = 0; i < kRing; i++) free(ring[i].frame);
+    delete[] ring;
 }
 
 } // namespace
@@ -331,6 +440,13 @@ int main(int argc, char **argv) {
 
     dc.stop_flag = true;
     decoder.join();
+
+    run_image_loader_test(
+        (std::filesystem::path(video_path).parent_path() / "imgseq").string(),
+        "png", false, 64, 48);
+    run_image_loader_test(
+        (std::filesystem::path(video_path).parent_path() / "imgseq").string(),
+        "jpg", true, 64, 48);
 
     for (int i = 0; i < kRing; i++) {
 #ifdef __APPLE__
