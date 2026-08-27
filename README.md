@@ -19,7 +19,7 @@ Full documentation — installation, configuration, data export — lives at the
 | | macOS | Linux | Windows |
 |---|---|---|---|
 | Build | CMake, pkg-config | CMake, pkg-config | CMake, Visual Studio 2022 (C++ toolset) |
-| Video | FFmpeg (avcodec, avformat, avutil, swscale) | ← same | ← same |
+| Video | FFmpeg (avcodec, avformat, avutil, swscale) | ← same | ← same (not from vcpkg) |
 | Graphics | GLFW | GLFW, GLEW, OpenGL | GLFW, GLEW |
 | Math | Eigen3, Ceres Solver | Eigen3, Ceres Solver, CBLAS/OpenBLAS | Eigen3, Ceres Solver |
 | Images | libjpeg-turbo | — | libjpeg-turbo |
@@ -53,14 +53,22 @@ sudo apt install cmake pkg-config libglfw3-dev libglew-dev libeigen3-dev \
 ./release/red
 ```
 
-**Windows** (NVIDIA GPU with NVDEC) — dependencies come from
-[vcpkg](https://vcpkg.io); `build.bat` finds Visual Studio, CUDA and vcpkg
-itself. Set `VCPKG_ROOT` if vcpkg is not at `%USERPROFILE%\vcpkg`.
+**Windows** (NVIDIA GPU with NVDEC)
 
 ```bat
-vcpkg install glfw3 glew eigen3 ceres ffmpeg libjpeg-turbo
+vcpkg install glfw3 glew eigen3 ceres libjpeg-turbo --triplet x64-windows
 build.bat     REM builds build_win\red.exe
 ```
+
+FFmpeg does not come from vcpkg — that port compiles FFmpeg from source under
+MSVC and frequently fails. Use any win64 *shared* build (one with `include\`
+and `lib\`, not just `ffmpeg.exe`), unpacked to `C:\ffmpeg` or pointed at by
+`FFMPEG_ROOT`; its `bin\` must be on `PATH` at runtime. Last tested 2026-08
+with the `win64-lgpl-shared` build from
+[BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds/releases).
+
+`build.bat` locates Visual Studio, CUDA, vcpkg and FFmpeg itself. Set
+`VCPKG_ROOT` if vcpkg is not on `PATH` or at `%USERPROFILE%\vcpkg`.
 
 ## Authors
 

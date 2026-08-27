@@ -68,9 +68,23 @@ if not exist "%VCPKG_ROOT%\scripts\buildsystems\vcpkg.cmake" (
     echo        ^(no scripts\buildsystems\vcpkg.cmake inside^).
     exit /b 1
 )
+rem --- FFmpeg: a prebuilt shared build, not vcpkg -----------------------
+rem vcpkg's ffmpeg port compiles all of FFmpeg under MSVC and needs a working
+rem msys2 + nasm; it fails often and slowly. A prebuilt drop from
+rem https://github.com/BtbN/FFmpeg-Builds (win64-lgpl-shared) just works.
+rem Point FFMPEG_ROOT at it, or unpack it to C:\ffmpeg.
+if not defined FFMPEG_ROOT if exist "C:\ffmpeg\include\libavcodec\avcodec.h" set "FFMPEG_ROOT=C:\ffmpeg"
+if not defined FFMPEG_ROOT (
+    echo ERROR: FFmpeg not found. Download a win64 shared build from
+    echo        https://github.com/BtbN/FFmpeg-Builds/releases ^(lgpl-shared^),
+    echo        unpack it to C:\ffmpeg, or set FFMPEG_ROOT to where it lives.
+    exit /b 1
+)
+
 echo Using vcpkg:  %VCPKG_ROOT%
 echo Using CUDA:   %CUDA_PATH%
-set "TOOLCHAIN=-DCMAKE_TOOLCHAIN_FILE=%VCPKG_ROOT:\=/%/scripts/buildsystems/vcpkg.cmake -DVCPKG_TARGET_TRIPLET=x64-windows"
+echo Using FFmpeg: %FFMPEG_ROOT%
+set "TOOLCHAIN=-DCMAKE_TOOLCHAIN_FILE=%VCPKG_ROOT:\=/%/scripts/buildsystems/vcpkg.cmake -DVCPKG_TARGET_TRIPLET=x64-windows -DCMAKE_PREFIX_PATH=%FFMPEG_ROOT:\=/%"
 
 cmake -G Ninja -B build_win -DCMAKE_BUILD_TYPE=Release %TOOLCHAIN%
 if errorlevel 1 exit /b 1
@@ -79,3 +93,6 @@ if errorlevel 1 exit /b 1
 
 echo.
 echo Build complete: build_win\red.exe
+echo Run it with FFmpeg's DLLs on PATH:
+echo     set PATH=%FFMPEG_ROOT%\bin;%%PATH%%
+echo     build_win\red.exe

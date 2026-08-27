@@ -361,11 +361,9 @@ elseif(WIN32)
     set(CMAKE_CXX_STANDARD 17)
     set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-    # vcpkg integration
-    set(VCPKG_ROOT "$ENV{USERPROFILE}/vcpkg")
-    if(EXISTS "${VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake" AND NOT DEFINED CMAKE_TOOLCHAIN_FILE)
-        set(CMAKE_TOOLCHAIN_FILE "${VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake" CACHE STRING "")
-    endif()
+    # No vcpkg auto-detection here: CMAKE_TOOLCHAIN_FILE is only read during
+    # the project() call above, so setting it at this point does nothing. It
+    # has to arrive on the command line -- build.bat passes it.
 
     # Find packages via vcpkg
     find_package(Eigen3 REQUIRED)
