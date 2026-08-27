@@ -101,6 +101,16 @@ RED_DECODE_BACKEND=hw ./release/red      # GPU decoder
 RED_SW_DECODE_THREADS=2 ./release/red    # CPU decode threads per camera
 ```
 
+In PowerShell the variable is set separately, and stays set until you clear it:
+
+```powershell
+$env:RED_DECODE_BACKEND = "sw"
+.\release\red.exe
+Remove-Item Env:RED_DECODE_BACKEND       # back to the default
+```
+
+red prints which backend it chose at startup.
+
 ## Authors
 
 **Red** is developed by Jinyao Yan, with contributions from Wilson Chen, Diptodip Deb, Ratan Othayoth, and Rob Johnson.
