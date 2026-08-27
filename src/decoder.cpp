@@ -1,7 +1,9 @@
 #include "decoder.h"
+#include "decode_backend.h"
 #include "global.h"
+#include "sw_decoder.h"
 #include "sync_plan.h"
-#if !defined(__APPLE__)
+#if defined(RED_HAVE_CUDA)
 #include "AppDecUtils.h"
 #endif
 #include "../lib/ImGuiFileDialog/stb/stb_image.h"  // all platforms: PNG/non-JPEG fallback
@@ -51,7 +53,7 @@ inline void decoder_check_input_files(const char *sz_in_file_path) {
     }
 }
 
-#ifndef __APPLE__
+#if defined(RED_HAVE_CUDA)
 
 void decoder_get_image_from_gpu(CUdeviceptr dpSrc, uint8_t *pDst, int nWidth,
                                 int nHeight) {
@@ -67,11 +69,12 @@ void decoder_get_image_from_gpu(CUdeviceptr dpSrc, uint8_t *pDst, int nWidth,
     cuMemcpy2D(&m);
 }
 
-void decoder_process(DecoderContext *dc_context, FFmpegDemuxer *demuxer,
-                     std::string cam_name, PictureBuffer *display_buffer,
-                     int size_of_buffer, SeekInfo *seek_info,
-                     bool use_cpu_buffer,
-                     const sync_plan::SyncCam *sync_cam) {
+static void nvdec_decoder_process(DecoderContext *dc_context,
+                                 FFmpegDemuxer *demuxer, std::string cam_name,
+                                 PictureBuffer *display_buffer,
+                                 int size_of_buffer, SeekInfo *seek_info,
+                                 bool use_cpu_buffer,
+                                 const sync_plan::SyncCam *sync_cam) {
   try {
     CUdeviceptr pTmpImage = 0;
     ck(cuInit(0));
@@ -379,7 +382,7 @@ void decoder_process(DecoderContext *dc_context, FFmpegDemuxer *demuxer,
   }
 }
 
-#else // __APPLE__
+#elif defined(__APPLE__)
 
 // macOS decoder: Phase 3 — async VideoToolbox via VTAsyncDecoder.
 // Phases 2+3: decoded frames are stored as CVPixelBufferRef (IOSurface-backed)
@@ -397,11 +400,12 @@ static inline void mac_release_pixbuf_slot(PictureBuffer &slot) {
     }
 }
 
-void decoder_process(DecoderContext *dc_context, FFmpegDemuxer *demuxer,
-                     std::string cam_name, PictureBuffer *display_buffer,
-                     int size_of_buffer, SeekInfo *seek_info,
-                     bool /*use_cpu_buffer*/,
-                     const sync_plan::SyncCam *sync_cam) {
+static void vt_decoder_process(DecoderContext *dc_context,
+                              FFmpegDemuxer *demuxer, std::string cam_name,
+                              PictureBuffer *display_buffer,
+                              int size_of_buffer, SeekInfo *seek_info,
+                              bool /*use_cpu_buffer*/,
+                              const sync_plan::SyncCam *sync_cam) {
   try {
     // Run on performance cores
     pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
@@ -713,9 +717,62 @@ void decoder_process(DecoderContext *dc_context, FFmpegDemuxer *demuxer,
   }
 }
 
-#endif // __APPLE__
+#endif // RED_HAVE_CUDA / __APPLE__
 
-// Helper: load image as RGBA into display buffer slot
+// ---------------------------------------------------------------------------
+// decoder_process -- entry point for every camera thread. Forwards to whichever
+// backend red::decode_backend() resolved, which is decided once per process, so
+// all cameras necessarily agree and the ring slots hold one kind of memory.
+// ---------------------------------------------------------------------------
+void decoder_process(DecoderContext *dc_context, FFmpegDemuxer *demuxer,
+                     std::string cam_name, PictureBuffer *display_buffer,
+                     int size_of_buffer, SeekInfo *seek_info,
+                     bool use_cpu_buffer,
+                     const sync_plan::SyncCam *sync_cam) {
+#if defined(RED_HAVE_CUDA) || defined(__APPLE__)
+    if (red::decode_backend() == red::DecodeBackend::Hardware) {
+#if defined(RED_HAVE_CUDA)
+        nvdec_decoder_process(dc_context, demuxer, cam_name, display_buffer,
+                              size_of_buffer, seek_info, use_cpu_buffer,
+                              sync_cam);
+#else
+        vt_decoder_process(dc_context, demuxer, cam_name, display_buffer,
+                           size_of_buffer, seek_info, use_cpu_buffer, sync_cam);
+#endif
+        return;
+    }
+#endif
+    sw_decoder_process(dc_context, demuxer, cam_name, display_buffer,
+                       size_of_buffer, seek_info, use_cpu_buffer, sync_cam);
+}
+
+// PictureBuffer::frame byte order is platform-dependent (see decoder.h): macOS
+// uploads it straight into a BGRA Metal texture, the GL path uploads it as
+// RGBA. Both loaders below default to RGBA, so the macOS build has to ask for
+// the other one -- getting this wrong is silent, and shows as swapped red and
+// blue rather than as any kind of error.
+#if defined(RED_FRAME_BGRA)
+static constexpr int kLoadPixelFormat = TJPF_BGRA;
+#elif defined(__APPLE__) || defined(_WIN32)
+static constexpr int kLoadPixelFormat = TJPF_RGBA;
+#endif
+
+// stb_image only ever returns RGBA, so where the display wants BGRA the red
+// and blue channels have to be swapped after the fact. Compiles away entirely
+// on the RGBA platforms.
+static inline void load_image_fix_channel_order(unsigned char *buf,
+                                                size_t pixel_count) {
+#if defined(RED_FRAME_BGRA)
+    for (size_t i = 0; i < pixel_count; ++i)
+        std::swap(buf[i * 4 + 0], buf[i * 4 + 2]);
+#else
+    (void)buf;
+    (void)pixel_count;
+#endif
+}
+
+// Helper: load one image into a display buffer slot, in this platform's
+// PictureBuffer::frame byte order.
 static inline bool load_image_rgba(const std::string &file_name,
                                    unsigned char *dst_buf,
                                    size_t *out_size) {
@@ -742,7 +799,7 @@ static inline bool load_image_rgba(const std::string &file_name,
                     if (tjDecompressHeader3(tj, jpeg_buf.data(), fsize,
                                             &w, &h, &tj_subsamp, &tj_cs) == 0) {
                         if (tjDecompress2(tj, jpeg_buf.data(), fsize,
-                                          dst_buf, w, 0, h, TJPF_RGBA,
+                                          dst_buf, w, 0, h, kLoadPixelFormat,
                                           TJFLAG_FASTDCT) == 0) {
                             if (out_size) *out_size = (size_t)w * h * 4;
                             tjDestroy(tj);
@@ -763,6 +820,7 @@ static inline bool load_image_rgba(const std::string &file_name,
     size_t buf_size = (size_t)w * h * 4;
     memcpy(dst_buf, data, buf_size);
     stbi_image_free(data);
+    load_image_fix_channel_order(dst_buf, (size_t)w * h);
     if (out_size) *out_size = buf_size;
     return true;
 #else
@@ -773,6 +831,7 @@ static inline bool load_image_rgba(const std::string &file_name,
     size_t buf_size = (size_t)w * h * 4;
     memcpy(dst_buf, data, buf_size);
     stbi_image_free(data);
+    load_image_fix_channel_order(dst_buf, (size_t)w * h);
     if (out_size) *out_size = buf_size;
     return true;
 #endif

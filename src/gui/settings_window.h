@@ -2,6 +2,7 @@
 #include "imgui.h"
 #include "implot.h"
 #include "app_context.h"
+#include "decode_backend.h"
 #include "global.h"
 #include "gui/panel.h"
 #include "keypoint_colors.h"
@@ -171,6 +172,18 @@ inline void DrawSettingsWindow(SettingsState &state, AppContext &ctx) {
 #ifndef __APPLE__
         // --- Hardware (Linux only) ---
         if (ImGui::CollapsingHeader("Hardware")) {
+            ImGui::Text("Decode backend: %s", red::decode_backend_name());
+            ImGui::TextDisabled("(%s)", red::decode_backend_reason());
+            // Software decode writes host memory, so render_allocate_scene_memory
+            // forces CPU Buffer regardless of what is persisted. Say so and
+            // disable the control rather than leaving a "pending restart" note
+            // that a restart would never clear.
+            const bool sw_backend = red::decode_backend_is_software();
+            if (sw_backend)
+                ImGui::TextDisabled(
+                    "Software decode delivers frames in host memory;\n"
+                    "Buffer Type is fixed to CPU Buffer.");
+            ImGui::BeginDisabled(sw_backend);
             // Buffer Type drives how display_buffer[].frame is allocated
             // (cudaMalloc vs malloc). That allocation only happens at
             // startup, so changing the value at runtime would just lie to
@@ -191,7 +204,8 @@ inline void DrawSettingsWindow(SettingsState &state, AppContext &ctx) {
                         "Your choice has been saved; close and reopen red to apply.");
                 }
             }
-            if (s.use_cpu_buffer != ctx.scene->use_cpu_buffer) {
+            ImGui::EndDisabled();
+            if (!sw_backend && s.use_cpu_buffer != ctx.scene->use_cpu_buffer) {
                 ImGui::TextDisabled(
                     "(pending — restart red to apply; currently running in %s)",
                     ctx.scene->use_cpu_buffer ? "CPU Buffer" : "GPU Buffer");

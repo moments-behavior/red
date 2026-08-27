@@ -55,20 +55,61 @@ sudo apt install cmake pkg-config libglfw3-dev libglew-dev libeigen3-dev \
 
 **Windows** (NVIDIA GPU with NVDEC)
 
-```bat
+```powershell
 vcpkg install glfw3 glew eigen3 ceres libjpeg-turbo --triplet x64-windows
-build.bat     REM builds build_win\red.exe
+.\build.bat                              # builds release\red.exe
+$env:PATH = "C:\ffmpeg\bin;$env:PATH"
+.\release\red.exe
 ```
 
 FFmpeg does not come from vcpkg — that port compiles FFmpeg from source under
 MSVC and frequently fails. Use any win64 *shared* build (one with `include\`
 and `lib\`, not just `ffmpeg.exe`), unpacked to `C:\ffmpeg` or pointed at by
-`FFMPEG_ROOT`; its `bin\` must be on `PATH` at runtime. Last tested 2026-08
-with the `win64-lgpl-shared` build from
+`FFMPEG_ROOT`; its `bin\` must be on `PATH` at runtime, as above. Last tested
+2026-08 with the `win64-lgpl-shared` build from
 [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds/releases).
 
 `build.bat` locates Visual Studio, CUDA, vcpkg and FFmpeg itself. Set
-`VCPKG_ROOT` if vcpkg is not on `PATH` or at `%USERPROFILE%\vcpkg`.
+`VCPKG_ROOT` if vcpkg is not on `PATH` or at `$env:USERPROFILE\vcpkg`.
+
+### Building for a machine without a GPU
+
+red decodes and renders on the GPU by default. On a machine with no NVIDIA GPU,
+build the CPU version instead:
+
+```bash
+./build.sh -DRED_ENABLE_CUDA=OFF
+./release/red
+```
+
+It does the same things, just slower — expect a large frame-rate drop with many
+cameras.
+
+On Linux this has to be a separate build: a normal build needs the NVIDIA
+driver's libraries just to start up, so without them red will not launch at
+all. Windows builds run on either kind of machine.
+
+### Choosing the decoder
+
+A GPU build uses the GPU, and switches to the CPU decoder by itself if the GPU
+turns out to be unusable. To choose explicitly — mainly to exercise the CPU
+path on a machine that does have a GPU:
+
+```bash
+RED_DECODE_BACKEND=sw ./release/red      # CPU decoder
+RED_DECODE_BACKEND=hw ./release/red      # GPU decoder
+RED_SW_DECODE_THREADS=2 ./release/red    # CPU decode threads per camera
+```
+
+In PowerShell the variable is set separately, and stays set until you clear it:
+
+```powershell
+$env:RED_DECODE_BACKEND = "sw"
+.\release\red.exe
+Remove-Item Env:RED_DECODE_BACKEND       # back to the default
+```
+
+red prints which backend it chose at startup.
 
 ## Authors
 

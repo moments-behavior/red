@@ -93,15 +93,10 @@ inline void copy_default_layout_to_project(const AppContext &ctx, const std::str
     fs::path dest = fs::path(proj_path) / "imgui_layout.ini";
     if (fs::exists(dest))
         return;
-    for (const auto &candidate : {
-             ctx.window->exe_dir + "/../default_imgui_layout.ini",
-             ctx.window->exe_dir + "/../share/red/default_imgui_layout.ini",
-         }) {
-        if (fs::exists(candidate)) {
-            std::error_code ec;
-            fs::copy_file(candidate, dest, ec);
-            break;
-        }
+    const std::string src = ctx.window->exe_dir + "/../default_imgui_layout.ini";
+    if (fs::exists(src)) {
+        std::error_code ec;
+        fs::copy_file(src, dest, ec);
     }
 }
 
