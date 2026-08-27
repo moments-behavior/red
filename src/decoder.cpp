@@ -11,6 +11,7 @@
 #include <turbojpeg.h>
 #endif
 #include <algorithm>
+#include <cstdlib>
 #include <cstdint>
 #include <cstring>
 
@@ -54,6 +55,22 @@ inline void decoder_check_input_files(const char *sz_in_file_path) {
 }
 
 #if defined(RED_HAVE_CUDA)
+
+// Seek diagnostics. Off unless RED_SEEK_DEBUG=1 is set in the environment, so
+// this can sit in a build without flooding normal runs.
+static bool red_seek_debug() {
+    static const bool on = [] {
+        const char *v = std::getenv("RED_SEEK_DEBUG");
+        return v && *v && *v != '0';
+    }();
+    return on;
+}
+#define RED_SEEKDBG(fmt, ...)                                                  \
+    do {                                                                       \
+        if (red_seek_debug())                                                  \
+            fprintf(stderr, "[seek %s] " fmt "\n", cam_name.c_str(),           \
+                    ##__VA_ARGS__);                                            \
+    } while (0)
 
 void decoder_get_image_from_gpu(CUdeviceptr dpSrc, uint8_t *pDst, int nWidth,
                                 int nHeight) {
@@ -118,6 +135,16 @@ static void nvdec_decoder_process(DecoderContext *dc_context,
     }
     int size_in_bytes;
     bool skip_first_decode_after_seek = false;
+    // The seek block identifies the target frame by timestamp, which means
+    // popping it. NvDecoder keeps the pointer valid until the next Decode(),
+    // and skip_first_decode_after_seek guarantees there isn't one, so it can
+    // be handed to the main loop rather than re-fetched.
+    uint8_t *pending_seek_frame = nullptr;
+    // Display order is monotonically increasing in presentation timestamp.
+    // Anything that goes backwards is stale or a duplicate -- cuvid has been
+    // observed re-displaying a picture already delivered -- and publishing it
+    // shifts every later frame. Enforce the invariant rather than assume it.
+    int64_t last_published_pts = INT64_MIN;
 
     // Copy the converted RGBA frame in pTmpImage into a ring slot and publish
     // it under `label` (mp4 index in passthrough, canonical slot in sync
@@ -195,16 +222,75 @@ static void nvdec_decoder_process(DecoderContext *dc_context,
             }
 
             nFrameReturned = dec.Decode(NULL, 0, CUVID_PKT_DISCONTINUITY);
-
+            RED_SEEKDBG("flush -> %d frames", nFrameReturned);
             for (int i = 0; i < nFrameReturned; i++) {
-                pFrame = dec.GetFrame();
+                dec.GetFrame();
             }
 
-            auto temp_nFrameReturned = dec.Decode(pVideo, nVideoBytes);
+            // Keep this count: the loop below budgets on it, and the frames
+            // it produced are real output that must be examined, not skipped.
+            nFrameReturned = dec.Decode(pVideo, nVideoBytes, 0, pktinfo.pts);
+            RED_SEEKDBG("key=%llu target=%llu accurate=%d | first packet "
+                        "(pts=%lld) -> %d frames",
+                        (unsigned long long)key_frame_num,
+                        (unsigned long long)mp4_target, (int)seek_accurate,
+                        (long long)pktinfo.pts, nFrameReturned);
 
-            if (seek_accurate) {
+            // Frames buffered from before the seek survive the flush and
+            // emerge from the Decode() calls below. Counting them as post-seek
+            // output is what made every accurate seek land 1-4 frames early on
+            // B-frame streams, by however many happened to leak that run.
+            //
+            // So don't count until the stream is identified: discard frames
+            // until one carries the keyframe's own timestamp -- exactly the
+            // pts of the packet Seek() just returned. Everything before that is
+            // a leftover, whatever timestamp it has.
+            const int64_t key_pts = pktinfo.pts;
+            bool synced = false;
+            int64_t land_ts = INT64_MIN;
+
+            // Both seek modes have to discard the leftovers; they differ only
+            // in where they stop. A non-accurate seek settles for the keyframe,
+            // which is exactly where the sync completes.
+            const uint64_t step_target =
+                seek_accurate ? mp4_target : key_frame_num;
+            if (!seek_accurate)
+                seek_info->seek_frame = key_frame_num;
+            {
                 uint64_t curr_frame = key_frame_num - 1;
-                while (curr_frame != mp4_target) {
+                for (;;) {
+                    while (nFrameReturned != 0) {
+                        int64_t ts = -1;
+                        uint8_t *f = dec.GetFrame(&ts);
+                        nFrameReturned--;
+                        if (!f) {          // decoder empty; count was optimistic
+                            nFrameReturned = 0;
+                            break;
+                        }
+                        if (!synced) {
+                            if (ts != key_pts) {
+                                RED_SEEKDBG("  drop leftover ts=%lld",
+                                            (long long)ts);
+                                continue;
+                            }
+                            synced = true;
+                            curr_frame = key_frame_num;
+                        } else {
+                            curr_frame++;
+                        }
+                        if (curr_frame == step_target) {
+                            RED_SEEKDBG("  LAND curr_frame=%llu ts=%lld",
+                                        (unsigned long long)curr_frame,
+                                        (long long)ts);
+                            pending_seek_frame = f;
+                            land_ts = ts;
+                            goto jump;
+                        }
+                        RED_SEEKDBG("  discard curr_frame=%llu ts=%lld",
+                                    (unsigned long long)curr_frame,
+                                    (long long)ts);
+                    }
+                    {
                     demux_success =
                         demuxer->Demux(pVideo, nVideoBytes, pktinfo);
                     if (!demux_success) {
@@ -214,7 +300,11 @@ static void nvdec_decoder_process(DecoderContext *dc_context,
                         if (!sync_on)
                             dc_context->total_num_frame = nFrame + nFrameReturned;
                     } else {
-                        nFrameReturned = dec.Decode(pVideo, nVideoBytes);
+                        nFrameReturned = dec.Decode(pVideo, nVideoBytes, 0, pktinfo.pts);
+                        RED_SEEKDBG("  packet pts=%lld -> %d frames "
+                                    "(curr_frame=%llu)",
+                                    (long long)pktinfo.pts, nFrameReturned,
+                                    (unsigned long long)curr_frame);
                     }
                     // EOF guard: the demuxer is exhausted AND the decoder has
                     // been fully flushed (no buffered frames left), so the
@@ -229,20 +319,9 @@ static void nvdec_decoder_process(DecoderContext *dc_context,
                         seek_info->seek_frame = curr_frame;
                         break;
                     }
-                    while (nFrameReturned != 0) {
-                        curr_frame++;
-                        if (curr_frame == mp4_target) {
-                            skip_first_decode_after_seek = true;
-                            goto jump;
-                        } else {
-                            dec.GetFrame();
-                        }
-                        nFrameReturned--;
                     }
                 }
             jump:;
-            } else {
-                seek_info->seek_frame = key_frame_num;
             }
 
             buffer_head = 0;
@@ -261,7 +340,78 @@ static void nvdec_decoder_process(DecoderContext *dc_context,
             }
             first_store_done = true;
             display_buffer[0].frame_number = -1;
+
             seek_info->use_seek = false;
+
+            // Publish the target frame directly.
+            //
+            // Identifying it by timestamp means popping it, so the seek block
+            // ends up holding it. Handing it to the main loop via a frame
+            // count did not work: the count and the decoder's real queue
+            // disagree by however many frames cuvid buffered, so the target
+            // got published and then handed out a second time. Storing it
+            // here needs no count and leaves the main loop with no carried
+            // state -- it simply resumes at the frame after the target.
+            last_published_pts = INT64_MIN;
+            if (pending_seek_frame) {
+                if (!pTmpImage) {
+                    nWidth = dec.GetWidth();
+                    nHeight = dec.GetHeight();
+                    size_in_bytes = nWidth * nHeight * 4;
+                    cuMemAlloc(&pTmpImage, size_in_bytes);
+                }
+                iMatrix = dec.GetVideoFormatInfo()
+                              .video_signal_description.matrix_coefficients;
+                Nv12ToColor32<RGBA32>(pending_seek_frame, dec.GetWidth(),
+                                      (uint8_t *)pTmpImage, 4 * dec.GetWidth(),
+                                      dec.GetWidth(), dec.GetHeight(), iMatrix);
+                pending_seek_frame = nullptr;
+                RED_SEEKDBG("publishing target %d from the seek block", nFrame);
+                if (sync_on) {
+                    have_content = true;
+                    if (store_slot(next_slot, false)) next_slot++;
+                } else {
+                    if (!store_slot(nFrame, false))
+                        RED_SEEKDBG("target store rejected");
+                }
+                last_published_pts = land_ts;
+                nFrame++;
+
+                // Publish whatever else the decoder is already holding.
+                //
+                // Decode() resets m_nDecodedFrame, so any frame still
+                // undelivered when the main loop next calls it is destroyed.
+                // Leaving them meant the frames right after the target went
+                // missing and playback jumped ahead by however many happened
+                // to be queued -- varying per run, like everything else here.
+                for (;;) {
+                    int64_t more_ts = -1;
+                    uint8_t *more = dec.GetFrame(&more_ts);
+                    if (!more) break;
+                    if (more_ts <= last_published_pts) {
+                        RED_SEEKDBG("  dropping non-advancing ts=%lld",
+                                    (long long)more_ts);
+                        continue;
+                    }
+                    last_published_pts = more_ts;
+                    Nv12ToColor32<RGBA32>(more, dec.GetWidth(),
+                                          (uint8_t *)pTmpImage,
+                                          4 * dec.GetWidth(), dec.GetWidth(),
+                                          dec.GetHeight(), iMatrix);
+                    RED_SEEKDBG("  also publishing %d ts=%lld", nFrame,
+                                (long long)more_ts);
+                    if (sync_on) {
+                        if (!store_slot(next_slot, false)) break;
+                        next_slot++;
+                    } else if (!store_slot(nFrame, false)) {
+                        break;
+                    }
+                    nFrame++;
+                }
+            }
+            nFrameReturned = 0;
+            skip_first_decode_after_seek = false;
+
             seek_info->seek_done = true;
         } else {
             if (window_need_decoding[cam_name].load()) {
@@ -274,7 +424,7 @@ static void nvdec_decoder_process(DecoderContext *dc_context,
                         if (!sync_on)
                             dc_context->total_num_frame = nFrame + nFrameReturned;
                     } else {
-                        nFrameReturned = dec.Decode(pVideo, nVideoBytes);
+                        nFrameReturned = dec.Decode(pVideo, nVideoBytes, 0, pktinfo.pts);
                     }
                 } else {
                     skip_first_decode_after_seek = false;
@@ -289,7 +439,19 @@ static void nvdec_decoder_process(DecoderContext *dc_context,
                 }
 
                 for (int i = 0; i < nFrameReturned; i++) {
-                    pFrame = dec.GetFrame();
+                    int64_t red_ts = -1;
+                    pFrame = dec.GetFrame(&red_ts);
+                    if (pFrame && red_ts != -1 &&
+                        red_ts <= last_published_pts) {
+                        RED_SEEKDBG("dropping non-advancing ts=%lld (last %lld)",
+                                    (long long)red_ts,
+                                    (long long)last_published_pts);
+                        continue;
+                    }
+                    if (red_ts != -1) last_published_pts = red_ts;
+                    RED_SEEKDBG("main loop: publishing nFrame=%d ts=%lld "
+                                "(%d of %d)", nFrame, (long long)red_ts, i + 1,
+                                nFrameReturned);
                     iMatrix = dec.GetVideoFormatInfo()
                                   .video_signal_description.matrix_coefficients;
                     if (!sync_on) {
@@ -591,7 +753,6 @@ static void vt_decoder_process(DecoderContext *dc_context,
             if (pVideo && nVideoBytes > 0) {
                 vt_dec.submit_blocking(pVideo, nVideoBytes, pktinfo.pts, pktinfo.dts,
                                        timebase, (pktinfo.flags & AV_PKT_FLAG_KEY) != 0);
-                // After submit_blocking, callback has fired; drain_one() retrieves it
                 CVPixelBufferRef pb = vt_dec.drain_one();
                 if (pb) {
                     if (curr_frame < mp4_target) {
