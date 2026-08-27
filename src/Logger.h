@@ -150,7 +150,10 @@ private:
 #else
                 struct in_addr addr = {inet_addr(szHost)};
 #endif
-                struct sockaddr_in s = {AF_INET, htons(uPort), addr};
+                struct sockaddr_in s = {};
+                s.sin_family = AF_INET;
+                s.sin_port = htons(uPort);
+                s.sin_addr = addr;
                 server = s;
             }
             ~UdpOstream() throw() {

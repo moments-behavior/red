@@ -11,13 +11,20 @@ imgui.ini
 data
 src/fonts
 .clangd
+.cache/
 build/
 .idea/
 cmake-build-debug/
+CMakeFiles/
+CMakeCache.txt
+_external/
 
 __pycache__
 
 lib/libtorch/
+lib/onnxruntime/
+lib/cudnn/
+lib/mujoco.framework/
 
 skeleton/*.json
 
@@ -27,3 +34,7 @@ red_exporter_env/
 venv/
 env/
 ENV/
+
+# Fly model (generated)
+models/fruitfly/
+.DS_Store

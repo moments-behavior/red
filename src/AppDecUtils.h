@@ -15,6 +15,7 @@
 //---------------------------------------------------------------------------
 
 #pragma once
+#ifndef __APPLE__
 #include <sstream>
 #include <iostream>
 
@@ -141,7 +142,11 @@ static void createCudaContext(CUcontext* cuContext, int iGpu, unsigned int flags
     char szDeviceName[80];
     ck(cuDeviceGetName(szDeviceName, sizeof(szDeviceName), cuDevice));
     std::cout << "GPU in use: " << szDeviceName << std::endl;
+#if CUDA_VERSION >= 13000
+    ck(cuCtxCreate(cuContext, nullptr, flags, cuDevice));
+#else
     ck(cuCtxCreate(cuContext, flags, cuDevice));
+#endif
 }
 
 /**
@@ -201,3 +206,4 @@ static void ShowDecoderCapability()
         ck(cuCtxDestroy(cuContext));
     }
 }
+#endif // !__APPLE__
