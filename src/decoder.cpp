@@ -753,7 +753,14 @@ static void vt_decoder_process(DecoderContext *dc_context,
             if (pVideo && nVideoBytes > 0) {
                 vt_dec.submit_blocking(pVideo, nVideoBytes, pktinfo.pts, pktinfo.dts,
                                        timebase, (pktinfo.flags & AV_PKT_FLAG_KEY) != 0);
-                CVPixelBufferRef pb = vt_dec.drain_one();
+                // pop_next(), not drain_one(): the queue is a min-heap on pts,
+                // and its top is only the next DISPLAY frame once enough frames
+                // are buffered to cover the reorder window. drain_one() takes
+                // the top immediately, so on a B-frame stream it can hand back
+                // a frame that a later-arriving one should have preceded --
+                // which is why seeks landed on the wrong image while sequential
+                // playback (which uses pop_next) was correct.
+                CVPixelBufferRef pb = vt_dec.pop_next();
                 if (pb) {
                     if (curr_frame < mp4_target) {
                         CFRelease(pb);
@@ -780,7 +787,8 @@ static void vt_decoder_process(DecoderContext *dc_context,
 
                 vt_dec.submit_blocking(pVideo, nVideoBytes, pktinfo.pts, pktinfo.dts,
                                        timebase, (pktinfo.flags & AV_PKT_FLAG_KEY) != 0);
-                CVPixelBufferRef pb = vt_dec.drain_one();
+                // See above: display order requires the reorder window.
+                CVPixelBufferRef pb = vt_dec.pop_next();
                 if (!pb) continue;
 
                 if (curr_frame < mp4_target) {
