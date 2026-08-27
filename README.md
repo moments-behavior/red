@@ -57,14 +57,16 @@ sudo apt install cmake pkg-config libglfw3-dev libglew-dev libeigen3-dev \
 
 ```bat
 vcpkg install glfw3 glew eigen3 ceres libjpeg-turbo --triplet x64-windows
-build.bat     REM builds build_win\red.exe
+build.bat                      REM builds release\red.exe
+set PATH=C:\ffmpeg\bin;%PATH%
+release\red.exe
 ```
 
 FFmpeg does not come from vcpkg — that port compiles FFmpeg from source under
 MSVC and frequently fails. Use any win64 *shared* build (one with `include\`
 and `lib\`, not just `ffmpeg.exe`), unpacked to `C:\ffmpeg` or pointed at by
-`FFMPEG_ROOT`; its `bin\` must be on `PATH` at runtime. Last tested 2026-08
-with the `win64-lgpl-shared` build from
+`FFMPEG_ROOT`; its `bin\` must be on `PATH` at runtime, as above. Last tested
+2026-08 with the `win64-lgpl-shared` build from
 [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds/releases).
 
 `build.bat` locates Visual Studio, CUDA, vcpkg and FFmpeg itself. Set

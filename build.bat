@@ -1,7 +1,7 @@
 @echo off
 rem Windows build. Discovers the toolchain rather than hardcoding paths, so it
 rem runs on any machine with VS 2022 (or Build Tools), the CUDA Toolkit, and
-rem vcpkg. Output goes to build_win\red.exe.
+rem vcpkg. Output goes to release\red.exe.
 rem
 rem   build.bat                      release build
 rem   build.bat > log.txt 2>&1       ...capturing output
@@ -86,13 +86,13 @@ echo Using CUDA:   %CUDA_PATH%
 echo Using FFmpeg: %FFMPEG_ROOT%
 set "TOOLCHAIN=-DCMAKE_TOOLCHAIN_FILE=%VCPKG_ROOT:\=/%/scripts/buildsystems/vcpkg.cmake -DVCPKG_TARGET_TRIPLET=x64-windows -DCMAKE_PREFIX_PATH=%FFMPEG_ROOT:\=/%"
 
-cmake -G Ninja -B build_win -DCMAKE_BUILD_TYPE=Release %TOOLCHAIN% %*
+cmake -G Ninja -B release -DCMAKE_BUILD_TYPE=Release %TOOLCHAIN% %*
 if errorlevel 1 exit /b 1
-cmake --build build_win
+cmake --build release
 if errorlevel 1 exit /b 1
 
 echo.
-echo Build complete: build_win\red.exe
+echo Build complete: release\red.exe
 echo Run it with FFmpeg's DLLs on PATH:
 echo     set PATH=%FFMPEG_ROOT%\bin;%%PATH%%
-echo     build_win\red.exe
+echo     release\red.exe
