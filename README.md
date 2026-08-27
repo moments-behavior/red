@@ -70,31 +70,34 @@ with the `win64-lgpl-shared` build from
 `build.bat` locates Visual Studio, CUDA, vcpkg and FFmpeg itself. Set
 `VCPKG_ROOT` if vcpkg is not on `PATH` or at `%USERPROFILE%\vcpkg`.
 
-### Running without a GPU
+### Building for a machine without a GPU
 
-Decode and render use the GPU by default — NVDEC + CUDA on Linux and Windows,
-VideoToolbox + Metal on macOS. There is also an FFmpeg software path, chosen
-automatically when no usable GPU is found. Expect a large frame-rate drop with
-many cameras.
-
-```bash
-RED_DECODE_BACKEND=sw ./release/red     # force software (works on macOS too)
-RED_SW_DECODE_THREADS=2 ./release/red   # decode threads per camera
-```
-
-A machine with no NVIDIA driver gets a CUDA-free build automatically. That
-matters because linking CUDA there produces a binary that cannot start at all:
-Linux resolves `libcuda.so.1` and `libnvcuvid.so.1` before `main()` runs, so it
-never reaches the code that would have fallen back to software.
-
-Force it when the build machine and the target machine differ — building on a
-GPU box to run somewhere without one:
+red decodes and renders on the GPU by default. On a machine with no NVIDIA GPU,
+build the CPU version instead:
 
 ```bash
 ./build.sh -DRED_ENABLE_CUDA=OFF
+./release/red
 ```
 
-Windows never needs this; that build delay-loads the CUDA DLLs instead.
+It does the same things, just slower — expect a large frame-rate drop with many
+cameras.
+
+On Linux this has to be a separate build: a normal build needs the NVIDIA
+driver's libraries just to start up, so without them red will not launch at
+all. Windows builds run on either kind of machine.
+
+### Choosing the decoder
+
+A GPU build uses the GPU, and switches to the CPU decoder by itself if the GPU
+turns out to be unusable. To choose explicitly — mainly to exercise the CPU
+path on a machine that does have a GPU:
+
+```bash
+RED_DECODE_BACKEND=sw ./release/red      # CPU decoder
+RED_DECODE_BACKEND=hw ./release/red      # GPU decoder
+RED_SW_DECODE_THREADS=2 ./release/red    # CPU decode threads per camera
+```
 
 ## Authors
 
