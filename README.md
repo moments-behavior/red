@@ -55,11 +55,11 @@ sudo apt install cmake pkg-config libglfw3-dev libglew-dev libeigen3-dev \
 
 **Windows** (NVIDIA GPU with NVDEC)
 
-```bat
+```powershell
 vcpkg install glfw3 glew eigen3 ceres libjpeg-turbo --triplet x64-windows
-build.bat                      REM builds release\red.exe
-set PATH=C:\ffmpeg\bin;%PATH%
-release\red.exe
+.\build.bat                              # builds release\red.exe
+$env:PATH = "C:\ffmpeg\bin;$env:PATH"
+.\release\red.exe
 ```
 
 FFmpeg does not come from vcpkg — that port compiles FFmpeg from source under
@@ -70,7 +70,7 @@ and `lib\`, not just `ffmpeg.exe`), unpacked to `C:\ffmpeg` or pointed at by
 [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds/releases).
 
 `build.bat` locates Visual Studio, CUDA, vcpkg and FFmpeg itself. Set
-`VCPKG_ROOT` if vcpkg is not on `PATH` or at `%USERPROFILE%\vcpkg`.
+`VCPKG_ROOT` if vcpkg is not on `PATH` or at `$env:USERPROFILE\vcpkg`.
 
 ### Building for a machine without a GPU
 

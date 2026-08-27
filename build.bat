@@ -93,6 +93,9 @@ if errorlevel 1 exit /b 1
 
 echo.
 echo Build complete: release\red.exe
-echo Run it with FFmpeg's DLLs on PATH:
+echo Run it with FFmpeg's DLLs on PATH.  PowerShell:
+echo     $env:PATH = "%FFMPEG_ROOT%\bin;$env:PATH"
+echo     .\release\red.exe
+echo cmd:
 echo     set PATH=%FFMPEG_ROOT%\bin;%%PATH%%
 echo     release\red.exe
