@@ -70,8 +70,14 @@ enc_args() { # gop bframes
 gen() { # name gop blue bframes
     local name=$1 gop=$2 blue=$3 bf=$4
     # shellcheck disable=SC2046  # enc_args intentionally word-splits
+    # The colour tags are load-bearing. Without them matrix_coefficients is
+    # "unspecified" and each decoder picks its own default -- swscale assumes
+    # BT.601, NVIDIA's Nv12ToColor32 does not -- so the same file yields
+    # different RGB per backend and the grid check below fails on frames that
+    # decoded perfectly well. Tagging BT.709 limited makes every backend agree.
     "$FF" -hide_banner -loglevel error -f lavfi -i "nullsrc=s=320x240:r=30:d=2" \
         -vf "format=gbrp,geq=r='mod(N\,8)*32':g='floor(N/8)*32':b='$blue',format=yuv420p" \
+        -colorspace bt709 -color_primaries bt709 -color_trc bt709 -color_range tv \
         $(enc_args "$gop" "$bf") -y "$OUT/$name.mp4" || return 1
 
     local types
