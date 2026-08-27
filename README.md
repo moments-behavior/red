@@ -10,41 +10,55 @@ A 3D multi-camera labeling tool for fast review and triangulation across many sy
 
 ## Documentation
 
-Full documentation — installation, configuration, data export — lives at the [moments-behavior docs site](https://moments-behavior.github.io/docs/red/). The site currently documents the Linux build; for macOS use the Homebrew install below.
+Full documentation — installation, configuration, data export — lives at the [moments-behavior docs site](https://moments-behavior.github.io/docs/red/). The site currently documents the Linux build; see Build below for macOS and Windows.
 
 [Video demo](https://www.youtube.com/watch?v=9eOJaadE1Nc)
 
-## Install
+## Dependencies
 
-**macOS** (Apple Silicon) — Metal rendering with VideoToolbox hardware decode:
+| | macOS | Linux | Windows |
+|---|---|---|---|
+| Build | CMake, pkg-config | CMake, pkg-config | CMake, Visual Studio 2022 (C++ toolset) |
+| Video | FFmpeg (avcodec, avformat, avutil, swscale) | ← same | ← same |
+| Graphics | GLFW | GLFW, GLEW, OpenGL | GLFW, GLEW |
+| Math | Eigen3, Ceres Solver | Eigen3, Ceres Solver, CBLAS/OpenBLAS | Eigen3, Ceres Solver |
+| Images | libjpeg-turbo | — | libjpeg-turbo |
+| GPU | — (VideoToolbox + Metal are part of macOS) | CUDA Toolkit with NVDEC | CUDA Toolkit 12.x with NVDEC |
 
-```bash
-brew tap moments-behavior/red
-brew install --HEAD moments-behavior/red/red
-```
+Homebrew, apt and vcpkg are the paths below, but nothing requires them — any
+install CMake can find via `find_package` / `pkg-config` works.
 
-## Quick build
-
-Apple Silicon on macOS; an NVIDIA GPU with NVDEC (GTX 1060+) on Linux and
-Windows. See the docs for full system requirements and the dependency install
-walkthrough.
-
-**macOS / Linux**
+## Build
 
 ```bash
 git clone --recursive https://github.com/moments-behavior/red.git
 cd red
-./build.sh    # builds release/red
-./run.sh
 ```
 
-**Windows** — needs Visual Studio 2022 (or Build Tools) with the C++ toolset,
-the CUDA Toolkit 12.x, and [vcpkg](https://vcpkg.io). `build.bat` locates all
-three; set `VCPKG_ROOT` if vcpkg is not at `%USERPROFILE%\vcpkg`.
+**macOS** (Apple Silicon)
+
+```bash
+brew install cmake pkg-config ffmpeg glfw eigen ceres-solver jpeg-turbo
+./build.sh          # builds release/red
+./release/red
+```
+
+**Linux** (NVIDIA GPU with NVDEC, GTX 1060+)
+
+```bash
+sudo apt install cmake pkg-config libglfw3-dev libglew-dev libeigen3-dev \
+    libceres-dev libopenblas-dev libgtest-dev nvidia-cuda-toolkit \
+    libavcodec-dev libavformat-dev libavutil-dev libswscale-dev
+./build.sh
+./release/red
+```
+
+**Windows** (NVIDIA GPU with NVDEC) — dependencies come from
+[vcpkg](https://vcpkg.io); `build.bat` finds Visual Studio, CUDA and vcpkg
+itself. Set `VCPKG_ROOT` if vcpkg is not at `%USERPROFILE%\vcpkg`.
 
 ```bat
-git clone --recursive https://github.com/moments-behavior/red.git
-cd red
+vcpkg install glfw3 glew eigen3 ceres ffmpeg libjpeg-turbo
 build.bat     REM builds build_win\red.exe
 ```
 

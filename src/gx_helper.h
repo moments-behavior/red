@@ -149,36 +149,25 @@ inline void gx_imgui_init(gx_context *context) {
     // Always reset to the shipped default layout on launch so that new projects
     // start with a clean arrangement rather than inheriting stale window positions.
     // Per-project layouts are handled separately by switch_ini_to_project().
-    for (const auto &candidate : {
-            context->exe_dir + "/../default_imgui_layout.ini",           // dev build
-            context->exe_dir + "/../share/red/default_imgui_layout.ini", // Homebrew
-        }) {
-        if (std::filesystem::exists(candidate)) {
-            std::filesystem::copy_file(candidate, ini_path,
+    {
+        const std::string layout = context->exe_dir + "/../default_imgui_layout.ini";
+        if (std::filesystem::exists(layout)) {
+            std::filesystem::copy_file(layout, ini_path,
                 std::filesystem::copy_options::overwrite_existing);
-            break;
         }
     }
 
     io.IniFilename = ini_path.c_str();
 
-    // Search for the fonts directory in candidate locations so the binary
-    // works both from a development build (./release/red → ./fonts) and
-    // from a Homebrew install (/opt/homebrew/bin/red → /opt/homebrew/share/red/fonts).
-    std::string font_dir;
-    for (const auto &candidate : {
-            context->exe_dir + "/../fonts",            // dev build
-            context->exe_dir + "/../share/red/fonts",  // Homebrew install
-        }) {
-        if (std::filesystem::exists(candidate + "/Roboto-Regular.ttf")) {
-            font_dir = candidate;
-            break;
-        }
-    }
-    if (font_dir.empty()) {
+    // Fonts sit next to the binary's parent (./release/red -> ./fonts), which
+    // is where a build-in-place tree puts them. Resolved relative to the
+    // executable, not the cwd, so launching from anywhere works.
+    const std::string font_dir = context->exe_dir + "/../fonts";
+    if (!std::filesystem::exists(font_dir + "/Roboto-Regular.ttf")) {
+        // Warn and carry on: AddFontFromFileTTF will fail loudly enough, and
+        // an unreadable font is not worth refusing to start over.
         fprintf(stderr, "[RED] Could not find fonts directory (searched relative to %s)\n",
                 context->exe_dir.c_str());
-        font_dir = context->exe_dir + "/../fonts"; // best-effort fallback
     }
     // Roboto's glyph range. Without this ImGui uses GetGlyphRangesDefault()
     // (Basic Latin + Latin-1, 0x20-0xFF) and every codepoint above it renders

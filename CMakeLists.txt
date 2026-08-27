@@ -12,21 +12,31 @@ endif()
 if(APPLE)
     project(red LANGUAGES CXX OBJCXX)
 
-    # Homebrew prefix — defaults to /opt/homebrew (Apple Silicon).
-    # Override with -DHOMEBREW_PREFIX=/usr/local for Intel Macs, or let
-    # the Homebrew formula pass the correct value via CMAKE_PREFIX_PATH.
-    if(NOT DEFINED HOMEBREW_PREFIX)
-        execute_process(
-            COMMAND brew --prefix
-            OUTPUT_VARIABLE HOMEBREW_PREFIX
-            OUTPUT_STRIP_TRAILING_WHITESPACE
-            ERROR_QUIET
-        )
-        if(NOT HOMEBREW_PREFIX)
-            set(HOMEBREW_PREFIX "/opt/homebrew")
-        endif()
+    # Where the macOS dependencies live (Eigen, FFmpeg, GLFW, Ceres,
+    # turbojpeg). No package manager is required -- any prefix CMake can search
+    # works. Point at one explicitly with either:
+    #     -DRED_DEPS_PREFIX=/your/prefix
+    #     -DCMAKE_PREFIX_PATH=/your/prefix
+    # Otherwise the usual roots are probed in order: Homebrew on Apple Silicon,
+    # Homebrew on Intel (or a manual /usr/local install), then MacPorts.
+    if(DEFINED HOMEBREW_PREFIX AND NOT DEFINED RED_DEPS_PREFIX)
+        set(RED_DEPS_PREFIX "${HOMEBREW_PREFIX}")  # accepted for compatibility
     endif()
-    list(APPEND CMAKE_PREFIX_PATH "${HOMEBREW_PREFIX}")
+    if(NOT DEFINED RED_DEPS_PREFIX)
+        foreach(_prefix "/opt/homebrew" "/usr/local" "/opt/local")
+            if(IS_DIRECTORY "${_prefix}/include")
+                set(RED_DEPS_PREFIX "${_prefix}")
+                break()
+            endif()
+        endforeach()
+    endif()
+    if(NOT DEFINED RED_DEPS_PREFIX)
+        message(FATAL_ERROR
+            "No dependency prefix found. Install the dependencies listed in "
+            "README.md, or pass -DRED_DEPS_PREFIX=/your/prefix.")
+    endif()
+    message(STATUS "Using dependency prefix: ${RED_DEPS_PREFIX}")
+    list(APPEND CMAKE_PREFIX_PATH "${RED_DEPS_PREFIX}")
 
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(FFMPEG REQUIRED libavcodec libavformat libavutil libswscale)
@@ -82,8 +92,8 @@ if(APPLE)
         lib/IconFontCppHeaders
         ${FFMPEG_INCLUDE_DIRS}
         ${TURBOJPEG_INCLUDE_DIRS}
-        ${HOMEBREW_PREFIX}/include
-        ${HOMEBREW_PREFIX}/include/eigen3
+        ${RED_DEPS_PREFIX}/include
+        ${RED_DEPS_PREFIX}/include/eigen3
     )
 
     target_link_directories(red PRIVATE ${FFMPEG_LIBRARY_DIRS} ${TURBOJPEG_LIBRARY_DIRS})
@@ -145,8 +155,8 @@ if(APPLE)
         lib/nvcodec
         lib/IconFontCppHeaders
         ${FFMPEG_INCLUDE_DIRS}
-        ${HOMEBREW_PREFIX}/include
-        ${HOMEBREW_PREFIX}/include/eigen3
+        ${RED_DEPS_PREFIX}/include
+        ${RED_DEPS_PREFIX}/include/eigen3
     )
 
     target_link_directories(test_gui PRIVATE ${FFMPEG_LIBRARY_DIRS} ${TURBOJPEG_LIBRARY_DIRS})
@@ -198,8 +208,8 @@ if(APPLE)
         lib/nvcodec
         lib/IconFontCppHeaders
         ${FFMPEG_INCLUDE_DIRS}
-        ${HOMEBREW_PREFIX}/include
-        ${HOMEBREW_PREFIX}/include/eigen3
+        ${RED_DEPS_PREFIX}/include
+        ${RED_DEPS_PREFIX}/include/eigen3
     )
     target_link_directories(test_annotation PRIVATE ${FFMPEG_LIBRARY_DIRS} ${TURBOJPEG_LIBRARY_DIRS})
     target_link_libraries(test_annotation PRIVATE
@@ -256,8 +266,8 @@ if(APPLE)
     target_include_directories(test_nerfstudio_export PRIVATE
         src
         lib/nvcodec
-        ${HOMEBREW_PREFIX}/include
-        ${HOMEBREW_PREFIX}/include/eigen3
+        ${RED_DEPS_PREFIX}/include
+        ${RED_DEPS_PREFIX}/include/eigen3
         ${FFMPEG_INCLUDE_DIRS}
         ${TURBOJPEG_INCLUDE_DIRS}
     )
