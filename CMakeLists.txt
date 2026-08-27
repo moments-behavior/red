@@ -14,6 +14,30 @@ cmake_minimum_required(VERSION 3.18...3.31)
 #   cmake -S . -B release -DRED_ENABLE_CUDA=OFF
 option(RED_ENABLE_CUDA "Build the NVDEC + CUDA-GL interop path" ON)
 
+# Decide whether this build gets CUDA. Sets RED_CUDA; call after project() and
+# before enable_language(CUDA).
+#
+# Deliberately NOT auto-detected. A probe that guesses wrong on a machine that
+# does have a GPU would silently produce a software-only binary -- far harder
+# to notice than a build that stops. So CUDA is on unless you say otherwise,
+# and a missing toolkit is an error explaining the way out.
+macro(red_resolve_cuda)
+    if(RED_ENABLE_CUDA)
+        include(CheckLanguage)
+        check_language(CUDA)
+        if(NOT CMAKE_CUDA_COMPILER)
+            message(FATAL_ERROR
+                "No CUDA compiler found, but the CUDA path is enabled.\n"
+                "  Install the CUDA Toolkit, or build the software-decode path:\n"
+                "      ./build.sh -DRED_ENABLE_CUDA=OFF")
+        endif()
+        set(RED_CUDA ON)
+    else()
+        set(RED_CUDA OFF)
+        message(STATUS "CUDA disabled -- building the software-decode path only")
+    endif()
+endmacro()
+
 # Default to an optimized build. Without this the build type is empty and the
 # compiler runs at -O0, which cripples hot host loops (e.g. the HybridNet
 # reprojection: 3200ms at -O0 vs ~450ms at -O3). Respects an explicit
@@ -410,12 +434,12 @@ if(APPLE)
 
 elseif(WIN32)
     # Windows build with NVIDIA CUDA support (RTX 3090)
-    if(RED_ENABLE_CUDA)
-        project(red LANGUAGES CXX CUDA)
+    project(red LANGUAGES CXX)
+    red_resolve_cuda()
+    if(RED_CUDA)
+        enable_language(CUDA)
         # CUDA architecture: 86 for RTX 3090 (Ampere)
         set(CMAKE_CUDA_ARCHITECTURES 86)
-    else()
-        project(red LANGUAGES CXX)
     endif()
     set(CMAKE_CXX_STANDARD 17)
     set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -482,7 +506,7 @@ elseif(WIN32)
 
     # CUDA source files. Empty without RED_ENABLE_CUDA, and NvDecoder.cpp goes
     # with them -- it is pure NVDEC and will not compile without cuviddec.
-    if(RED_ENABLE_CUDA)
+    if(RED_CUDA)
         set(CUDA_SRC_FILES
             src/create_image_cuda.cu
             src/ColorSpace.cu
@@ -532,7 +556,7 @@ elseif(WIN32)
 
 
     target_compile_definitions(red PRIVATE NOMINMAX _USE_MATH_DEFINES)
-    if(NOT RED_ENABLE_CUDA)
+    if(NOT RED_CUDA)
         target_compile_definitions(red PRIVATE RED_NO_CUDA)
     endif()
     target_compile_options(red PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/bigobj /EHsc>)
@@ -614,7 +638,7 @@ elseif(WIN32)
             tests/${TEST_NAME}.cpp
         )
         target_compile_definitions(${TEST_NAME} PRIVATE NOMINMAX _USE_MATH_DEFINES)
-        if(NOT RED_ENABLE_CUDA)
+        if(NOT RED_CUDA)
             target_compile_definitions(${TEST_NAME} PRIVATE RED_NO_CUDA)
         endif()
         target_compile_options(${TEST_NAME} PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/bigobj /EHsc>)
@@ -677,15 +701,15 @@ else()
     # links read-only against those shared installs.
     # No OpenCV, no LibTorch.
     # ────────────────────────────────────────────────────────────────────────
-    if(RED_ENABLE_CUDA)
-        project(red LANGUAGES CXX CUDA)
+    project(red LANGUAGES CXX)
+    red_resolve_cuda()
+    if(RED_CUDA)
+        enable_language(CUDA)
         # CUDA arch: 86 = A16 (Ampere), 89 = RTX 4000 Ada. Override with
         # -DCMAKE_CUDA_ARCHITECTURES=... on the cmake command line if needed.
         if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
             set(CMAKE_CUDA_ARCHITECTURES 86 89)
         endif()
-    else()
-        project(red LANGUAGES CXX)
     endif()
     set(CMAKE_CXX_STANDARD 17)
     set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -703,7 +727,7 @@ else()
     find_package(glfw3 REQUIRED)
     find_package(GLEW REQUIRED)
     find_package(Threads REQUIRED)
-    if(RED_ENABLE_CUDA)
+    if(RED_CUDA)
         find_package(CUDAToolkit REQUIRED)
     endif()
     find_package(PkgConfig REQUIRED)
@@ -749,7 +773,7 @@ else()
     # DT_NEEDED entries, and a binary carrying them will not load at all on a
     # machine with no NVIDIA driver. NvDecoder.cpp goes with them; it is pure
     # NVDEC and will not compile without cuviddec.
-    if(RED_ENABLE_CUDA)
+    if(RED_CUDA)
         set(CUDA_SRC_FILES
             src/create_image_cuda.cu
             src/ColorSpace.cu
@@ -783,7 +807,7 @@ else()
 
 
 
-    if(RED_ENABLE_CUDA)
+    if(RED_CUDA)
         target_compile_definitions(red PRIVATE)
     else()
         target_compile_definitions(red PRIVATE RED_NO_CUDA)
@@ -847,7 +871,7 @@ else()
             ${CUDA_SRC_FILES}
             tests/${TEST_NAME}.cpp
         )
-        if(RED_ENABLE_CUDA)
+        if(RED_CUDA)
             target_compile_definitions(${TEST_NAME} PRIVATE)
         else()
             target_compile_definitions(${TEST_NAME} PRIVATE RED_NO_CUDA)

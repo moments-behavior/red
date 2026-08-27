@@ -82,15 +82,19 @@ RED_DECODE_BACKEND=sw ./release/red     # force software (works on macOS too)
 RED_SW_DECODE_THREADS=2 ./release/red   # decode threads per camera
 ```
 
-A machine with *no* NVIDIA driver needs a build without CUDA — `libcuda.so.1`
-and `libnvcuvid.so.1` are `DT_NEEDED`, so the loader fails before the runtime
-probe ever runs:
+A machine with no NVIDIA driver gets a CUDA-free build automatically. That
+matters because linking CUDA there produces a binary that cannot start at all:
+Linux resolves `libcuda.so.1` and `libnvcuvid.so.1` before `main()` runs, so it
+never reaches the code that would have fallen back to software.
+
+Force it when the build machine and the target machine differ — building on a
+GPU box to run somewhere without one:
 
 ```bash
-cmake -S . -B release -DRED_ENABLE_CUDA=OFF
+./build.sh -DRED_ENABLE_CUDA=OFF
 ```
 
-Windows does not need this; the default build delay-loads those DLLs.
+Windows never needs this; that build delay-loads the CUDA DLLs instead.
 
 ## Authors
 

@@ -86,7 +86,7 @@ echo Using CUDA:   %CUDA_PATH%
 echo Using FFmpeg: %FFMPEG_ROOT%
 set "TOOLCHAIN=-DCMAKE_TOOLCHAIN_FILE=%VCPKG_ROOT:\=/%/scripts/buildsystems/vcpkg.cmake -DVCPKG_TARGET_TRIPLET=x64-windows -DCMAKE_PREFIX_PATH=%FFMPEG_ROOT:\=/%"
 
-cmake -G Ninja -B build_win -DCMAKE_BUILD_TYPE=Release %TOOLCHAIN%
+cmake -G Ninja -B build_win -DCMAKE_BUILD_TYPE=Release %TOOLCHAIN% %*
 if errorlevel 1 exit /b 1
 cmake --build build_win
 if errorlevel 1 exit /b 1
