@@ -5,7 +5,7 @@ rem vcpkg. Output goes to build_win\red.exe.
 rem
 rem   build.bat                      release build
 rem   build.bat > log.txt 2>&1       ...capturing output
-setlocal
+setlocal enabledelayedexpansion
 cd /d "%~dp0"
 
 rem --- Visual Studio: vswhere ships with the VS Installer (2017+) ---------
@@ -43,10 +43,34 @@ if not defined CUDA_PATH (
 )
 set "PATH=%CUDA_PATH%\bin;%PATH%"
 
-rem --- vcpkg: only needed if it is not at %USERPROFILE%\vcpkg, which
-rem     CMakeLists.txt already falls back to on its own ----------------------
-set "TOOLCHAIN="
-if defined VCPKG_ROOT set "TOOLCHAIN=-DCMAKE_TOOLCHAIN_FILE=%VCPKG_ROOT:\=/%/scripts/buildsystems/vcpkg.cmake"
+rem --- vcpkg: every Windows dependency comes from here ------------------
+rem Looked for as VCPKG_ROOT, then the vcpkg on PATH, then the usual clone
+rem location. This is a hard requirement: without the toolchain CMake happily
+rem falls back to system-wide packages and builds against whatever unrelated
+rem Ceres or Eigen happens to be in Program Files, which fails much later and
+rem much less clearly.
+if not defined VCPKG_ROOT (
+    for /f "usebackq tokens=*" %%i in (`where vcpkg 2^>nul`) do (
+        if not defined VCPKG_ROOT set "VCPKG_ROOT=%%~dpi"
+    )
+    if defined VCPKG_ROOT if "!VCPKG_ROOT:~-1!"=="\" set "VCPKG_ROOT=!VCPKG_ROOT:~0,-1!"
+)
+if not defined VCPKG_ROOT (
+    if exist "%USERPROFILE%\vcpkg\scripts\buildsystems\vcpkg.cmake" set "VCPKG_ROOT=%USERPROFILE%\vcpkg"
+)
+if not defined VCPKG_ROOT (
+    echo ERROR: vcpkg not found. Install it, then either put vcpkg on PATH or
+    echo        set VCPKG_ROOT, e.g.  set VCPKG_ROOT=C:\vcpkg
+    exit /b 1
+)
+if not exist "%VCPKG_ROOT%\scripts\buildsystems\vcpkg.cmake" (
+    echo ERROR: "%VCPKG_ROOT%" is not a vcpkg root
+    echo        ^(no scripts\buildsystems\vcpkg.cmake inside^).
+    exit /b 1
+)
+echo Using vcpkg:  %VCPKG_ROOT%
+echo Using CUDA:   %CUDA_PATH%
+set "TOOLCHAIN=-DCMAKE_TOOLCHAIN_FILE=%VCPKG_ROOT:\=/%/scripts/buildsystems/vcpkg.cmake -DVCPKG_TARGET_TRIPLET=x64-windows"
 
 cmake -G Ninja -B build_win -DCMAKE_BUILD_TYPE=Release %TOOLCHAIN%
 if errorlevel 1 exit /b 1
