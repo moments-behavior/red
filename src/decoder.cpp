@@ -278,7 +278,22 @@ void decoder_process(DecoderContext *dc_context, FFmpegDemuxer *demuxer,
                     nWidth = dec.GetWidth();
                     nHeight = dec.GetHeight();
                     size_in_bytes = nWidth * nHeight * 4;
-                    cuMemAlloc(&pTmpImage, size_in_bytes);
+                    CUresult cres = cuMemAlloc(&pTmpImage, size_in_bytes);
+                    if (cres != CUDA_SUCCESS) {
+                        // Bail out before Nv12ToColor32 writes through the
+                        // null pointer — a device-side fault is sticky and
+                        // poisons every CUDA context on the GPU
+                        // (cudaErrorIllegalAddress in unrelated calls).
+                        const char *err_name = nullptr;
+                        cuGetErrorName(cres, &err_name);
+                        throw std::runtime_error(
+                            "cuMemAlloc of " + std::to_string(size_in_bytes) +
+                            " bytes for the RGBA conversion buffer failed (" +
+                            (err_name ? err_name : "unknown") +
+                            ") — GPU out of memory? Video is " +
+                            std::to_string(nWidth) + "x" +
+                            std::to_string(nHeight));
+                    }
                 }
 
                 for (int i = 0; i < nFrameReturned; i++) {

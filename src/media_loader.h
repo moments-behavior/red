@@ -385,6 +385,14 @@ load_videos(std::map<std::string, std::string> &selected_files,
             pm.camera_params[j].image_height = scene->image_height[j];
         }
     }
+    // Clamp the ring to the longest video, mirroring load_images: a short
+    // clip would otherwise get default_buffer_size slots per camera that can
+    // never all be filled — at 8K that is tens of GiB of frame buffers.
+    int max_frames = 0;
+    for (auto *d : demuxers)
+        max_frames = std::max(max_frames, (int)d->GetNumFrames());
+    if (max_frames > 0 && max_frames < label_buffer_size)
+        label_buffer_size = max_frames;
     render_allocate_scene_memory(scene, label_buffer_size);
 
     // Desync fix: build/import the sync plan and apply the persisted toggle
