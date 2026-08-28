@@ -131,6 +131,10 @@ inline const std::vector<Group> &shortcut_groups() {
             {S::COUNT, "Click, click", "Place the two line endpoints (in the line camera)"},
             {S::COUNT, "W", "Label the midline keypoints in the side camera (as usual)"},
         }},
+        {"Collaboration", "Syncing with other machines", Gate::Always, {
+            {S::SyncNow, nullptr, "Push local edits and pull collaborators' edits", Gate::Always,
+                "Also runs on a timer when Auto-sync is on"},
+        }},
     };
     return g;
 }
@@ -183,6 +187,8 @@ inline const std::vector<Tool> &tools() {
             // Annotation
             {"Labeling Tool", "Always-on panel",
                 "The core keypoint panel: save, triangulate, jump between labeled frames, copy previous.", Gate::Always, "An open project"},
+            {"Collaboration", "View \xE2\x86\x92 Collaboration",
+                "Annotate the same project from machines on different networks; also shares a whole project, media included.", Gate::Always, "A relay address, room, and room secret"},
             {"Bbox Tool", "Tools \xE2\x86\x92 Bbox Tool",
                 "Axis-aligned bounding boxes with multi-class and instance ids."},
             {"OBB Tool", "Tools \xE2\x86\x92 OBB Tool",
@@ -245,6 +251,14 @@ inline const std::vector<Workflow> &workflows() {
             "Prev/Next jump between labeled frames; Copy Prev seeds from the previous labeled frame.",
             "Ctrl+S saves labels to a new timestamped labeled_data folder.",
         }},
+        {"Collaborate with another lab", {
+            "One person runs the relay on a reachable host: red_relay --secrets rooms.json (rooms.json holds a room name and a long shared secret).",
+            "Everyone opens View \xE2\x86\x92 Collaboration, enters the relay host, the room, and the secret, and ticks Enable collaboration.",
+            "One person opens the Share tab and clicks Publish this project.",
+            "The others pick a destination folder, review what would download, then Download \xE2\x80\x94 files they already have are skipped.",
+            "Open the cloned project with File \xE2\x86\x92 Load Project, then annotate as usual. Edits sync on a timer or with F5.",
+            "Everyone must be on the same skeleton and camera list; joining with a different one is refused rather than merged.",
+        }},
         {"Run JARVIS prediction", {
             "Tools \xE2\x86\x92 JARVIS Predict \xE2\x86\x92 Import Model (RED auto-detects the backend from the files).",
             "Import to Project copies + registers the model; pick it under Project Models.",
@@ -283,6 +297,14 @@ inline const std::vector<Concept> &concepts() {
             "Cameras are hardware-triggered off a shared clock; a dropped frame desyncs everything after it. The Sync toggle maps frame index i to the same trigger instant across all cameras."},
         {"Pump dispense alignment",
             "pumpctl stamps each dispense with the same PTP hardware clock the cameras write into Cam*_meta.csv, so a dispense maps to a frame by lookup, not by fitting. The Offset (ms) slider is for rig latency (tubing, valve), not clock drift."},
+        {"Collaboration relay",
+            "A small server one collaborator runs on a reachable host. Every client dials OUT to it, so nobody needs an open port and machines behind different NATs can still work together. It stores and forwards edits; it never interprets them. Traffic is authenticated but not encrypted \xE2\x80\x94 tunnel it over SSH or WireGuard if the data is sensitive."},
+        {"Eventual sync",
+            "Edits queue locally and reconcile on sync (a timer, F5, or View \xE2\x86\x92 Sync Now). Working offline is normal; the queue drains on reconnect. Annotations are still saved the usual way \xE2\x80\x94 Ctrl+S writes a labeled_data snapshot, and merged edits are not on disk until you do."},
+        {"Last-writer-wins",
+            "If two people change the same keypoint while apart, the newer edit wins once both sync, decided by a logical clock rather than wall-clock time (machine clocks disagree). Nothing is thrown away: the History tab shows every edit for a keypoint and can restore an older value as a new edit."},
+        {"Content-addressed sharing",
+            "A shared file is identified by the hash of its bytes, so a file the other machine already has transfers nothing. For a large rig, copy the videos once by USB or rsync \xE2\x80\x94 the clone then verifies them and downloads only what is genuinely missing."},
         {"Prediction stores (.rpred)",
             "Read-only, on-disk 3D + confidence, kept separate from manual labels so whole-video prediction never floods the Labeling Tool. They power the overlay, Pose Stats, and Bouts."},
         {"Model sets",

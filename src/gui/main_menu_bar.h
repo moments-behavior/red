@@ -1,5 +1,6 @@
 #pragma once
 #include "app_context.h"
+#include "gui/shortcuts.h"
 #include "gui/window_states.h"
 #include "IconsForkAwesome.h"
 #include <ImGuiFileDialog.h>
@@ -204,6 +205,20 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
                 pump_events_jump(pe, ctx.current_frame_num, true);
             if (ImGui::MenuItem("Previous Pump Dispense", "["))
                 pump_events_jump(pe, ctx.current_frame_num, false);
+            ImGui::EndDisabled();
+        }
+        ImGui::Separator();
+        if (ImGui::MenuItem("Collaboration")) {
+            win.collab.show = true;
+        }
+        {
+            // The label comes from the binding table so it can never drift
+            // from the key that actually fires.
+            auto &cs = win.collab;
+            ImGui::BeginDisabled(!collab::collab_configured(cs));
+            if (ImGui::MenuItem("Sync Now",
+                                keys::display(keys::Sc::SyncNow).c_str()))
+                collab::collab_sync_now(cs, ctx);
             ImGui::EndDisabled();
         }
         ImGui::Separator();

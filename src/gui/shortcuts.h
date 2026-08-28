@@ -34,6 +34,7 @@ enum class Sc {
     Triangulate,
     PlotMenu,
     PeekRaw,
+    SyncNow,
     COUNT  // sentinel: "no single bound key" (help rows that use a literal label)
 };
 
@@ -67,6 +68,10 @@ inline const Binding &binding(Sc s) {
         /* Triangulate    */ {ImGuiKey_T, false, false, false, false},
         /* PlotMenu       */ {ImGuiKey_2, false, false, false, false},
         /* PeekRaw        */ {ImGuiKey_P, false, false, false, true},
+        // F5 rather than a Ctrl chord: mods_ok() only ENFORCES the modifiers a
+        // binding requires and does not forbid extras, so Ctrl+Shift+S would
+        // also fire SaveLabels. A bare function key has no such overlap.
+        /* SyncNow        */ {ImGuiKey_F5, false, false, false, false},
     };
     static_assert(sizeof(table) / sizeof(table[0]) == (size_t)Sc::COUNT,
                   "keys::binding table is out of sync with enum Sc");
@@ -108,6 +113,8 @@ inline std::string key_name(ImGuiKey k) {
         return std::string(1, (char)('A' + (k - ImGuiKey_A)));
     if (k >= ImGuiKey_0 && k <= ImGuiKey_9)
         return std::string(1, (char)('0' + (k - ImGuiKey_0)));
+    if (k >= ImGuiKey_F1 && k <= ImGuiKey_F12)
+        return "F" + std::to_string(1 + (k - ImGuiKey_F1));
     switch (k) {
         case ImGuiKey_LeftArrow:  return "\xE2\x86\x90"; // <-
         case ImGuiKey_RightArrow: return "\xE2\x86\x92"; // ->

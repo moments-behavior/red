@@ -22,7 +22,8 @@ std::map<std::string, SkeletonPrimitive> skeleton_get_all() {
         {"Rat24Target", Rat24Target},
         {"Fly50", Fly50},
         {"Box4", Box4},
-        {"ArenaCorners4", ArenaCorners4}};
+        {"ArenaCorners4", ArenaCorners4},
+        {"Bee10", Bee10}};
     return skeleton_all;
 }
 
@@ -337,6 +338,27 @@ void skeleton_initialize(std::string name, SkeletonContext *skeleton,
         };
         // Edges form a square: A-B, B-C, C-D, D-A
         skeleton->edges = {{0, 1}, {1, 2}, {2, 3}, {3, 0}};
+        break;
+
+    case Bee10:
+        // Honeybee: both antennae (base + tip) and the six tarsal tips.
+        // Leg naming matches Fly50's T<segment><side> convention
+        // (T1 = front, T2 = mid, T3 = hind; Ta = tarsus).
+        skeleton->name = name;
+        skeleton->num_nodes = 10;
+        skeleton->num_edges = 9;
+        skeleton->node_names = {"AntennaTipL", "AntennaBaseL", "AntennaTipR",
+                                "AntennaBaseR", "T1L_TaTip",   "T2L_TaTip",
+                                "T3L_TaTip",    "T1R_TaTip",   "T2R_TaTip",
+                                "T3R_TaTip"};
+        for (int i = 0; i < skeleton->num_nodes; i++)
+            skeleton->node_colors.push_back(
+                (ImVec4)ImColor::HSV(i / (float)skeleton->num_nodes, 1.0f, 1.0f));
+        // The two antenna bases are joined across the head, each with its
+        // tip hanging off it. There is no body node, so all three leg tips
+        // on a side fan out from that side's antenna base.
+        skeleton->edges = {{0, 1}, {1, 3}, {3, 2}, {1, 4}, {1, 5},
+                           {1, 6}, {3, 7}, {3, 8}, {3, 9}};
         break;
     }
 }

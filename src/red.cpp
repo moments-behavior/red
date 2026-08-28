@@ -501,6 +501,7 @@ int main(int argc, char **argv) {
                 pm = loaded;
                 if (setup_project(pm, skeleton, skeleton_map, &err)) {
                     on_project_loaded(ctx, print_metadata, print_summary);
+                    collab::collab_open_project(win.collab, ctx);
                     // Reopen the JARVIS Predict panel if it was open last time.
                     win.jarvis_predict.show = pm.show_jarvis_predict;
                 } else
@@ -588,6 +589,7 @@ int main(int argc, char **argv) {
             return false;
         }
         on_project_loaded(ctx, print_metadata, print_summary);
+        collab::collab_open_project(win.collab, ctx);
         return true;
     };
 
@@ -694,6 +696,9 @@ int main(int argc, char **argv) {
                 nullptr});
     panels.add({"Pump Events",
                 [&]() { DrawPumpEventsWindow(win.pump_events, ctx); },
+                nullptr});
+    panels.add({"Collaboration",
+                [&]() { DrawCollabWindow(win.collab, ctx); },
                 nullptr});
     panels.add({"Bouts",
                 [&]() { DrawBoutsWindow(win.bouts, prediction_store,
@@ -878,6 +883,18 @@ int main(int argc, char **argv) {
                 value.store(true);
         }
 
+        // Collaboration: jump to the frame a comment is pinned to.
+        if (win.collab.seek_requested) {
+            win.collab.seek_requested = false;
+            int tgt = win.collab.seek_frame;
+            seek_all_cameras(scene, tgt, dc_context->video_fps, ps, true);
+            current_frame_num = tgt;
+            ps.pause_selected = 0;
+            ps.pause_seeked = true;
+            for (auto &[key, value] : window_need_decoding)
+                value.store(true);
+        }
+
         // Bouts: seek to a bout, or export bouts to CSV next to the store.
         if (win.bouts.seek_requested) {
             win.bouts.seek_requested = false;
@@ -1019,6 +1036,14 @@ int main(int argc, char **argv) {
                 !pump_events_jump(win.pump_events, current_frame_num, false))
                 ctx.toasts.push("No earlier pump dispense");
         }
+
+        // Collaboration: capture local edits on a timer and auto-sync. Cheap
+        // when idle -- it only copies the AnnotationMap once a second, and
+        // only when the feature is switched on for this project.
+        collab::collab_tick(win.collab, ctx, ImGui::GetTime());
+        if (keys::pressed(keys::Sc::SyncNow) &&
+            collab::collab_configured(win.collab))
+            collab::collab_sync_now(win.collab, ctx);
 
         static int select_corr_head = 0;
         if (ps.video_loaded && (!ps.play_video)) {

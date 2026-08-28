@@ -57,7 +57,8 @@ enum SkeletonPrimitive {
     Rat24Target,
     Fly50,
     Box4,
-    ArenaCorners4
+    ArenaCorners4,
+    Bee10
 };
 
 std::map<std::string, SkeletonPrimitive> skeleton_get_all();

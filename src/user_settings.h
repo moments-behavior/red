@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <string>
 
 struct UserSettings {
@@ -61,6 +62,21 @@ struct UserSettings {
     // Arena alignment corners (4 corners x 3 coords, in calibration mm)
     std::vector<double> arena_corners; // 12 values, empty if not set
 
+    // ── Collaboration (machine-local, never synced to peers) ──
+    // peer_id identifies this machine in an op log and is the tiebreak that
+    // makes last-writer-wins deterministic across replicas, so it must be
+    // stable for the life of the install. Generated once on first use.
+    std::string collab_peer_id;
+    std::string collab_display_name;   // shown to collaborators
+    std::string collab_relay_host;
+    int         collab_relay_port = 7373;
+    // Room shared secrets, keyed by room name. Stored in the clear, which is
+    // why the settings file is written 0600; see the security note in the
+    // Collaboration panel.
+    std::map<std::string, std::string> collab_room_secrets;
+    bool        collab_auto_sync = true;
+    int         collab_auto_sync_seconds = 60;
+
     // Recent projects (most recent first, max 10)
     std::vector<std::string> recent_projects;
 
@@ -98,6 +114,13 @@ inline void to_json(nlohmann::json &j, const UserSettings &s) {
         {"jarvis_jpeg_quality", s.jarvis_jpeg_quality},
         {"last_mujoco_model", s.last_mujoco_model},
         {"arena_corners", s.arena_corners},
+        {"collab_peer_id", s.collab_peer_id},
+        {"collab_display_name", s.collab_display_name},
+        {"collab_relay_host", s.collab_relay_host},
+        {"collab_relay_port", s.collab_relay_port},
+        {"collab_room_secrets", s.collab_room_secrets},
+        {"collab_auto_sync", s.collab_auto_sync},
+        {"collab_auto_sync_seconds", s.collab_auto_sync_seconds},
         {"recent_projects", s.recent_projects}};
 }
 
@@ -123,6 +146,14 @@ inline void from_json(const nlohmann::json &j, UserSettings &s) {
     s.jarvis_jpeg_quality = j.value("jarvis_jpeg_quality", 95);
     s.last_mujoco_model = j.value("last_mujoco_model", std::string{});
     s.arena_corners = j.value("arena_corners", std::vector<double>{});
+    s.collab_peer_id = j.value("collab_peer_id", std::string{});
+    s.collab_display_name = j.value("collab_display_name", std::string{});
+    s.collab_relay_host = j.value("collab_relay_host", std::string{});
+    s.collab_relay_port = j.value("collab_relay_port", 7373);
+    s.collab_room_secrets =
+        j.value("collab_room_secrets", std::map<std::string, std::string>{});
+    s.collab_auto_sync = j.value("collab_auto_sync", true);
+    s.collab_auto_sync_seconds = j.value("collab_auto_sync_seconds", 60);
     s.recent_projects = j.value("recent_projects", std::vector<std::string>{});
 }
 
@@ -163,6 +194,16 @@ inline bool save_user_settings(const UserSettings &s) {
             return false;
         nlohmann::json j = s;
         f << j.dump(2);
+        f.close();
+        // This file now holds collaboration room secrets, so keep it readable
+        // only by its owner. Best-effort: a failure here is not worth refusing
+        // to save the user's settings over.
+        std::error_code perm_ec;
+        std::filesystem::permissions(
+            p,
+            std::filesystem::perms::owner_read |
+                std::filesystem::perms::owner_write,
+            std::filesystem::perm_options::replace, perm_ec);
         return true;
     } catch (const std::exception &e) {
         std::cerr << "Failed to write user_settings.json: " << e.what()

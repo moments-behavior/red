@@ -9,6 +9,7 @@
 #include "gui/jarvis_predict_window.h"
 #include "gui/bouts_window.h"
 #include "gui/bout_filter_window.h"
+#include "gui/collab_window.h"
 #include "gui/pose_stats_window.h"
 #include "gui/frame_drops_window.h"
 #include "gui/pump_events_window.h"
@@ -41,6 +42,7 @@ struct WindowStates {
     PumpEventsState pump_events;
     BoutState bouts;
     BoutFilterState bout_filter;
+    CollabState collab;
     ExportWindowState export_win;
     GroupExportState group_export;
     BBoxToolState bbox;
@@ -182,6 +184,9 @@ struct WindowStates {
         frame_drops = FrameDropsState{};
         pump_events = PumpEventsState{};
         bouts = BoutState{};
+        // CollabState owns worker threads and a mutex, so it cannot be
+        // reassigned like the plain states above; close it down instead.
+        collab::collab_close_project(collab);
         // Keep scanned profiles + current selection; clear per-store results.
         bout_filter.inputs = boutfilter::Inputs{};
         bout_filter.inputs_valid = false;

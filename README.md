@@ -18,6 +18,7 @@ Developed at the [Johnson Lab](https://www.janelia.org/lab/johnson-lab), HHMI Ja
 - [Supported Animals and Skeletons](#supported-animals-and-skeletons)
 - [Building from Source](#building-from-source)
 - [Project File Format](#project-file-format)
+- [Collaboration](#collaboration)
 - [Contributing](#contributing)
 - [License](#license)
 - [Citation](#citation)
@@ -439,6 +440,7 @@ RED requires MuJoCo 3.6.0 as a macOS framework in `lib/mujoco.framework/`. This 
 | `Rat24`           | 24        | Full body with detailed tail segments                  |
 | `Rat24Target`     | 25        | Full body with tail + target                           |
 | `Fly50`           | 50        | Drosophila: head, thorax, abdomen, wings, all 6 legs   |
+| `Bee10`           | 10        | Honeybee: antenna bases + tips, all 6 leg tips         |
 | `Table3Corners`   | 3         | Calibration: 3 table corner landmarks                  |
 
 ### Custom Skeleton JSON Format
@@ -558,6 +560,140 @@ The `.redproj` file contains:
 |--------------|-------------------------------|-----------------------------------------------------|
 | Projective   | `<camera>.yaml`               | OpenCV-compatible YAML with intrinsics + extrinsics |
 | Telecentric  | `<camera>_dlt.csv`            | DLT projection matrix coefficients                  |
+
+---
+
+## Collaboration
+
+Several people can annotate the same project from machines that have no direct
+network path to each other, and a whole project — media included — can be moved
+to another machine without copying folders by hand.
+
+### How it works
+
+One collaborator runs a small relay on a host the others can reach (a VPS, or
+any port-forwarded machine). **Every client dials out to the relay**, so no
+client needs an open port and collaborators behind unrelated NATs can still work
+together.
+
+```
+  machine A (behind NAT) ──outbound──┐
+  machine B (behind NAT) ──outbound──┼──►  red_relay :7373
+  machine C (behind NAT) ──outbound──┘
+```
+
+Sync is **eventual**: edits queue locally and reconcile on a timer, on `F5`, or
+via **View → Sync Now**. Working offline is normal — the queue drains on
+reconnect.
+
+Annotation persistence is unchanged. The `labeled_data/` CSV snapshots remain
+the source of truth; the collaboration layer keeps an append-only op log beside
+them in `.collab/` and merges incoming edits into the live model. **A merge does
+not save** — press `Ctrl+S` to write a snapshot as usual.
+
+### Running a relay
+
+```bash
+cat > rooms.json <<'JSON'
+{ "rooms": { "rig-a": { "psk": "a-long-random-shared-secret" } } }
+JSON
+
+./red_relay --port 7373 --data ./relay-data --secrets rooms.json
+```
+
+| Flag | Meaning |
+|---|---|
+| `--port N` | Port to listen on (default 7373) |
+| `--data DIR` | Where ops, manifests, and blobs live (default `./relay-data`) |
+| `--secrets FILE` | Room shared secrets (required) |
+| `--quota-gb N` | Blob store size cap (default 200); least-recently-used unreferenced blobs are evicted above it |
+
+The relay never interprets annotations. It authenticates, orders, persists, and
+fans out opaque records, so all merge logic stays on the clients.
+
+> **Security.** Connections are authenticated with HMAC-SHA256, but **traffic is
+> not encrypted** — no hand-rolled cipher is shipped. Anyone who can observe the
+> network sees annotation coordinates, comments, and file contents. If that
+> matters, put the relay behind a tunnel:
+>
+> ```bash
+> ssh -N -L 7373:localhost:7373 user@relay-host   # then point RED at localhost
+> ```
+>
+> or run it on a WireGuard/Tailscale network. Room secrets are stored in
+> `~/.config/red/user_settings.json`, which RED writes owner-readable only.
+
+### Joining from RED
+
+**View → Collaboration**, then on the **Sync** tab enter the relay host, the
+room, and the room secret, and tick *Enable collaboration for this project*.
+
+Everyone in a room must share the same **skeleton, keypoint count, and camera
+list in the same order** — annotations are indexed positionally, so joining with
+a different shape is refused with an explanation rather than merged into
+scrambled labels.
+
+| Tab | What it does |
+|---|---|
+| **Sync** | Relay/room setup, auto-sync interval, `Sync now`, pending in/out counts |
+| **Peers** | Who else is in the room, what frame they were last on |
+| **Comments** | Freeform notes pinned to a frame (optionally to a keypoint), with click-to-jump and resolve |
+| **History** | Every recorded edit for a keypoint, which one is current, and *Restore* for the others |
+| **Share** | Publish this project to the room, or clone a shared one |
+
+### Conflicts
+
+If two people change the same keypoint while apart, the newer edit wins once
+both sync — decided by a **logical clock**, not wall-clock time, because machine
+clocks disagree. Ties break on peer id so every machine independently picks the
+same winner.
+
+**Nothing is discarded.** Losing edits stay in the log; the History tab shows
+them with their author and lets you restore one, which is recorded as a new
+edit rather than by rewriting the past.
+
+### Sharing a project, media included
+
+The **Share** tab publishes the `.redproj`, the calibration folder, the most
+recent label snapshot, the skeleton, and optionally the media. Files are
+**content-addressed**: a file is identified by the hash of its bytes, so
+anything the other side already has transfers zero bytes.
+
+For a large rig this is the difference between a feasible transfer and an
+infeasible one. Moving tens of gigabytes through a single relay is slow and
+bandwidth-expensive, so:
+
+- **Copy the media once out of band** (USB, `rsync`, `scp`), then clone
+  normally. The clone hashes what is already on disk, confirms it matches, and
+  downloads nothing.
+- Or untick *Include media* to move only the project, calibration, and labels.
+- Transfers move in 4 MiB chunks and **resume** — an interrupted download picks
+  up where it stopped instead of restarting.
+- Every blob is verified against its hash before it lands, so a truncated or
+  tampered transfer is discarded rather than written.
+
+Machine-local absolute paths (`project_path`, `media_folder`,
+`calibration_folder`, `skeleton_file`) are rewritten for the receiving machine
+on clone. The `.redproj` is written **last**, only after every file has landed
+and verified — so an interrupted clone leaves a folder that will not open,
+rather than a project that opens and then fails on missing media.
+
+Open the result with **File → Load Project**.
+
+### On-disk layout
+
+```
+<project>/
+  labeled_data/<TIMESTAMP>/     unchanged — still the source of truth
+  .collab/
+    ops/local.log               ops authored on this machine
+    ops/remote-<peer>.log       one file per collaborator
+    cursor.json                 how far we have pushed / pulled
+    room.json                   relay address, room, enabled flag (no secret)
+    incoming/                   partial downloads, for resume
+```
+
+`.collab/` is per-machine bookkeeping and is never shipped to a peer.
 
 ---
 

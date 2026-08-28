@@ -2138,3 +2138,46 @@ set_target_properties(test_pump_events PROPERTIES
     CXX_STANDARD 17
     CXX_STANDARD_REQUIRED ON
 )
+
+
+# ── Collaboration layer (src/collab_*.h, src/relay/) ────────────────────────
+# Header-only cores with no deps beyond C++17, src/json.hpp, and the platform
+# sockets, so like test_pump_events these build outside the APPLE/else split.
+#
+# The relay is a separate binary on purpose: one collaborator runs it on a
+# reachable host, every RED client dials out to it, and no client needs an
+# open port. It links nothing from the GUI.
+
+find_package(Threads REQUIRED)
+
+set(RED_COLLAB_TESTS
+    test_collab_hash
+    test_collab_proto
+    test_collab_ops
+    test_collab_bundle
+    test_collab_loopback
+)
+
+foreach(COLLAB_TEST ${RED_COLLAB_TESTS})
+    add_executable(${COLLAB_TEST} tests/${COLLAB_TEST}.cpp)
+    target_include_directories(${COLLAB_TEST} PRIVATE src)
+    target_link_libraries(${COLLAB_TEST} PRIVATE Threads::Threads)
+    set_target_properties(${COLLAB_TEST} PROPERTIES
+        CXX_STANDARD 17
+        CXX_STANDARD_REQUIRED ON
+    )
+    if(WIN32)
+        target_link_libraries(${COLLAB_TEST} PRIVATE ws2_32)
+    endif()
+endforeach()
+
+add_executable(red_relay src/relay/red_relay.cpp)
+target_include_directories(red_relay PRIVATE src)
+target_link_libraries(red_relay PRIVATE Threads::Threads)
+set_target_properties(red_relay PROPERTIES
+    CXX_STANDARD 17
+    CXX_STANDARD_REQUIRED ON
+)
+if(WIN32)
+    target_link_libraries(red_relay PRIVATE ws2_32)
+endif()
