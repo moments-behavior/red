@@ -276,6 +276,7 @@ inline void close_project(AppContext &ctx) {
     ctx.skeleton.node_colors.clear();
     ctx.skeleton.edges.clear();
     ctx.skeleton.node_names.clear();
+    ctx.skeleton.groups.clear();
 
     // 6. Reset ProjectManager (preserve nothing)
     ctx.pm.project_path.clear();
@@ -293,6 +294,9 @@ inline void close_project(AppContext &ctx) {
     ctx.pm.show_project_window = false;
     ctx.pm.telecentric = false;
     ctx.pm.sync_fix_enabled = false;
+    ctx.pm.pump_log_path.clear();
+    ctx.pm.pump_offset_ms = 0.0f;
+    ctx.pm.pump_show_pulls = false;
     ctx.pm.annotation_config = AnnotationConfig{};
     ctx.pm.jarvis_models.clear();
     ctx.pm.active_jarvis_model = -1;

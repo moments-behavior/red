@@ -42,7 +42,17 @@ mkdir -p "$APPDIR" "$BINDIR" "$DESKTOP_DIR" "$MIME_PKGS_DIR"
 # below APPDIR (in bin/) for `../fonts` to land on APPDIR/fonts. (Putting the
 # binary directly in APPDIR makes it search APPDIR/../fonts and fonts vanish.)
 mkdir -p "$APPDIR/bin"
-install -m 755 "$BIN_SRC" "$APPDIR/bin/$APP_NAME"
+# Dev boxes: RED_DEV_LINK=1 symlinks the binary to the build tree so the dock/CLI
+# always run the latest `release/red` (no re-install after a rebuild). Default is
+# a self-contained copy, correct for real installs where the build tree may vanish.
+# Fonts still resolve either way: the binary locates them via /proc/self/exe at
+# <exe_dir>/../fonts (a symlink canonicalizes to release/red -> release/../fonts).
+if [[ "${RED_DEV_LINK:-0}" == 1 ]]; then
+  ln -sfn "$BIN_SRC" "$APPDIR/bin/$APP_NAME"
+  echo "[*] Linked binary -> $BIN_SRC (RED_DEV_LINK=1)"
+else
+  install -m 755 "$BIN_SRC" "$APPDIR/bin/$APP_NAME"
+fi
 if [[ -d "$FONTS_SRC" ]]; then
   mkdir -p "$APPDIR/fonts"
   cp -a "$FONTS_SRC"/. "$APPDIR/fonts"/

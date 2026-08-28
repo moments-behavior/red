@@ -266,7 +266,7 @@ inline FeatureResult run_feature_refinement_impl(
     // 1. Load calibration YAMLs
     if (status) *status = "Loading calibration from " + config.calibration_folder;
     std::vector<CalibrationPipeline::CameraPose> poses(nc);
-    int image_width = 0, image_height = 0;
+    std::vector<int> image_widths(nc, 0), image_heights(nc, 0);
 
     for (int c = 0; c < nc; c++) {
         std::string yaml_path = config.calibration_folder + "/Cam" + config.camera_names[c] + ".yaml";
@@ -282,7 +282,7 @@ inline FeatureResult run_feature_refinement_impl(
             poses[c].R = yaml.getMatrix("rc_ext").block<3, 3>(0, 0);
             Eigen::MatrixXd t_mat = yaml.getMatrix("tc_ext");
             poses[c].t = Eigen::Vector3d(t_mat(0, 0), t_mat(1, 0), t_mat(2, 0));
-            if (c == 0) { image_width = yaml.getInt("image_width"); image_height = yaml.getInt("image_height"); }
+            image_widths[c] = yaml.getInt("image_width"); image_heights[c] = yaml.getInt("image_height");
             fprintf(stderr, "Feature: loaded %s (fx=%.1f fy=%.1f)\n", config.camera_names[c].c_str(), poses[c].K(0,0), poses[c].K(1,1));
         } catch (const std::exception &e) {
             result.error = "Error reading " + yaml_path + ": " + e.what();
@@ -547,7 +547,7 @@ inline FeatureResult run_feature_refinement_impl(
         out_folder = config.calibration_folder + "/feature_refined";
     if (status) *status = "Writing refined calibration to " + out_folder;
     std::string write_err;
-    if (!CalibrationPipeline::write_calibration(poses, config.camera_names, out_folder, image_width, image_height, &write_err)) {
+    if (!CalibrationPipeline::write_calibration(poses, config.camera_names, out_folder, image_widths, image_heights, &write_err)) {
         result.error = write_err;
         return result;
     }

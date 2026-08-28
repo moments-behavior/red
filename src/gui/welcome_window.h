@@ -121,6 +121,10 @@ inline void DrawWelcomeWindow(AppContext &ctx, WindowStates &win) {
     calibButton("Telecentric DLT",
                 "Calibrate telecentric cameras from known 3D landmarks",
                 CalibrationTool::CalibSubtype::Telecentric);
+    calibButton("Cropped-Sensor Refinement",
+                "Two-stage: full-frame ChArUco calibration + posts, then refine "
+                "intrinsics for a sensor ROI crop",
+                CalibrationTool::CalibSubtype::CroppedRefinement);
 
     ImGui::Spacing();
     ImGui::Separator();

@@ -206,7 +206,7 @@ inline void obb_handle_input(OBBToolState &state, BBoxToolState &bbox_state,
 
     // G key advances the OBB state machine (G for "geometry";
     // W is reserved for keypoint labeling to avoid conflict)
-    if (ImGui::IsKeyPressed(ImGuiKey_G)) {
+    if (!ImGui::GetIO().WantTextInput && ImGui::IsKeyPressed(ImGuiKey_G)) {
         switch (state.draw_state) {
         case OBBDrawState::Idle:
             state.ax1_x = mx; state.ax1_y = my;
@@ -253,7 +253,7 @@ inline void obb_handle_input(OBBToolState &state, BBoxToolState &bbox_state,
     }
 
     // Escape: cancel construction
-    if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+    if (!ImGui::GetIO().WantTextInput && ImGui::IsKeyPressed(ImGuiKey_Escape)) {
         state.draw_state = OBBDrawState::Idle;
     }
 
@@ -279,8 +279,10 @@ inline void obb_handle_input(OBBToolState &state, BBoxToolState &bbox_state,
         }
     }
 
-    // T key: delete hovered OBB from this camera
-    if (state.hovered && ImGui::IsKeyPressed(ImGuiKey_T)) {
+    // Delete key: delete hovered OBB from this camera. (Uses Delete, not T,
+    // because T is the global Triangulate shortcut — both handlers would fire.)
+    if (state.hovered && !ImGui::GetIO().WantTextInput &&
+        ImGui::IsKeyPressed(ImGuiKey_Delete)) {
         auto &fa = amap[frame];
         if (cam_idx < (int)fa.cameras.size())
             fa.cameras[cam_idx].get_extras().has_obb = false;

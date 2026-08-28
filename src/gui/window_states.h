@@ -11,6 +11,7 @@
 #include "gui/bout_filter_window.h"
 #include "gui/pose_stats_window.h"
 #include "gui/frame_drops_window.h"
+#include "gui/pump_events_window.h"
 #include "gui/export_window.h"
 #include "gui/group_export_window.h"
 #include "gui/bbox_tool.h"
@@ -37,6 +38,7 @@ struct WindowStates {
     JarvisPredictState jarvis_predict;
     PoseStatsState pose_stats;
     FrameDropsState frame_drops;
+    PumpEventsState pump_events;
     BoutState bouts;
     BoutFilterState bout_filter;
     ExportWindowState export_win;
@@ -178,6 +180,7 @@ struct WindowStates {
         jarvis_predict.store_status.clear();
         pose_stats = PoseStatsState{};
         frame_drops = FrameDropsState{};
+        pump_events = PumpEventsState{};
         bouts = BoutState{};
         // Keep scanned profiles + current selection; clear per-store results.
         bout_filter.inputs = boutfilter::Inputs{};

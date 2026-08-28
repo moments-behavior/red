@@ -25,6 +25,7 @@
 #include "annotation_csv.h"
 #include "export_formats.h"
 #include "gui/bbox_tool.h"
+#include "gui/keypoint_clipboard.h"
 #include "gui/obb_tool.h"
 #include "sam_inference.h"
 #include "project.h"
@@ -2426,6 +2427,94 @@ static void test_sam_cache_sentinel_default() {
 // Main
 // ═══════════════════════════════════════════════════════════════════════════
 
+// ---------------------------------------------------------------------------
+// Keypoint clipboard: multi-select + copy/paste/delete of keypoint SETS
+// ---------------------------------------------------------------------------
+static void test_keypoint_clipboard_ops() {
+    printf("  test_keypoint_clipboard_ops...\n");
+    const int NN = 4, NC = 3;
+
+    // Selection helpers
+    KeypointClipboard kc;
+    kc.ensure_size(NN);
+    EXPECT_EQ((int)kc.selected.size(), NN);
+    EXPECT_FALSE(kc.any());
+    EXPECT_EQ(kc.count(), 0);
+    kc.selected[0] = kc.selected[1] = kc.selected[2] = 1; // node 3 unselected
+    EXPECT_TRUE(kc.any());
+    EXPECT_EQ(kc.count(), 3);
+    EXPECT_TRUE(kc.is_selected(2));
+    EXPECT_FALSE(kc.is_selected(3));
+
+    // Source: node0 labeled in cam0; node1 labeled in cam1 + 3D; node2 empty
+    FrameAnnotation src = make_frame(NN, NC, 10);
+    src.cameras[0].keypoints[0] = Keypoint2D{100.0, 200.0, true, 0.5f, LabelSource::Manual};
+    src.cameras[1].keypoints[1] = Keypoint2D{ 11.0,  22.0, true, 0.0f, LabelSource::Manual};
+    src.kp3d[1].x = 1.0; src.kp3d[1].y = 2.0; src.kp3d[1].z = 3.0;
+    src.kp3d[1].set_triangulated();
+
+    // Copy: node2 (no labels) is skipped -> only node0, node1 captured
+    int copied = copy_selected_keypoints(kc, src, NN, NC, "TestSkel");
+    EXPECT_EQ(copied, 2);
+    EXPECT_EQ((int)kc.clip.size(), 2);
+    EXPECT_EQ(kc.clip_num_nodes, NN);
+    EXPECT_EQ(kc.clip_num_cams, NC);
+    EXPECT_TRUE(kc.clip_skeleton == "TestSkel");
+
+    // Identity guard
+    EXPECT_TRUE(paste_identity_ok(kc, NN, NC, "TestSkel"));
+    EXPECT_FALSE(paste_identity_ok(kc, NN + 1, NC, "TestSkel"));
+    EXPECT_FALSE(paste_identity_ok(kc, NN, NC, "OtherSkel"));
+
+    // Paste overwrites, including a pre-existing label on node0/cam0
+    FrameAnnotation dst = make_frame(NN, NC, 20);
+    dst.cameras[0].keypoints[0] = Keypoint2D{5.0, 5.0, true, 1.0f, LabelSource::Predicted};
+    int pasted = paste_keypoints(kc, dst, NN, NC);
+    EXPECT_EQ(pasted, 2);
+    EXPECT_TRUE(dst.cameras[0].keypoints[0].labeled);
+    EXPECT_NEAR(dst.cameras[0].keypoints[0].x, 100.0, 1e-9);
+    EXPECT_NEAR(dst.cameras[0].keypoints[0].y, 200.0, 1e-9);
+    EXPECT_TRUE(dst.cameras[1].keypoints[1].labeled);
+    EXPECT_NEAR(dst.cameras[1].keypoints[1].x, 11.0, 1e-9);
+    EXPECT_TRUE(dst.kp3d[1].triangulated);
+    EXPECT_NEAR(dst.kp3d[1].z, 3.0, 1e-9);
+    // node2 (skipped) and node3 (unselected) stay unlabeled
+    EXPECT_FALSE(dst.cameras[0].keypoints[2].labeled);
+    EXPECT_FALSE(dst.cameras[0].keypoints[3].labeled);
+
+    // Delete one camera only
+    delete_node_from_camera(dst, 0, 0);
+    EXPECT_FALSE(dst.cameras[0].keypoints[0].labeled);
+
+    // Delete a node across all cameras also clears its (now unsupported) 3D
+    delete_node_all_cameras(dst, 1, NC);
+    for (int c = 0; c < NC; ++c)
+        EXPECT_FALSE(dst.cameras[c].keypoints[1].labeled);
+    EXPECT_FALSE(dst.kp3d[1].triangulated);
+
+    // Delete a selected set from all cameras
+    FrameAnnotation d2 = make_frame(NN, NC, 30);
+    for (int c = 0; c < NC; ++c)
+        for (int k = 0; k < NN; ++k)
+            d2.cameras[c].keypoints[k].labeled = true;
+    KeypointClipboard kc2;
+    kc2.ensure_size(NN);
+    kc2.selected[0] = kc2.selected[3] = 1; // delete nodes 0 and 3
+    int del = delete_selected_all_cameras(kc2, d2, NN, NC);
+    EXPECT_EQ(del, 2);
+    for (int c = 0; c < NC; ++c) {
+        EXPECT_FALSE(d2.cameras[c].keypoints[0].labeled);
+        EXPECT_TRUE(d2.cameras[c].keypoints[1].labeled);
+        EXPECT_TRUE(d2.cameras[c].keypoints[2].labeled);
+        EXPECT_FALSE(d2.cameras[c].keypoints[3].labeled);
+    }
+
+    // Resizing to a new node count drops any stale selection
+    kc.ensure_size(NN + 2);
+    EXPECT_EQ((int)kc.selected.size(), NN + 2);
+    EXPECT_FALSE(kc.any());
+}
+
 int main() {
     printf("=== Annotation System Tests ===\n");
 
@@ -2553,6 +2642,9 @@ int main() {
     printf("\n--- Data Model Edge Cases ---\n");
     test_get_or_create_frame_idempotent();
     test_make_frame_sizes_match();
+
+    printf("\n--- Keypoint Clipboard ---\n");
+    test_keypoint_clipboard_ops();
 
     printf("\n--- SAM Cache Sentinel ---\n");
     test_sam_cache_sentinel_default();

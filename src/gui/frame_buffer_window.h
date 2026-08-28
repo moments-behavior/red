@@ -1,5 +1,6 @@
 #pragma once
 #include "app_context.h"
+#include "gui/label_palette.h"
 #include "implot_internal.h"
 
 // Draw the Frame Buffer window — shows buffered frames as vertical-text selectables.
@@ -74,8 +75,9 @@ inline void DrawFrameBufferWindow(AppContext &ctx, int select_corr_head) {
                 }
 
                 // Draw vertical text over the selectable
-                // Color code: green = fully labeled + triangulated,
-                // teal = partially labeled, default = unlabeled
+                // Color code (label_palette): kp_complete = fully labeled +
+                // triangulated, kp_partial = partially labeled, default =
+                // unlabeled
                 const char *text = label;
                 float cx = pos.x + item_w * 0.5f;
                 (void)cx;
@@ -90,9 +92,9 @@ inline void DrawFrameBufferWindow(AppContext &ctx, int select_corr_head) {
                             if (!ann_it->second.kp3d[k].triangulated)
                                 complete = false;
                     }
-                    text_col = complete
-                        ? IM_COL32(51, 204, 77, 255)   // green
-                        : IM_COL32(51, 179, 179, 255); // teal
+                    const LabelPalette &pal = label_palette();
+                    text_col = ImGui::ColorConvertFloat4ToU32(
+                        complete ? pal.kp_complete : pal.kp_partial);
                 } else {
                     text_col = is_selected
                         ? ImGui::GetColorU32(ImGuiCol_Text)

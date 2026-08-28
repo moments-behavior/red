@@ -7,6 +7,7 @@
 #include "global.h"
 #include "gui.h"
 #include "gui/help_window.h"
+#include "gui/shortcuts.h"
 #include "gui/jarvis_export_window.h"
 #include "gui/export_window.h"
 #include "gui/bbox_tool.h"
@@ -36,7 +37,10 @@
 #include "gui/prediction_overlay.h"
 #include "gui/bout_filter_preview.h"
 #include "gui/annotation_dialog.h"
+#include "gui/body_parts_window.h"
+#include "gui/label_palette.h"
 #include "gui/calibration_tool_window.h"
+#include "gui/crop_designer.h"
 #include "gui/labeling_tool_window.h"
 #include "gui/project_window.h"
 #include "gui/settings_window.h"
@@ -305,6 +309,9 @@ int main(int argc, char **argv) {
     std::string media_root_dir;
     prepare_application_folders(red_data_dir, media_root_dir);
     UserSettings user_settings = load_user_settings();
+    // Apply any persisted label-state color overrides to the shared palette
+    // before the first frame renders (gui/label_palette.h).
+    apply_label_color_overrides(user_settings.label_colors);
     // Honor the persisted buffer mode (default GPU Buffer on first launch).
     // Frame buffers are allocated later in media_loader::render_allocate_scene_memory
     // based on this flag, so it must be set before any project is loaded.
@@ -499,6 +506,8 @@ int main(int argc, char **argv) {
                 pm = loaded;
                 if (setup_project(pm, skeleton, skeleton_map, &err)) {
                     on_project_loaded(ctx, print_metadata, print_summary);
+                    // Reopen the JARVIS Predict panel if it was open last time.
+                    win.jarvis_predict.show = pm.show_jarvis_predict;
                 } else
                     popups.pushError(err);
             }
@@ -600,9 +609,7 @@ int main(int argc, char **argv) {
     panels.add({"Labeling Tool",
                 [&]() {
                     DrawLabelingToolWindow(win.labeling, ctx);
-                    if (keypoints_find &&
-                        ImGui::IsKeyPressed(ImGuiKey_T, false) &&
-                        !ImGui::GetIO().WantTextInput) {
+                    if (keypoints_find && keys::pressed(keys::Sc::Triangulate)) {
                         if (!pm.camera_params.empty()) {
                             reprojection(annotations.at(current_frame_num),
                                          &skeleton, pm.camera_params, scene);
@@ -613,7 +620,19 @@ int main(int argc, char **argv) {
                     }
                 },
                 [&]() { return pm.plot_keypoints_flag; }});
-    panels.add({"Help", [&]() { DrawHelpWindow(win.show_help); }, nullptr});
+    panels.add({"Body Parts",
+                [&]() { DrawBodyPartsWindow(ctx); },
+                [&]() { return pm.plot_keypoints_flag; }});
+    panels.add({"Help", [&]() {
+                    help::Context hctx;
+                    hctx.project_open = !pm.project_path.empty();
+                    hctx.is_3d        = hctx.project_open && !project_is_2d(pm);
+                    hctx.bbox_on      = win.bbox.enabled;
+                    hctx.obb_on       = win.obb.enabled;
+                    hctx.sam_on       = win.sam_tool.enabled;
+                    hctx.midline_on   = win.midline.enabled;
+                    DrawHelpWindow(win.show_help, hctx);
+                }, nullptr});
     panels.add({"JARVIS Export",
                 [&]() { DrawJarvisExportWindow(win.jarvis_export, ctx); },
                 nullptr});
@@ -680,6 +699,9 @@ int main(int argc, char **argv) {
                 nullptr});
     panels.add({"Frame Drops",
                 [&]() { DrawFrameDropsWindow(win.frame_drops, ctx); },
+                nullptr});
+    panels.add({"Pump Events",
+                [&]() { DrawPumpEventsWindow(win.pump_events, ctx); },
                 nullptr});
     panels.add({"Bouts",
                 [&]() { DrawBoutsWindow(win.bouts, prediction_store,
@@ -819,6 +841,10 @@ int main(int argc, char **argv) {
             ImGui::SetWindowFocus("Labeling Tool");
         }
 
+        // pumpctl writes its dispense log into orange's recording folder, so
+        // pick it up whenever the loaded media changes. Cheap no-op otherwise.
+        pump_events_auto_load(win.pump_events, ctx);
+
         // Draw all registered panels
         panels.drawAll();
 
@@ -839,6 +865,19 @@ int main(int argc, char **argv) {
         if (win.frame_drops.seek_requested) {
             win.frame_drops.seek_requested = false;
             int tgt = win.frame_drops.seek_frame;
+            seek_all_cameras(scene, tgt, dc_context->video_fps, ps, true);
+            current_frame_num = tgt;
+            ps.pause_selected = 0;
+            ps.pause_seeked = true;
+            for (auto &[key, value] : window_need_decoding)
+                value.store(true);
+        }
+
+        // Pump Events: seek to a dispense (already in playback coordinates —
+        // the panel maps mp4 index -> canonical slot when the sync fix is on).
+        if (win.pump_events.seek_requested) {
+            win.pump_events.seek_requested = false;
+            int tgt = win.pump_events.seek_frame;
             seek_all_cameras(scene, tgt, dc_context->video_fps, ps, true);
             current_frame_num = tgt;
             ps.pause_selected = 0;
@@ -976,6 +1015,19 @@ int main(int argc, char **argv) {
 #endif
                               });
 
+        // Jump to the next/previous pump dispense. Outside the paused-only
+        // block below so it also works during playback; the seek itself is
+        // performed by the seek_requested handler on the next iteration.
+        if (ps.video_loaded && !win.pump_events.events.empty() &&
+            !io.WantTextInput) {
+            if (ImGui::IsKeyPressed(ImGuiKey_RightBracket, false) &&
+                !pump_events_jump(win.pump_events, current_frame_num, true))
+                ctx.toasts.push("No later pump dispense");
+            if (ImGui::IsKeyPressed(ImGuiKey_LeftBracket, false) &&
+                !pump_events_jump(win.pump_events, current_frame_num, false))
+                ctx.toasts.push("No earlier pump dispense");
+        }
+
         static int select_corr_head = 0;
         if (ps.video_loaded && (!ps.play_video)) {
             int visible_idx = find_visible_cam();
@@ -990,16 +1042,14 @@ int main(int argc, char **argv) {
             if (ps.pause_selected >= (int)scene->size_of_buffer)
                 ps.pause_selected = scene->size_of_buffer - 1;
 
-            if (ImGui::IsKeyPressed(ImGuiKey_Comma, true) &&
-                !io.WantTextInput) {
+            if (keys::pressed(keys::Sc::BufferPrev)) {
                 if (ps.pause_selected > 0) {
                     ps.pause_selected--;
                     selection_changed = true;
                 }
             }
 
-            if (ImGui::IsKeyPressed(ImGuiKey_Period, true) &&
-                !io.WantTextInput) {
+            if (keys::pressed(keys::Sc::BufferNext)) {
                 if (ps.pause_selected < (int)scene->size_of_buffer - 1) {
                     ps.pause_selected++;
                     selection_changed = true;
@@ -1599,8 +1649,7 @@ int main(int argc, char **argv) {
                             // OBB tool uses G key (not W), so no keypoint conflict
                             if (ImPlot::IsPlotHovered()) {
                                 is_view_focused[j] = true;
-                                if (ImGui::IsKeyPressed(ImGuiKey_B, false) &&
-                                    !io.WantTextInput) {
+                                if (keys::pressed(keys::Sc::CreateFrame)) {
                                     // create frame annotation
                                     if (!keypoints_find) {
                                         get_or_create_frame(annotations,
@@ -1613,9 +1662,7 @@ int main(int argc, char **argv) {
                                 if (keypoints_find && skeleton.has_skeleton) {
                                     u32 *kp = &annotations.at(current_frame_num)
                                                    .cameras[j].active_id;
-                                    if (ImGui::IsKeyPressed(ImGuiKey_W,
-                                                            false) &&
-                                        !io.WantTextInput) {
+                                    if (keys::pressed(keys::Sc::PlaceKeypoint)) {
                                         // labeling sequentially each view
                                         ImPlotPoint mouse =
                                             ImPlot::GetPlotMousePos();
@@ -1629,39 +1676,31 @@ int main(int argc, char **argv) {
                                         }
                                     }
 
-                                    if (ImGui::IsKeyPressed(ImGuiKey_A, true) &&
-                                        !io.WantTextInput) {
+                                    if (keys::pressed(keys::Sc::ActivePrev)) {
                                         if (*kp <= 0) {
                                             *kp = 0;
                                         } else
                                             (*kp)--;
                                     }
 
-                                    if (ImGui::IsKeyPressed(ImGuiKey_D, true) &&
-                                        !io.WantTextInput) {
+                                    if (keys::pressed(keys::Sc::ActiveNext)) {
                                         if (*kp >= skeleton.num_nodes - 1) {
                                             *kp = skeleton.num_nodes - 1;
                                         } else
                                             (*kp)++;
                                     }
 
-                                    if (ImGui::IsKeyPressed(ImGuiKey_E,
-                                                            false) &&
-                                        !io.WantTextInput) {
+                                    if (keys::pressed(keys::Sc::ActiveLast)) {
                                         *kp = skeleton.num_nodes - 1;
                                     }
 
-                                    if (ImGui::IsKeyPressed(ImGuiKey_Q,
-                                                            false) &&
-                                        !io.WantTextInput) {
+                                    if (keys::pressed(keys::Sc::ActiveFirst)) {
                                         *kp = 0;
                                     }
 
                                     // delete all keypoints on a frame
                                     // (skip if SAM has active prompts — Backspace is SAM undo)
-                                    if (ImGui::IsKeyPressed(ImGuiKey_Backspace,
-                                                            false) &&
-                                        !io.WantTextInput &&
+                                    if (keys::pressed(keys::Sc::DeleteAllKp) &&
                                         !(win.sam_tool.enabled &&
                                           (!win.sam_tool.fg_points.empty() ||
                                            !win.sam_tool.bg_points.empty()))) {
@@ -1673,8 +1712,15 @@ int main(int argc, char **argv) {
                                 is_view_focused[j] = false;
                             }
 
+                            // Hold P while hovering a view to hide its label
+                            // overlay (manual keypoints + prediction overlay) and
+                            // peek at the raw image underneath. Per-view: affects
+                            // only the hovered image; release to restore.
+                            bool peek_raw = ImPlot::IsPlotHovered() &&
+                                            keys::held(keys::Sc::PeekRaw);
+
                             if (keypoints_find && skeleton.has_skeleton &&
-                                display.show_keypoints) {
+                                display.show_keypoints && !peek_raw) {
                                 gui_plot_keypoints(
                                     annotations.at(current_frame_num),
                                     &skeleton, j, scene->num_cams,
@@ -1687,7 +1733,7 @@ int main(int argc, char **argv) {
                             // hand-labeled) so the automatic prediction doesn't
                             // linger once a frame has manual/human-owned data.
                             if (!keypoints_find && skeleton.has_skeleton &&
-                                display.show_keypoints &&
+                                display.show_keypoints && !peek_raw &&
                                 win.jarvis_predict.show_prediction_overlay &&
                                 prediction_store.is_open() &&
                                 (int)prediction_store.num_keypoints() ==
@@ -1718,6 +1764,10 @@ int main(int argc, char **argv) {
                             u32 frame = (u32)current_frame_num;
                             int nn = skeleton.num_nodes;
                             int nc = (int)scene->num_cams;
+
+                            // Crop designer (cropped-sensor calibration wizard)
+                            crop_designer_draw(win.calibration, annotations,
+                                               j, iw, ih);
 
                             // Bbox tool
                             if (win.bbox.enabled) {
@@ -1792,8 +1842,7 @@ int main(int argc, char **argv) {
                         // Plot context menu: press 1 key while hovering
                         // (right-click reserved for SAM background points)
                         if (ImPlot::IsPlotHovered() &&
-                            ImGui::IsKeyPressed(ImGuiKey_2, false) &&
-                            !io.WantTextInput) {
+                            keys::pressed(keys::Sc::PlotMenu)) {
                             ImGui::OpenPopup("##plot_settings");
                         }
                         if (ImGui::BeginPopup("##plot_settings")) {
@@ -1826,8 +1875,8 @@ int main(int argc, char **argv) {
                 ImGui::End();
             }
 
-            if (ImGui::IsKeyPressed(ImGuiKey_Space, false) &&
-                !io.WantTextInput && !win.jarvis_predict.batch_running) {
+            if (keys::pressed(keys::Sc::PlayPause) &&
+                !win.jarvis_predict.batch_running) {
                 ps.play_video = !ps.play_video;
                 if (ps.play_video) {
                     ps.pause_seeked = false;
@@ -1843,7 +1892,7 @@ int main(int argc, char **argv) {
 
             // Hotkey 6: Run JARVIS prediction on current frame
             bool jarvis_predict_trigger =
-                (ImGui::IsKeyPressed(ImGuiKey_6, false) && !io.WantTextInput) ||
+                keys::pressed(keys::Sc::PredictCurrent) ||
                 win.jarvis_predict.predict_requested;
             win.jarvis_predict.predict_requested = false;
 
@@ -3335,13 +3384,13 @@ int main(int argc, char **argv) {
                 }
             }
 
-            if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow, false) &&
-                !io.WantTextInput && !win.jarvis_predict.batch_running) {
+            if (keys::pressed(keys::Sc::SeekBack) &&
+                !win.jarvis_predict.batch_running) {
                 seek_relative(ImGui::GetIO().KeyShift ? -10 : -1);
             }
 
-            if (ImGui::IsKeyPressed(ImGuiKey_RightArrow, false) &&
-                !io.WantTextInput && !win.jarvis_predict.batch_running) {
+            if (keys::pressed(keys::Sc::SeekFwd) &&
+                !win.jarvis_predict.batch_running) {
                 seek_relative(ImGui::GetIO().KeyShift ? 10 : 1);
             }
 
@@ -3351,7 +3400,7 @@ int main(int argc, char **argv) {
         }
 
         // H-key help toggle
-        if (ImGui::IsKeyPressed(ImGuiKey_H, false) && !io.WantTextInput) {
+        if (keys::pressed(keys::Sc::ToggleHelp)) {
             win.show_help = !win.show_help;
         }
 

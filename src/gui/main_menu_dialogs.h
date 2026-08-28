@@ -205,6 +205,8 @@ inline void HandleMainMenuDialogs(
                     pm = loaded;
                     if (setup_project(pm, skeleton, skeleton_map, &err)) {
                         on_project_loaded(ctx, print_metadata_fn, print_summary_fn);
+                        // Reopen the JARVIS Predict panel if it was open last time.
+                        win.jarvis_predict.show = pm.show_jarvis_predict;
                     } else
                         popups.pushError(err);
                 }
@@ -261,6 +263,8 @@ inline void HandleMainMenuDialogs(
                 pm = loaded;
                 if (setup_project(pm, skeleton, skeleton_map, &err)) {
                     on_project_loaded(ctx, print_metadata_fn, print_summary_fn);
+                    // Reopen the JARVIS Predict panel if it was open last time.
+                    win.jarvis_predict.show = pm.show_jarvis_predict;
                 } else
                     popups.pushError(err);
             }

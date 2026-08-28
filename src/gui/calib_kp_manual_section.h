@@ -27,7 +27,7 @@ collect_manual_landmarks(
     int num_keypoints,
     int num_cameras,
     const std::vector<std::string> &camera_serials,
-    int image_height = 0) {
+    const std::vector<int> &image_heights = {}) {
 
     std::map<std::string, std::map<int, Eigen::Vector2d>> landmarks;
 
@@ -39,13 +39,15 @@ collect_manual_landmarks(
         const auto &cam = fa.cameras[c];
         std::string serial = (c < (int)camera_serials.size())
             ? camera_serials[c] : std::to_string(c);
+        int image_height = (c < (int)image_heights.size()) ? image_heights[c] : 0;
 
         for (int k = 0; k < num_keypoints && k < (int)cam.keypoints.size(); k++) {
             const auto &kp = cam.keypoints[k];
             if (kp.labeled && kp.x < UNLABELED * 0.9 && kp.y < UNLABELED * 0.9) {
                 // Labels are in ImPlot coords (Y=0 at bottom).
                 // Calibration uses OpenCV coords (Y=0 at top).
-                // Flip Y if image_height is provided.
+                // Flip Y if image_height is provided. Heights are per camera —
+                // cropped rigs can have different sizes per view.
                 double y = (image_height > 0) ? (image_height - kp.y) : kp.y;
                 landmarks[serial][k] = Eigen::Vector2d(kp.x, y);
             }
@@ -339,10 +341,11 @@ inline void DrawCalibKPManualSection(
     ImGui::BeginDisabled(!can_eval);
     if (ImGui::Button("Evaluate Calibration##kp")) {
         // Collect landmarks from annotations (flip Y from ImPlot to OpenCV convention)
-        int img_h = (scene->num_cams > 0) ? scene->image_height[0] : 0;
+        std::vector<int> img_hs(scene->num_cams);
+        for (u32 c = 0; c < scene->num_cams; c++) img_hs[c] = (int)scene->image_height[c];
         auto landmarks = collect_manual_landmarks(
             ctx.annotations, 0, state.kp_num_points,
-            scene->num_cams, state.project.camera_names, img_h);
+            scene->num_cams, state.project.camera_names, img_hs);
 
         state.kp_eval = evaluate_manual_calibration(
             landmarks, state.project.calibration_folder,
@@ -407,10 +410,11 @@ inline void DrawCalibKPManualSection(
         ImGui::BeginDisabled(!can_refine);
         if (ImGui::Button("Run Refinement##kp")) {
             // Collect landmarks (flip Y from ImPlot to OpenCV convention)
-            int img_h = (scene->num_cams > 0) ? scene->image_height[0] : 0;
+            std::vector<int> img_hs(scene->num_cams);
+            for (u32 c = 0; c < scene->num_cams; c++) img_hs[c] = (int)scene->image_height[c];
             auto landmarks = collect_manual_landmarks(
                 ctx.annotations, 0, state.kp_num_points,
-                scene->num_cams, state.project.camera_names, img_h);
+                scene->num_cams, state.project.camera_names, img_hs);
 
             state.kp_landmarks = landmarks; // save for async use
 

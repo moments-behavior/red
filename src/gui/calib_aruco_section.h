@@ -182,10 +182,17 @@ inline void DrawCalibArucoSection(CalibrationToolState &state, AppContext &ctx,
                         auto vids = CalibrationTool::discover_aruco_videos(
                             media_folder, state.config.cam_ordered);
                         state.aruco_video_count = (int)vids.size();
-                        if (!vids.empty())
-                            state.aruco_total_frames =
-                                CalibrationPipeline::get_video_frame_count(
-                                    vids.begin()->second);
+                        // Longest video, not the first one. The canonical slot
+                        // range the per-frame remap scans is at least the
+                        // longest camera's frame count; taking the first video
+                        // caps the range sliders at whichever camera happens to
+                        // sort first, which is the *short* one exactly when a
+                        // camera dropped frames — silently truncating the run.
+                        int longest = 0;
+                        for (const auto &[cam, path] : vids)
+                            longest = std::max(longest,
+                                CalibrationPipeline::get_video_frame_count(path));
+                        if (longest > 0) state.aruco_total_frames = longest;
                     }
                 }
 
@@ -330,11 +337,25 @@ inline void DrawCalibArucoSection(CalibrationToolState &state, AppContext &ctx,
                             state.aruco_sync_status.clear();  // re-detect on change
                         ImGui::SameLine();
                         bool detect = ImGui::Button("Detect##aruco_sync");
-                        if (detect || state.aruco_sync_status.empty())
-                            aruco_detect_sync_offsets(
+                        if (detect || state.aruco_sync_status.empty()) {
+                            // Prefer the per-frame remap; it is the only mode
+                            // that survives interior dropped frames. Report the
+                            // constant-offset result only when no plan builds,
+                            // so the status line matches what the run will do.
+                            std::string plan_status;
+                            auto maps = CalibrationPipeline::build_calibration_slot_maps(
                                 media_folder, state.config.cam_ordered,
-                                state.aruco_ts_pattern, state.aruco_sync_status,
-                                state.aruco_sync_ok);
+                                state.aruco_ts_pattern, &plan_status);
+                            if (!maps.empty()) {
+                                state.aruco_sync_status = plan_status;
+                                state.aruco_sync_ok = true;
+                            } else {
+                                aruco_detect_sync_offsets(
+                                    media_folder, state.config.cam_ordered,
+                                    state.aruco_ts_pattern, state.aruco_sync_status,
+                                    state.aruco_sync_ok);
+                            }
+                        }
                         if (!state.aruco_sync_status.empty()) {
                             ImVec4 col = state.aruco_sync_ok
                                 ? ImVec4(0.4f, 1.0f, 0.4f, 1.0f)
@@ -528,12 +549,26 @@ inline void DrawCalibArucoSection(CalibrationToolState &state, AppContext &ctx,
                         vfr.stop_frame = state.aruco_stop_frame;
                         vfr.frame_step = state.aruco_frame_step;
                         if (state.aruco_sync_by_timestamp) {
-                            std::string sync_status; bool sync_ok = false;
-                            vfr.cam_frame_offset = aruco_detect_sync_offsets(
-                                media_folder, enabled, state.aruco_ts_pattern,
-                                sync_status, sync_ok);
-                            fprintf(stderr, "[Calibration] timestamp sync: %s\n",
-                                    sync_status.c_str());
+                            // Same precedence as the Detect button: per-frame
+                            // remap first, constant offsets only as fallback.
+                            // Built against `enabled` (not cam_ordered) so the
+                            // map indices line up with the cameras actually run.
+                            std::string plan_status;
+                            vfr.cam_slot_to_frame =
+                                CalibrationPipeline::build_calibration_slot_maps(
+                                    media_folder, enabled, state.aruco_ts_pattern,
+                                    &plan_status);
+                            if (!vfr.cam_slot_to_frame.empty()) {
+                                fprintf(stderr, "[Calibration] timestamp sync: %s\n",
+                                        plan_status.c_str());
+                            } else {
+                                std::string sync_status; bool sync_ok = false;
+                                vfr.cam_frame_offset = aruco_detect_sync_offsets(
+                                    media_folder, enabled, state.aruco_ts_pattern,
+                                    sync_status, sync_ok);
+                                fprintf(stderr, "[Calibration] timestamp sync: %s\n",
+                                        sync_status.c_str());
+                            }
                         }
                         state.aruco_future = std::async(
                             std::launch::async,

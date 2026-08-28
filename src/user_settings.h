@@ -2,6 +2,7 @@
 #include "json.hpp"
 #include "utils.h"
 #include <filesystem>
+#include <map>
 #include <fstream>
 #include <iostream>
 #include <string>
@@ -49,6 +50,13 @@ struct UserSettings {
     int keypoint_colormap = -1;
     std::vector<float> active_keypoint_color = {1.0f, 1.0f, 1.0f};
 
+    // Label-state colors (Labeling Tool grid/timeline, Frame Buffer window).
+    // Only OVERRIDES are stored, keyed by LabelPalette role name with RGB
+    // triplet values; roles absent here use the built-in defaults. Applied to
+    // the palette at startup and edited live in Settings > Label Colors.
+    // See gui/label_palette.h for the role list.
+    std::map<std::string, std::vector<float>> label_colors;
+
     // Export defaults
     float jarvis_margin = 50.0f;
     float jarvis_train_ratio = 0.9f;
@@ -91,6 +99,7 @@ inline void to_json(nlohmann::json &j, const UserSettings &s) {
         {"use_cpu_buffer", s.use_cpu_buffer},
         {"keypoint_colormap", s.keypoint_colormap},
         {"active_keypoint_color", s.active_keypoint_color},
+        {"label_colors", s.label_colors},
         {"jarvis_center_cams", s.jarvis_center_cams},
         {"jarvis_margin", s.jarvis_margin},
         {"jarvis_train_ratio", s.jarvis_train_ratio},
@@ -116,6 +125,8 @@ inline void from_json(const nlohmann::json &j, UserSettings &s) {
     s.keypoint_colormap = j.value("keypoint_colormap", -1);
     s.active_keypoint_color =
         j.value("active_keypoint_color", std::vector<float>{1.0f, 1.0f, 1.0f});
+    s.label_colors = j.value(
+        "label_colors", std::map<std::string, std::vector<float>>{});
     s.jarvis_center_cams = j.value("jarvis_center_cams", 8);
     s.jarvis_margin = j.value("jarvis_margin", 50.0f);
     s.jarvis_train_ratio = j.value("jarvis_train_ratio", 0.9f);

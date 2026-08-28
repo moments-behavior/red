@@ -2,6 +2,8 @@
 #include "imgui.h"
 #include "calibration_tool.h"
 #include "calibration_pipeline.h"
+#include "crop_calibration.h"
+#include "cropped_refinement.h"
 #include "pointsource_calibration.h"
 #include "superpoint_refinement.h"
 #include "telecentric_dlt.h"
@@ -244,6 +246,50 @@ struct CalibrationToolState {
     FeatureRefinement::FeatureResult kp_feat_result;
     std::future<FeatureRefinement::FeatureResult> kp_future;
     std::map<std::string, std::map<int, Eigen::Vector2d>> kp_landmarks; // saved for async
+
+    // Cropped-sensor refinement wizard (CalibSubtype::CroppedRefinement)
+    struct CroppedState {
+        // Step 1: posts at full frame
+        bool fullframe_videos_loaded = false;
+        bool fullframe_skeleton_ready = false;
+        bool posts_triangulated = false;
+        std::vector<CropCalibration::PostReport> post_report;
+        double post_accept_th = 3.0;  // px, per-post accept threshold
+
+        // Step 2: crop transform
+        CropCalibration::CropSpec crop_spec;
+        bool crop_applied = false;
+        std::vector<std::string> crop_warnings;
+
+        // Step 2: interactive crop designer (fixed-size rect on camera views)
+        bool designer_enabled = false;
+        int crop_w = 1024, crop_h = 1024;  // shared crop dims (all cameras)
+
+        // Step 2: orange config export
+        std::string orange_status;
+
+        // Step 2: apply + verify (full-frame clicks shifted into the crop)
+        bool verify_running = false;
+        bool verify_done = false;
+        CroppedRefinement::RefineResult verify_result;
+        std::future<CroppedRefinement::RefineResult> verify_future;
+        std::vector<std::string> verify_dropped;
+
+        // Step 3: posts in cropped views + refinement
+        bool cropped_videos_loaded = false;
+        bool cropped_skeleton_ready = false;
+        bool refine_free_focal = false;
+        float refine_prior_principal = 0.05f;
+        float refine_prior_focal = 0.5f;
+        float refine_outlier_th = 25.0f;
+        float refine_holdout = 0.2f;
+        bool refine_running = false;
+        bool refine_done = false;
+        CroppedRefinement::RefineResult refine_result;
+        std::future<CroppedRefinement::RefineResult> refine_future;
+        std::map<std::string, std::map<int, Eigen::Vector2d>> landmarks; // saved for async
+        std::string status;
+    } cropped;
 
     // 3D calibration viewer (perspective)
     CalibViewerState calib_viewer;

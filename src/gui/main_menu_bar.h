@@ -64,6 +64,15 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
             win.switch_skeleton.initialized = false;
         }
         ImGui::EndDisabled();
+        ImGui::Separator();
+        // Save Labels — same action as the toolbar floppy icon and the Labeling
+        // Tool's Save button: ctx.save_requested is forwarded to the labeling
+        // tool, which writes the per-camera and 3D label CSVs.
+        ImGui::BeginDisabled(!pm.plot_keypoints_flag);
+        if (ImGui::MenuItem("Save Labels")) {
+            ctx.save_requested = true;
+        }
+        ImGui::EndDisabled();
         ImGui::EndMenu();
     }
 
@@ -183,6 +192,21 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
         if (ImGui::MenuItem("Bout Filter")) {
             win.bout_filter.show = true;
         }
+        if (ImGui::MenuItem("Pump Events")) {
+            win.pump_events.show = true;
+        }
+        {
+            // Jumps operate on the same filtered set the table shows, so a
+            // hidden pump is skipped here too.
+            auto &pe = win.pump_events;
+            ImGui::BeginDisabled(pe.events.empty());
+            if (ImGui::MenuItem("Next Pump Dispense", "]"))
+                pump_events_jump(pe, ctx.current_frame_num, true);
+            if (ImGui::MenuItem("Previous Pump Dispense", "["))
+                pump_events_jump(pe, ctx.current_frame_num, false);
+            ImGui::EndDisabled();
+        }
+        ImGui::Separator();
         if (ImGui::MenuItem("Help")) {
             show_help_window = true;
         }

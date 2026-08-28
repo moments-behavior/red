@@ -9,6 +9,7 @@
 #include "calib_pointsource_section.h"
 #include "calib_superpoint_section.h"
 #include "calib_kp_manual_section.h"
+#include "calib_cropped_section.h"
 #include "calib_viewer_window.h"
 #include "tele_viewer_window.h"
 #include <ImGuiFileDialog.h>
@@ -289,6 +290,13 @@ inline void DrawCalibrationToolWindow(
                 } else if (sub == CalibrationTool::CalibSubtype::PointSourceRefinement) {
                     steps = {{"Detect", false},
                              {"Refine", state.pointsource_done}};
+                } else if (sub == CalibrationTool::CalibSubtype::CroppedRefinement) {
+                    steps = {{"Posts 3D", state.cropped.posts_triangulated ||
+                                          !state.project.posts_3d_file.empty()},
+                             {"Crop", !state.project.cropped_calibration_folder.empty()},
+                             {"Refine", (state.cropped.refine_done &&
+                                         state.cropped.refine_result.success) ||
+                                        !state.project.cropped_refined_folder.empty()}};
                 } else {
                     // ArUco or ArUco+PointSource
                     steps = {{"Detect", state.aruco_done},
@@ -414,6 +422,12 @@ inline void DrawCalibrationToolWindow(
                 DrawCalibTeleSection(state, ctx, cb);
             }
             ImGui::Spacing();
+
+            // ---- Section: Cropped-Sensor Refinement wizard ----
+            if (state.project.subtype ==
+                CalibrationTool::CalibSubtype::CroppedRefinement) {
+                DrawCalibCroppedSection(state, ctx, cb);
+            }
 
             // ---- Section 2: Aruco Calibration (if has_aruco) ----
             if (state.project.has_aruco() && state.config_loaded) {

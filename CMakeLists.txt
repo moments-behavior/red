@@ -1005,6 +1005,45 @@ if(APPLE)
         CXX_STANDARD_REQUIRED ON
     )
 
+    # Two-stage cropped-sensor calibration test (crop transform + refinement)
+    add_executable(test_crop_refinement
+        tests/test_crop_refinement.cpp
+        src/aruco_metal.mm
+        src/FFmpegDemuxer.cpp
+        src/vt_async_decoder.mm
+        src/superpoint_coreml.mm
+    )
+    target_include_directories(test_crop_refinement PRIVATE
+        src
+        lib/nvcodec
+        ${HOMEBREW_PREFIX}/include
+        ${HOMEBREW_PREFIX}/include/eigen3
+        ${FFMPEG_INCLUDE_DIRS}
+        ${TURBOJPEG_INCLUDE_DIRS}
+    )
+    target_link_directories(test_crop_refinement PRIVATE
+        ${FFMPEG_LIBRARY_DIRS} ${TURBOJPEG_LIBRARY_DIRS})
+    target_link_libraries(test_crop_refinement PRIVATE
+        Eigen3::Eigen
+        Ceres::ceres
+        ${FFMPEG_LIBRARIES}
+        ${TURBOJPEG_LIBRARIES}
+        "-framework Metal"
+        "-framework Foundation"
+        "-framework CoreGraphics"
+        "-framework CoreVideo"
+        "-framework CoreMedia"
+        "-framework VideoToolbox"
+        "-framework CoreML"
+        "-framework Accelerate"
+        "-framework IOKit"
+        pthread
+    )
+    set_target_properties(test_crop_refinement PROPERTIES
+        CXX_STANDARD 17
+        CXX_STANDARD_REQUIRED ON
+    )
+
     # DICT_5X5 detection test (rat calibration board)
     add_executable(test_dict5x5
         tests/test_dict5x5.cpp
@@ -2065,7 +2104,37 @@ else()
         target_link_options(${TEST_NAME} PRIVATE "-Wl,--disable-new-dtags")
     endforeach()
 
+    # ── Headless experimental-calibration CLI (images or --videos) ──────────
+    add_executable(run_experimental_calib tests/run_experimental_calib.cpp)
+    target_include_directories(run_experimental_calib PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+        ${DIR_NVCODEC}
+    )
+    target_link_libraries(run_experimental_calib PRIVATE
+        Eigen3::Eigen
+        Ceres::ceres
+        PkgConfig::FFMPEG
+        Threads::Threads
+        ${CMAKE_DL_LIBS}
+    )
+    set_target_properties(run_experimental_calib PROPERTIES
+        CXX_STANDARD 17
+        CXX_STANDARD_REQUIRED ON
+        BUILD_RPATH "${RED_RPATH_BUILD}"
+        INSTALL_RPATH "${RED_RPATH_INSTALL}"
+    )
+    target_link_options(run_experimental_calib PRIVATE "-Wl,--disable-new-dtags")
+
 endif()
 
 
 
+# ── Pump dispense log import (src/pump_events_core.h) ───────────────────────
+# Header-only with no deps beyond C++17 and src/json.hpp, so it builds on both
+# platforms outside the APPLE/else split above.
+add_executable(test_pump_events tests/test_pump_events.cpp)
+target_include_directories(test_pump_events PRIVATE src)
+set_target_properties(test_pump_events PROPERTIES
+    CXX_STANDARD 17
+    CXX_STANDARD_REQUIRED ON
+)

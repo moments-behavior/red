@@ -436,6 +436,10 @@ inline void DrawCalibTeleSection(CalibrationToolState &state, AppContext &ctx,
                                 state.tele_fit_center;
 
                             // Get image dimensions from loaded video
+                            // PER-CAM-HEIGHT: DLTConfig holds one scalar size,
+                            // so heterogeneous (per-camera) crops would get a
+                            // wrong y-flip here. Telecentric rigs record one
+                            // uniform size, so this is acceptable for now.
                             if (scene->num_cams > 0) {
                                 dlt_cfg.image_width = scene->image_width[0];
                                 dlt_cfg.image_height = scene->image_height[0];
