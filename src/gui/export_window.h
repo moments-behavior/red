@@ -26,10 +26,20 @@
 struct ExportWindowState {
     bool show = false;
     int format_idx = 0; // 0=JARVIS, 1=COCO, 2=DLC, 3=YOLO Pose, 4=YOLO Detect, 5=Nerfstudio, 6=tailcycle
-    int  tailcycle_split_idx = 0;   // train | val | test
+    // One row per session to write. The format makes split a directory level,
+    // so a session belongs wholly to one split -- you build train/val/test by
+    // exporting several ranges, not by ratio-splitting one. Frame-level random
+    // splits are what rule 14 warns against: at 180 fps, frame N in train and
+    // N+1 in val are near-identical, so the val score measures memorisation.
+    struct TailcycleRange {
+        int start = 0;
+        int end = 0;            // inclusive; 0 with start 0 means "whole video"
+        int split_idx = 0;      // train | val | test
+    };
+    std::vector<TailcycleRange> tailcycle_ranges{{}};
     char tailcycle_session_id[128] = "";
     bool tailcycle_include_triangulated_3d = false;
-    bool tailcycle_copy_media = false;
+    std::string tailcycle_range_error;
     bool include_video_index = false; // JARVIS: include video_index.json
     int scale_factor = 1; // JARVIS: write calibration so 3D reconstructs in (mm × scale_factor)
     std::string output_dir;
@@ -106,20 +116,76 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
         auto fmt = format_map[state.format_idx];
         bool is_jarvis = (fmt == ExportFormats::JARVIS);
 
-        // tailcycle-specific: split, session id, and the 3D layer.
+        // tailcycle-specific: one row per session, plus the 3D layer.
         if (fmt == ExportFormats::TAILCYCLE) {
             if (state.tailcycle_session_id[0] == '\0')
                 snprintf(state.tailcycle_session_id,
                          sizeof(state.tailcycle_session_id), "%s",
                          pm.project_name.c_str());
-            const char *splits[] = {"train", "val", "test"};
-            ImGui::Combo("Split", &state.tailcycle_split_idx, splits, 3);
-            ImGui::SetItemTooltip(
-                "The split is a directory level, not a field: "
-                "<root>/<split>/<session>/");
             ImGui::InputText("Session ID", state.tailcycle_session_id,
                              sizeof(state.tailcycle_session_id));
-            ImGui::SetItemTooltip("Becomes the folder name, which IS the session id.");
+            ImGui::SetItemTooltip(
+                "Becomes the folder name, which IS the session id. Shared by "
+                "every row below -- the split directory keeps them apart.");
+
+            ImGui::SeparatorText("Splits");
+            ImGui::TextDisabled(
+                "One session per row. Leave end at 0 for the whole recording.");
+            static const char *kSplits[] = {"train", "val", "test"};
+            int remove_at = -1;
+            for (size_t i = 0; i < state.tailcycle_ranges.size(); i++) {
+                auto &r = state.tailcycle_ranges[i];
+                ImGui::PushID((int)i);
+                ImGui::SetNextItemWidth(90);
+                ImGui::InputInt("##start", &r.start, 0, 0);
+                if (r.start < 0) r.start = 0;
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(90);
+                ImGui::InputInt("##end", &r.end, 0, 0);
+                if (r.end < 0) r.end = 0;
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(90);
+                ImGui::Combo("##split", &r.split_idx, kSplits, 3);
+                ImGui::SameLine();
+                ImGui::BeginDisabled(state.tailcycle_ranges.size() == 1);
+                if (ImGui::Button("x")) remove_at = (int)i;
+                ImGui::EndDisabled();
+                if (i == 0) {
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("start / end / split");
+                }
+                ImGui::PopID();
+            }
+            if (remove_at >= 0)
+                state.tailcycle_ranges.erase(state.tailcycle_ranges.begin() + remove_at);
+            if (ImGui::Button("+ Add split"))
+                state.tailcycle_ranges.push_back({});
+
+            // Overlapping ranges are the leak rule 14 exists to prevent, and a
+            // validator only warns about it -- so catch it here, where it can
+            // still be fixed.
+            std::string range_err;
+            for (size_t i = 0; i < state.tailcycle_ranges.size() && range_err.empty(); i++) {
+                const auto &a = state.tailcycle_ranges[i];
+                if (a.end != 0 && a.end < a.start) range_err = "A range ends before it starts.";
+                for (size_t j = i + 1; j < state.tailcycle_ranges.size(); j++) {
+                    const auto &b = state.tailcycle_ranges[j];
+                    const int ae = a.end ? a.end : INT_MAX, be = b.end ? b.end : INT_MAX;
+                    if (a.start <= be && b.start <= ae) {
+                        range_err = "Ranges overlap -- the same frames would land in "
+                                    "two splits.";
+                        break;
+                    }
+                    if (a.split_idx == b.split_idx)
+                        range_err = "Two rows share a split, so they would write the "
+                                    "same session folder twice.";
+                }
+            }
+            if (!range_err.empty())
+                ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.3f, 1.0f), "%s", range_err.c_str());
+            state.tailcycle_range_error = range_err;
+
+            ImGui::Spacing();
             ImGui::Checkbox("Include triangulated 3D",
                             &state.tailcycle_include_triangulated_3d);
             ImGui::SetItemTooltip(
@@ -129,11 +195,6 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
                 "layer at all -- not a reduced one.\n"
                 "On: ships red's own solve, for a consumer that wants these exact "
                 "numbers rather than its own.");
-            ImGui::Checkbox("Copy media instead of symlinking",
-                            &state.tailcycle_copy_media);
-            ImGui::SetItemTooltip(
-                "Symlinks cost one link per camera instead of copying gigabytes, "
-                "but the dataset then breaks if it is moved or archived.");
         }
 
         // JARVIS-specific: video index checkbox
@@ -252,6 +313,14 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
                     validation_error = "Output directory not set";
                 } else if (pm.camera_names.empty()) {
                     validation_error = "No cameras loaded";
+                } else if (dispatch_fmt == ExportFormats::TAILCYCLE &&
+                           !state.tailcycle_range_error.empty()) {
+                    validation_error = state.tailcycle_range_error;
+                } else if (dispatch_fmt == ExportFormats::TAILCYCLE &&
+                           pm.media_folder.empty()) {
+                    validation_error =
+                        "No media folder set -- the group length must come from "
+                        "the recording, not the labels";
                 } else {
                     // Auto-save annotations before export so CSVs on disk are current.
                     // JARVIS reads from disk; other formats use AnnotationMap directly
@@ -311,13 +380,11 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
                     for (const auto &e : skeleton.edges)
                         ecfg.edges.push_back({e.x, e.y});
 
+                    std::vector<ExportWindowState::TailcycleRange> tc_rows;
                     if (dispatch_fmt == ExportFormats::TAILCYCLE) {
-                        static const char *kSplits[] = {"train", "val", "test"};
-                        ecfg.tailcycle_split = kSplits[state.tailcycle_split_idx];
                         ecfg.tailcycle_session_id = state.tailcycle_session_id;
                         ecfg.tailcycle_include_triangulated_3d =
                             state.tailcycle_include_triangulated_3d;
-                        ecfg.tailcycle_copy_media = state.tailcycle_copy_media;
                         // n_frames must describe the media, not the labels: every
                         // frame index in the tables is validated against it, and
                         // the annotation range is usually a sparse subset.
@@ -329,6 +396,7 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
                             ecfg.tailcycle_fps =
                                 (float)ctx.demuxers[0]->GetFramerate();
                         }
+                        tc_rows = state.tailcycle_ranges;
                     }
 
                     // Copy the annotation map for thread safety
@@ -342,10 +410,28 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
                     state.finished_status = result_status;
 
                     std::thread(
-                        [ecfg, amap_copy, result_status, &state]() {
+                        [ecfg, amap_copy, tc_rows, result_status, &state]() {
                             // Thread-local string for export_dataset to write into.
                             // No other thread touches this string.
                             std::string thread_status;
+                            if (ecfg.format == ExportFormats::TAILCYCLE) {
+                                // One session per row: split is a directory level,
+                                // so each range is its own export.
+                                static const char *kSplits[] = {"train", "val", "test"};
+                                for (const auto &r : tc_rows) {
+                                    ExportFormats::ExportConfig one = ecfg;
+                                    one.tailcycle_frame_start = r.start;
+                                    one.tailcycle_frame_end = r.end;
+                                    one.tailcycle_split = kSplits[r.split_idx];
+                                    std::string one_status;
+                                    const bool ok = ExportFormats::export_dataset(
+                                        one.format, one, amap_copy, &one_status,
+                                        &state.images_saved);
+                                    if (!thread_status.empty()) thread_status += "\n";
+                                    thread_status += one_status;
+                                    if (!ok) break;   // a refusal applies to them all
+                                }
+                            } else
                             ExportFormats::export_dataset(
                                 ecfg.format, ecfg, amap_copy, &thread_status,
                                 &state.images_saved);

@@ -8,6 +8,7 @@
 #include "annotation.h"
 #include "tailcycle_export.h"
 #include "camera.h"
+#include "ffmpeg_frame_reader.h"
 #include "jarvis_export.h"
 #include "json.hpp"
 #include "opencv_yaml_io.h"
@@ -104,10 +105,11 @@ struct ExportConfig {
     // range: the format validates every frame index against n_frames.
     std::string tailcycle_split = "train";      // train | val | test
     std::string tailcycle_session_id;
-    int tailcycle_n_frames = 0;
+    int tailcycle_n_frames = 0;                 // frames in the MEDIA
     float tailcycle_fps = 0.0f;
+    int tailcycle_frame_start = 0;              // inclusive
+    int tailcycle_frame_end = 0;                // inclusive; 0 = to the end
     bool tailcycle_include_triangulated_3d = false;
-    bool tailcycle_copy_media = false;          // false = symlink
 };
 
 // ── Per-camera image-size resolver ──
@@ -928,17 +930,40 @@ inline bool export_nerfstudio(const ExportConfig &cfg, const AnnotationMap &amap
 // Main dispatch
 // ═══════════════════════════════════════════════════════════════════════════
 // ── tailcycle-dataset ────────────────────────────────────────────────────────
-// Adapts the shared ExportConfig onto TailcycleExport's own, which is kept
-// separate because it carries the format's structural fields (split, group,
-// frame rebasing) that no other exporter has.
+// Adapts the shared ExportConfig onto TailcycleExport's own, which stays
+// separate because it carries structural fields (split, group, frame rebasing)
+// that no other exporter has.
+//
+// One call writes ONE session, covering one frame range. Several splits means
+// several calls -- the format makes split a directory level so a session
+// belongs wholly to one, which is what stops a shuffled train/val split from
+// putting near-identical adjacent frames on both sides (rule 14).
 inline bool export_tailcycle(const ExportConfig &cfg, const AnnotationMap &amap,
-                             std::string *status) {
+                             std::string *status,
+                             std::atomic<int> *img_counter = nullptr) {
+    namespace fs = std::filesystem;
     if (!TailcycleExport::available()) {
         if (status)
             *status = "Error: this build has no Parquet support (Arrow was not "
                       "found at configure time).";
         return false;
     }
+    if (cfg.tailcycle_n_frames <= 0) {
+        if (status) *status = "Error: no media loaded, so the group length is unknown.";
+        return false;
+    }
+
+    const int total = cfg.tailcycle_n_frames;
+    const int start = std::max(0, cfg.tailcycle_frame_start);
+    const int end = cfg.tailcycle_frame_end > 0
+                        ? std::min(cfg.tailcycle_frame_end, total - 1)
+                        : total - 1;
+    if (end < start) {
+        if (status) *status = "Error: frame range ends before it starts.";
+        return false;
+    }
+    const int n = end - start + 1;
+    const bool whole_recording = (start == 0 && n == total);
 
     TailcycleExport::ExportConfig tc;
     tc.output_folder = cfg.output_folder;
@@ -949,32 +974,83 @@ inline bool export_tailcycle(const ExportConfig &cfg, const AnnotationMap &amap,
     tc.calibration = cfg.camera_params;
     tc.node_names = cfg.node_names;
     tc.edges = cfg.edges;
-    tc.n_frames = cfg.tailcycle_n_frames;
+    tc.n_frames = n;
     tc.fps = cfg.tailcycle_fps;
+    tc.source_frame_start = start;
     tc.include_triangulated_3d = cfg.tailcycle_include_triangulated_3d;
-    tc.media = cfg.tailcycle_copy_media ? TailcycleExport::MediaMode::Copy
-                                        : TailcycleExport::MediaMode::Symlink;
     tc.provenance_source = cfg.label_folder;
 
-    // Validation rule 8 asserts the declared size equals the media's. The
-    // calibration YAML is not always the authority -- a telecentric project has
-    // none -- so prefer the dimensions the loaded video reported.
+    const std::string stem =
+        cfg.media_folder.empty() ? tc.session_id
+                                 : fs::path(cfg.media_folder).filename().string();
+    tc.source_video = stem;
+    // Encodes the offset the way johnson-mouse-tracked does: <recording>_ix<start>.
+    // Two ranges of one recording then have distinct group ids.
+    tc.group_id = stem + "_ix" + std::to_string(start);
+
     for (size_t i = 0; i < tc.calibration.size(); i++) {
         if (i < cfg.image_width.size() && cfg.image_width[i] > 0)
             tc.calibration[i].image_width = cfg.image_width[i];
         if (i < cfg.image_height.size() && cfg.image_height[i] > 0)
             tc.calibration[i].image_height = cfg.image_height[i];
     }
-
     for (const auto &cam : cfg.camera_names) {
         const std::string v = cfg.media_folder + "/" + cam + ".mp4";
-        tc.video_paths.push_back(std::filesystem::exists(v) ? v : std::string());
+        tc.video_paths.push_back(fs::exists(v) ? v : std::string());
     }
-    if (!cfg.media_folder.empty())
-        tc.source_video = std::filesystem::path(cfg.media_folder).filename().string();
+
+    // A consumer reads group frame f as the f-th frame of the media in the
+    // group folder -- source_frame_start is provenance, not an indexing
+    // instruction. So only a whole-recording group may link the video; a
+    // sub-range must carry exactly its own frames, or every index is off by
+    // `start`. That is why johnson-mouse-tracked ships extracted JPEGs.
+    tc.media = whole_recording ? TailcycleExport::MediaMode::Symlink
+                               : TailcycleExport::MediaMode::None;
 
     TailcycleExport::ExportStats st;
-    return TailcycleExport::export_session(tc, amap, &st, status);
+    if (!TailcycleExport::export_session(tc, amap, &st, status)) return false;
+
+    if (!whole_recording) {
+        const fs::path gdir = fs::path(tc.output_folder) / tc.split / tc.session_id /
+                              "groups" / tc.group_id;
+        for (size_t i = 0; i < cfg.camera_names.size(); i++) {
+            if (i >= tc.video_paths.size() || tc.video_paths[i].empty()) continue;
+            ffmpeg_reader::FrameReader reader;
+            if (!reader.open(tc.video_paths[i])) {
+                if (status)
+                    *status = "Error: cannot open " + tc.video_paths[i] + " to extract frames.";
+                return false;
+            }
+            const fs::path cdir = gdir / cfg.camera_names[i];
+            fs::create_directories(cdir);
+            for (int f = start; f <= end; f++) {
+                const uint8_t *rgb = reader.readFrame(f);
+                if (!rgb) {
+                    if (status)
+                        *status = "Error: frame " + std::to_string(f) + " of " +
+                                  cfg.camera_names[i] + " could not be decoded.";
+                    return false;
+                }
+                char name[32];
+                snprintf(name, sizeof(name), "%06d.jpg", f - start);
+                if (!JarvisExport::write_jpeg((cdir / name).string().c_str(),
+                                              reader.width(), reader.height(), 3,
+                                              rgb, cfg.jpeg_quality)) {
+                    if (status) *status = "Error: could not write " + (cdir / name).string();
+                    return false;
+                }
+                if (img_counter) img_counter->fetch_add(1);
+            }
+        }
+    }
+
+    if (status) {
+        *status = "Wrote " + tc.split + "/" + tc.session_id + " (" +
+                  std::to_string(n) + " frames, " + std::to_string(st.keypoint_rows) +
+                  " 2D rows, " + std::to_string(st.points3d_rows) + " 3D rows)" +
+                  (whole_recording ? ", media symlinked" : ", frames extracted");
+    }
+    return true;
 }
 
 inline bool export_dataset(Format fmt, const ExportConfig &cfg,
@@ -991,7 +1067,7 @@ inline bool export_dataset(Format fmt, const ExportConfig &cfg,
     case YOLO_DETECT: return export_yolo(cfg, amap, false, status, img_counter);
     case DEEPLABCUT:  return export_deeplabcut(cfg, amap, status, img_counter);
     case NERFSTUDIO:  return export_nerfstudio(cfg, amap, status, img_counter);
-    case TAILCYCLE:   return export_tailcycle(cfg, amap, status);
+    case TAILCYCLE:   return export_tailcycle(cfg, amap, status, img_counter);
     default:
         if (status) *status = "Error: Unknown export format";
         return false;
