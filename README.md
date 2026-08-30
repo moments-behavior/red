@@ -24,6 +24,16 @@ Full documentation — installation, configuration, data export — lives at the
 | Math | Eigen3, Ceres Solver | Eigen3, Ceres Solver, CBLAS/OpenBLAS | Eigen3, Ceres Solver |
 | Images | libjpeg-turbo | — | libjpeg-turbo |
 | GPU | — (VideoToolbox + Metal are part of macOS) | CUDA Toolkit with NVDEC | CUDA Toolkit 12.x with NVDEC |
+| *Optional* | Apache Arrow + Parquet | ← same | ← same |
+
+red is built as C++20 throughout, so every build needs a compiler that
+supports it — GCC 10+, Clang 10+, or Visual Studio 2022. (The standard moved
+up for Arrow, whose headers use `std::span`, but it applies whether or not
+Arrow is installed.)
+
+Apache Arrow is optional and only enables the tailcycle-dataset export format
+(see [below](#optional-tailcycle-dataset-export)). Without it red builds and
+runs normally; that one entry simply does not appear in the export window.
 
 Homebrew, apt and vcpkg are the paths below, but nothing requires them — any
 install CMake can find via `find_package` / `pkg-config` works.
@@ -71,6 +81,47 @@ and `lib\`, not just `ffmpeg.exe`), unpacked to `C:\ffmpeg` or pointed at by
 
 `build.bat` locates Visual Studio, CUDA, vcpkg and FFmpeg itself. Set
 `VCPKG_ROOT` if vcpkg is not on `PATH` or at `$env:USERPROFILE\vcpkg`.
+
+### Optional: tailcycle-dataset export
+
+The `tailcycle-dataset` export format writes Parquet, which needs Apache Arrow.
+Install it before configuring and CMake picks it up; skip it and everything
+else still works.
+
+**macOS**
+
+```bash
+brew install apache-arrow
+```
+
+**Linux** — Ubuntu does not package Arrow C++, so it comes from Apache's own
+repository:
+
+```bash
+wget https://apache.jfrog.io/artifactory/arrow/$(lsb_release --id --short | tr 'A-Z' 'a-z')/apache-arrow-apt-source-latest-$(lsb_release --codename --short).deb
+sudo apt install -y -V ./apache-arrow-apt-source-latest-*.deb
+sudo apt update
+sudo apt install -y -V libarrow-dev libparquet-dev
+```
+
+**Windows** — untested. `vcpkg install arrow` builds it from source, which is
+slow and pulls a large dependency set. Extracting the prebuilt conda-forge
+package and pointing `-DCMAKE_PREFIX_PATH` at its `Library\` directory avoids
+both.
+
+Configure reports which way it went:
+
+```
+-- Arrow 25.0.1 found -- tailcycle export enabled
+-- Arrow/Parquet not found -- tailcycle export disabled
+```
+
+With Arrow present the build also produces `test_tailcycle_export`, a
+self-contained check that needs no project or fixture data:
+
+```bash
+./release/test_tailcycle_export      # expect: ALL CHECKS PASSED
+```
 
 ### Building for a machine without a GPU
 
