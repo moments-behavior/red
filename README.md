@@ -82,71 +82,18 @@ and `lib\`, not just `ffmpeg.exe`), unpacked to `C:\ffmpeg` or pointed at by
 `build.bat` locates Visual Studio, CUDA, vcpkg and FFmpeg itself. Set
 `VCPKG_ROOT` if vcpkg is not on `PATH` or at `$env:USERPROFILE\vcpkg`.
 
-**Windows toolchain versions.** These interlock, and the failures are all
-misleading, so they are worth stating outright:
+**Windows toolchain versions:**
 
-| | needs | why |
-|---|---|---|
-| MSVC | **14.4x** (VS 2022 17.14+) | 14.30, the VS 2022 launch toolset, miscompiles xsimd's template specialisations. Arrow fails to build with pages of errors inside `xsimd_cpu_features_x86.hpp` that never mention the compiler |
-| CUDA | new enough for your MSVC | `nvcc` refuses any host compiler newer than it knows about. CUDA 11.6 rejects MSVC 14.4x, and CMake reports it as *no CUDA compiler found* — indistinguishable from not having installed one |
-| CMake | 3.31 (VS's bundled one) | `build.bat` puts it ahead of any standalone CMake, because 4.x dropped feature tables this toolchain needs |
+- **MSVC 14.4x** (VS 2022 17.14 or newer). Older toolsets fail to build Arrow.
+- **CUDA** new enough for that MSVC — `nvcc` rejects newer host compilers, and
+  CMake reports it as *no CUDA compiler found*.
+- **CMake** comes from Visual Studio; `build.bat` prefers it over any
+  standalone install.
 
-Updating Visual Studio therefore breaks a working CUDA install until the
-toolkit is updated too. Check your driver's ceiling with `nvidia-smi` first
-(top right); if it already exceeds the toolkit you want, install the toolkit
-with the bundled display driver **unticked** and nothing else changes.
-
-`build.bat` deletes `release\` and reconfigures when the compiler recorded in
-its cache no longer exists, which is what a Visual Studio update leaves
-behind. Without that, CMake stops with *"is not a full path to an existing
-compiler tool"* and the only fix is removing the directory by hand.
-
-### Optional: tailcycle-dataset export
-
-The `tailcycle-dataset` export format writes Parquet, which needs Apache Arrow.
-Install it before configuring and CMake picks it up; skip it and everything
-else still works.
-
-**macOS**
-
-```bash
-brew install apache-arrow
-```
-
-**Linux** — Ubuntu does not package Arrow C++, so it comes from Apache's own
-repository:
-
-```bash
-wget https://apache.jfrog.io/artifactory/arrow/$(lsb_release --id --short | tr 'A-Z' 'a-z')/apache-arrow-apt-source-latest-$(lsb_release --codename --short).deb
-sudo apt install -y -V ./apache-arrow-apt-source-latest-*.deb
-sudo apt update
-sudo apt install -y -V libarrow-dev libparquet-dev
-```
-
-**Windows** — from vcpkg, which builds it from source but handles Boost,
-Thrift and the rest itself:
-
-```powershell
-vcpkg install arrow[parquet] --triplet x64-windows
-```
-
-`build.bat` picks it up through the vcpkg toolchain, so nothing else is
-needed. This needs a current MSVC — see [Windows toolchain
-versions](#build) above; on 14.30 the Arrow build fails inside xsimd.
-
-Configure reports which way it went:
-
-```
--- Arrow 25.0.1 found -- tailcycle export enabled
--- Arrow/Parquet not found -- tailcycle export disabled
-```
-
-With Arrow present the build also produces `test_tailcycle_export`, a
-self-contained check that needs no project or fixture data:
-
-```bash
-./release/test_tailcycle_export      # expect: ALL CHECKS PASSED
-```
+Updating Visual Studio breaks a working CUDA install until the toolkit is
+updated too. Check `nvidia-smi` (top right) for your driver's ceiling first —
+if it already covers the toolkit you want, install with the bundled display
+driver **unticked**.
 
 ### Building for a machine without a GPU
 
