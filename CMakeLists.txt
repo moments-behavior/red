@@ -168,7 +168,7 @@ if(APPLE)
     )
 
     set_target_properties(red PROPERTIES
-        CXX_STANDARD 17
+        CXX_STANDARD 20
         CXX_STANDARD_REQUIRED ON
     )
 
@@ -225,7 +225,7 @@ if(APPLE)
 
 
     set_target_properties(test_gui PROPERTIES
-        CXX_STANDARD 17
+        CXX_STANDARD 20
         CXX_STANDARD_REQUIRED ON
     )
 
@@ -267,7 +267,7 @@ if(APPLE)
         pthread
     )
     set_target_properties(test_annotation PROPERTIES
-        CXX_STANDARD 17
+        CXX_STANDARD 20
         CXX_STANDARD_REQUIRED ON
     )
 
@@ -311,7 +311,7 @@ if(APPLE)
         pthread
     )
     set_target_properties(test_decoder PROPERTIES
-        CXX_STANDARD 17
+        CXX_STANDARD 20
         CXX_STANDARD_REQUIRED ON
     )
 
@@ -319,7 +319,7 @@ if(APPLE)
     add_executable(test_sync_plan tests/test_sync_plan.cpp)
     target_include_directories(test_sync_plan PRIVATE src)
     set_target_properties(test_sync_plan PROPERTIES
-        CXX_STANDARD 17
+        CXX_STANDARD 20
         CXX_STANDARD_REQUIRED ON
     )
 
@@ -372,7 +372,7 @@ if(APPLE)
         PROPERTIES COMPILE_FLAGS "-fobjc-arc"
     )
     set_target_properties(test_nerfstudio_export PROPERTIES
-        CXX_STANDARD 17
+        CXX_STANDARD 20
         CXX_STANDARD_REQUIRED ON
     )
 
@@ -441,7 +441,7 @@ elseif(WIN32)
         # CUDA architecture: 86 for RTX 3090 (Ampere)
         set(CMAKE_CUDA_ARCHITECTURES 86)
     endif()
-    set(CMAKE_CXX_STANDARD 17)
+    set(CMAKE_CXX_STANDARD 20)
     set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
     # No vcpkg auto-detection here: CMAKE_TOOLCHAIN_FILE is only read during
@@ -621,7 +621,7 @@ elseif(WIN32)
     # vcpkg automatically copies dependent DLLs via its toolchain
 
     set_target_properties(red PROPERTIES
-        CXX_STANDARD 17
+        CXX_STANDARD 20
         CXX_STANDARD_REQUIRED ON
     )
 
@@ -678,7 +678,7 @@ elseif(WIN32)
             target_link_libraries(${TEST_NAME} PRIVATE ${TURBOJPEG_LIB})
         endif()
         set_target_properties(${TEST_NAME} PROPERTIES
-            CXX_STANDARD 17
+            CXX_STANDARD 20
             CXX_STANDARD_REQUIRED ON
         )
     endforeach()
@@ -711,7 +711,7 @@ else()
             set(CMAKE_CUDA_ARCHITECTURES 86 89)
         endif()
     endif()
-    set(CMAKE_CXX_STANDARD 17)
+    set(CMAKE_CXX_STANDARD 20)
     set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
     # System packages (apt / distro)
@@ -846,7 +846,7 @@ else()
     set(RED_RPATH_INSTALL "$ORIGIN")
 
     set_target_properties(red PROPERTIES
-        CXX_STANDARD 17
+        CXX_STANDARD 20
         CXX_STANDARD_REQUIRED ON
         BUILD_RPATH "${RED_RPATH_BUILD}"
         INSTALL_RPATH "${RED_RPATH_INSTALL}"
@@ -898,7 +898,7 @@ else()
             ${CMAKE_DL_LIBS}
         )
         set_target_properties(${TEST_NAME} PROPERTIES
-            CXX_STANDARD 17
+            CXX_STANDARD 20
             CXX_STANDARD_REQUIRED ON
             BUILD_RPATH "${RED_RPATH_BUILD}"
             INSTALL_RPATH "${RED_RPATH_INSTALL}"
@@ -912,3 +912,26 @@ else()
 endif()
 
 
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# tailcycle-dataset export (optional)
+#
+# Arrow's public headers use std::span, which is why red is built as C++20
+# rather than C++17. Without Arrow, red still builds: tailcycle_export.cpp
+# compiles to a stub whose available() returns false and the GUI hides the
+# window, the same shape as the RED_ENABLE_CUDA gate.
+#
+# Note for anyone bumping this back down: Arrow will not compile as C++17.
+# ─────────────────────────────────────────────────────────────────────────────
+find_package(Arrow CONFIG QUIET)
+find_package(Parquet CONFIG QUIET)
+
+if(Arrow_FOUND AND Parquet_FOUND)
+    message(STATUS "Arrow ${Arrow_VERSION} found -- tailcycle import/export enabled")
+    target_compile_definitions(red PRIVATE RED_HAVE_PARQUET)
+    target_include_directories(red PRIVATE ${ARROW_INCLUDE_DIR})
+    target_link_libraries(red PRIVATE Arrow::arrow_shared Parquet::parquet_shared)
+else()
+    message(STATUS "Arrow/Parquet not found -- tailcycle import/export disabled")
+endif()
