@@ -38,6 +38,24 @@ macro(red_resolve_cuda)
     endif()
 endmacro()
 
+# Detect Arrow/Parquet for the tailcycle-dataset exporter. Must be called after
+# project(), like red_resolve_cuda -- Arrow's config does find_dependency(Threads),
+# which needs a language enabled.
+#
+# red is built as C++20 because Arrow's public headers require it: arrow/buffer.h
+# uses std::span. Without Arrow, red still builds -- the exporter compiles to a
+# stub whose available() returns false and the GUI hides the window, the same
+# shape as the RED_ENABLE_CUDA gate.
+macro(red_resolve_parquet)
+    find_package(Arrow CONFIG QUIET)
+    find_package(Parquet CONFIG QUIET)
+    if(Arrow_FOUND AND Parquet_FOUND)
+        message(STATUS "Arrow ${Arrow_VERSION} found -- tailcycle export enabled")
+    else()
+        message(STATUS "Arrow/Parquet not found -- tailcycle export disabled")
+    endif()
+endmacro()
+
 # Default to an optimized build. Without this the build type is empty and the
 # compiler runs at -O0, which cripples hot host loops (e.g. the HybridNet
 # reprojection: 3200ms at -O0 vs ~450ms at -O3). Respects an explicit
@@ -49,6 +67,7 @@ endif()
 
 if(APPLE)
     project(red LANGUAGES CXX OBJCXX)
+    red_resolve_parquet()
 
     # Where the macOS dependencies live (Eigen, FFmpeg, GLFW, Ceres,
     # turbojpeg). No package manager is required -- any prefix CMake can search
@@ -338,6 +357,31 @@ if(APPLE)
     )
 
     # Nerfstudio / 3DGS export test: extracts frames + writes transforms.json
+    # Self-contained: no project on disk, no fixture data. Only built when
+    # Arrow is present, since there is nothing to test without it.
+    if(Arrow_FOUND AND Parquet_FOUND)
+        add_executable(test_tailcycle_export
+            tests/test_tailcycle_export.cpp
+            src/tailcycle_export.cpp
+        )
+        target_include_directories(test_tailcycle_export PRIVATE
+            src
+            ${RED_DEPS_PREFIX}/include
+            ${RED_DEPS_PREFIX}/include/eigen3
+        )
+        target_compile_definitions(test_tailcycle_export PRIVATE RED_HAVE_PARQUET)
+        target_link_libraries(test_tailcycle_export PRIVATE
+            Eigen3::Eigen
+            Arrow::arrow_shared
+            Parquet::parquet_shared
+            pthread
+        )
+        set_target_properties(test_tailcycle_export PROPERTIES
+            CXX_STANDARD 20
+            CXX_STANDARD_REQUIRED ON
+        )
+    endif()
+
     add_executable(test_nerfstudio_export
         tests/test_nerfstudio_export.cpp
         src/FFmpegDemuxer.cpp
@@ -436,6 +480,7 @@ elseif(WIN32)
     # Windows build with NVIDIA CUDA support (RTX 3090)
     project(red LANGUAGES CXX)
     red_resolve_cuda()
+    red_resolve_parquet()
     if(RED_CUDA)
         enable_language(CUDA)
         # CUDA architecture: 86 for RTX 3090 (Ampere)
@@ -703,6 +748,7 @@ else()
     # ────────────────────────────────────────────────────────────────────────
     project(red LANGUAGES CXX)
     red_resolve_cuda()
+    red_resolve_parquet()
     if(RED_CUDA)
         enable_language(CUDA)
         # CUDA arch: 86 = A16 (Ampere), 89 = RTX 4000 Ada. Override with
@@ -914,24 +960,8 @@ endif()
 
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# tailcycle-dataset export (optional)
-#
-# Arrow's public headers use std::span, which is why red is built as C++20
-# rather than C++17. Without Arrow, red still builds: tailcycle_export.cpp
-# compiles to a stub whose available() returns false and the GUI hides the
-# window, the same shape as the RED_ENABLE_CUDA gate.
-#
-# Note for anyone bumping this back down: Arrow will not compile as C++17.
-# ─────────────────────────────────────────────────────────────────────────────
-find_package(Arrow CONFIG QUIET)
-find_package(Parquet CONFIG QUIET)
-
+# Link the optional tailcycle export into red (detection is near the top).
 if(Arrow_FOUND AND Parquet_FOUND)
-    message(STATUS "Arrow ${Arrow_VERSION} found -- tailcycle import/export enabled")
     target_compile_definitions(red PRIVATE RED_HAVE_PARQUET)
-    target_include_directories(red PRIVATE ${ARROW_INCLUDE_DIR})
     target_link_libraries(red PRIVATE Arrow::arrow_shared Parquet::parquet_shared)
-else()
-    message(STATUS "Arrow/Parquet not found -- tailcycle import/export disabled")
 endif()
