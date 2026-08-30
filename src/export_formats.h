@@ -110,6 +110,11 @@ struct ExportConfig {
     int tailcycle_frame_start = 0;              // inclusive
     int tailcycle_frame_end = 0;                // inclusive; 0 = to the end
     bool tailcycle_include_triangulated_3d = false;
+    // Whole-recording groups only; a sub-range always extracts frames. Copy by
+    // default because a symlinked dataset resolves only on the machine that
+    // wrote it -- the moment it is shipped to a training host, every link
+    // dangles. A copied mp4 is still far cheaper than extracted JPEGs.
+    bool tailcycle_copy_media = true;
 };
 
 // ── Per-camera image-size resolver ──
@@ -1004,8 +1009,9 @@ inline bool export_tailcycle(const ExportConfig &cfg, const AnnotationMap &amap,
     // instruction. So only a whole-recording group may link the video; a
     // sub-range must carry exactly its own frames, or every index is off by
     // `start`. That is why johnson-mouse-tracked ships extracted JPEGs.
-    tc.media = whole_recording ? TailcycleExport::MediaMode::Symlink
-                               : TailcycleExport::MediaMode::None;
+    tc.media = !whole_recording ? TailcycleExport::MediaMode::None
+               : cfg.tailcycle_copy_media ? TailcycleExport::MediaMode::Copy
+                                          : TailcycleExport::MediaMode::Symlink;
 
     TailcycleExport::ExportStats st;
     if (!TailcycleExport::export_session(tc, amap, &st, status)) return false;
@@ -1048,7 +1054,9 @@ inline bool export_tailcycle(const ExportConfig &cfg, const AnnotationMap &amap,
         *status = "Wrote " + tc.split + "/" + tc.session_id + " (" +
                   std::to_string(n) + " frames, " + std::to_string(st.keypoint_rows) +
                   " 2D rows, " + std::to_string(st.points3d_rows) + " 3D rows)" +
-                  (whole_recording ? ", media symlinked" : ", frames extracted");
+                  (!whole_recording      ? ", frames extracted"
+                   : cfg.tailcycle_copy_media ? ", video copied"
+                                              : ", video symlinked");
     }
     return true;
 }
