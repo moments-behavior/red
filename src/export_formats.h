@@ -6,6 +6,7 @@
 // (jarvis_export.h) is called through this dispatcher for JARVIS format.
 
 #include "annotation.h"
+#include "tailcycle_export.h"
 #include "camera.h"
 #include "jarvis_export.h"
 #include "json.hpp"
@@ -36,12 +37,14 @@ enum Format {
     YOLO_POSE,
     YOLO_DETECT,
     NERFSTUDIO,
+    TAILCYCLE,
     FORMAT_COUNT
 };
 
 inline const char *format_name(Format f) {
     switch (f) {
     case JARVIS:      return "JARVIS";
+    case TAILCYCLE:   return "tailcycle-dataset";
     case JARVIS_TR:   return "JARVIS (with video index)";
     case COCO:        return "COCO Keypoints";
     case DEEPLABCUT:  return "DeepLabCut";
@@ -94,6 +97,17 @@ struct ExportConfig {
 
     // Nerfstudio-specific: frame list (if empty, uses annotated frames)
     std::vector<int> nerfstudio_frames;
+
+    // tailcycle-dataset. The split is a directory level rather than a field,
+    // and the session id becomes the folder name -- so both are structural,
+    // not metadata. n_frames and fps come from the media, not the annotation
+    // range: the format validates every frame index against n_frames.
+    std::string tailcycle_split = "train";      // train | val | test
+    std::string tailcycle_session_id;
+    int tailcycle_n_frames = 0;
+    float tailcycle_fps = 0.0f;
+    bool tailcycle_include_triangulated_3d = false;
+    bool tailcycle_copy_media = false;          // false = symlink
 };
 
 // ── Per-camera image-size resolver ──
@@ -913,6 +927,56 @@ inline bool export_nerfstudio(const ExportConfig &cfg, const AnnotationMap &amap
 // ═══════════════════════════════════════════════════════════════════════════
 // Main dispatch
 // ═══════════════════════════════════════════════════════════════════════════
+// ── tailcycle-dataset ────────────────────────────────────────────────────────
+// Adapts the shared ExportConfig onto TailcycleExport's own, which is kept
+// separate because it carries the format's structural fields (split, group,
+// frame rebasing) that no other exporter has.
+inline bool export_tailcycle(const ExportConfig &cfg, const AnnotationMap &amap,
+                             std::string *status) {
+    if (!TailcycleExport::available()) {
+        if (status)
+            *status = "Error: this build has no Parquet support (Arrow was not "
+                      "found at configure time).";
+        return false;
+    }
+
+    TailcycleExport::ExportConfig tc;
+    tc.output_folder = cfg.output_folder;
+    tc.split = cfg.tailcycle_split;
+    tc.session_id = cfg.tailcycle_session_id.empty() ? cfg.skeleton_name
+                                                     : cfg.tailcycle_session_id;
+    tc.camera_names = cfg.camera_names;
+    tc.calibration = cfg.camera_params;
+    tc.node_names = cfg.node_names;
+    tc.edges = cfg.edges;
+    tc.n_frames = cfg.tailcycle_n_frames;
+    tc.fps = cfg.tailcycle_fps;
+    tc.include_triangulated_3d = cfg.tailcycle_include_triangulated_3d;
+    tc.media = cfg.tailcycle_copy_media ? TailcycleExport::MediaMode::Copy
+                                        : TailcycleExport::MediaMode::Symlink;
+    tc.provenance_source = cfg.label_folder;
+
+    // Validation rule 8 asserts the declared size equals the media's. The
+    // calibration YAML is not always the authority -- a telecentric project has
+    // none -- so prefer the dimensions the loaded video reported.
+    for (size_t i = 0; i < tc.calibration.size(); i++) {
+        if (i < cfg.image_width.size() && cfg.image_width[i] > 0)
+            tc.calibration[i].image_width = cfg.image_width[i];
+        if (i < cfg.image_height.size() && cfg.image_height[i] > 0)
+            tc.calibration[i].image_height = cfg.image_height[i];
+    }
+
+    for (const auto &cam : cfg.camera_names) {
+        const std::string v = cfg.media_folder + "/" + cam + ".mp4";
+        tc.video_paths.push_back(std::filesystem::exists(v) ? v : std::string());
+    }
+    if (!cfg.media_folder.empty())
+        tc.source_video = std::filesystem::path(cfg.media_folder).filename().string();
+
+    TailcycleExport::ExportStats st;
+    return TailcycleExport::export_session(tc, amap, &st, status);
+}
+
 inline bool export_dataset(Format fmt, const ExportConfig &cfg,
                            const AnnotationMap &amap, std::string *status,
                            std::atomic<int> *img_counter = nullptr) {
@@ -927,6 +991,7 @@ inline bool export_dataset(Format fmt, const ExportConfig &cfg,
     case YOLO_DETECT: return export_yolo(cfg, amap, false, status, img_counter);
     case DEEPLABCUT:  return export_deeplabcut(cfg, amap, status, img_counter);
     case NERFSTUDIO:  return export_nerfstudio(cfg, amap, status, img_counter);
+    case TAILCYCLE:   return export_tailcycle(cfg, amap, status);
     default:
         if (status) *status = "Error: Unknown export format";
         return false;

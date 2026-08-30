@@ -25,7 +25,11 @@
 
 struct ExportWindowState {
     bool show = false;
-    int format_idx = 0; // 0=JARVIS, 1=COCO, 2=DLC, 3=YOLO Pose, 4=YOLO Detect, 5=Nerfstudio
+    int format_idx = 0; // 0=JARVIS, 1=COCO, 2=DLC, 3=YOLO Pose, 4=YOLO Detect, 5=Nerfstudio, 6=tailcycle
+    int  tailcycle_split_idx = 0;   // train | val | test
+    char tailcycle_session_id[128] = "";
+    bool tailcycle_include_triangulated_3d = false;
+    bool tailcycle_copy_media = false;
     bool include_video_index = false; // JARVIS: include video_index.json
     int scale_factor = 1; // JARVIS: write calibration so 3D reconstructs in (mm × scale_factor)
     std::string output_dir;
@@ -87,6 +91,13 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
             format_labels.push_back("Nerfstudio / 3DGS");
             format_map.push_back(ExportFormats::NERFSTUDIO);
         }
+        // Offered only when this build has Arrow. Hiding it beats showing a
+        // button that always fails -- same reason Nerfstudio is hidden for
+        // uncalibrated projects.
+        if (TailcycleExport::available()) {
+            format_labels.push_back("tailcycle-dataset");
+            format_map.push_back(ExportFormats::TAILCYCLE);
+        }
         if (state.format_idx >= (int)format_labels.size())
             state.format_idx = 0;
         ImGui::Combo("Export Format", &state.format_idx, format_labels.data(),
@@ -94,6 +105,36 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
 
         auto fmt = format_map[state.format_idx];
         bool is_jarvis = (fmt == ExportFormats::JARVIS);
+
+        // tailcycle-specific: split, session id, and the 3D layer.
+        if (fmt == ExportFormats::TAILCYCLE) {
+            if (state.tailcycle_session_id[0] == '\0')
+                snprintf(state.tailcycle_session_id,
+                         sizeof(state.tailcycle_session_id), "%s",
+                         pm.project_name.c_str());
+            const char *splits[] = {"train", "val", "test"};
+            ImGui::Combo("Split", &state.tailcycle_split_idx, splits, 3);
+            ImGui::SetItemTooltip(
+                "The split is a directory level, not a field: "
+                "<root>/<split>/<session>/");
+            ImGui::InputText("Session ID", state.tailcycle_session_id,
+                             sizeof(state.tailcycle_session_id));
+            ImGui::SetItemTooltip("Becomes the folder name, which IS the session id.");
+            ImGui::Checkbox("Include triangulated 3D",
+                            &state.tailcycle_include_triangulated_3d);
+            ImGui::SetItemTooltip(
+                "Off: the session ships 2D labels and calibration, and a consumer "
+                "triangulates for itself.\n"
+                "Triangulation is the only source of 3D in red, so OFF means no 3D "
+                "layer at all -- not a reduced one.\n"
+                "On: ships red's own solve, for a consumer that wants these exact "
+                "numbers rather than its own.");
+            ImGui::Checkbox("Copy media instead of symlinking",
+                            &state.tailcycle_copy_media);
+            ImGui::SetItemTooltip(
+                "Symlinks cost one link per camera instead of copying gigabytes, "
+                "but the dataset then breaks if it is moved or archived.");
+        }
 
         // JARVIS-specific: video index checkbox
         if (is_jarvis) {
@@ -269,6 +310,26 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
                     ecfg.node_names         = skeleton.node_names;
                     for (const auto &e : skeleton.edges)
                         ecfg.edges.push_back({e.x, e.y});
+
+                    if (dispatch_fmt == ExportFormats::TAILCYCLE) {
+                        static const char *kSplits[] = {"train", "val", "test"};
+                        ecfg.tailcycle_split = kSplits[state.tailcycle_split_idx];
+                        ecfg.tailcycle_session_id = state.tailcycle_session_id;
+                        ecfg.tailcycle_include_triangulated_3d =
+                            state.tailcycle_include_triangulated_3d;
+                        ecfg.tailcycle_copy_media = state.tailcycle_copy_media;
+                        // n_frames must describe the media, not the labels: every
+                        // frame index in the tables is validated against it, and
+                        // the annotation range is usually a sparse subset.
+                        if (ctx.input_is_imgs) {
+                            ecfg.tailcycle_n_frames = (int)ctx.imgs_names.size();
+                        } else if (!ctx.demuxers.empty() && ctx.demuxers[0]) {
+                            ecfg.tailcycle_n_frames =
+                                (int)ctx.demuxers[0]->GetNumFrames();
+                            ecfg.tailcycle_fps =
+                                (float)ctx.demuxers[0]->GetFramerate();
+                        }
+                    }
 
                     // Copy the annotation map for thread safety
                     AnnotationMap amap_copy = amap;
