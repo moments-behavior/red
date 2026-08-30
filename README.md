@@ -24,16 +24,9 @@ Full documentation — installation, configuration, data export — lives at the
 | Math | Eigen3, Ceres Solver | Eigen3, Ceres Solver, CBLAS/OpenBLAS | Eigen3, Ceres Solver |
 | Images | libjpeg-turbo | — | libjpeg-turbo |
 | GPU | — (VideoToolbox + Metal are part of macOS) | CUDA Toolkit with NVDEC | CUDA Toolkit 12.x with NVDEC |
-| *Optional* | Apache Arrow + Parquet | ← same | ← same |
+| Dataset export | Apache Arrow + Parquet | ← same | ← same |
 
-red is built as C++20 throughout, so every build needs a compiler that
-supports it — GCC 10+, Clang 10+, or Visual Studio 2022. (The standard moved
-up for Arrow, whose headers use `std::span`, but it applies whether or not
-Arrow is installed.)
-
-Apache Arrow is optional and only enables the tailcycle-dataset export format
-(see [below](#optional-tailcycle-dataset-export)). Without it red builds and
-runs normally; that one entry simply does not appear in the export window.
+red is built as C++20, so it needs GCC 10+, Clang 10+, or Visual Studio 2022.
 
 Homebrew, apt and vcpkg are the paths below, but nothing requires them — any
 install CMake can find via `find_package` / `pkg-config` works.
@@ -48,7 +41,7 @@ cd red
 **macOS** (Apple Silicon)
 
 ```bash
-brew install cmake pkg-config ffmpeg glfw eigen ceres-solver jpeg-turbo
+brew install cmake pkg-config ffmpeg glfw eigen ceres-solver jpeg-turbo apache-arrow
 ./build.sh          # builds release/red
 ./release/red
 ```
@@ -59,6 +52,12 @@ brew install cmake pkg-config ffmpeg glfw eigen ceres-solver jpeg-turbo
 sudo apt install cmake pkg-config libglfw3-dev libglew-dev libeigen3-dev \
     libceres-dev libopenblas-dev libgtest-dev nvidia-cuda-toolkit \
     libavcodec-dev libavformat-dev libavutil-dev libswscale-dev
+
+# Arrow is not in Ubuntu's archive; add Apache's repository
+wget https://apache.jfrog.io/artifactory/arrow/$(lsb_release --id --short | tr 'A-Z' 'a-z')/apache-arrow-apt-source-latest-$(lsb_release --codename --short).deb
+sudo apt install -y -V ./apache-arrow-apt-source-latest-*.deb
+sudo apt update && sudo apt install -y -V libarrow-dev libparquet-dev
+
 ./build.sh
 ./release/red
 ```
@@ -66,7 +65,7 @@ sudo apt install cmake pkg-config libglfw3-dev libglew-dev libeigen3-dev \
 **Windows** (NVIDIA GPU with NVDEC)
 
 ```powershell
-vcpkg install glfw3 glew eigen3 ceres libjpeg-turbo --triplet x64-windows
+vcpkg install glfw3 glew eigen3 ceres libjpeg-turbo arrow[parquet] --triplet x64-windows
 .\build.bat                              # builds release\red.exe
 $env:PATH = "C:\ffmpeg\bin;$env:PATH"
 .\release\red.exe
@@ -79,50 +78,17 @@ and `lib\`, not just `ffmpeg.exe`), unpacked to `C:\ffmpeg` or pointed at by
 2026-08 with the `win64-lgpl-shared` build from
 [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds/releases).
 
-`build.bat` locates Visual Studio, CUDA, vcpkg and FFmpeg itself. Set
-`VCPKG_ROOT` if vcpkg is not on `PATH` or at `$env:USERPROFILE\vcpkg`.
+`build.bat` locates Visual Studio, CUDA, vcpkg and FFmpeg itself; set
+`VCPKG_ROOT` if vcpkg is not on `PATH` or at `$env:USERPROFILE\vcpkg`. It
+needs **MSVC 14.4x** (VS 2022 17.14 or newer) — older toolsets fail to build
+Arrow — and a **CUDA** release new enough for that MSVC, since `nvcc` rejects
+newer host compilers and CMake reports it as *no CUDA compiler found*.
 
-**Windows toolchain versions:**
+### Building without Arrow
 
-- **MSVC 14.4x** (VS 2022 17.14 or newer). Older toolsets fail to build Arrow.
-- **CUDA** new enough for that MSVC — `nvcc` rejects newer host compilers, and
-  CMake reports it as *no CUDA compiler found*.
-- **CMake** comes from Visual Studio; `build.bat` prefers it over any
-  standalone install.
-
-### Optional: tailcycle-dataset export
-
-The `tailcycle-dataset` export format writes Parquet, which needs Apache Arrow.
-Install it before configuring and CMake picks it up; skip it and everything
-else still works.
-
-**macOS**
-
-```bash
-brew install apache-arrow
-```
-
-**Linux** — Ubuntu does not package Arrow C++, so it comes from Apache's own
-repository:
-
-```bash
-wget https://apache.jfrog.io/artifactory/arrow/$(lsb_release --id --short | tr 'A-Z' 'a-z')/apache-arrow-apt-source-latest-$(lsb_release --codename --short).deb
-sudo apt install -y -V ./apache-arrow-apt-source-latest-*.deb
-sudo apt update
-sudo apt install -y -V libarrow-dev libparquet-dev
-```
-
-**Windows** — from vcpkg, which builds it from source but handles Boost,
-Thrift and the rest itself:
-
-```powershell
-vcpkg install arrow[parquet] --triplet x64-windows
-```
-
-`build.bat` picks it up through the vcpkg toolchain, so nothing else is
-needed. Needs MSVC 14.4x or newer — older toolsets fail to build Arrow.
-
-Configure reports which way it went:
+Arrow is the one dependency red does not require. Leave it out and everything
+else works; the `tailcycle-dataset` entry simply does not appear in the export
+window. Configure says which way it went:
 
 ```
 -- Arrow 25.0.1 found -- tailcycle export enabled
