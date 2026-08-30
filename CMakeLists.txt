@@ -26,10 +26,21 @@ macro(red_resolve_cuda)
         include(CheckLanguage)
         check_language(CUDA)
         if(NOT CMAKE_CUDA_COMPILER)
+            if(WIN32)
+                set(RED_BUILD_CMD ".\\build.bat")
+            else()
+                set(RED_BUILD_CMD "./build.sh")
+            endif()
+            # A toolkit that is installed but too old for the host compiler
+            # fails here the same way a missing one does: nvcc refuses any MSVC
+            # or GCC newer than it knows about, and check_language() only
+            # reports that it found nothing.
             message(FATAL_ERROR
-                "No CUDA compiler found, but the CUDA path is enabled.\n"
-                "  Install the CUDA Toolkit, or build the software-decode path:\n"
-                "      ./build.sh -DRED_ENABLE_CUDA=OFF")
+                "No usable CUDA compiler found, but the CUDA path is enabled.\n"
+                "  Either the CUDA Toolkit is missing, or it is too old for this\n"
+                "  host compiler -- nvcc rejects a newer MSVC/GCC than it supports.\n"
+                "  Install or update the CUDA Toolkit, or build the software-decode path:\n"
+                "      ${RED_BUILD_CMD} -DRED_ENABLE_CUDA=OFF")
         endif()
         set(RED_CUDA ON)
     else()
