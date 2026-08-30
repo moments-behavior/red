@@ -39,7 +39,6 @@ struct ExportWindowState {
     std::vector<TailcycleRange> tailcycle_ranges{{}};
     char tailcycle_session_id[128] = "";
     bool tailcycle_include_triangulated_3d = false;
-    bool tailcycle_copy_media = true;
     std::string tailcycle_range_error;
     bool include_video_index = false; // JARVIS: include video_index.json
     int scale_factor = 1; // JARVIS: write calibration so 3D reconstructs in (mm × scale_factor)
@@ -132,6 +131,9 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
             ImGui::SeparatorText("Splits");
             ImGui::TextDisabled(
                 "One session per row. Leave end at 0 for the whole recording.");
+            ImGui::TextDisabled(
+                "Frames are extracted into each group, so the dataset is "
+                "self-contained.");
             static const char *kSplits[] = {"train", "val", "test"};
             int remove_at = -1;
             for (size_t i = 0; i < state.tailcycle_ranges.size(); i++) {
@@ -197,23 +199,6 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
                 "On: ships red's own solve, for a consumer that wants these exact "
                 "numbers rather than its own.");
 
-            // Only meaningful for a whole-recording row; a sub-range must carry
-            // its own extracted frames either way.
-            bool any_whole = false;
-            for (const auto &r : state.tailcycle_ranges)
-                if (r.start == 0 && r.end == 0) any_whole = true;
-            ImGui::BeginDisabled(!any_whole);
-            ImGui::Checkbox("Copy videos (uncheck to symlink)",
-                            &state.tailcycle_copy_media);
-            ImGui::SetItemTooltip(
-                "Whole-recording rows only -- a frame range always extracts JPEGs.\n"
-                "Copy: the dataset is self-contained and can be moved or shipped to "
-                "a training host.\n"
-                "Symlink: costs nothing, but the links resolve only on this machine. "
-                "Use it when the consumer reads the dataset from here.");
-            ImGui::EndDisabled();
-            if (!any_whole)
-                ImGui::TextDisabled("  (every row is a frame range, so frames are extracted)");
         }
 
         // JARVIS-specific: video index checkbox
@@ -404,7 +389,6 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
                         ecfg.tailcycle_session_id = state.tailcycle_session_id;
                         ecfg.tailcycle_include_triangulated_3d =
                             state.tailcycle_include_triangulated_3d;
-                        ecfg.tailcycle_copy_media = state.tailcycle_copy_media;
                         // n_frames must describe the media, not the labels: every
                         // frame index in the tables is validated against it, and
                         // the annotation range is usually a sparse subset.

@@ -16,11 +16,18 @@
 
 namespace TailcycleExport {
 
-// §3 encourages symlinking whole camera directories rather than copying: a
-// dense group then costs one link per camera instead of one per frame. But a
-// symlinked dataset is not portable, and Windows needs developer mode for
-// links, so this is an explicit choice rather than a silent default.
-enum class MediaMode { Symlink, Copy, None };
+// What to put in groups/<group_id>/ for each camera.
+//
+// §3 encourages symlinking whole camera directories, and for a group that is a
+// whole recording that is cheap and correct -- but only while the dataset stays
+// on the machine that wrote it. Ship it anywhere and the links dangle, leaving
+// labels with no pixels, so Copy is the default and Symlink is opt-in.
+//
+// None leaves the folder empty for the caller to populate: red's export window
+// uses it, because a group that is a frame range must contain exactly its own
+// frames (a consumer reads group frame f as the f-th frame of the media there,
+// and source_frame_start is provenance, not an offset to apply).
+enum class MediaMode { Copy, Symlink, None };
 
 struct ExportConfig {
     std::string output_folder;      // dataset root; <root>/<split>/<session>/
@@ -60,7 +67,7 @@ struct ExportConfig {
     bool export_annotated = true;
     bool export_tracked = true;
 
-    MediaMode media = MediaMode::Symlink;
+    MediaMode media = MediaMode::Copy;
 
     std::string provenance_source;
     std::string annotator;          // empty when one annotator authored the root (§2.11)
