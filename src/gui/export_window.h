@@ -270,8 +270,11 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
 
         bool is_nerfstudio = (fmt == ExportFormats::NERFSTUDIO);
 
-        // Common options (not applicable to Nerfstudio)
-        if (!is_nerfstudio) {
+        // Train Ratio and Random Seed drive a frame-level shuffle split, which
+        // only the 2D formats do. Nerfstudio uses every annotated frame, and
+        // tailcycle makes split a directory level with explicit frame ranges --
+        // showing a ratio for either would be a control that does nothing.
+        if (!is_nerfstudio && fmt != ExportFormats::TAILCYCLE) {
             ImGui::SliderFloat("Train Ratio", &state.train_ratio, 0.5f, 0.99f);
             ImGui::InputInt("Random Seed", &state.seed);
         }
