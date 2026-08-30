@@ -90,6 +90,52 @@ and `lib\`, not just `ffmpeg.exe`), unpacked to `C:\ffmpeg` or pointed at by
 - **CMake** comes from Visual Studio; `build.bat` prefers it over any
   standalone install.
 
+### Optional: tailcycle-dataset export
+
+The `tailcycle-dataset` export format writes Parquet, which needs Apache Arrow.
+Install it before configuring and CMake picks it up; skip it and everything
+else still works.
+
+**macOS**
+
+```bash
+brew install apache-arrow
+```
+
+**Linux** — Ubuntu does not package Arrow C++, so it comes from Apache's own
+repository:
+
+```bash
+wget https://apache.jfrog.io/artifactory/arrow/$(lsb_release --id --short | tr 'A-Z' 'a-z')/apache-arrow-apt-source-latest-$(lsb_release --codename --short).deb
+sudo apt install -y -V ./apache-arrow-apt-source-latest-*.deb
+sudo apt update
+sudo apt install -y -V libarrow-dev libparquet-dev
+```
+
+**Windows** — from vcpkg, which builds it from source but handles Boost,
+Thrift and the rest itself:
+
+```powershell
+vcpkg install arrow[parquet] --triplet x64-windows
+```
+
+`build.bat` picks it up through the vcpkg toolchain, so nothing else is
+needed. Needs MSVC 14.4x or newer — older toolsets fail to build Arrow.
+
+Configure reports which way it went:
+
+```
+-- Arrow 25.0.1 found -- tailcycle export enabled
+-- Arrow/Parquet not found -- tailcycle export disabled
+```
+
+With Arrow present the build also produces `test_tailcycle_export`, a
+self-contained check that needs no project or fixture data:
+
+```bash
+./release/test_tailcycle_export      # expect: ALL CHECKS PASSED
+```
+
 ### Building for a machine without a GPU
 
 red decodes and renders on the GPU by default. On a machine with no NVIDIA GPU,
