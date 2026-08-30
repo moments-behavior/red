@@ -357,31 +357,6 @@ if(APPLE)
     )
 
     # Nerfstudio / 3DGS export test: extracts frames + writes transforms.json
-    # Self-contained: no project on disk, no fixture data. Only built when
-    # Arrow is present, since there is nothing to test without it.
-    if(Arrow_FOUND AND Parquet_FOUND)
-        add_executable(test_tailcycle_export
-            tests/test_tailcycle_export.cpp
-            src/tailcycle_export.cpp
-        )
-        target_include_directories(test_tailcycle_export PRIVATE
-            src
-            ${RED_DEPS_PREFIX}/include
-            ${RED_DEPS_PREFIX}/include/eigen3
-        )
-        target_compile_definitions(test_tailcycle_export PRIVATE RED_HAVE_PARQUET)
-        target_link_libraries(test_tailcycle_export PRIVATE
-            Eigen3::Eigen
-            Arrow::arrow_shared
-            Parquet::parquet_shared
-            pthread
-        )
-        set_target_properties(test_tailcycle_export PROPERTIES
-            CXX_STANDARD 20
-            CXX_STANDARD_REQUIRED ON
-        )
-    endif()
-
     add_executable(test_nerfstudio_export
         tests/test_nerfstudio_export.cpp
         src/FFmpegDemuxer.cpp
@@ -961,7 +936,30 @@ endif()
 
 
 # Link the optional tailcycle export into red (detection is near the top).
+#
+# Defined here rather than inside the platform blocks because it is identical
+# on all three: if() creates no scope in CMake, so everything they found is
+# still visible. The test target deliberately does NOT join the per-platform
+# test loops -- those link the whole of red (GUI, ImGui, CUDA, FFmpeg) and this
+# test needs none of it. Eigen and Arrow are the entire dependency set.
 if(Arrow_FOUND AND Parquet_FOUND)
     target_compile_definitions(red PRIVATE RED_HAVE_PARQUET)
     target_link_libraries(red PRIVATE Arrow::arrow_shared Parquet::parquet_shared)
+
+    add_executable(test_tailcycle_export
+        ${CMAKE_SOURCE_DIR}/tests/test_tailcycle_export.cpp
+        ${CMAKE_SOURCE_DIR}/src/tailcycle_export.cpp
+    )
+    target_include_directories(test_tailcycle_export PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_definitions(test_tailcycle_export PRIVATE RED_HAVE_PARQUET)
+    target_link_libraries(test_tailcycle_export PRIVATE
+        Eigen3::Eigen
+        Arrow::arrow_shared
+        Parquet::parquet_shared
+        Threads::Threads
+    )
+    set_target_properties(test_tailcycle_export PROPERTIES
+        CXX_STANDARD 20
+        CXX_STANDARD_REQUIRED ON
+    )
 endif()
