@@ -90,11 +90,6 @@ and `lib\`, not just `ffmpeg.exe`), unpacked to `C:\ffmpeg` or pointed at by
 - **CMake** comes from Visual Studio; `build.bat` prefers it over any
   standalone install.
 
-Updating Visual Studio breaks a working CUDA install until the toolkit is
-updated too. Check `nvidia-smi` (top right) for your driver's ceiling first —
-if it already covers the toolkit you want, install with the bundled display
-driver **unticked**.
-
 ### Building for a machine without a GPU
 
 red decodes and renders on the GPU by default. On a machine with no NVIDIA GPU,
