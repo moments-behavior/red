@@ -22,11 +22,18 @@ if not defined VSPATH (
     echo ERROR: no Visual Studio installation with the C++ toolset was found.
     exit /b 1
 )
+rem vcvars64.bat exports its own VCPKG_ROOT, pointing at the vcpkg that ships
+rem inside Visual Studio. That one is manifest-mode only and has none of the
+rem packages a classic-mode clone has installed, so it silently replaces the
+rem caller's choice with an empty one. Remember the caller's value across the
+rem call and put it back.
+set "VCPKG_ROOT_CALLER=%VCPKG_ROOT%"
 call "%VSPATH%\VC\Auxiliary\Build\vcvars64.bat" >nul
 if errorlevel 1 (
     echo ERROR: vcvars64.bat failed.
     exit /b 1
 )
+if defined VCPKG_ROOT_CALLER set "VCPKG_ROOT=%VCPKG_ROOT_CALLER%"
 
 rem --- Prefer the CMake and Ninja that ship with Visual Studio ------------
 rem VS bundles CMake 3.31. Standalone CMake 4.x dropped the MSVC 19.44
