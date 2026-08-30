@@ -82,6 +82,25 @@ and `lib\`, not just `ffmpeg.exe`), unpacked to `C:\ffmpeg` or pointed at by
 `build.bat` locates Visual Studio, CUDA, vcpkg and FFmpeg itself. Set
 `VCPKG_ROOT` if vcpkg is not on `PATH` or at `$env:USERPROFILE\vcpkg`.
 
+**Windows toolchain versions.** These interlock, and the failures are all
+misleading, so they are worth stating outright:
+
+| | needs | why |
+|---|---|---|
+| MSVC | **14.4x** (VS 2022 17.14+) | 14.30, the VS 2022 launch toolset, miscompiles xsimd's template specialisations. Arrow fails to build with pages of errors inside `xsimd_cpu_features_x86.hpp` that never mention the compiler |
+| CUDA | new enough for your MSVC | `nvcc` refuses any host compiler newer than it knows about. CUDA 11.6 rejects MSVC 14.4x, and CMake reports it as *no CUDA compiler found* — indistinguishable from not having installed one |
+| CMake | 3.31 (VS's bundled one) | `build.bat` puts it ahead of any standalone CMake, because 4.x dropped feature tables this toolchain needs |
+
+Updating Visual Studio therefore breaks a working CUDA install until the
+toolkit is updated too. Check your driver's ceiling with `nvidia-smi` first
+(top right); if it already exceeds the toolkit you want, install the toolkit
+with the bundled display driver **unticked** and nothing else changes.
+
+`build.bat` deletes `release\` and reconfigures when the compiler recorded in
+its cache no longer exists, which is what a Visual Studio update leaves
+behind. Without that, CMake stops with *"is not a full path to an existing
+compiler tool"* and the only fix is removing the directory by hand.
+
 ### Optional: tailcycle-dataset export
 
 The `tailcycle-dataset` export format writes Parquet, which needs Apache Arrow.
@@ -104,10 +123,16 @@ sudo apt update
 sudo apt install -y -V libarrow-dev libparquet-dev
 ```
 
-**Windows** — untested. `vcpkg install arrow` builds it from source, which is
-slow and pulls a large dependency set. Extracting the prebuilt conda-forge
-package and pointing `-DCMAKE_PREFIX_PATH` at its `Library\` directory avoids
-both.
+**Windows** — from vcpkg, which builds it from source but handles Boost,
+Thrift and the rest itself:
+
+```powershell
+vcpkg install arrow[parquet] --triplet x64-windows
+```
+
+`build.bat` picks it up through the vcpkg toolchain, so nothing else is
+needed. This needs a current MSVC — see [Windows toolchain
+versions](#build) above; on 14.30 the Arrow build fails inside xsimd.
 
 Configure reports which way it went:
 
@@ -135,6 +160,10 @@ build the CPU version instead:
 
 It does the same things, just slower — expect a large frame-rate drop with many
 cameras.
+
+Only playback is affected. Every export format decodes with FFmpeg in software
+on Linux and Windows regardless of this flag, so a CPU-only build extracts
+frames at full capability.
 
 On Linux this has to be a separate build: a normal build needs the NVIDIA
 driver's libraries just to start up, so without them red will not launch at
