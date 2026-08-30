@@ -84,9 +84,17 @@ if not defined FFMPEG_ROOT (
 echo Using vcpkg:  %VCPKG_ROOT%
 echo Using CUDA:   %CUDA_PATH%
 echo Using FFmpeg: %FFMPEG_ROOT%
-set "TOOLCHAIN=-DCMAKE_TOOLCHAIN_FILE=%VCPKG_ROOT:\=/%/scripts/buildsystems/vcpkg.cmake -DVCPKG_TARGET_TRIPLET=x64-windows -DCMAKE_PREFIX_PATH=%FFMPEG_ROOT:\=/%"
+rem Each -D is quoted as one whole token. Without that a path containing a
+rem space -- Visual Studio's bundled vcpkg lives under "C:\Program Files" --
+rem splits into two arguments, and CMake reports the memorable
+rem "Could not find toolchain file: C:/Program".
+set "VCPKG_TC=%VCPKG_ROOT:\=/%/scripts/buildsystems/vcpkg.cmake"
+set "FFMPEG_PREFIX=%FFMPEG_ROOT:\=/%"
 
-cmake -G Ninja -B release -DCMAKE_BUILD_TYPE=Release %TOOLCHAIN% %*
+cmake -G Ninja -B release -DCMAKE_BUILD_TYPE=Release ^
+    "-DCMAKE_TOOLCHAIN_FILE=%VCPKG_TC%" ^
+    -DVCPKG_TARGET_TRIPLET=x64-windows ^
+    "-DCMAKE_PREFIX_PATH=%FFMPEG_PREFIX%" %*
 if errorlevel 1 exit /b 1
 cmake --build release
 if errorlevel 1 exit /b 1
