@@ -98,6 +98,24 @@ rem "Could not find toolchain file: C:/Program".
 set "VCPKG_TC=%VCPKG_ROOT:\=/%/scripts/buildsystems/vcpkg.cmake"
 set "FFMPEG_PREFIX=%FFMPEG_ROOT:\=/%"
 
+rem --- stale cache -------------------------------------------------------
+rem A Visual Studio update installs a new MSVC toolset and removes the old
+rem one, leaving release\CMakeCache.txt pointing at a cl.exe that no longer
+rem exists. CMake cannot re-detect a compiler in an existing cache, so it
+rem stops with "is not a full path to an existing compiler tool" and the only
+rem fix is deleting the cache -- which is not what that message suggests.
+if exist "release\CMakeCache.txt" (
+    set "CACHED_CXX="
+    for /f "usebackq tokens=2 delims==" %%i in (`findstr /b "CMAKE_CXX_COMPILER:" "release\CMakeCache.txt"`) do set "CACHED_CXX=%%i"
+    if defined CACHED_CXX (
+        set "CACHED_CXX=!CACHED_CXX:/=\!"
+        if not exist "!CACHED_CXX!" (
+            echo Stale cache: !CACHED_CXX! is gone. Reconfiguring from scratch.
+            rmdir /s /q release
+        )
+    )
+)
+
 cmake -G Ninja -B release -DCMAKE_BUILD_TYPE=Release ^
     "-DCMAKE_TOOLCHAIN_FILE=%VCPKG_TC%" ^
     -DVCPKG_TARGET_TRIPLET=x64-windows ^
