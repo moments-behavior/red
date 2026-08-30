@@ -39,12 +39,15 @@ struct Keypoint2D {
 // Tracks where a Keypoint3D's values came from. Combined with `reviewed`,
 // this drives the active-learning loop: predictions need review, approved or
 // edited points become training-quality.
+// Values 2 (HybridNet) and 3 (Manual) were removed: nothing ever produced
+// them. red has no UI for placing a 3D point directly, and HybridNet output
+// arrives through set_imported(). The numbering is left alone so the two are
+// not silently reused -- Kp3DSource is in-memory only and never serialised,
+// but a reader comparing this against older code should see the gap.
 enum class Kp3DSource : int {
     None         = 0,  // no 3D values yet
     Triangulated = 1,  // DLT-solved from 2D labels
-    HybridNet    = 2,  // direct 3D prediction by HybridNet
-    Manual       = 3,  // user placed/edited 3D directly in the viewer
-    Imported     = 4,  // external CSV/JSON import
+    Imported     = 4,  // external CSV/JSON import, incl. model predictions
 };
 
 // ── Per-keypoint 3D annotation ──
@@ -64,18 +67,6 @@ struct Keypoint3D {
         source = Kp3DSource::Triangulated;
         triangulated = true;
         confidence = conf;
-    }
-    void set_hybridnet(float conf) {
-        source = Kp3DSource::HybridNet;
-        triangulated = true;
-        reviewed = false;  // freshly predicted; awaits user review
-        confidence = conf;
-    }
-    void set_manual() {
-        source = Kp3DSource::Manual;
-        triangulated = true;
-        reviewed = true;   // user-placed = implicitly reviewed
-        confidence = 1.0f;
     }
     void set_imported(float conf = 1.0f) {
         source = Kp3DSource::Imported;
@@ -245,8 +236,8 @@ inline bool frame_has_any_keypoints(const FrameAnnotation &fa) {
 // every keypoint by node position and would silently corrupt this data.
 inline bool frame_has_any_manual_labels(const FrameAnnotation &fa) {
     if (fa.needs_improvement) return true;
-    for (const auto &kp3 : fa.kp3d)
-        if (kp3.source == Kp3DSource::Manual) return true;
+    // No 3D check: red has no way to hand-place a 3D point, so any frame with
+    // hand-made data is caught by the 2D pass below or by needs_improvement.
     for (const auto &cam : fa.cameras)
         for (const auto &kp : cam.keypoints)
             if (kp.labeled && kp.source == LabelSource::Manual) return true;
