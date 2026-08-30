@@ -158,7 +158,11 @@ static AnnotationMap make_annotations(u32 first_frame = 0) {
 // ── tests ────────────────────────────────────────────────────────────────────
 
 int main(int argc, char **argv) {
-    std::string root = argc > 1 ? argv[1] : "/tmp/red_tailcycle_test";
+    // temp_directory_path() rather than /tmp: on Windows that would land in
+    // C:\tmp, which works but is not where anyone looks for scratch files.
+    std::string root = argc > 1
+                           ? argv[1]
+                           : (fs::temp_directory_path() / "red_tailcycle_test").string();
     fs::remove_all(root);
     fs::create_directories(root);
 
