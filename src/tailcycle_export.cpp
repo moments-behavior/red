@@ -339,34 +339,6 @@ bool export_session(const ExportConfig &cfg, const AnnotationMap &amap,
         if (!fs::exists(dir / "keypoints.pq") && !fs::exists(dir / "points3d.pq"))
             return fail("Session " + sid + " would have no label table.");
 
-        // ── media ──
-        if (cfg.media != MediaMode::None) {
-            for (size_t i = 0; i < cfg.camera_names.size() && i < cfg.video_paths.size(); i++) {
-                const fs::path src = cfg.video_paths[i];
-                if (src.empty() || !fs::exists(src)) {
-                    st.warnings.push_back("No media for camera " + cfg.camera_names[i]);
-                    continue;
-                }
-                const fs::path dst =
-                    dir / "groups" / gid / (cfg.camera_names[i] + src.extension().string());
-                std::error_code mec;
-                fs::remove(dst, mec);
-                if (cfg.media == MediaMode::Symlink) {
-                    fs::create_symlink(fs::absolute(src), dst, mec);
-                    if (mec) {   // Windows without developer mode lands here
-                        fs::copy_file(src, dst, mec);
-                        if (!mec) st.warnings.push_back("Symlink unavailable; copied " +
-                                                        cfg.camera_names[i]);
-                    }
-                } else {
-                    fs::copy_file(src, dst, mec);
-                }
-                if (mec)
-                    st.warnings.push_back("Media failed for " + cfg.camera_names[i] + ": " +
-                                          mec.message());
-            }
-        }
-
         st.sessions.push_back(dir.string());
         st.sessions_written++;
     }

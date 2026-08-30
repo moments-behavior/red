@@ -993,24 +993,11 @@ inline bool export_tailcycle(const ExportConfig &cfg, const AnnotationMap &amap,
         if (i < cfg.image_height.size() && cfg.image_height[i] > 0)
             tc.calibration[i].image_height = cfg.image_height[i];
     }
-    for (const auto &cam : cfg.camera_names) {
-        const std::string v = cfg.media_folder + "/" + cam + ".mp4";
-        tc.video_paths.push_back(fs::exists(v) ? v : std::string());
-    }
-
     // A consumer reads group frame f as the f-th frame of the media in the
     // group folder -- source_frame_start is provenance, not an indexing
     // instruction. So only a whole-recording group may link the video; a
     // sub-range must carry exactly its own frames, or every index is off by
     // `start`. That is why johnson-mouse-tracked ships extracted JPEGs.
-    // Always extract, including for a whole recording. A consumer reads group
-    // frame f as the f-th frame of the media in the group folder, so a group
-    // must contain exactly its own frames -- and a linked video resolves only
-    // on the machine that wrote it, which turns a shipped dataset into labels
-    // with no pixels. Extraction is the one behaviour that is correct in both
-    // respects, at the cost of disk.
-    tc.media = TailcycleExport::MediaMode::None;
-
     TailcycleExport::ExportStats st;
     if (!TailcycleExport::export_session(tc, amap, &st, status)) return false;
 
@@ -1018,11 +1005,15 @@ inline bool export_tailcycle(const ExportConfig &cfg, const AnnotationMap &amap,
         const fs::path gdir = fs::path(tc.output_folder) / tc.split / tc.session_id /
                               "groups" / tc.group_id;
         for (size_t i = 0; i < cfg.camera_names.size(); i++) {
-            if (i >= tc.video_paths.size() || tc.video_paths[i].empty()) continue;
+            const std::string vpath = cfg.media_folder + "/" + cfg.camera_names[i] + ".mp4";
+            if (!fs::exists(vpath)) {
+                if (status) *status = "Error: no video for camera " + cfg.camera_names[i];
+                return false;
+            }
             ffmpeg_reader::FrameReader reader;
-            if (!reader.open(tc.video_paths[i])) {
+            if (!reader.open(vpath)) {
                 if (status)
-                    *status = "Error: cannot open " + tc.video_paths[i] + " to extract frames.";
+                    *status = "Error: cannot open " + vpath + " to extract frames.";
                 return false;
             }
             const fs::path cdir = gdir / cfg.camera_names[i];

@@ -101,8 +101,7 @@ static std::string slurp(const fs::path &p) {
 
 static const int NC = 2, NN = 3, NF = 5;
 
-static TailcycleExport::ExportConfig make_config(const std::string &out,
-                                                 const std::string &media_dir) {
+static TailcycleExport::ExportConfig make_config(const std::string &out) {
     TailcycleExport::ExportConfig cfg;
     cfg.output_folder = out;
     cfg.split = "train";
@@ -126,9 +125,6 @@ static TailcycleExport::ExportConfig make_config(const std::string &out,
         c.image_width = 1280;
         c.image_height = 960;
         cfg.calibration.push_back(c);
-        const fs::path m = fs::path(media_dir) / (cfg.camera_names[i] + ".mp4");
-        std::ofstream(m) << "not really a video";
-        cfg.video_paths.push_back(m.string());
     }
     return cfg;
 }
@@ -164,13 +160,12 @@ static AnnotationMap make_annotations(u32 first_frame = 0) {
 int main(int argc, char **argv) {
     std::string root = argc > 1 ? argv[1] : "/tmp/red_tailcycle_test";
     fs::remove_all(root);
-    const fs::path media = fs::path(root) / "media";
-    fs::create_directories(media);
+    fs::create_directories(root);
 
     // ── 1. default export splits annotated from tracked ──
     {
         const std::string out = root + "/t1";
-        auto cfg = make_config(out, media.string());
+        auto cfg = make_config(out);
         TailcycleExport::ExportStats st;
         std::string status;
         CHECK(TailcycleExport::export_session(cfg, make_annotations(), &st, &status),
@@ -222,13 +217,17 @@ int main(int argc, char **argv) {
         CHECK(!fs::exists(A / "extrinsics.pq") && !fs::exists(A / "regions.pq"),
               "optional tables red cannot fill are absent, not empty");
 
-        CHECK(fs::exists(A / "groups" / "sess1" / "camA.mp4"), "media linked into the group");
+        // export_session creates the group folder but never fills it -- the
+        // caller owns the pixels, because a group must hold exactly its own
+        // frames (see the header).
+        CHECK(fs::is_directory(A / "groups" / "sess1"), "group folder created");
+        CHECK(fs::is_empty(A / "groups" / "sess1"), "group folder left for the caller to fill");
     }
 
     // ── 2. an unlabelled point writes no row at all ──
     {
         const std::string out = root + "/t2";
-        auto cfg = make_config(out, media.string());
+        auto cfg = make_config(out);
         TailcycleExport::ExportStats st;
         std::string status;
         TailcycleExport::export_session(cfg, make_annotations(), &st, &status);
@@ -242,7 +241,7 @@ int main(int argc, char **argv) {
     // ── 3. include_triangulated_3d brings the derived solve back ──
     {
         const std::string out = root + "/t3";
-        auto cfg = make_config(out, media.string());
+        auto cfg = make_config(out);
         cfg.include_triangulated_3d = true;
         TailcycleExport::ExportStats st;
         std::string status;
@@ -258,7 +257,7 @@ int main(int argc, char **argv) {
     // ── 4. frame numbers are rebased into the group ──
     {
         const std::string out = root + "/t4";
-        auto cfg = make_config(out, media.string());
+        auto cfg = make_config(out);
         cfg.source_frame_start = 100;
         TailcycleExport::ExportStats st;
         std::string status;
@@ -277,7 +276,7 @@ int main(int argc, char **argv) {
 
     // ── 5. refusals: a file that loads cleanly and is wrong is worse than none ──
     {
-        auto cfg = make_config(root + "/t5", media.string());
+        auto cfg = make_config(root + "/t5");
         cfg.calibration[0].telecentric = true;
         TailcycleExport::ExportStats st;
         std::string status;
@@ -286,7 +285,7 @@ int main(int argc, char **argv) {
         CHECK(status.find("telecentric") != std::string::npos, "refusal names the reason");
     }
     {
-        auto cfg = make_config(root + "/t6", media.string());
+        auto cfg = make_config(root + "/t6");
         cfg.calibration[1].r(2, 2) = -1.0;   // det = -1, no Rodrigues vector exists
         TailcycleExport::ExportStats st;
         std::string status;
@@ -294,7 +293,7 @@ int main(int argc, char **argv) {
               "improper rotation is refused");
     }
     {
-        auto cfg = make_config(root + "/t7", media.string());
+        auto cfg = make_config(root + "/t7");
         cfg.calibration[0].image_width = 0;
         TailcycleExport::ExportStats st;
         std::string status;

@@ -3,6 +3,15 @@
 
 // Export a red project as a `tailcycle-dataset` session (annotation_format.md).
 //
+// Writes the format -- session.toml, calibration.toml, and the Parquet tables --
+// and creates groups/<group_id>/ but leaves it EMPTY. Populating it is the
+// caller's job, because a group must contain exactly its own frames: a consumer
+// reads group frame f as the f-th frame of the media in that folder, and
+// source_frame_start is provenance, not an offset to apply. Linking a whole
+// recording into a group that starts elsewhere puts every index out, and a link
+// resolves only on the machine that wrote it. red's export window extracts
+// JPEGs; see export_tailcycle() in export_formats.h.
+//
 // Deliberately NOT header-only, unlike jarvis_export.h. Arrow 25 requires
 // C++20 and red is C++17 everywhere, so every Arrow include lives in
 // tailcycle_export.cpp, which CMake builds as its own C++20 target. This
@@ -16,19 +25,6 @@
 
 namespace TailcycleExport {
 
-// What to put in groups/<group_id>/ for each camera.
-//
-// §3 encourages symlinking whole camera directories, and for a group that is a
-// whole recording that is cheap and correct -- but only while the dataset stays
-// on the machine that wrote it. Ship it anywhere and the links dangle, leaving
-// labels with no pixels, so Copy is the default and Symlink is opt-in.
-//
-// None leaves the folder empty for the caller to populate: red's export window
-// uses it, because a group that is a frame range must contain exactly its own
-// frames (a consumer reads group frame f as the f-th frame of the media there,
-// and source_frame_start is provenance, not an offset to apply).
-enum class MediaMode { Copy, Symlink, None };
-
 struct ExportConfig {
     std::string output_folder;      // dataset root; <root>/<split>/<session>/
     std::string split = "train";    // train | val | test -- a directory level (§2.1)
@@ -36,7 +32,6 @@ struct ExportConfig {
 
     std::vector<std::string> camera_names;
     std::vector<CameraParams> calibration;   // parallel to camera_names
-    std::vector<std::string> video_paths;    // parallel to camera_names
 
     std::vector<std::string> node_names;         // the keypoint axis (§4)
     std::vector<std::pair<int, int>> edges;      // resolved to name pairs on write
@@ -66,8 +61,6 @@ struct ExportConfig {
     // project with both produces <session>_annotated and <session>_tracked.
     bool export_annotated = true;
     bool export_tracked = true;
-
-    MediaMode media = MediaMode::Copy;
 
     std::string provenance_source;
     std::string annotator;          // empty when one annotator authored the root (§2.11)
