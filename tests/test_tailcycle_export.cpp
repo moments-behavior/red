@@ -189,6 +189,23 @@ int main(int argc, char **argv) {
         CHECK(!has_column(ka, "score"),
               "score column omitted entirely when every label is hand-placed");
 
+        // red stores y with the origin at the BOTTOM of the image (ImPlot
+        // coords); the format, the calibration and the JPEGs all use top-left.
+        // The fixture puts every point at y = 200 + camera index, so an
+        // unflipped export writes 200/201 and a correct one writes 760/759.
+        {
+            auto ycol = ka->GetColumnByName("y");
+            auto yarr = std::static_pointer_cast<arrow::FloatArray>(ycol->chunk(0));
+            bool flipped = true, unflipped = false;
+            for (int64_t r = 0; r < ka->num_rows(); r++) {
+                const float want = 960.0f - (200.0f + (dict_at(ka, "camera", r) == "camB" ? 1.0f : 0.0f));
+                if (std::abs(yarr->Value(r) - want) > 0.01f) flipped = false;
+                if (std::abs(yarr->Value(r) - (want - 960.0f + 2.0f * (960.0f - want))) < 0.01f) unflipped = true;
+            }
+            CHECK(flipped, "y is flipped from ImPlot (bottom-origin) to image coords");
+            (void)unflipped;
+        }
+
         auto kt = read_pq(T / "keypoints.pq");
         CHECK(kt && kt->num_rows() == 6, "tracked 2D row count");
         CHECK(has_column(kt, "score"), "predicted points carry a score");

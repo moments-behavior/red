@@ -247,6 +247,14 @@ bool export_session(const ExportConfig &cfg, const AnnotationMap &amap,
                 if (frame < 0 || frame >= cfg.n_frames) continue;   // rule 6
                 for (size_t ci = 0; ci < fa.cameras.size() && ci < cfg.camera_names.size(); ci++) {
                     const auto &cam = fa.cameras[ci];
+                    // red stores 2D keypoints in ImPlot coordinates, whose origin
+                    // is the BOTTOM-left of the image. Every other exporter flips
+                    // (see jarvis_export.h, "ImPlot -> image coords"), and the
+                    // format, the calibration and the extracted JPEGs all use a
+                    // top-left origin. Without this the labels look plausible --
+                    // they sit inside the frame and move smoothly -- but nothing
+                    // triangulates: reprojection residuals run to hundreds of px.
+                    const double img_h = (double)cfg.calibration[ci].image_height;
                     for (size_t ni = 0; ni < cam.keypoints.size() && ni < cfg.node_names.size(); ni++) {
                         const Keypoint2D &kp = cam.keypoints[ni];
                         if (!kp.labeled) continue;   // no row, not `unlabeled` (§7)
@@ -256,7 +264,8 @@ bool export_session(const ExportConfig &cfg, const AnnotationMap &amap,
                             !c_b.Append(cfg.camera_names[ci]).ok() ||
                             !p_b.Append(cfg.node_names[ni]).ok() ||
                             !s_b.Append(Tailcycle::status::kProjected).ok() ||
-                            !x_b.Append((float)kp.x).ok() || !y_b.Append((float)kp.y).ok())
+                            !x_b.Append((float)kp.x).ok() ||
+                            !y_b.Append((float)(img_h - kp.y)).ok())
                             return fail("keypoints.pq: builder append failed.");
                         // A human label carries no confidence -- red stores 0.0f,
                         // and passing that through would ship every hand-placed
