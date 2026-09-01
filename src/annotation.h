@@ -27,9 +27,17 @@ enum class LabelSource : int {
 };
 
 // ── Per-keypoint 2D annotation ──
+//
+// `y` has its ORIGIN AT THE BOTTOM of the image: these are ImPlot coordinates,
+// which is what the labelling views work in. Image files, calibration and every
+// export format use a top-left origin, so anything leaving red must write
+// `image_height - y`. Every exporter does this (jarvis_export.h,
+// build_coco_json, export_yolo, export_deeplabcut); getting it wrong produces
+// coordinates that sit inside the frame and move smoothly, pass every
+// structural check, and fail to triangulate.
 struct Keypoint2D {
     double x = UNLABELED;
-    double y = UNLABELED;
+    double y = UNLABELED;   // bottom-origin; see above
     bool   labeled    = false;
     float  confidence = 0.0f;
     LabelSource source = LabelSource::Manual;
