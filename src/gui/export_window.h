@@ -52,6 +52,7 @@ struct ExportWindowState {
 
     // Progress counters (written by export thread via atomic, read by main thread)
     std::atomic<int> images_saved{0};
+    std::atomic<bool> cancel_requested{false};
     int images_total = 0; // set before thread launch, read-only during export
 
     // Thread → main thread communication for final status.
@@ -128,9 +129,15 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
                 "Becomes the folder name, which IS the session id. Shared by "
                 "every row below -- the split directory keeps them apart.");
 
+            int tc_total = 0;
+            if (ctx.input_is_imgs)
+                tc_total = (int)ctx.imgs_names.size();
+            else if (!ctx.demuxers.empty() && ctx.demuxers[0])
+                tc_total = (int)ctx.demuxers[0]->GetNumFrames();
+
             ImGui::SeparatorText("Splits");
-            ImGui::TextDisabled(
-                "One session per row. Leave end at 0 for the whole recording.");
+            ImGui::TextDisabled("One session per row. End at 0 means to the end of the recording (%d frames).",
+                                tc_total);
             ImGui::TextDisabled(
                 "Frames are extracted into each group, so the dataset is "
                 "self-contained.");
@@ -153,9 +160,20 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
                 ImGui::BeginDisabled(state.tailcycle_ranges.size() == 1);
                 if (ImGui::Button("x")) remove_at = (int)i;
                 ImGui::EndDisabled();
-                if (i == 0) {
+                // Show what the row will actually extract. An unedited row means
+                // the whole recording, which is the most expensive thing the
+                // export can do, so it should never be a surprise.
+                {
+                    const int last = (r.end > 0 && r.end < tc_total) ? r.end
+                                     : (tc_total > 0 ? tc_total - 1 : r.start);
+                    const int n = last >= r.start ? last - r.start + 1 : 0;
+                    const long long imgs = (long long)n * (long long)pm.camera_names.size();
                     ImGui::SameLine();
-                    ImGui::TextDisabled("start / end / split");
+                    if (r.end == 0 && tc_total > 0)
+                        ImGui::TextColored(ImVec4(0.95f, 0.65f, 0.3f, 1.0f),
+                                           "to end: %d frames, %lld images", n, imgs);
+                    else
+                        ImGui::TextDisabled("%d frames, %lld images", n, imgs);
                 }
                 ImGui::PopID();
             }
@@ -351,6 +369,7 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
 
                     // Compute total expected images for progress bar
                     state.images_saved.store(0, std::memory_order_relaxed);
+                    state.cancel_requested.store(false, std::memory_order_relaxed);
                     state.images_total = kp_count * (int)pm.camera_names.size();
                     state.in_progress.store(true, std::memory_order_relaxed);
                     state.status = "Exporting...";
@@ -433,7 +452,7 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
                                     std::string one_status;
                                     const bool ok = ExportFormats::export_dataset(
                                         one.format, one, amap_copy, &one_status,
-                                        &state.images_saved);
+                                        &state.images_saved, &state.cancel_requested);
                                     if (!thread_status.empty()) thread_status += "\n";
                                     thread_status += one_status;
                                     if (!ok) break;   // a refusal applies to them all
@@ -457,6 +476,19 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
             ImGui::BeginDisabled();
             ImGui::Button("Exporting...");
             ImGui::EndDisabled();
+
+            // Extraction can run for a long time -- a whole recording across
+            // many cameras is hundreds of thousands of frames -- and the export
+            // runs on a detached thread, so without this the only way to stop it
+            // is quitting red, which leaves a half-written session behind.
+            ImGui::SameLine();
+            const bool cancelling = state.cancel_requested.load(std::memory_order_relaxed);
+            ImGui::BeginDisabled(cancelling);
+            if (ImGui::Button(cancelling ? "Cancelling..." : "Cancel"))
+                state.cancel_requested.store(true, std::memory_order_relaxed);
+            ImGui::EndDisabled();
+            if (cancelling)
+                ImGui::TextDisabled("Finishing the current frame, then removing the partial session.");
 
             // Progress bar
             if (state.images_total > 0) {

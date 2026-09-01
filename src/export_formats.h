@@ -940,7 +940,8 @@ inline bool export_nerfstudio(const ExportConfig &cfg, const AnnotationMap &amap
 // putting near-identical adjacent frames on both sides (rule 14).
 inline bool export_tailcycle(const ExportConfig &cfg, const AnnotationMap &amap,
                              std::string *status,
-                             std::atomic<int> *img_counter = nullptr) {
+                             std::atomic<int> *img_counter = nullptr,
+                             std::atomic<bool> *cancel = nullptr) {
     namespace fs = std::filesystem;
     if (!TailcycleExport::available()) {
         if (status)
@@ -967,8 +968,13 @@ inline bool export_tailcycle(const ExportConfig &cfg, const AnnotationMap &amap,
     TailcycleExport::ExportConfig tc;
     tc.output_folder = cfg.output_folder;
     tc.split = cfg.tailcycle_split;
+    // The session id becomes a single folder name, so it cannot carry
+    // separators -- a path-like project name would otherwise nest the session
+    // several directories deep and break the <split>/<session>/ layout.
     tc.session_id = cfg.tailcycle_session_id.empty() ? cfg.skeleton_name
                                                      : cfg.tailcycle_session_id;
+    for (char &c : tc.session_id)
+        if (c == '/' || c == '\\') c = '_';
     tc.camera_names = cfg.camera_names;
     tc.calibration = cfg.camera_params;
     tc.node_names = cfg.node_names;
@@ -979,9 +985,15 @@ inline bool export_tailcycle(const ExportConfig &cfg, const AnnotationMap &amap,
     tc.include_triangulated_3d = cfg.tailcycle_include_triangulated_3d;
     tc.provenance_source = cfg.label_folder;
 
-    const std::string stem =
-        cfg.media_folder.empty() ? tc.session_id
-                                 : fs::path(cfg.media_folder).filename().string();
+    // filename() returns empty when the path ends in a separator, which would
+    // leave the group id as a bare "_ix<start>".
+    std::string stem;
+    if (!cfg.media_folder.empty()) {
+        fs::path mp(cfg.media_folder);
+        if (mp.filename().empty()) mp = mp.parent_path();
+        stem = mp.filename().string();
+    }
+    if (stem.empty()) stem = tc.session_id;
     tc.source_video = stem;
     // Encodes the offset the way johnson-mouse-tracked does: <recording>_ix<start>.
     // Two ranges of one recording then have distinct group ids.
@@ -1019,6 +1031,16 @@ inline bool export_tailcycle(const ExportConfig &cfg, const AnnotationMap &amap,
             const fs::path cdir = gdir / cfg.camera_names[i];
             fs::create_directories(cdir);
             for (int f = start; f <= end; f++) {
+                // Cancelling leaves a group with fewer frames than groups.pq
+                // declares, which is worse than no session at all -- so remove
+                // what was written rather than leaving something that looks
+                // complete.
+                if (cancel && cancel->load(std::memory_order_relaxed)) {
+                    std::error_code ec;
+                    fs::remove_all(fs::path(tc.output_folder) / tc.split / tc.session_id, ec);
+                    if (status) *status = "Export cancelled; partial session removed.";
+                    return false;
+                }
                 const uint8_t *rgb = reader.readFrame(f);
                 if (!rgb) {
                     if (status)
@@ -1050,7 +1072,8 @@ inline bool export_tailcycle(const ExportConfig &cfg, const AnnotationMap &amap,
 
 inline bool export_dataset(Format fmt, const ExportConfig &cfg,
                            const AnnotationMap &amap, std::string *status,
-                           std::atomic<int> *img_counter = nullptr) {
+                           std::atomic<int> *img_counter = nullptr,
+                           std::atomic<bool> *cancel = nullptr) {
     namespace fs = std::filesystem;
     fs::create_directories(cfg.output_folder);
 
@@ -1062,7 +1085,7 @@ inline bool export_dataset(Format fmt, const ExportConfig &cfg,
     case YOLO_DETECT: return export_yolo(cfg, amap, false, status, img_counter);
     case DEEPLABCUT:  return export_deeplabcut(cfg, amap, status, img_counter);
     case NERFSTUDIO:  return export_nerfstudio(cfg, amap, status, img_counter);
-    case TAILCYCLE:   return export_tailcycle(cfg, amap, status, img_counter);
+    case TAILCYCLE:   return export_tailcycle(cfg, amap, status, img_counter, cancel);
     default:
         if (status) *status = "Error: Unknown export format";
         return false;
