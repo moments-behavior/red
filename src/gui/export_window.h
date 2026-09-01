@@ -117,6 +117,14 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
         auto fmt = format_map[state.format_idx];
         bool is_jarvis = (fmt == ExportFormats::JARVIS);
 
+        // Frames in the loaded media. tailcycle validates every frame index
+        // against this and uses it for "to the end of the recording".
+        int tc_total = 0;
+        if (ctx.input_is_imgs)
+            tc_total = (int)ctx.imgs_names.size();
+        else if (!ctx.demuxers.empty() && ctx.demuxers[0])
+            tc_total = (int)ctx.demuxers[0]->GetNumFrames();
+
         // tailcycle-specific: one row per session, plus the 3D layer.
         if (fmt == ExportFormats::TAILCYCLE) {
             if (state.tailcycle_session_id[0] == '\0')
@@ -128,12 +136,6 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
             ImGui::SetItemTooltip(
                 "Becomes the folder name, which IS the session id. Shared by "
                 "every row below -- the split directory keeps them apart.");
-
-            int tc_total = 0;
-            if (ctx.input_is_imgs)
-                tc_total = (int)ctx.imgs_names.size();
-            else if (!ctx.demuxers.empty() && ctx.demuxers[0])
-                tc_total = (int)ctx.demuxers[0]->GetNumFrames();
 
             ImGui::SeparatorText("Splits");
             ImGui::TextDisabled("One session per row. End at 0 means to the end of the recording (%d frames).",
@@ -370,7 +372,21 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
                     // Compute total expected images for progress bar
                     state.images_saved.store(0, std::memory_order_relaxed);
                     state.cancel_requested.store(false, std::memory_order_relaxed);
-                    state.images_total = kp_count * (int)pm.camera_names.size();
+                    // tailcycle extracts a frame range, not one image per
+                    // annotated frame, so kp_count is the wrong denominator --
+                    // it made the progress bar read 1717 / 813416.
+                    if (dispatch_fmt == ExportFormats::TAILCYCLE) {
+                        int tc_frames = 0;
+                        for (const auto &r : state.tailcycle_ranges) {
+                            const int last = (r.end > 0 && r.end < tc_total)
+                                                 ? r.end
+                                                 : (tc_total > 0 ? tc_total - 1 : r.start);
+                            if (last >= r.start) tc_frames += last - r.start + 1;
+                        }
+                        state.images_total = tc_frames * (int)pm.camera_names.size();
+                    } else {
+                        state.images_total = kp_count * (int)pm.camera_names.size();
+                    }
                     state.in_progress.store(true, std::memory_order_relaxed);
                     state.status = "Exporting...";
 
