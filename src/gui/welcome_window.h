@@ -2,6 +2,7 @@
 #include "imgui.h"
 #include "app_context.h"
 #include "gui/window_states.h"
+#include "tailcycle_import.h"
 #include <ImGuiFileDialog.h>
 #include <filesystem>
 
@@ -106,6 +107,15 @@ inline void DrawWelcomeWindow(AppContext &ctx, WindowStates &win) {
         ImGuiFileDialog::Instance()->OpenDialog(
             "LoadAnnotProject", "Load Annotation Project",
             "Red Project{.redproj}", cfg);
+    }
+    // Not a red project: a tailcycle-dataset session brings its own cameras,
+    // calibration and skeleton, and opens read-only for looking at.
+    if (TailcycleImport::available()) {
+        if (ImGui::Button("Open tailcycle Dataset", ImVec2(-1, 0)))
+            win.tailcycle_open.show = true;
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Browse a tailcycle-dataset root and open one of its\n"
+                              "sessions. Brings its own cameras and skeleton.");
     }
     ImGui::PopStyleVar();
 
