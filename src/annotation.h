@@ -20,6 +20,12 @@
 static constexpr double UNLABELED = 1E7;
 
 // ── Label provenance ──
+enum class LabelSource : int {
+    Manual    = 0,
+    Predicted = 1,
+    Imported  = 2
+};
+
 // ── Per-keypoint 2D annotation ──
 //
 // `y` has its ORIGIN AT THE BOTTOM of the image: these are ImPlot coordinates,
@@ -34,15 +40,7 @@ struct Keypoint2D {
     double y = UNLABELED;   // bottom-origin; see above
     bool   labeled    = false;
     float  confidence = 0.0f;
-    // True when this position was produced by projecting a 3D point into this
-    // camera rather than observed in it. red fills views this way whenever it
-    // has 3D and no 2D -- promoting a prediction, importing JARVIS or a 3D-only
-    // tailcycle session, propagating a triangulated point to the other views.
-    //
-    // A derived position is not an observation: the tailcycle exporter drops
-    // these rather than store the same information twice, and switching
-    // skeletons may discard them because they can be regenerated.
-    bool   projected  = false;
+    LabelSource source = LabelSource::Manual;
 };
 
 // ── 3D label provenance ──
@@ -242,11 +240,9 @@ inline bool frame_has_any_manual_labels(const FrameAnnotation &fa) {
     if (fa.needs_improvement) return true;
     // No 3D check: red has no way to hand-place a 3D point, so any frame with
     // hand-made data is caught by the 2D pass below or by needs_improvement.
-    // Projected points do not count -- they are derived from 3D and can be
-    // regenerated, so losing them to a re-index costs nothing.
     for (const auto &cam : fa.cameras)
         for (const auto &kp : cam.keypoints)
-            if (kp.labeled && !kp.projected) return true;
+            if (kp.labeled && kp.source == LabelSource::Manual) return true;
     return false;
 }
 

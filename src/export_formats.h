@@ -110,7 +110,6 @@ struct ExportConfig {
     int tailcycle_frame_start = 0;              // inclusive
     int tailcycle_frame_end = 0;                // inclusive; 0 = to the end
     int tailcycle_layers = 0;   // 0 = 2D, 1 = 2D+3D, 2 = 3D only
-    bool tailcycle_labels_tracked = false;  // annotated | tracked (§2.6)
 };
 
 // ── Per-camera image-size resolver ──
@@ -984,7 +983,6 @@ inline bool export_tailcycle(const ExportConfig &cfg, const AnnotationMap &amap,
     tc.fps = cfg.tailcycle_fps;
     tc.source_frame_start = start;
     tc.layers = (TailcycleExport::ExportConfig::Layers)cfg.tailcycle_layers;
-    tc.labels_are_tracked = cfg.tailcycle_labels_tracked;
     tc.provenance_source = cfg.label_folder;
 
     // filename() returns empty when the path ends in a separator, which would

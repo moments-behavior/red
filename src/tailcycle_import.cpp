@@ -328,6 +328,7 @@ bool read_session(const std::string &session_dir, const std::string &group_id,
             // image, red works in ImPlot coordinates measured from the bottom.
             kp.y = (double)out->calibration[ci].image_height - y.vals[i];
             kp.labeled = true;
+            kp.source = LabelSource::Imported;
             if (sc.ok && i < sc.null.size() && !sc.null[i]) kp.confidence = (float)sc.vals[i];
             st.keypoint_rows++;
         }

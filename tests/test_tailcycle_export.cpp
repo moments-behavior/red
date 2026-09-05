@@ -65,7 +65,6 @@ static bool has_column(const std::shared_ptr<arrow::Table> &t, const char *name)
 static std::set<std::string> dict_values(const std::shared_ptr<arrow::Table> &t,
                                          const char *name) {
     std::set<std::string> out;
-    if (!t) return out;
     auto col = t->GetColumnByName(name);
     if (!col) return out;
     for (int c = 0; c < col->num_chunks(); c++) {
@@ -80,7 +79,6 @@ static std::set<std::string> dict_values(const std::shared_ptr<arrow::Table> &t,
 // are small enough to arrive in a single chunk).
 static std::string dict_at(const std::shared_ptr<arrow::Table> &t, const char *name,
                            int64_t row) {
-    if (!t) return {};
     auto col = t->GetColumnByName(name);
     auto d = std::static_pointer_cast<arrow::DictionaryArray>(col->chunk(0));
     auto vals = std::static_pointer_cast<arrow::StringArray>(d->dictionary());
@@ -90,7 +88,6 @@ static std::string dict_at(const std::shared_ptr<arrow::Table> &t, const char *n
 
 static int32_t int_at(const std::shared_ptr<arrow::Table> &t, const char *name,
                       int64_t row) {
-    if (!t) return -1;
     auto col = t->GetColumnByName(name);
     return std::static_pointer_cast<arrow::Int32Array>(col->chunk(0))->Value(row);
 }
@@ -146,7 +143,8 @@ static AnnotationMap make_annotations(u32 first_frame = 0) {
                 kp.x = 100.0 + i * 10 + n;
                 kp.y = 200.0 + c;
                 kp.labeled = true;
-                if (i == 4) kp.confidence = 0.75f;   // as a prediction would carry
+                kp.source = (i == 4) ? LabelSource::Predicted : LabelSource::Manual;
+                if (i == 4) kp.confidence = 0.75f;
             }
         fa.kp3d[0].x = 1; fa.kp3d[0].y = 2; fa.kp3d[0].z = 3;
         fa.kp3d[0].set_triangulated();
@@ -176,19 +174,20 @@ int main(int argc, char **argv) {
         std::string status;
         CHECK(TailcycleExport::export_session(cfg, make_annotations(), &st, &status),
               "default export should succeed: " + status);
-        CHECK(st.sessions_written == 1, "one row means one session");
+        CHECK(st.sessions_written == 2, "a project with manual and predicted points is two sessions");
 
-        const fs::path A = fs::path(out) / "train" / "sess1";
-        CHECK(fs::exists(A), "the session exists");
+        const fs::path A = fs::path(out) / "train" / "sess1_annotated";
+        const fs::path T = fs::path(out) / "train" / "sess1_tracked";
+        CHECK(fs::exists(A) && fs::exists(T), "both sessions exist");
 
         auto ka = read_pq(A / "keypoints.pq");
         CHECK(ka != nullptr, "annotated keypoints.pq is readable");
-        // 5 frames x 2 cameras x 3 nodes, less the 2 unlabelled
-        CHECK(ka && ka->num_rows() == 28, "2D row count");
+        // 4 frames x 2 cameras x 3 nodes, less the 2 unlabelled
+        CHECK(ka && ka->num_rows() == 22, "annotated 2D row count");
         CHECK(dict_values(ka, "status") == std::set<std::string>{"projected"},
               "red has no occlusion channel, so every point is `projected`");
-        CHECK(has_column(ka, "score"),
-              "score column present: frame 4 carries a confidence");
+        CHECK(!has_column(ka, "score"),
+              "score column omitted entirely when every label is hand-placed");
 
         // red stores y with the origin at the BOTTOM of the image (ImPlot
         // coords); the format, the calibration and the JPEGs all use top-left.
@@ -207,8 +206,12 @@ int main(int argc, char **argv) {
             (void)unflipped;
         }
 
-        // The default writes the 2D layer only.
-        CHECK(!fs::exists(A / "points3d.pq"),
+        auto kt = read_pq(T / "keypoints.pq");
+        CHECK(kt && kt->num_rows() == 6, "tracked 2D row count");
+        CHECK(has_column(kt, "score"), "predicted points carry a score");
+
+        // The default writes the 2D layer only, so neither session carries 3D.
+        CHECK(!fs::exists(A / "points3d.pq") && !fs::exists(T / "points3d.pq"),
               "the default (2D keypoints) writes no points3d.pq");
 
         auto g = read_pq(A / "groups.pq");
@@ -219,7 +222,8 @@ int main(int argc, char **argv) {
         CHECK(toml.find("mode = \"3d\"") != std::string::npos, "two cameras means 3d mode");
         CHECK(toml.find("labels = \"annotated\"") != std::string::npos, "annotated session labels");
         CHECK(toml.find("\"TailBase\"") != std::string::npos, "keypoint names written");
-
+        CHECK(slurp(T / "session.toml").find("labels = \"tracked\"") != std::string::npos,
+              "tracked session labels");
 
         const std::string calib = slurp(A / "calibration.toml");
         CHECK(calib.find("offset = [ 0.0, 0.0,]") != std::string::npos,
@@ -243,7 +247,7 @@ int main(int argc, char **argv) {
         TailcycleExport::ExportStats st;
         std::string status;
         TailcycleExport::export_session(cfg, make_annotations(), &st, &status);
-        auto k = read_pq(fs::path(out) / "train" / "sess1" / "keypoints.pq");
+        auto k = read_pq(fs::path(out) / "train" / "sess1_annotated" / "keypoints.pq");
         int found = 0;
         for (int64_t r = 0; k && r < k->num_rows(); r++)
             if (int_at(k, "frame", r) == 3 && dict_at(k, "bodypart", r) == "TailBase") found++;
@@ -258,38 +262,12 @@ int main(int argc, char **argv) {
         TailcycleExport::ExportStats st;
         std::string status;
         TailcycleExport::export_session(cfg, make_annotations(), &st, &status);
-        auto p3 = read_pq(fs::path(out) / "train" / "sess1" / "points3d.pq");
-        // Both 3D points: the triangulated Snout and the imported EarL.
-        CHECK(p3 && p3->num_rows() == 2 * NF, "both 3D bodyparts written");
-        const std::set<std::string> want_bp{"Snout", "EarL"};
-        CHECK(p3 && dict_values(p3, "bodypart") == want_bp,
-              "triangulated and imported alike");
-    }
-
-    // ── 3a. projected 2D are derivations and are never written ──
-    {
-        const std::string out = root + "/t3a";
-        auto cfg = make_config(out);
-        AnnotationMap amap = make_annotations();
-        // Mark camB's points as projected from 3D, as an import would.
-        for (auto &[f, fa] : amap)
-            for (auto &kp : fa.cameras[1].keypoints)
-                if (kp.labeled) kp.projected = true;
-        TailcycleExport::ExportStats st;
-        std::string status;
-        CHECK(TailcycleExport::export_session(cfg, amap, &st, &status),
-              "export with projected points succeeds: " + status);
-        // camB must not appear in ANY session -- a projected point is a
-        // derivation, not an observation, wherever it would have been bucketed.
-        for (const char *sfx : {""}) {
-            const fs::path kf = fs::path(out) / "train" /
-                                (std::string("sess1") + sfx) / "keypoints.pq";
-            if (!fs::exists(kf)) continue;
-            auto k = read_pq(kf);
-            CHECK(k && dict_values(k, "camera").count("camB") == 0,
-                  std::string("camB absent from sess1") + sfx +
-                      ": its points were projected, not observed");
-        }
+        auto p3 = read_pq(fs::path(out) / "train" / "sess1_annotated" / "points3d.pq");
+        CHECK(p3 && p3->num_rows() == NF, "triangulated 3D written when asked for");
+        CHECK(p3 && dict_values(p3, "bodypart") == std::set<std::string>{"Snout"},
+              "the triangulated bodypart");
+        CHECK(p3 && !has_column(p3, "score"),
+              "a triangulated point's confidence describes the solve, not the point");
     }
 
     // ── 3b. a 3D-only session writes no keypoints.pq at all ──
@@ -303,7 +281,7 @@ int main(int argc, char **argv) {
               "3D-only export succeeds: " + status);
         // The imported 3D is the tracked bucket, the triangulated is annotated.
         bool any = false;
-        for (const char *sfx : {""}) {
+        for (const char *sfx : {"", "_annotated", "_tracked"}) {
             const fs::path d = fs::path(out) / "train" / (std::string("sess1") + sfx);
             if (!fs::exists(d)) continue;
             any = true;
@@ -323,14 +301,14 @@ int main(int argc, char **argv) {
         std::string status;
         CHECK(TailcycleExport::export_session(cfg, make_annotations(100), &st, &status),
               "rebased export succeeds: " + status);
-        auto k = read_pq(fs::path(out) / "train" / "sess1" / "keypoints.pq");
+        auto k = read_pq(fs::path(out) / "train" / "sess1_annotated" / "keypoints.pq");
         int32_t lo = 1 << 30, hi = -1;
         for (int64_t r = 0; k && r < k->num_rows(); r++) {
             const int32_t f = int_at(k, "frame", r);
             lo = std::min(lo, f);
             hi = std::max(hi, f);
         }
-        CHECK(k && lo == 0 && hi == 4,
+        CHECK(k && lo == 0 && hi == 3,
               "red's absolute frame_number becomes a 0-based index into the group");
     }
 

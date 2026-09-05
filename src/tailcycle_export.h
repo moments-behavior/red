@@ -59,12 +59,12 @@ struct ExportConfig {
     enum class Layers { TwoD, TwoDAndThreeD, ThreeD };
     Layers layers = Layers::TwoD;
 
-    // §2.6 closes `labels` at "annotated" (a human placed these) or "tracked"
-    // (a machine produced them), and calls it the one thing a consumer cannot
-    // recover from the tables. red cannot infer it: nothing in Keypoint2D
-    // distinguishes a click from an import that was marked the same way. So it
-    // is declared, not guessed.
-    bool labels_are_tracked = false;
+    // `labels` is closed at annotated|tracked and a session that is both must
+    // be two sessions (§2.6). Rows partition by LabelSource/Kp3DSource; a
+    // project with both produces <session>_annotated and <session>_tracked.
+    bool export_annotated = true;
+    bool export_tracked = true;
+
     std::string provenance_source;
     std::string annotator;          // empty when one annotator authored the root (§2.11)
 };
