@@ -5,6 +5,7 @@
 #include "gui/transport_bar.h"
 #include "gui/jarvis_export_window.h"
 #include "gui/jarvis_import_window.h"
+#include "gui/tailcycle_open_window.h"
 #include "gui/pose_stats_window.h"
 #include "gui/frame_drops_window.h"
 #include "gui/export_window.h"
@@ -24,6 +25,7 @@ struct WindowStates {
     TransportBarState transport;
     JarvisExportState jarvis_export;
     JarvisImportState jarvis_import;
+    TailcycleOpenState tailcycle_open;
     PoseStatsState pose_stats;
     FrameDropsState frame_drops;
     ExportWindowState export_win;
