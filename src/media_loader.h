@@ -246,8 +246,8 @@ load_images(std::map<std::string, std::string> &selected_files,
     scene->image_width = (u32 *)malloc(sizeof(u32) * scene->num_cams);
     scene->image_height = (u32 *)malloc(sizeof(u32) * scene->num_cams);
     for (u32 j = 0; j < scene->num_cams; j++) {
-        std::string file_name = pm.media_folder + "/" + pm.camera_names[j] +
-                                "_" + imgs_names[0] + "." + file_ext;
+        std::string file_name = image_frame_path(
+            pm.media_folder, pm.camera_names[j], imgs_names[0], file_ext, layout);
 #if defined(__APPLE__) || defined(_WIN32)
         int w = 0, h = 0, ch = 0;
         stbi_info(file_name.c_str(), &w, &h, &ch);
@@ -260,6 +260,17 @@ load_images(std::map<std::string, std::string> &selected_files,
         scene->image_width[j] = w;
         scene->image_height[j] = h;
 #endif
+        // A frame that will not read leaves w/h at 0, and a 0-sized texture
+        // aborts inside Metal's descriptor validation with nothing pointing at
+        // the cause. Name the file, and stop before the GPU sees it.
+        if (scene->image_width[j] == 0 || scene->image_height[j] == 0) {
+            std::cerr << "[RED] Cannot read frame for camera " << pm.camera_names[j]
+                      << ": " << file_name << "\n";
+            free(scene->image_width);  scene->image_width = nullptr;
+            free(scene->image_height); scene->image_height = nullptr;
+            scene->num_cams = 0;
+            return;
+        }
         if (j < pm.camera_params.size() && pm.camera_params[j].image_width == 0) {
             pm.camera_params[j].image_width = scene->image_width[j];
             pm.camera_params[j].image_height = scene->image_height[j];
@@ -454,6 +465,16 @@ load_videos(std::map<std::string, std::string> &selected_files,
         scene->image_height[j] = demuxers[j]->GetHeight();
         // Back-propagate video dimensions to CameraParams (needed for
         // telecentric DLT cameras where the calibration file has no image size)
+        // A video reporting no dimensions would build a 0-sized texture, which
+        // aborts inside Metal's descriptor validation.
+        if (scene->image_width[j] == 0 || scene->image_height[j] == 0) {
+            std::cerr << "[RED] Camera " << pm.camera_names[j]
+                      << " reports a zero frame size.\n";
+            free(scene->image_width);  scene->image_width = nullptr;
+            free(scene->image_height); scene->image_height = nullptr;
+            scene->num_cams = 0;
+            return;
+        }
         if (j < pm.camera_params.size() && pm.camera_params[j].image_width == 0) {
             pm.camera_params[j].image_width = scene->image_width[j];
             pm.camera_params[j].image_height = scene->image_height[j];
