@@ -210,14 +210,9 @@ int main(int argc, char **argv) {
         CHECK(kt && kt->num_rows() == 6, "tracked 2D row count");
         CHECK(has_column(kt, "score"), "predicted points carry a score");
 
-        // Triangulated 3D is excluded by default, and triangulation is the only
-        // producer of 3D in red -- so the annotated session has no 3D layer.
-        CHECK(!fs::exists(A / "points3d.pq"),
-              "no points3d.pq when the only 3D is triangulated");
-        auto p3 = read_pq(T / "points3d.pq");
-        CHECK(p3 && p3->num_rows() == NF, "imported 3D lands in the tracked session");
-        CHECK(p3 && dict_values(p3, "bodypart") == std::set<std::string>{"EarL"},
-              "only the imported bodypart, not the triangulated one");
+        // The default writes the 2D layer only, so neither session carries 3D.
+        CHECK(!fs::exists(A / "points3d.pq") && !fs::exists(T / "points3d.pq"),
+              "the default (2D keypoints) writes no points3d.pq");
 
         auto g = read_pq(A / "groups.pq");
         CHECK(g && g->num_rows() == 1, "one group row");
@@ -259,11 +254,11 @@ int main(int argc, char **argv) {
         CHECK(found == 0, "unlabelled writes no row, rather than an `unlabeled` row");
     }
 
-    // ── 3. include_triangulated_3d brings the derived solve back ──
+    // ── 3. asking for the 3D layer brings the derived solve back ──
     {
         const std::string out = root + "/t3";
         auto cfg = make_config(out);
-        cfg.include_triangulated_3d = true;
+        cfg.layers = TailcycleExport::ExportConfig::Layers::TwoDAndThreeD;
         TailcycleExport::ExportStats st;
         std::string status;
         TailcycleExport::export_session(cfg, make_annotations(), &st, &status);
@@ -273,6 +268,28 @@ int main(int argc, char **argv) {
               "the triangulated bodypart");
         CHECK(p3 && !has_column(p3, "score"),
               "a triangulated point's confidence describes the solve, not the point");
+    }
+
+    // ── 3b. a 3D-only session writes no keypoints.pq at all ──
+    {
+        const std::string out = root + "/t3b";
+        auto cfg = make_config(out);
+        cfg.layers = TailcycleExport::ExportConfig::Layers::ThreeD;
+        TailcycleExport::ExportStats st;
+        std::string status;
+        CHECK(TailcycleExport::export_session(cfg, make_annotations(), &st, &status),
+              "3D-only export succeeds: " + status);
+        // The imported 3D is the tracked bucket, the triangulated is annotated.
+        bool any = false;
+        for (const char *sfx : {"", "_annotated", "_tracked"}) {
+            const fs::path d = fs::path(out) / "train" / (std::string("sess1") + sfx);
+            if (!fs::exists(d)) continue;
+            any = true;
+            CHECK(!fs::exists(d / "keypoints.pq"),
+                  "3D-only writes no keypoints.pq");
+            CHECK(fs::exists(d / "points3d.pq"), "3D-only writes points3d.pq");
+        }
+        CHECK(any, "3D-only produced at least one session");
     }
 
     // ── 4. frame numbers are rebased into the group ──

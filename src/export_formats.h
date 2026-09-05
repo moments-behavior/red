@@ -109,7 +109,7 @@ struct ExportConfig {
     float tailcycle_fps = 0.0f;
     int tailcycle_frame_start = 0;              // inclusive
     int tailcycle_frame_end = 0;                // inclusive; 0 = to the end
-    bool tailcycle_include_triangulated_3d = false;
+    int tailcycle_layers = 0;   // 0 = 2D, 1 = 2D+3D, 2 = 3D only
 };
 
 // ── Per-camera image-size resolver ──
@@ -982,7 +982,7 @@ inline bool export_tailcycle(const ExportConfig &cfg, const AnnotationMap &amap,
     tc.n_frames = n;
     tc.fps = cfg.tailcycle_fps;
     tc.source_frame_start = start;
-    tc.include_triangulated_3d = cfg.tailcycle_include_triangulated_3d;
+    tc.layers = (TailcycleExport::ExportConfig::Layers)cfg.tailcycle_layers;
     tc.provenance_source = cfg.label_folder;
 
     // filename() returns empty when the path ends in a separator, which would

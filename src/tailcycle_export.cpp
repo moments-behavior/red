@@ -184,7 +184,7 @@ bool export_session(const ExportConfig &cfg, const AnnotationMap &amap,
                 if (kp.labeled) has[(int)bucket_2d(kp.source)] = true;
         for (const auto &k3 : fa.kp3d) {
             if (k3.source == Kp3DSource::None) continue;
-            if (k3.source == Kp3DSource::Triangulated && !cfg.include_triangulated_3d) continue;
+            if (cfg.layers == ExportConfig::Layers::TwoD) continue;
             has[(int)bucket_3d(k3.source)] = true;
         }
     }
@@ -245,6 +245,7 @@ bool export_session(const ExportConfig &cfg, const AnnotationMap &amap,
             for (const auto &[fnum, fa] : amap) {
                 const int frame = (int)fnum - cfg.source_frame_start;
                 if (frame < 0 || frame >= cfg.n_frames) continue;   // rule 6
+                if (cfg.layers == ExportConfig::Layers::ThreeD) break;
                 for (size_t ci = 0; ci < fa.cameras.size() && ci < cfg.camera_names.size(); ci++) {
                     const auto &cam = fa.cameras[ci];
                     // red stores 2D keypoints in ImPlot coordinates, whose origin
@@ -309,8 +310,7 @@ bool export_session(const ExportConfig &cfg, const AnnotationMap &amap,
                 for (size_t ni = 0; ni < fa.kp3d.size() && ni < cfg.node_names.size(); ni++) {
                     const Keypoint3D &k3 = fa.kp3d[ni];
                     if (k3.source == Kp3DSource::None) continue;
-                    if (k3.source == Kp3DSource::Triangulated && !cfg.include_triangulated_3d)
-                        continue;
+                    if (cfg.layers == ExportConfig::Layers::TwoD) continue;
                     if (bucket_3d(k3.source) != job.b) continue;
                     if (!g_b.Append(gid).ok() || !f_b.Append(frame).ok() ||
                         !a_b.Append(animal_id).ok() || !p_b.Append(cfg.node_names[ni]).ok() ||

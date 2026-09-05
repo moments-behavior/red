@@ -44,17 +44,20 @@ struct ExportConfig {
 
     std::string units = "mm";
 
-    // §8 says a consumer derives 3D from 2D by triangulation and that "neither
-    // derivation is stored", so red's triangulated solve is excluded by
-    // default and the session ships keypoints.pq plus the calibration.
+    // Which label tables to write. §3 requires at least one of keypoints.pq
+    // and points3d.pq, and a session may legitimately carry either alone.
     //
-    // Note what "off" means in practice: triangulation is the ONLY thing in
-    // red that produces 3D, so a labelling project exports no 3D layer at all
-    // rather than a reduced one. Turn this on when the consumer wants red's
-    // specific solve -- triangulation is not unique, and two implementations
-    // can differ on outlier rejection and which views they use -- or when it
-    // does not triangulate for itself.
-    bool include_triangulated_3d = false;
+    // TwoD is the default because red's labels are per-camera 2D. Where those
+    // 2D are themselves reprojections of a 3D solve -- which is what dense,
+    // every-view labelling usually means -- writing both stores the same
+    // information twice, and §8 says a derivation is not stored. ThreeD alone
+    // is then the honest export.
+    //
+    // Whenever 3D is written it includes red's triangulated solve: asking for
+    // the 3D layer and getting an empty one would be worse than not offering
+    // the choice.
+    enum class Layers { TwoD, TwoDAndThreeD, ThreeD };
+    Layers layers = Layers::TwoD;
 
     // `labels` is closed at annotated|tracked and a session that is both must
     // be two sessions (§2.6). Rows partition by LabelSource/Kp3DSource; a

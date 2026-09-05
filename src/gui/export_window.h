@@ -38,7 +38,7 @@ struct ExportWindowState {
     };
     std::vector<TailcycleRange> tailcycle_ranges{{}};
     char tailcycle_session_id[128] = "";
-    bool tailcycle_include_triangulated_3d = false;
+    int tailcycle_layers = 0;   // 2D | 2D+3D | 3D only
     std::string tailcycle_range_error;
     bool include_video_index = false; // JARVIS: include video_index.json
     int scale_factor = 1; // JARVIS: write calibration so 3D reconstructs in (mm × scale_factor)
@@ -209,15 +209,17 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
             state.tailcycle_range_error = range_err;
 
             ImGui::Spacing();
-            ImGui::Checkbox("Include triangulated 3D",
-                            &state.tailcycle_include_triangulated_3d);
+            static const char *kLayers[] = {"2D keypoints", "2D keypoints + 3D",
+                                            "3D only"};
+            ImGui::Combo("Labels", &state.tailcycle_layers, kLayers, 3);
             ImGui::SetItemTooltip(
-                "Off: the session ships 2D labels and calibration, and a consumer "
-                "triangulates for itself.\n"
-                "Triangulation is the only source of 3D in red, so OFF means no 3D "
-                "layer at all -- not a reduced one.\n"
-                "On: ships red's own solve, for a consumer that wants these exact "
-                "numbers rather than its own.");
+                "2D keypoints: per-camera labels plus the calibration, and a "
+                "consumer triangulates for itself.\n"
+                "2D + 3D: also ships red's triangulated solve, for a consumer that "
+                "wants these exact numbers rather than its own.\n"
+                "3D only: the honest choice when the 2D are themselves "
+                "reprojections of a 3D solve -- writing both would store the same "
+                "information twice.");
 
         }
 
@@ -425,8 +427,7 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
                     std::vector<ExportWindowState::TailcycleRange> tc_rows;
                     if (dispatch_fmt == ExportFormats::TAILCYCLE) {
                         ecfg.tailcycle_session_id = state.tailcycle_session_id;
-                        ecfg.tailcycle_include_triangulated_3d =
-                            state.tailcycle_include_triangulated_3d;
+                        ecfg.tailcycle_layers = state.tailcycle_layers;
                         // n_frames must describe the media, not the labels: every
                         // frame index in the tables is validated against it, and
                         // the annotation range is usually a sparse subset.
