@@ -270,6 +270,32 @@ int main(int argc, char **argv) {
               "a triangulated point's confidence describes the solve, not the point");
     }
 
+    // ── 3a. projected 2D are derivations and are never written ──
+    {
+        const std::string out = root + "/t3a";
+        auto cfg = make_config(out);
+        AnnotationMap amap = make_annotations();
+        // Mark camB's points as projected from 3D, as an import would.
+        for (auto &[f, fa] : amap)
+            for (auto &kp : fa.cameras[1].keypoints)
+                if (kp.labeled) kp.source = LabelSource::Projected;
+        TailcycleExport::ExportStats st;
+        std::string status;
+        CHECK(TailcycleExport::export_session(cfg, amap, &st, &status),
+              "export with projected points succeeds: " + status);
+        // camB must not appear in ANY session -- a projected point is a
+        // derivation, not an observation, wherever it would have been bucketed.
+        for (const char *sfx : {"", "_annotated", "_tracked"}) {
+            const fs::path kf = fs::path(out) / "train" /
+                                (std::string("sess1") + sfx) / "keypoints.pq";
+            if (!fs::exists(kf)) continue;
+            auto k = read_pq(kf);
+            CHECK(k && dict_values(k, "camera").count("camB") == 0,
+                  std::string("camB absent from sess1") + sfx +
+                      ": its points were projected, not observed");
+        }
+    }
+
     // ── 3b. a 3D-only session writes no keypoints.pq at all ──
     {
         const std::string out = root + "/t3b";

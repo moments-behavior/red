@@ -130,6 +130,7 @@ inline bool save_2d_csv(const std::string &path, const std::string &skeleton_nam
                 f << ",";
                 if (kp.source == LabelSource::Predicted) f << "P";
                 else if (kp.source == LabelSource::Imported) f << "I";
+                else if (kp.source == LabelSource::Projected) f << "R";
             } else {
                 f << ",,,,";
             }
@@ -312,6 +313,7 @@ inline bool load_2d_csv(const std::string &path, AnnotationMap &amap,
                 cam.keypoints[k].confidence = has_c ? (float)c : 0.0f;
                 if (src == 'P') cam.keypoints[k].source = LabelSource::Predicted;
                 else if (src == 'I') cam.keypoints[k].source = LabelSource::Imported;
+                else if (src == 'R') cam.keypoints[k].source = LabelSource::Projected;
                 else cam.keypoints[k].source = LabelSource::Manual;
             }
             // else: stays at default (UNLABELED, labeled=false)

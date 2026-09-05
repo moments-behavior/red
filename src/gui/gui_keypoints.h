@@ -244,7 +244,7 @@ inline bool solve_midline_constraint(FrameAnnotation &fa,
                 fa.cameras[v].keypoints[node].x = rx;
                 fa.cameras[v].keypoints[node].y = ry;
                 fa.cameras[v].keypoints[node].labeled = true;
-                fa.cameras[v].keypoints[node].source = LabelSource::Predicted;
+                fa.cameras[v].keypoints[node].source = LabelSource::Projected;
             }
         }
     }

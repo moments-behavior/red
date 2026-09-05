@@ -23,7 +23,16 @@ static constexpr double UNLABELED = 1E7;
 enum class LabelSource : int {
     Manual    = 0,
     Predicted = 1,
-    Imported  = 2
+    Imported  = 2,
+    // A 3D point projected into this camera, not an observation of it. red
+    // fills views this way whenever it has 3D and no 2D: promoting a
+    // prediction, importing JARVIS or a 3D-only tailcycle session, or
+    // propagating a triangulated point to the other views.
+    //
+    // Kept separate from Predicted because a consumer must be able to tell a
+    // derived position from a claimed one -- the tailcycle exporter drops
+    // these rather than store the same information twice.
+    Projected = 3
 };
 
 // ── Per-keypoint 2D annotation ──

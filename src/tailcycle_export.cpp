@@ -51,6 +51,7 @@ Bucket bucket_2d(LabelSource s) {
     case LabelSource::Manual:    return Bucket::Annotated;
     case LabelSource::Predicted: return Bucket::Tracked;
     case LabelSource::Imported:  return Bucket::Tracked;
+    case LabelSource::Projected: return Bucket::Tracked;
     }
     return Bucket::Annotated;
 }
@@ -259,6 +260,12 @@ bool export_session(const ExportConfig &cfg, const AnnotationMap &amap,
                     for (size_t ni = 0; ni < cam.keypoints.size() && ni < cfg.node_names.size(); ni++) {
                         const Keypoint2D &kp = cam.keypoints[ni];
                         if (!kp.labeled) continue;   // no row, not `unlabeled` (§7)
+                        // A projected point is this session's own 3D seen from
+                        // one camera. §8: a consumer derives 2D from 3D, and
+                        // neither derivation is stored -- so writing it would
+                        // ship the same information twice, and claim an
+                        // observation nobody made.
+                        if (kp.source == LabelSource::Projected) continue;
                         if (bucket_2d(kp.source) != job.b) continue;
                         if (!g_b.Append(gid).ok() || !f_b.Append(frame).ok() ||
                             !a_b.Append(animal_id).ok() ||
