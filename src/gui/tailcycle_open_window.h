@@ -27,10 +27,11 @@
 
 struct TailcycleOpenState {
     bool show = false;
-    std::string session_dir;
-    std::vector<std::string> groups;
-    int group_idx = 0;
-    std::string scanned_dir;      // which dir `groups` was listed from
+    std::string root;                 // the dataset root, or a session folder
+    std::vector<TailcycleImport::SessionInfo> sessions;
+    std::string scanned;              // which root `sessions` came from
+    int group_idx = 0;                // for a session holding several groups
+    int selected = -1;                // row currently open
     std::string status;
 };
 
@@ -176,46 +177,89 @@ inline void DrawTailcycleOpenWindow(TailcycleOpenState &state, AppContext &ctx) 
                                "at configure time).");
             return;
         }
-        ImGui::TextDisabled("Point at a session folder: <dataset>/<split>/<session>/");
-        ImGui::InputText("Session folder", &state.session_dir);
+        ImGui::TextDisabled("Point at a dataset root; a single session folder works too.");
+        ImGui::InputText("Dataset", &state.root);
         ImGui::SameLine();
         if (ImGui::Button("Browse##tc_open")) {
             IGFD::FileDialogConfig cfg;
             cfg.countSelectionMax = 1;
-            cfg.path = state.session_dir;
+            cfg.path = state.root;
             cfg.flags = ImGuiFileDialogFlags_Modal;
             ImGuiFileDialog::Instance()->OpenDialog("ChooseTailcycleSession",
-                                                    "Choose Session Folder", nullptr, cfg);
+                                                    "Choose Dataset Folder", nullptr, cfg);
         }
 
-        // A session may hold several groups; a red project is one media folder,
-        // so one has to be chosen.
-        if (state.session_dir != state.scanned_dir) {
-            state.scanned_dir = state.session_dir;
-            state.groups.clear();
+        // Rescan when the path changes. The scan reads session.toml and one row
+        // of groups.pq per session, never the label tables, so it stays quick
+        // on a dataset whose tables run to millions of rows.
+        if (state.root != state.scanned) {
+            state.scanned = state.root;
+            state.sessions.clear();
+            state.selected = -1;
             state.group_idx = 0;
-            std::string err;
-            TailcycleImport::list_groups(state.session_dir, &state.groups, &err);
-        }
-        if (state.groups.size() > 1) {
-            std::vector<const char *> labels;
-            for (const auto &g : state.groups) labels.push_back(g.c_str());
-            ImGui::Combo("Group", &state.group_idx, labels.data(), (int)labels.size());
-        } else if (state.groups.size() == 1) {
-            ImGui::Text("Group: %s", state.groups[0].c_str());
+            if (!state.root.empty()) {
+                std::string err;
+                if (!TailcycleImport::scan_dataset(state.root, &state.sessions, &err))
+                    state.status = err;
+            }
         }
 
-        ImGui::Separator();
-        ImGui::BeginDisabled(state.groups.empty());
-        if (ImGui::Button("Open")) {
-            const std::string gid =
-                state.groups.empty() ? std::string()
-                                     : state.groups[(size_t)state.group_idx];
-            tailcycle_open_session(ctx, state.session_dir, gid, &state.status);
+        if (state.sessions.empty()) {
+            if (!state.root.empty())
+                ImGui::TextDisabled("Nothing here — expected <split>/<session>/session.toml");
+        } else {
+            ImGui::Spacing();
+            const ImGuiTableFlags tf = ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders |
+                                       ImGuiTableFlags_SizingStretchProp |
+                                       ImGuiTableFlags_ScrollY;
+            if (ImGui::BeginTable("##tc_sessions", 7, tf, ImVec2(0, 200))) {
+                ImGui::TableSetupScrollFreeze(0, 1);
+                for (const char *h : {"Split", "Session", "Labels", "Cams", "Frames",
+                                      "Layers", "Groups"})
+                    ImGui::TableSetupColumn(h);
+                ImGui::TableHeadersRow();
+                for (int i = 0; i < (int)state.sessions.size(); i++) {
+                    const auto &si = state.sessions[i];
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn();
+                    ImGui::PushID(i);
+                    if (ImGui::Selectable(si.split.c_str(), state.selected == i,
+                                          ImGuiSelectableFlags_SpanAllColumns)) {
+                        state.selected = i;
+                        state.group_idx = 0;
+                        const std::string gid =
+                            si.groups.empty() ? std::string() : si.groups[0];
+                        tailcycle_open_session(ctx, si.dir, gid, &state.status);
+                    }
+                    ImGui::PopID();
+                    ImGui::TableNextColumn(); ImGui::TextUnformatted(si.session_id.c_str());
+                    ImGui::TableNextColumn(); ImGui::TextUnformatted(si.labels.c_str());
+                    ImGui::TableNextColumn(); ImGui::Text("%d", si.n_cameras);
+                    ImGui::TableNextColumn(); ImGui::Text("%d", si.n_frames);
+                    ImGui::TableNextColumn();
+                    ImGui::TextUnformatted(si.has_2d && si.has_3d ? "2D+3D"
+                                           : si.has_2d           ? "2D"
+                                           : si.has_3d           ? "3D"
+                                                                 : "none");
+                    ImGui::TableNextColumn(); ImGui::Text("%d", (int)si.groups.size());
+                }
+                ImGui::EndTable();
+            }
+            ImGui::TextDisabled("Click a row to open it.");
+
+            // Only worth a control when there is a choice to make: a red project
+            // is one media folder, so one group at a time.
+            if (state.selected >= 0 &&
+                state.sessions[state.selected].groups.size() > 1) {
+                const auto &si = state.sessions[state.selected];
+                std::vector<const char *> labels;
+                for (const auto &g : si.groups) labels.push_back(g.c_str());
+                if (ImGui::Combo("Group", &state.group_idx, labels.data(),
+                                 (int)labels.size()))
+                    tailcycle_open_session(ctx, si.dir, si.groups[(size_t)state.group_idx],
+                                           &state.status);
+            }
         }
-        ImGui::EndDisabled();
-        if (state.groups.empty() && !state.session_dir.empty())
-            ImGui::TextDisabled("No groups/ found here — is this a session folder?");
 
         if (!state.status.empty()) {
             const bool bad = state.status.rfind("Opened", 0) != 0;
@@ -229,11 +273,11 @@ inline void DrawTailcycleOpenWindow(TailcycleOpenState &state, AppContext &ctx) 
                                                  ImGuiWindowFlags_NoCollapse,
                                                  ImVec2(680, 440))) {
             if (ImGuiFileDialog::Instance()->IsOk())
-                state.session_dir = ImGuiFileDialog::Instance()->GetCurrentPath();
+                state.root = ImGuiFileDialog::Instance()->GetCurrentPath();
             ImGuiFileDialog::Instance()->Close();
         }
         },
-        ImVec2(560, 300));
+        ImVec2(720, 420));
 }
 
 #endif // RED_TAILCYCLE_OPEN_WINDOW

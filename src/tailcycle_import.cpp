@@ -24,6 +24,10 @@ bool list_groups(const std::string &, std::vector<std::string> *, std::string *s
     if (s) *s = "This build has no Parquet support.";
     return false;
 }
+bool scan_dataset(const std::string &, std::vector<SessionInfo> *, std::string *s) {
+    if (s) *s = "This build has no Parquet support.";
+    return false;
+}
 bool read_session(const std::string &, const std::string &, Session *, ImportStats *,
                   std::string *s) {
     if (s) *s = "This build has no Parquet support.";
@@ -170,6 +174,64 @@ bool list_groups(const std::string &session_dir, std::vector<std::string> *out,
     for (const auto &e : fs::directory_iterator(g))
         if (e.is_directory()) out->push_back(e.path().filename().string());
     std::sort(out->begin(), out->end());
+    return !out->empty();
+}
+
+bool scan_dataset(const std::string &root, std::vector<SessionInfo> *out,
+                  std::string *status) {
+    if (!fs::is_directory(root)) {
+        if (status) *status = "Not a directory: " + root;
+        return false;
+    }
+    // A session is any directory holding a session.toml. Pointing at a session
+    // directly works too, which saves explaining the layout to someone who
+    // already has the path.
+    auto add = [&](const fs::path &d, const std::string &split) {
+        if (!fs::exists(d / "session.toml")) return;
+        SessionInfo si;
+        si.dir = d.string();
+        si.split = split;
+        si.session_id = d.filename().string();
+        std::ifstream f(d / "session.toml");
+        std::string text((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        si.mode = toml_string(text, "mode");
+        si.labels = toml_string(text, "labels");
+        si.n_nodes = (int)toml_strings(text, "names").size();
+        if (fs::exists(d / "calibration.toml")) {
+            std::ifstream cf(d / "calibration.toml");
+            std::string ctext((std::istreambuf_iterator<char>(cf)),
+                              std::istreambuf_iterator<char>());
+            for (size_t p = 0; (p = ctext.find("\nname = \"", p)) != std::string::npos; p++)
+                si.n_cameras++;
+            if (ctext.rfind("name = \"", 0) == 0) si.n_cameras++;   // first line
+        }
+        if (fs::is_directory(d / "groups"))
+            for (const auto &g : fs::directory_iterator(d / "groups"))
+                if (g.is_directory()) si.groups.push_back(g.path().filename().string());
+        std::sort(si.groups.begin(), si.groups.end());
+        si.has_2d = fs::exists(d / "keypoints.pq");
+        si.has_3d = fs::exists(d / "points3d.pq");
+        // One row, so this is cheap even for a large session.
+        if (auto gt = read_pq(d / "groups.pq")) {
+            NumCol nf(gt, "n_frames");
+            if (nf.ok && !nf.vals.empty()) si.n_frames = (int)nf.vals[0];
+        }
+        out->push_back(std::move(si));
+    };
+
+    add(fs::path(root), fs::path(root).parent_path().filename().string());
+    if (out->empty()) {
+        for (const auto &split : fs::directory_iterator(root)) {
+            if (!split.is_directory()) continue;
+            for (const auto &sess : fs::directory_iterator(split.path()))
+                if (sess.is_directory()) add(sess.path(), split.path().filename().string());
+        }
+    }
+    std::sort(out->begin(), out->end(), [](const SessionInfo &a, const SessionInfo &b) {
+        return a.split != b.split ? a.split < b.split : a.session_id < b.session_id;
+    });
+    if (out->empty() && status)
+        *status = "No sessions under " + root + " (looked for <split>/<session>/session.toml)";
     return !out->empty();
 }
 

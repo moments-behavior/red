@@ -49,6 +49,30 @@ struct Session {
     bool has_3d = false;
 };
 
+// One session's headline facts, read without touching the label tables --
+// johnson-mouse-tracked's are 158k rows, and a browser must not pay for that
+// to list what is available.
+struct SessionInfo {
+    std::string dir;          // <root>/<split>/<session>
+    std::string split;        // the parent folder name
+    std::string session_id;   // the folder name, which IS the id
+    std::string mode;         // "2d" | "3d"
+    std::string labels;       // "annotated" | "tracked"
+    int n_cameras = 0;
+    int n_nodes = 0;
+    std::vector<std::string> groups;
+    int n_frames = 0;         // of the first group
+    bool has_2d = false;      // keypoints.pq present
+    bool has_3d = false;      // points3d.pq present
+};
+
+// Walk <root>/<split>/<session>/ and summarise every session found. A session
+// is any directory holding a session.toml, so the split level is whatever its
+// parent happens to be called -- §2.1 makes split a directory name, not a
+// closed vocabulary.
+bool scan_dataset(const std::string &root, std::vector<SessionInfo> *out,
+                  std::string *status);
+
 struct ImportStats {
     int keypoint_rows = 0;
     int points3d_rows = 0;
