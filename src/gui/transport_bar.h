@@ -284,11 +284,19 @@ inline void DrawTransportBar(TransportBarState &state, AppContext &ctx) {
     }
 
     ImGui::SameLine(0, spacing);
-    float current_time_sec = state.edit_buf / dc->video_fps;
-    float total_time_sec = dc->estimated_num_frames / dc->video_fps;
-    std::string current_str = format_time(current_time_sec);
-    std::string total_str = format_time(total_time_sec);
-    ImGui::Text("%s / %s", current_str.c_str(), total_str.c_str());
+    if (ctx.input_is_imgs) {
+        // An image sequence has no timebase -- load_images sets video_fps to 1
+        // so the clock would read 00:00:07 for frame 7, which looks like a
+        // duration and is not one. Count frames instead.
+        ImGui::Text("frame %d / %d", (int)state.edit_buf,
+                    (int)dc->estimated_num_frames);
+    } else {
+        float current_time_sec = state.edit_buf / dc->video_fps;
+        float total_time_sec = dc->estimated_num_frames / dc->video_fps;
+        std::string current_str = format_time(current_time_sec);
+        std::string total_str = format_time(total_time_sec);
+        ImGui::Text("%s / %s", current_str.c_str(), total_str.c_str());
+    }
 
     // === Playback rate ===
     ImGui::SameLine(0, spacing * 3);
