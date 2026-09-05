@@ -53,9 +53,7 @@ struct Keypoint2D {
 };
 
 // ── 3D label provenance ──
-// Tracks where a Keypoint3D's values came from. Combined with `reviewed`,
-// this drives the active-learning loop: predictions need review, approved or
-// edited points become training-quality.
+// Tracks where a Keypoint3D's values came from.
 // Values 2 (HybridNet) and 3 (Manual) were removed: nothing ever produced
 // them. red has no UI for placing a 3D point directly, and HybridNet output
 // arrives through set_imported(). The numbering is left alone so the two are
@@ -74,7 +72,6 @@ struct Keypoint3D {
     double z = UNLABELED;
     bool   triangulated = false;             // legacy presence flag, kept in sync with source != None
     Kp3DSource source = Kp3DSource::None;    // immediate provenance of the values
-    bool   reviewed = false;                 // user signed off (approved or edited)
     float  confidence   = 0.0f;
 
     // Setter helpers keep `triangulated` (legacy bool) and `source` in sync.
@@ -88,14 +85,11 @@ struct Keypoint3D {
     void set_imported(float conf = 1.0f) {
         source = Kp3DSource::Imported;
         triangulated = true;
-        reviewed = false;
         confidence = conf;
     }
-    void approve() { reviewed = true; }      // accept current values without changing them
     void clear() {
         source = Kp3DSource::None;
         triangulated = false;
-        reviewed = false;
         confidence = 0.0f;
     }
 };

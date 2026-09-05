@@ -228,8 +228,6 @@ inline bool solve_midline_constraint(FrameAnnotation &fa,
         fa.kp3d[node].y = X(1);
         fa.kp3d[node].z = X(2);
         fa.kp3d[node].set_triangulated();
-        // Single manual side label drives it → treat as reviewed iff manual.
-        fa.kp3d[node].reviewed = (kp.source == LabelSource::Manual);
         n_solved++;
 
         // Reproject into every OTHER view for verification (keep the side
@@ -330,20 +328,7 @@ inline void reprojection(FrameAnnotation &fa, SkeletonContext *skeleton,
             fa.kp3d[node].y = pt3d(1);
             fa.kp3d[node].z = pt3d(2);
             // Reviewed=true iff every contributing 2D label was Manual.
-            // Mixed (manual + predicted) contributions count as un-reviewed
-            // until the user explicitly approves the resulting 3D point.
-            bool all_manual = true;
-            for (u32 view_idx = 0; view_idx < scene->num_cams; view_idx++) {
-                if (view_idx >= (u32)fa.cameras.size()) continue;
-                if (node >= (u32)fa.cameras[view_idx].keypoints.size()) continue;
-                const auto &kp2d = fa.cameras[view_idx].keypoints[node];
-                if (kp2d.labeled && kp2d.source != LabelSource::Manual) {
-                    all_manual = false;
-                    break;
-                }
-            }
             fa.kp3d[node].set_triangulated();
-            fa.kp3d[node].reviewed = all_manual;
 
             for (u32 view_idx = 0; view_idx < scene->num_cams; view_idx++) {
                 if (view_idx >= (u32)fa.cameras.size()) continue;
