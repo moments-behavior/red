@@ -108,5 +108,9 @@ void image_loader(DecoderContext *dc_context,
                   SeekInfo *seek_info, bool use_cpu_buffer,
                   std::string cam_name, std::string root_dir,
                   std::string file_ext,
-                  ImageLayout layout = ImageLayout::Flat);
+                  // Not defaulted: image_loader is only ever invoked through a
+                  // function pointer (std::thread), and default arguments do
+                  // not apply there -- a missing argument would surface as an
+                  // "attempt to use a deleted function" inside <thread>.
+                  ImageLayout layout);
 #endif

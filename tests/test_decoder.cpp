@@ -235,7 +235,7 @@ void run_image_loader_test(const std::string &dir, const char *ext, bool jpeg,
     si.seek_accurate = false;
 
     std::thread loader(image_loader, &dc, std::cref(names), ring, kRing, &si,
-                       true, cam, dir, std::string(ext));
+                       true, cam, dir, std::string(ext), ImageLayout::Flat);
 
     int head = 0;
     for (int expected = 0; expected < kImgCount; expected++) {
