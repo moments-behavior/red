@@ -55,7 +55,14 @@ inline void DrawKeypointsWindow(AppContext &ctx) {
             // the table): a specific cell, a column header, or neither.
             int hover_row = -1, hover_node = -1, hover_header_node = -1;
 
-            if (ImGui::BeginTable("table_angled_headers", columns_count,
+            // The table ID carries the skeleton name. ImGui saves column
+            // settings -- widths, visibility, display order -- per table ID in
+            // the ini, so a fixed ID makes a 24-keypoint skeleton inherit the
+            // layout of a 25-keypoint one opened earlier: same columns, wrong
+            // arrangement, and no way to tell from the data.
+            const std::string table_id =
+                "table_angled_headers##" + skeleton.name;
+            if (ImGui::BeginTable(table_id.c_str(), columns_count,
                                   table_flags, table_size)) {
                 ImGui::TableSetupColumn(
                     "Name", ImGuiTableColumnFlags_NoHide |
