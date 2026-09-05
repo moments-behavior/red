@@ -19,14 +19,24 @@ inline void load_project_from_path(
     // A tailcycle session is a directory holding a session.toml, not a
     // .redproj. Recents carry both, so route by what is actually there rather
     // than asking the caller to know which kind of path it has.
-    if (std::filesystem::is_directory(cfg_path) &&
-        std::filesystem::exists(cfg_path / "session.toml")) {
-        std::string status;
-        if (!tailcycle_open_session(ctx, cfg_path.string(), std::string(), &status))
-            ctx.popups.pushError(status);
-        else
-            ctx.toasts.pushSuccess(status);
-        return;
+    if (std::filesystem::is_directory(cfg_path)) {
+        if (std::filesystem::exists(cfg_path / "session.toml")) {
+            std::string status;
+            if (!tailcycle_open_session(ctx, cfg_path.string(), std::string(), &status))
+                ctx.popups.pushError(status);
+            else
+                ctx.toasts.pushSuccess(status);
+            return;
+        }
+        // A dataset root: show the browser pointed at it rather than guessing
+        // which session was meant. The panel rescans when its root changes.
+        std::vector<TailcycleImport::SessionInfo> probe;
+        std::string err;
+        if (TailcycleImport::scan_dataset(cfg_path.string(), &probe, &err)) {
+            win.tailcycle_open.root = cfg_path.string();
+            win.tailcycle_open.show = true;
+            return;
+        }
     }
 
     // Legacy calibration projects share the .redproj extension; detect them so
