@@ -1011,7 +1011,7 @@ void image_loader(DecoderContext *dc_context,
                   PictureBuffer *display_buffer, int size_of_buffer,
                   SeekInfo *seek_info, bool use_cpu_buffer,
                   std::string cam_name, std::string root_dir,
-                  std::string file_ext) {
+                  std::string file_ext, ImageLayout layout) {
     int buffer_head = 0;
     int frame_number = 0;
     dc_context->total_num_frame = img_list_vector.size();
@@ -1031,9 +1031,9 @@ void image_loader(DecoderContext *dc_context,
         } else {
             if (frame_number < (int)img_list_vector.size()) {
                 if (frame_number == 0) {
-                    std::string file_name = root_dir + "/" + cam_name + "_" +
-                                            img_list_vector[frame_number] +
-                                            "." + file_ext;
+                    std::string file_name = image_frame_path(
+                            root_dir, cam_name, img_list_vector[frame_number],
+                            file_ext, layout);
                     load_image_rgba(file_name,
                                     display_buffer[buffer_head].frame, nullptr);
                     display_buffer[buffer_head].available_to_write = false;
@@ -1045,9 +1045,9 @@ void image_loader(DecoderContext *dc_context,
                         std::this_thread::sleep_for(
                             std::chrono::milliseconds(1));
                     }
-                    std::string file_name = root_dir + "/" + cam_name + "_" +
-                                            img_list_vector[frame_number] +
-                                            "." + file_ext;
+                    std::string file_name = image_frame_path(
+                            root_dir, cam_name, img_list_vector[frame_number],
+                            file_ext, layout);
                     load_image_rgba(file_name,
                                     display_buffer[buffer_head].frame, nullptr);
                     display_buffer[buffer_head].available_to_write = false;

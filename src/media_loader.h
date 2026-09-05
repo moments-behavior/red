@@ -39,6 +39,36 @@ inline bool enabled() {
 }  // namespace load_timing
 
 // Tear down existing media (decoder threads, demuxers, scene memory)
+// Build the selected_files map load_images expects from a directory laid out
+// as <root>/<cam>/<name>.<ext> -- which is what a tailcycle-dataset group
+// holds. Keys stay "<cam>_<file>" because that is what load_images parses; the
+// layout flag is what decides how the path is rebuilt when reading.
+inline bool scan_per_camera_dirs(const std::string &root,
+                                 std::map<std::string, std::string> &out,
+                                 std::string *err = nullptr) {
+    namespace fs = std::filesystem;
+    if (!fs::is_directory(root)) {
+        if (err) *err = "Not a directory: " + root;
+        return false;
+    }
+    for (const auto &cam : fs::directory_iterator(root)) {
+        if (!cam.is_directory()) continue;
+        const std::string cam_name = cam.path().filename().string();
+        // A camera name containing '_' would break load_images, which splits
+        // the key on the first underscore to recover it.
+        if (cam_name.find('_') != std::string::npos) {
+            if (err) *err = "Camera directory name contains '_': " + cam_name;
+            return false;
+        }
+        for (const auto &f : fs::directory_iterator(cam.path())) {
+            if (!f.is_regular_file()) continue;
+            out[cam_name + "_" + f.path().filename().string()] = f.path().string();
+        }
+    }
+    if (out.empty() && err) *err = "No per-camera image directories under " + root;
+    return !out.empty();
+}
+
 // so that load_images or load_videos can be called cleanly.
 inline void
 unload_media(PlaybackState &ps, ProjectManager &pm,
@@ -174,7 +204,8 @@ load_images(std::map<std::string, std::string> &selected_files,
             DecoderContext *dc_context, int label_buffer_size,
             std::vector<std::thread> &decoder_threads,
             std::vector<bool> &is_view_focused,
-            std::unordered_map<std::string, bool> &window_was_decoding) {
+            std::unordered_map<std::string, bool> &window_was_decoding,
+            ImageLayout layout = ImageLayout::Flat) {
 
     std::string file_ext;
     for (const auto &elem : selected_files) {
@@ -243,7 +274,7 @@ load_images(std::map<std::string, std::string> &selected_files,
             std::thread(&image_loader, dc_context, imgs_names,
                         scene->display_buffer[i], scene->size_of_buffer,
                         &scene->seek_context[i], scene->use_cpu_buffer,
-                        pm.camera_names[i], pm.media_folder, file_ext));
+                        pm.camera_names[i], pm.media_folder, file_ext, layout));
         is_view_focused.push_back(false);
     }
     ps.video_loaded = true;

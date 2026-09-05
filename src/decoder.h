@@ -85,10 +85,28 @@ void decoder_process(DecoderContext *dc_context, FFmpegDemuxer *demuxer,
                      int size_of_buffer, SeekInfo *seek_info,
                      bool use_cpu_buffer,
                      const sync_plan::SyncCam *sync_cam = nullptr);
+// How an image-sequence project lays its frames out on disk.
+//   Flat        <root>/<cam>_<name>.<ext>   -- red's own convention
+//   PerCameraDir <root>/<cam>/<name>.<ext>  -- what a tailcycle-dataset group
+//                                              holds, so such a group can be
+//                                              opened without restructuring it
+enum class ImageLayout { Flat, PerCameraDir };
+
+inline std::string image_frame_path(const std::string &root_dir,
+                                    const std::string &cam_name,
+                                    const std::string &name,
+                                    const std::string &file_ext,
+                                    ImageLayout layout) {
+    return layout == ImageLayout::PerCameraDir
+               ? root_dir + "/" + cam_name + "/" + name + "." + file_ext
+               : root_dir + "/" + cam_name + "_" + name + "." + file_ext;
+}
+
 void image_loader(DecoderContext *dc_context,
                   const std::vector<std::string> &img_list_vector,
                   PictureBuffer *display_buffer, int size_of_buffer,
                   SeekInfo *seek_info, bool use_cpu_buffer,
                   std::string cam_name, std::string root_dir,
-                  std::string file_ext);
+                  std::string file_ext,
+                  ImageLayout layout = ImageLayout::Flat);
 #endif
