@@ -201,6 +201,20 @@ inline void DrawTailcycleOpenWindow(TailcycleOpenState &state, AppContext &ctx) 
                 std::string err;
                 if (!TailcycleImport::scan_dataset(state.root, &state.sessions, &err))
                     state.status = err;
+                // Open the first session straight away. Pointing at a dataset
+                // is a request to look at it, and the list is for switching
+                // between sessions rather than a gate in front of the first.
+                if (!state.sessions.empty()) {
+                    const auto &si = state.sessions.front();
+                    if (tailcycle_open_session(
+                            ctx, si.dir,
+                            si.groups.empty() ? std::string() : si.groups[0],
+                            &state.status)) {
+                        state.selected = 0;
+                        ctx.user_settings.push_recent_project(state.root);
+                        save_user_settings(ctx.user_settings);
+                    }
+                }
             }
         }
 
