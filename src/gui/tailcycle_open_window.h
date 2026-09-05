@@ -25,7 +25,7 @@
 #include <vector>
 
 struct TailcycleOpenState {
-    bool enabled = false;
+    bool show = false;
     std::string session_dir;
     std::vector<std::string> groups;
     int group_idx = 0;
@@ -125,7 +125,7 @@ inline bool tailcycle_open_session(AppContext &ctx, const std::string &session_d
 }
 
 inline void DrawTailcycleOpenWindow(TailcycleOpenState &state, AppContext &ctx) {
-    DrawPanel("Open tailcycle Dataset", state.enabled, [&]() {
+    DrawPanel("Open tailcycle Dataset", state.show, [&]() {
         if (!TailcycleImport::available()) {
             ImGui::TextWrapped("This build has no Parquet support (Arrow was not found "
                                "at configure time).");
