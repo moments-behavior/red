@@ -109,9 +109,11 @@ inline bool tailcycle_open_session(AppContext &ctx, const std::string &session_d
             return false;
         }
         ctx.imgs_names.clear();
+        // groups.pq declares the source recording's fps, so the clock-paced
+        // playback speeds mean something here even though the frames are stills.
         load_images(files, ctx.ps, ctx.pm, ctx.imgs_names, ctx.scene, ctx.dc_context,
                     ctx.label_buffer_size, ctx.decoder_threads, ctx.is_view_focused,
-                    ctx.window_was_decoding, ImageLayout::PerCameraDir);
+                    ctx.window_was_decoding, ImageLayout::PerCameraDir, s.fps);
     } else {
         std::map<std::string, std::string> none;
         load_videos(none, ctx.ps, ctx.pm, ctx.window_was_decoding, ctx.demuxers,

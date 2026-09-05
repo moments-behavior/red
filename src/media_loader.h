@@ -205,7 +205,12 @@ load_images(std::map<std::string, std::string> &selected_files,
             std::vector<std::thread> &decoder_threads,
             std::vector<bool> &is_view_focused,
             std::unordered_map<std::string, bool> &window_was_decoding,
-            ImageLayout layout = ImageLayout::Flat) {
+            ImageLayout layout = ImageLayout::Flat,
+            // Frames per second of the source recording, when it is known --
+            // a tailcycle group declares one. 0 means "no timebase", which is
+            // the honest default for a folder of images: the clock-paced
+            // playback speeds have nothing to pace against.
+            float fps = 0.0f) {
 
     std::string file_ext;
     for (const auto &elem : selected_files) {
@@ -240,7 +245,7 @@ load_images(std::map<std::string, std::string> &selected_files,
               });
 
     dc_context->seek_interval = 1;
-    dc_context->video_fps = 1;
+    dc_context->video_fps = fps > 0.0f ? fps : 1.0;
     ps.realtime_playback = false;
     scene->num_cams = pm.camera_names.size();
     scene->image_width = (u32 *)malloc(sizeof(u32) * scene->num_cams);

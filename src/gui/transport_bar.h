@@ -335,13 +335,24 @@ inline void DrawTransportBar(TransportBarState &state, AppContext &ctx) {
     ImGui::TextColored(label_col, "Playback Speed");
     ImGui::SameLine(0, spacing);
     ImGui::SetNextItemWidth(130.0f);
+    // An image sequence with no declared fps has no timebase: video_fps is 1,
+    // so "1x" would advance one frame per second and "1/16x" one every sixteen.
+    // That reads as not playing at all, so those choices are disabled rather
+    // than offered and quietly useless.
+    const bool no_timebase = ctx.input_is_imgs && dc->video_fps <= 1.0;
     if (ImGui::BeginCombo("##playbackspeed", kSpeeds[speed_idx].label)) {
         for (int i = 0; i < kNumSpeeds; ++i) {
+            ImGui::BeginDisabled(no_timebase && kSpeeds[i].clock_paced);
             if (ImGui::Selectable(kSpeeds[i].label, i == speed_idx)) {
                 ps.realtime_playback = kSpeeds[i].clock_paced;
                 if (kSpeeds[i].clock_paced)
                     ps.set_playback_speed = kSpeeds[i].speed;
             }
+            ImGui::EndDisabled();
+            if (no_timebase && kSpeeds[i].clock_paced && ImGui::IsItemHovered(
+                    ImGuiHoveredFlags_AllowWhenDisabled))
+                ImGui::SetTooltip("These images declare no frame rate, so there is "
+                                  "nothing to play them against.");
             if (i == speed_idx) ImGui::SetItemDefaultFocus();
         }
         ImGui::EndCombo();
