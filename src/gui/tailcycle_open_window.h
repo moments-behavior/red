@@ -15,6 +15,7 @@
 #include "app_context.h"
 #include "imgui.h"
 #include "media_loader.h"
+#include "gui/gui_keypoints.h"
 #include "tailcycle_import.h"
 #include "gui/panel.h"
 #include "ImGuiFileDialog.h"
@@ -99,6 +100,40 @@ inline bool tailcycle_open_session(AppContext &ctx, const std::string &session_d
 
     tailcycle_skeleton_from_session(s, ctx.skeleton);
     ctx.annotations = s.annotations;
+
+    // A session may carry 3D and no per-camera 2D at all -- johnson-mouse-tracked
+    // is exactly that. §8 expects a consumer to derive what it needs ("2D from 3D
+    // by projection"), and without it the camera views open with no labels on
+    // them. red already does this for imported JARVIS predictions, and marks the
+    // result Predicted, so follow that.
+    //
+    // These are derived, not observations. Re-exporting this session would write
+    // them as real 2D rows, which §8 says not to store -- so treat an imported
+    // 3D-only session as something to look at rather than a round trip.
+    int reprojected = 0;
+    if (!s.has_2d && s.has_3d) {
+        for (auto &[frame, fa] : ctx.annotations) {
+            for (size_t n = 0; n < fa.kp3d.size(); n++) {
+                const Keypoint3D &k3 = fa.kp3d[n];
+                if (k3.source == Kp3DSource::None) continue;
+                const Eigen::Vector3d p3d(k3.x, k3.y, k3.z);
+                for (size_t c = 0; c < fa.cameras.size() && c < s.calibration.size(); c++) {
+                    double px = 0, py = 0;
+                    if (!reproject_3d_to_cam(p3d, s.calibration[c],
+                                             s.calibration[c].image_width,
+                                             s.calibration[c].image_height, px, py))
+                        continue;   // behind the camera or outside the frame
+                    Keypoint2D &kp = fa.cameras[c].keypoints[n];
+                    kp.x = px;
+                    kp.y = py;
+                    kp.labeled = true;
+                    kp.source = LabelSource::Predicted;
+                    kp.confidence = k3.confidence;
+                    reprojected++;
+                }
+            }
+        }
+    }
     ctx.input_is_imgs = has_dirs;
 
     if (has_dirs) {
@@ -127,6 +162,9 @@ inline bool tailcycle_open_session(AppContext &ctx, const std::string &session_d
                   std::to_string(s.n_frames) + " frames, " +
                   std::to_string(st.keypoint_rows) + " 2D and " +
                   std::to_string(st.points3d_rows) + " 3D labels" +
+                  (reprojected ? ", " + std::to_string(reprojected) +
+                                     " 2D reprojected from 3D"
+                               : std::string()) +
                   (has_dirs ? " (images)" : " (videos)");
     return true;
 }
