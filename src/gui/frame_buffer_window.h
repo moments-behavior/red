@@ -49,10 +49,32 @@ inline void DrawFrameBufferWindow(AppContext &ctx, int select_corr_head) {
                 int frame_num =
                     scene.display_buffer[visible_idx][buf_idx].frame_number;
 
-                char label[32];
-                if (ctx.input_is_imgs)
-                    snprintf(label, sizeof(label), "%d:%s",
-                             frame_num, ctx.imgs_names[i].c_str());
+                // The frame number is the label. For images the source file
+                // name is worth appending only when it differs from the frame
+                // index -- a tailcycle group names frame 477 "000477", so
+                // printing both would just repeat itself.
+                //
+                // This used to index imgs_names by `i`, the ring-slot position,
+                // which named an unrelated file: "477:000017" meant "frame 477
+                // sits in slot 17".
+                char label[64];
+                const std::string *src_name = nullptr;
+                if (ctx.input_is_imgs && frame_num >= 0 &&
+                    frame_num < (int)ctx.imgs_names.size()) {
+                    const std::string &n = ctx.imgs_names[frame_num];
+                    // Not stoi: this runs every frame in the render loop, and a
+                    // non-numeric name would throw rather than mislabel.
+                    long v = 0;
+                    bool numeric = !n.empty();
+                    for (char c : n) {
+                        if (c < '0' || c > '9') { numeric = false; break; }
+                        v = v * 10 + (c - '0');
+                    }
+                    if (!numeric || v != frame_num) src_name = &n;
+                }
+                if (src_name)
+                    snprintf(label, sizeof(label), "%d (%s)", frame_num,
+                             src_name->c_str());
                 else
                     snprintf(label, sizeof(label), "%d", frame_num);
 
