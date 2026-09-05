@@ -1,5 +1,6 @@
 #pragma once
 #include "app_context.h"
+#include "gui/tailcycle_open_window.h"
 #include "gui/window_states.h"
 #include <ImGuiFileDialog.h>
 #include <filesystem>
@@ -14,6 +15,19 @@ inline void load_project_from_path(
     std::function<void(const std::string &)> print_summary_fn,
     std::function<void()> nuke_inference_fn = nullptr) {
     auto &pm = ctx.pm;
+
+    // A tailcycle session is a directory holding a session.toml, not a
+    // .redproj. Recents carry both, so route by what is actually there rather
+    // than asking the caller to know which kind of path it has.
+    if (std::filesystem::is_directory(cfg_path) &&
+        std::filesystem::exists(cfg_path / "session.toml")) {
+        std::string status;
+        if (!tailcycle_open_session(ctx, cfg_path.string(), std::string(), &status))
+            ctx.popups.pushError(status);
+        else
+            ctx.toasts.pushSuccess(status);
+        return;
+    }
 
     // Legacy calibration projects share the .redproj extension; detect them so
     // the failure is explicit rather than a confusing parse error from the

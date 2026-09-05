@@ -157,6 +157,12 @@ inline bool tailcycle_open_session(AppContext &ctx, const std::string &session_d
                     ctx.decoder_threads, ctx.is_view_focused);
     }
 
+    // Recents hold a .redproj path for ordinary projects and a session
+    // directory for these. load_project_from_path tells them apart by looking
+    // for a session.toml, so one list serves both.
+    ctx.user_settings.push_recent_project(session_dir);
+    save_user_settings(ctx.user_settings);
+
     if (status)
         *status = "Opened " + s.session_id + "/" + s.group_id + " — " +
                   std::to_string(s.camera_names.size()) + " cameras, " +
