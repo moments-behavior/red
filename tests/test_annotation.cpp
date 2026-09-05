@@ -2135,8 +2135,8 @@ static void test_keypoint_clipboard_ops() {
 
     // Source: node0 labeled in cam0; node1 labeled in cam1 + 3D; node2 empty
     FrameAnnotation src = make_frame(NN, NC, 10);
-    src.cameras[0].keypoints[0] = Keypoint2D{100.0, 200.0, true, 0.5f, LabelSource::Manual};
-    src.cameras[1].keypoints[1] = Keypoint2D{ 11.0,  22.0, true, 0.0f, LabelSource::Manual};
+    src.cameras[0].keypoints[0] = Keypoint2D{100.0, 200.0, true, 0.5f, false};
+    src.cameras[1].keypoints[1] = Keypoint2D{ 11.0,  22.0, true, 0.0f, false};
     src.kp3d[1].x = 1.0; src.kp3d[1].y = 2.0; src.kp3d[1].z = 3.0;
     src.kp3d[1].set_triangulated();
 
@@ -2155,7 +2155,7 @@ static void test_keypoint_clipboard_ops() {
 
     // Paste overwrites, including a pre-existing label on node0/cam0
     FrameAnnotation dst = make_frame(NN, NC, 20);
-    dst.cameras[0].keypoints[0] = Keypoint2D{5.0, 5.0, true, 1.0f, LabelSource::Predicted};
+    dst.cameras[0].keypoints[0] = Keypoint2D{5.0, 5.0, true, 1.0f, false};
     int pasted = paste_keypoints(kc, dst, NN, NC);
     EXPECT_EQ(pasted, 2);
     EXPECT_TRUE(dst.cameras[0].keypoints[0].labeled);

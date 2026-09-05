@@ -128,9 +128,11 @@ inline bool save_2d_csv(const std::string &path, const std::string &skeleton_nam
                 if (kp.confidence > 0.0f)
                     f << kp.confidence;
                 f << ",";
-                if (kp.source == LabelSource::Predicted) f << "P";
-                else if (kp.source == LabelSource::Imported) f << "I";
-                else if (kp.source == LabelSource::Projected) f << "R";
+                // Historically this column held a provenance letter (M/P/I).
+                // It now records only whether the position was projected from
+                // 3D; an old file's P or I reads back as not-projected, which
+                // is right -- those were observations however they arrived.
+                if (kp.projected) f << "R";
             } else {
                 f << ",,,,";
             }
@@ -309,10 +311,7 @@ inline bool load_2d_csv(const std::string &path, AnnotationMap &amap,
                 cam.keypoints[k].y = y;
                 cam.keypoints[k].labeled = true;
                 cam.keypoints[k].confidence = has_c ? (float)c : 0.0f;
-                if (src == 'P') cam.keypoints[k].source = LabelSource::Predicted;
-                else if (src == 'I') cam.keypoints[k].source = LabelSource::Imported;
-                else if (src == 'R') cam.keypoints[k].source = LabelSource::Projected;
-                else cam.keypoints[k].source = LabelSource::Manual;
+                cam.keypoints[k].projected = (src == 'R');
             }
             // else: stays at default (UNLABELED, labeled=false)
         }

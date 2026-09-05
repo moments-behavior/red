@@ -39,6 +39,7 @@ struct ExportWindowState {
     std::vector<TailcycleRange> tailcycle_ranges{{}};
     char tailcycle_session_id[128] = "";
     int tailcycle_layers = 0;   // 2D | 2D+3D | 3D only
+    int tailcycle_labels_idx = 0;   // annotated | tracked
     std::string tailcycle_range_error;
     bool include_video_index = false; // JARVIS: include video_index.json
     int scale_factor = 1; // JARVIS: write calibration so 3D reconstructs in (mm × scale_factor)
@@ -211,7 +212,7 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
             ImGui::Spacing();
             static const char *kLayers[] = {"2D keypoints", "2D keypoints + 3D",
                                             "3D only"};
-            ImGui::Combo("Labels", &state.tailcycle_layers, kLayers, 3);
+            ImGui::Combo("Layers", &state.tailcycle_layers, kLayers, 3);
             ImGui::SetItemTooltip(
                 "2D keypoints: per-camera labels plus the calibration, and a "
                 "consumer triangulates for itself.\n"
@@ -220,6 +221,14 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
                 "3D only: the honest choice when the 2D are themselves "
                 "reprojections of a 3D solve -- writing both would store the same "
                 "information twice.");
+
+            static const char *kLabelKinds[] = {"annotated (a human placed these)",
+                                                "tracked (a machine produced these)"};
+            ImGui::Combo("Labels", &state.tailcycle_labels_idx, kLabelKinds, 2);
+            ImGui::SetItemTooltip(
+                "The one thing a consumer cannot recover from the tables, so it "
+                "has to be declared. A training sampler weights hand-annotated "
+                "stills against machine-tracked clips using it.");
 
         }
 
@@ -428,6 +437,7 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
                     if (dispatch_fmt == ExportFormats::TAILCYCLE) {
                         ecfg.tailcycle_session_id = state.tailcycle_session_id;
                         ecfg.tailcycle_layers = state.tailcycle_layers;
+                        ecfg.tailcycle_labels_tracked = state.tailcycle_labels_idx == 1;
                         // n_frames must describe the media, not the labels: every
                         // frame index in the tables is validated against it, and
                         // the annotation range is usually a sparse subset.

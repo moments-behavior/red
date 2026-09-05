@@ -34,37 +34,6 @@ namespace fs = std::filesystem;
 
 namespace {
 
-// Which of the two sessions (§2.6) a point belongs to. The partition is per
-// *point*, not per frame: red lets a frame hold hand-placed keypoints in one
-// camera and predicted ones in another.
-enum class Bucket { Annotated, Tracked };
-
-// `Imported` is machine output, not a third category. Nothing in red imports
-// hand-made labels into it: red's own CSV round-trips the source letter, so
-// hand labels reload as Manual, and the only writers of Imported are the
-// JARVIS importer (gui/jarvis_import_window.h) and red.cpp, which sets it
-// with the comment "predicted, awaiting review". If a future import path
-// brings in genuine human labels, it should set Manual rather than teach this
-// function a new case.
-Bucket bucket_2d(LabelSource s) {
-    switch (s) {
-    case LabelSource::Manual:    return Bucket::Annotated;
-    case LabelSource::Predicted: return Bucket::Tracked;
-    case LabelSource::Imported:  return Bucket::Tracked;
-    case LabelSource::Projected: return Bucket::Tracked;
-    }
-    return Bucket::Annotated;
-}
-
-Bucket bucket_3d(Kp3DSource s) {
-    switch (s) {
-    case Kp3DSource::Triangulated: return Bucket::Annotated;  // derived from 2D labels
-    case Kp3DSource::Imported:     return Bucket::Tracked;    // model predictions
-    case Kp3DSource::None:         return Bucket::Annotated;
-    }
-    return Bucket::Annotated;
-}
-
 std::string toml_str(const std::string &v) { return "\"" + v + "\""; }
 
 std::string toml_name_list(const std::vector<std::string> &v) {
@@ -177,38 +146,33 @@ bool export_session(const ExportConfig &cfg, const AnnotationMap &amap,
     const std::string gid = cfg.group_id.empty() ? cfg.session_id : cfg.group_id;
     const std::string animal_id = "a00";   // matches the convention in johnson-mouse-tracked
 
-    // ── which buckets actually have data ──
-    bool has[2] = {false, false};
+    // Something has to be written: §3 requires a non-empty label table.
+    bool any = false;
     for (const auto &[fnum, fa] : amap) {
-        for (const auto &cam : fa.cameras)
-            for (const auto &kp : cam.keypoints)
-                if (kp.labeled) has[(int)bucket_2d(kp.source)] = true;
-        for (const auto &k3 : fa.kp3d) {
-            if (k3.source == Kp3DSource::None) continue;
-            if (cfg.layers == ExportConfig::Layers::TwoD) continue;
-            has[(int)bucket_3d(k3.source)] = true;
-        }
+        if (cfg.layers != ExportConfig::Layers::ThreeD)
+            for (const auto &cam : fa.cameras)
+                for (const auto &kp : cam.keypoints)
+                    if (kp.labeled && !kp.projected) any = true;
+        if (cfg.layers != ExportConfig::Layers::TwoD)
+            for (const auto &k3 : fa.kp3d)
+                if (k3.source != Kp3DSource::None) any = true;
     }
-    if (!has[0] && !has[1]) return fail("Nothing to export: no labelled points.");
+    if (!any) return fail("Nothing to export: no labels of the selected kind.");
 
-    struct Job { Bucket b; const char *labels; std::string suffix; };
-    std::vector<Job> jobs;
-    const bool both = has[0] && has[1] && cfg.export_annotated && cfg.export_tracked;
-    if (has[0] && cfg.export_annotated)
-        jobs.push_back({Bucket::Annotated, Tailcycle::labels::kAnnotated, both ? "_annotated" : ""});
-    if (has[1] && cfg.export_tracked)
-        jobs.push_back({Bucket::Tracked, Tailcycle::labels::kTracked, both ? "_tracked" : ""});
-    if (jobs.empty()) return fail("Nothing selected to export.");
+    {
 
-    for (const Job &job : jobs) {
-        const std::string sid = cfg.session_id + job.suffix;
+        const std::string sid = cfg.session_id;
         const fs::path dir = fs::path(cfg.output_folder) / cfg.split / sid;
         std::error_code ec;
         fs::create_directories(dir / "groups" / gid, ec);
         if (ec) return fail("Cannot create " + dir.string() + ": " + ec.message());
 
         std::string err;
-        if (!write_session_toml(dir, cfg, job.labels, &err)) return fail(err);
+        if (!write_session_toml(dir, cfg,
+                                cfg.labels_are_tracked ? Tailcycle::labels::kTracked
+                                                       : Tailcycle::labels::kAnnotated,
+                                &err))
+            return fail(err);
         if (!write_calibration_toml(dir, cfg, &err)) return fail(err);
 
         // ── groups.pq ──
@@ -265,8 +229,7 @@ bool export_session(const ExportConfig &cfg, const AnnotationMap &amap,
                         // neither derivation is stored -- so writing it would
                         // ship the same information twice, and claim an
                         // observation nobody made.
-                        if (kp.source == LabelSource::Projected) continue;
-                        if (bucket_2d(kp.source) != job.b) continue;
+                        if (kp.projected) continue;
                         if (!g_b.Append(gid).ok() || !f_b.Append(frame).ok() ||
                             !a_b.Append(animal_id).ok() ||
                             !c_b.Append(cfg.camera_names[ci]).ok() ||
@@ -278,7 +241,7 @@ bool export_session(const ExportConfig &cfg, const AnnotationMap &amap,
                         // A human label carries no confidence -- red stores 0.0f,
                         // and passing that through would ship every hand-placed
                         // point with a score of zero (§7 says null).
-                        const bool scored = kp.source != LabelSource::Manual && kp.confidence > 0.0f;
+                        const bool scored = kp.confidence > 0.0f;
                         if (scored) any_score = true;
                         if (!(scored ? sc_b.Append(kp.confidence) : sc_b.AppendNull()).ok())
                             return fail("keypoints.pq: score append failed.");
@@ -318,7 +281,6 @@ bool export_session(const ExportConfig &cfg, const AnnotationMap &amap,
                     const Keypoint3D &k3 = fa.kp3d[ni];
                     if (k3.source == Kp3DSource::None) continue;
                     if (cfg.layers == ExportConfig::Layers::TwoD) continue;
-                    if (bucket_3d(k3.source) != job.b) continue;
                     if (!g_b.Append(gid).ok() || !f_b.Append(frame).ok() ||
                         !a_b.Append(animal_id).ok() || !p_b.Append(cfg.node_names[ni]).ok() ||
                         !s_b.Append(Tailcycle::status::kVisible).ok() ||
