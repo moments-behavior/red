@@ -91,6 +91,11 @@ inline bool tailcycle_open_session(AppContext &ctx, const std::string &session_d
     // Saving edits would write red's own CSVs beside the session rather than
     // back into the Parquet, so it is deliberately pointed inside the session.
     ctx.pm.keypoints_root_folder = (fs::path(session_dir) / "red_labels").string();
+    // What load_project sets on a normal open. Without the first of these the
+    // labelling overlay never draws, so the frames appear with no labels on
+    // them and nothing says why.
+    ctx.pm.plot_keypoints_flag = true;
+    ctx.pm.show_project_window = false;
 
     tailcycle_skeleton_from_session(s, ctx.skeleton);
     ctx.annotations = s.annotations;
