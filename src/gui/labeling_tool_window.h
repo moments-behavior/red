@@ -155,7 +155,8 @@ inline void DrawLabelingToolWindow(
 
             bool keypoint_triangulated_all = true;
             if (keypoints_find && scene->num_cams > 1) {
-                const auto &fa = annotations.at(current_frame_num).front();
+                const auto &fa = instance_or_first(
+                    annotations.at(current_frame_num), ctx.active_instance);
                 for (int j = 0; j < skeleton.num_nodes; j++) {
                     if (!fa.kp3d[j].triangulated) {
                         keypoint_triangulated_all = false;
@@ -183,7 +184,10 @@ inline void DrawLabelingToolWindow(
                                    !pm.camera_params.empty();
             ImGui::BeginDisabled(!can_triangulate);
             if (ImGui::Button("Triangulate")) {
-                reprojection(annotations.at(current_frame_num).front(),
+                // The animal being edited, same as the T key. Using front()
+                // here triangulated animal 0 however many were selected.
+                reprojection(instance_or_first(annotations.at(current_frame_num),
+                                               ctx.active_instance),
                              &skeleton, pm.camera_params, scene);
             }
             ImGui::EndDisabled();
@@ -260,7 +264,8 @@ inline void DrawLabelingToolWindow(
             snprintf(copy_id, sizeof(copy_id), "Copy Sel (%d)", sel);
             if (ImGui::Button(copy_id)) {
                 int n = copy_selected_keypoints(
-                    kc, annotations.at(current_frame_num).front(),
+                    kc, instance_or_first(annotations.at(current_frame_num),
+                                          ctx.active_instance),
                     skeleton.num_nodes, scene->num_cams, skeleton.name);
                 if (n == 0)
                     toasts.push("None of the selected keypoints are labeled here",

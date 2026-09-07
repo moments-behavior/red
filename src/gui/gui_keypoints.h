@@ -352,7 +352,6 @@ inline void reprojection(FrameAnnotation &fa, SkeletonContext *skeleton,
             fa.kp3d[node].x = pt3d(0);
             fa.kp3d[node].y = pt3d(1);
             fa.kp3d[node].z = pt3d(2);
-            // Reviewed=true iff every contributing 2D label was Manual.
             fa.kp3d[node].set_triangulated();
 
             for (u32 view_idx = 0; view_idx < scene->num_cams; view_idx++) {
