@@ -506,6 +506,9 @@ int main(int argc, char **argv) {
     panels.add({"Import JARVIS Predictions",
                 [&]() { DrawJarvisImportWindow(win.jarvis_import, ctx); },
                 nullptr});
+    panels.add({"tailcycle Dataset",
+                [&]() { DrawTailcycleDatasetWindow(win.tailcycle_open, ctx); },
+                [&]() { return win.tailcycle_open.open_valid; }});
     panels.add({"Open tailcycle Dataset",
                 [&]() { DrawTailcycleOpenWindow(win.tailcycle_open, ctx); },
                 nullptr});
