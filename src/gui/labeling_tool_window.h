@@ -418,6 +418,44 @@ inline void DrawLabelingToolWindow(
         cells.reserve(cell_by_frame.size());
         for (auto &[f, c] : cell_by_frame) cells.push_back(c);
 
+        // === Is the timeline worth its height? ===
+        // It answers "where are my labels across the recording", which only
+        // has an answer when they are sparse. On an imported image set where
+        // every frame is labelled and every frame is the same state it is a
+        // solid bar of one colour -- 78px of nothing in a narrow panel. Mixed
+        // states at full coverage still earn it, though: that is the view that
+        // shows which frames are still short of triangulation. So the test is
+        // whether the bar would be uniform, not whether the media is video.
+        const int total_frames = dc_context->estimated_num_frames;
+        bool timeline_informative = false;
+        {
+            bool k_yellow = false, k_purple = false, k_green = false,
+                 k_fix = false, k_bbox = false, k_obb = false;
+            for (const auto &c : cells) {
+                if (c.needs_fix) k_fix = true;
+                else if (c.has_kp) {
+                    if (c.kp_state == KP_GREEN) k_green = true;
+                    else if (c.kp_state == KP_PURPLE) k_purple = true;
+                    else k_yellow = true;
+                }
+                if (c.has_bbox) k_bbox = true;
+                if (c.has_obb) k_obb = true;
+            }
+            const int classes = (int)k_yellow + k_purple + k_green + k_fix +
+                                k_bbox + k_obb;
+            // "Every frame" with a little slack: an image set can be off by a
+            // frame or two against the estimated count.
+            const bool near_total =
+                (double)cells.size() >= (double)total_frames * 0.98;
+            timeline_informative =
+                total_frames > 0 && !cells.empty() && (!near_total || classes > 1);
+        }
+
+        // Two rows of frame cells normally; when the timeline is dropped its
+        // height goes to the strip, which is what you navigate a fully
+        // labelled set with anyway.
+        const int strip_rows = timeline_informative ? 2 : 5;
+
         // Annotation type colors, shared by the section labels and the
         // timeline ticks.
         const ImVec4 color_green(0.2f, 0.8f, 0.3f, 1.0f);
@@ -435,13 +473,13 @@ inline void DrawLabelingToolWindow(
             int overview_lines = 1;  // "Keypoint Labels" is always shown
             if (!needs_fix_frames.empty()) overview_lines++;
             if (!bbox_frames.empty())      overview_lines++;
-            const float timeline_block =
-                (dc_context->estimated_num_frames > 0) ? 78.0f : 0.0f;
-            // Header line + two 16px rows for the nearby-frames strip.
+            const float timeline_block = timeline_informative ? 78.0f : 0.0f;
+            // Header line + the strip's rows of 16px cells.
             const float strip_block =
                 cells.empty()
                     ? 0.0f
-                    : line_h + 2.0f * (16.0f + ImGui::GetStyle().ItemSpacing.y);
+                    : line_h + strip_rows * (16.0f +
+                                             ImGui::GetStyle().ItemSpacing.y);
             const float reserved =
                 overview_lines * line_h + strip_block + timeline_block +
                 ImGui::GetStyle().ItemSpacing.y * 4.0f;
@@ -541,7 +579,7 @@ inline void DrawLabelingToolWindow(
 
             const int per_row = ImMax(
                 1, (int)((avail_w + gap) / (cell_size.x + gap)));
-            const int window_n = ImMin((int)cells.size(), per_row * 2);
+            const int window_n = ImMin((int)cells.size(), per_row * strip_rows);
 
             // Centre on the current frame -- or, if it is not annotated, on
             // the first annotated frame at or after it, so scrubbing through
@@ -648,12 +686,8 @@ inline void DrawLabelingToolWindow(
         }
 
         // === Timeline minimap (ImPlot — all annotation types) ===
-        ImGui::Spacing();
-        int total_frames = dc_context->estimated_num_frames;
-        bool has_any_annotations = !labeled_frames.empty() ||
-                                   !bbox_frames.empty() ||
-                                   !needs_fix_frames.empty();
-        if (total_frames > 0 && has_any_annotations) {
+        if (timeline_informative) {
+            ImGui::Spacing();
 
             // Reserve space for rotated "Timeline" label on the left
             float label_font = ImGui::GetFontSize();
