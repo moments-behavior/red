@@ -335,24 +335,18 @@ inline void DrawTransportBar(TransportBarState &state, AppContext &ctx) {
     ImGui::TextColored(label_col, "Playback Speed");
     ImGui::SameLine(0, spacing);
     ImGui::SetNextItemWidth(130.0f);
-    // An image sequence with no declared fps has no timebase: video_fps is 1,
-    // so "1x" would advance one frame per second and "1/16x" one every sixteen.
-    // That reads as not playing at all, so those choices are disabled rather
-    // than offered and quietly useless.
-    const bool no_timebase = ctx.input_is_imgs && dc->video_fps <= 1.0;
+    // The speeds are multiples of dc->video_fps. These used to be disabled for
+    // an image sequence, because video_fps was 1 there and "1/16x" meant a
+    // frame every sixteen seconds. The rate is now an assumed 30 that the user
+    // can edit (below), so the multiples mean something and slow playback is
+    // reachable without special-casing anything.
     if (ImGui::BeginCombo("##playbackspeed", kSpeeds[speed_idx].label)) {
         for (int i = 0; i < kNumSpeeds; ++i) {
-            ImGui::BeginDisabled(no_timebase && kSpeeds[i].clock_paced);
             if (ImGui::Selectable(kSpeeds[i].label, i == speed_idx)) {
                 ps.realtime_playback = kSpeeds[i].clock_paced;
                 if (kSpeeds[i].clock_paced)
                     ps.set_playback_speed = kSpeeds[i].speed;
             }
-            ImGui::EndDisabled();
-            if (no_timebase && kSpeeds[i].clock_paced && ImGui::IsItemHovered(
-                    ImGuiHoveredFlags_AllowWhenDisabled))
-                ImGui::SetTooltip("These images declare no frame rate, so there is "
-                                  "nothing to play them against.");
             if (i == speed_idx) ImGui::SetItemDefaultFocus();
         }
         ImGui::EndCombo();
@@ -363,6 +357,26 @@ inline void DrawTransportBar(TransportBarState &state, AppContext &ctx) {
             "accurate and frames are skipped if decoding lags.\n"
             "\"Every frame\" shows every decoded frame instead \xE2\x80\x94 nothing is "
             "skipped, but the rate depends on decoding speed.");
+
+    // What "1x" means, when nothing declared it. Shown only for a source with
+    // no frame rate of its own, because for a video it is not a choice.
+    if (!dc->fps_declared) {
+        ImGui::SameLine(0, spacing);
+        ImGui::TextColored(label_col, "at");
+        ImGui::SameLine(0, spacing);
+        ImGui::SetNextItemWidth(90.0f);
+        float assumed = (float)dc->video_fps;
+        if (ImGui::DragFloat("##assumedfps", &assumed, 0.5f, 0.5f, 240.0f,
+                             "%.1f fps")) {
+            dc->video_fps = (double)ImClamp(assumed, 0.5f, 240.0f);
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip(
+                "These images declare no frame rate, so 1x has to be told what "
+                "it means. The fractions are relative to this \xE2\x80\x94 at 30, "
+                "1/16x plays about 2 frames a second.\n"
+                "Drag or double-click to type a value.");
+    }
 
     // === Desync fix (canonical trigger timeline) ===
     // Only shown when a usable sync plan exists for the loaded videos.
@@ -488,7 +502,13 @@ inline void DrawTransportBar(TransportBarState &state, AppContext &ctx) {
     // === Right-aligned status readouts ===
     // Pre-format value strings to compute total width for right-alignment
     char val_fr[16], val_spd[16], val_rr[16];
-    snprintf(val_fr,  sizeof(val_fr),  "%.0f fps", dc->video_fps);
+    // "Recorded FR" is the rate the source declares. When it declares none,
+    // video_fps holds the assumed playback rate, and printing that here said
+    // "1 fps" -- reporting red's placeholder as a fact about the recording.
+    if (dc->fps_declared)
+        snprintf(val_fr, sizeof(val_fr), "%.0f fps", dc->video_fps);
+    else
+        snprintf(val_fr, sizeof(val_fr), "\xE2\x80\x94");
     snprintf(val_spd, sizeof(val_spd), "%.2fx",    ps.inst_speed);
     snprintf(val_rr,  sizeof(val_rr),  "%.0f fps", ImGui::GetIO().Framerate);
     const char *lbl_fr = "Recorded FR", *lbl_spd = "Play Speed", *lbl_rr = "Render Rate";
@@ -500,6 +520,10 @@ inline void DrawTransportBar(TransportBarState &state, AppContext &ctx) {
 
     ImGui::TextColored(label_col, "%s", lbl_fr);
     ImGui::SameLine(0, spacing); ImGui::TextDisabled("%s", val_fr);
+    if (!dc->fps_declared && ImGui::IsItemHovered())
+        ImGui::SetTooltip("This source declares no frame rate. Playback runs at "
+                          "the assumed %.1f fps set next to Playback Speed.",
+                          dc->video_fps);
     ImGui::SameLine(0, gap);
     ImGui::TextColored(label_col, "%s", lbl_spd);
     ImGui::SameLine(0, spacing); ImGui::TextDisabled("%s", val_spd);

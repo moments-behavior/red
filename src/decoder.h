@@ -60,7 +60,15 @@ struct DecoderContext {
     int estimated_num_frames;
     int gpu_index;
     int seek_interval;
+    // Frames per second. Two different things have to be told apart here: what
+    // the recording was shot at, and how fast to play it back. A video knows
+    // the first; a folder of images does not, and 3dzef's groups.pq leaves fps
+    // null. `fps_declared` is false in that case and video_fps holds an assumed
+    // playback rate instead -- so the speed control still works, and the
+    // "Recorded FR" readout can say it does not know rather than reporting the
+    // placeholder as fact.
     double video_fps;
+    bool fps_declared = true;
     // Canonical-timeline desync fix (sync_plan.h). When active, decoders emit
     // canonical trigger slots instead of mp4 frame indices: frame_number,
     // seek_frame, latest_decoded_frame and total/estimated counts are all in

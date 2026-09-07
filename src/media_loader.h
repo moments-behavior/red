@@ -245,7 +245,12 @@ load_images(std::map<std::string, std::string> &selected_files,
               });
 
     dc_context->seek_interval = 1;
-    dc_context->video_fps = fps > 0.0f ? fps : 1.0;
+    // With no declared rate, assume something playable rather than 1: at 1 fps
+    // every clock-paced speed reads as "not playing" and the whole speed
+    // control had to be disabled. 30 with the 1/2x..1/16x choices spans
+    // 30 down to ~2 fps, and the rate is editable in the transport bar.
+    dc_context->fps_declared = fps > 0.0f;
+    dc_context->video_fps = fps > 0.0f ? fps : 30.0;
     ps.realtime_playback = false;
     scene->num_cams = pm.camera_names.size();
     scene->image_width = (u32 *)malloc(sizeof(u32) * scene->num_cams);
@@ -418,6 +423,7 @@ load_videos(std::map<std::string, std::string> &selected_files,
             dc_context->seek_interval =
                 (int)demuxers[0]->FindKeyFrameInterval();
             dc_context->video_fps = demuxers[0]->GetFramerate();
+            dc_context->fps_declared = true;
         }
         t_keyframe = load_timing::ms(t_stage);
         pm.camera_names = loaded_cam_names;
@@ -452,6 +458,7 @@ load_videos(std::map<std::string, std::string> &selected_files,
             dc_context->seek_interval =
                 (int)demuxers[0]->FindKeyFrameInterval();
             dc_context->video_fps = demuxers[0]->GetFramerate();
+            dc_context->fps_declared = true;
         }
         t_keyframe = load_timing::ms(t_stage);
         pm.camera_names = loaded_cam_names;
@@ -516,6 +523,7 @@ load_videos(std::map<std::string, std::string> &selected_files,
         // Canonical slots are uniform in trigger time — pace playback by the
         // trigger interval, not the (nominal) container frame rate.
         dc_context->video_fps = 1e9 / (double)splan.delta_ns;
+        dc_context->fps_declared = true;
     }
 
     t_stage = load_timing::Clock::now();

@@ -252,7 +252,11 @@ inline void DrawJarvisImportWindow(JarvisImportState &state, AppContext &ctx) {
 
                 uint32_t fps_hint = 0, total_hint = 0;
                 if (ctx.dc_context) {
-                    if (ctx.dc_context->video_fps > 0)
+                    // Only a declared rate. For an image sequence video_fps
+                    // is an assumed playback rate, and writing that into the
+                    // store would state it as the recording's.
+                    if (ctx.dc_context->fps_declared &&
+                        ctx.dc_context->video_fps > 0)
                         fps_hint = (uint32_t)std::lround(ctx.dc_context->video_fps);
                     if (ctx.dc_context->total_num_frame > 0)
                         total_hint = (uint32_t)ctx.dc_context->total_num_frame;
