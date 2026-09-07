@@ -508,10 +508,7 @@ int main(int argc, char **argv) {
                 nullptr});
     panels.add({"tailcycle Dataset",
                 [&]() { DrawTailcycleDatasetWindow(win.tailcycle_open, ctx); },
-                [&]() { return win.tailcycle_open.open_valid; }});
-    panels.add({"Open tailcycle Dataset",
-                [&]() { DrawTailcycleOpenWindow(win.tailcycle_open, ctx); },
-                nullptr});
+                nullptr});   // always called: it pumps the folder dialog
     panels.add({"Settings",
                 [&]() { DrawSettingsWindow(win.settings, ctx); },
                 nullptr});

@@ -27,7 +27,6 @@
 #include <vector>
 
 struct TailcycleOpenState {
-    bool show = false;
     std::string root;                 // the dataset root, or a session folder
     std::vector<TailcycleImport::SessionInfo> sessions;
     std::string scanned;              // which root `sessions` came from
@@ -266,63 +265,96 @@ inline bool tailcycle_save_session(AppContext &ctx, TailcycleOpenState &st,
     return TailcycleExport::export_session(cfg, ctx.annotations, &est, status);
 }
 
-inline void DrawTailcycleOpenWindow(TailcycleOpenState &state, AppContext &ctx) {
-    DrawPanel("Open tailcycle Dataset", state.show, [&]() {
+// Opening the folder dialog. There is no browser window in front of it: a
+// dataset is chosen by picking a folder, and a window whose whole content was
+// a path field and a Browse button was a step with nothing in it. Everything
+// else -- the session list, the group, saving corrections -- describes a
+// dataset you already have, and lives in "tailcycle Dataset".
+inline void tailcycle_open_browse(TailcycleOpenState &state) {
+    IGFD::FileDialogConfig cfg;
+    cfg.countSelectionMax = 1;
+    cfg.path = state.root;
+    cfg.flags = ImGuiFileDialogFlags_Modal;
+    ImGuiFileDialog::Instance()->OpenDialog("ChooseTailcycleSession",
+                                            "Choose Dataset Folder", nullptr, cfg);
+}
+
+// Runs every frame, window or no window: the dialog has to be pumped, and the
+// scan that follows a new root is what makes the window appear at all.
+inline void tailcycle_pump(TailcycleOpenState &state, AppContext &ctx) {
+    if (ImGuiFileDialog::Instance()->Display("ChooseTailcycleSession",
+                                             ImGuiWindowFlags_NoCollapse,
+                                             ImVec2(680, 440))) {
+        if (ImGuiFileDialog::Instance()->IsOk())
+            state.root = ImGuiFileDialog::Instance()->GetCurrentPath();
+        ImGuiFileDialog::Instance()->Close();
+    }
+
+    // Rescan when the path changes. The scan reads session.toml and one row of
+    // groups.pq per session, never the label tables, so it stays quick on a
+    // dataset whose tables run to millions of rows.
+    if (state.root == state.scanned) return;
+    state.scanned = state.root;
+    state.sessions.clear();
+    state.selected = -1;
+    state.group_idx = 0;
+    if (state.root.empty()) return;
+
+    std::string err;
+    if (!TailcycleImport::scan_dataset(state.root, &state.sessions, &err))
+        state.status = err;
+    // Open the first session straight away. Pointing at a dataset is a request
+    // to look at it, and the list is for switching between sessions rather
+    // than a gate in front of the first.
+    if (state.sessions.empty()) return;
+    const auto &si = state.sessions.front();
+    if (tailcycle_open_session(ctx, si.dir,
+                               si.groups.empty() ? std::string() : si.groups[0],
+                               &state.status, &state)) {
+        state.selected = 0;
+        ctx.user_settings.push_recent_project(state.root);
+        save_user_settings(ctx.user_settings);
+    }
+}
+
+// The dataset you have open, as opposed to the browser you opened it with.
+//
+// One window used to do both, and the two want opposite things. Browsing is a
+// path and a Browse button; everything else here describes a dataset that is
+// already open -- which sessions it holds, which one you are in, which group,
+// and saving your corrections back -- and belongs docked next to the Labeling
+// Tool where you are working. Switching session through a window called Open
+// was the tell.
+inline void DrawTailcycleDatasetWindow(TailcycleOpenState &state,
+                                       AppContext &ctx) {
+    tailcycle_pump(state, ctx);
+    if (!state.open_valid && state.sessions.empty()) return;
+    bool always_open = true;   // no close button: it tracks what is loaded
+    DrawPanel("tailcycle Dataset", always_open, [&]() {
         if (!TailcycleImport::available()) {
-            ImGui::TextWrapped("This build has no Parquet support (Arrow was not found "
-                               "at configure time).");
+            ImGui::TextWrapped("This build has no Parquet support (Arrow was "
+                               "not found at configure time).");
             return;
         }
-        ImGui::TextDisabled("Point at a dataset root; a single session folder works too.");
-        ImGui::InputText("Dataset", &state.root);
+        // The path stays editable with a Browse beside it, as it was: typing
+        // or pasting a root is often faster than walking a file dialog to it.
+        ImGui::SetNextItemWidth(-75.0f);
+        ImGui::InputText("##tc_root", &state.root);
+        if (ImGui::IsItemHovered() && !state.root.empty())
+            ImGui::SetTooltip("%s", state.root.c_str());
         ImGui::SameLine();
-        if (ImGui::Button("Browse##tc_open")) {
-            IGFD::FileDialogConfig cfg;
-            cfg.countSelectionMax = 1;
-            cfg.path = state.root;
-            cfg.flags = ImGuiFileDialogFlags_Modal;
-            ImGuiFileDialog::Instance()->OpenDialog("ChooseTailcycleSession",
-                                                    "Choose Dataset Folder", nullptr, cfg);
-        }
+        if (ImGui::Button("Browse##tc_open", ImVec2(-1, 0)))
+            tailcycle_open_browse(state);
 
-        // Rescan when the path changes. The scan reads session.toml and one row
-        // of groups.pq per session, never the label tables, so it stays quick
-        // on a dataset whose tables run to millions of rows.
-        if (state.root != state.scanned) {
-            state.scanned = state.root;
-            state.sessions.clear();
-            state.selected = -1;
-            state.group_idx = 0;
-            if (!state.root.empty()) {
-                std::string err;
-                if (!TailcycleImport::scan_dataset(state.root, &state.sessions, &err))
-                    state.status = err;
-                // Open the first session straight away. Pointing at a dataset
-                // is a request to look at it, and the list is for switching
-                // between sessions rather than a gate in front of the first.
-                if (!state.sessions.empty()) {
-                    const auto &si = state.sessions.front();
-                    if (tailcycle_open_session(
-                            ctx, si.dir,
-                            si.groups.empty() ? std::string() : si.groups[0],
-                            &state.status, &state)) {
-                        state.selected = 0;
-                        ctx.user_settings.push_recent_project(state.root);
-                        save_user_settings(ctx.user_settings);
-                        // Its job is done; "tailcycle Dataset" takes over, and
-                        // "Switch session..." there brings this back.
-                        state.show = false;
-                    }
-                }
-            }
-        }
+        if (state.sessions.empty() && !state.root.empty())
+            ImGui::TextDisabled("Nothing here \xE2\x80\x94 expected "
+                                "<split>/<session>/session.toml");
 
-        if (state.sessions.empty()) {
-            if (!state.root.empty())
-                ImGui::TextDisabled("Nothing here — expected <split>/<session>/session.toml");
-        } else {
+        // === Sessions ===
+        if (!state.sessions.empty()) {
             ImGui::Spacing();
-            // ScrollX and fixed-fit sizing: docked into the left tab group the
+            ImGui::SeparatorText("Sessions");
+            // ScrollX and fixed-fit sizing: docked into the tool column the
             // panel is ~280px, far narrower than seven columns of session
             // metadata want. Scrolling sideways beats truncating names that
             // differ only in their tail.
@@ -330,7 +362,7 @@ inline void DrawTailcycleOpenWindow(TailcycleOpenState &state, AppContext &ctx) 
                                        ImGuiTableFlags_SizingFixedFit |
                                        ImGuiTableFlags_ScrollX |
                                        ImGuiTableFlags_ScrollY;
-            if (ImGui::BeginTable("##tc_sessions", 7, tf, ImVec2(0, 200))) {
+            if (ImGui::BeginTable("##tc_sessions", 7, tf, ImVec2(0, 180))) {
                 ImGui::TableSetupScrollFreeze(0, 1);
                 for (const char *h : {"Split", "Session", "Labels", "Cams", "Frames",
                                       "Layers", "Groups"})
@@ -353,7 +385,6 @@ inline void DrawTailcycleOpenWindow(TailcycleOpenState &state, AppContext &ctx) 
                             // from, which is how you actually use a dataset.
                             ctx.user_settings.push_recent_project(state.root);
                             save_user_settings(ctx.user_settings);
-                            state.show = false;
                         }
                     }
                     ImGui::PopID();
@@ -371,111 +402,71 @@ inline void DrawTailcycleOpenWindow(TailcycleOpenState &state, AppContext &ctx) 
                 ImGui::EndTable();
             }
             ImGui::TextDisabled("Click a row to open it.");
-
         }
 
-        if (!state.status.empty()) {
-            const bool bad = state.status.rfind("Opened", 0) != 0 &&
-                             state.status.rfind("Saved", 0) != 0;
-            ImGui::TextColored(bad ? ImVec4(1.0f, 0.45f, 0.35f, 1.0f)
-                                   : ImVec4(0.4f, 0.9f, 0.5f, 1.0f),
-                               "%s", state.status.c_str());
-        }
-        },
-        [&]() {
-        if (ImGuiFileDialog::Instance()->Display("ChooseTailcycleSession",
-                                                 ImGuiWindowFlags_NoCollapse,
-                                                 ImVec2(680, 440))) {
-            if (ImGuiFileDialog::Instance()->IsOk())
-                state.root = ImGuiFileDialog::Instance()->GetCurrentPath();
-            ImGuiFileDialog::Instance()->Close();
-        }
-        },
-        ImVec2(720, 420),
-        // Floating: the session table wants seven columns and ~700px, which
-        // is the opposite of the ~280px tool column. The docked half is
-        // "tailcycle Dataset" below.
-        ImGuiWindowFlags_NoDocking);
-}
-
-// The dataset you have open, as opposed to the browser you opened it with.
-//
-// One window used to do both, and the two want opposite things: browsing wants
-// a seven-column table and ~700px, while what you need while working -- which
-// session, which group, and saving corrections -- wants to sit docked in the
-// narrow tool column next to the Labeling Tool. Worse, "Save corrections to
-// this session" overwrites label tables in place, and it lived inside a window
-// called Open.
-inline void DrawTailcycleDatasetWindow(TailcycleOpenState &state,
-                                       AppContext &ctx) {
-    if (!state.open_valid) return;
-    bool always_open = true;   // no close button: it tracks what is loaded
-    DrawPanel("tailcycle Dataset", always_open, [&]() {
-        ImGui::TextDisabled("Split");
-        ImGui::SameLine(70.0f); ImGui::TextUnformatted(state.open_split.c_str());
-        ImGui::TextDisabled("Session");
-        ImGui::SameLine(70.0f); ImGui::TextUnformatted(state.open_session_id.c_str());
-        if (!state.open_group_id.empty()) {
-            ImGui::TextDisabled("Group");
-            ImGui::SameLine(70.0f);
-            ImGui::TextUnformatted(state.open_group_id.c_str());
-        }
-        ImGui::TextDisabled("Labels");
-        ImGui::SameLine(70.0f);
-        ImGui::Text("%s, %s", state.open_labels.c_str(),
-                    state.open_has_2d && state.open_has_3d ? "2D+3D"
-                    : state.open_has_2d                    ? "2D"
-                    : state.open_has_3d                    ? "3D"
-                                                           : "no layers");
-
-        // Only worth a control when there is a choice to make: a red project is
-        // one media folder, so one group at a time.
-        if (state.selected >= 0 && state.selected < (int)state.sessions.size() &&
-            state.sessions[state.selected].groups.size() > 1) {
-            const auto &si = state.sessions[state.selected];
-            std::vector<const char *> labels;
-            for (const auto &g : si.groups) labels.push_back(g.c_str());
+        // === The one that is open ===
+        if (state.open_valid) {
             ImGui::Spacing();
-            if (ImGui::Combo("Group", &state.group_idx, labels.data(),
-                             (int)labels.size()))
-                tailcycle_open_session(ctx, si.dir,
-                                       si.groups[(size_t)state.group_idx],
-                                       &state.status, &state);
-        }
-
-        ImGui::Spacing();
-        if (ImGui::Button("Switch session..."))
-            state.show = true;
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Reopen the dataset browser to pick another "
-                              "session from this root.");
-
-        // Rewrites this session's label tables in place. The export window is
-        // the other half of the pair: it writes a NEW dataset and leaves this
-        // one alone.
-        ImGui::Separator();
-        if (!state.confirm_save) {
-            if (ImGui::Button("Save corrections to this session"))
-                state.confirm_save = true;
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Overwrite %s/%s's label tables with your "
-                                  "edits. Use Export Tool instead to write a "
-                                  "new dataset and leave this one untouched.",
-                                  state.open_split.c_str(),
-                                  state.open_session_id.c_str());
-        } else {
-            ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.35f, 1.0f),
-                               "Overwrite this session's label tables?");
-            if (ImGui::Button("Overwrite")) {
-                state.confirm_save = false;
-                if (tailcycle_save_session(ctx, state, &state.status))
-                    state.status = "Saved corrections to " + state.open_split +
-                                   "/" + state.open_session_id;
+            ImGui::SeparatorText("Open");
+            ImGui::TextDisabled("Session");
+            ImGui::SameLine(80.0f);
+            ImGui::Text("%s/%s", state.open_split.c_str(),
+                        state.open_session_id.c_str());
+            if (!state.open_group_id.empty()) {
+                ImGui::TextDisabled("Group");
+                ImGui::SameLine(80.0f);
+                ImGui::TextUnformatted(state.open_group_id.c_str());
             }
-            ImGui::SameLine();
-            if (ImGui::Button("Cancel")) state.confirm_save = false;
-            ImGui::SameLine();
-            ImGui::TextDisabled("frames are untouched");
+            ImGui::TextDisabled("Labels");
+            ImGui::SameLine(80.0f);
+            ImGui::Text("%s, %s", state.open_labels.c_str(),
+                        state.open_has_2d && state.open_has_3d ? "2D+3D"
+                        : state.open_has_2d                    ? "2D"
+                        : state.open_has_3d                    ? "3D"
+                                                               : "no layers");
+
+            // Only worth a control when there is a choice to make: a red
+            // project is one media folder, so one group at a time.
+            if (state.selected >= 0 && state.selected < (int)state.sessions.size() &&
+                state.sessions[state.selected].groups.size() > 1) {
+                const auto &si = state.sessions[state.selected];
+                std::vector<const char *> labels;
+                for (const auto &g : si.groups) labels.push_back(g.c_str());
+                if (ImGui::Combo("Group", &state.group_idx, labels.data(),
+                                 (int)labels.size()))
+                    tailcycle_open_session(ctx, si.dir,
+                                           si.groups[(size_t)state.group_idx],
+                                           &state.status, &state);
+            }
+
+            // Rewrites this session's label tables in place. The export window
+            // is the other half of the pair: it writes a NEW dataset and
+            // leaves this one alone.
+            ImGui::Spacing();
+            if (!state.confirm_save) {
+                if (ImGui::Button("Save corrections to this session"))
+                    state.confirm_save = true;
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Overwrite %s/%s's label tables with your "
+                                      "edits. Use Export Tool instead to write "
+                                      "a new dataset and leave this one "
+                                      "untouched.",
+                                      state.open_split.c_str(),
+                                      state.open_session_id.c_str());
+            } else {
+                ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.35f, 1.0f),
+                                   "Overwrite this session's label tables?");
+                if (ImGui::Button("Overwrite")) {
+                    state.confirm_save = false;
+                    if (tailcycle_save_session(ctx, state, &state.status))
+                        state.status = "Saved corrections to " + state.open_split +
+                                       "/" + state.open_session_id;
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Cancel")) state.confirm_save = false;
+                ImGui::SameLine();
+                ImGui::TextDisabled("frames are untouched");
+            }
         }
 
         if (!state.status.empty()) {
@@ -485,7 +476,7 @@ inline void DrawTailcycleDatasetWindow(TailcycleOpenState &state,
                                    : ImVec4(0.4f, 0.9f, 0.5f, 1.0f),
                                "%s", state.status.c_str());
         }
-    }, nullptr, ImVec2(280, 260));
+    }, nullptr, ImVec2(280, 460));
 }
 
 #endif // RED_TAILCYCLE_OPEN_WINDOW

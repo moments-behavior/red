@@ -33,8 +33,9 @@ inline void load_project_from_path(
         std::vector<TailcycleImport::SessionInfo> probe;
         std::string err;
         if (TailcycleImport::scan_dataset(cfg_path.string(), &probe, &err)) {
+            // Setting the root is the whole action: tailcycle_pump sees it
+            // change, scans, and opens the first session.
             win.tailcycle_open.root = cfg_path.string();
-            win.tailcycle_open.show = true;
             return;
         }
     }

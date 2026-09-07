@@ -3,6 +3,7 @@
 #include "app_context.h"
 #include "gui/window_states.h"
 #include "tailcycle_import.h"
+#include "gui/tailcycle_open_window.h"
 #include <ImGuiFileDialog.h>
 #include <filesystem>
 
@@ -92,7 +93,7 @@ inline void DrawWelcomeWindow(AppContext &ctx, WindowStates &win) {
             ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0.5f, 0.5f));
             if (ImGui::Button("Open tailcycle Dataset",
                               ImVec2(2 * btn_w + spacing, 30))) {
-                win.tailcycle_open.show = true;
+                tailcycle_open_browse(win.tailcycle_open);
             }
             ImGui::PopStyleVar();
             if (ImGui::IsItemHovered())

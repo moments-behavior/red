@@ -3,6 +3,7 @@
 #include "gui/window_states.h"
 #include "IconsForkAwesome.h"
 #include "tailcycle_import.h"
+#include "gui/tailcycle_open_window.h"
 #include <ImGuiFileDialog.h>
 
 inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
@@ -62,7 +63,7 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
         // about it from here.
         if (TailcycleImport::available()) {
             if (ImGui::MenuItem("Open tailcycle Dataset...")) {
-                win.tailcycle_open.show = true;
+                tailcycle_open_browse(win.tailcycle_open);
             }
         }
         ImGui::BeginDisabled(pm.project_path.empty());
@@ -124,11 +125,6 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
             win.jarvis_import.show = true;
         }
         ImGui::EndDisabled();
-        // Not inside the is_2d guard: a tailcycle session brings its own
-        // cameras and calibration, so it does not depend on the open project.
-        if (ImGui::MenuItem("Open tailcycle Dataset")) {
-            win.tailcycle_open.show = true;
-        }
         ImGui::Separator();
         if (ImGui::MenuItem("Bbox Tool")) {
             bbox_state.show = true;
