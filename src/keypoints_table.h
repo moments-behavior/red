@@ -9,6 +9,9 @@
 
 inline void DrawKeypointsWindow(AppContext &ctx) {
     int current_frame_num = ctx.current_frame_num;
+    // The table shows the animal being edited, not the first one -- otherwise
+    // dragging animal 2's keypoint clears animal 2's 3D while the table keeps
+    // reporting animal 0's, which reads as the state failing to follow.
     auto &pm = ctx.pm;
     auto *scene = ctx.scene;
     auto &skeleton = ctx.skeleton;
@@ -184,7 +187,7 @@ inline void DrawKeypointsWindow(AppContext &ctx) {
                             ImVec2 p0 = ImGui::GetCursorScreenPos();
 
                             if (keypoints_find) {
-                                auto &fa = annotations.at(current_frame_num).front();
+                                auto &fa = instance_or_first(annotations.at(current_frame_num), ctx.active_instance);
                                 const bool is_active =
                                     row < (int)fa.cameras.size() &&
                                     fa.cameras[row].active_id == (u32)node;
@@ -346,7 +349,7 @@ inline void DrawKeypointsWindow(AppContext &ctx) {
                                 kc.anchor = node;
                                 if (keypoints_find) {
                                     auto &fa =
-                                        annotations.at(current_frame_num).front();
+                                        instance_or_first(annotations.at(current_frame_num), ctx.active_instance);
                                     for (auto &cam : fa.cameras)
                                         cam.active_id = (u32)node;
                                 }
@@ -376,7 +379,7 @@ inline void DrawKeypointsWindow(AppContext &ctx) {
             //    selection over the window) ──
             if (keypoints_find &&
                 keys::pressed(keys::Sc::DeleteKeypoint)) {
-                auto &fa = annotations.at(current_frame_num).front();
+                auto &fa = instance_or_first(annotations.at(current_frame_num), ctx.active_instance);
                 const bool win_hovered = ImGui::IsWindowHovered(
                     ImGuiHoveredFlags_RootAndChildWindows);
                 auto delete_selection = [&]() {
@@ -415,7 +418,7 @@ inline void DrawKeypointsWindow(AppContext &ctx) {
                 } else {
                     int sel = kc.count();
                     int n = copy_selected_keypoints(
-                        kc, annotations.at(current_frame_num).front(),
+                        kc, instance_or_first(annotations.at(current_frame_num), ctx.active_instance),
                         skeleton.num_nodes, scene->num_cams, skeleton.name);
                     if (n == 0)
                         ctx.toasts.push(

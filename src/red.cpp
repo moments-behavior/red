@@ -301,6 +301,7 @@ int main(int argc, char **argv) {
     WindowStates win;
     bool save_requested = false;
     int current_frame_num = 0;
+    int active_instance = 0;
     std::vector<std::string> imgs_names;
 
     // for labeling
@@ -400,7 +401,7 @@ int main(int argc, char **argv) {
         user_settings, red_data_dir, skeleton_dir,
         imgs_names, demuxers, decoder_threads,
         is_view_focused, window_was_decoding,
-        input_is_imgs, label_buffer_size, current_frame_num,
+        input_is_imgs, label_buffer_size, current_frame_num, active_instance,
         display, window, save_requested, project_ini_path, main_loop_running
 #ifdef __APPLE__
         , mac_last_uploaded_frame
@@ -482,10 +483,9 @@ int main(int argc, char **argv) {
                     DrawLabelingToolWindow(win.labeling, ctx);
                     if (keypoints_find && keys::pressed(keys::Sc::Triangulate)) {
                         if (!pm.camera_params.empty()) {
-                            // .front(): the animal being labelled. When the
-                            // active-instance UI lands, these three sites --
-                            // triangulate, place, draw -- are where it plugs in.
-                            reprojection(annotations.at(current_frame_num).front(),
+                            reprojection(instance_or_first(
+                                             annotations.at(current_frame_num),
+                                             active_instance),
                                          &skeleton, pm.camera_params, scene);
                         } else {
                             toasts.push("No calibration loaded",
@@ -1189,17 +1189,27 @@ int main(int argc, char **argv) {
                                 }
 
                                 if (keypoints_find && skeleton.has_skeleton) {
-                                    u32 *kp = &annotations.at(current_frame_num)
-                                                   .front().cameras[j].active_id;
+                                    u32 *kp = &instance_or_first(
+                                                   annotations.at(current_frame_num),
+                                                   active_instance)
+                                                   .cameras[j].active_id;
                                     if (keys::pressed(keys::Sc::PlaceKeypoint)) {
                                         // labeling sequentially each view
                                         ImPlotPoint mouse =
                                             ImPlot::GetPlotMousePos();
-                                        auto &fa = annotations.at(current_frame_num).front();
+                                        auto &fa = instance_or_first(
+                                            annotations.at(current_frame_num),
+                                            active_instance);
                                         auto &kp2d = fa.cameras[j].keypoints[*kp];
                                         kp2d.x = mouse.x;
                                         kp2d.y = mouse.y;
                                         kp2d.labeled = true;
+                                        // Moving a 2D point invalidates the 3D
+                                        // solved from it. Dragging already did
+                                        // this (gui_keypoints); placing did
+                                        // not, so the old point kept its "T"
+                                        // and its coordinates.
+                                        fa.kp3d[*kp].clear();
                                         if (*kp < (skeleton.num_nodes - 1)) {
                                             (*kp)++;
                                         }
@@ -1253,7 +1263,8 @@ int main(int argc, char **argv) {
                                         fis_draw[inst], &skeleton, j,
                                         scene->num_cams,
                                         active_keypoint_color(user_settings),
-                                        (int)inst, inst == 0);
+                                        (int)inst,
+                                        (int)inst == active_instance);
                             }
 
                             // Read-only prediction overlay. Skipped once the

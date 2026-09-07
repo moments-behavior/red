@@ -79,6 +79,10 @@ struct Keypoint3D {
         confidence = conf;
     }
     void clear() {
+        // Reset the values too. Leaving them behind kept a stale position on a
+        // point that reads as unset -- invisible while `triangulated` is false,
+        // but resurrected by anything that checks the flag less carefully.
+        x = y = z = UNLABELED;
         source = Kp3DSource::None;
         triangulated = false;
         confidence = 0.0f;
@@ -255,6 +259,19 @@ inline FrameAnnotation &get_or_create_frame(AnnotationMap &amap, u32 frame,
     if (FrameAnnotation *fa = find_instance(fis, instance_id)) return *fa;
     fis.push_back(make_frame(num_nodes, num_cameras, frame, instance_id));
     return fis.back();
+}
+
+// The animal being edited, clamped into range. A frame may hold fewer
+// instances than the UI's index -- switching frames must not put the editor
+// out of bounds, and silently editing the wrong animal would be worse than
+// falling back to the first.
+inline FrameAnnotation &instance_or_first(FrameInstances &fis, int index) {
+    if (index > 0 && index < (int)fis.size()) return fis[(size_t)index];
+    return fis.front();
+}
+inline const FrameAnnotation &instance_or_first(const FrameInstances &fis, int index) {
+    if (index > 0 && index < (int)fis.size()) return fis[(size_t)index];
+    return fis.front();
 }
 
 // Whole-frame versions of the per-animal predicates below: true when ANY

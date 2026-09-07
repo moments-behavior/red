@@ -86,6 +86,56 @@ inline void DrawLabelingToolWindow(
             ImGui::EndDisabled();
         };
 
+        // ─── Animals in this frame ───
+        // Only shown once a frame holds more than one, so a single-animal
+        // project sees nothing new. The selector picks which animal placing,
+        // dragging and triangulating apply to; the others draw dimmed.
+        {
+            auto fit = annotations.find((u32)current_frame_num);
+            const int n = fit == annotations.end() ? 0 : (int)fit->second.size();
+            if (ctx.active_instance >= n) ctx.active_instance = 0;
+
+            if (n > 1) {
+                ImGui::SeparatorText("Animals");
+                for (int i = 0; i < n; i++) {
+                    if (i) ImGui::SameLine();
+                    ImGui::PushID(i);
+                    const ImVec4 t = instance_tint(i);
+                    ImGui::PushStyleColor(ImGuiCol_Text, t);
+                    char lbl[16];
+                    snprintf(lbl, sizeof(lbl), "%d", fit->second[(size_t)i].instance_id);
+                    if (ImGui::RadioButton(lbl, ctx.active_instance == i))
+                        ctx.active_instance = i;
+                    ImGui::PopStyleColor();
+                    ImGui::PopID();
+                }
+                ImGui::SameLine();
+                ImGui::TextDisabled("(editing #%d)", ctx.active_instance);
+            }
+
+            if (fit != annotations.end() && skeleton.has_skeleton) {
+                if (n > 1) ImGui::SameLine();
+                if (ImGui::SmallButton(ICON_FK_PLUS " Animal")) {
+                    // A new animal gets the next unused id, so ids stay stable
+                    // even after one is removed.
+                    int next_id = 0;
+                    for (const auto &fa : fit->second)
+                        next_id = std::max(next_id, fa.instance_id + 1);
+                    get_or_create_frame(annotations, (u32)current_frame_num,
+                                        skeleton.num_nodes,
+                                        (int)scene->num_cams, next_id);
+                    ctx.active_instance = (int)fit->second.size() - 1;
+                }
+                if (n > 1) {
+                    ImGui::SameLine();
+                    if (ImGui::SmallButton(ICON_FK_TRASH " Animal")) {
+                        fit->second.erase(fit->second.begin() + ctx.active_instance);
+                        ctx.active_instance = 0;
+                    }
+                }
+            }
+        }
+
         // Find prev/next for keypoints
         auto kp_pn = find_prev_next([](const FrameInstances &fis) {
             return any_instance_has_keypoints(fis);

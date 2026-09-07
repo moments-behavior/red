@@ -64,6 +64,10 @@ struct AppContext {
     bool &input_is_imgs;
     int &label_buffer_size;
     int &current_frame_num;
+    // Which animal is being edited. An index into the frame's instances, not
+    // an instance_id -- the id is stable across frames, the index is what the
+    // UI walks. Clamped per frame, since frames need not hold the same count.
+    int &active_instance;
 
     // Display
     DisplayState &display;
