@@ -652,8 +652,21 @@ inline void DrawLabelingToolWindow(
                 std::unique(all_annotated_frames.begin(), all_annotated_frames.end()),
                 all_annotated_frames.end());
 
+            // Ticks are drawn centred on their frame, so one at frame 0 or at
+            // the last frame loses half its width to the plot edge and the
+            // surviving half lands flush under the border -- reading as absent.
+            // The wider the tick the worse it is, so the widening that made a
+            // lone frame visible is what buried it at the extremes, and frame 0
+            // is exactly the frame someone hunting a deleted label lands on.
+            // Pad the axis by half the widest tick so the ends sit inside the
+            // plot.
+            const double px_per_frame_full =
+                timeline_w / (double)ImMax(1, total_frames);
+            const double x_pad = 6.0 / ImMax(px_per_frame_full, 1e-9);
+            const double x_lo = -x_pad, x_hi = (double)total_frames + x_pad;
+
             if (state.timeline_reset_pending) {
-                ImPlot::SetNextAxesLimits(0, total_frames, 0, 1);
+                ImPlot::SetNextAxesLimits(x_lo, x_hi, 0, 1);
                 state.timeline_reset_pending = false;
             }
 
@@ -668,9 +681,9 @@ inline void DrawLabelingToolWindow(
                                           ImPlotAxisFlags_NoGridLines |
                                           ImPlotAxisFlags_Lock;
                 ImPlot::SetupAxes("frame number", nullptr, x_flags, y_flags);
-                ImPlot::SetupAxisLimits(ImAxis_X1, 0, total_frames, ImPlotCond_Once);
+                ImPlot::SetupAxisLimits(ImAxis_X1, x_lo, x_hi, ImPlotCond_Once);
                 ImPlot::SetupAxisLimits(ImAxis_Y1, 0, 1, ImPlotCond_Always);
-                ImPlot::SetupAxisZoomConstraints(ImAxis_X1, 50, total_frames);
+                ImPlot::SetupAxisZoomConstraints(ImAxis_X1, 50, x_hi - x_lo);
 
                 // Ticks, widened by rarity. At 8000 frames across ~250px a
                 // frame is 0.03px, so the one that is still yellow among 7999
