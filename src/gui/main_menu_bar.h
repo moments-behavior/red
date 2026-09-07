@@ -42,11 +42,17 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
                 "ChooseImages", "Choose Images",
                 ".jpg,.tiff,.jpeg,.png", config);
         }
-        ImGui::BeginDisabled(!ps.video_loaded);
+        // The same form as Annotate > Create Annotation Project. There used
+        // to be a second one here that could only wrap media you already had
+        // open -- greyed out otherwise -- and offered no way to pick a media
+        // folder, which the annotation dialog does and now seeds from the open
+        // media anyway.
         if (ImGui::MenuItem("Create Project")) {
-            pm.show_project_window = true;
+            annot_state.show = true;
+            annot_state.discovered_cameras.clear();
+            annot_state.camera_selected.clear();
+            annot_state.status.clear();
         }
-        ImGui::EndDisabled();
         if (ImGui::MenuItem("Load Project")) {
             IGFD::FileDialogConfig config;
             config.countSelectionMax = 1;
@@ -153,13 +159,14 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
     ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
 
     // New Project
-    ImGui::BeginDisabled(!ps.video_loaded);
     if (ImGui::MenuItem(ICON_FK_FILE_O "##toolbar_new")) {
-        pm.show_project_window = true;
+        annot_state.show = true;
+        annot_state.discovered_cameras.clear();
+        annot_state.camera_selected.clear();
+        annot_state.status.clear();
     }
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
         ImGui::SetTooltip("Create Project");
-    ImGui::EndDisabled();
 
     // Open Project
     if (ImGui::MenuItem(ICON_FK_FOLDER_OPEN "##toolbar_open")) {

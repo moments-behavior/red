@@ -122,7 +122,6 @@ inline bool tailcycle_open_session(AppContext &ctx, const std::string &session_d
     // labelling overlay never draws, so the frames appear with no labels on
     // them and nothing says why.
     ctx.pm.plot_keypoints_flag = true;
-    ctx.pm.show_project_window = false;
 
     tailcycle_skeleton_from_session(s, ctx.skeleton);
     ctx.annotations = s.annotations;

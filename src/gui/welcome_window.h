@@ -116,6 +116,18 @@ inline void DrawWelcomeWindow(AppContext &ctx, WindowStates &win) {
         win.annotation.show = true;
         win.annotation.two_d_mode = false; // calibrated multi-camera 3D
     }
+    if (ImGui::Button("Load Annotation Project", ImVec2(-1, 0))) {
+        // The same dialog File > Load Project uses. The old separate
+        // LoadAnnotProject handler only knew how to open an annotation
+        // .redproj, so a tailcycle folder or a legacy calibration project gave
+        // a raw parse error instead of an explanation.
+        IGFD::FileDialogConfig cfg;
+        cfg.countSelectionMax = 1;
+        cfg.flags = ImGuiFileDialogFlags_Modal;
+        ImGuiFileDialog::Instance()->OpenDialog(
+            "ChooseProject", "Load Annotation Project",
+            "Red Project{.redproj}", cfg);
+    }
     if (ImGui::Button("Create 2D Annotation Project", ImVec2(-1, 0))) {
         win.annotation.show = true;
         win.annotation.two_d_mode = true; // single / uncalibrated camera(s), 2D only

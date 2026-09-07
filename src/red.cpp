@@ -24,7 +24,6 @@
 #include "gui/switch_skeleton_window.h"
 #include "gui/annotation_dialog.h"
 #include "gui/labeling_tool_window.h"
-#include "gui/project_window.h"
 #include "gui/settings_window.h"
 #include "gui/main_menu_dialogs.h"
 #include "gui/main_menu_bar.h"
@@ -470,8 +469,6 @@ int main(int argc, char **argv) {
 
     // Panel registry — replaces manual draw calls
     PanelRegistry panels;
-    panels.add({"Create Project",
-                [&]() { DrawProjectWindow(ctx); }, nullptr});
     panels.add({"Annotation Dialog",
                 [&]() { DrawAnnotationDialog(win.annotation, ctx, annot_create_cb); },
                 nullptr});

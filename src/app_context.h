@@ -288,7 +288,6 @@ inline void close_project(AppContext &ctx) {
     ctx.pm.skeleton_file.clear();
     ctx.pm.load_skeleton_from_json = false;
     ctx.pm.plot_keypoints_flag = false;
-    ctx.pm.show_project_window = false;
     ctx.pm.telecentric = false;
     ctx.pm.sync_fix_enabled = false;
     ctx.pm.annotation_config = AnnotationConfig{};

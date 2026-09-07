@@ -33,7 +33,6 @@ inline void from_json(const nlohmann::json &j, AnnotationConfig &a) {
 }
 
 struct ProjectManager {
-    bool show_project_window = false;
     std::string project_root_path;
     std::string project_path;
     std::string project_name;
@@ -441,6 +440,5 @@ inline bool setup_project(ProjectManager &pm, SkeletonContext &skeleton,
         return false;
 
     pm.plot_keypoints_flag = true;
-    pm.show_project_window = false;
     return true;
 }
