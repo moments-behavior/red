@@ -145,10 +145,10 @@ inline void DrawLabelingToolWindow(
         auto kp_pn = find_prev_next([](const FrameInstances &fis) {
             return any_instance_has_keypoints(fis);
         });
-        bool has_next = kp_pn.next >= 0;
-        bool has_prev = kp_pn.prev >= 0;
-        int next_frame = kp_pn.next;
-        int prev_frame = kp_pn.prev;
+        // Only the previous frame is still needed up here, for "Copy Prev";
+        // walking the labelled frames is jump_buttons' job now.
+        const bool has_prev = kp_pn.prev >= 0;
+        const int prev_frame = kp_pn.prev;
 
         // === Top row: Save, Triangulate, Prev/Next label ===
         if (ImGui::Button(ICON_FK_FLOPPY_O " Save")) {
@@ -206,31 +206,10 @@ inline void DrawLabelingToolWindow(
             }
         }
 
-        // Prev / Jump to Label / Next
-        ImGui::SameLine();
-        ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
-        ImGui::SameLine();
-
-        ImGui::BeginDisabled(!has_prev);
-        if (ImGui::Button(ICON_FK_CHEVRON_LEFT " Prev")) {
-            ps.play_video = false;
-            seek_all_cameras(scene, prev_frame,
-                             dc_context->video_fps, ps, true);
-        }
-        ImGui::EndDisabled();
-
-        ImGui::SameLine();
-        ImGui::TextColored(ImVec4(0.5f, 0.7f, 1.0f, 1.0f), "Jump");
-        ImGui::SameLine();
-
-        ImGui::BeginDisabled(!has_next);
-        if (ImGui::Button("Next " ICON_FK_CHEVRON_RIGHT)) {
-            ps.play_video = false;
-            seek_all_cameras(scene, next_frame,
-                             dc_context->video_fps, ps, true);
-        }
-        ImGui::EndDisabled();
-
+        // (Prev / Jump / Next lives with the other jump controls in the frame
+        // overview below. Up here it was an unlabelled pair of buttons that
+        // looked exactly like the needs-fixing, unfinished and bounding-box
+        // ones but walked a different set, with nothing on screen to say so.)
         ImGui::SameLine();
         ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
         ImGui::SameLine();
@@ -587,9 +566,9 @@ inline void DrawLabelingToolWindow(
             }
         }
 
-        // No jump buttons here: the Prev / Jump / Next row above already walks
-        // the annotated frames. The per-state counts stand in for the colour
-        // key the grid squares used to carry in their tooltips.
+        // The per-state counts stand in for the colour key the grid squares
+        // used to carry in their tooltips; the legend under the timeline
+        // carries the rest.
         {
             size_t n_green = 0, n_partial = 0, n_yellow = 0;
             for (auto &lf : labeled_frames) {
@@ -598,6 +577,10 @@ inline void DrawLabelingToolWindow(
                 else n_yellow++;
             }
             ImGui::Text("Keypoint Labels (%zu)", labeled_frames.size());
+            if (!labeled_frames.empty()) {
+                ImGui::SameLine();
+                jump_buttons(kp_pn, "kplabels");
+            }
             auto count_chip = [&](const ImVec4 &col, size_t n, const char *tip) {
                 if (n == 0) return;
                 ImGui::SameLine();
