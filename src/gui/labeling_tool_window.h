@@ -429,11 +429,22 @@ inline void DrawLabelingToolWindow(
         // at all and you are hunting an absence. A button that walks the list
         // is the only thing that reliably reaches it.
         const int total_frames = dc_context->estimated_num_frames;
-        // "Every frame", with slack: an image set can be off by one or two
-        // against the estimated count.
-        const bool near_total =
-            total_frames > 0 &&
-            (double)cells.size() >= (double)total_frames * 0.98;
+        // Are the never-labelled frames the exception, or the norm? On a
+        // video where 100 frames of 8000 are labelled they are the norm: an
+        // orange tick on each would paint the bar and bury the 100 that
+        // matter. On a proofread that is nearly done they are exactly what
+        // you are looking for. The test is which side outnumbers the other,
+        // not a coverage percentage -- 7000 of 8000 is a pass with 1000
+        // frames left to do, and hiding them because it missed a 98% cutoff
+        // helps nobody.
+        // The cap is part of the test, not a truncation applied after it:
+        // enumerating 40000 gaps and plotting the first 4096 would read as
+        // "these are the gaps" while quietly hiding nine tenths of them.
+        constexpr int kMaxGaps = 4096;
+        const int gap_count = ImMax(0, total_frames - (int)cells.size());
+        const bool gaps_are_exceptional =
+            total_frames > 0 && gap_count > 0 &&
+            gap_count < (int)cells.size() && gap_count <= kMaxGaps;
 
         std::vector<int> unfinished;
         // Frames with no annotation at all. Kept separately because the
@@ -441,7 +452,6 @@ inline void DrawLabelingToolWindow(
         // thing it cannot show by colouring a tick, having no tick to colour.
         std::vector<int> unlabeled;
         {
-            constexpr size_t kMaxUnfinished = 4096;  // bound the pathological case
             for (const auto &c : cells)
                 if (c.needs_fix ||
                     (skeleton.has_skeleton && (!c.has_kp || c.kp_state != KP_GREEN)))
@@ -449,16 +459,14 @@ inline void DrawLabelingToolWindow(
             // Never-labelled frames only count when they are the exception.
             // On a sparsely labelled recording "unfinished" would be almost
             // every frame, which is not a thing anyone navigates.
-            if (near_total) {
+            if (gaps_are_exceptional) {
                 int expected = 0;
                 for (const auto &c : cells) {
-                    for (; expected < c.frame &&
-                           unlabeled.size() < kMaxUnfinished; ++expected)
+                    for (; expected < c.frame; ++expected)
                         unlabeled.push_back(expected);
                     expected = c.frame + 1;
                 }
-                for (; expected < total_frames &&
-                       unlabeled.size() < kMaxUnfinished; ++expected)
+                for (; expected < total_frames; ++expected)
                     unlabeled.push_back(expected);
                 unfinished.insert(unfinished.end(), unlabeled.begin(),
                                   unlabeled.end());
@@ -606,7 +614,7 @@ inline void DrawLabelingToolWindow(
                                unfinished.size());
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip(
-                    near_total
+                    gaps_are_exceptional
                         ? "Frames that are unlabelled, or labelled but not "
                           "complete."
                         : "Labelled frames that are not complete.");
