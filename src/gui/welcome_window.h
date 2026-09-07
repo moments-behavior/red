@@ -123,14 +123,6 @@ inline void DrawWelcomeWindow(AppContext &ctx, WindowStates &win) {
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Label 2D keypoints on one or more uncalibrated\n"
                           "cameras. No calibration or triangulation.");
-    if (ImGui::Button("Load Annotation Project", ImVec2(-1, 0))) {
-        IGFD::FileDialogConfig cfg;
-        cfg.countSelectionMax = 1;
-        cfg.flags = ImGuiFileDialogFlags_Modal;
-        ImGuiFileDialog::Instance()->OpenDialog(
-            "LoadAnnotProject", "Load Annotation Project",
-            "Red Project{.redproj}", cfg);
-    }
     ImGui::PopStyleVar();
 
     // Recent Projects section

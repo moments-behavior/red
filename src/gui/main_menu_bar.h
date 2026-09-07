@@ -91,15 +91,6 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
             annot_state.camera_selected.clear();
             annot_state.status.clear();
         }
-        if (ImGui::MenuItem("Load Annotation Project")) {
-            IGFD::FileDialogConfig cfg;
-            cfg.countSelectionMax = 1;
-            cfg.path = pm.project_root_path;
-            cfg.flags = ImGuiFileDialogFlags_Modal;
-            ImGuiFileDialog::Instance()->OpenDialog(
-                "LoadAnnotProject", "Load Annotation Project",
-                "Red Project{.redproj}", cfg);
-        }
         ImGui::EndMenu();
     }
 
