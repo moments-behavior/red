@@ -387,6 +387,37 @@ inline void DrawLabelingToolWindow(
                 bbox_frames.push_back({(int)fnum, any_bbox, any_obb});
         }
 
+        // === Merge into one cell per frame (for the strip below) ===
+        // Three separate grids meant a frame that was annotated, boxed and
+        // flagged showed up as three squares in three places. One cell per
+        // frame instead, with the state drawn into it.
+        struct FrameCell {
+            int frame = 0;
+            int kp_state = 0;
+            bool has_kp = false;
+            bool needs_fix = false;
+            bool has_bbox = false;
+            bool has_obb = false;
+        };
+        std::map<int, FrameCell> cell_by_frame;
+        for (auto &lf : labeled_frames) {
+            auto &c = cell_by_frame[lf.frame];
+            c.frame = lf.frame; c.kp_state = lf.state; c.has_kp = true;
+        }
+        for (auto &nf : needs_fix_frames) {
+            auto &c = cell_by_frame[nf.frame];
+            c.frame = nf.frame; c.kp_state = nf.state; c.has_kp = true;
+            c.needs_fix = true;
+        }
+        for (auto &bf : bbox_frames) {
+            auto &c = cell_by_frame[bf.frame];
+            c.frame = bf.frame;
+            c.has_bbox = bf.has_bbox; c.has_obb = bf.has_obb;
+        }
+        std::vector<FrameCell> cells;
+        cells.reserve(cell_by_frame.size());
+        for (auto &[f, c] : cell_by_frame) cells.push_back(c);
+
         // Annotation type colors, shared by the section labels and the
         // timeline ticks.
         const ImVec4 color_green(0.2f, 0.8f, 0.3f, 1.0f);
@@ -406,8 +437,13 @@ inline void DrawLabelingToolWindow(
             if (!bbox_frames.empty())      overview_lines++;
             const float timeline_block =
                 (dc_context->estimated_num_frames > 0) ? 78.0f : 0.0f;
+            // Header line + two 16px rows for the nearby-frames strip.
+            const float strip_block =
+                cells.empty()
+                    ? 0.0f
+                    : line_h + 2.0f * (16.0f + ImGui::GetStyle().ItemSpacing.y);
             const float reserved =
-                overview_lines * line_h + timeline_block +
+                overview_lines * line_h + strip_block + timeline_block +
                 ImGui::GetStyle().ItemSpacing.y * 4.0f;
             const float table_h =
                 ImMax(90.0f, ImGui::GetContentRegionAvail().y - reserved);
@@ -417,10 +453,11 @@ inline void DrawLabelingToolWindow(
         ImGui::Separator();
 
         // === Frame overview ===
-        // Counts and jump buttons per annotation type; the timeline below is
-        // the frame picker. This used to also draw one clickable square per
-        // annotated frame, which on a fully-labelled recording meant thousands
-        // of squares -- unreadable, and slow to scan for the frame you wanted.
+        // Counts and jump buttons per annotation type. Below them: a strip of
+        // clickable cells for the frames around the current one, then the
+        // timeline for the whole recording. The strip used to be every
+        // annotated frame at once, which on a fully-labelled recording meant
+        // thousands of squares filling the panel.
         if (!needs_fix_frames.empty()) {
             auto fix_pn = find_prev_next([](const FrameInstances &fis) {
                 for (const auto &fa : fis)
@@ -482,6 +519,132 @@ inline void DrawLabelingToolWindow(
             ImGui::Text("Bounding Box Labels (%zu)", bbox_frames.size());
             ImGui::SameLine();
             jump_buttons(bbox_pn, "bbox");
+        }
+
+        // === Nearby frames ===
+        // The squares are back, but windowed: as many as fit the panel in two
+        // rows, centred on where you are. A cell is a real click target with
+        // the frame number in its tooltip, which is what the timeline cannot
+        // give you -- at full zoom a frame there is well under a pixel wide.
+        // The timeline below keeps the whole-recording view.
+        if (!cells.empty()) {
+            const ImVec2 cell_size(16, 16);
+            const float gap = ImGui::GetStyle().ItemSpacing.x;
+            const float avail_w = ImGui::GetContentRegionAvail().x;
+            const ImU32 white = IM_COL32(255, 255, 255, 255);
+            const ImU32 yellow_u32 = ImGui::ColorConvertFloat4ToU32(color_yellow);
+            const ImU32 purple_u32 = ImGui::ColorConvertFloat4ToU32(color_purple);
+            const ImU32 green_u32  = ImGui::ColorConvertFloat4ToU32(color_green);
+            const ImU32 lilac_u32  = ImGui::ColorConvertFloat4ToU32(color_lilac);
+            const ImU32 red_u32    = ImGui::ColorConvertFloat4ToU32(color_red);
+            const ImU32 empty_u32  = ImGui::GetColorU32(ImGuiCol_FrameBg);
+
+            const int per_row = ImMax(
+                1, (int)((avail_w + gap) / (cell_size.x + gap)));
+            const int window_n = ImMin((int)cells.size(), per_row * 2);
+
+            // Centre on the current frame -- or, if it is not annotated, on
+            // the first annotated frame at or after it, so scrubbing through
+            // unlabelled stretches still slides the window along.
+            int cur_idx = (int)(std::lower_bound(
+                                    cells.begin(), cells.end(), current_frame_num,
+                                    [](const FrameCell &c, int f) {
+                                        return c.frame < f;
+                                    }) - cells.begin());
+            int start = cur_idx - window_n / 2;
+            start = ImClamp(start, 0, ImMax(0, (int)cells.size() - window_n));
+
+            if (window_n < (int)cells.size())
+                ImGui::TextDisabled("Nearby frames (%d-%d of %zu)",
+                                    cells[start].frame,
+                                    cells[start + window_n - 1].frame,
+                                    cells.size());
+            else
+                ImGui::TextDisabled("Frames (%zu)", cells.size());
+
+            for (int i = 0; i < window_n; ++i) {
+                const FrameCell &c = cells[start + i];
+                ImGui::PushID(c.frame);
+
+                bool is_current = (c.frame == current_frame_num);
+                if (is_current) {
+                    ImVec2 pos = ImGui::GetCursorScreenPos();
+                    ImGui::GetWindowDrawList()->AddRect(
+                        ImVec2(pos.x - 1, pos.y - 1),
+                        ImVec2(pos.x + cell_size.x + 1, pos.y + cell_size.y + 1),
+                        white, 0.0f, 0, 2.0f);
+                }
+
+                if (ImGui::InvisibleButton("##cell", cell_size)) {
+                    ps.play_video = false;
+                    seek_all_cameras(scene, c.frame,
+                                     dc_context->video_fps, ps, true);
+                }
+
+                ImVec2 mn = ImGui::GetItemRectMin();
+                ImVec2 mx = ImGui::GetItemRectMax();
+                ImDrawList *dl = ImGui::GetWindowDrawList();
+
+                // Fill: keypoint state, or red if this frame still needs a fix.
+                ImU32 fill = empty_u32;
+                if (c.needs_fix) fill = red_u32;
+                else if (c.has_kp)
+                    fill = c.kp_state == KP_GREEN    ? green_u32
+                           : c.kp_state == KP_PURPLE ? purple_u32
+                                                     : yellow_u32;
+                dl->AddRectFilled(mn, mx, fill);
+
+                // BBox: purple outline. OBB: lilac diamond. Both drawn over
+                // the fill so a frame carrying boxes and keypoints reads as
+                // both rather than picking one.
+                if (c.has_bbox)
+                    dl->AddRect(ImVec2(mn.x + 1, mn.y + 1),
+                                ImVec2(mx.x - 1, mx.y - 1),
+                                purple_u32, 0.0f, 0, 1.5f);
+                if (c.has_obb) {
+                    float cx = (mn.x + mx.x) * 0.5f, cy = (mn.y + mx.y) * 0.5f;
+                    float hx = (mx.x - mn.x) * 0.5f - 1.5f;
+                    float hy = (mx.y - mn.y) * 0.5f - 1.5f;
+                    ImVec2 pts[4] = {ImVec2(cx, cy - hy), ImVec2(cx + hx, cy),
+                                     ImVec2(cx, cy + hy), ImVec2(cx - hx, cy)};
+                    dl->AddPolyline(pts, 4, lilac_u32, ImDrawFlags_Closed, 1.5f);
+                }
+
+                if (ImGui::IsItemHovered()) {
+                    char tip[160];
+                    // snprintf returns what it WOULD have written, so a running
+                    // offset has to be clamped or truncation walks it past the
+                    // end of the buffer.
+                    auto adv = [&](int off, int n) {
+                        return ImMin(off + ImMax(n, 0), (int)sizeof(tip) - 1);
+                    };
+                    int off = adv(0, snprintf(tip, sizeof(tip), "Frame %d",
+                                              c.frame));
+                    if (c.needs_fix)
+                        off = adv(off, snprintf(tip + off, sizeof(tip) - off,
+                                                " \xE2\x80\x94 needs fixing"));
+                    else if (c.has_kp)
+                        off = adv(off, snprintf(
+                            tip + off, sizeof(tip) - off, " \xE2\x80\x94 %s",
+                            c.kp_state == KP_GREEN
+                                ? "complete (all placed & triangulated)"
+                                : c.kp_state == KP_PURPLE
+                                      ? "all placed keypoints triangulated"
+                                      : "some keypoints not triangulated"));
+                    if (c.has_bbox && c.has_obb)
+                        snprintf(tip + off, sizeof(tip) - off, " + BBox, OBB");
+                    else if (c.has_bbox)
+                        snprintf(tip + off, sizeof(tip) - off, " + BBox");
+                    else if (c.has_obb)
+                        snprintf(tip + off, sizeof(tip) - off, " + OBB");
+                    ImGui::SetTooltip("%s", tip);
+                }
+
+                ImGui::PopID();
+                if (i + 1 < window_n && (i + 1) % per_row != 0)
+                    ImGui::SameLine(0, gap);
+            }
+            ImGui::Spacing();
         }
 
         // === Timeline minimap (ImPlot — all annotation types) ===
