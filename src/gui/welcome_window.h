@@ -78,6 +78,28 @@ inline void DrawWelcomeWindow(AppContext &ctx, WindowStates &win) {
                 "ChooseProject", "Load Project",
                 "Red Project{.redproj}", cfg);
         }
+
+        // A tailcycle session is not a red project -- it brings its own
+        // cameras, calibration and skeleton -- but opening one is the same
+        // kind of act as loading a project, so it belongs up here rather than
+        // fourth in the Annotate list, where it was easy to miss. Full width
+        // because the name does not fit a 150px button.
+        if (TailcycleImport::available()) {
+            ImGui::Spacing();
+            // The SameLine above ended, so the cursor is back at the left
+            // content edge; line it up under the two buttons.
+            ImGui::SetCursorPosX(start_x);
+            ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0.5f, 0.5f));
+            if (ImGui::Button("Open tailcycle Dataset",
+                              ImVec2(2 * btn_w + spacing, 30))) {
+                win.tailcycle_open.show = true;
+            }
+            ImGui::PopStyleVar();
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip(
+                    "Browse a tailcycle-dataset root and open one of its\n"
+                    "sessions. Brings its own cameras and skeleton.");
+        }
     }
 
     ImGui::Spacing();
@@ -107,15 +129,6 @@ inline void DrawWelcomeWindow(AppContext &ctx, WindowStates &win) {
         ImGuiFileDialog::Instance()->OpenDialog(
             "LoadAnnotProject", "Load Annotation Project",
             "Red Project{.redproj}", cfg);
-    }
-    // Not a red project: a tailcycle-dataset session brings its own cameras,
-    // calibration and skeleton, and opens read-only for looking at.
-    if (TailcycleImport::available()) {
-        if (ImGui::Button("Open tailcycle Dataset", ImVec2(-1, 0)))
-            win.tailcycle_open.show = true;
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Browse a tailcycle-dataset root and open one of its\n"
-                              "sessions. Brings its own cameras and skeleton.");
     }
     ImGui::PopStyleVar();
 

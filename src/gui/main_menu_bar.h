@@ -2,6 +2,7 @@
 #include "app_context.h"
 #include "gui/window_states.h"
 #include "IconsForkAwesome.h"
+#include "tailcycle_import.h"
 #include <ImGuiFileDialog.h>
 
 inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
@@ -53,6 +54,16 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
             ImGuiFileDialog::Instance()->OpenDialog(
                 "ChooseProject", "Choose Project File", ".redproj",
                 config);
+        }
+        // A tailcycle session is not a .redproj -- it brings its own cameras,
+        // calibration and skeleton -- but opening one belongs with the other
+        // ways of opening something to work on. Hidden rather than disabled
+        // when the build has no Parquet: there is nothing the user could do
+        // about it from here.
+        if (TailcycleImport::available()) {
+            if (ImGui::MenuItem("Open tailcycle Dataset...")) {
+                win.tailcycle_open.show = true;
+            }
         }
         ImGui::BeginDisabled(pm.project_path.empty());
         if (ImGui::MenuItem("Switch Skeleton...")) {
