@@ -7,7 +7,12 @@
 #include <algorithm>
 #include <string>
 
-inline void DrawKeypointsWindow(AppContext &ctx) {
+// The per-camera x per-keypoint grid. Drawn inline inside the Labeling Tool
+// rather than in a window of its own: it is the labeling surface for whatever
+// the tool's controls act on, and splitting them across two dockable windows
+// meant the animal selector, Triangulate and the table it reports on could sit
+// on opposite sides of the screen. `height` is what the caller can spare.
+inline void DrawKeypointsTable(AppContext &ctx, float height) {
     int current_frame_num = ctx.current_frame_num;
     // The table shows the animal being edited, not the first one -- otherwise
     // dragging animal 2's keypoint clears animal 2's 3D while the table keeps
@@ -20,7 +25,7 @@ inline void DrawKeypointsWindow(AppContext &ctx) {
     const ImVec4 active_kp_color = active_keypoint_color(ctx.user_settings);
     KeypointClipboard &kc = keypoint_clipboard();
 
-    if (ImGui::Begin("Keypoints")) {
+    {
 
         bool keypoints_find =
             annotations.find(current_frame_num) != annotations.end();
@@ -47,7 +52,7 @@ inline void DrawKeypointsWindow(AppContext &ctx) {
                 ImGuiTableFlags_Resizable |
                 ImGuiTableFlags_HighlightHoveredColumn;
 
-            float table_height = ImGui::GetContentRegionAvail().y;
+            float table_height = height;
             ImVec2 table_size(0.0f, table_height);
 
             // Top of the table on screen = top of the angled-header band; used
@@ -362,7 +367,7 @@ inline void DrawKeypointsWindow(AppContext &ctx) {
             }
 
             // ── Select All (Ctrl+A): toggle every keypoint column. Scoped to
-            //    the Keypoints window so it never clashes with the image-view
+            //    the keypoints table so it never clashes with the image-view
             //    'A' (previous active keypoint), which only fires over a plot. ──
             if ((ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows) ||
                  ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) &&
@@ -459,5 +464,4 @@ inline void DrawKeypointsWindow(AppContext &ctx) {
             }
         }
     }
-    ImGui::End();
 }

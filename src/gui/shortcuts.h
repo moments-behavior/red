@@ -34,10 +34,10 @@ enum class Sc {
     Triangulate,
     PlotMenu,
     PeekRaw,
-    SelectAllKeypoints, // Keypoints window: select every keypoint column (toggle)
-    CopyKeypoints,    // Keypoints window: copy the selected node set
-    PasteKeypoints,   // Keypoints window: paste the copied node set onto this frame
-    DeleteKeypoint,   // Keypoints window: delete (hovered cell / hovered column / selection)
+    SelectAllKeypoints, // keypoints table: select every keypoint column (toggle)
+    CopyKeypoints,    // keypoints table: copy the selected node set
+    PasteKeypoints,   // keypoints table: paste the copied node set onto this frame
+    DeleteKeypoint,   // keypoints table: delete (hovered cell / hovered column / selection)
     COUNT  // sentinel: "no single bound key" (help rows that use a literal label)
 };
 

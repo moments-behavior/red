@@ -475,9 +475,6 @@ int main(int argc, char **argv) {
     panels.add({"Annotation Dialog",
                 [&]() { DrawAnnotationDialog(win.annotation, ctx, annot_create_cb); },
                 nullptr});
-    panels.add({"Keypoints",
-                [&]() { DrawKeypointsWindow(ctx); },
-                [&]() { return pm.plot_keypoints_flag; }});
     panels.add({"Labeling Tool",
                 [&]() {
                     DrawLabelingToolWindow(win.labeling, ctx);
@@ -1258,13 +1255,21 @@ int main(int argc, char **argv) {
                                 // edited draws full strength; the rest are
                                 // tinted and dimmed so they read as context.
                                 auto &fis_draw = annotations.at(current_frame_num);
+                                int grabbed = -1;
                                 for (size_t inst = 0; inst < fis_draw.size(); inst++)
-                                    gui_plot_keypoints(
-                                        fis_draw[inst], &skeleton, j,
-                                        scene->num_cams,
-                                        active_keypoint_color(user_settings),
-                                        (int)inst,
-                                        (int)inst == active_instance);
+                                    if (gui_plot_keypoints(
+                                            fis_draw[inst], &skeleton, j,
+                                            scene->num_cams,
+                                            active_keypoint_color(user_settings),
+                                            (int)inst,
+                                            (int)inst == active_instance))
+                                        grabbed = (int)inst;
+                                // Grabbing an animal's keypoint selects that
+                                // animal, so the table, Triangulate and the
+                                // rest follow the hand rather than needing a
+                                // separate radio-button click first.
+                                if (grabbed >= 0)
+                                    active_instance = grabbed;
                             }
 
                             // Read-only prediction overlay. Skipped once the

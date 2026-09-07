@@ -30,12 +30,17 @@ inline ImVec4 instance_tint(int instance) {
 // `instance` separates one animal's draggable points from another's: ImPlot
 // keys DragPoint by id, so without it five animals would share one point per
 // node and dragging any would move them together.
-inline void gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
+// Returns true if the user touched one of this instance's points this frame
+// (clicked or dragged). The caller uses that to make the animal you just
+// grabbed the one the Labeling Tool is editing -- otherwise you drag animal 2
+// and every panel keeps reporting animal 0.
+inline bool gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
                                int view_idx, int num_cams,
                                ImVec4 active_color = ImVec4(1, 1, 1, 1),
                                int instance = 0, bool is_active = true) {
-    if (view_idx >= (int)fa.cameras.size()) return;
+    if (view_idx >= (int)fa.cameras.size()) return false;
     auto &cam = fa.cameras[view_idx];
+    bool touched = false;
 
     float pt_size = 6.0f;
     for (u32 node = 0; node < skeleton->num_nodes; node++) {
@@ -67,6 +72,7 @@ inline void gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
                 &drag_point_hovered);
             if (drag_point_modified) {
                 fa.kp3d[node].clear();
+                touched = true;
             }
             if (drag_point_hovered) {
                 if (fa.kp3d[node].triangulated) {
@@ -104,6 +110,7 @@ inline void gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
 
             if (drag_point_clicked) {
                 cam.active_id = node;
+                touched = true;
             }
         }
     }
@@ -118,6 +125,7 @@ inline void gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
             ImPlot::PlotLine("##line", xs, ys, 2);
         }
     }
+    return touched;
 }
 
 inline bool is_in_camera_fov(const Eigen::Vector3d &point_world,

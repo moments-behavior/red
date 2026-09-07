@@ -5,6 +5,7 @@
 #include "annotation_csv.h"
 #include "gui/gui_keypoints.h"
 #include "gui/keypoint_clipboard.h"
+#include "keypoints_table.h"
 #include "gui/shortcuts.h"
 #include "IconsForkAwesome.h"
 #include "implot.h"
@@ -250,8 +251,8 @@ inline void DrawLabelingToolWindow(
         ImGui::EndDisabled();
 
         // Copy / Paste a SELECTED set of keypoints (selection is built in the
-        // Keypoints window by clicking column names). Overwrite on paste.
-        // Mirrors the Ctrl+C / Ctrl+V hotkeys handled in the Keypoints window.
+        // keypoints table by clicking column names). Overwrite on paste.
+        // Mirrors the Ctrl+C / Ctrl+V hotkeys handled in the keypoints table.
         {
             KeypointClipboard &kc = keypoint_clipboard();
             ImGui::SameLine();
@@ -314,11 +315,10 @@ inline void DrawLabelingToolWindow(
 
         ImGui::Separator();
 
-        // === Collect labeled frames (shared by grid + timeline) ===
+        // === Collect labeled frames (counts + timeline) ===
         // needs_improvement frames (promoted predictions awaiting a manual fix)
         // are collected separately so they get their own section below.
-        // Keypoint-label state, used to color the grid squares and timeline
-        // ticks:
+        // Keypoint-label state, used to color the timeline ticks:
         //   GREEN  = every keypoint placed on every camera AND fully triangulated
         //   PURPLE = not complete, but every placed keypoint IS triangulated
         //   YELLOW = some placed keypoint is not (yet) triangulated
@@ -387,80 +387,48 @@ inline void DrawLabelingToolWindow(
                 bbox_frames.push_back({(int)fnum, any_bbox, any_obb});
         }
 
-        // === Shared constants (grid + timeline) ===
-        const ImVec2 cell_size(16, 16);
-        const float gap = ImGui::GetStyle().ItemSpacing.y;
-        const float avail_w = ImGui::GetContentRegionAvail().x;
-        const ImU32 white = IM_COL32(255, 255, 255, 255);
-
-        // Annotation type colors (shared between grid cells and timeline ticks)
+        // Annotation type colors, shared by the section labels and the
+        // timeline ticks.
         const ImVec4 color_green(0.2f, 0.8f, 0.3f, 1.0f);
         const ImVec4 color_yellow(0.95f, 0.85f, 0.15f, 1.0f);
         const ImVec4 color_purple(0.63f, 0.35f, 0.86f, 1.0f);
         const ImVec4 color_lilac(0.78f, 0.59f, 1.0f, 1.0f);
         const ImVec4 color_red(0.90f, 0.28f, 0.28f, 1.0f);
 
-        // Grid cell PushID offsets (max ~10k frames per section before collision)
-        constexpr int kKpIdOffset      = 0;
-        constexpr int kBBoxIdOffset    = 20000;
-        constexpr int kNeedsFixIdOffset = 30000;
+        // === Keypoints table ===
+        // Takes whatever height is left once the frame overview below has
+        // been accounted for, so the table grows with the window instead of
+        // being pinned to a guessed size.
+        {
+            const float line_h = ImGui::GetTextLineHeightWithSpacing();
+            int overview_lines = 1;  // "Keypoint Labels" is always shown
+            if (!needs_fix_frames.empty()) overview_lines++;
+            if (!bbox_frames.empty())      overview_lines++;
+            const float timeline_block =
+                (dc_context->estimated_num_frames > 0) ? 78.0f : 0.0f;
+            const float reserved =
+                overview_lines * line_h + timeline_block +
+                ImGui::GetStyle().ItemSpacing.y * 4.0f;
+            const float table_h =
+                ImMax(90.0f, ImGui::GetContentRegionAvail().y - reserved);
+            DrawKeypointsTable(ctx, table_h);
+        }
 
-        // Helper: render a clickable grid cell with custom drawing.
-        // draw_fn(ImDrawList*, ImVec2 min, ImVec2 max) draws the cell interior.
-        // tooltip is shown on hover. Returns true if clicked.
-        auto grid_cell = [&](int idx, int frame_num, const char *tooltip_text,
-                             auto draw_fn) -> bool {
-            bool clicked = false;
-            bool is_current = (frame_num == current_frame_num);
+        ImGui::Separator();
 
-            ImGui::PushID(idx);
-
-            // White border for current frame (drawn before button so it's behind)
-            if (is_current) {
-                ImVec2 pos = ImGui::GetCursorScreenPos();
-                ImGui::GetWindowDrawList()->AddRect(
-                    ImVec2(pos.x - 1, pos.y - 1),
-                    ImVec2(pos.x + cell_size.x + 1, pos.y + cell_size.y + 1),
-                    white, 0.0f, 0, 2.0f);
-            }
-
-            // Invisible button for click + hover detection
-            if (ImGui::InvisibleButton("##cell", cell_size)) {
-                ps.play_video = false;
-                seek_all_cameras(scene, frame_num,
-                                 dc_context->video_fps, ps, true);
-                clicked = true;
-            }
-
-            // Draw custom shape into the button rect
-            ImVec2 rmin = ImGui::GetItemRectMin();
-            ImVec2 rmax = ImGui::GetItemRectMax();
-            draw_fn(ImGui::GetWindowDrawList(), rmin, rmax);
-
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("%s", tooltip_text);
-
-            ImGui::PopID();
-            return clicked;
-        };
-
-        // Helper: wrap to next row or stay on same line
-        auto grid_wrap = [&](size_t i, size_t count) {
-            if (i + 1 < count) {
-                float next_x = ImGui::GetItemRectMax().x + gap + cell_size.x;
-                if (next_x < ImGui::GetWindowPos().x + avail_w)
-                    ImGui::SameLine(0, gap);
-            }
-        };
-
-        // ─── Section 0: Needs Improvement (promoted predictions to fix) ───
+        // === Frame overview ===
+        // Counts and jump buttons per annotation type; the timeline below is
+        // the frame picker. This used to also draw one clickable square per
+        // annotated frame, which on a fully-labelled recording meant thousands
+        // of squares -- unreadable, and slow to scan for the frame you wanted.
         if (!needs_fix_frames.empty()) {
             auto fix_pn = find_prev_next([](const FrameInstances &fis) {
                 for (const auto &fa : fis)
                     if (fa.needs_improvement) return true;
                 return false;
             });
-            ImGui::Text("Needs Improvement (%zu)", needs_fix_frames.size());
+            ImGui::TextColored(color_red, "Needs Improvement (%zu)",
+                               needs_fix_frames.size());
             ImGui::SameLine();
             jump_buttons(fix_pn, "needsfix");
 
@@ -477,55 +445,34 @@ inline void DrawLabelingToolWindow(
                     ImGui::SetTooltip("Clear the Needs-Improvement flag on the "
                                       "current frame (moves it to Keypoint Labels).");
             }
-
-            ImU32 red_u32 = ImGui::ColorConvertFloat4ToU32(color_red);
-            for (size_t i = 0; i < needs_fix_frames.size(); ++i) {
-                auto &nf = needs_fix_frames[i];
-                char tip[64];
-                snprintf(tip, sizeof(tip), "Frame %d — needs fixing", nf.frame);
-                grid_cell(kNeedsFixIdOffset + (int)i, nf.frame, tip,
-                    [red_u32](ImDrawList *dl, ImVec2 mn, ImVec2 mx) {
-                        dl->AddRectFilled(mn, mx, red_u32);
-                    });
-                grid_wrap(i, needs_fix_frames.size());
-            }
-            ImGui::Spacing();
         }
 
-        // ─── Section 1: Keypoint Labels ───
-        ImGui::Text("Keypoint Labels (%zu)", labeled_frames.size());
-
-        if (!labeled_frames.empty()) {
-            ImU32 yellow_u32 = ImGui::ColorConvertFloat4ToU32(color_yellow);
-            ImU32 purple_u32 = ImGui::ColorConvertFloat4ToU32(color_purple);
-            ImU32 green_u32  = ImGui::ColorConvertFloat4ToU32(color_green);
-
-            for (size_t i = 0; i < labeled_frames.size(); ++i) {
-                auto &lf = labeled_frames[i];
-                ImU32 fill = lf.state == KP_GREEN    ? green_u32
-                             : lf.state == KP_PURPLE ? purple_u32
-                                                     : yellow_u32;
-                const char *desc =
-                    lf.state == KP_GREEN
-                        ? "complete (all placed & triangulated)"
-                        : lf.state == KP_PURPLE
-                              ? "all placed keypoints triangulated"
-                              : "some keypoints not triangulated";
-                char tip[96];
-                snprintf(tip, sizeof(tip), "Frame %d \xE2\x80\x94 %s", lf.frame,
-                         desc);
-
-                grid_cell(kKpIdOffset + (int)i, lf.frame, tip,
-                    [fill](ImDrawList *dl, ImVec2 mn, ImVec2 mx) {
-                        dl->AddRectFilled(mn, mx, fill);
-                    });
-                grid_wrap(i, labeled_frames.size());
+        // No jump buttons here: the Prev / Jump / Next row above already walks
+        // the annotated frames. The per-state counts stand in for the colour
+        // key the grid squares used to carry in their tooltips.
+        {
+            size_t n_green = 0, n_purple = 0, n_yellow = 0;
+            for (auto &lf : labeled_frames) {
+                if (lf.state == KP_GREEN) n_green++;
+                else if (lf.state == KP_PURPLE) n_purple++;
+                else n_yellow++;
             }
+            ImGui::Text("Keypoint Labels (%zu)", labeled_frames.size());
+            auto count_chip = [&](const ImVec4 &col, size_t n, const char *tip) {
+                if (n == 0) return;
+                ImGui::SameLine();
+                ImGui::TextColored(col, "%zu", n);
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
+            };
+            count_chip(color_green, n_green,
+                       "complete (all placed & triangulated)");
+            count_chip(color_purple, n_purple,
+                       "all placed keypoints triangulated");
+            count_chip(color_yellow, n_yellow,
+                       "some keypoints not triangulated");
         }
 
-        // ─── Section 2: Bounding Box Labels ───
         if (!bbox_frames.empty()) {
-            ImGui::Spacing();
             auto bbox_pn = find_prev_next([](const FrameInstances &fis) {
                 for (const auto &fa : fis)
                     for (const auto &cam : fa.cameras)
@@ -535,53 +482,14 @@ inline void DrawLabelingToolWindow(
             ImGui::Text("Bounding Box Labels (%zu)", bbox_frames.size());
             ImGui::SameLine();
             jump_buttons(bbox_pn, "bbox");
-
-            ImU32 purple_u32  = ImGui::ColorConvertFloat4ToU32(color_purple);
-            ImU32 lilac_u32   = ImGui::ColorConvertFloat4ToU32(color_lilac);
-
-            for (size_t i = 0; i < bbox_frames.size(); ++i) {
-                auto &bf = bbox_frames[i];
-                char tip[96];
-                if (bf.has_bbox && bf.has_obb)
-                    snprintf(tip, sizeof(tip), "Frame %d (BBox+OBB)", bf.frame);
-                else if (bf.has_obb)
-                    snprintf(tip, sizeof(tip), "Frame %d (OBB)", bf.frame);
-                else
-                    snprintf(tip, sizeof(tip), "Frame %d (BBox)", bf.frame);
-
-                bool has_bb = bf.has_bbox, has_ob = bf.has_obb;
-                grid_cell(kBBoxIdOffset + (int)i, bf.frame, tip,
-                    [purple_u32, lilac_u32, has_bb, has_ob](ImDrawList *dl, ImVec2 mn, ImVec2 mx) {
-                        // BBox: purple square outline (inset 1px for clarity)
-                        if (has_bb) {
-                            dl->AddRect(
-                                ImVec2(mn.x + 1, mn.y + 1),
-                                ImVec2(mx.x - 1, mx.y - 1),
-                                purple_u32, 0.0f, 0, 1.5f);
-                        }
-                        // OBB: lighter purple diamond outline
-                        if (has_ob) {
-                            float cx = (mn.x + mx.x) * 0.5f;
-                            float cy = (mn.y + mx.y) * 0.5f;
-                            float hx = (mx.x - mn.x) * 0.5f - 1.5f;
-                            float hy = (mx.y - mn.y) * 0.5f - 1.5f;
-                            ImVec2 pts[4] = {
-                                ImVec2(cx, cy - hy),   // top
-                                ImVec2(cx + hx, cy),   // right
-                                ImVec2(cx, cy + hy),   // bottom
-                                ImVec2(cx - hx, cy),   // left
-                            };
-                            dl->AddPolyline(pts, 4, lilac_u32, ImDrawFlags_Closed, 1.5f);
-                        }
-                    });
-                grid_wrap(i, bbox_frames.size());
-            }
         }
 
         // === Timeline minimap (ImPlot — all annotation types) ===
         ImGui::Spacing();
         int total_frames = dc_context->estimated_num_frames;
-        bool has_any_annotations = !labeled_frames.empty() || !bbox_frames.empty();
+        bool has_any_annotations = !labeled_frames.empty() ||
+                                   !bbox_frames.empty() ||
+                                   !needs_fix_frames.empty();
         if (total_frames > 0 && has_any_annotations) {
 
             // Reserve space for rotated "Timeline" label on the left
@@ -604,7 +512,9 @@ inline void DrawLabelingToolWindow(
 
             // Build tick arrays for each annotation type
             std::vector<double> kp_yellow_x, kp_purple_x, green_x,
-                purple_x, lilac_x;
+                purple_x, lilac_x, needs_fix_x;
+            for (auto &nf : needs_fix_frames)
+                needs_fix_x.push_back((double)nf.frame);
             for (auto &lf : labeled_frames) {
                 if (lf.state == KP_GREEN) green_x.push_back((double)lf.frame);
                 else if (lf.state == KP_PURPLE)
@@ -620,6 +530,7 @@ inline void DrawLabelingToolWindow(
             std::vector<int> all_annotated_frames;
             for (auto &lf : labeled_frames) all_annotated_frames.push_back(lf.frame);
             for (auto &bf : bbox_frames) all_annotated_frames.push_back(bf.frame);
+            for (auto &nf : needs_fix_frames) all_annotated_frames.push_back(nf.frame);
             std::sort(all_annotated_frames.begin(), all_annotated_frames.end());
             all_annotated_frames.erase(
                 std::unique(all_annotated_frames.begin(), all_annotated_frames.end()),
@@ -677,6 +588,14 @@ inline void DrawLabelingToolWindow(
                 if (!lilac_x.empty()) {
                     ImPlot::PlotInfLines("##obb", lilac_x.data(), (int)lilac_x.size(),
                                          red_line_spec(color_lilac, 2.0f));
+                }
+
+                // Needs-improvement ticks (red), drawn last so a frame that
+                // needs fixing is never hidden under its own keypoint tick.
+                if (!needs_fix_x.empty()) {
+                    ImPlot::PlotInfLines("##needsfix", needs_fix_x.data(),
+                                         (int)needs_fix_x.size(),
+                                         red_line_spec(color_red, 2.0f));
                 }
 
                 // Double-click to reset to full video range
