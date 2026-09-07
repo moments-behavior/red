@@ -759,11 +759,50 @@ inline void DrawLabelingToolWindow(
                     ImPlotRect lims = ImPlot::GetPlotLimits();
                     double px_per_frame = timeline_w / (lims.X.Max - lims.X.Min);
                     double tolerance = 5.0 / px_per_frame;
+
+                    auto nearest_of = [&](const std::vector<int> &v,
+                                          double tol) {
+                        int best = -1;
+                        double best_d = tol + 1.0;
+                        for (int f : v) {
+                            double d = fabs((double)f - mp.x);
+                            if (d < best_d) { best_d = d; best = f; }
+                        }
+                        return std::pair<int, double>(best, best_d);
+                    };
+
+                    // Hit-testing follows the draw order: rare ticks are drawn
+                    // on top, so a click lands on them first. Without this,
+                    // all_annotated_frames holds every frame once the
+                    // recording is fully labelled, the nearest is whichever
+                    // green neighbour the cursor happens to be over, and the
+                    // one orange frame is unclickable however wide it is drawn.
+                    // The wider tolerance matches the width those ticks are
+                    // given, so clicking the tick itself works, not just its
+                    // centre line.
+                    // Only while they are rare enough to be targets rather
+                    // than a field -- the same condition that draws them fat.
+                    // Prioritising 500 of them would just make the ordinary
+                    // frames hard to hit instead.
+                    const double pri_tol = 8.0 / px_per_frame;
+                    const bool prioritize =
+                        !unfinished.empty() &&
+                        timeline_w * 0.25f / (float)unfinished.size() > 2.5f;
                     int nearest = -1;
-                    double nearest_dist = tolerance + 1;
-                    for (int f : all_annotated_frames) {
-                        double d = fabs((double)f - mp.x);
-                        if (d < nearest_dist) { nearest_dist = d; nearest = f; }
+                    double nearest_dist = 0.0;
+                    if (prioritize) {
+                        auto [pri, pri_d] = nearest_of(unfinished, pri_tol);
+                        if (pri >= 0 && pri_d <= pri_tol) {
+                            nearest = pri;
+                            nearest_dist = pri_d;
+                            tolerance = pri_tol;
+                        }
+                    }
+                    if (nearest < 0) {
+                        auto [any, any_d] =
+                            nearest_of(all_annotated_frames, tolerance);
+                        nearest = any;
+                        nearest_dist = any_d;
                     }
                     if (nearest >= 0 && nearest_dist <= tolerance) {
                         if (std::binary_search(unlabeled.begin(),
