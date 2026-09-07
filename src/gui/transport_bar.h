@@ -501,14 +501,17 @@ inline void DrawTransportBar(TransportBarState &state, AppContext &ctx) {
 
     // === Right-aligned status readouts ===
     // Pre-format value strings to compute total width for right-alignment
-    char val_fr[16], val_spd[16], val_rr[16];
+    char val_fr[40], val_spd[16], val_rr[16];
     // "Recorded FR" is the rate the source declares. When it declares none,
-    // video_fps holds the assumed playback rate, and printing that here said
-    // "1 fps" -- reporting red's placeholder as a fact about the recording.
+    // video_fps holds the assumed playback rate. Printing that here said
+    // "1 fps" -- red's placeholder reported as a fact about the recording. Say
+    // both instead: that nothing was declared, and what is being assumed in
+    // its place, so the number driving playback is never a mystery.
     if (dc->fps_declared)
         snprintf(val_fr, sizeof(val_fr), "%.0f fps", dc->video_fps);
     else
-        snprintf(val_fr, sizeof(val_fr), "\xE2\x80\x94");
+        snprintf(val_fr, sizeof(val_fr),
+                 "\xE2\x80\x94 (assuming %.0f fps)", dc->video_fps);
     snprintf(val_spd, sizeof(val_spd), "%.2fx",    ps.inst_speed);
     snprintf(val_rr,  sizeof(val_rr),  "%.0f fps", ImGui::GetIO().Framerate);
     const char *lbl_fr = "Recorded FR", *lbl_spd = "Play Speed", *lbl_rr = "Render Rate";
@@ -521,9 +524,9 @@ inline void DrawTransportBar(TransportBarState &state, AppContext &ctx) {
     ImGui::TextColored(label_col, "%s", lbl_fr);
     ImGui::SameLine(0, spacing); ImGui::TextDisabled("%s", val_fr);
     if (!dc->fps_declared && ImGui::IsItemHovered())
-        ImGui::SetTooltip("This source declares no frame rate. Playback runs at "
-                          "the assumed %.1f fps set next to Playback Speed.",
-                          dc->video_fps);
+        ImGui::SetTooltip("This source declares no frame rate, so playback runs "
+                          "at an assumed %.1f fps. Change it next to Playback "
+                          "Speed.", dc->video_fps);
     ImGui::SameLine(0, gap);
     ImGui::TextColored(label_col, "%s", lbl_spd);
     ImGui::SameLine(0, spacing); ImGui::TextDisabled("%s", val_spd);
