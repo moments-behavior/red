@@ -491,13 +491,20 @@ inline void DrawTailcycleDatasetWindow(TailcycleOpenState &state,
             ImGui::PushStyleColor(ImGuiCol_Text,
                                   bad ? ImVec4(1.0f, 0.45f, 0.35f, 1.0f)
                                       : ImVec4(0.4f, 0.9f, 0.5f, 1.0f));
-            ImGui::PushTextWrapPos(ImGui::GetCursorPosX() +
-                                   ImGui::GetContentRegionAvail().x);
+            const float wrap_x =
+                ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x;
+            ImGui::PushTextWrapPos(wrap_x);
             ImGui::TextUnformatted(state.status.c_str());
             ImGui::PopTextWrapPos();
             ImGui::PopStyleColor();
-            if (!bad && !state.open_detail.empty() && ImGui::IsItemHovered())
-                ImGui::SetTooltip("%s", state.open_detail.c_str());
+            // The counts, on the line below rather than behind a hover. They
+            // are worth reading without going looking for them; splitting them
+            // off the status line was only ever about its length.
+            if (!bad && !state.open_detail.empty()) {
+                ImGui::PushTextWrapPos(wrap_x);
+                ImGui::TextDisabled("%s", state.open_detail.c_str());
+                ImGui::PopTextWrapPos();
+            }
         }
     }, nullptr, ImVec2(280, 460));
 }
