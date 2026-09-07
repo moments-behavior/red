@@ -345,7 +345,8 @@ inline void on_project_loaded(AppContext &ctx,
     load_videos(empty_selected_files, ctx.ps, ctx.pm,
                 ctx.window_was_decoding, ctx.demuxers, ctx.dc_context,
                 ctx.scene, ctx.label_buffer_size, ctx.decoder_threads,
-                ctx.is_view_focused);
+                ctx.is_view_focused,
+                ctx.user_settings.default_realtime_playback);
     const double t_videos = load_timing::ms(t_stage);
     if (print_metadata_fn) print_metadata_fn();
     // The desync fix was requested by the project but the plan could not be

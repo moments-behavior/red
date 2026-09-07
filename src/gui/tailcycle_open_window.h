@@ -176,12 +176,14 @@ inline bool tailcycle_open_session(AppContext &ctx, const std::string &session_d
         // playback speeds mean something here even though the frames are stills.
         load_images(files, ctx.ps, ctx.pm, ctx.imgs_names, ctx.scene, ctx.dc_context,
                     ctx.label_buffer_size, ctx.decoder_threads, ctx.is_view_focused,
-                    ctx.window_was_decoding, ImageLayout::PerCameraDir, s.fps);
+                    ctx.window_was_decoding, ImageLayout::PerCameraDir, s.fps,
+                    ctx.user_settings.default_realtime_playback);
     } else {
         std::map<std::string, std::string> none;
         load_videos(none, ctx.ps, ctx.pm, ctx.window_was_decoding, ctx.demuxers,
                     ctx.dc_context, ctx.scene, ctx.label_buffer_size,
-                    ctx.decoder_threads, ctx.is_view_focused);
+                    ctx.decoder_threads, ctx.is_view_focused,
+                    ctx.user_settings.default_realtime_playback);
     }
 
     if (remember) {

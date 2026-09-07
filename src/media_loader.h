@@ -190,7 +190,8 @@ unload_media(PlaybackState &ps, ProjectManager &pm,
     dc_context->sync_fix_active = false;
     dc_context->sync_canonical_len = 0;
 
-    // Reset realtime playback (load_images sets false; load_videos expects true)
+    // Reset realtime playback. Both loaders set it from the user's default
+    // afterwards; true is the neutral value in between.
     ps.realtime_playback = true;
     ps.accumulated_play_time = 0.0;
     ps.last_play_time_start = std::chrono::steady_clock::now();
@@ -207,10 +208,14 @@ load_images(std::map<std::string, std::string> &selected_files,
             std::unordered_map<std::string, bool> &window_was_decoding,
             ImageLayout layout = ImageLayout::Flat,
             // Frames per second of the source recording, when it is known --
-            // a tailcycle group declares one. 0 means "no timebase", which is
-            // the honest default for a folder of images: the clock-paced
-            // playback speeds have nothing to pace against.
-            float fps = 0.0f) {
+            // a tailcycle group declares one. 0 means the source declares
+            // none, and an assumed rate is used for playback instead.
+            float fps = 0.0f,
+            // The user's default playback mode. This used to be forced to
+            // tick mode here, back when video_fps was 1 for images and the
+            // clock-paced speeds were meaningless; now that they work against
+            // an assumed rate there is no reason to override the setting.
+            bool realtime_playback = true) {
 
     std::string file_ext;
     for (const auto &elem : selected_files) {
@@ -251,7 +256,7 @@ load_images(std::map<std::string, std::string> &selected_files,
     // 30 down to ~2 fps, and the rate is editable in the transport bar.
     dc_context->fps_declared = fps > 0.0f;
     dc_context->video_fps = fps > 0.0f ? fps : 30.0;
-    ps.realtime_playback = false;
+    ps.realtime_playback = realtime_playback;
     scene->num_cams = pm.camera_names.size();
     scene->image_width = (u32 *)malloc(sizeof(u32) * scene->num_cams);
     scene->image_height = (u32 *)malloc(sizeof(u32) * scene->num_cams);
@@ -383,7 +388,13 @@ load_videos(std::map<std::string, std::string> &selected_files,
             std::vector<FFmpegDemuxer *> &demuxers, DecoderContext *dc_context,
             RenderScene *scene, int label_buffer_size,
             std::vector<std::thread> &decoder_threads,
-            std::vector<bool> &is_view_focused) {
+            std::vector<bool> &is_view_focused,
+            // The user's default playback mode, same as load_images. Videos
+            // used to inherit the `true` reset_playback_state leaves behind,
+            // so a default of "Every frame" survived only until the first
+            // project was opened.
+            bool realtime_playback = true) {
+    ps.realtime_playback = realtime_playback;
     // Track which camera names successfully loaded (in order) so that
     // camera_names stays in sync with demuxers after skipping failures.
     std::vector<std::string> loaded_cam_names;

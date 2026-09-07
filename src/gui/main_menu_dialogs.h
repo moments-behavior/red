@@ -148,7 +148,8 @@ inline void HandleMainMenuDialogs(
             load_videos(selected_files, ctx.ps, pm, ctx.window_was_decoding,
                         ctx.demuxers, ctx.dc_context, ctx.scene,
                         ctx.label_buffer_size, ctx.decoder_threads,
-                        ctx.is_view_focused);
+                        ctx.is_view_focused,
+                        ctx.user_settings.default_realtime_playback);
             if (print_metadata_fn) print_metadata_fn();
         }
         ImGuiFileDialog::Instance()->Close();
@@ -165,7 +166,8 @@ inline void HandleMainMenuDialogs(
             load_images(selected_files, ctx.ps, pm, ctx.imgs_names, ctx.scene,
                         ctx.dc_context, ctx.label_buffer_size,
                         ctx.decoder_threads, ctx.is_view_focused,
-                        ctx.window_was_decoding);
+                        ctx.window_was_decoding, ImageLayout::Flat, 0.0f,
+                        ctx.user_settings.default_realtime_playback);
             ctx.input_is_imgs = true;
         }
         ImGuiFileDialog::Instance()->Close();
