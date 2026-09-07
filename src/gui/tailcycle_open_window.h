@@ -50,6 +50,9 @@ struct TailcycleOpenState {
     std::vector<std::pair<int,int>> open_edges;
     std::vector<std::string> open_animal_ids;
     bool     confirm_save = false;
+    // The counts that used to be crammed into the status line. Kept apart so
+    // the line itself stays short enough for a ~280px docked panel.
+    std::string open_detail;
 };
 
 // Build a SkeletonContext from names+edges alone. A session carries its own
@@ -205,16 +208,22 @@ inline bool tailcycle_open_session(AppContext &ctx, const std::string &session_d
         remember->open_animal_ids = s.animal_ids;
     }
 
+    // Short enough to read at a glance in a narrow panel. The counts go to
+    // open_detail, shown on hover -- cameras, frames and layers are already on
+    // screen in the Sessions table and the Open section, so repeating them in
+    // a line that then ran off the edge bought nothing.
     if (status)
-        *status = "Opened " + s.session_id + "/" + s.group_id + " — " +
-                  std::to_string(s.camera_names.size()) + " cameras, " +
-                  std::to_string(s.n_frames) + " frames, " +
-                  std::to_string(st.keypoint_rows) + " 2D and " +
-                  std::to_string(st.points3d_rows) + " 3D labels" +
-                  (reprojected ? ", " + std::to_string(reprojected) +
-                                     " 2D reprojected from 3D"
-                               : std::string()) +
-                  (has_dirs ? " (images)" : " (videos)");
+        *status = "Opened " + s.session_id + "/" + s.group_id;
+    if (remember)
+        remember->open_detail =
+            std::to_string(s.camera_names.size()) + " cameras, " +
+            std::to_string(s.n_frames) + " frames, " +
+            std::to_string(st.keypoint_rows) + " 2D and " +
+            std::to_string(st.points3d_rows) + " 3D labels" +
+            (reprojected ? ", " + std::to_string(reprojected) +
+                               " 2D reprojected from 3D"
+                         : std::string()) +
+            (has_dirs ? " (images)" : " (videos)");
     return true;
 }
 
@@ -346,8 +355,11 @@ inline void DrawTailcycleDatasetWindow(TailcycleOpenState &state,
             tailcycle_open_browse(state);
 
         if (state.sessions.empty() && !state.root.empty())
+            ImGui::PushTextWrapPos(ImGui::GetCursorPosX() +
+                                   ImGui::GetContentRegionAvail().x);
             ImGui::TextDisabled("Nothing here \xE2\x80\x94 expected "
                                 "<split>/<session>/session.toml");
+            ImGui::PopTextWrapPos();
 
         // === Sessions ===
         if (!state.sessions.empty()) {
@@ -471,9 +483,20 @@ inline void DrawTailcycleDatasetWindow(TailcycleOpenState &state,
         if (!state.status.empty()) {
             const bool bad = state.status.rfind("Opened", 0) != 0 &&
                              state.status.rfind("Saved", 0) != 0;
-            ImGui::TextColored(bad ? ImVec4(1.0f, 0.45f, 0.35f, 1.0f)
-                                   : ImVec4(0.4f, 0.9f, 0.5f, 1.0f),
-                               "%s", state.status.c_str());
+            // Wrapped at the width actually available here, not at
+            // TextWrapped's default work rect -- the sessions table above sets
+            // a wide content size, and an error message has no length limit
+            // while this panel is docked at about 280px.
+            ImGui::PushStyleColor(ImGuiCol_Text,
+                                  bad ? ImVec4(1.0f, 0.45f, 0.35f, 1.0f)
+                                      : ImVec4(0.4f, 0.9f, 0.5f, 1.0f));
+            ImGui::PushTextWrapPos(ImGui::GetCursorPosX() +
+                                   ImGui::GetContentRegionAvail().x);
+            ImGui::TextUnformatted(state.status.c_str());
+            ImGui::PopTextWrapPos();
+            ImGui::PopStyleColor();
+            if (!bad && !state.open_detail.empty() && ImGui::IsItemHovered())
+                ImGui::SetTooltip("%s", state.open_detail.c_str());
         }
     }, nullptr, ImVec2(280, 460));
 }
