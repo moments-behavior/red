@@ -53,17 +53,21 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
             annot_state.camera_selected.clear();
             annot_state.status.clear();
         };
-        if (ImGui::MenuItem("Create Project"))
+        // "Annotation" is kept rather than trimmed: it is the kind of project
+        // this makes, and calibration projects are expected to come back as a
+        // second kind. The welcome screen and the dialog title use the same
+        // words.
+        if (ImGui::MenuItem("Create Annotation Project"))
             open_create(false);
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
             ImGui::SetTooltip("Calibrated multi-camera project with 3D "
                               "triangulation.");
-        if (ImGui::MenuItem("Create 2D Project"))
+        if (ImGui::MenuItem("Create 2D Annotation Project"))
             open_create(true);
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
             ImGui::SetTooltip("Single or uncalibrated cameras. No calibration, "
                               "no triangulation.");
-        if (ImGui::MenuItem("Load Project")) {
+        if (ImGui::MenuItem("Load Annotation Project")) {
             IGFD::FileDialogConfig config;
             config.countSelectionMax = 1;
             config.path = pm.project_root_path;
