@@ -436,6 +436,10 @@ inline void DrawLabelingToolWindow(
             (double)cells.size() >= (double)total_frames * 0.98;
 
         std::vector<int> unfinished;
+        // Frames with no annotation at all. Kept separately because the
+        // timeline has to plot them as their own series: they are the one
+        // thing it cannot show by colouring a tick, having no tick to colour.
+        std::vector<int> unlabeled;
         {
             constexpr size_t kMaxUnfinished = 4096;  // bound the pathological case
             for (const auto &c : cells)
@@ -449,13 +453,15 @@ inline void DrawLabelingToolWindow(
                 int expected = 0;
                 for (const auto &c : cells) {
                     for (; expected < c.frame &&
-                           unfinished.size() < kMaxUnfinished; ++expected)
-                        unfinished.push_back(expected);
+                           unlabeled.size() < kMaxUnfinished; ++expected)
+                        unlabeled.push_back(expected);
                     expected = c.frame + 1;
                 }
                 for (; expected < total_frames &&
-                       unfinished.size() < kMaxUnfinished; ++expected)
-                    unfinished.push_back(expected);
+                       unlabeled.size() < kMaxUnfinished; ++expected)
+                    unlabeled.push_back(expected);
+                unfinished.insert(unfinished.end(), unlabeled.begin(),
+                                  unlabeled.end());
             }
             std::sort(unfinished.begin(), unfinished.end());
             unfinished.erase(std::unique(unfinished.begin(), unfinished.end()),
@@ -469,6 +475,7 @@ inline void DrawLabelingToolWindow(
         const ImVec4 color_purple(0.63f, 0.35f, 0.86f, 1.0f);
         const ImVec4 color_lilac(0.78f, 0.59f, 1.0f, 1.0f);
         const ImVec4 color_red(0.90f, 0.28f, 0.28f, 1.0f);
+        const ImVec4 color_orange(1.00f, 0.55f, 0.10f, 1.0f);
 
         // === Keypoints table ===
         // Height follows the window by default -- whatever the frame overview
@@ -603,6 +610,14 @@ inline void DrawLabelingToolWindow(
                         ? "Frames that are unlabelled, or labelled but not "
                           "complete."
                         : "Labelled frames that are not complete.");
+            if (!unlabeled.empty()) {
+                // Same orange as the timeline ticks, so the colour there means
+                // something without needing a legend of its own.
+                ImGui::SameLine();
+                ImGui::TextColored(color_orange, "%zu", unlabeled.size());
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("not labelled at all");
+            }
             ImGui::SameLine();
             jump_buttons(un_pn, "unfinished");
         }
@@ -649,6 +664,8 @@ inline void DrawLabelingToolWindow(
                 purple_x, lilac_x, needs_fix_x;
             for (auto &nf : needs_fix_frames)
                 needs_fix_x.push_back((double)nf.frame);
+            std::vector<double> unlabeled_x;
+            for (int f : unlabeled) unlabeled_x.push_back((double)f);
             for (auto &lf : labeled_frames) {
                 if (lf.state == KP_GREEN) green_x.push_back((double)lf.frame);
                 else if (lf.state == KP_PURPLE)
@@ -665,6 +682,7 @@ inline void DrawLabelingToolWindow(
             for (auto &lf : labeled_frames) all_annotated_frames.push_back(lf.frame);
             for (auto &bf : bbox_frames) all_annotated_frames.push_back(bf.frame);
             for (auto &nf : needs_fix_frames) all_annotated_frames.push_back(nf.frame);
+            for (int f : unlabeled) all_annotated_frames.push_back(f);
             std::sort(all_annotated_frames.begin(), all_annotated_frames.end());
             all_annotated_frames.erase(
                 std::unique(all_annotated_frames.begin(), all_annotated_frames.end()),
@@ -690,47 +708,46 @@ inline void DrawLabelingToolWindow(
                 ImPlot::SetupAxisLimits(ImAxis_Y1, 0, 1, ImPlotCond_Always);
                 ImPlot::SetupAxisZoomConstraints(ImAxis_X1, 50, total_frames);
 
-                // Current frame indicator
+                // Ticks, widened by rarity. At 8000 frames across ~250px a
+                // frame is 0.03px, so the one that is still yellow among 7999
+                // green ones is invisible at a fixed weight -- and the green
+                // series, drawn after it, paints over it. Both are fixed here:
+                // a series gets at most a quarter of the bar's width shared
+                // between its ticks, so a lone frame draws fat and a common
+                // state stays hairline; and the series are drawn commonest
+                // first, so the rare ones land on top.
+                struct Series {
+                    const char *id;
+                    const std::vector<double> *xs;
+                    const ImVec4 *color;
+                };
+                Series series[] = {
+                    {"##kp_yellow", &kp_yellow_x, &color_yellow},
+                    {"##kp_purple", &kp_purple_x, &color_purple},
+                    {"##green",     &green_x,     &color_green},
+                    {"##bbox",      &purple_x,    &color_purple},
+                    {"##obb",       &lilac_x,     &color_lilac},
+                    {"##needsfix",  &needs_fix_x, &color_red},
+                    {"##unlabeled", &unlabeled_x, &color_orange},
+                };
+                std::stable_sort(
+                    std::begin(series), std::end(series),
+                    [](const Series &a, const Series &b) {
+                        return a.xs->size() > b.xs->size();
+                    });
+                for (const Series &sr : series) {
+                    if (sr.xs->empty()) continue;
+                    const float w = ImClamp(
+                        timeline_w * 0.25f / (float)sr.xs->size(), 2.0f, 10.0f);
+                    ImPlot::PlotInfLines(sr.id, sr.xs->data(), (int)sr.xs->size(),
+                                         red_line_spec(*sr.color, w));
+                }
+
+                // Current frame indicator, drawn last so it stays visible
+                // over a widened tick.
                 double cf = (double)current_frame_num;
                 ImPlot::PlotInfLines("##current", &cf, 1,
-                                     red_line_spec(ImVec4(1, 1, 1, 0.4f), 1.0f));
-
-                // Keypoint ticks: yellow=some untriangulated, purple=all placed
-                // triangulated, green=complete.
-                if (!kp_yellow_x.empty()) {
-                    ImPlot::PlotInfLines("##kp_yellow", kp_yellow_x.data(),
-                                         (int)kp_yellow_x.size(),
-                                         red_line_spec(color_yellow, 2.0f));
-                }
-                if (!kp_purple_x.empty()) {
-                    ImPlot::PlotInfLines("##kp_purple", kp_purple_x.data(),
-                                         (int)kp_purple_x.size(),
-                                         red_line_spec(color_purple, 2.0f));
-                }
-                if (!green_x.empty()) {
-                    ImPlot::PlotInfLines("##green", green_x.data(), (int)green_x.size(),
-                                         red_line_spec(color_green, 2.0f));
-                }
-
-                // BBox ticks (purple)
-                if (!purple_x.empty()) {
-                    ImPlot::PlotInfLines("##bbox", purple_x.data(), (int)purple_x.size(),
-                                         red_line_spec(color_purple, 2.0f));
-                }
-
-                // OBB ticks (lilac)
-                if (!lilac_x.empty()) {
-                    ImPlot::PlotInfLines("##obb", lilac_x.data(), (int)lilac_x.size(),
-                                         red_line_spec(color_lilac, 2.0f));
-                }
-
-                // Needs-improvement ticks (red), drawn last so a frame that
-                // needs fixing is never hidden under its own keypoint tick.
-                if (!needs_fix_x.empty()) {
-                    ImPlot::PlotInfLines("##needsfix", needs_fix_x.data(),
-                                         (int)needs_fix_x.size(),
-                                         red_line_spec(color_red, 2.0f));
-                }
+                                     red_line_spec(ImVec4(1, 1, 1, 0.6f), 1.5f));
 
                 // Double-click to reset to full video range
                 if (ImPlot::IsPlotHovered() && ImGui::IsMouseDoubleClicked(0))
@@ -749,7 +766,12 @@ inline void DrawLabelingToolWindow(
                         if (d < nearest_dist) { nearest_dist = d; nearest = f; }
                     }
                     if (nearest >= 0 && nearest_dist <= tolerance) {
-                        ImGui::SetTooltip("Frame %d", nearest);
+                        if (std::binary_search(unlabeled.begin(),
+                                               unlabeled.end(), nearest))
+                            ImGui::SetTooltip(
+                                "Frame %d \xE2\x80\x94 not labelled", nearest);
+                        else
+                            ImGui::SetTooltip("Frame %d", nearest);
                         if (ImGui::IsMouseClicked(0)) {
                             ps.play_video = false;
                             seek_all_cameras(scene, nearest,
