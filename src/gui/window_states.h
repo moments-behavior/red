@@ -1,6 +1,7 @@
 #pragma once
 #include "gui/labeling_tool_window.h"
 #include "gui/annotation_dialog.h"
+#include "gui/skeleton_creator_window.h"
 #include "gui/settings_window.h"
 #include "gui/transport_bar.h"
 #include "gui/jarvis_export_window.h"
@@ -19,6 +20,7 @@
 
 // Bundle of all tool-window states.
 struct WindowStates {
+    SkeletonCreatorState skeleton_creator;
     LabelingToolState labeling;
     AnnotationDialogState annotation;
     SettingsState settings;

@@ -127,6 +127,13 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
         }
         ImGui::EndDisabled();
         ImGui::Separator();
+        if (ImGui::MenuItem("Skeleton Creator")) {
+            win.skeleton_creator.show = true;
+        }
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+            ImGui::SetTooltip("Draw a skeleton and save it as the .json a "
+                              "project loads.");
+        ImGui::Separator();
         if (ImGui::MenuItem("Bbox Tool")) {
             bbox_state.show = true;
         }

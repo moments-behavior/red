@@ -145,15 +145,16 @@ void prepare_application_folders(std::string &red_data_dir,
     if (red_data_dir.empty()) {
         red_data_dir = home_dir + "/red_data";
     }
-    std::vector<std::string> app_folders = {"yolo_model", "skeleton"};
-    // create required folders
-    for (const auto &folder : app_folders) {
+    // "skeleton" is where skeleton .json files live and is browsed to by the
+    // Skeleton Creator and the project dialog. A "yolo_model" folder was
+    // created alongside it and never read by anything -- export_yolo writes to
+    // the export destination, not here.
+    {
         std::filesystem::path path =
-            std::filesystem::path(red_data_dir) / folder;
-        if (!std::filesystem::exists(path)) {
-            if (std::filesystem::create_directories(path)) {
-                std::cout << "Created " << folder << " folder..." << std::endl;
-            }
+            std::filesystem::path(red_data_dir) / "skeleton";
+        if (!std::filesystem::exists(path) &&
+            std::filesystem::create_directories(path)) {
+            std::cout << "Created skeleton folder..." << std::endl;
         }
     }
 

@@ -506,6 +506,9 @@ int main(int argc, char **argv) {
     panels.add({"tailcycle Dataset",
                 [&]() { DrawTailcycleDatasetWindow(win.tailcycle_open, ctx); },
                 nullptr});   // always called: it pumps the folder dialog
+    panels.add({"Skeleton Creator",
+                [&]() { DrawSkeletonCreatorWindow(win.skeleton_creator, ctx); },
+                nullptr});
     panels.add({"Settings",
                 [&]() { DrawSettingsWindow(win.settings, ctx); },
                 nullptr});
