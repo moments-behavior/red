@@ -73,6 +73,12 @@ struct ExportConfig {
     // that belong to neither.
     std::string force_labels;
 
+    // The format's animal_id per instance, indexed by FrameAnnotation's
+    // instance_id. Supplied when saving back over a session so its own names
+    // survive; otherwise ids are generated as a00, a01, ... which is the
+    // convention every dataset seen so far uses.
+    std::vector<std::string> animal_ids;
+
     std::string provenance_source;
     std::string annotator;          // empty when one annotator authored the root (§2.11)
 };

@@ -318,6 +318,43 @@ int main(int argc, char **argv) {
               "the forced label is written");
     }
 
+    // ── 3d. every animal gets its own animal_id ──
+    // The row key is (group, frame, animal, camera, bodypart). A shared id
+    // makes rows collide, and a reader keeping the last per key silently keeps
+    // one animal out of N -- which is how a save destroyed four fish.
+    {
+        const std::string out = root + "/t3d";
+        auto cfg = make_config(out);
+        AnnotationMap amap = make_annotations();
+        // give every frame a second animal
+        for (auto &[f, fis] : amap) {
+            FrameAnnotation second = fis.front();
+            second.instance_id = 1;
+            for (auto &cam : second.cameras)
+                for (auto &kp : cam.keypoints) kp.x += 500.0;
+            fis.push_back(std::move(second));
+        }
+        TailcycleExport::ExportStats st;
+        std::string status;
+        CHECK(TailcycleExport::export_session(cfg, amap, &st, &status),
+              "two-animal export succeeds: " + status);
+        auto k = read_pq(fs::path(out) / "train" / "sess1_annotated" / "keypoints.pq");
+        const std::set<std::string> want{"a00", "a01"};
+        CHECK(k && dict_values(k, "animal_id") == want,
+              "each instance writes its own animal_id");
+        // and no key collides
+        std::set<std::string> keys;
+        bool dup = false;
+        for (int64_t r = 0; k && r < k->num_rows(); r++) {
+            std::string key = dict_at(k, "animal_id", r) + "|" +
+                              std::to_string(int_at(k, "frame", r)) + "|" +
+                              dict_at(k, "camera", r) + "|" +
+                              dict_at(k, "bodypart", r);
+            if (!keys.insert(key).second) dup = true;
+        }
+        CHECK(!dup, "rule 9: no duplicate key once animals are distinguished");
+    }
+
     // ── 4. frame numbers are rebased into the group ──
     {
         const std::string out = root + "/t4";

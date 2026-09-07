@@ -49,6 +49,7 @@ struct TailcycleOpenState {
     std::vector<CameraParams> open_calibration;
     std::vector<std::string> open_node_names;
     std::vector<std::pair<int,int>> open_edges;
+    std::vector<std::string> open_animal_ids;
     bool     confirm_save = false;
 };
 
@@ -201,6 +202,7 @@ inline bool tailcycle_open_session(AppContext &ctx, const std::string &session_d
         remember->open_calibration = s.calibration;
         remember->open_node_names = s.node_names;
         remember->open_edges = s.edges;
+        remember->open_animal_ids = s.animal_ids;
     }
 
     if (status)
@@ -249,6 +251,7 @@ inline bool tailcycle_save_session(AppContext &ctx, TailcycleOpenState &st,
     cfg.node_names = st.open_node_names;
     cfg.edges = st.open_edges;
     cfg.force_labels = st.open_labels.empty() ? "annotated" : st.open_labels;
+    cfg.animal_ids = st.open_animal_ids;
     cfg.provenance_source = st.open_dir;
     // Keep the session's own shape: a 3D-only session stays 3D-only rather
     // than gaining a 2D layer red derived by reprojection (§8).

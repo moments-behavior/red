@@ -174,7 +174,18 @@ bool export_session(const ExportConfig &cfg, const AnnotationMap &amap,
     }
 
     const std::string gid = cfg.group_id.empty() ? cfg.session_id : cfg.group_id;
-    const std::string animal_id = "a00";   // matches the convention in johnson-mouse-tracked
+    // The format keys every row by (group, frame, animal, camera, bodypart),
+    // so an id shared between animals is not a cosmetic problem: the rows
+    // collide, and a reader keeping the last one per key silently keeps one
+    // animal out of five.
+    auto animal_id_of = [&](int instance_id) -> std::string {
+        if (instance_id >= 0 && instance_id < (int)cfg.animal_ids.size() &&
+            !cfg.animal_ids[(size_t)instance_id].empty())
+            return cfg.animal_ids[(size_t)instance_id];
+        char buf[16];
+        snprintf(buf, sizeof(buf), "a%02d", instance_id < 0 ? 0 : instance_id);
+        return buf;
+    };
 
     // ── which buckets actually have data ──
     bool has[2] = {false, false};
@@ -271,7 +282,7 @@ bool export_session(const ExportConfig &cfg, const AnnotationMap &amap,
                         if (cfg.force_labels.empty() &&
                             bucket_2d(kp.source) != job.b) continue;
                         if (!g_b.Append(gid).ok() || !f_b.Append(frame).ok() ||
-                            !a_b.Append(animal_id).ok() ||
+                            !a_b.Append(animal_id_of(fa.instance_id)).ok() ||
                             !c_b.Append(cfg.camera_names[ci]).ok() ||
                             !p_b.Append(cfg.node_names[ni]).ok() ||
                             !s_b.Append(Tailcycle::status::kProjected).ok() ||
@@ -325,7 +336,8 @@ bool export_session(const ExportConfig &cfg, const AnnotationMap &amap,
                     if (cfg.force_labels.empty() &&
                         bucket_3d(k3.source) != job.b) continue;
                     if (!g_b.Append(gid).ok() || !f_b.Append(frame).ok() ||
-                        !a_b.Append(animal_id).ok() || !p_b.Append(cfg.node_names[ni]).ok() ||
+                        !a_b.Append(animal_id_of(fa.instance_id)).ok() ||
+                        !p_b.Append(cfg.node_names[ni]).ok() ||
                         !s_b.Append(Tailcycle::status::kVisible).ok() ||
                         !x_b.Append((float)k3.x).ok() || !y_b.Append((float)k3.y).ok() ||
                         !z_b.Append((float)k3.z).ok())
