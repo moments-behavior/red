@@ -42,17 +42,27 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
                 "ChooseImages", "Choose Images",
                 ".jpg,.tiff,.jpeg,.png", config);
         }
-        // The same form as Annotate > Create Annotation Project. There used
-        // to be a second one here that could only wrap media you already had
-        // open -- greyed out otherwise -- and offered no way to pick a media
-        // folder, which the annotation dialog does and now seeds from the open
-        // media anyway.
-        if (ImGui::MenuItem("Create Project")) {
+        // Both modes of the one form. The mode is always set explicitly: it
+        // used to be left at whatever the last creation put there, so making a
+        // 2D project once meant every later "Create Project" quietly opened in
+        // 2D mode too.
+        auto open_create = [&](bool two_d) {
             annot_state.show = true;
+            annot_state.two_d_mode = two_d;
             annot_state.discovered_cameras.clear();
             annot_state.camera_selected.clear();
             annot_state.status.clear();
-        }
+        };
+        if (ImGui::MenuItem("Create Project"))
+            open_create(false);
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+            ImGui::SetTooltip("Calibrated multi-camera project with 3D "
+                              "triangulation.");
+        if (ImGui::MenuItem("Create 2D Project"))
+            open_create(true);
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+            ImGui::SetTooltip("Single or uncalibrated cameras. No calibration, "
+                              "no triangulation.");
         if (ImGui::MenuItem("Load Project")) {
             IGFD::FileDialogConfig config;
             config.countSelectionMax = 1;
@@ -87,16 +97,6 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
             ctx.save_requested = true;
         }
         ImGui::EndDisabled();
-        ImGui::EndMenu();
-    }
-
-    if (ImGui::BeginMenu("Annotate")) {
-        if (ImGui::MenuItem("Create Annotation Project")) {
-            annot_state.show = true;
-            annot_state.discovered_cameras.clear();
-            annot_state.camera_selected.clear();
-            annot_state.status.clear();
-        }
         ImGui::EndMenu();
     }
 
@@ -161,6 +161,7 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
     // New Project
     if (ImGui::MenuItem(ICON_FK_FILE_O "##toolbar_new")) {
         annot_state.show = true;
+        annot_state.two_d_mode = false;
         annot_state.discovered_cameras.clear();
         annot_state.camera_selected.clear();
         annot_state.status.clear();
