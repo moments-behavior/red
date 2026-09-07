@@ -323,20 +323,24 @@ inline void DrawLabelingToolWindow(
         // needs_improvement frames (promoted predictions awaiting a manual fix)
         // are collected separately so they get their own section below.
         // Keypoint-label state, used to color the timeline ticks:
-        //   GREEN  = every keypoint placed on every camera AND fully triangulated
-        //   PURPLE = not complete, but every placed keypoint IS triangulated
-        //   YELLOW = some placed keypoint is not (yet) triangulated
-        // (2D projects have no triangulation: complete -> GREEN, else YELLOW.)
-        enum KpLabelState { KP_YELLOW = 0, KP_PURPLE = 1, KP_GREEN = 2 };
+        //   COMPLETE       = every keypoint placed on every camera AND fully
+        //                    triangulated
+        //   TRIANGULATED   = not complete, but every placed keypoint IS
+        //                    triangulated
+        //   UNTRIANGULATED = some placed keypoint is not (yet) triangulated
+        // (2D projects have no triangulation: complete -> COMPLETE, else
+        // UNTRIANGULATED.)
+        enum KpLabelState { KP_UNTRIANGULATED = 0, KP_TRIANGULATED = 1,
+                            KP_COMPLETE = 2 };
         auto classify_kp_state = [&](const FrameAnnotation &fa) -> int {
             if (!skeleton.has_skeleton)
-                return KP_YELLOW;
+                return KP_UNTRIANGULATED;
             if (project_is_2d(pm))
-                return frame_is_complete(fa) ? KP_GREEN : KP_YELLOW;
+                return frame_is_complete(fa) ? KP_COMPLETE : KP_UNTRIANGULATED;
             bool green = scene->num_cams > 1 && frame_is_complete(fa) &&
                          frame_is_fully_triangulated(fa, skeleton.num_nodes);
             if (green)
-                return KP_GREEN;
+                return KP_COMPLETE;
             // Purple iff every placed node (labeled in >=1 camera) is
             // triangulated. Triangulated implies placed, so this means the
             // placed and triangulated sets coincide.
@@ -357,8 +361,8 @@ inline void DrawLabelingToolWindow(
                 }
             }
             if (placed > 0 && placed_untriangulated == 0)
-                return KP_PURPLE;
-            return KP_YELLOW;
+                return KP_TRIANGULATED;
+            return KP_UNTRIANGULATED;
         };
 
         struct LabeledFrameInfo { int frame; int state; };
@@ -454,7 +458,7 @@ inline void DrawLabelingToolWindow(
         {
             for (const auto &c : cells)
                 if (c.needs_fix ||
-                    (skeleton.has_skeleton && (!c.has_kp || c.kp_state != KP_GREEN)))
+                    (skeleton.has_skeleton && (!c.has_kp || c.kp_state != KP_COMPLETE)))
                     unfinished.push_back(c.frame);
             // Never-labelled frames only count when they are the exception.
             // On a sparsely labelled recording "unfinished" would be almost
@@ -480,7 +484,14 @@ inline void DrawLabelingToolWindow(
         // timeline ticks.
         const ImVec4 color_green(0.2f, 0.8f, 0.3f, 1.0f);
         const ImVec4 color_yellow(0.95f, 0.85f, 0.15f, 1.0f);
+        // Purple and lilac are the bounding-box family. Keypoint progress is
+        // green / teal / yellow -- teal because the Frame Buffer window
+        // already draws a partially-labelled frame in it, and the two panels
+        // describing the same frame should not disagree. Purple used to serve
+        // both, so a purple tick meant either "all placed keypoints
+        // triangulated" or "this frame has a bbox", with no way to tell.
         const ImVec4 color_purple(0.63f, 0.35f, 0.86f, 1.0f);
+        const ImVec4 color_teal(0.20f, 0.70f, 0.80f, 1.0f);
         const ImVec4 color_lilac(0.78f, 0.59f, 1.0f, 1.0f);
         const ImVec4 color_red(0.90f, 0.28f, 0.28f, 1.0f);
         const ImVec4 color_orange(1.00f, 0.55f, 0.10f, 1.0f);
@@ -495,8 +506,10 @@ inline void DrawLabelingToolWindow(
             if (!needs_fix_frames.empty()) overview_lines++;
             if (!bbox_frames.empty())      overview_lines++;
             if (!unfinished.empty())       overview_lines++;
+            // Plot plus up to two wrapped rows of legend.
             const float timeline_block =
-                (dc_context->estimated_num_frames > 0) ? 78.0f : 0.0f;
+                (dc_context->estimated_num_frames > 0) ? 78.0f + 2.0f * line_h
+                                                       : 0.0f;
             const float splitter_h = 6.0f;
             const float reserved =
                 overview_lines * line_h + timeline_block + splitter_h +
@@ -578,10 +591,10 @@ inline void DrawLabelingToolWindow(
         // the annotated frames. The per-state counts stand in for the colour
         // key the grid squares used to carry in their tooltips.
         {
-            size_t n_green = 0, n_purple = 0, n_yellow = 0;
+            size_t n_green = 0, n_partial = 0, n_yellow = 0;
             for (auto &lf : labeled_frames) {
-                if (lf.state == KP_GREEN) n_green++;
-                else if (lf.state == KP_PURPLE) n_purple++;
+                if (lf.state == KP_COMPLETE) n_green++;
+                else if (lf.state == KP_TRIANGULATED) n_partial++;
                 else n_yellow++;
             }
             ImGui::Text("Keypoint Labels (%zu)", labeled_frames.size());
@@ -593,7 +606,7 @@ inline void DrawLabelingToolWindow(
             };
             count_chip(color_green, n_green,
                        "complete (all placed & triangulated)");
-            count_chip(color_purple, n_purple,
+            count_chip(color_teal, n_partial,
                        "all placed keypoints triangulated");
             count_chip(color_yellow, n_yellow,
                        "some keypoints not triangulated");
@@ -668,16 +681,16 @@ inline void DrawLabelingToolWindow(
             }
 
             // Build tick arrays for each annotation type
-            std::vector<double> kp_yellow_x, kp_purple_x, green_x,
+            std::vector<double> kp_yellow_x, kp_partial_x, green_x,
                 purple_x, lilac_x, needs_fix_x;
             for (auto &nf : needs_fix_frames)
                 needs_fix_x.push_back((double)nf.frame);
             std::vector<double> unlabeled_x;
             for (int f : unlabeled) unlabeled_x.push_back((double)f);
             for (auto &lf : labeled_frames) {
-                if (lf.state == KP_GREEN) green_x.push_back((double)lf.frame);
-                else if (lf.state == KP_PURPLE)
-                    kp_purple_x.push_back((double)lf.frame);
+                if (lf.state == KP_COMPLETE) green_x.push_back((double)lf.frame);
+                else if (lf.state == KP_TRIANGULATED)
+                    kp_partial_x.push_back((double)lf.frame);
                 else kp_yellow_x.push_back((double)lf.frame);
             }
             for (auto &bf : bbox_frames) {
@@ -731,7 +744,7 @@ inline void DrawLabelingToolWindow(
                 };
                 Series series[] = {
                     {"##kp_yellow", &kp_yellow_x, &color_yellow},
-                    {"##kp_purple", &kp_purple_x, &color_purple},
+                    {"##kp_partial", &kp_partial_x, &color_teal},
                     {"##green",     &green_x,     &color_green},
                     {"##bbox",      &purple_x,    &color_purple},
                     {"##obb",       &lilac_x,     &color_lilac},
@@ -830,6 +843,66 @@ inline void DrawLabelingToolWindow(
                 ImPlot::EndPlot();
             }
             ImPlot::PopStyleVar();
+
+            // === Legend ===
+            // Seven colours with nothing on screen saying what they are is not
+            // a legend, it is a memory test. Only the ones actually plotted
+            // are listed, so in practice this is two or three entries.
+            {
+                struct LegendItem {
+                    const ImVec4 *color;
+                    const char *label;
+                    bool present;
+                    const char *tip;
+                };
+                const LegendItem items[] = {
+                    {&color_green, "complete", !green_x.empty(),
+                     "every keypoint placed on every camera, and triangulated"},
+                    {&color_teal, "triangulated", !kp_partial_x.empty(),
+                     "every keypoint you placed is triangulated, but not all "
+                     "keypoints are placed"},
+                    {&color_yellow, "untriangulated", !kp_yellow_x.empty(),
+                     "some placed keypoint has no 3D yet"},
+                    {&color_orange, "unlabelled", !unlabeled_x.empty(),
+                     "no annotation on this frame at all"},
+                    {&color_red, "needs fixing", !needs_fix_x.empty(),
+                     "a promoted prediction still waiting on a manual fix"},
+                    {&color_purple, "bbox", !purple_x.empty(),
+                     "an axis-aligned bounding box"},
+                    {&color_lilac, "obb", !lilac_x.empty(),
+                     "an oriented bounding box"},
+                };
+
+                const float h = ImGui::GetTextLineHeight();
+                const float sw = h * 0.62f;
+                const float pad = 4.0f;
+                const float step = ImGui::GetStyle().ItemSpacing.x * 2.0f;
+                const float right =
+                    ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x;
+
+                bool first = true;
+                for (const LegendItem &it : items) {
+                    if (!it.present) continue;
+                    if (!first) {
+                        float need = sw + pad +
+                                     ImGui::CalcTextSize(it.label).x + step;
+                        if (ImGui::GetItemRectMax().x + need < right)
+                            ImGui::SameLine(0, step);
+                    }
+                    first = false;
+
+                    ImVec2 p0 = ImGui::GetCursorScreenPos();
+                    ImGui::Dummy(ImVec2(sw, h));
+                    ImGui::GetWindowDrawList()->AddRectFilled(
+                        ImVec2(p0.x, p0.y + (h - sw) * 0.5f),
+                        ImVec2(p0.x + sw, p0.y + (h + sw) * 0.5f),
+                        ImGui::ColorConvertFloat4ToU32(*it.color), 2.0f);
+                    ImGui::SameLine(0, pad);
+                    ImGui::TextDisabled("%s", it.label);
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("%s", it.tip);
+                }
+            }
         }
 
     }
