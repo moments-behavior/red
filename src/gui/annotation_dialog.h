@@ -324,14 +324,7 @@ inline void DrawAnnotationDialog(AnnotationDialogState &state,
             {
                 int n_sel = 0;
                 for (auto b : state.camera_selected) if (b) n_sel++;
-                // Always drawn, disabled when there is only one camera. These
-                // rows used to vanish below two selected cameras, so ticking a
-                // box silently changed which fields the form had -- and if you
-                // were looking for Calibration Folder, it was simply not
-                // there, with nothing to say why.
-                if (!state.two_d_mode) {
-                const bool calib_usable = n_sel > 1;
-                ImGui::BeginDisabled(!calib_usable);
+                if (n_sel > 1 && !state.two_d_mode) {
                 // Camera Model selector
                 ImGui::TableNextRow();
                 LabelCell("Camera Model");
@@ -364,11 +357,6 @@ inline void DrawAnnotationDialog(AnnotationDialogState &state,
                     cfg.flags = ImGuiFileDialogFlags_Modal;
                     ImGuiFileDialog::Instance()->OpenDialog(
                         "ChooseAnnotCalib", "Select Calibration Folder", nullptr, cfg);
-                }
-                ImGui::EndDisabled();
-                if (!calib_usable) {
-                    ImGui::TableSetColumnIndex(1);
-                    ImGui::TextDisabled("Select two or more cameras to calibrate.");
                 }
                 }
             }
