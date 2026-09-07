@@ -16,6 +16,7 @@
 #include "imgui.h"
 #include "media_loader.h"
 #include "gui/gui_keypoints.h"
+#include "tailcycle_export.h"
 #include "tailcycle_import.h"
 #include "gui/panel.h"
 #include "ImGuiFileDialog.h"
@@ -33,6 +34,22 @@ struct TailcycleOpenState {
     int group_idx = 0;                // for a session holding several groups
     int selected = -1;                // row currently open
     std::string status;
+
+    // Enough of the open session to write corrections back over it. Held
+    // rather than re-read because a save must reproduce the session's own
+    // shape -- its group id, frame range and which label layers it carried --
+    // not whatever an exporter would choose afresh.
+    bool     open_valid = false;
+    std::string open_dir, open_split, open_session_id, open_group_id;
+    std::string open_source_video, open_units, open_labels;
+    int      open_n_frames = 0, open_source_frame_start = 0;
+    float    open_fps = 0.0f;
+    bool     open_has_2d = false, open_has_3d = false;
+    std::vector<std::string> open_camera_names;
+    std::vector<CameraParams> open_calibration;
+    std::vector<std::string> open_node_names;
+    std::vector<std::pair<int,int>> open_edges;
+    bool     confirm_save = false;
 };
 
 // Build a SkeletonContext from names+edges alone. A session carries its own
@@ -53,7 +70,8 @@ inline void tailcycle_skeleton_from_session(const TailcycleImport::Session &s,
 }
 
 inline bool tailcycle_open_session(AppContext &ctx, const std::string &session_dir,
-                                   const std::string &group_id, std::string *status) {
+                                   const std::string &group_id, std::string *status,
+                                   TailcycleOpenState *remember = nullptr) {
     namespace fs = std::filesystem;
     TailcycleImport::Session s;
     TailcycleImport::ImportStats st;
@@ -165,6 +183,26 @@ inline bool tailcycle_open_session(AppContext &ctx, const std::string &session_d
                     ctx.decoder_threads, ctx.is_view_focused);
     }
 
+    if (remember) {
+        remember->open_valid = true;
+        remember->open_dir = session_dir;
+        remember->open_split = s.split;
+        remember->open_session_id = s.session_id;
+        remember->open_group_id = s.group_id;
+        remember->open_source_video = s.source_video;
+        remember->open_units = s.units;
+        remember->open_labels = s.labels;
+        remember->open_n_frames = s.n_frames;
+        remember->open_source_frame_start = s.source_frame_start;
+        remember->open_fps = s.fps;
+        remember->open_has_2d = s.has_2d;
+        remember->open_has_3d = s.has_3d;
+        remember->open_camera_names = s.camera_names;
+        remember->open_calibration = s.calibration;
+        remember->open_node_names = s.node_names;
+        remember->open_edges = s.edges;
+    }
+
     if (status)
         *status = "Opened " + s.session_id + "/" + s.group_id + " — " +
                   std::to_string(s.camera_names.size()) + " cameras, " +
@@ -176,6 +214,51 @@ inline bool tailcycle_open_session(AppContext &ctx, const std::string &session_d
                                : std::string()) +
                   (has_dirs ? " (images)" : " (videos)");
     return true;
+}
+
+// Write corrections back over the session that was opened.
+//
+// Not the export window's job: that makes a NEW dataset and picks its own
+// group id, frame range and layers. Saving in place has to reproduce this
+// session's -- otherwise the tables would stop matching the frames sitting
+// next to them in groups/.
+//
+// The media is untouched. export_session only ever creates groups/<id>/ and
+// leaves it empty, so the frames already there survive.
+inline bool tailcycle_save_session(AppContext &ctx, TailcycleOpenState &st,
+                                   std::string *status) {
+    namespace fs = std::filesystem;
+    if (!st.open_valid) {
+        if (status) *status = "No session is open.";
+        return false;
+    }
+    TailcycleExport::ExportConfig cfg;
+    // <dir> is <root>/<split>/<session>; export_session appends split/session,
+    // so it has to start two levels up to land back on the same folder.
+    cfg.output_folder = fs::path(st.open_dir).parent_path().parent_path().string();
+    cfg.split = st.open_split;
+    cfg.session_id = st.open_session_id;
+    cfg.group_id = st.open_group_id;
+    cfg.source_video = st.open_source_video;
+    cfg.units = st.open_units.empty() ? "mm" : st.open_units;
+    cfg.n_frames = st.open_n_frames;
+    cfg.fps = st.open_fps;
+    cfg.source_frame_start = st.open_source_frame_start;
+    cfg.camera_names = st.open_camera_names;
+    cfg.calibration = st.open_calibration;
+    cfg.node_names = st.open_node_names;
+    cfg.edges = st.open_edges;
+    cfg.force_labels = st.open_labels.empty() ? "annotated" : st.open_labels;
+    cfg.provenance_source = st.open_dir;
+    // Keep the session's own shape: a 3D-only session stays 3D-only rather
+    // than gaining a 2D layer red derived by reprojection (§8).
+    cfg.layers = st.open_has_2d && st.open_has_3d
+                     ? TailcycleExport::ExportConfig::Layers::TwoDAndThreeD
+                 : st.open_has_3d ? TailcycleExport::ExportConfig::Layers::ThreeD
+                                  : TailcycleExport::ExportConfig::Layers::TwoD;
+
+    TailcycleExport::ExportStats est;
+    return TailcycleExport::export_session(cfg, ctx.annotations, &est, status);
 }
 
 inline void DrawTailcycleOpenWindow(TailcycleOpenState &state, AppContext &ctx) {
@@ -217,7 +300,7 @@ inline void DrawTailcycleOpenWindow(TailcycleOpenState &state, AppContext &ctx) 
                     if (tailcycle_open_session(
                             ctx, si.dir,
                             si.groups.empty() ? std::string() : si.groups[0],
-                            &state.status)) {
+                            &state.status, &state)) {
                         state.selected = 0;
                         ctx.user_settings.push_recent_project(state.root);
                         save_user_settings(ctx.user_settings);
@@ -256,7 +339,7 @@ inline void DrawTailcycleOpenWindow(TailcycleOpenState &state, AppContext &ctx) 
                         state.group_idx = 0;
                         const std::string gid =
                             si.groups.empty() ? std::string() : si.groups[0];
-                        if (tailcycle_open_session(ctx, si.dir, gid, &state.status)) {
+                        if (tailcycle_open_session(ctx, si.dir, gid, &state.status, &state)) {
                             // The ROOT goes in recents, not the session:
                             // reopening should bring back the list to choose
                             // from, which is how you actually use a dataset.
@@ -290,12 +373,40 @@ inline void DrawTailcycleOpenWindow(TailcycleOpenState &state, AppContext &ctx) 
                 if (ImGui::Combo("Group", &state.group_idx, labels.data(),
                                  (int)labels.size()))
                     tailcycle_open_session(ctx, si.dir, si.groups[(size_t)state.group_idx],
-                                           &state.status);
+                                           &state.status, &state);
+            }
+        }
+
+        // Saving corrections back over the session that is open. Separate
+        // from the export window, which makes a NEW dataset -- this one
+        // rewrites the tables in place and leaves the frames alone.
+        if (state.open_valid) {
+            ImGui::Separator();
+            if (!state.confirm_save) {
+                if (ImGui::Button("Save corrections to this session"))
+                    state.confirm_save = true;
+                ImGui::SameLine();
+                ImGui::TextDisabled("%s/%s", state.open_split.c_str(),
+                                    state.open_session_id.c_str());
+            } else {
+                ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.35f, 1.0f),
+                                   "Overwrite this session's label tables?");
+                if (ImGui::Button("Overwrite")) {
+                    state.confirm_save = false;
+                    if (tailcycle_save_session(ctx, state, &state.status))
+                        state.status = "Saved corrections to " + state.open_split +
+                                       "/" + state.open_session_id;
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Cancel")) state.confirm_save = false;
+                ImGui::SameLine();
+                ImGui::TextDisabled("frames are untouched");
             }
         }
 
         if (!state.status.empty()) {
-            const bool bad = state.status.rfind("Opened", 0) != 0;
+            const bool bad = state.status.rfind("Opened", 0) != 0 &&
+                             state.status.rfind("Saved", 0) != 0;
             ImGui::TextColored(bad ? ImVec4(1.0f, 0.45f, 0.35f, 1.0f)
                                    : ImVec4(0.4f, 0.9f, 0.5f, 1.0f),
                                "%s", state.status.c_str());

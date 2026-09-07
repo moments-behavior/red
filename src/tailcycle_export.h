@@ -65,6 +65,14 @@ struct ExportConfig {
     bool export_annotated = true;
     bool export_tracked = true;
 
+    // When set to "annotated" or "tracked", every row goes into ONE session
+    // carrying that value, whatever each point's source says. Saving
+    // corrections back over an existing session has to reproduce it -- editing
+    // an imported session mixes sources, and the usual split would replace one
+    // session with <name>_annotated and <name>_tracked sitting beside frames
+    // that belong to neither.
+    std::string force_labels;
+
     std::string provenance_source;
     std::string annotator;          // empty when one annotator authored the root (§2.11)
 };

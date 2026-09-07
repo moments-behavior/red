@@ -292,6 +292,32 @@ int main(int argc, char **argv) {
         CHECK(any, "3D-only produced at least one session");
     }
 
+    // ── 3c. force_labels puts every row in one session ──
+    // What saving corrections back over an existing session needs: editing an
+    // imported session mixes sources, and the usual split would replace it
+    // with <name>_annotated and <name>_tracked beside frames belonging to
+    // neither.
+    {
+        const std::string out = root + "/t3c";
+        auto cfg = make_config(out);
+        cfg.force_labels = "tracked";
+        TailcycleExport::ExportStats st;
+        std::string status;
+        CHECK(TailcycleExport::export_session(cfg, make_annotations(), &st, &status),
+              "forced-label export succeeds: " + status);
+        CHECK(st.sessions_written == 1, "forced labels means exactly one session");
+        const fs::path d = fs::path(out) / "train" / "sess1";
+        CHECK(fs::exists(d), "written under the unsuffixed name");
+        CHECK(!fs::exists(fs::path(out) / "train" / "sess1_annotated") &&
+              !fs::exists(fs::path(out) / "train" / "sess1_tracked"),
+              "no _annotated / _tracked split");
+        auto k = read_pq(d / "keypoints.pq");
+        // every 2D row, manual and predicted alike
+        CHECK(k && k->num_rows() == 28, "all rows land in the one session");
+        CHECK(slurp(d / "session.toml").find("labels = \"tracked\"") != std::string::npos,
+              "the forced label is written");
+    }
+
     // ── 4. frame numbers are rebased into the group ──
     {
         const std::string out = root + "/t4";

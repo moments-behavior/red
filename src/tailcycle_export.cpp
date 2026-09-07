@@ -193,10 +193,17 @@ bool export_session(const ExportConfig &cfg, const AnnotationMap &amap,
 
     struct Job { Bucket b; const char *labels; std::string suffix; };
     std::vector<Job> jobs;
-    const bool both = has[0] && has[1] && cfg.export_annotated && cfg.export_tracked;
-    if (has[0] && cfg.export_annotated)
+    const bool forced = !cfg.force_labels.empty();
+    if (forced) {
+        // One session, every row, the caller's label. Bucket::Any is expressed
+        // by running both buckets into the same job below.
+        jobs.push_back({Bucket::Annotated, cfg.force_labels.c_str(), ""});
+    }
+    const bool both = !forced && has[0] && has[1] &&
+                      cfg.export_annotated && cfg.export_tracked;
+    if (!forced && has[0] && cfg.export_annotated)
         jobs.push_back({Bucket::Annotated, Tailcycle::labels::kAnnotated, both ? "_annotated" : ""});
-    if (has[1] && cfg.export_tracked)
+    if (!forced && has[1] && cfg.export_tracked)
         jobs.push_back({Bucket::Tracked, Tailcycle::labels::kTracked, both ? "_tracked" : ""});
     if (jobs.empty()) return fail("Nothing selected to export.");
 
@@ -261,7 +268,8 @@ bool export_session(const ExportConfig &cfg, const AnnotationMap &amap,
                     for (size_t ni = 0; ni < cam.keypoints.size() && ni < cfg.node_names.size(); ni++) {
                         const Keypoint2D &kp = cam.keypoints[ni];
                         if (!kp.labeled) continue;   // no row, not `unlabeled` (§7)
-                        if (bucket_2d(kp.source) != job.b) continue;
+                        if (cfg.force_labels.empty() &&
+                            bucket_2d(kp.source) != job.b) continue;
                         if (!g_b.Append(gid).ok() || !f_b.Append(frame).ok() ||
                             !a_b.Append(animal_id).ok() ||
                             !c_b.Append(cfg.camera_names[ci]).ok() ||
@@ -314,7 +322,8 @@ bool export_session(const ExportConfig &cfg, const AnnotationMap &amap,
                     const Keypoint3D &k3 = fa.kp3d[ni];
                     if (k3.source == Kp3DSource::None) continue;
                     if (cfg.layers == ExportConfig::Layers::TwoD) continue;
-                    if (bucket_3d(k3.source) != job.b) continue;
+                    if (cfg.force_labels.empty() &&
+                        bucket_3d(k3.source) != job.b) continue;
                     if (!g_b.Append(gid).ok() || !f_b.Append(frame).ok() ||
                         !a_b.Append(animal_id).ok() || !p_b.Append(cfg.node_names[ni]).ok() ||
                         !s_b.Append(Tailcycle::status::kVisible).ok() ||
