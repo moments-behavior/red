@@ -94,13 +94,15 @@ inline void DrawFrameBufferWindow(AppContext &ctx, int select_corr_head) {
                 const char *text = label;
                 ImU32 text_col;
                 auto ann_it = annotations.find((u32)frame_num);
-                if (ann_it != annotations.end() &&
-                    frame_has_any_keypoints(ann_it->second)) {
-                    bool complete = frame_is_complete(ann_it->second);
+                const bool ann_ok = ann_it != annotations.end() &&
+                                    !ann_it->second.empty();
+                if (ann_ok &&
+                    any_instance_has_keypoints(ann_it->second)) {
+                    bool complete = frame_is_complete(ann_it->second.front());
                     if (complete && skeleton.has_skeleton &&
                         (project_is_2d(ctx.pm) || scene.num_cams > 1)) {
                         for (int k = 0; k < skeleton.num_nodes; ++k)
-                            if (!ann_it->second.kp3d[k].triangulated)
+                            if (!ann_it->second.front().kp3d[k].triangulated)
                                 complete = false;
                     }
                     text_col = complete

@@ -193,7 +193,7 @@ static void test_migration_roundtrip() {
     EXPECT_EQ((int)amap.size(), 1);
     EXPECT_TRUE(amap.find(10) != amap.end());
 
-    auto &fa = amap[10];
+    auto &fa = amap[10].front();
 
     // Check 2D keypoints survived migration
     EXPECT_TRUE(fa.cameras[0].keypoints[0].labeled);
@@ -323,7 +323,7 @@ static void test_json_camera_index_out_of_bounds() {
     j["frames"] = nlohmann::json::array({jf});
 
     annotations_from_json(j, amap); // should not crash, silently skip
-    auto &cam0 = amap[5].cameras[0];
+    auto &cam0 = amap[5].front().cameras[0];
     EXPECT_FALSE(cam0.has_bbox()); // unchanged
 }
 
@@ -350,8 +350,8 @@ static void test_json_file_save_load() {
     get_or_create_frame(amap2, 3, 2, 1);
     EXPECT_TRUE(load_annotations_json(amap2, tmpdir));
 
-    EXPECT_TRUE(amap2[3].cameras[0].has_bbox());
-    EXPECT_NEAR(amap2[3].cameras[0].extras->bbox_x, 42.0, 0.001);
+    EXPECT_TRUE(amap2[3].front().cameras[0].has_bbox());
+    EXPECT_NEAR(amap2[3].front().cameras[0].extras->bbox_x, 42.0, 0.001);
 
     // Cleanup
     fs::remove_all(tmpdir);
@@ -1239,7 +1239,7 @@ static void test_save_load_keypoints_roundtrip() {
 
     // Verify data survived the roundtrip
     for (u32 f : {5u, 15u, 25u}) {
-        auto &fa = amap2[f];
+        auto &fa = amap2[f].front();
 
         // Cam 0, keypoint 0
         EXPECT_TRUE(fa.cameras[0].keypoints[0].labeled);
@@ -1304,13 +1304,13 @@ static void test_save_load_with_extended_data() {
     EXPECT_EQ(rc, 0);
 
     // Verify keypoints survived
-    EXPECT_TRUE(amap2[10].cameras[0].keypoints[0].labeled);
-    EXPECT_NEAR(amap2[10].cameras[0].keypoints[0].x, 50.0, 0.01);
+    EXPECT_TRUE(amap2[10].front().cameras[0].keypoints[0].labeled);
+    EXPECT_NEAR(amap2[10].front().cameras[0].keypoints[0].x, 50.0, 0.01);
 
     // Verify bbox survived
-    EXPECT_TRUE(amap2[10].cameras[0].has_bbox());
-    EXPECT_NEAR(amap2[10].cameras[0].extras->bbox_x, 10.0, 0.01);
-    EXPECT_NEAR(amap2[10].cameras[0].extras->bbox_h, 150.0, 0.01);
+    EXPECT_TRUE(amap2[10].front().cameras[0].has_bbox());
+    EXPECT_NEAR(amap2[10].front().cameras[0].extras->bbox_x, 10.0, 0.01);
+    EXPECT_NEAR(amap2[10].front().cameras[0].extras->bbox_h, 150.0, 0.01);
 
     fs::remove_all(tmpdir);
 }
@@ -1562,10 +1562,10 @@ static void test_bridge_keypoints_and_extended_roundtrip() {
     // Step 2: Bridge → AnnotationMap
     AnnotationMap amap = migrate_keypoints_map(km, skel, &scene);
     EXPECT_EQ((int)amap.size(), 1);
-    EXPECT_TRUE(amap[50].cameras[0].keypoints[0].labeled);
+    EXPECT_TRUE(amap[50].front().cameras[0].keypoints[0].labeled);
 
     // Step 3: Add bbox via AnnotationMap (simulating annotation tool)
-    auto &bext = amap[50].cameras[0].get_extras();
+    auto &bext = amap[50].front().cameras[0].get_extras();
     bext.bbox_x = 50.0;
     bext.bbox_y = 100.0;
     bext.bbox_w = 200.0;
@@ -1588,17 +1588,17 @@ static void test_bridge_keypoints_and_extended_roundtrip() {
     // Step 6: Verify keypoints survived
     EXPECT_EQ((int)amap2.size(), 1);
     EXPECT_TRUE(amap2.count(50));
-    EXPECT_TRUE(amap2[50].cameras[0].keypoints[0].labeled);
-    EXPECT_NEAR(amap2[50].cameras[0].keypoints[0].x, 100.0, 0.01);
-    EXPECT_NEAR(amap2[50].cameras[0].keypoints[0].y, 200.0, 0.01);
-    EXPECT_TRUE(amap2[50].cameras[0].keypoints[1].labeled);
-    EXPECT_TRUE(amap2[50].cameras[1].keypoints[0].labeled);
+    EXPECT_TRUE(amap2[50].front().cameras[0].keypoints[0].labeled);
+    EXPECT_NEAR(amap2[50].front().cameras[0].keypoints[0].x, 100.0, 0.01);
+    EXPECT_NEAR(amap2[50].front().cameras[0].keypoints[0].y, 200.0, 0.01);
+    EXPECT_TRUE(amap2[50].front().cameras[0].keypoints[1].labeled);
+    EXPECT_TRUE(amap2[50].front().cameras[1].keypoints[0].labeled);
 
     // Step 7: Verify bbox survived
-    EXPECT_TRUE(amap2[50].cameras[0].has_bbox());
-    EXPECT_NEAR(amap2[50].cameras[0].extras->bbox_x, 50.0, 0.01);
-    EXPECT_NEAR(amap2[50].cameras[0].extras->bbox_w, 200.0, 0.01);
-    EXPECT_NEAR(amap2[50].cameras[0].extras->bbox_h, 300.0, 0.01);
+    EXPECT_TRUE(amap2[50].front().cameras[0].has_bbox());
+    EXPECT_NEAR(amap2[50].front().cameras[0].extras->bbox_x, 50.0, 0.01);
+    EXPECT_NEAR(amap2[50].front().cameras[0].extras->bbox_w, 200.0, 0.01);
+    EXPECT_NEAR(amap2[50].front().cameras[0].extras->bbox_h, 300.0, 0.01);
 
     // Step 8: Simulate user editing keypoints → refresh_keypoints_in_amap
     kp->kp2d[0][2].position = {175.0, 275.0};
@@ -1606,11 +1606,11 @@ static void test_bridge_keypoints_and_extended_roundtrip() {
     refresh_keypoints_in_amap(amap, km, skel, &scene);
 
     // Bbox should still be there after refresh
-    EXPECT_TRUE(amap[50].cameras[0].has_bbox());
-    EXPECT_NEAR(amap[50].cameras[0].extras->bbox_x, 50.0, 0.01);
+    EXPECT_TRUE(amap[50].front().cameras[0].has_bbox());
+    EXPECT_NEAR(amap[50].front().cameras[0].extras->bbox_x, 50.0, 0.01);
     // New keypoint should be reflected
-    EXPECT_TRUE(amap[50].cameras[0].keypoints[2].labeled);
-    EXPECT_NEAR(amap[50].cameras[0].keypoints[2].x, 175.0, 0.01);
+    EXPECT_TRUE(amap[50].front().cameras[0].keypoints[2].labeled);
+    EXPECT_NEAR(amap[50].front().cameras[0].keypoints[2].x, 175.0, 0.01);
 
     // Cleanup
     for (auto &[f, k] : km)  free_keypoints(k, &scene);
@@ -1629,8 +1629,8 @@ static void test_refresh_empty_keypoints_map() {
     // Start with populated amap, sync from empty km → amap should become empty
     AnnotationMap amap;
     get_or_create_frame(amap, 10, 3, 2);
-    amap[10].cameras[0].keypoints[0].labeled = true;
-    amap[10].cameras[0].get_extras().has_bbox = true;
+    amap[10].front().cameras[0].keypoints[0].labeled = true;
+    amap[10].front().cameras[0].get_extras().has_bbox = true;
     EXPECT_EQ((int)amap.size(), 1);
 
     std::map<u32, KeyPoints *> km; // empty
@@ -1661,8 +1661,8 @@ static void test_refresh_null_keypoints_skipped() {
     EXPECT_EQ((int)amap.size(), 1);
     EXPECT_TRUE(amap.count(20));
     EXPECT_FALSE(amap.count(10));
-    EXPECT_TRUE(amap[20].cameras[0].keypoints[0].labeled);
-    EXPECT_NEAR(amap[20].cameras[0].keypoints[0].x, 42.0, 0.001);
+    EXPECT_TRUE(amap[20].front().cameras[0].keypoints[0].labeled);
+    EXPECT_NEAR(amap[20].front().cameras[0].keypoints[0].x, 42.0, 0.001);
 
     free_keypoints(km[20], &scene);
 }
@@ -1693,12 +1693,12 @@ static void test_refresh_preserves_bbox_on_update() {
     // Refresh should update keypoints but keep bbox/obb
     refresh_keypoints_in_amap(amap, km, skel, &scene);
 
-    EXPECT_TRUE(amap[5].cameras[0].keypoints[0].labeled);
-    EXPECT_NEAR(amap[5].cameras[0].keypoints[0].x, 10.0, 0.001);
-    EXPECT_TRUE(amap[5].cameras[0].has_bbox());
-    EXPECT_NEAR(amap[5].cameras[0].extras->bbox_x, 100.0, 0.001);
-    EXPECT_TRUE(amap[5].cameras[0].has_obb());
-    EXPECT_NEAR(amap[5].cameras[0].extras->obb_cx, 150.0, 0.001);
+    EXPECT_TRUE(amap[5].front().cameras[0].keypoints[0].labeled);
+    EXPECT_NEAR(amap[5].front().cameras[0].keypoints[0].x, 10.0, 0.001);
+    EXPECT_TRUE(amap[5].front().cameras[0].has_bbox());
+    EXPECT_NEAR(amap[5].front().cameras[0].extras->bbox_x, 100.0, 0.001);
+    EXPECT_TRUE(amap[5].front().cameras[0].has_obb());
+    EXPECT_NEAR(amap[5].front().cameras[0].extras->obb_cx, 150.0, 0.001);
 
     free_keypoints(km[5], &scene);
 }
@@ -1728,7 +1728,7 @@ static void test_refresh_adds_new_frames() {
     EXPECT_EQ((int)amap.size(), 2);
     EXPECT_TRUE(amap.count(10));
     EXPECT_TRUE(amap.count(20));
-    EXPECT_TRUE(amap[20].cameras[0].keypoints[0].labeled);
+    EXPECT_TRUE(amap[20].front().cameras[0].keypoints[0].labeled);
 
     for (auto &[f, kp] : km) free_keypoints(kp, &scene);
 }
@@ -1779,8 +1779,8 @@ static void test_refresh_new_frame_gets_keypoints() {
     // Should have created the frame with keypoints
     EXPECT_EQ((int)amap.size(), 1);
     EXPECT_TRUE(amap.count(5));
-    EXPECT_TRUE(amap[5].cameras[0].keypoints[0].labeled);
-    EXPECT_NEAR(amap[5].cameras[0].keypoints[0].x, 99.0, 0.001);
+    EXPECT_TRUE(amap[5].front().cameras[0].keypoints[0].labeled);
+    EXPECT_NEAR(amap[5].front().cameras[0].keypoints[0].x, 99.0, 0.001);
 
     free_keypoints(km[5], &scene);
 }
@@ -1828,10 +1828,10 @@ static void test_migrate_multi_frame() {
 
     for (u32 f : {0u, 100u, 500u, 999u}) {
         EXPECT_TRUE(amap.count(f));
-        EXPECT_EQ((int)amap[f].cameras.size(), 2);
-        EXPECT_EQ((int)amap[f].kp3d.size(), 4);
-        EXPECT_TRUE(amap[f].cameras[0].keypoints[0].labeled);
-        EXPECT_NEAR(amap[f].cameras[0].keypoints[0].x, (double)f, 0.001);
+        EXPECT_EQ((int)amap[f].front().cameras.size(), 2);
+        EXPECT_EQ((int)amap[f].front().kp3d.size(), 4);
+        EXPECT_TRUE(amap[f].front().cameras[0].keypoints[0].labeled);
+        EXPECT_NEAR(amap[f].front().cameras[0].keypoints[0].x, (double)f, 0.001);
     }
 
     for (auto &[f, kp] : km) free_keypoints(kp, &scene);
@@ -2049,7 +2049,7 @@ static void test_json_obb_roundtrip() {
     get_or_create_frame(amap2, 7, 1, 1);
     annotations_from_json(j, amap2);
 
-    auto &cam2 = amap2[7].cameras[0];
+    auto &cam2 = amap2[7].front().cameras[0];
     EXPECT_TRUE(cam2.has_obb());
     EXPECT_NEAR(cam2.extras->obb_cx, 100.5, 0.001);
     EXPECT_NEAR(cam2.extras->obb_angle, 0.785, 0.001);
@@ -2071,10 +2071,10 @@ static void test_json_combined_bbox_obb() {
     get_or_create_frame(amap2, 1, 1, 2);
     annotations_from_json(j, amap2);
 
-    EXPECT_TRUE(amap2[1].cameras[0].has_bbox());
-    EXPECT_FALSE(amap2[1].cameras[0].has_obb());
-    EXPECT_TRUE(amap2[1].cameras[1].has_obb());
-    EXPECT_NEAR(amap2[1].cameras[0].extras->bbox_w, 100.0, 0.001);
+    EXPECT_TRUE(amap2[1].front().cameras[0].has_bbox());
+    EXPECT_FALSE(amap2[1].front().cameras[0].has_obb());
+    EXPECT_TRUE(amap2[1].front().cameras[1].has_obb());
+    EXPECT_NEAR(amap2[1].front().cameras[0].extras->bbox_w, 100.0, 0.001);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

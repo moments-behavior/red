@@ -87,8 +87,8 @@ inline void DrawLabelingToolWindow(
         };
 
         // Find prev/next for keypoints
-        auto kp_pn = find_prev_next([](const FrameAnnotation &fa) {
-            return frame_has_any_keypoints(fa);
+        auto kp_pn = find_prev_next([](const FrameInstances &fis) {
+            return any_instance_has_keypoints(fis);
         });
         bool has_next = kp_pn.next >= 0;
         bool has_prev = kp_pn.prev >= 0;
@@ -105,7 +105,7 @@ inline void DrawLabelingToolWindow(
 
             bool keypoint_triangulated_all = true;
             if (keypoints_find && scene->num_cams > 1) {
-                const auto &fa = annotations.at(current_frame_num);
+                const auto &fa = annotations.at(current_frame_num).front();
                 for (int j = 0; j < skeleton.num_nodes; j++) {
                     if (!fa.kp3d[j].triangulated) {
                         keypoint_triangulated_all = false;
@@ -133,7 +133,7 @@ inline void DrawLabelingToolWindow(
                                    !pm.camera_params.empty();
             ImGui::BeginDisabled(!can_triangulate);
             if (ImGui::Button("Triangulate")) {
-                reprojection(annotations.at(current_frame_num),
+                reprojection(annotations.at(current_frame_num).front(),
                              &skeleton, pm.camera_params, scene);
             }
             ImGui::EndDisabled();
@@ -179,7 +179,7 @@ inline void DrawLabelingToolWindow(
         ImGui::BeginDisabled(!has_prev);
         if (ImGui::Button("Copy Prev")) {
             // Copy annotations from prev frame into current frame
-            const auto &prev_fa = annotations.at(prev_frame);
+            const auto &prev_fa = annotations.at(prev_frame).front();
             FrameAnnotation new_fa = make_frame(skeleton.num_nodes, scene->num_cams, current_frame_num);
             // Copy keypoints from prev frame
             for (int c = 0; c < scene->num_cams && c < (int)prev_fa.cameras.size(); ++c) {
@@ -191,7 +191,7 @@ inline void DrawLabelingToolWindow(
             for (int k = 0; k < skeleton.num_nodes && k < (int)prev_fa.kp3d.size(); ++k) {
                 new_fa.kp3d[k] = prev_fa.kp3d[k];
             }
-            annotations[current_frame_num] = std::move(new_fa);
+            annotations[current_frame_num] = FrameInstances{std::move(new_fa)};
         }
         ImGui::EndDisabled();
 
@@ -210,7 +210,7 @@ inline void DrawLabelingToolWindow(
             snprintf(copy_id, sizeof(copy_id), "Copy Sel (%d)", sel);
             if (ImGui::Button(copy_id)) {
                 int n = copy_selected_keypoints(
-                    kc, annotations.at(current_frame_num),
+                    kc, annotations.at(current_frame_num).front(),
                     skeleton.num_nodes, scene->num_cams, skeleton.name);
                 if (n == 0)
                     toasts.push("None of the selected keypoints are labeled here",
@@ -305,9 +305,12 @@ inline void DrawLabelingToolWindow(
         struct LabeledFrameInfo { int frame; int state; };
         std::vector<LabeledFrameInfo> labeled_frames;
         std::vector<LabeledFrameInfo> needs_fix_frames;
-        for (const auto &[fnum, fa] : annotations) {
-            if (!frame_has_any_keypoints(fa))
+        // The frame list is per frame, not per animal: a frame appears once,
+        // classified by the animal being labelled.
+        for (const auto &[fnum, fis] : annotations) {
+            if (fis.empty() || !frame_has_any_keypoints(fis.front()))
                 continue;
+            const FrameAnnotation &fa = fis.front();
             int state = classify_kp_state(fa);
             if (fa.needs_improvement)
                 needs_fix_frames.push_back({(int)fnum, state});
@@ -318,9 +321,10 @@ inline void DrawLabelingToolWindow(
         // === Collect bounding box frames ===
         struct BBoxFrameInfo { int frame; bool has_bbox; bool has_obb; };
         std::vector<BBoxFrameInfo> bbox_frames;
-        for (const auto &[fnum, fa] : annotations) {
+        for (const auto &[fnum, fis] : annotations) {
             bool any_bbox = false, any_obb = false;
-            for (const auto &cam : fa.cameras) {
+            for (const auto &fa : fis)
+              for (const auto &cam : fa.cameras) {
                 if (cam.has_bbox()) any_bbox = true;
                 if (cam.has_obb())  any_obb  = true;
             }
@@ -396,8 +400,10 @@ inline void DrawLabelingToolWindow(
 
         // ─── Section 0: Needs Improvement (promoted predictions to fix) ───
         if (!needs_fix_frames.empty()) {
-            auto fix_pn = find_prev_next([](const FrameAnnotation &fa) {
-                return fa.needs_improvement;
+            auto fix_pn = find_prev_next([](const FrameInstances &fis) {
+                for (const auto &fa : fis)
+                    if (fa.needs_improvement) return true;
+                return false;
             });
             ImGui::Text("Needs Improvement (%zu)", needs_fix_frames.size());
             ImGui::SameLine();
@@ -406,11 +412,12 @@ inline void DrawLabelingToolWindow(
             // "Mark fixed" for the current frame, if it is one of them.
             auto cur_it = annotations.find((u32)current_frame_num);
             bool cur_needs_fix = cur_it != annotations.end() &&
-                                 cur_it->second.needs_improvement;
+                                 !cur_it->second.empty() &&
+                                 cur_it->second.front().needs_improvement;
             if (cur_needs_fix) {
                 ImGui::SameLine();
                 if (ImGui::SmallButton("Mark fixed"))
-                    cur_it->second.needs_improvement = false;
+                    cur_it->second.front().needs_improvement = false;
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Clear the Needs-Improvement flag on the "
                                       "current frame (moves it to Keypoint Labels).");
@@ -464,9 +471,10 @@ inline void DrawLabelingToolWindow(
         // ─── Section 2: Bounding Box Labels ───
         if (!bbox_frames.empty()) {
             ImGui::Spacing();
-            auto bbox_pn = find_prev_next([](const FrameAnnotation &fa) {
-                for (const auto &cam : fa.cameras)
-                    if (cam.has_bbox() || cam.has_obb()) return true;
+            auto bbox_pn = find_prev_next([](const FrameInstances &fis) {
+                for (const auto &fa : fis)
+                    for (const auto &cam : fa.cameras)
+                        if (cam.has_bbox() || cam.has_obb()) return true;
                 return false;
             });
             ImGui::Text("Bounding Box Labels (%zu)", bbox_frames.size());

@@ -184,7 +184,7 @@ inline void DrawKeypointsWindow(AppContext &ctx) {
                             ImVec2 p0 = ImGui::GetCursorScreenPos();
 
                             if (keypoints_find) {
-                                auto &fa = annotations.at(current_frame_num);
+                                auto &fa = annotations.at(current_frame_num).front();
                                 const bool is_active =
                                     row < (int)fa.cameras.size() &&
                                     fa.cameras[row].active_id == (u32)node;
@@ -346,7 +346,7 @@ inline void DrawKeypointsWindow(AppContext &ctx) {
                                 kc.anchor = node;
                                 if (keypoints_find) {
                                     auto &fa =
-                                        annotations.at(current_frame_num);
+                                        annotations.at(current_frame_num).front();
                                     for (auto &cam : fa.cameras)
                                         cam.active_id = (u32)node;
                                 }
@@ -376,7 +376,7 @@ inline void DrawKeypointsWindow(AppContext &ctx) {
             //    selection over the window) ──
             if (keypoints_find &&
                 keys::pressed(keys::Sc::DeleteKeypoint)) {
-                auto &fa = annotations.at(current_frame_num);
+                auto &fa = annotations.at(current_frame_num).front();
                 const bool win_hovered = ImGui::IsWindowHovered(
                     ImGuiHoveredFlags_RootAndChildWindows);
                 auto delete_selection = [&]() {
@@ -415,7 +415,7 @@ inline void DrawKeypointsWindow(AppContext &ctx) {
                 } else {
                     int sel = kc.count();
                     int n = copy_selected_keypoints(
-                        kc, annotations.at(current_frame_num),
+                        kc, annotations.at(current_frame_num).front(),
                         skeleton.num_nodes, scene->num_cams, skeleton.name);
                     if (n == 0)
                         ctx.toasts.push(

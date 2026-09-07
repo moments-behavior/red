@@ -45,8 +45,10 @@ struct BBoxToolState {
 inline void bbox_draw_overlays(BBoxToolState &state, const AnnotationMap &amap,
                                 u32 frame, int cam_idx, int img_w, int img_h) {
     auto it = amap.find(frame);
-    if (it == amap.end()) return;
-    const auto &fa = it->second;
+    if (it == amap.end() || it->second.empty()) return;
+    // The bbox tools work on the animal being labelled; multi-animal boxes
+    // wait on the active-instance UI.
+    const auto &fa = it->second.front();
 
     if (cam_idx >= (int)fa.cameras.size()) return;
     const auto &cam = fa.cameras[cam_idx];
@@ -160,8 +162,8 @@ inline void bbox_handle_input(BBoxToolState &state, AnnotationMap &amap,
     state.hovered = false;
     state.hovered_cam = -1;
     auto it = amap.find(frame);
-    if (it != amap.end()) {
-        const auto &fa = it->second;
+    if (it != amap.end() && !it->second.empty()) {
+        const auto &fa = it->second.front();
         if (cam_idx < (int)fa.cameras.size()) {
             const auto &cam = fa.cameras[cam_idx];
             if (cam.has_bbox()) {
@@ -180,8 +182,9 @@ inline void bbox_handle_input(BBoxToolState &state, AnnotationMap &amap,
 
     // F key: delete hovered bbox from this camera
     if (state.hovered && ImGui::IsKeyPressed(ImGuiKey_F)) {
-        auto &fa = amap[frame];
-        if (cam_idx < (int)fa.cameras.size()) {
+        auto &fis = amap[frame];
+        if (!fis.empty() && cam_idx < (int)fis.front().cameras.size()) {
+            auto &fa = fis.front();
             fa.cameras[cam_idx].get_extras().has_bbox = false;
         }
         state.hovered = false;
@@ -191,7 +194,9 @@ inline void bbox_handle_input(BBoxToolState &state, AnnotationMap &amap,
     if (state.hovered && ImGui::IsKeyPressed(ImGuiKey_O)) {
         auto it2 = amap.find(frame);
         if (it2 != amap.end()) {
-            for (auto &cam : it2->second.cameras) {
+            // "All boxes on this frame" means every camera of every animal.
+            for (auto &fa : it2->second)
+              for (auto &cam : fa.cameras) {
                 if (cam.has_bbox())
                     cam.get_extras().has_bbox = false;
             }

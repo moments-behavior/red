@@ -205,7 +205,8 @@ inline SourceInfo scan_project(const std::string &redproj_path,
         return s;
     }
     int valid = 0;
-    for (const auto &[fid, fa] : amap)
+    for (const auto &[fid, fis] : amap)
+      for (const FrameAnnotation &fa : fis)
         if (frame_is_fully_triangulated(fa, skel.num_nodes)) ++valid;
     if (valid == 0) {
         s.message = "No fully-triangulated frames.";
@@ -338,7 +339,8 @@ inline bool build_project_json(const SourceInfo &src, float margin_pixel,
     }
 
     std::vector<int> frames;
-    for (const auto &[fid, fa] : amap)
+    for (const auto &[fid, fis] : amap)
+      for (const FrameAnnotation &fa : fis)
         if (frame_is_fully_triangulated(fa, src.num_nodes)) frames.push_back((int)fid);
     std::sort(frames.begin(), frames.end());
 

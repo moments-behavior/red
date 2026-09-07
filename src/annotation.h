@@ -180,7 +180,23 @@ struct FrameAnnotation {
 };
 
 // ── The main annotation container ──
-using AnnotationMap = std::map<u32, FrameAnnotation>;
+// ── The main annotation container ──
+//
+// A frame holds one FrameAnnotation per animal. FrameAnnotation was always the
+// per-animal record -- it carries instance_id -- it was simply stored one to a
+// frame, so a second animal had nowhere to go.
+//
+// Order is the instance order; instance_id is the identity that travels with
+// the animal across frames and views, and is what a tailcycle session's
+// `animal_id` maps onto. Index and identity are deliberately not the same
+// thing: an animal that appears late must keep its id.
+using FrameInstances = std::vector<FrameAnnotation>;
+using AnnotationMap = std::map<u32, FrameInstances>;
+
+// INVARIANT: a frame present in the map has at least one instance. Callers use
+// front() for "the animal being labelled"; an empty vector would make that
+// undefined. get_or_create_frame maintains this -- prefer it to amap[frame],
+// which default-constructs an empty list.
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Helpers
@@ -203,14 +219,61 @@ inline FrameAnnotation make_frame(int num_nodes, int num_cameras, u32 frame_numb
     return fa;
 }
 
+// ── Instance lookup ──
+//
+// Most of red works on one animal at a time, so these take an instance and
+// default to the first. A caller that means "the animal being labelled" passes
+// the active instance; a caller that means "every animal" iterates.
+
+// The instance with this id, or nullptr. Prefer this to indexing: the id is
+// stable across frames, the index is not.
+inline FrameAnnotation *find_instance(FrameInstances &fis, int instance_id) {
+    for (auto &fa : fis)
+        if (fa.instance_id == instance_id) return &fa;
+    return nullptr;
+}
+inline const FrameAnnotation *find_instance(const FrameInstances &fis, int instance_id) {
+    for (const auto &fa : fis)
+        if (fa.instance_id == instance_id) return &fa;
+    return nullptr;
+}
+
+// The frame's instances, or an empty list if the frame has none.
+inline const FrameInstances &instances_at(const AnnotationMap &amap, u32 frame) {
+    static const FrameInstances empty;
+    const auto it = amap.find(frame);
+    return it == amap.end() ? empty : it->second;
+}
+
 // Get-or-create a FrameAnnotation with default sizes
+// Get-or-create one animal's annotation for a frame. Defaults to instance 0,
+// which is every existing project and every caller that predates multi-animal.
 inline FrameAnnotation &get_or_create_frame(AnnotationMap &amap, u32 frame,
-                                             int num_nodes, int num_cameras) {
-    auto it = amap.find(frame);
-    if (it != amap.end()) return it->second;
-    FrameAnnotation &fa = amap[frame];
-    fa = make_frame(num_nodes, num_cameras, frame);
-    return fa;
+                                            int num_nodes, int num_cameras,
+                                            int instance_id = 0) {
+    FrameInstances &fis = amap[frame];
+    if (FrameAnnotation *fa = find_instance(fis, instance_id)) return *fa;
+    fis.push_back(make_frame(num_nodes, num_cameras, frame, instance_id));
+    return fis.back();
+}
+
+// Whole-frame versions of the per-animal predicates below: true when ANY
+// animal in the frame qualifies.
+inline bool frame_has_any_labels(const FrameAnnotation &fa);
+inline bool frame_has_any_keypoints(const FrameAnnotation &fa);
+inline bool frame_has_any_manual_labels(const FrameAnnotation &fa);
+
+inline bool any_instance_has_labels(const FrameInstances &fis) {
+    for (const auto &fa : fis) if (frame_has_any_labels(fa)) return true;
+    return false;
+}
+inline bool any_instance_has_keypoints(const FrameInstances &fis) {
+    for (const auto &fa : fis) if (frame_has_any_keypoints(fa)) return true;
+    return false;
+}
+inline bool any_instance_has_manual_labels(const FrameInstances &fis) {
+    for (const auto &fa : fis) if (frame_has_any_manual_labels(fa)) return true;
+    return false;
 }
 
 // Check if the frame has any annotation data (keypoints or bboxes)
@@ -248,8 +311,8 @@ inline bool frame_has_any_manual_labels(const FrameAnnotation &fa) {
 
 // Whole-project version of frame_has_any_manual_labels.
 inline bool project_has_any_manual_labels(const AnnotationMap &amap) {
-    for (const auto &[frame, fa] : amap)
-        if (frame_has_any_manual_labels(fa)) return true;
+    for (const auto &[frame, fis] : amap)
+        if (any_instance_has_manual_labels(fis)) return true;
     return false;
 }
 
@@ -283,7 +346,8 @@ inline nlohmann::json annotations_to_json(const AnnotationMap &amap) {
     root["version"] = 2;
     nlohmann::json frames_arr = nlohmann::json::array();
 
-    for (const auto &[fnum, fa] : amap) {
+    for (const auto &[fnum, fis] : amap)
+      for (const auto &fa : fis) {
         // Serialize frames that carry extended (extras) data OR a needs-fix flag
         // OR a single-view midline constraint.
         bool has_extended = fa.needs_improvement || fa.midline.has_line;
@@ -350,11 +414,13 @@ inline void annotations_from_json(const nlohmann::json &root, AnnotationMap &ama
         auto it = amap.find(fnum);
         if (it == amap.end()) continue; // only augment existing frames
 
-        auto &fa = it->second;
-
-        // Read instance/category IDs if present
-        if (jf.contains("instance_id"))
-            fa.instance_id = jf["instance_id"].get<int>();
+        // Match the instance this record belongs to. A v2 file written before
+        // multi-animal has one record per frame with instance_id 0, which is
+        // also what the CSV loader created, so it lands on the right one.
+        const int inst = jf.contains("instance_id") ? jf["instance_id"].get<int>() : 0;
+        FrameAnnotation *fap = find_instance(it->second, inst);
+        if (!fap) continue;
+        auto &fa = *fap;
         if (jf.contains("category_id"))
             fa.category_id = jf["category_id"].get<int>();
         if (jf.contains("needs_improvement"))

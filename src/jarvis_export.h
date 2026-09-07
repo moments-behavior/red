@@ -941,8 +941,8 @@ inline nlohmann::json generate_annotation_json_from_amap(
             // Check if all 2D keypoints are valid for this camera on this frame
             bool has_valid_2d = false;
             auto it = amap.find((u32)frame_num);
-            if (it != amap.end() && cam_idx < (int)it->second.cameras.size()) {
-                const auto &cam = it->second.cameras[cam_idx];
+            if (it != amap.end() && !it->second.empty() && cam_idx < (int)it->second.front().cameras.size()) {
+                const auto &cam = it->second.front().cameras[cam_idx];
                 bool any_unlabeled = false;
                 for (int k = 0; k < config.num_keypoints && k < (int)cam.keypoints.size(); ++k) {
                     if (!cam.keypoints[k].labeled) { any_unlabeled = true; break; }
@@ -953,7 +953,7 @@ inline nlohmann::json generate_annotation_json_from_amap(
 
             nlohmann::json annotation_entry;
             if (has_valid_2d) {
-                const auto &cam = it->second.cameras[cam_idx];
+                const auto &cam = it->second.front().cameras[cam_idx];
 
                 // Compute bbox from 2D keypoints + margin (Y-flipped to image coords)
                 double x_min = 1e9, x_max = -1e9, y_min = 1e9, y_max = -1e9;
@@ -1091,7 +1091,11 @@ inline bool export_jarvis_dataset(const ExportConfig &config_in,
 
     // 1. Get valid frames from AnnotationMap (all 3D keypoints triangulated)
     std::vector<int> valid_frames;
-    for (const auto &[fid, fa] : amap) {
+    for (const auto &[fid, fis] : amap) {
+        // Single-animal format: the first instance. Multi-animal
+        // export goes through tailcycle, which the format supports.
+        if (fis.empty()) continue;
+        const FrameAnnotation &fa = fis.front();
         if (frame_is_fully_triangulated(fa, config.num_keypoints))
             valid_frames.push_back((int)fid);
     }

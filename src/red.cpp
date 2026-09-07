@@ -482,7 +482,10 @@ int main(int argc, char **argv) {
                     DrawLabelingToolWindow(win.labeling, ctx);
                     if (keypoints_find && keys::pressed(keys::Sc::Triangulate)) {
                         if (!pm.camera_params.empty()) {
-                            reprojection(annotations.at(current_frame_num),
+                            // .front(): the animal being labelled. When the
+                            // active-instance UI lands, these three sites --
+                            // triangulate, place, draw -- are where it plugs in.
+                            reprojection(annotations.at(current_frame_num).front(),
                                          &skeleton, pm.camera_params, scene);
                         } else {
                             toasts.push("No calibration loaded",
@@ -1187,12 +1190,12 @@ int main(int argc, char **argv) {
 
                                 if (keypoints_find && skeleton.has_skeleton) {
                                     u32 *kp = &annotations.at(current_frame_num)
-                                                   .cameras[j].active_id;
+                                                   .front().cameras[j].active_id;
                                     if (keys::pressed(keys::Sc::PlaceKeypoint)) {
                                         // labeling sequentially each view
                                         ImPlotPoint mouse =
                                             ImPlot::GetPlotMousePos();
-                                        auto &fa = annotations.at(current_frame_num);
+                                        auto &fa = annotations.at(current_frame_num).front();
                                         auto &kp2d = fa.cameras[j].keypoints[*kp];
                                         kp2d.x = mouse.x;
                                         kp2d.y = mouse.y;
@@ -1241,10 +1244,16 @@ int main(int argc, char **argv) {
 
                             if (keypoints_find && skeleton.has_skeleton &&
                                 display.show_keypoints && !peek_raw) {
-                                gui_plot_keypoints(
-                                    annotations.at(current_frame_num),
-                                    &skeleton, j, scene->num_cams,
-                                    active_keypoint_color(user_settings));
+                                // Every animal in the frame. The one being
+                                // edited draws full strength; the rest are
+                                // tinted and dimmed so they read as context.
+                                auto &fis_draw = annotations.at(current_frame_num);
+                                for (size_t inst = 0; inst < fis_draw.size(); inst++)
+                                    gui_plot_keypoints(
+                                        fis_draw[inst], &skeleton, j,
+                                        scene->num_cams,
+                                        active_keypoint_color(user_settings),
+                                        (int)inst, inst == 0);
                             }
 
                             // Read-only prediction overlay. Skipped once the

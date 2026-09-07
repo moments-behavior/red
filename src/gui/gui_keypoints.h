@@ -11,9 +11,29 @@
 #include <sstream>
 #include <vector>
 
+// Per-animal tint. Applied to every node so two animals are told apart at a
+// glance even when they share a skeleton -- which they always do, since the
+// keypoint axis is per session, not per animal.
+inline ImVec4 instance_tint(int instance) {
+    static const ImVec4 kTints[] = {
+        {1.00f, 1.00f, 1.00f, 1.0f},  // 0: untinted, the animal being labelled
+        {1.00f, 0.55f, 0.35f, 1.0f},
+        {0.45f, 0.80f, 1.00f, 1.0f},
+        {0.60f, 1.00f, 0.55f, 1.0f},
+        {1.00f, 0.75f, 0.95f, 1.0f},
+        {1.00f, 0.90f, 0.40f, 1.0f},
+    };
+    constexpr int n = (int)(sizeof(kTints) / sizeof(kTints[0]));
+    return kTints[instance <= 0 ? 0 : 1 + ((instance - 1) % (n - 1))];
+}
+
+// `instance` separates one animal's draggable points from another's: ImPlot
+// keys DragPoint by id, so without it five animals would share one point per
+// node and dragging any would move them together.
 inline void gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
                                int view_idx, int num_cams,
-                               ImVec4 active_color = ImVec4(1, 1, 1, 1)) {
+                               ImVec4 active_color = ImVec4(1, 1, 1, 1),
+                               int instance = 0, bool is_active = true) {
     if (view_idx >= (int)fa.cameras.size()) return;
     auto &cam = fa.cameras[view_idx];
 
@@ -31,7 +51,12 @@ inline void gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
                 node_color.w = 0.9;
                 pt_size = 6.0f;
             }
-            int id = skeleton->num_nodes * view_idx + node;
+            // Tint by animal, and dim the ones that are not being edited.
+            const ImVec4 tint = instance_tint(instance);
+            node_color.x *= tint.x; node_color.y *= tint.y; node_color.z *= tint.z;
+            if (!is_active) { node_color.w *= 0.55f; pt_size *= 0.8f; }
+            int id = (skeleton->num_nodes * num_cams) * instance +
+                     skeleton->num_nodes * view_idx + node;
             bool drag_point_clicked;
             bool drag_point_hovered;
             bool drag_point_modified;

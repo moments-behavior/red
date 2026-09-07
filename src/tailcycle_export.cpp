@@ -178,7 +178,8 @@ bool export_session(const ExportConfig &cfg, const AnnotationMap &amap,
 
     // ── which buckets actually have data ──
     bool has[2] = {false, false};
-    for (const auto &[fnum, fa] : amap) {
+    for (const auto &[fnum, fis] : amap)
+      for (const FrameAnnotation &fa : fis) {
         for (const auto &cam : fa.cameras)
             for (const auto &kp : cam.keypoints)
                 if (kp.labeled) has[(int)bucket_2d(kp.source)] = true;
@@ -242,7 +243,8 @@ bool export_session(const ExportConfig &cfg, const AnnotationMap &amap,
             bool any_score = false;
             int rows = 0;
 
-            for (const auto &[fnum, fa] : amap) {
+            for (const auto &[fnum, fis] : amap)
+      for (const FrameAnnotation &fa : fis) {
                 const int frame = (int)fnum - cfg.source_frame_start;
                 if (frame < 0 || frame >= cfg.n_frames) continue;   // rule 6
                 if (cfg.layers == ExportConfig::Layers::ThreeD) break;
@@ -304,7 +306,8 @@ bool export_session(const ExportConfig &cfg, const AnnotationMap &amap,
             bool any_score = false;
             int rows = 0;
 
-            for (const auto &[fnum, fa] : amap) {
+            for (const auto &[fnum, fis] : amap)
+      for (const FrameAnnotation &fa : fis) {
                 const int frame = (int)fnum - cfg.source_frame_start;
                 if (frame < 0 || frame >= cfg.n_frames) continue;
                 for (size_t ni = 0; ni < fa.kp3d.size() && ni < cfg.node_names.size(); ni++) {

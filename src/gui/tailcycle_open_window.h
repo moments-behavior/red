@@ -113,7 +113,8 @@ inline bool tailcycle_open_session(AppContext &ctx, const std::string &session_d
     // 3D-only session as something to look at rather than a round trip.
     int reprojected = 0;
     if (!s.has_2d && s.has_3d) {
-        for (auto &[frame, fa] : ctx.annotations) {
+        for (auto &[frame, fis] : ctx.annotations)
+          for (auto &fa : fis) {
             for (size_t n = 0; n < fa.kp3d.size(); n++) {
                 const Keypoint3D &k3 = fa.kp3d[n];
                 if (k3.source == Kp3DSource::None) continue;
@@ -223,8 +224,13 @@ inline void DrawTailcycleOpenWindow(TailcycleOpenState &state, AppContext &ctx) 
                 ImGui::TextDisabled("Nothing here — expected <split>/<session>/session.toml");
         } else {
             ImGui::Spacing();
+            // ScrollX and fixed-fit sizing: docked into the left tab group the
+            // panel is ~280px, far narrower than seven columns of session
+            // metadata want. Scrolling sideways beats truncating names that
+            // differ only in their tail.
             const ImGuiTableFlags tf = ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders |
-                                       ImGuiTableFlags_SizingStretchProp |
+                                       ImGuiTableFlags_SizingFixedFit |
+                                       ImGuiTableFlags_ScrollX |
                                        ImGuiTableFlags_ScrollY;
             if (ImGui::BeginTable("##tc_sessions", 7, tf, ImVec2(0, 200))) {
                 ImGui::TableSetupScrollFreeze(0, 1);

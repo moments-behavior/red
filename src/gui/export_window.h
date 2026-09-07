@@ -271,8 +271,8 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
         ImGui::Text("Cameras:      %d", (int)pm.camera_names.size());
 
         int kp_count = 0;
-        for (const auto &[f, fa] : amap)
-            if (frame_has_any_keypoints(fa)) ++kp_count;
+        for (const auto &[f, fis] : amap)
+            if (any_instance_has_keypoints(fis)) ++kp_count;
         ImGui::Text("Annotated:    %d frames", kp_count);
 
         ImGui::SeparatorText("Output");

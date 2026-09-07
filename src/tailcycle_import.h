@@ -47,6 +47,13 @@ struct Session {
 
     bool has_2d = false;
     bool has_3d = false;
+
+    // The session's animal_ids, in order of first appearance. red's
+    // instance_id is the index into this: the format's ids are strings
+    // ("a00".."a04") and red's are ints, so the mapping is positional and
+    // stable within a session. Kept so an export can write the original names
+    // back rather than inventing new ones.
+    std::vector<std::string> animal_ids;
 };
 
 // One session's headline facts, read without touching the label tables --
@@ -88,8 +95,6 @@ bool list_groups(const std::string &session_dir, std::vector<std::string> *out,
 // the only group, and fails if there is more than one.
 //
 // Refuses rather than silently misreading:
-//   - more than one animal_id: red's AnnotationMap is keyed by frame alone, so
-//     the second animal would overwrite the first
 //   - a non-zero camera `offset`: red has no crop model, and loading these
 //     coordinates against uncorrected calibration is the 2.38mm -> 16.9mm
 //     error the format's §5 documents

@@ -108,7 +108,8 @@ inline void obb_draw_overlays(OBBToolState &state, const BBoxToolState &bbox_sta
     if (it == amap.end()) goto draw_construction;
 
     {
-        const auto &fa = it->second;
+        if (it->second.empty()) return;
+        const auto &fa = it->second.front();
         if (cam_idx < (int)fa.cameras.size()) {
             const auto &cam = fa.cameras[cam_idx];
             if (cam.has_obb()) {
@@ -264,7 +265,8 @@ inline void obb_handle_input(OBBToolState &state, BBoxToolState &bbox_state,
     state.hovered_cam = -1;
     auto it = amap.find(frame);
     if (it != amap.end()) {
-        const auto &fa = it->second;
+        if (it->second.empty()) return;
+        const auto &fa = it->second.front();
         if (cam_idx < (int)fa.cameras.size()) {
             const auto &cam = fa.cameras[cam_idx];
             if (cam.has_obb()) {
@@ -285,7 +287,9 @@ inline void obb_handle_input(OBBToolState &state, BBoxToolState &bbox_state,
     // because T is the global Triangulate shortcut — both handlers would fire.)
     if (state.hovered && !ImGui::GetIO().WantTextInput &&
         ImGui::IsKeyPressed(ImGuiKey_Delete)) {
-        auto &fa = amap[frame];
+        auto &fis_ = amap[frame];
+        if (fis_.empty()) fis_.push_back(FrameAnnotation{});
+        auto &fa = fis_.front();
         if (cam_idx < (int)fa.cameras.size())
             fa.cameras[cam_idx].get_extras().has_obb = false;
         state.hovered = false;

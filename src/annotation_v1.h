@@ -63,7 +63,8 @@ inline AnnotationMap migrate_keypoints_map(const std::map<u32, KeyPoints *> &km,
         if (!kp) continue;
         FrameAnnotation fa = frame_from_keypoints(kp, skel, scene);
         fa.frame_number = frame;
-        amap[frame] = std::move(fa);
+        // v1 predates multi-animal: one record per frame, instance 0.
+        amap[frame] = FrameInstances{std::move(fa)};
     }
     return amap;
 }
@@ -83,9 +84,9 @@ inline void refresh_keypoints_in_amap(AnnotationMap &amap,
         if (it == amap.end()) {
             FrameAnnotation fa = frame_from_keypoints(kp, skel, scene);
             fa.frame_number = frame;
-            amap[frame] = std::move(fa);
-        } else {
-            auto &fa = it->second;
+            amap[frame] = FrameInstances{std::move(fa)};
+        } else if (!it->second.empty()) {
+            auto &fa = it->second.front();
             if (kp->kp3d)
                 for (int k = 0; k < nn; ++k) {
                     fa.kp3d[k].x = kp->kp3d[k].position.x;
@@ -122,7 +123,11 @@ inline void populate_keypoints_from_amap(std::map<u32, KeyPoints *> &km,
                                           const AnnotationMap &amap,
                                           SkeletonContext *skeleton,
                                           RenderScene *scene) {
-    for (const auto &[frame, fa] : amap) {
+    // The v1 bridge is single-animal: KeyPoints* has one pose per frame, so
+    // only the first instance can be represented.
+    for (const auto &[frame, fis] : amap) {
+        if (fis.empty()) continue;
+        const FrameAnnotation &fa = fis.front();
         if (km.find(frame) == km.end()) {
             KeyPoints *kp = (KeyPoints *)malloc(sizeof(KeyPoints));
             allocate_keypoints(kp, scene, skeleton);

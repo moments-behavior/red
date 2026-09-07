@@ -150,7 +150,7 @@ static AnnotationMap make_annotations(u32 first_frame = 0) {
         fa.kp3d[0].set_triangulated();
         fa.kp3d[1].x = 4; fa.kp3d[1].y = 5; fa.kp3d[1].z = 6;
         fa.kp3d[1].set_imported(0.9f);
-        amap[f] = std::move(fa);
+        amap[f] = FrameInstances{std::move(fa)};
     }
     return amap;
 }

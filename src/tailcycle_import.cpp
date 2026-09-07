@@ -354,11 +354,20 @@ bool read_session(const std::string &session_dir, const std::string &group_id,
         const auto it = std::find(v.begin(), v.end(), s);
         return it == v.end() ? -1 : (int)(it - v.begin());
     };
-    auto frame_of = [&](u32 f) -> FrameAnnotation & {
-        return get_or_create_frame(out->annotations, f, NN, NC);
+    auto frame_of = [&](u32 f, int inst) -> FrameAnnotation & {
+        return get_or_create_frame(out->annotations, f, NN, NC, inst);
     };
 
-    std::set<std::string> animals;
+    // animal_id -> instance index, assigned in order of first appearance.
+    std::map<std::string, int> animal_index;
+    auto instance_of = [&](const std::string &aid) {
+        auto it = animal_index.find(aid);
+        if (it != animal_index.end()) return it->second;
+        const int idx = (int)out->animal_ids.size();
+        out->animal_ids.push_back(aid);
+        animal_index.emplace(aid, idx);
+        return idx;
+    };
 
     // ── keypoints.pq ──
     if (auto kt = read_pq(D / "keypoints.pq")) {
@@ -370,7 +379,7 @@ bool read_session(const std::string &session_dir, const std::string &group_id,
             return fail("keypoints.pq: unexpected column types.");
         for (size_t i = 0; i < fr.vals.size(); i++) {
             if (gid.ok && gid.vals[i] != out->group_id) continue;
-            if (aid.ok) animals.insert(aid.vals[i]);
+            const int inst = instance_of(aid.ok ? aid.vals[i] : std::string("a00"));
             const std::string &s = stt.vals[i];
             // `unlabeled` is a progress marker a consumer treats as an absent
             // row; `missing` is an assessed occlusion red cannot represent.
@@ -384,7 +393,7 @@ bool read_session(const std::string &session_dir, const std::string &group_id,
             if (ci < 0) return fail("keypoints.pq: camera \"" + cam.vals[i] +
                                     "\" is not in calibration.toml (rule 6).");
             if (x.null[i] || y.null[i]) continue;
-            Keypoint2D &kp = frame_of((u32)f).cameras[ci].keypoints[ni];
+            Keypoint2D &kp = frame_of((u32)f, inst).cameras[ci].keypoints[ni];
             kp.x = x.vals[i];
             // Mirror of the export: the format stores y from the top of the
             // image, red works in ImPlot coordinates measured from the bottom.
@@ -405,7 +414,7 @@ bool read_session(const std::string &session_dir, const std::string &group_id,
             return fail("points3d.pq: unexpected column types.");
         for (size_t i = 0; i < fr.vals.size(); i++) {
             if (gid.ok && gid.vals[i] != out->group_id) continue;
-            if (aid.ok) animals.insert(aid.vals[i]);
+            const int inst = instance_of(aid.ok ? aid.vals[i] : std::string("a00"));
             if (stt.vals[i] != Tailcycle::status::kVisible) continue;
             const int f = (int)fr.vals[i];
             if (f < 0 || f >= out->n_frames) continue;
@@ -413,7 +422,7 @@ bool read_session(const std::string &session_dir, const std::string &group_id,
             if (ni < 0) return fail("points3d.pq: bodypart \"" + bp.vals[i] +
                                     "\" is not in the session's names (rule 6).");
             if (x.null[i] || y.null[i] || z.null[i]) continue;
-            Keypoint3D &k3 = frame_of((u32)f).kp3d[ni];
+            Keypoint3D &k3 = frame_of((u32)f, inst).kp3d[ni];
             k3.x = x.vals[i]; k3.y = y.vals[i]; k3.z = z.vals[i];
             k3.set_imported(sc.ok && i < sc.null.size() && !sc.null[i] ? (float)sc.vals[i] : 1.0f);
             st.points3d_rows++;
@@ -422,17 +431,13 @@ bool read_session(const std::string &session_dir, const std::string &group_id,
 
     if (!out->has_2d && !out->has_3d)
         return fail("Session has neither keypoints.pq nor points3d.pq (§3).");
-    if (animals.size() > 1)
-        return fail("This session has " + std::to_string(animals.size()) +
-                    " animals. red holds one instance per frame, so the others would be "
-                    "silently discarded.");
-
     st.frames = (int)out->annotations.size();
     if (status) {
         *status = "Read " + out->session_id + "/" + out->group_id + ": " +
                   std::to_string(st.keypoint_rows) + " 2D rows, " +
                   std::to_string(st.points3d_rows) + " 3D rows, " +
-                  std::to_string(st.frames) + " frames";
+                  std::to_string(st.frames) + " frames, " +
+                  std::to_string(out->animal_ids.size()) + " animal(s)";
     }
     return true;
 }

@@ -105,22 +105,24 @@ inline bool save_2d_csv(const std::string &path, const std::string &skeleton_nam
     std::ofstream f(path);
     if (!f) return false;
 
-    // Header lines
-    f << "#red_csv v2\n";
+    // Header lines. v3 adds the instance column; the column header is what a
+    // reader keys off, so the version comment stays informational.
+    f << "#red_csv v3\n";
     f << "#skeleton " << skeleton_name << "\n";
 
-    // Column header: frame, then groups of (x, y, c, s) per keypoint
-    f << "frame";
+    // Column header: frame, instance, then groups of (x, y, c, s) per keypoint
+    f << "frame,instance";
     for (int k = 0; k < num_nodes; ++k)
         f << ",x" << k << ",y" << k << ",c" << k << ",s" << k;
     f << "\n";
 
-    // Data rows
-    for (const auto &[frame, fa] : amap) {
+    // One row per animal per frame.
+    for (const auto &[frame, fis] : amap)
+      for (const auto &fa : fis) {
         if (cam_idx >= (int)fa.cameras.size()) continue;
         const auto &cam = fa.cameras[cam_idx];
 
-        f << frame;
+        f << frame << "," << fa.instance_id;
         for (int k = 0; k < num_nodes; ++k) {
             if (k < (int)cam.keypoints.size() && cam.keypoints[k].labeled) {
                 const auto &kp = cam.keypoints[k];
@@ -146,19 +148,20 @@ inline bool save_3d_csv(const std::string &path, const std::string &skeleton_nam
     std::ofstream f(path);
     if (!f) return false;
 
-    // Header lines
-    f << "#red_csv v2\n";
+    // Header lines. See save_2d_csv for the v3 change.
+    f << "#red_csv v3\n";
     f << "#skeleton " << skeleton_name << "\n";
 
-    // Column header: frame, then groups of (x, y, z, c) per keypoint
-    f << "frame";
+    // Column header: frame, instance, then groups of (x, y, z, c) per keypoint
+    f << "frame,instance";
     for (int k = 0; k < num_nodes; ++k)
         f << ",x" << k << ",y" << k << ",z" << k << ",c" << k;
     f << "\n";
 
-    // Data rows
-    for (const auto &[frame, fa] : amap) {
-        f << frame;
+    // One row per animal per frame.
+    for (const auto &[frame, fis] : amap)
+      for (const auto &fa : fis) {
+        f << frame << "," << fa.instance_id;
         for (int k = 0; k < num_nodes; ++k) {
             if (k < (int)fa.kp3d.size() && fa.kp3d[k].triangulated) {
                 const auto &kp = fa.kp3d[k];
@@ -229,11 +232,15 @@ inline bool load_3d_csv(const std::string &path, AnnotationMap &amap,
     }
 
     std::string line;
+    // See load_2d_csv: the column header says whether there is an instance.
+    bool has_instance = false;
     while (std::getline(fin, line)) {
         // Skip comment lines
         if (!line.empty() && line[0] == '#') continue;
-        // Skip column header
-        if (line.size() >= 6 && line.substr(0, 6) == "frame,") continue;
+        if (line.size() >= 6 && line.substr(0, 6) == "frame,") {
+            has_instance = line.rfind("frame,instance", 0) == 0;
+            continue;
+        }
 
         if (line.empty()) continue;
 
@@ -242,7 +249,15 @@ inline bool load_3d_csv(const std::string &path, AnnotationMap &amap,
         if (!parse_csv_double(ptr, frame_d)) continue;
         u32 frame = (u32)frame_d;
 
-        FrameAnnotation &fa = get_or_create_frame(amap, frame, num_nodes, num_cameras);
+        int instance = 0;
+        if (has_instance) {
+            double inst_d;
+            if (!parse_csv_double(ptr, inst_d)) continue;
+            instance = (int)inst_d;
+        }
+
+        FrameAnnotation &fa =
+            get_or_create_frame(amap, frame, num_nodes, num_cameras, instance);
 
         // Read groups of (x, y, z, c) per keypoint
         for (int k = 0; k < num_nodes; ++k) {
@@ -278,11 +293,18 @@ inline bool load_2d_csv(const std::string &path, AnnotationMap &amap,
     }
 
     std::string line;
+    // v3 carries an instance column; v2 and earlier do not. Detected from the
+    // column header rather than the version comment, so the file describes
+    // itself and a hand-edited comment cannot misdirect the parse.
+    bool has_instance = false;
     while (std::getline(fin, line)) {
         // Skip comment lines
         if (!line.empty() && line[0] == '#') continue;
-        // Skip column header
-        if (line.size() >= 6 && line.substr(0, 6) == "frame,") continue;
+        // Column header: note the layout, then skip it
+        if (line.size() >= 6 && line.substr(0, 6) == "frame,") {
+            has_instance = line.rfind("frame,instance", 0) == 0;
+            continue;
+        }
 
         if (line.empty()) continue;
 
@@ -291,7 +313,15 @@ inline bool load_2d_csv(const std::string &path, AnnotationMap &amap,
         if (!parse_csv_double(ptr, frame_d)) continue;
         u32 frame = (u32)frame_d;
 
-        FrameAnnotation &fa = get_or_create_frame(amap, frame, num_nodes, num_cameras);
+        int instance = 0;
+        if (has_instance) {
+            double inst_d;
+            if (!parse_csv_double(ptr, inst_d)) continue;
+            instance = (int)inst_d;
+        }
+
+        FrameAnnotation &fa =
+            get_or_create_frame(amap, frame, num_nodes, num_cameras, instance);
         if (cam_idx >= (int)fa.cameras.size()) continue;
         auto &cam = fa.cameras[cam_idx];
 

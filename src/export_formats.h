@@ -166,16 +166,16 @@ inline void split_train_val(const std::vector<u32> &frames, float train_ratio,
 // ── Get annotated frames from AnnotationMap (any annotation type) ──
 inline std::vector<u32> get_labeled_frames(const AnnotationMap &amap) {
     std::vector<u32> frames;
-    for (const auto &[f, fa] : amap)
-        if (frame_has_any_labels(fa)) frames.push_back(f);
+    for (const auto &[f, fis] : amap)
+        if (any_instance_has_labels(fis)) frames.push_back(f);
     return frames;
 }
 
 // ── Get frames with keypoints only (for keypoint-only exporters) ──
 inline std::vector<u32> get_keypoint_frames(const AnnotationMap &amap) {
     std::vector<u32> frames;
-    for (const auto &[f, fa] : amap)
-        if (frame_has_any_keypoints(fa)) frames.push_back(f);
+    for (const auto &[f, fis] : amap)
+        if (any_instance_has_keypoints(fis)) frames.push_back(f);
     return frames;
 }
 
@@ -235,7 +235,8 @@ inline nlohmann::json build_coco_json(
     for (u32 frame : frames) {
         auto it = amap.find(frame);
         if (it == amap.end()) continue;
-        const auto &fa = it->second;
+        if (it->second.empty()) continue;
+        const auto &fa = it->second.front();
 
         std::string filename = cam_name + "/Frame_" + std::to_string(frame) + ".jpg";
         nlohmann::json img;
@@ -413,7 +414,8 @@ inline bool export_yolo(const ExportConfig &cfg, const AnnotationMap &amap,
             for (u32 frame : frames) {
                 auto it = amap.find(frame);
                 if (it == amap.end()) continue;
-                const auto &fa = it->second;
+                if (it->second.empty()) continue;
+                const auto &fa = it->second.front();
 
                 if (ci >= (int)fa.cameras.size()) continue;
                 const auto &c2d = fa.cameras[ci];
@@ -560,7 +562,8 @@ inline bool export_deeplabcut(const ExportConfig &cfg, const AnnotationMap &amap
         for (u32 frame : labeled) {
             auto it = amap.find(frame);
             if (it == amap.end()) continue;
-            const auto &fa = it->second;
+            if (it->second.empty()) continue;
+            const auto &fa = it->second.front();
             if (ci >= (int)fa.cameras.size()) continue;
             const auto &c2d = fa.cameras[ci];
 
