@@ -18,6 +18,10 @@ struct LabelingToolState {
     std::time_t last_saved = static_cast<std::time_t>(-1);
     bool save_requested = false;
     bool timeline_reset_pending = false;
+    // Height of the keypoints table, in pixels. 0 = follow the window: take
+    // whatever the frame overview below does not need. Set by dragging the
+    // splitter under the table; double-clicking it goes back to 0.
+    float table_height = 0.0f;
 };
 
 inline void DrawLabelingToolWindow(
@@ -387,10 +391,10 @@ inline void DrawLabelingToolWindow(
                 bbox_frames.push_back({(int)fnum, any_bbox, any_obb});
         }
 
-        // === Merge into one cell per frame (for the strip below) ===
-        // Three separate grids meant a frame that was annotated, boxed and
-        // flagged showed up as three squares in three places. One cell per
-        // frame instead, with the state drawn into it.
+        // === Merge into one cell per frame ===
+        // One record per frame rather than one per annotation type, so the
+        // counts and the unfinished list below do not double-count a frame
+        // that is annotated, boxed and flagged all at once.
         struct FrameCell {
             int frame = 0;
             int kp_state = 0;
@@ -398,7 +402,6 @@ inline void DrawLabelingToolWindow(
             bool needs_fix = false;
             bool has_bbox = false;
             bool has_obb = false;
-            bool present = true;   // false = frame carries no annotation at all
         };
         std::map<int, FrameCell> cell_by_frame;
         for (auto &lf : labeled_frames) {
@@ -419,13 +422,12 @@ inline void DrawLabelingToolWindow(
         cells.reserve(cell_by_frame.size());
         for (auto &[f, c] : cell_by_frame) cells.push_back(c);
 
-        // === What still needs work, and what the timeline should show ===
-        // Once nearly every frame is labelled, drawing the labels is noise:
-        // 8000 frames across ~250px is 0.03px each, so the one frame that is
-        // still yellow is invisible among the green, and a frame that was
-        // never labelled has no tick at all -- you are hunting an absence. So
-        // at that density the timeline inverts and plots only the exceptions,
-        // which puts a single unfinished frame on an otherwise empty axis.
+        // === What still needs work ===
+        // 8000 frames across ~250px of timeline is 0.03px each, so the one
+        // frame that is still yellow is invisible among the green -- and one
+        // that was never labelled has no annotation entry, so it has no tick
+        // at all and you are hunting an absence. A button that walks the list
+        // is the only thing that reliably reaches it.
         const int total_frames = dc_context->estimated_num_frames;
         // "Every frame", with slack: an image set can be off by one or two
         // against the estimated count.
@@ -460,20 +462,6 @@ inline void DrawLabelingToolWindow(
                              unfinished.end());
         }
 
-        enum TimelineMode { TL_NONE, TL_LABELS, TL_UNFINISHED };
-        TimelineMode tl_mode = TL_NONE;
-        if (total_frames > 0 && !cells.empty()) {
-            if (!near_total)             tl_mode = TL_LABELS;
-            else if (!unfinished.empty()) tl_mode = TL_UNFINISHED;
-            // near-total and nothing unfinished: everything is done, and a
-            // solid bar of one colour says less than the counts above it.
-        }
-
-        // Two rows of frame cells normally; when the timeline is dropped its
-        // height goes to the strip, which is what you navigate a fully
-        // labelled set with anyway.
-        const int strip_rows = (tl_mode == TL_NONE) ? 5 : 2;
-
         // Annotation type colors, shared by the section labels and the
         // timeline ticks.
         const ImVec4 color_green(0.2f, 0.8f, 0.3f, 1.0f);
@@ -483,30 +471,61 @@ inline void DrawLabelingToolWindow(
         const ImVec4 color_red(0.90f, 0.28f, 0.28f, 1.0f);
 
         // === Keypoints table ===
-        // Takes whatever height is left once the frame overview below has
-        // been accounted for, so the table grows with the window instead of
-        // being pinned to a guessed size.
+        // Height follows the window by default -- whatever the frame overview
+        // below does not need -- until you drag the splitter under it, after
+        // which your height wins. Double-click the splitter to go back.
         {
             const float line_h = ImGui::GetTextLineHeightWithSpacing();
             int overview_lines = 1;  // "Keypoint Labels" is always shown
             if (!needs_fix_frames.empty()) overview_lines++;
             if (!bbox_frames.empty())      overview_lines++;
-            const float timeline_block = (tl_mode != TL_NONE) ? 78.0f : 0.0f;
-            // Header line + the strip's rows of 16px cells.
-            const float strip_block =
-                cells.empty()
-                    ? 0.0f
-                    : line_h + strip_rows * (16.0f +
-                                             ImGui::GetStyle().ItemSpacing.y);
+            if (!unfinished.empty())       overview_lines++;
+            const float timeline_block =
+                (dc_context->estimated_num_frames > 0) ? 78.0f : 0.0f;
+            const float splitter_h = 6.0f;
             const float reserved =
-                overview_lines * line_h + strip_block + timeline_block +
+                overview_lines * line_h + timeline_block + splitter_h +
                 ImGui::GetStyle().ItemSpacing.y * 4.0f;
-            const float table_h =
-                ImMax(90.0f, ImGui::GetContentRegionAvail().y - reserved);
-            DrawKeypointsTable(ctx, table_h);
-        }
 
-        ImGui::Separator();
+            const float avail = ImGui::GetContentRegionAvail().y;
+            const float auto_h = avail - reserved;
+            float table_h = (state.table_height > 0.0f) ? state.table_height
+                                                        : auto_h;
+            // Clamp for display only -- the stored height is left alone, so
+            // shrinking the window and growing it again gets it back.
+            table_h = ImClamp(table_h, 60.0f,
+                              ImMax(60.0f, avail - splitter_h - line_h));
+
+            DrawKeypointsTable(ctx, table_h);
+
+            // Splitter. Dragging seeds the stored height from the height
+            // actually in use, so the first drag from auto does not jump.
+            ImGui::InvisibleButton("##kp_table_splitter",
+                                   ImVec2(-1.0f, splitter_h));
+            const bool split_active = ImGui::IsItemActive();
+            const bool split_hover = ImGui::IsItemHovered();
+            if (split_active || split_hover)
+                ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
+            if (split_active)
+                state.table_height = table_h + ImGui::GetIO().MouseDelta.y;
+            if (split_hover && ImGui::IsMouseDoubleClicked(0))
+                state.table_height = 0.0f;
+            if (split_hover && !split_active)
+                ImGui::SetTooltip("Drag to resize the table, double-click to "
+                                  "fit the window");
+            {
+                ImVec2 mn = ImGui::GetItemRectMin();
+                ImVec2 mx = ImGui::GetItemRectMax();
+                float y = (mn.y + mx.y) * 0.5f;
+                ImU32 col = ImGui::GetColorU32(
+                    split_active  ? ImGuiCol_SeparatorActive
+                    : split_hover ? ImGuiCol_SeparatorHovered
+                                  : ImGuiCol_Separator);
+                ImGui::GetWindowDrawList()->AddLine(ImVec2(mn.x, y),
+                                                    ImVec2(mx.x, y), col,
+                                                    split_active ? 3.0f : 2.0f);
+            }
+        }
 
         // === Frame overview ===
         // Counts and jump buttons per annotation type. Below them: a strip of
@@ -600,174 +619,11 @@ inline void DrawLabelingToolWindow(
             jump_buttons(bbox_pn, "bbox");
         }
 
-        // === Nearby frames ===
-        // The squares are back, but windowed: as many as fit the panel in two
-        // rows, centred on where you are. A cell is a real click target with
-        // the frame number in its tooltip, which is what the timeline cannot
-        // give you -- at full zoom a frame there is well under a pixel wide.
-        // The timeline below keeps the whole-recording view.
-        if (!cells.empty()) {
-            const ImVec2 cell_size(16, 16);
-            const float gap = ImGui::GetStyle().ItemSpacing.x;
-            const float avail_w = ImGui::GetContentRegionAvail().x;
-            const ImU32 white = IM_COL32(255, 255, 255, 255);
-            const ImU32 yellow_u32 = ImGui::ColorConvertFloat4ToU32(color_yellow);
-            const ImU32 purple_u32 = ImGui::ColorConvertFloat4ToU32(color_purple);
-            const ImU32 green_u32  = ImGui::ColorConvertFloat4ToU32(color_green);
-            const ImU32 lilac_u32  = ImGui::ColorConvertFloat4ToU32(color_lilac);
-            const ImU32 red_u32    = ImGui::ColorConvertFloat4ToU32(color_red);
-            const ImU32 empty_u32  = ImGui::GetColorU32(ImGuiCol_FrameBg);
-
-            const int per_row = ImMax(
-                1, (int)((avail_w + gap) / (cell_size.x + gap)));
-
-            // What the strip walks. Once nearly every frame is annotated it
-            // walks the frame RANGE, so a frame that was never labelled shows
-            // as a hole among its neighbours -- walking the annotated frames
-            // there would step 3999 -> 4001 and hide the very thing you are
-            // looking for. When labels are sparse there is nothing for a hole
-            // to stand out against, so it walks the annotated frames.
-            std::vector<FrameCell> items;
-            if (near_total) {
-                const int window_n =
-                    ImMin(total_frames, per_row * strip_rows);
-                int first = ImClamp(current_frame_num - window_n / 2, 0,
-                                    ImMax(0, total_frames - window_n));
-                for (int f = first; f < ImMin(total_frames, first + window_n);
-                     ++f) {
-                    auto it = cell_by_frame.find(f);
-                    if (it != cell_by_frame.end()) {
-                        items.push_back(it->second);
-                    } else {
-                        FrameCell blank;
-                        blank.frame = f;
-                        blank.present = false;
-                        items.push_back(blank);
-                    }
-                }
-            } else {
-                const int window_n =
-                    ImMin((int)cells.size(), per_row * strip_rows);
-                // Centre on the current frame -- or, if it is not annotated,
-                // on the first annotated frame at or after it, so scrubbing
-                // through unlabelled stretches still slides the window along.
-                int cur_idx = (int)(std::lower_bound(
-                                        cells.begin(), cells.end(),
-                                        current_frame_num,
-                                        [](const FrameCell &c, int f) {
-                                            return c.frame < f;
-                                        }) - cells.begin());
-                int start = ImClamp(cur_idx - window_n / 2, 0,
-                                    ImMax(0, (int)cells.size() - window_n));
-                items.assign(cells.begin() + start,
-                             cells.begin() + start + window_n);
-            }
-            if (items.empty()) items.push_back(FrameCell{});
-
-            const int window_n = (int)items.size();
-            const int shown_total = near_total ? total_frames : (int)cells.size();
-            if (window_n < shown_total)
-                ImGui::TextDisabled("Nearby frames (%d-%d of %d)",
-                                    items.front().frame, items.back().frame,
-                                    shown_total);
-            else
-                ImGui::TextDisabled("Frames (%d)", shown_total);
-
-            for (int i = 0; i < window_n; ++i) {
-                const FrameCell &c = items[i];
-                ImGui::PushID(c.frame);
-
-                bool is_current = (c.frame == current_frame_num);
-                if (is_current) {
-                    ImVec2 pos = ImGui::GetCursorScreenPos();
-                    ImGui::GetWindowDrawList()->AddRect(
-                        ImVec2(pos.x - 1, pos.y - 1),
-                        ImVec2(pos.x + cell_size.x + 1, pos.y + cell_size.y + 1),
-                        white, 0.0f, 0, 2.0f);
-                }
-
-                if (ImGui::InvisibleButton("##cell", cell_size)) {
-                    ps.play_video = false;
-                    seek_all_cameras(scene, c.frame,
-                                     dc_context->video_fps, ps, true);
-                }
-
-                ImVec2 mn = ImGui::GetItemRectMin();
-                ImVec2 mx = ImGui::GetItemRectMax();
-                ImDrawList *dl = ImGui::GetWindowDrawList();
-
-                // Fill: keypoint state, or red if this frame still needs a
-                // fix. An unlabelled frame is left as a dark hole with a
-                // hairline border -- among a row of solid green cells that is
-                // the most legible way to say "nothing here".
-                ImU32 fill = empty_u32;
-                if (c.needs_fix) fill = red_u32;
-                else if (c.has_kp)
-                    fill = c.kp_state == KP_GREEN    ? green_u32
-                           : c.kp_state == KP_PURPLE ? purple_u32
-                                                     : yellow_u32;
-                dl->AddRectFilled(mn, mx, fill);
-                if (!c.present)
-                    dl->AddRect(mn, mx, ImGui::GetColorU32(ImGuiCol_Border));
-
-                // BBox: purple outline. OBB: lilac diamond. Both drawn over
-                // the fill so a frame carrying boxes and keypoints reads as
-                // both rather than picking one.
-                if (c.has_bbox)
-                    dl->AddRect(ImVec2(mn.x + 1, mn.y + 1),
-                                ImVec2(mx.x - 1, mx.y - 1),
-                                purple_u32, 0.0f, 0, 1.5f);
-                if (c.has_obb) {
-                    float cx = (mn.x + mx.x) * 0.5f, cy = (mn.y + mx.y) * 0.5f;
-                    float hx = (mx.x - mn.x) * 0.5f - 1.5f;
-                    float hy = (mx.y - mn.y) * 0.5f - 1.5f;
-                    ImVec2 pts[4] = {ImVec2(cx, cy - hy), ImVec2(cx + hx, cy),
-                                     ImVec2(cx, cy + hy), ImVec2(cx - hx, cy)};
-                    dl->AddPolyline(pts, 4, lilac_u32, ImDrawFlags_Closed, 1.5f);
-                }
-
-                if (ImGui::IsItemHovered()) {
-                    char tip[160];
-                    // snprintf returns what it WOULD have written, so a running
-                    // offset has to be clamped or truncation walks it past the
-                    // end of the buffer.
-                    auto adv = [&](int off, int n) {
-                        return ImMin(off + ImMax(n, 0), (int)sizeof(tip) - 1);
-                    };
-                    int off = adv(0, snprintf(tip, sizeof(tip), "Frame %d",
-                                              c.frame));
-                    if (!c.present)
-                        off = adv(off, snprintf(tip + off, sizeof(tip) - off,
-                                                " \xE2\x80\x94 not labelled"));
-                    else if (c.needs_fix)
-                        off = adv(off, snprintf(tip + off, sizeof(tip) - off,
-                                                " \xE2\x80\x94 needs fixing"));
-                    else if (c.has_kp)
-                        off = adv(off, snprintf(
-                            tip + off, sizeof(tip) - off, " \xE2\x80\x94 %s",
-                            c.kp_state == KP_GREEN
-                                ? "complete (all placed & triangulated)"
-                                : c.kp_state == KP_PURPLE
-                                      ? "all placed keypoints triangulated"
-                                      : "some keypoints not triangulated"));
-                    if (c.has_bbox && c.has_obb)
-                        snprintf(tip + off, sizeof(tip) - off, " + BBox, OBB");
-                    else if (c.has_bbox)
-                        snprintf(tip + off, sizeof(tip) - off, " + BBox");
-                    else if (c.has_obb)
-                        snprintf(tip + off, sizeof(tip) - off, " + OBB");
-                    ImGui::SetTooltip("%s", tip);
-                }
-
-                ImGui::PopID();
-                if (i + 1 < window_n && (i + 1) % per_row != 0)
-                    ImGui::SameLine(0, gap);
-            }
-            ImGui::Spacing();
-        }
-
         // === Timeline minimap (ImPlot — all annotation types) ===
-        if (tl_mode != TL_NONE) {
+        const bool has_any_annotations = !labeled_frames.empty() ||
+                                         !bbox_frames.empty() ||
+                                         !needs_fix_frames.empty();
+        if (total_frames > 0 && has_any_annotations) {
             ImGui::Spacing();
 
             // Reserve space for rotated "Timeline" label on the left
@@ -779,13 +635,11 @@ inline void DrawLabelingToolWindow(
             // Draw rotated "Timeline" label on the left
             {
                 ImVec2 label_pos = ImGui::GetCursorScreenPos();
-                const char *tl_label =
-                    (tl_mode == TL_UNFINISHED) ? "Unfinished" : "Timeline";
-                float text_w = ImGui::CalcTextSize(tl_label).x;
+                float text_w = ImGui::CalcTextSize("Timeline").x;
                 ImVec2 tp(label_pos.x + (label_margin - label_font) * 0.5f,
                           label_pos.y + (timeline_h + text_w) * 0.5f);
                 ImPlot::AddTextVertical(ImGui::GetWindowDrawList(), tp,
-                    ImGui::GetColorU32(ImGuiCol_Text), tl_label);
+                    ImGui::GetColorU32(ImGuiCol_Text), "Timeline");
                 ImGui::Dummy(ImVec2(label_margin, timeline_h));
                 ImGui::SameLine();
             }
@@ -795,34 +649,22 @@ inline void DrawLabelingToolWindow(
                 purple_x, lilac_x, needs_fix_x;
             for (auto &nf : needs_fix_frames)
                 needs_fix_x.push_back((double)nf.frame);
-            std::vector<double> unfinished_x;
-            if (tl_mode == TL_UNFINISHED) {
-                // Only the exceptions. Plotting the 7999 finished frames as
-                // well is what made the one that is not invisible.
-                for (int f : unfinished) unfinished_x.push_back((double)f);
-            } else {
-                for (auto &lf : labeled_frames) {
-                    if (lf.state == KP_GREEN)
-                        green_x.push_back((double)lf.frame);
-                    else if (lf.state == KP_PURPLE)
-                        kp_purple_x.push_back((double)lf.frame);
-                    else kp_yellow_x.push_back((double)lf.frame);
-                }
-                for (auto &bf : bbox_frames) {
-                    if (bf.has_bbox) purple_x.push_back((double)bf.frame);
-                    if (bf.has_obb) lilac_x.push_back((double)bf.frame);
-                }
+            for (auto &lf : labeled_frames) {
+                if (lf.state == KP_GREEN) green_x.push_back((double)lf.frame);
+                else if (lf.state == KP_PURPLE)
+                    kp_purple_x.push_back((double)lf.frame);
+                else kp_yellow_x.push_back((double)lf.frame);
+            }
+            for (auto &bf : bbox_frames) {
+                if (bf.has_bbox) purple_x.push_back((double)bf.frame);
+                if (bf.has_obb) lilac_x.push_back((double)bf.frame);
             }
 
             // Collect all annotated frames for click-to-seek
             std::vector<int> all_annotated_frames;
-            if (tl_mode == TL_UNFINISHED) {
-                all_annotated_frames = unfinished;
-            } else {
-                for (auto &lf : labeled_frames) all_annotated_frames.push_back(lf.frame);
-                for (auto &bf : bbox_frames) all_annotated_frames.push_back(bf.frame);
-                for (auto &nf : needs_fix_frames) all_annotated_frames.push_back(nf.frame);
-            }
+            for (auto &lf : labeled_frames) all_annotated_frames.push_back(lf.frame);
+            for (auto &bf : bbox_frames) all_annotated_frames.push_back(bf.frame);
+            for (auto &nf : needs_fix_frames) all_annotated_frames.push_back(nf.frame);
             std::sort(all_annotated_frames.begin(), all_annotated_frames.end());
             all_annotated_frames.erase(
                 std::unique(all_annotated_frames.begin(), all_annotated_frames.end()),
@@ -880,12 +722,6 @@ inline void DrawLabelingToolWindow(
                 if (!lilac_x.empty()) {
                     ImPlot::PlotInfLines("##obb", lilac_x.data(), (int)lilac_x.size(),
                                          red_line_spec(color_lilac, 2.0f));
-                }
-
-                if (!unfinished_x.empty()) {
-                    ImPlot::PlotInfLines("##unfinished", unfinished_x.data(),
-                                         (int)unfinished_x.size(),
-                                         red_line_spec(color_yellow, 2.0f));
                 }
 
                 // Needs-improvement ticks (red), drawn last so a frame that
