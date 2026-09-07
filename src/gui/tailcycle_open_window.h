@@ -354,12 +354,13 @@ inline void DrawTailcycleDatasetWindow(TailcycleOpenState &state,
         if (ImGui::Button("Browse##tc_open", ImVec2(-1, 0)))
             tailcycle_open_browse(state);
 
-        if (state.sessions.empty() && !state.root.empty())
+        if (state.sessions.empty() && !state.root.empty()) {
             ImGui::PushTextWrapPos(ImGui::GetCursorPosX() +
                                    ImGui::GetContentRegionAvail().x);
             ImGui::TextDisabled("Nothing here \xE2\x80\x94 expected "
                                 "<split>/<session>/session.toml");
             ImGui::PopTextWrapPos();
+        }
 
         // === Sessions ===
         if (!state.sessions.empty()) {
