@@ -132,7 +132,7 @@ inline void HandleMainMenuDialogs(
                 ImGuiFileDialog::Instance()->GetCurrentPath();
             user_settings.default_media_root_path = chosen;
             pm.media_folder = chosen;
-            annot_state.video_folder = chosen;
+            annot_state.media_folder = chosen;
             save_user_settings(user_settings);
         }
         ImGuiFileDialog::Instance()->Close();

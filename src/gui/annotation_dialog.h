@@ -10,30 +10,16 @@
 #include <string>
 #include <vector>
 
-inline std::vector<std::string> discover_mp4_cameras(const std::string &folder) {
-    namespace fs = std::filesystem;
-    std::vector<std::string> cameras;
-    if (folder.empty() || !fs::is_directory(folder))
-        return cameras;
-    for (const auto &entry : fs::directory_iterator(folder)) {
-        if (!entry.is_regular_file()) continue;
-        auto ext = entry.path().extension().string();
-        // case-insensitive .mp4 check
-        if (ext.size() == 4 &&
-            (ext[1] == 'm' || ext[1] == 'M') &&
-            (ext[2] == 'p' || ext[2] == 'P') &&
-            (ext[3] == '4')) {
-            cameras.push_back(entry.path().stem().string());
-        }
-    }
-    std::sort(cameras.begin(), cameras.end());
-    return cameras;
-}
+// Discovery lives in media_loader.h now: a folder may hold videos, a
+// directory per camera, or camera-prefixed image files, and which one it is
+// has to be recorded on the project so reloading can do the same thing.
 
 struct AnnotationDialogState {
     bool show = false;
+    bool was_shown = false;   // edge-detect the frame the dialog opens on
+    MediaKind media_kind = MediaKind::Video;
     bool two_d_mode = false; // 2D-only project: no calibration, no triangulation
-    std::string video_folder;
+    std::string media_folder;
     std::vector<std::string> discovered_cameras;
     std::vector<bool> camera_selected;
     std::string status;
@@ -59,8 +45,9 @@ inline void DrawAnnotationDialog(AnnotationDialogState &state,
         if (ImGuiFileDialog::Instance()->IsOk()) {
             std::filesystem::path chosen(
                 ImGuiFileDialog::Instance()->GetCurrentPath());
-            state.video_folder = chosen.string();
-            state.discovered_cameras = discover_mp4_cameras(state.video_folder);
+            state.media_folder = chosen.string();
+            state.discovered_cameras =
+                discover_media_cameras(state.media_folder, &state.media_kind);
             state.camera_selected.assign(state.discovered_cameras.size(), true);
             if (pm.project_name.empty())
                 pm.project_name = chosen.filename().string();
@@ -83,11 +70,31 @@ inline void DrawAnnotationDialog(AnnotationDialogState &state,
         ImGuiFileDialog::Instance()->Close();
     }
 
+    // Seed the folder from whatever media is already open, the first frame
+    // the dialog appears. Creating a project for footage you are looking at
+    // was the whole point of File > Create Project, which could only ever wrap
+    // the open media and was greyed out otherwise; here it is a starting
+    // value, and pointing the field somewhere else switches media instead of
+    // being impossible. Only when the field is empty, so it never overwrites
+    // a folder the user typed and then reopened the dialog on.
+    if (state.show && !state.was_shown && state.media_folder.empty() &&
+        ctx.ps.video_loaded && !pm.media_folder.empty()) {
+        state.media_folder = pm.media_folder;
+        state.discovered_cameras =
+                discover_media_cameras(state.media_folder, &state.media_kind);
+        state.camera_selected.assign(state.discovered_cameras.size(), true);
+        if (pm.project_name.empty())
+            pm.project_name =
+                std::filesystem::path(state.media_folder).filename().string();
+    }
+    state.was_shown = state.show;
+
     if (!state.show) return;
 
     // Reflect the chosen mode onto the project every frame while shown. In 2D
     // mode there is no calibration / camera model.
     pm.annotation_2d = state.two_d_mode;
+    pm.media_kind = media_kind_str(state.media_kind);
     if (state.two_d_mode) {
         pm.calibration_folder.clear();
         pm.telecentric = false;
@@ -122,7 +129,7 @@ inline void DrawAnnotationDialog(AnnotationDialogState &state,
             pm.annotation_2d = false;
             // Reset dialog state
             state.status.clear();
-            state.video_folder.clear();
+            state.media_folder.clear();
             state.discovered_cameras.clear();
             state.camera_selected.clear();
             ImGui::End();
@@ -155,21 +162,22 @@ inline void DrawAnnotationDialog(AnnotationDialogState &state,
 
             // ---- Video Folder ----
             ImGui::TableNextRow();
-            LabelCell("Video Folder");
+            LabelCell("Media Folder");
             ImGui::TableSetColumnIndex(1);
             ImGui::SetNextItemWidth(-FLT_MIN);
-            if (ImGui::InputText("##annot_video_folder", &state.video_folder)) {
-                state.discovered_cameras = discover_mp4_cameras(state.video_folder);
+            if (ImGui::InputText("##annot_video_folder", &state.media_folder)) {
+                state.discovered_cameras =
+                discover_media_cameras(state.media_folder, &state.media_kind);
                 state.camera_selected.assign(state.discovered_cameras.size(), true);
             }
             ImGui::TableSetColumnIndex(2);
             if (ImGui::Button("Browse##annot_video")) {
                 IGFD::FileDialogConfig cfg;
                 cfg.countSelectionMax = 1;
-                cfg.path = state.video_folder;
+                cfg.path = state.media_folder;
                 cfg.flags = ImGuiFileDialogFlags_Modal;
                 ImGuiFileDialog::Instance()->OpenDialog(
-                    "ChooseAnnotVideoDir", "Choose Video Folder", nullptr, cfg);
+                    "ChooseAnnotVideoDir", "Choose Media Folder", nullptr, cfg);
             }
 
             // ---- Cameras Found (checkboxes) ----
@@ -184,7 +192,8 @@ inline void DrawAnnotationDialog(AnnotationDialogState &state,
             }
             ImGui::TableSetColumnIndex(1);
             if (state.discovered_cameras.empty()) {
-                ImGui::TextDisabled("(none — select a folder with .mp4 files)");
+                ImGui::TextDisabled("(none \xE2\x80\x94 expects .mp4 files, a "
+                                    "directory per camera, or <cam>_<frame> images)");
             } else {
                 // Vertical 2-column layout for camera checkboxes
                 int n_cams = (int)state.discovered_cameras.size();
@@ -342,9 +351,9 @@ inline void DrawAnnotationDialog(AnnotationDialogState &state,
                 if (ImGui::Button("Browse##annot_calib")) {
                     IGFD::FileDialogConfig cfg;
                     cfg.countSelectionMax = 1;
-                    cfg.path = state.video_folder.empty()
+                    cfg.path = state.media_folder.empty()
                                    ? default_browse_path
-                                   : state.video_folder;
+                                   : state.media_folder;
                     cfg.flags = ImGuiFileDialogFlags_Modal;
                     ImGuiFileDialog::Instance()->OpenDialog(
                         "ChooseAnnotCalib", "Select Calibration Folder", nullptr, cfg);
@@ -380,7 +389,7 @@ inline void DrawAnnotationDialog(AnnotationDialogState &state,
         ImGui::BeginDisabled(!annot_ok);
         if (ImGui::Button(create_label)) {
             state.status.clear();
-            pm.media_folder = state.video_folder;
+            pm.media_folder = state.media_folder;
             // Only include selected cameras
             pm.camera_names.clear();
             for (size_t i = 0; i < state.discovered_cameras.size(); i++)

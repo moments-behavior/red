@@ -342,7 +342,7 @@ int main(int argc, char **argv) {
     win.export_win.jpeg_quality = user_settings.jarvis_jpeg_quality;
 
 
-    win.annotation.video_folder = user_settings.default_media_root_path.empty()
+    win.annotation.media_folder = user_settings.default_media_root_path.empty()
                                      ? media_root_dir
                                      : user_settings.default_media_root_path;
 

@@ -46,6 +46,9 @@ struct ProjectManager {
     std::vector<std::string> camera_names;
     std::string skeleton_name;
     std::string media_folder;
+    // "video" | "images_per_camera" | "images_flat". Reloading assumed video
+    // unconditionally, so an image project came back empty.
+    std::string media_kind = "video";
     bool telecentric = false; // true if using telecentric DLT calibration
     bool annotation_2d = false; // 2D-only: single/uncalibrated camera(s), no
                                 // calibration / triangulation / 3D view
@@ -141,6 +144,7 @@ inline void to_json(nlohmann::json &j, const ProjectManager &p) {
                        {"camera_names", p.camera_names},
                        {"skeleton_name", p.skeleton_name},
                        {"media_folder", p.media_folder},
+                       {"media_kind", p.media_kind},
                        {"telecentric", p.telecentric},
                        {"annotation_2d", p.annotation_2d},
                        {"sync_fix_enabled", p.sync_fix_enabled},
@@ -163,6 +167,7 @@ inline void from_json(const nlohmann::json &j, ProjectManager &p) {
     p.camera_names = j.value("camera_names", std::vector<std::string>{});
     p.skeleton_name = j.value("skeleton_name", std::string{});
     p.media_folder = j.value("media_folder", std::string{});
+    p.media_kind = j.value("media_kind", std::string{"video"});
     p.telecentric = j.value("telecentric", false);
     p.annotation_2d = j.value("annotation_2d", false);
     p.sync_fix_enabled = j.value("sync_fix_enabled", false);

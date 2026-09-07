@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <set>
 #include <map>
 #include <string>
 #include <thread>
@@ -39,6 +40,113 @@ inline bool enabled() {
 }  // namespace load_timing
 
 // Tear down existing media (decoder threads, demuxers, scene memory)
+// What kind of media a folder holds. A project has to reload its media long
+// after it was created, and "video" was assumed everywhere -- so an image
+// project could be created and then came back as an empty video project.
+enum class MediaKind { Video, ImagesPerCamera, ImagesFlat };
+
+inline const char *media_kind_str(MediaKind k) {
+    switch (k) {
+    case MediaKind::ImagesPerCamera: return "images_per_camera";
+    case MediaKind::ImagesFlat:      return "images_flat";
+    case MediaKind::Video:
+    default:                         return "video";
+    }
+}
+
+inline MediaKind media_kind_from_str(const std::string &s) {
+    if (s == "images_per_camera") return MediaKind::ImagesPerCamera;
+    if (s == "images_flat")       return MediaKind::ImagesFlat;
+    return MediaKind::Video;
+}
+
+inline bool is_image_ext(const std::string &ext) {
+    std::string e;
+    for (char c : ext) e += (char)std::tolower((unsigned char)c);
+    return e == ".jpg" || e == ".jpeg" || e == ".png" || e == ".tif" ||
+           e == ".tiff" || e == ".bmp";
+}
+
+// The flat counterpart of scan_per_camera_dirs: <root>/<cam>_<name>.<ext>,
+// which is the shape File > Open Images produces.
+inline bool scan_flat_images(const std::string &root,
+                             std::map<std::string, std::string> &out,
+                             std::string *err = nullptr) {
+    namespace fs = std::filesystem;
+    if (!fs::is_directory(root)) {
+        if (err) *err = "Not a directory: " + root;
+        return false;
+    }
+    for (const auto &f : fs::directory_iterator(root)) {
+        if (!f.is_regular_file()) continue;
+        if (!is_image_ext(f.path().extension().string())) continue;
+        const std::string name = f.path().filename().string();
+        if (name.find('_') == std::string::npos) continue;
+        out[name] = f.path().string();
+    }
+    if (out.empty() && err)
+        *err = "No <camera>_<frame> images directly under " + root;
+    return !out.empty();
+}
+
+// The cameras a folder offers, and how they are laid out. Checked in the order
+// a person would: videos, then a directory per camera, then camera-prefixed
+// files. Returns empty if the folder holds none of those.
+inline std::vector<std::string> discover_media_cameras(const std::string &folder,
+                                                       MediaKind *kind_out) {
+    namespace fs = std::filesystem;
+    std::vector<std::string> cams;
+    MediaKind kind = MediaKind::Video;
+    if (folder.empty() || !fs::is_directory(folder)) {
+        if (kind_out) *kind_out = kind;
+        return cams;
+    }
+
+    for (const auto &e : fs::directory_iterator(folder)) {
+        if (!e.is_regular_file()) continue;
+        std::string ext = e.path().extension().string();
+        for (char &c : ext) c = (char)std::tolower((unsigned char)c);
+        if (ext == ".mp4") cams.push_back(e.path().stem().string());
+    }
+    if (!cams.empty()) {
+        std::sort(cams.begin(), cams.end());
+        if (kind_out) *kind_out = MediaKind::Video;
+        return cams;
+    }
+
+    // A directory per camera, each holding that camera's frames.
+    for (const auto &d : fs::directory_iterator(folder)) {
+        if (!d.is_directory()) continue;
+        // load_images splits the key on the first underscore to recover the
+        // camera, so a name carrying one cannot round-trip.
+        if (d.path().filename().string().find('_') != std::string::npos) continue;
+        for (const auto &f : fs::directory_iterator(d.path()))
+            if (f.is_regular_file() && is_image_ext(f.path().extension().string())) {
+                cams.push_back(d.path().filename().string());
+                break;
+            }
+    }
+    if (!cams.empty()) {
+        std::sort(cams.begin(), cams.end());
+        if (kind_out) *kind_out = MediaKind::ImagesPerCamera;
+        return cams;
+    }
+
+    // <cam>_<frame>.<ext> all in one folder.
+    std::set<std::string> flat;
+    for (const auto &f : fs::directory_iterator(folder)) {
+        if (!f.is_regular_file()) continue;
+        if (!is_image_ext(f.path().extension().string())) continue;
+        const std::string name = f.path().filename().string();
+        const size_t us = name.find('_');
+        if (us != std::string::npos && us > 0) flat.insert(name.substr(0, us));
+    }
+    cams.assign(flat.begin(), flat.end());
+    if (kind_out)
+        *kind_out = cams.empty() ? MediaKind::Video : MediaKind::ImagesFlat;
+    return cams;
+}
+
 // Build the selected_files map load_images expects from a directory laid out
 // as <root>/<cam>/<name>.<ext> -- which is what a tailcycle-dataset group
 // holds. Keys stay "<cam>_<file>" because that is what load_images parses; the

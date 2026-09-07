@@ -45,7 +45,7 @@ struct WindowStates {
     void reset() {
         labeling = LabelingToolState{};
         annotation.show = false;
-        annotation.video_folder.clear();
+        annotation.media_folder.clear();
         annotation.discovered_cameras.clear();
         annotation.camera_selected.clear();
         annotation.status.clear();

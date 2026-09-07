@@ -340,13 +340,41 @@ inline void on_project_loaded(AppContext &ctx,
     switch_ini_to_project(ctx);
     const double t_ini = load_timing::ms(t_stage);
     int expected_cameras = (int)ctx.pm.camera_names.size();
-    std::map<std::string, std::string> empty_selected_files;
+    std::map<std::string, std::string> selected_files;
     t_stage = load_timing::Clock::now();
-    load_videos(empty_selected_files, ctx.ps, ctx.pm,
-                ctx.window_was_decoding, ctx.demuxers, ctx.dc_context,
-                ctx.scene, ctx.label_buffer_size, ctx.decoder_threads,
-                ctx.is_view_focused,
-                ctx.user_settings.default_realtime_playback);
+    const MediaKind media_kind = media_kind_from_str(ctx.pm.media_kind);
+    if (media_kind == MediaKind::Video) {
+        load_videos(selected_files, ctx.ps, ctx.pm,
+                    ctx.window_was_decoding, ctx.demuxers, ctx.dc_context,
+                    ctx.scene, ctx.label_buffer_size, ctx.decoder_threads,
+                    ctx.is_view_focused,
+                    ctx.user_settings.default_realtime_playback);
+    } else {
+        // An image project. This branch did not exist: reloading always called
+        // load_videos, so a project made from image folders came back with no
+        // media at all.
+        const bool per_cam = (media_kind == MediaKind::ImagesPerCamera);
+        std::string scan_err;
+        ctx.imgs_names.clear();
+        const bool ok =
+            per_cam ? scan_per_camera_dirs(ctx.pm.media_folder, selected_files,
+                                           &scan_err)
+                    : scan_flat_images(ctx.pm.media_folder, selected_files,
+                                       &scan_err);
+        if (ok) {
+            ctx.pm.camera_names.clear();
+            load_images(selected_files, ctx.ps, ctx.pm, ctx.imgs_names,
+                        ctx.scene, ctx.dc_context, ctx.label_buffer_size,
+                        ctx.decoder_threads, ctx.is_view_focused,
+                        ctx.window_was_decoding,
+                        per_cam ? ImageLayout::PerCameraDir : ImageLayout::Flat,
+                        0.0f, ctx.user_settings.default_realtime_playback);
+            ctx.input_is_imgs = true;
+        } else {
+            ctx.popups.pushError("Could not load this project's images: " +
+                                 scan_err);
+        }
+    }
     const double t_videos = load_timing::ms(t_stage);
     if (print_metadata_fn) print_metadata_fn();
     // The desync fix was requested by the project but the plan could not be
