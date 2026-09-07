@@ -90,9 +90,16 @@ inline bool tailcycle_open_session(AppContext &ctx, const std::string &session_d
     ctx.pm.camera_names = s.camera_names;
     ctx.pm.camera_params = s.calibration;
     ctx.pm.skeleton_name = "tailcycle:" + s.session_id;
-    // Saving edits would write red's own CSVs beside the session rather than
-    // back into the Parquet, so it is deliberately pointed inside the session.
-    ctx.pm.keypoints_root_folder = (fs::path(session_dir) / "red_labels").string();
+    // Deliberately left empty: a session opens READ-ONLY.
+    //
+    // close_project() auto-saves whenever this is set and annotations exist,
+    // which is always true after opening a session -- so pointing it anywhere
+    // inside the dataset made red write CSVs into data it did not author,
+    // every time a session was opened or switched.
+    //
+    // Round-tripping edits belongs in a tailcycle export, which writes the
+    // format the session is already in, rather than red's CSVs beside it.
+    ctx.pm.keypoints_root_folder.clear();
     // What load_project sets on a normal open. Without the first of these the
     // labelling overlay never draws, so the frames appear with no labels on
     // them and nothing says why.
