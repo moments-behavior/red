@@ -8,6 +8,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <cctype>
 #include <filesystem>
 #include <set>
 #include <map>
@@ -350,11 +351,31 @@ load_images(std::map<std::string, std::string> &selected_files,
         }
     }
 
-    auto to_number = [](const std::string &s) { return std::stoi(s); };
+    // Order by the frame number in the name. std::stoi was used directly here,
+    // which threw -- uncaught, so the app died -- on any name that is not
+    // digits end to end: a per-camera folder of "Frame_361.jpg" is exactly
+    // that, and creating a project from one is now a supported thing to do.
+    // Take the last run of digits instead, and fall back to comparing the
+    // names when there is none, so an unnumbered set still loads in a stable
+    // order rather than not at all.
+    auto frame_number = [](const std::string &s) -> long long {
+        size_t end = s.size();
+        while (end > 0 && !std::isdigit((unsigned char)s[end - 1])) --end;
+        if (end == 0) return -1;
+        size_t begin = end;
+        while (begin > 0 && std::isdigit((unsigned char)s[begin - 1])) --begin;
+        try {
+            return std::stoll(s.substr(begin, end - begin));
+        } catch (...) {
+            return -1;   // absurdly long digit run; order it by name instead
+        }
+    };
 
     std::sort(imgs_names.begin(), imgs_names.end(),
               [&](const std::string &a, const std::string &b) {
-                  return to_number(a) < to_number(b);
+                  const long long na = frame_number(a), nb = frame_number(b);
+                  if (na < 0 || nb < 0 || na == nb) return a < b;
+                  return na < nb;
               });
 
     dc_context->seek_interval = 1;
