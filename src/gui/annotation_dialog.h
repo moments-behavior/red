@@ -192,8 +192,13 @@ inline void DrawAnnotationDialog(AnnotationDialogState &state,
             }
             ImGui::TableSetColumnIndex(1);
             if (state.discovered_cameras.empty()) {
-                ImGui::TextDisabled("(none \xE2\x80\x94 expects .mp4 files, a "
-                                    "directory per camera, or <cam>_<frame> images)");
+                ImGui::TextDisabled("(none found)");
+                ImGui::TextWrapped(
+                    "Videos: .mp4 files directly in the folder, one per "
+                    "camera.\n"
+                    "Images: one directory per camera holding that camera's "
+                    "frames, or <camera>_<frame>.jpg files in the folder "
+                    "itself.");
             } else {
                 // Vertical 2-column layout for camera checkboxes
                 int n_cams = (int)state.discovered_cameras.size();
@@ -371,13 +376,33 @@ inline void DrawAnnotationDialog(AnnotationDialogState &state,
         for (size_t i = 0; i < state.camera_selected.size(); i++)
             if (state.camera_selected[i]) annot_n_selected++;
 
-        // Validation
-        const bool annot_ok =
-            !pm.project_name.empty() && !pm.project_root_path.empty() &&
-            annot_n_selected > 0 &&
-            (state.two_d_mode || annot_n_selected <= 1 ||
-             !pm.calibration_folder.empty()) &&
-            (!pm.load_skeleton_from_json || !pm.skeleton_file.empty());
+        // Validation. Five conditions used to be ANDed into one bool, and a
+        // failing one greyed out Create with nothing else on screen -- so the
+        // form said "no" without saying which field it meant, and the answer
+        // was often a row that is only drawn under some conditions.
+        std::vector<const char *> missing;
+        if (annot_n_selected == 0)
+            missing.push_back(state.discovered_cameras.empty()
+                                  ? "a media folder with cameras in it"
+                                  : "at least one camera ticked");
+        if (pm.project_name.empty())      missing.push_back("a project name");
+        if (pm.project_root_path.empty()) missing.push_back("a project root path");
+        if (pm.load_skeleton_from_json && pm.skeleton_file.empty())
+            missing.push_back("a skeleton file");
+        if (!state.two_d_mode && annot_n_selected > 1 &&
+            pm.calibration_folder.empty())
+            missing.push_back("a calibration folder");
+        const bool annot_ok = missing.empty();
+
+        if (!annot_ok) {
+            std::string need = "Still needed: ";
+            for (size_t i = 0; i < missing.size(); i++) {
+                if (i) need += (i + 1 == missing.size()) ? " and " : ", ";
+                need += missing[i];
+            }
+            ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.35f, 1.0f), "%s",
+                               need.c_str());
+        }
 
         // Right-align Create button
         float avail = ImGui::GetContentRegionAvail().x;

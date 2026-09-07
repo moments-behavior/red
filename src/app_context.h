@@ -275,10 +275,18 @@ inline void close_project(AppContext &ctx) {
     ctx.skeleton.edges.clear();
     ctx.skeleton.node_names.clear();
 
-    // 6. Reset ProjectManager (preserve nothing)
+    // 6. Reset ProjectManager
     ctx.pm.project_path.clear();
     ctx.pm.project_name.clear();
-    ctx.pm.project_root_path.clear();
+    // Back to the configured defaults, not empty. These two are seeded at
+    // startup and are where the Create Annotation Project form starts from, so
+    // clearing them meant the first project of a session had them filled in
+    // and every one after it did not -- a required field that silently emptied
+    // itself once you had opened anything.
+    ctx.pm.project_root_path =
+        ctx.user_settings.default_project_root_path.empty()
+            ? ctx.red_data_dir
+            : ctx.user_settings.default_project_root_path;
     ctx.pm.calibration_folder.clear();
     ctx.pm.keypoints_root_folder.clear();
     ctx.pm.camera_params.clear();
