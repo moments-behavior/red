@@ -1,5 +1,6 @@
 #pragma once
 #include "app_context.h"
+#include "keypoint_colors.h"
 
 // Draw the Frame Buffer window — a vertical list of buffered frames, one row
 // per slot, newest-first order matching the read head.
@@ -89,35 +90,80 @@ inline void DrawFrameBufferWindow(AppContext &ctx, int select_corr_head) {
                     }
                 }
 
-                // Color code: green = fully labeled + triangulated,
-                // teal = partially labeled, default = unlabeled
+                // Label state, in the shared vocabulary (keypoint_colors.h),
+                // classified by the shared frame_kp_progress so this and the
+                // Labeling Tool's timeline cannot disagree about a frame.
+                // Unlabelled stays the theme's disabled text: in this list it
+                // is the common case, and an accent would light up the whole
+                // window.
                 const char *text = label;
                 ImU32 text_col;
                 auto ann_it = annotations.find((u32)frame_num);
                 const bool ann_ok = ann_it != annotations.end() &&
                                     !ann_it->second.empty();
-                if (ann_ok &&
-                    any_instance_has_keypoints(ann_it->second)) {
-                    bool complete = frame_is_complete(ann_it->second.front());
-                    if (complete && skeleton.has_skeleton &&
-                        (project_is_2d(ctx.pm) || scene.num_cams > 1)) {
-                        for (int k = 0; k < skeleton.num_nodes; ++k)
-                            if (!ann_it->second.front().kp3d[k].triangulated)
-                                complete = false;
-                    }
-                    text_col = complete
-                        ? IM_COL32(51, 204, 77, 255)   // green
-                        : IM_COL32(51, 179, 179, 255); // teal
-                } else {
+                const FrameAnnotation *fa =
+                    ann_ok ? &ann_it->second.front() : nullptr;
+                KpProgress prog =
+                    fa ? frame_kp_progress(*fa, skeleton.num_nodes,
+                                           (int)scene.num_cams,
+                                           project_is_2d(ctx.pm),
+                                           skeleton.has_skeleton)
+                       : KpProgress::None;
+                const char *state_tip = nullptr;
+                if (fa && fa->needs_improvement) {
+                    text_col = ImGui::ColorConvertFloat4ToU32(kLabelNeedsFix);
+                    state_tip = "needs fixing";
+                } else switch (prog) {
+                case KpProgress::Complete:
+                    text_col = ImGui::ColorConvertFloat4ToU32(kLabelComplete);
+                    state_tip = "complete";
+                    break;
+                case KpProgress::Triangulated:
+                    text_col = ImGui::ColorConvertFloat4ToU32(kLabelTriangulated);
+                    state_tip = "triangulated";
+                    break;
+                case KpProgress::Untriangulated:
+                    text_col = ImGui::ColorConvertFloat4ToU32(kLabelUntriangulated);
+                    state_tip = "untriangulated";
+                    break;
+                case KpProgress::None:
+                default:
                     text_col = is_selected
                         ? ImGui::GetColorU32(ImGuiCol_Text)
                         : ImGui::GetColorU32(ImGuiCol_TextDisabled);
+                    break;
                 }
-                // Desync fix: this slot is a duplicate for a dropped frame
-                // on the visible camera — tint it red.
-                if (ctx.dc_context->sync_fix_active.load() &&
-                    scene.display_buffer[visible_idx][buf_idx].dropped.load())
-                    text_col = IM_COL32(230, 80, 80, 255);
+
+                // Desync fix: this slot holds a duplicate standing in for a
+                // frame the visible camera dropped. That is the media being at
+                // fault, not the labels, so it gets its own channel -- a red
+                // stripe down the left edge -- instead of overwriting the text
+                // colour. Recolouring the text lost the label state entirely:
+                // a complete, triangulated frame that happened to be a
+                // duplicate read as plain red.
+                const bool dropped =
+                    ctx.dc_context->sync_fix_active.load() &&
+                    scene.display_buffer[visible_idx][buf_idx].dropped.load();
+                if (dropped)
+                    dl->AddRectFilled(
+                        ImVec2(pos.x, pos.y),
+                        ImVec2(pos.x + 3.0f, pos.y + item_h),
+                        ImGui::ColorConvertFloat4ToU32(kFrameDropped));
+
+                if (ImGui::IsItemHovered() && (state_tip || dropped)) {
+                    if (state_tip && dropped)
+                        ImGui::SetTooltip(
+                            "%s \xE2\x80\x94 and a duplicate: a camera dropped "
+                            "this frame, so the nearest decoded one is shown.",
+                            state_tip);
+                    else if (dropped)
+                        ImGui::SetTooltip(
+                            "A camera dropped this frame; the nearest decoded "
+                            "one is shown in its place.");
+                    else
+                        ImGui::SetTooltip("%s", state_tip);
+                }
+
                 ImVec2 ts = ImGui::CalcTextSize(text);
                 ImVec2 text_pos(pos.x + 4.0f, pos.y + (item_h - ts.y) * 0.5f);
                 dl->AddText(text_pos, text_col, text);

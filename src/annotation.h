@@ -350,6 +350,54 @@ inline bool frame_is_fully_triangulated(const FrameAnnotation &fa, int num_nodes
     return true;
 }
 
+// How far along a frame's keypoint labelling is.
+//
+// Shared by the Labeling Tool's timeline and the Frame Buffer list, which used
+// to classify independently and disagree: the Frame Buffer lumped
+// Triangulated and Untriangulated into one "partial", so the same frame read
+// as two different states depending on which panel you looked at.
+//
+// is_2d / has_skeleton / num_cams are passed rather than a ProjectManager so
+// this stays where the predicates it builds on already live.
+enum class KpProgress {
+    None = 0,        // no keypoints on this frame at all
+    Untriangulated,  // some placed keypoint has no 3D yet
+    Triangulated,    // every placed keypoint is triangulated, not all placed
+    Complete,        // every keypoint placed on every camera, and triangulated
+};
+
+inline KpProgress frame_kp_progress(const FrameAnnotation &fa, int num_nodes,
+                                    int num_cams, bool is_2d,
+                                    bool has_skeleton) {
+    if (!frame_has_any_keypoints(fa)) return KpProgress::None;
+    if (!has_skeleton) return KpProgress::Untriangulated;
+    if (is_2d)
+        return frame_is_complete(fa) ? KpProgress::Complete
+                                     : KpProgress::Untriangulated;
+    if (num_cams > 1 && frame_is_complete(fa) &&
+        frame_is_fully_triangulated(fa, num_nodes))
+        return KpProgress::Complete;
+    // Triangulated iff every placed node (labeled in >=1 camera) is
+    // triangulated. Triangulated implies placed, so this means the placed and
+    // triangulated sets coincide.
+    int placed = 0, placed_untriangulated = 0;
+    for (int n = 0; n < num_nodes; ++n) {
+        bool node_placed = false;
+        for (const auto &cam : fa.cameras)
+            if (n < (int)cam.keypoints.size() && cam.keypoints[n].labeled) {
+                node_placed = true;
+                break;
+            }
+        bool node_tri = n < (int)fa.kp3d.size() && fa.kp3d[n].triangulated;
+        if (node_placed) {
+            ++placed;
+            if (!node_tri) ++placed_untriangulated;
+        }
+    }
+    if (placed > 0 && placed_untriangulated == 0) return KpProgress::Triangulated;
+    return KpProgress::Untriangulated;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // JSON persistence for extended annotations (bbox, OBB, mask)
 //

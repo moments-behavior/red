@@ -301,50 +301,14 @@ inline void DrawLabelingToolWindow(
         // === Collect labeled frames (counts + timeline) ===
         // needs_improvement frames (promoted predictions awaiting a manual fix)
         // are collected separately so they get their own section below.
-        // Keypoint-label state, used to color the timeline ticks:
-        //   COMPLETE       = every keypoint placed on every camera AND fully
-        //                    triangulated
-        //   TRIANGULATED   = not complete, but every placed keypoint IS
-        //                    triangulated
-        //   UNTRIANGULATED = some placed keypoint is not (yet) triangulated
-        // (2D projects have no triangulation: complete -> COMPLETE, else
-        // UNTRIANGULATED.)
-        enum KpLabelState { KP_UNTRIANGULATED = 0, KP_TRIANGULATED = 1,
-                            KP_COMPLETE = 2 };
-        auto classify_kp_state = [&](const FrameAnnotation &fa) -> int {
-            if (!skeleton.has_skeleton)
-                return KP_UNTRIANGULATED;
-            if (project_is_2d(pm))
-                return frame_is_complete(fa) ? KP_COMPLETE : KP_UNTRIANGULATED;
-            bool green = scene->num_cams > 1 && frame_is_complete(fa) &&
-                         frame_is_fully_triangulated(fa, skeleton.num_nodes);
-            if (green)
-                return KP_COMPLETE;
-            // Purple iff every placed node (labeled in >=1 camera) is
-            // triangulated. Triangulated implies placed, so this means the
-            // placed and triangulated sets coincide.
-            int placed = 0, placed_untriangulated = 0;
-            for (int n = 0; n < skeleton.num_nodes; ++n) {
-                bool node_placed = false;
-                for (const auto &cam : fa.cameras)
-                    if (n < (int)cam.keypoints.size() &&
-                        cam.keypoints[n].labeled) {
-                        node_placed = true;
-                        break;
-                    }
-                bool node_tri =
-                    n < (int)fa.kp3d.size() && fa.kp3d[n].triangulated;
-                if (node_placed) {
-                    ++placed;
-                    if (!node_tri) ++placed_untriangulated;
-                }
-            }
-            if (placed > 0 && placed_untriangulated == 0)
-                return KP_TRIANGULATED;
-            return KP_UNTRIANGULATED;
+        // The states themselves are documented on KpProgress in annotation.h,
+        // which the Frame Buffer classifies with too.
+        auto classify_kp_state = [&](const FrameAnnotation &fa) {
+            return frame_kp_progress(fa, skeleton.num_nodes, (int)scene->num_cams,
+                                     project_is_2d(pm), skeleton.has_skeleton);
         };
 
-        struct LabeledFrameInfo { int frame; int state; };
+        struct LabeledFrameInfo { int frame; KpProgress state; };
         std::vector<LabeledFrameInfo> labeled_frames;
         std::vector<LabeledFrameInfo> needs_fix_frames;
         // The frame list is per frame, not per animal: a frame appears once,
@@ -353,7 +317,7 @@ inline void DrawLabelingToolWindow(
             if (fis.empty() || !frame_has_any_keypoints(fis.front()))
                 continue;
             const FrameAnnotation &fa = fis.front();
-            int state = classify_kp_state(fa);
+            KpProgress state = classify_kp_state(fa);
             if (fa.needs_improvement)
                 needs_fix_frames.push_back({(int)fnum, state});
             else
@@ -380,7 +344,7 @@ inline void DrawLabelingToolWindow(
         // that is annotated, boxed and flagged all at once.
         struct FrameCell {
             int frame = 0;
-            int kp_state = 0;
+            KpProgress kp_state = KpProgress::None;
             bool has_kp = false;
             bool needs_fix = false;
             bool has_bbox = false;
@@ -437,7 +401,7 @@ inline void DrawLabelingToolWindow(
         {
             for (const auto &c : cells)
                 if (c.needs_fix ||
-                    (skeleton.has_skeleton && (!c.has_kp || c.kp_state != KP_COMPLETE)))
+                    (skeleton.has_skeleton && (!c.has_kp || c.kp_state != KpProgress::Complete)))
                     unfinished.push_back(c.frame);
             // Never-labelled frames only count when they are the exception.
             // On a sparsely labelled recording "unfinished" would be almost
@@ -461,19 +425,15 @@ inline void DrawLabelingToolWindow(
 
         // Annotation type colors, shared by the section labels and the
         // timeline ticks.
-        const ImVec4 color_green(0.2f, 0.8f, 0.3f, 1.0f);
-        const ImVec4 color_yellow(0.95f, 0.85f, 0.15f, 1.0f);
-        // Purple and lilac are the bounding-box family. Keypoint progress is
-        // green / teal / yellow -- teal because the Frame Buffer window
-        // already draws a partially-labelled frame in it, and the two panels
-        // describing the same frame should not disagree. Purple used to serve
-        // both, so a purple tick meant either "all placed keypoints
-        // triangulated" or "this frame has a bbox", with no way to tell.
-        const ImVec4 color_purple(0.63f, 0.35f, 0.86f, 1.0f);
-        const ImVec4 color_teal(0.20f, 0.70f, 0.80f, 1.0f);
-        const ImVec4 color_lilac(0.78f, 0.59f, 1.0f, 1.0f);
-        const ImVec4 color_red(0.90f, 0.28f, 0.28f, 1.0f);
-        const ImVec4 color_orange(1.00f, 0.55f, 0.10f, 1.0f);
+        // The shared palette (keypoint_colors.h). Aliased locally so the rest
+        // of this function reads the same as before.
+        const ImVec4 &color_green  = kLabelComplete;
+        const ImVec4 &color_teal   = kLabelTriangulated;
+        const ImVec4 &color_yellow = kLabelUntriangulated;
+        const ImVec4 &color_red    = kLabelNeedsFix;
+        const ImVec4 &color_orange = kLabelGap;
+        const ImVec4 &color_purple = kLabelBBox;
+        const ImVec4 &color_lilac  = kLabelOBB;
 
         // === Keypoints table ===
         // Height follows the window by default -- whatever the frame overview
@@ -572,8 +532,8 @@ inline void DrawLabelingToolWindow(
         {
             size_t n_green = 0, n_partial = 0, n_yellow = 0;
             for (auto &lf : labeled_frames) {
-                if (lf.state == KP_COMPLETE) n_green++;
-                else if (lf.state == KP_TRIANGULATED) n_partial++;
+                if (lf.state == KpProgress::Complete) n_green++;
+                else if (lf.state == KpProgress::Triangulated) n_partial++;
                 else n_yellow++;
             }
             ImGui::Text("Keypoint Labels (%zu)", labeled_frames.size());
@@ -671,8 +631,8 @@ inline void DrawLabelingToolWindow(
             std::vector<double> unlabeled_x;
             for (int f : unlabeled) unlabeled_x.push_back((double)f);
             for (auto &lf : labeled_frames) {
-                if (lf.state == KP_COMPLETE) green_x.push_back((double)lf.frame);
-                else if (lf.state == KP_TRIANGULATED)
+                if (lf.state == KpProgress::Complete) green_x.push_back((double)lf.frame);
+                else if (lf.state == KpProgress::Triangulated)
                     kp_partial_x.push_back((double)lf.frame);
                 else kp_yellow_x.push_back((double)lf.frame);
             }
@@ -846,8 +806,11 @@ inline void DrawLabelingToolWindow(
                      "keypoints are placed"},
                     {&color_yellow, "untriangulated", !kp_yellow_x.empty(),
                      "some placed keypoint has no 3D yet"},
-                    {&color_orange, "unlabelled", !unlabeled_x.empty(),
-                     "no annotation on this frame at all"},
+                    {&color_orange, "gap", !unlabeled_x.empty(),
+                     "no annotation on this frame -- a hole in otherwise "
+                     "complete coverage. Only shown while unlabelled frames "
+                     "are the minority; the Frame Buffer greys every "
+                     "unlabelled frame, however many there are."},
                     {&color_red, "needs fixing", !needs_fix_x.empty(),
                      "a promoted prediction still waiting on a manual fix"},
                     {&color_purple, "bbox", !purple_x.empty(),

@@ -17,6 +17,29 @@
 // colormap >= 0 is an ImPlotColormap_ index sampled continuously across nodes.
 static constexpr int KEYPOINT_COLORMAP_RAINBOW = -1;
 
+// ─── Label-state palette ───
+// One vocabulary for every panel that reports what state a frame's labels are
+// in. Defined once because the Labeling Tool's timeline and the Frame Buffer
+// list both describe the same frame, and they used to pick their own colours:
+// purple meant two unrelated things, and red meant "needs fixing" in one panel
+// and "dropped frame" in the other.
+//
+// Unlabelled has no entry on purpose. In a list every row is a real frame and
+// unlabelled is the common case, so it is the theme's disabled text -- an
+// accent there would light up the whole window. The timeline draws unlabelled
+// frames only when they are a hole in otherwise-complete coverage, which is a
+// different thing worth its own colour (label_gap).
+inline const ImVec4 kLabelComplete      (0.20f, 0.80f, 0.30f, 1.0f);
+inline const ImVec4 kLabelTriangulated  (0.20f, 0.70f, 0.80f, 1.0f);
+inline const ImVec4 kLabelUntriangulated(0.95f, 0.85f, 0.15f, 1.0f);
+inline const ImVec4 kLabelNeedsFix      (0.90f, 0.28f, 0.28f, 1.0f);
+inline const ImVec4 kLabelGap           (1.00f, 0.55f, 0.10f, 1.0f);
+inline const ImVec4 kLabelBBox          (0.63f, 0.35f, 0.86f, 1.0f);
+inline const ImVec4 kLabelOBB           (0.78f, 0.59f, 1.00f, 1.0f);
+// Not a label state: the media is at fault, not the labels. Kept out of the
+// list above so it is never reached for by something classifying labels.
+inline const ImVec4 kFrameDropped       (0.90f, 0.28f, 0.28f, 1.0f);
+
 // Color for keypoint `index` of `num_nodes`, under `colormap`.
 inline ImVec4 keypoint_node_color(int index, int num_nodes, int colormap) {
     if (num_nodes <= 0)
