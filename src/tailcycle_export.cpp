@@ -222,8 +222,18 @@ bool export_session(const ExportConfig &cfg, const AnnotationMap &amap,
         const std::string sid = cfg.session_id + job.suffix;
         const fs::path dir = fs::path(cfg.output_folder) / cfg.split / sid;
         std::error_code ec;
-        fs::create_directories(dir / "groups" / gid, ec);
-        if (ec) return fail("Cannot create " + dir.string() + ": " + ec.message());
+        if (cfg.in_place) {
+            // The session is already there, frames and all. Creating
+            // groups/<gid> would leave an empty directory beside the real one
+            // -- or an empty one in a session whose media lives elsewhere,
+            // which is exactly the kind of litter red has no business leaving
+            // in someone's dataset.
+            if (!fs::is_directory(dir))
+                return fail("Session folder is gone: " + dir.string());
+        } else {
+            fs::create_directories(dir / "groups" / gid, ec);
+            if (ec) return fail("Cannot create " + dir.string() + ": " + ec.message());
+        }
 
         std::string err;
         // In place: these describe the session, not its labels, and what is
