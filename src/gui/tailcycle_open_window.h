@@ -262,6 +262,10 @@ inline bool tailcycle_save_session(AppContext &ctx, TailcycleOpenState &st,
     cfg.force_labels = st.open_labels.empty() ? "annotated" : st.open_labels;
     cfg.animal_ids = st.open_animal_ids;
     cfg.provenance_source = st.open_dir;
+    // Rewrite the label tables and nothing else: session.toml,
+    // calibration.toml and groups.pq describe the session rather than its
+    // labels, and what is on disk carries more than this config models.
+    cfg.in_place = true;
     // Keep the session's own shape: a 3D-only session stays 3D-only rather
     // than gaining a 2D layer red derived by reprojection (§8).
     cfg.layers = st.open_has_2d && st.open_has_3d

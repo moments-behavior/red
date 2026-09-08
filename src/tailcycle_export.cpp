@@ -226,28 +226,37 @@ bool export_session(const ExportConfig &cfg, const AnnotationMap &amap,
         if (ec) return fail("Cannot create " + dir.string() + ": " + ec.message());
 
         std::string err;
-        if (!write_session_toml(dir, cfg, job.labels, &err)) return fail(err);
-        if (!write_calibration_toml(dir, cfg, &err)) return fail(err);
+        // In place: these describe the session, not its labels, and what is
+        // already on disk says more than this config can reproduce.
+        if (!cfg.in_place) {
+            if (!write_session_toml(dir, cfg, job.labels, &err)) return fail(err);
+            if (!write_calibration_toml(dir, cfg, &err)) return fail(err);
+        }
 
         // ── groups.pq ──
-        {
-            arrow::StringBuilder gid_b, src_b, notes_b;
-            arrow::Int32Builder nf_b, start_b, step_b;
-            arrow::FloatBuilder fps_b;
-            auto ok = gid_b.Append(gid).ok() && nf_b.Append(cfg.n_frames).ok() &&
-                      src_b.Append(cfg.source_video).ok() &&
-                      start_b.Append(cfg.source_frame_start).ok() && step_b.Append(1).ok() &&
-                      notes_b.Append("").ok() &&
-                      (cfg.fps > 0 ? fps_b.Append(cfg.fps).ok() : fps_b.AppendNull().ok());
-            if (!ok) return fail("groups.pq: builder append failed.");
-            std::vector<std::shared_ptr<arrow::Array>> a(7);
-            if (!gid_b.Finish(&a[0]).ok() || !nf_b.Finish(&a[1]).ok() || !fps_b.Finish(&a[2]).ok() ||
-                !src_b.Finish(&a[3]).ok() || !start_b.Finish(&a[4]).ok() ||
-                !step_b.Finish(&a[5]).ok() || !notes_b.Finish(&a[6]).ok())
-                return fail("groups.pq: finish failed.");
-            auto s = Tailcycle::write_table(
-                arrow::Table::Make(Tailcycle::groups_schema(), a), (dir / "groups.pq").string());
-            if (!s.ok()) return fail("groups.pq: " + s.ToString());
+        // Skipped in place for the same reason as the TOMLs, and one of its
+        // own: source_frame_step and notes are hardcoded here (1 and empty),
+        // so rewriting it would overwrite whatever the session recorded.
+        if (!cfg.in_place) {
+            {
+                arrow::StringBuilder gid_b, src_b, notes_b;
+                arrow::Int32Builder nf_b, start_b, step_b;
+                arrow::FloatBuilder fps_b;
+                auto ok = gid_b.Append(gid).ok() && nf_b.Append(cfg.n_frames).ok() &&
+                          src_b.Append(cfg.source_video).ok() &&
+                          start_b.Append(cfg.source_frame_start).ok() && step_b.Append(1).ok() &&
+                          notes_b.Append("").ok() &&
+                          (cfg.fps > 0 ? fps_b.Append(cfg.fps).ok() : fps_b.AppendNull().ok());
+                if (!ok) return fail("groups.pq: builder append failed.");
+                std::vector<std::shared_ptr<arrow::Array>> a(7);
+                if (!gid_b.Finish(&a[0]).ok() || !nf_b.Finish(&a[1]).ok() || !fps_b.Finish(&a[2]).ok() ||
+                    !src_b.Finish(&a[3]).ok() || !start_b.Finish(&a[4]).ok() ||
+                    !step_b.Finish(&a[5]).ok() || !notes_b.Finish(&a[6]).ok())
+                    return fail("groups.pq: finish failed.");
+                auto s = Tailcycle::write_table(
+                    arrow::Table::Make(Tailcycle::groups_schema(), a), (dir / "groups.pq").string());
+                if (!s.ok()) return fail("groups.pq: " + s.ToString());
+            }
         }
 
         // ── keypoints.pq ──

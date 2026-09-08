@@ -79,6 +79,17 @@ struct ExportConfig {
     // convention every dataset seen so far uses.
     std::vector<std::string> animal_ids;
 
+    // Saving corrections back over a session that is already on disk, rather
+    // than writing a new dataset. Only the label tables are rewritten:
+    // session.toml, calibration.toml and groups.pq describe things a label
+    // edit does not change, and rewriting them from an ExportConfig would
+    // replace what is there with the subset red happens to model. A 3dzef
+    // session.toml carries 44 keys -- the checkpoint that produced it, the
+    // detector settings, the source paths, assoc_res_max_px -- and the
+    // exporter writes 9 of them, so correcting one keypoint would have thrown
+    // the other 35 away.
+    bool in_place = false;
+
     std::string provenance_source;
     std::string annotator;          // empty when one annotator authored the root (§2.11)
 };
