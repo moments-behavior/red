@@ -183,6 +183,18 @@ inline std::string save_all(const std::string &root_dir, const std::string &skel
                              const AnnotationMap &amap, int num_cameras, int num_nodes,
                              const std::vector<std::string> &camera_names,
                              std::string *error = nullptr) {
+    // An empty root makes folder "/<timestamp>" -- a directory at the
+    // filesystem root. A tailcycle session leaves keypoints_root_folder empty
+    // on purpose (red must not write its CSVs into someone else's dataset), so
+    // this is reachable from the Save button, not just from a bad argument.
+    if (root_dir.empty()) {
+        if (error)
+            *error = "This project has no label folder. A tailcycle session is "
+                     "saved with \"Save corrections to this session\" in the "
+                     "tailcycle Dataset panel.";
+        return {};
+    }
+
     std::string ts = current_timestamp();
     std::string folder = root_dir + "/" + ts;
 

@@ -155,9 +155,21 @@ inline void DrawLabelingToolWindow(
         const int prev_frame = kp_pn.prev;
 
         // === Top row: Save, Triangulate, Prev/Next label ===
+        // Saves red's CSVs into the project's label folder. A tailcycle
+        // session has none -- it is saved back into its own tables from the
+        // tailcycle Dataset panel -- so the button says why rather than
+        // failing when pressed.
+        const bool can_save_csv = !pm.keypoints_root_folder.empty();
+        ImGui::BeginDisabled(!can_save_csv);
         if (ImGui::Button(ICON_FK_FLOPPY_O " Save")) {
             state.save_requested = true;
         }
+        ImGui::EndDisabled();
+        if (!can_save_csv &&
+            ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("This session has no red label folder. Use "
+                              "\"Save corrections to this session\" in the "
+                              "tailcycle Dataset panel.");
 
         if (scene->num_cams > 1) {
             ImGui::SameLine();
