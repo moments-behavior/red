@@ -423,6 +423,65 @@ inline void DrawLabelingToolWindow(
         const ImVec4 &color_purple = kLabelBBox;
         const ImVec4 &color_lilac  = kLabelOBB;
 
+        // === Keypoints table ===
+        // Height follows the window by default -- whatever the frame overview
+        // below does not need -- until you drag the splitter under it, after
+        // which your height wins. Double-click the splitter to go back.
+        {
+            const float line_h = ImGui::GetTextLineHeightWithSpacing();
+            // What sits below the table now: one Jump row, a Mark-fixed row
+            // when the current frame carries that flag, then the timeline.
+            int overview_lines = 1;
+            if (!needs_fix_frames.empty()) overview_lines++;
+            // Plot plus up to two wrapped rows of class chips.
+            const float timeline_block =
+                (dc_context->estimated_num_frames > 0) ? 78.0f + 2.0f * line_h
+                                                       : 0.0f;
+            const float splitter_h = 6.0f;
+            const float reserved =
+                overview_lines * line_h + timeline_block + splitter_h +
+                ImGui::GetStyle().ItemSpacing.y * 4.0f;
+
+            const float avail = ImGui::GetContentRegionAvail().y;
+            const float auto_h = avail - reserved;
+            float table_h = (state.table_height > 0.0f) ? state.table_height
+                                                        : auto_h;
+            // Clamp for display only -- the stored height is left alone, so
+            // shrinking the window and growing it again gets it back.
+            table_h = ImClamp(table_h, 60.0f,
+                              ImMax(60.0f, avail - splitter_h - line_h));
+
+            DrawKeypointsTable(ctx, table_h);
+
+            // Splitter. Dragging seeds the stored height from the height
+            // actually in use, so the first drag from auto does not jump.
+            ImGui::InvisibleButton("##kp_table_splitter",
+                                   ImVec2(-1.0f, splitter_h));
+            const bool split_active = ImGui::IsItemActive();
+            const bool split_hover = ImGui::IsItemHovered();
+            if (split_active || split_hover)
+                ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
+            if (split_active)
+                state.table_height = table_h + ImGui::GetIO().MouseDelta.y;
+            if (split_hover && ImGui::IsMouseDoubleClicked(0))
+                state.table_height = 0.0f;
+            if (split_hover && !split_active)
+                ImGui::SetTooltip("Drag to resize the table, double-click to "
+                                  "fit the window");
+            {
+                ImVec2 mn = ImGui::GetItemRectMin();
+                ImVec2 mx = ImGui::GetItemRectMax();
+                float y = (mn.y + mx.y) * 0.5f;
+                ImU32 col = ImGui::GetColorU32(
+                    split_active  ? ImGuiCol_SeparatorActive
+                    : split_hover ? ImGuiCol_SeparatorHovered
+                                  : ImGuiCol_Separator);
+                ImGui::GetWindowDrawList()->AddLine(ImVec2(mn.x, y),
+                                                    ImVec2(mx.x, y), col,
+                                                    split_active ? 3.0f : 2.0f);
+            }
+        }
+
         // === Classes ===
         // Every annotation type as one list, in a fixed order so an index into
         // it is stable. These drive three things at once: the counts, which
