@@ -12,6 +12,7 @@
 #include "skeleton.h"
 #include "user_settings.h"
 #include "utils.h"
+#include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <map>
@@ -92,16 +93,50 @@ struct AppContext {
 
 // Copy the shipped default_imgui_layout.ini into a project folder.
 // No-op if ini already exists.
-inline void copy_default_layout_to_project(const AppContext &ctx, const std::string &proj_path) {
+// Where this project's layout is kept, seeding it from the shipped default if
+// it is not there yet.
+//
+// Next to the project when that directory can be written, which is the useful
+// place -- the layout travels with the project. When it cannot be, the layout
+// goes under red_data instead, keyed by the project path. A read-only or
+// permission-denied project directory is ordinary on a shared NFS export, and
+// the copy failure used to be swallowed into an unchecked error_code: the ini
+// then did not exist, LoadIniSettingsFromDisk returned early, and with no
+// dockspace in the context every panel came up floating and the camera-docking
+// pass found no central node to dock into.
+inline std::string resolve_project_layout_path(const AppContext &ctx,
+                                               const std::string &proj_path) {
     namespace fs = std::filesystem;
-    fs::path dest = fs::path(proj_path) / "imgui_layout.ini";
-    if (fs::exists(dest))
-        return;
+    const fs::path in_project = fs::path(proj_path) / "imgui_layout.ini";
+    std::error_code ec;
+    if (fs::exists(in_project, ec))
+        return in_project.string();
+
     const std::string src = ctx.window->exe_dir + "/../default_imgui_layout.ini";
-    if (fs::exists(src)) {
-        std::error_code ec;
-        fs::copy_file(src, dest, ec);
+    const bool have_src = fs::exists(src, ec);
+
+    if (have_src) {
+        ec.clear();
+        fs::copy_file(src, in_project, ec);
+        if (!ec) return in_project.string();
     }
+
+    // Not writable there. Keep it in red_data under a name derived from the
+    // project path, so two projects cannot share one layout.
+    std::string key;
+    for (char c : proj_path)
+        key += (std::isalnum((unsigned char)c) ? c : '_');
+    if (key.size() > 120) key = key.substr(key.size() - 120);
+    const fs::path dir = fs::path(ctx.red_data_dir) / "layouts";
+    ec.clear();
+    fs::create_directories(dir, ec);
+    const fs::path fallback = dir / (key + ".ini");
+    ec.clear();
+    if (!fs::exists(fallback, ec) && have_src) {
+        ec.clear();
+        fs::copy_file(src, fallback, ec);
+    }
+    return fallback.string();
 }
 
 // Migrate a single window header in an ini string. Returns true if content was modified.
@@ -209,8 +244,7 @@ inline void migrate_ini_window_names(const std::string &ini_path) {
 // projects come up with a broken layout (camera windows hard-docked to
 // 0x05-0x08 collide, Keypoints/Labeling Tool orphaned and invisible).
 inline void switch_ini_to_path(AppContext &ctx, const std::string &project_path) {
-    ctx.project_ini_path = project_path + "/imgui_layout.ini";
-    copy_default_layout_to_project(ctx, project_path);
+    ctx.project_ini_path = resolve_project_layout_path(ctx, project_path);
     migrate_ini_window_names(ctx.project_ini_path);
     if (!ctx.main_loop_running) {
         // Startup path: NewFrame() loads io.IniFilename itself.
@@ -441,10 +475,20 @@ inline void on_project_loaded(AppContext &ctx,
 
     if (print_summary_fn) print_summary_fn(most_recent_folder);
 
-    // Track in recent projects
-    if (!ctx.pm.project_path.empty()) {
-        std::string redproj = ctx.pm.project_path + "/" + ctx.pm.project_name + ".redproj";
-        ctx.user_settings.push_recent_project(redproj);
-        save_user_settings(ctx.user_settings);
+    // Track in recent projects. The path is the file that was opened, when
+    // that is known: rebuilding it from project_path + project_name is only
+    // right when the file is named after the project, which red's own creation
+    // path guarantees and a hand-made or older "project.redproj" does not. The
+    // rebuilt path then pointed at nothing, and the welcome screen -- which
+    // drops entries that do not exist -- showed the project as missing the
+    // moment you reopened red.
+    {
+        std::string redproj = ctx.pm.source_file;
+        if (redproj.empty() && !ctx.pm.project_path.empty())
+            redproj = ctx.pm.project_path + "/" + ctx.pm.project_name + ".redproj";
+        if (!redproj.empty()) {
+            ctx.user_settings.push_recent_project(redproj);
+            save_user_settings(ctx.user_settings);
+        }
     }
 }

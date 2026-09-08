@@ -45,6 +45,12 @@ struct ProjectManager {
     std::vector<std::string> camera_names;
     std::string skeleton_name;
     std::string media_folder;
+    // The .redproj this was read from. Not serialised -- a file does not need
+    // to record its own name -- but the recent-projects list needs the path
+    // that was actually opened, not one rebuilt from project_path and
+    // project_name. Those two agree only when the file is named after the
+    // project, and red's own creation path is what makes them agree.
+    std::string source_file;
     // "video" | "images_per_camera" | "images_flat". Reloading assumed video
     // unconditionally, so an image project came back empty.
     std::string media_kind = "video";
@@ -241,6 +247,9 @@ inline bool load_project_manager_json(ProjectManager *out,
         nlohmann::json j;
         ifs >> j;
         *out = j.get<ProjectManager>();
+        // Every load path goes through here, so this is the one place that
+        // reliably knows which file it was.
+        out->source_file = file.string();
         if (reg)
             project_handlers_load(*reg, j);
         return true;
