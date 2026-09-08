@@ -43,9 +43,11 @@ const char *decode_backend_reason();
 //
 // Returns true when hardware is not in use or when it can decode the stream.
 // `why` is filled in when it cannot.
+// `device_index` is the CUDA device red will decode on, so a multi-GPU
+// machine is asked about the right one; ignored on macOS.
 bool hw_can_decode_stream(int av_codec_id, int chroma_format,
                           int bit_depth_minus8, int width, int height,
-                          std::string *why);
+                          int device_index, std::string *why);
 
 // Switch to software for the rest of the process, with a reason. Only safe
 // before any decode buffers are allocated or decoder threads spawned --

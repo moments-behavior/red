@@ -58,7 +58,12 @@ struct DecoderContext {
     std::atomic<bool> stop_flag;
     int total_num_frame;
     int estimated_num_frames;
-    int gpu_index;
+    // Which CUDA device to decode on. Never assigned anywhere -- it is 0
+    // because DecoderContext is value-initialised -- so red is single-GPU by
+    // accident rather than by decision. Stated here so the NVDEC capability
+    // query can ask the same device red will decode on rather than
+    // independently assuming zero.
+    int gpu_index = 0;
     int seek_interval;
     // Frames per second. Two different things have to be told apart here: what
     // the recording was shot at, and how fast to play it back. A video knows

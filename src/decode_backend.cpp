@@ -158,7 +158,7 @@ namespace red {
 
 bool hw_can_decode_stream(int av_codec_id, int chroma_format,
                           int bit_depth_minus8, int width, int height,
-                          std::string *why) {
+                          int device_index, std::string *why) {
     if (decode_backend() == DecodeBackend::Software) return true;
 
 #if defined(RED_HAVE_CUDA)
@@ -178,7 +178,7 @@ bool hw_can_decode_stream(int av_codec_id, int chroma_format,
     CUcontext primary = nullptr;
     bool pushed = false;
     if (cuCtxGetCurrent(&current) != CUDA_SUCCESS || current == nullptr) {
-        if (cuInit(0) != CUDA_SUCCESS || cuDeviceGet(&dev, 0) != CUDA_SUCCESS ||
+        if (cuInit(0) != CUDA_SUCCESS || cuDeviceGet(&dev, device_index) != CUDA_SUCCESS ||
             cuDevicePrimaryCtxRetain(&primary, dev) != CUDA_SUCCESS ||
             cuCtxPushCurrent(primary) != CUDA_SUCCESS) {
             std::cerr << "[decode] could not open a CUDA context to ask NVDEC "
@@ -203,7 +203,8 @@ bool hw_can_decode_stream(int av_codec_id, int chroma_format,
 
     // Always say what the GPU answered. The whole failure mode here was a
     // decoder that reported nothing and drew nothing.
-    std::cerr << "[decode] NVDEC caps: codec=" << (int)codec
+    std::cerr << "[decode] NVDEC caps (device " << device_index
+              << "): codec=" << (int)codec
               << " supported=" << (int)caps.bIsSupported
               << " max=" << caps.nMaxWidth << "x" << caps.nMaxHeight
               << " (stream " << width << "x" << height << ")\n";
@@ -223,6 +224,7 @@ bool hw_can_decode_stream(int av_codec_id, int chroma_format,
     return true;
 #elif defined(__APPLE__)
     (void)chroma_format; (void)bit_depth_minus8; (void)width; (void)height;
+    (void)device_index;
     // Two different limits, and it is worth saying which one was hit.
     //
     // red's VideoToolbox path builds a format description for H.264 and HEVC
@@ -259,7 +261,7 @@ bool hw_can_decode_stream(int av_codec_id, int chroma_format,
     return true;
 #else
     (void)av_codec_id; (void)chroma_format; (void)bit_depth_minus8;
-    (void)width; (void)height; (void)why;
+    (void)width; (void)height; (void)device_index; (void)why;
     return true;
 #endif
 }

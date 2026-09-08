@@ -660,7 +660,8 @@ load_videos(std::map<std::string, std::string> &selected_files,
         if (!red::hw_can_decode_stream((int)demuxers[0]->GetVideoCodec(),
                                        /*chroma 4:2:0*/ 1, /*8-bit*/ 0,
                                        (int)demuxers[0]->GetWidth(),
-                                       (int)demuxers[0]->GetHeight(), &why))
+                                       (int)demuxers[0]->GetHeight(),
+                                       dc_context->gpu_index, &why))
             red::decode_backend_force_software(why);
     }
 
