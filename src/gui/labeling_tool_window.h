@@ -401,7 +401,7 @@ inline void DrawLabelingToolWindow(
         {
             for (const auto &c : cells)
                 if (c.needs_fix ||
-                    (skeleton.has_skeleton && (!c.has_kp || c.kp_state != KpProgress::AllViews)))
+                    (skeleton.has_skeleton && (!c.has_kp || c.kp_state != KpProgress::Full)))
                     unfinished.push_back(c.frame);
             // Never-labelled frames only count when they are the exception.
             // On a sparsely labelled recording "unfinished" would be almost
@@ -532,7 +532,7 @@ inline void DrawLabelingToolWindow(
         {
             size_t n_all_views = 0, n_partial = 0, n_yellow = 0;
             for (auto &lf : labeled_frames) {
-                if (lf.state == KpProgress::AllViews) n_all_views++;
+                if (lf.state == KpProgress::Full) n_all_views++;
                 else if (lf.state == KpProgress::Triangulated) n_partial++;
                 else n_yellow++;
             }
@@ -632,7 +632,7 @@ inline void DrawLabelingToolWindow(
             std::vector<double> unlabeled_x;
             for (int f : unlabeled) unlabeled_x.push_back((double)f);
             for (auto &lf : labeled_frames) {
-                if (lf.state == KpProgress::AllViews) green_x.push_back((double)lf.frame);
+                if (lf.state == KpProgress::Full) green_x.push_back((double)lf.frame);
                 else if (lf.state == KpProgress::Triangulated)
                     kp_partial_x.push_back((double)lf.frame);
                 else kp_yellow_x.push_back((double)lf.frame);
@@ -813,7 +813,7 @@ inline void DrawLabelingToolWindow(
                     const char *tip;
                 };
                 const LegendItem items[] = {
-                    {&color_green, "all views", !green_x.empty(),
+                    {&color_green, "full", !green_x.empty(),
                      "every keypoint placed in every camera, and "
                      "triangulated. A keypoint hidden from one camera keeps a "
                      "frame out of this state however finished it is."},

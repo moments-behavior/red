@@ -114,9 +114,9 @@ inline void DrawFrameBufferWindow(AppContext &ctx, int select_corr_head) {
                     text_col = ImGui::ColorConvertFloat4ToU32(kLabelNeedsFix);
                     state_tip = "needs fixing";
                 } else switch (prog) {
-                case KpProgress::AllViews:
+                case KpProgress::Full:
                     text_col = ImGui::ColorConvertFloat4ToU32(kLabelComplete);
-                    state_tip = "all views";
+                    state_tip = "full";
                     break;
                 case KpProgress::Triangulated:
                     text_col = ImGui::ColorConvertFloat4ToU32(kLabelTriangulated);
