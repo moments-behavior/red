@@ -10,6 +10,7 @@
 // to agree on it, and a probe that could answer differently mid-run would
 // leave frames in the wrong kind of memory.
 #include "red_build_config.h"
+#include <string>
 
 namespace red {
 
@@ -30,6 +31,28 @@ inline bool decode_backend_is_software() {
 // process lifetime.
 const char *decode_backend_name();
 const char *decode_backend_reason();
+
+// Can the hardware decoder actually handle this stream?
+//
+// NVDEC advertises what it supports per codec, chroma and resolution, and a
+// GPU that cannot take a stream will simply produce no frames. NvDecoder does
+// ask -- and throws "Codec not supported on this GPU" -- but it asks from
+// inside a CUVID parser callback, and a C++ exception does not travel back
+// through NVIDIA's C frame: the parser stops and nothing is printed. So the
+// question has to be asked here, before any decoding starts.
+//
+// Returns true when hardware is not in use or when it can decode the stream.
+// `why` is filled in when it cannot.
+bool hw_can_decode_stream(int av_codec_id, int chroma_format,
+                          int bit_depth_minus8, int width, int height,
+                          std::string *why);
+
+// Switch to software for the rest of the process, with a reason. Only safe
+// before any decode buffers are allocated or decoder threads spawned --
+// load_videos calls it between opening the demuxers and allocating, which is
+// the one point where the codec is known and nothing has been built on the
+// earlier answer yet.
+void decode_backend_force_software(const std::string &why);
 
 // Software decode thread budget. Call sw_decode_set_camera_count() once,
 // before spawning decoder threads: N cameras each letting libavcodec size its

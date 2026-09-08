@@ -12,6 +12,8 @@
 #if defined(RED_HAVE_CUDA)
 #include <cuda.h>
 #include <cuda_runtime_api.h>
+#include <nvcuvid.h>
+#include "FFmpegDemuxer.h"
 #endif
 
 namespace red {
@@ -143,6 +145,61 @@ int sw_decode_threads_per_camera() {
     // before that on a single 1-2 MP stream.
     int per_cam = (int)hw / g_num_cams.load();
     return std::clamp(per_cam, 1, 4);
+}
+
+} // namespace red
+
+namespace red {
+
+bool hw_can_decode_stream(int av_codec_id, int chroma_format,
+                          int bit_depth_minus8, int width, int height,
+                          std::string *why) {
+    if (decode_backend() == DecodeBackend::Software) return true;
+
+#if defined(RED_HAVE_CUDA)
+    const cudaVideoCodec codec = FFmpeg2NvCodecId((AVCodecID)av_codec_id);
+    CUVIDDECODECAPS caps{};
+    caps.eCodecType = codec;
+    caps.eChromaFormat = (cudaVideoChromaFormat)chroma_format;
+    caps.nBitDepthMinus8 = (unsigned)bit_depth_minus8;
+
+    CUcontext ctx = nullptr;
+    if (cuCtxGetCurrent(&ctx) != CUDA_SUCCESS || ctx == nullptr) {
+        // No context to ask on. Say yes rather than downgrading on a
+        // question we could not put.
+        return true;
+    }
+    if (cuvidGetDecoderCaps(&caps) != CUDA_SUCCESS) {
+        if (why) *why = "could not query NVDEC capabilities";
+        return false;
+    }
+    if (!caps.bIsSupported) {
+        if (why)
+            *why = "this GPU's NVDEC cannot decode this codec";
+        return false;
+    }
+    if (width > (int)caps.nMaxWidth || height > (int)caps.nMaxHeight) {
+        if (why)
+            *why = "resolution " + std::to_string(width) + "x" +
+                   std::to_string(height) + " exceeds NVDEC's " +
+                   std::to_string(caps.nMaxWidth) + "x" +
+                   std::to_string(caps.nMaxHeight);
+        return false;
+    }
+    return true;
+#else
+    (void)av_codec_id; (void)chroma_format; (void)bit_depth_minus8;
+    (void)width; (void)height; (void)why;
+    return true;
+#endif
+}
+
+void decode_backend_force_software(const std::string &why) {
+    decode_backend();   // make sure the one-time resolve has run
+    if (g_backend == DecodeBackend::Software) return;
+    g_backend = DecodeBackend::Software;
+    g_reason = why;
+    std::cerr << "[decode] falling back to software: " << why << "\n";
 }
 
 } // namespace red

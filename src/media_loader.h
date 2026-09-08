@@ -641,6 +641,25 @@ load_videos(std::map<std::string, std::string> &selected_files,
                       << " — wrong calibration for this crop?" << std::endl;
         }
     }
+    // Ask the hardware decoder whether it can actually take this stream,
+    // before anything is built on the assumption that it can. NVDEC advertises
+    // per codec and resolution, and a GPU that cannot decode a stream produces
+    // no frames at all -- 3DPOP's MPEG-4 Part 2 pigeon videos opened cleanly
+    // on an A6000, reported their metadata, and then showed nothing. The check
+    // NvDecoder already does runs inside a CUVID parser callback, where its
+    // exception cannot travel back out through NVIDIA's C frame, so it fails
+    // silently. Here it can fall back instead.
+    if (!demuxers.empty() && demuxers[0]) {
+        std::string why;
+        // 4:2:0 8-bit is what every path downstream is written for, and what
+        // these files are; a stream that is not will fail its own way.
+        if (!red::hw_can_decode_stream((int)demuxers[0]->GetVideoCodec(),
+                                       /*chroma 4:2:0*/ 1, /*8-bit*/ 0,
+                                       (int)demuxers[0]->GetWidth(),
+                                       (int)demuxers[0]->GetHeight(), &why))
+            red::decode_backend_force_software(why);
+    }
+
     t_stage = load_timing::Clock::now();
     render_allocate_scene_memory(scene, label_buffer_size);
     t_alloc = load_timing::ms(t_stage);
