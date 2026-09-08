@@ -401,7 +401,7 @@ inline void DrawLabelingToolWindow(
         {
             for (const auto &c : cells)
                 if (c.needs_fix ||
-                    (skeleton.has_skeleton && (!c.has_kp || c.kp_state != KpProgress::Complete)))
+                    (skeleton.has_skeleton && (!c.has_kp || c.kp_state != KpProgress::AllViews)))
                     unfinished.push_back(c.frame);
             // Never-labelled frames only count when they are the exception.
             // On a sparsely labelled recording "unfinished" would be almost
@@ -530,9 +530,9 @@ inline void DrawLabelingToolWindow(
         // used to carry in their tooltips; the legend under the timeline
         // carries the rest.
         {
-            size_t n_green = 0, n_partial = 0, n_yellow = 0;
+            size_t n_all_views = 0, n_partial = 0, n_yellow = 0;
             for (auto &lf : labeled_frames) {
-                if (lf.state == KpProgress::Complete) n_green++;
+                if (lf.state == KpProgress::AllViews) n_all_views++;
                 else if (lf.state == KpProgress::Triangulated) n_partial++;
                 else n_yellow++;
             }
@@ -547,8 +547,9 @@ inline void DrawLabelingToolWindow(
                 ImGui::TextColored(col, "%zu", n);
                 if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
             };
-            count_chip(color_green, n_green,
-                       "complete (all placed & triangulated)");
+            count_chip(color_green, n_all_views,
+                       "every keypoint placed in every camera, and "
+                       "triangulated");
             count_chip(color_teal, n_partial,
                        "all placed keypoints triangulated");
             count_chip(color_yellow, n_yellow,
@@ -572,7 +573,7 @@ inline void DrawLabelingToolWindow(
                 ImGui::SetTooltip(
                     gaps_are_exceptional
                         ? "Frames that are unlabelled, or labelled but not "
-                          "complete."
+                          "in every view."
                         : "Labelled frames that are not complete.");
             if (!unlabeled.empty()) {
                 // Same orange as the timeline ticks, so the colour there means
@@ -631,7 +632,7 @@ inline void DrawLabelingToolWindow(
             std::vector<double> unlabeled_x;
             for (int f : unlabeled) unlabeled_x.push_back((double)f);
             for (auto &lf : labeled_frames) {
-                if (lf.state == KpProgress::Complete) green_x.push_back((double)lf.frame);
+                if (lf.state == KpProgress::AllViews) green_x.push_back((double)lf.frame);
                 else if (lf.state == KpProgress::Triangulated)
                     kp_partial_x.push_back((double)lf.frame);
                 else kp_yellow_x.push_back((double)lf.frame);
@@ -812,8 +813,10 @@ inline void DrawLabelingToolWindow(
                     const char *tip;
                 };
                 const LegendItem items[] = {
-                    {&color_green, "complete", !green_x.empty(),
-                     "every keypoint placed on every camera, and triangulated"},
+                    {&color_green, "all views", !green_x.empty(),
+                     "every keypoint placed in every camera, and "
+                     "triangulated. A keypoint hidden from one camera keeps a "
+                     "frame out of this state however finished it is."},
                     {&color_teal, "triangulated", !kp_partial_x.empty(),
                      "every keypoint you placed is triangulated, but not all "
                      "keypoints are placed"},
