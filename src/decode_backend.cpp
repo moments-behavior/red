@@ -163,19 +163,48 @@ bool hw_can_decode_stream(int av_codec_id, int chroma_format,
     caps.eChromaFormat = (cudaVideoChromaFormat)chroma_format;
     caps.nBitDepthMinus8 = (unsigned)bit_depth_minus8;
 
-    CUcontext ctx = nullptr;
-    if (cuCtxGetCurrent(&ctx) != CUDA_SUCCESS || ctx == nullptr) {
-        // No context to ask on. Say yes rather than downgrading on a
-        // question we could not put.
-        return true;
+    // A context has to be current to ask. load_videos runs on the main thread,
+    // which has none -- the decoder threads make their own -- so the first
+    // version of this bailed out and answered "yes" to every stream, which is
+    // exactly the silence it was written to remove. Retain the device's
+    // primary context for the length of the query instead.
+    CUcontext current = nullptr;
+    CUdevice dev = 0;
+    CUcontext primary = nullptr;
+    bool pushed = false;
+    if (cuCtxGetCurrent(&current) != CUDA_SUCCESS || current == nullptr) {
+        if (cuInit(0) != CUDA_SUCCESS || cuDeviceGet(&dev, 0) != CUDA_SUCCESS ||
+            cuDevicePrimaryCtxRetain(&primary, dev) != CUDA_SUCCESS ||
+            cuCtxPushCurrent(primary) != CUDA_SUCCESS) {
+            std::cerr << "[decode] could not open a CUDA context to ask NVDEC "
+                         "what it supports; assuming it can decode this\n";
+            return true;
+        }
+        pushed = true;
     }
-    if (cuvidGetDecoderCaps(&caps) != CUDA_SUCCESS) {
+
+    const CUresult qr = cuvidGetDecoderCaps(&caps);
+
+    if (pushed) {
+        CUcontext popped = nullptr;
+        cuCtxPopCurrent(&popped);
+        cuDevicePrimaryCtxRelease(dev);
+    }
+
+    if (qr != CUDA_SUCCESS) {
         if (why) *why = "could not query NVDEC capabilities";
         return false;
     }
+
+    // Always say what the GPU answered. The whole failure mode here was a
+    // decoder that reported nothing and drew nothing.
+    std::cerr << "[decode] NVDEC caps: codec=" << (int)codec
+              << " supported=" << (int)caps.bIsSupported
+              << " max=" << caps.nMaxWidth << "x" << caps.nMaxHeight
+              << " (stream " << width << "x" << height << ")\n";
+
     if (!caps.bIsSupported) {
-        if (why)
-            *why = "this GPU's NVDEC cannot decode this codec";
+        if (why) *why = "this GPU's NVDEC cannot decode this codec";
         return false;
     }
     if (width > (int)caps.nMaxWidth || height > (int)caps.nMaxHeight) {
