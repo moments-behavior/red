@@ -77,16 +77,6 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
                 "ChooseProject", "Choose Project File", ".redproj",
                 config);
         }
-        // A tailcycle session is not a .redproj -- it brings its own cameras,
-        // calibration and skeleton -- but opening one belongs with the other
-        // ways of opening something to work on. Hidden rather than disabled
-        // when the build has no Parquet: there is nothing the user could do
-        // about it from here.
-        if (TailcycleImport::available()) {
-            if (ImGui::MenuItem("Open tailcycle Dataset...")) {
-                tailcycle_open_browse(win.tailcycle_open);
-            }
-        }
         ImGui::BeginDisabled(pm.project_path.empty());
         if (ImGui::MenuItem("Switch Skeleton...")) {
             win.switch_skeleton.show = true;
@@ -102,6 +92,30 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
             ctx.save_requested = true;
         }
         ImGui::EndDisabled();
+        ImGui::EndMenu();
+    }
+
+    // Its own menu rather than one entry in File and a format buried in the
+    // Export Tool's combo. Hidden entirely without Parquet: neither entry
+    // could do anything, and there is nothing the user could do about that
+    // from a menu.
+    if (TailcycleImport::available() && ImGui::BeginMenu("tailcycle")) {
+        if (ImGui::MenuItem("Open Dataset...")) {
+            tailcycle_open_browse(win.tailcycle_open);
+        }
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+            ImGui::SetTooltip("Open a tailcycle-dataset session to look at or "
+                              "correct.");
+        ImGui::BeginDisabled(pm.project_path.empty() && !ps.video_loaded);
+        if (ImGui::MenuItem("Export Dataset...")) {
+            export_state.show = true;
+            export_state.want_format = (int)ExportFormats::TAILCYCLE;
+        }
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort |
+                                 ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("Write this project out as a tailcycle-dataset. "
+                              "Opens the Export Tool with that format chosen.");
         ImGui::EndMenu();
     }
 

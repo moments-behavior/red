@@ -26,6 +26,11 @@
 struct ExportWindowState {
     bool show = false;
     int format_idx = 0; // 0=JARVIS, 1=COCO, 2=DLC, 3=YOLO Pose, 4=YOLO Detect, 5=Nerfstudio, 6=tailcycle
+    // A format to select the next time the window draws, as an
+    // ExportFormats::Format; -1 for none. The combo's indices depend on which
+    // formats this project and this build offer, so a caller that wants a
+    // particular one cannot just set format_idx.
+    int want_format = -1;
     // One row per session to write. The format makes split a directory level,
     // so a session belongs wholly to one split -- you build train/val/test by
     // exporting several ranges, not by ratio-splitting one. Frame-level random
@@ -108,6 +113,14 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
         if (TailcycleExport::available()) {
             format_labels.push_back("tailcycle-dataset");
             format_map.push_back(ExportFormats::TAILCYCLE);
+        }
+        if (state.want_format >= 0) {
+            for (size_t i = 0; i < format_map.size(); i++)
+                if ((int)format_map[i] == state.want_format) {
+                    state.format_idx = (int)i;
+                    break;
+                }
+            state.want_format = -1;
         }
         if (state.format_idx >= (int)format_labels.size())
             state.format_idx = 0;
