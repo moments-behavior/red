@@ -1,5 +1,6 @@
 #pragma once
 #include "app_context.h"
+#include "decode_backend.h"
 #include "IconsForkAwesome.h"
 #include "utils.h"
 #include <algorithm>
@@ -514,11 +515,19 @@ inline void DrawTransportBar(TransportBarState &state, AppContext &ctx) {
                  "\xE2\x80\x94 (assuming %.0f fps)", dc->video_fps);
     snprintf(val_spd, sizeof(val_spd), "%.2fx",    ps.inst_speed);
     snprintf(val_rr,  sizeof(val_rr),  "%.0f fps", ImGui::GetIO().Framerate);
-    const char *lbl_fr = "Recorded FR", *lbl_spd = "Play Speed", *lbl_rr = "Render Rate";
+    // Which decoder is running. Worth showing because it is not always the
+    // one the machine picked at startup: a stream the GPU cannot take -- a
+    // codec VideoToolbox does not build a format description for, or a
+    // resolution above what NVDEC advertises -- drops the whole session to
+    // software when the videos load. That used to happen with no sign of it.
+    const char *val_dec = red::decode_backend_name();
+    const char *lbl_fr = "Recorded FR", *lbl_spd = "Play Speed",
+               *lbl_rr = "Render Rate", *lbl_dec = "Decode";
     float gap = spacing * 3;
     float total_w = ImGui::CalcTextSize(lbl_fr).x + spacing + ImGui::CalcTextSize(val_fr).x + gap
                   + ImGui::CalcTextSize(lbl_spd).x + spacing + ImGui::CalcTextSize(val_spd).x + gap
-                  + ImGui::CalcTextSize(lbl_rr).x + spacing + ImGui::CalcTextSize(val_rr).x;
+                  + ImGui::CalcTextSize(lbl_rr).x + spacing + ImGui::CalcTextSize(val_rr).x + gap
+                  + ImGui::CalcTextSize(lbl_dec).x + spacing + ImGui::CalcTextSize(val_dec).x;
     ImGui::SameLine(ImGui::GetWindowWidth() - total_w - 12.0f);
 
     ImGui::TextColored(label_col, "%s", lbl_fr);
@@ -533,6 +542,13 @@ inline void DrawTransportBar(TransportBarState &state, AppContext &ctx) {
     ImGui::SameLine(0, gap);
     ImGui::TextColored(label_col, "%s", lbl_rr);
     ImGui::SameLine(0, spacing); ImGui::TextDisabled("%s", val_rr);
+    ImGui::SameLine(0, gap);
+    ImGui::TextColored(label_col, "%s", lbl_dec);
+    ImGui::SameLine(0, spacing); ImGui::TextDisabled("%s", val_dec);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("%s decoding \xE2\x80\x94 %s.\n"
+                          "Override with RED_DECODE_BACKEND=hw or sw.",
+                          val_dec, red::decode_backend_reason());
 
     ImGui::End();
 }
