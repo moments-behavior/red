@@ -642,13 +642,17 @@ load_videos(std::map<std::string, std::string> &selected_files,
         }
     }
     // Ask the hardware decoder whether it can actually take this stream,
-    // before anything is built on the assumption that it can. NVDEC advertises
-    // per codec and resolution, and a GPU that cannot decode a stream produces
-    // no frames at all -- 3DPOP's MPEG-4 Part 2 pigeon videos opened cleanly
-    // on an A6000, reported their metadata, and then showed nothing. The check
-    // NvDecoder already does runs inside a CUVID parser callback, where its
-    // exception cannot travel back out through NVIDIA's C frame, so it fails
-    // silently. Here it can fall back instead.
+    // before anything is built on the assumption that it can. A GPU that
+    // cannot produces no frames at all and says nothing: the check NvDecoder
+    // already does runs inside a CUVID parser callback, where its exception
+    // cannot travel back out through NVIDIA's C frame.
+    //
+    // The limit is per codec AND per resolution, and the resolution half is
+    // the one that bites. 3DPOP's pigeon videos are MPEG-4 Part 2 at
+    // 3840x2160; an A6000's NVDEC decodes MPEG-4 quite happily but only up to
+    // 2032x2032, so the stream was accepted and then silently dropped. Asking
+    // about the codec alone would have called this supported and changed
+    // nothing.
     if (!demuxers.empty() && demuxers[0]) {
         std::string why;
         // 4:2:0 8-bit is what every path downstream is written for, and what
