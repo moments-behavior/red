@@ -437,7 +437,7 @@ inline void DrawLabelingToolWindow(
             std::vector<int> frames;
         };
         FrameClass classes[] = {
-            {"full", &color_green,
+            {"complete", &color_green,
              "every keypoint placed in every camera, and triangulated. A "
              "keypoint hidden from one camera keeps a frame out of this state "
              "however finished it is.", {}},
@@ -459,7 +459,7 @@ inline void DrawLabelingToolWindow(
         constexpr int kNumClasses = 7;
 
         for (const auto &lf : labeled_frames) {
-            if (lf.state == KpProgress::Full) classes[kFull].frames.push_back(lf.frame);
+            if (lf.state == KpProgress::Complete) classes[kFull].frames.push_back(lf.frame);
             else if (lf.state == KpProgress::Triangulated)
                 classes[kTri].frames.push_back(lf.frame);
             else classes[kUntri].frames.push_back(lf.frame);

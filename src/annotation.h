@@ -363,13 +363,13 @@ enum class KpProgress {
     None = 0,        // no keypoints on this frame at all
     Untriangulated,  // some placed keypoint has no 3D yet
     Triangulated,    // every placed keypoint is triangulated, not all placed
-    // Every keypoint placed in EVERY camera, and triangulated. Not called
-    // Complete: that reads as "this frame is done", and it is not what the
-    // test measures -- a keypoint the animal's own body hides from one camera
-    // can never be placed there, so an honestly-finished frame stays out of
-    // this state for good. "Full" says how much is there without claiming
-    // anything about whether the work is over.
-    Full,
+    // Every keypoint placed in EVERY camera, and triangulated.
+    //
+    // Read it as "nothing is missing from any view", not as "this frame is
+    // done": a keypoint the animal's own body hides from one camera can never
+    // be placed there, so a frame that is finished as far as anyone can take
+    // it still sits in Triangulated below. The legend's tooltip says so.
+    Complete,
 };
 
 inline KpProgress frame_kp_progress(const FrameAnnotation &fa, int num_nodes,
@@ -378,11 +378,11 @@ inline KpProgress frame_kp_progress(const FrameAnnotation &fa, int num_nodes,
     if (!frame_has_any_keypoints(fa)) return KpProgress::None;
     if (!has_skeleton) return KpProgress::Untriangulated;
     if (is_2d)
-        return frame_is_complete(fa) ? KpProgress::Full
+        return frame_is_complete(fa) ? KpProgress::Complete
                                      : KpProgress::Untriangulated;
     if (num_cams > 1 && frame_is_complete(fa) &&
         frame_is_fully_triangulated(fa, num_nodes))
-        return KpProgress::Full;
+        return KpProgress::Complete;
     // Triangulated iff every placed node (labeled in >=1 camera) is
     // triangulated. Triangulated implies placed, so this means the placed and
     // triangulated sets coincide.
