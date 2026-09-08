@@ -14,6 +14,10 @@
 #include <cuda_runtime_api.h>
 #include <nvcuvid.h>
 #include "FFmpegDemuxer.h"
+#elif defined(__APPLE__)
+extern "C" {
+#include <libavcodec/avcodec.h>
+}
 #endif
 
 namespace red {
@@ -213,6 +217,23 @@ bool hw_can_decode_stream(int av_codec_id, int chroma_format,
                    std::to_string(height) + " exceeds NVDEC's " +
                    std::to_string(caps.nMaxWidth) + "x" +
                    std::to_string(caps.nMaxHeight);
+        return false;
+    }
+    return true;
+#elif defined(__APPLE__)
+    (void)chroma_format; (void)bit_depth_minus8; (void)width; (void)height;
+    // red's VideoToolbox path builds a format description for H.264 and HEVC
+    // and nothing else (vt_async_decoder.mm). Any other codec fails at init
+    // with "Failed to create format description" and leaves the camera with no
+    // decoder at all -- the same silent-blank-views symptom NVDEC had, by a
+    // different route.
+    if (av_codec_id != AV_CODEC_ID_H264 && av_codec_id != AV_CODEC_ID_HEVC) {
+        const AVCodecDescriptor *d =
+            avcodec_descriptor_get((AVCodecID)av_codec_id);
+        if (why)
+            *why = std::string("VideoToolbox decode here covers H.264 and HEVC "
+                               "only, and this is ") +
+                   (d && d->name ? d->name : "another codec");
         return false;
     }
     return true;
