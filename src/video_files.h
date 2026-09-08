@@ -1,24 +1,30 @@
 #pragma once
 // Which video containers red accepts, and how a camera's file is found.
 //
-// ".mp4" used to be written out at every site that needed a camera's video --
-// the open dialogs, camera discovery, reload, and every exporter that pulls
-// frames from the source. The decoder never cared: FFmpegDemuxer hands the
-// path to avformat_open_input, which opens AVI and MOV and MKV as readily as
-// MP4. The restriction was string literals, not capability.
+// ".mp4" used to be written out at each of the eleven sites that needed a
+// camera's video -- the open dialogs, camera discovery, the reload path, and
+// every exporter that pulls frames from the source. It is written once here
+// instead, so the answer to "which containers?" lives in one place.
 //
-// Resolving by search rather than by a stored extension means projects made
-// before this keep working with no migration, and a folder can hold a mix.
-// The tie-break when a camera has more than one file is the order below.
+// That answer is currently mp4 alone. The decoder does not require it --
+// FFmpegDemuxer hands the path to avformat_open_input, which opens AVI, MOV
+// and MKV just as well -- but the tailcycle-dataset format specifies
+// <cam>.mp4, so a project in another container could not round-trip through
+// it, and there is no call for the others yet. Adding one is appending to the
+// list below; every site follows it.
+//
+// Resolution is by search rather than by an extension stored on the project,
+// so nothing needs migrating if that list grows. When a camera has more than
+// one matching file, the order below decides.
 
 #include <filesystem>
 #include <string>
 #include <cctype>
 
-inline const char *const kVideoExts[] = {".mp4", ".avi", ".mov", ".mkv"};
+inline const char *const kVideoExts[] = {".mp4"};
 
 // For an ImGuiFileDialog filter string.
-inline const char *video_ext_filter() { return ".mp4,.avi,.mov,.mkv"; }
+inline const char *video_ext_filter() { return ".mp4"; }
 
 inline bool is_video_ext(const std::string &ext) {
     std::string e;
