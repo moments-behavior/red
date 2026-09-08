@@ -1,6 +1,7 @@
 #pragma once
 #include "imgui.h"
 #include "app_context.h"
+#include "video_files.h"
 #include "gui/window_states.h"
 #include "tailcycle_import.h"
 #include "gui/tailcycle_open_window.h"
@@ -68,7 +69,7 @@ inline void DrawWelcomeWindow(AppContext &ctx, WindowStates &win) {
             cfg.flags = ImGuiFileDialogFlags_Modal;
             ImGuiFileDialog::Instance()->OpenDialog(
                 "ChooseMedia", "Select Video(s)",
-                ".mp4", cfg);
+                video_ext_filter(), cfg);
         }
         ImGui::SameLine(0, spacing);
         if (ImGui::Button("Load Project", ImVec2(btn_w, 30))) {

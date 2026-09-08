@@ -1,4 +1,5 @@
 #pragma once
+#include "video_files.h"
 // jarvis_merge.h — Group JARVIS export: merge many JARVIS datasets into one
 // master dataset.
 //
@@ -311,8 +312,8 @@ inline bool build_project_json(const SourceInfo &src, float margin_pixel,
     for (const auto &cam : src.camera_names) {
         if (src.telecentric) {
             ffmpeg_reader::FrameReader reader;
-            if (!reader.open(src.media_folder + "/" + cam + ".mp4")) {
-                if (err) *err = "Cannot open video for dims: " + cam + ".mp4";
+            if (!reader.open(camera_video_path(src.media_folder, cam))) {
+                if (err) *err = "Cannot open video for dims: " + cam;
                 return false;
             }
             img_w[cam] = reader.width();
@@ -681,7 +682,7 @@ inline bool merge_datasets(const MergeConfig &cfg_in,
 
             std::vector<std::thread> threads;
             for (const auto &cam : s.camera_names) {
-                std::string video = s.media_folder + "/" + cam + ".mp4";
+                std::string video = camera_video_path(s.media_folder, cam);
                 threads.emplace_back(JarvisExport::extract_jpegs_for_camera, cam, trial,
                                      video, out, train_frames, val_frames, frame_to_mode,
                                      status, &status_mutex, images_saved, cfg_in.jpeg_quality);

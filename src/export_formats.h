@@ -1,4 +1,5 @@
 #pragma once
+#include "video_files.h"
 // export_formats.h — Multi-format export dispatcher
 //
 // Single entry point for exporting annotations to various training frameworks.
@@ -202,7 +203,7 @@ inline bool extract_images(const ExportConfig &cfg,
     std::vector<std::thread> threads;
 
     for (const auto &cam : cfg.camera_names) {
-        std::string video_path = cfg.media_folder + "/" + cam + ".mp4";
+        std::string video_path = camera_video_path(cfg.media_folder, cam);
         if (!std::filesystem::exists(video_path)) continue;
         threads.emplace_back(
             JarvisExport::extract_jpegs_for_camera,
@@ -611,7 +612,7 @@ inline bool export_deeplabcut(const ExportConfig &cfg, const AnnotationMap &amap
         std::vector<int> empty_int;
         std::vector<std::thread> threads;
         for (const auto &cam : cfg.camera_names) {
-            std::string vid = cfg.media_folder + "/" + cam + ".mp4";
+            std::string vid = camera_video_path(cfg.media_folder, cam);
             if (!std::filesystem::exists(vid)) continue;
             // path: <output>/labeled-data/<cam>/Frame_N.jpg (trial="" so no extra subdir)
             threads.emplace_back(
@@ -687,7 +688,7 @@ inline bool export_jarvis_tr(const ExportConfig &cfg, const AnnotationMap &amap,
 
     nlohmann::json vid_index;
     for (const auto &cam : cfg.camera_names) {
-        vid_index[cam] = cfg.media_folder + "/" + cam + ".mp4";
+        vid_index[cam] = camera_video_path(cfg.media_folder, cam);
     }
 
     std::ofstream f(latest + "/video_index.json");
@@ -897,7 +898,7 @@ inline bool export_nerfstudio(const ExportConfig &cfg, const AnnotationMap &amap
         // Collect camera/video pairs
         std::vector<std::pair<std::string, std::string>> cam_vids;
         for (const auto &cam : cfg.camera_names) {
-            std::string video_path = cfg.media_folder + "/" + cam + ".mp4";
+            std::string video_path = camera_video_path(cfg.media_folder, cam);
             if (fs::exists(video_path))
                 cam_vids.push_back({cam, video_path});
         }
@@ -1020,7 +1021,7 @@ inline bool export_tailcycle(const ExportConfig &cfg, const AnnotationMap &amap,
         const fs::path gdir = fs::path(tc.output_folder) / tc.split / tc.session_id /
                               "groups" / tc.group_id;
         for (size_t i = 0; i < cfg.camera_names.size(); i++) {
-            const std::string vpath = cfg.media_folder + "/" + cfg.camera_names[i] + ".mp4";
+            const std::string vpath = camera_video_path(cfg.media_folder, cfg.camera_names[i]);
             if (!fs::exists(vpath)) {
                 if (status) *status = "Error: no video for camera " + cfg.camera_names[i];
                 return false;

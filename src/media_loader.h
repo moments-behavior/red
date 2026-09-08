@@ -11,6 +11,7 @@
 #include <cctype>
 #include <filesystem>
 #include <set>
+#include "video_files.h"
 #include <map>
 #include <string>
 #include <thread>
@@ -105,9 +106,8 @@ inline std::vector<std::string> discover_media_cameras(const std::string &folder
 
     for (const auto &e : fs::directory_iterator(folder)) {
         if (!e.is_regular_file()) continue;
-        std::string ext = e.path().extension().string();
-        for (char &c : ext) c = (char)std::tolower((unsigned char)c);
-        if (ext == ".mp4") cams.push_back(e.path().stem().string());
+        if (is_video_ext(e.path().extension().string()))
+            cams.push_back(e.path().stem().string());
     }
     if (!cams.empty()) {
         std::sort(cams.begin(), cams.end());
@@ -536,7 +536,7 @@ load_videos(std::map<std::string, std::string> &selected_files,
         for (const auto &cam_string : pm.camera_names) {
             std::map<std::string, std::string> m;
             std::string media_filename =
-                (std::filesystem::path(pm.media_folder) / (cam_string + ".mp4"))
+                std::filesystem::path(camera_video_path(pm.media_folder, cam_string))
                     .string();
             try {
                 FFmpegDemuxer *demuxer =

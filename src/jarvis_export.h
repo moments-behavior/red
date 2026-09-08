@@ -1,4 +1,5 @@
 #pragma once
+#include "video_files.h"
 #include "ffmpeg_frame_reader.h"
 #include "json.hpp"
 #include "opencv_yaml_io.h"
@@ -1184,7 +1185,7 @@ inline bool export_jarvis_dataset(const ExportConfig &config_in,
     std::vector<std::thread> threads;
     for (const auto &cam : config.camera_names) {
         std::string video_path =
-            config.media_folder + "/" + cam + ".mp4";
+            camera_video_path(config.media_folder, cam);
         threads.emplace_back(extract_jpegs_for_camera, cam, trial_name,
                              video_path, config.output_folder, train_frames,
                              val_frames, frame_to_mode, status, &status_mutex,
@@ -1353,7 +1354,7 @@ inline bool export_jarvis_dataset(const ExportConfig &config_in,
     std::vector<std::thread> threads;
     for (const auto &cam : config.camera_names) {
         std::string video_path =
-            config.media_folder + "/" + cam + ".mp4";
+            camera_video_path(config.media_folder, cam);
         threads.emplace_back(extract_jpegs_for_camera, cam, trial_name,
                              video_path, config.output_folder, train_frames,
                              val_frames, frame_to_mode, status, &status_mutex,

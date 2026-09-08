@@ -1,5 +1,6 @@
 #pragma once
 #include "app_context.h"
+#include "video_files.h"
 #include "gui/window_states.h"
 #include "IconsForkAwesome.h"
 #include "tailcycle_import.h"
@@ -31,7 +32,7 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
             config.path = pm.media_folder;
             config.flags = ImGuiFileDialogFlags_Modal;
             ImGuiFileDialog::Instance()->OpenDialog(
-                "ChooseMedia", "Choose Media", ".mp4", config);
+                "ChooseMedia", "Choose Media", video_ext_filter(), config);
         }
         if (ImGui::MenuItem("Open Images")) {
             IGFD::FileDialogConfig config;
