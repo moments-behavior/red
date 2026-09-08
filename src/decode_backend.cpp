@@ -18,6 +18,7 @@
 extern "C" {
 #include <libavcodec/avcodec.h>
 }
+#include <VideoToolbox/VideoToolbox.h>
 #endif
 
 namespace red {
@@ -222,18 +223,37 @@ bool hw_can_decode_stream(int av_codec_id, int chroma_format,
     return true;
 #elif defined(__APPLE__)
     (void)chroma_format; (void)bit_depth_minus8; (void)width; (void)height;
+    // Two different limits, and it is worth saying which one was hit.
+    //
     // red's VideoToolbox path builds a format description for H.264 and HEVC
-    // and nothing else (vt_async_decoder.mm). Any other codec fails at init
-    // with "Failed to create format description" and leaves the camera with no
-    // decoder at all -- the same silent-blank-views symptom NVDEC had, by a
-    // different route.
+    // and nothing else (vt_async_decoder.mm), so anything else fails at init
+    // and leaves the camera with no decoder. But VideoToolbox itself supports
+    // a wider set on some Macs and a narrower one on others -- this machine
+    // decodes MJPEG, ProRes and AV1 but not MPEG-4 Part 2, MPEG-2 or VP9 --
+    // so "red has not implemented it" and "this Mac cannot do it" are separate
+    // answers, and only the first is worth anyone's time to fix.
     if (av_codec_id != AV_CODEC_ID_H264 && av_codec_id != AV_CODEC_ID_HEVC) {
         const AVCodecDescriptor *d =
             avcodec_descriptor_get((AVCodecID)av_codec_id);
-        if (why)
-            *why = std::string("VideoToolbox decode here covers H.264 and HEVC "
-                               "only, and this is ") +
-                   (d && d->name ? d->name : "another codec");
+        const std::string name = (d && d->name) ? d->name : "this codec";
+        CMVideoCodecType vt = 0;
+        switch (av_codec_id) {
+        case AV_CODEC_ID_MPEG4:      vt = kCMVideoCodecType_MPEG4Video; break;
+        case AV_CODEC_ID_MPEG2VIDEO: vt = kCMVideoCodecType_MPEG2Video; break;
+        case AV_CODEC_ID_MJPEG:      vt = kCMVideoCodecType_JPEG; break;
+        case AV_CODEC_ID_PRORES:     vt = kCMVideoCodecType_AppleProRes422; break;
+        case AV_CODEC_ID_VP9:        vt = kCMVideoCodecType_VP9; break;
+        case AV_CODEC_ID_AV1:        vt = kCMVideoCodecType_AV1; break;
+        default: break;
+        }
+        if (why) {
+            if (vt && VTIsHardwareDecodeSupported(vt))
+                *why = "VideoToolbox on this Mac can decode " + name +
+                       ", but red's VideoToolbox path only handles H.264 and "
+                       "HEVC";
+            else
+                *why = "VideoToolbox on this Mac cannot decode " + name;
+        }
         return false;
     }
     return true;
