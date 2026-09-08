@@ -684,20 +684,36 @@ int main(int argc, char **argv) {
                 cam_signature += pm.camera_names[j] + "|";
             static std::string docked_signature;
             if (cam_signature != docked_signature) {
-                docked_signature = cam_signature;
-                bool has_saved_layout = false;
-                for (int j = 0; j < ncam && !has_saved_layout; ++j) {
+                // A camera counts as already placed only if it is placed
+                // SOMEWHERE. Settings with DockId == 0 mean it was saved
+                // floating, which is the state this pass exists to correct
+                // rather than a layout worth preserving -- and treating those
+                // as "has a layout" made the problem permanent: one session
+                // that ended with floating cameras wrote floating entries, and
+                // every session after it skipped the pass and floated again.
+                bool has_docked_layout = false;
+                for (int j = 0; j < ncam && !has_docked_layout; ++j) {
                     ImGuiID wid = ImHashStr(pm.camera_names[j].c_str());
-                    has_saved_layout =
-                        ImGui::FindWindowSettingsByID(wid) != nullptr;
+                    if (ImGuiWindowSettings *ws =
+                            ImGui::FindWindowSettingsByID(wid))
+                        has_docked_layout = ws->DockId != 0;
                 }
                 const ImGuiID central = 0x00000005;
-                if (!has_saved_layout && ImGui::DockBuilderGetNode(central)) {
+                if (has_docked_layout) {
+                    docked_signature = cam_signature;  // nothing to do
+                } else if (ImGui::DockBuilderGetNode(central)) {
                     for (int j = 0; j < ncam; ++j)
                         ImGui::DockBuilderDockWindow(
                             pm.camera_names[j].c_str(), central);
                     ImGui::DockBuilderFinish(0x00000001);
+                    docked_signature = cam_signature;  // handled
                 }
+                // Otherwise the central node does not exist yet -- the .ini
+                // reload happens in a preframe callback and its nodes are not
+                // live until the dockspace is next built. The signature is
+                // deliberately NOT committed here, so this retries next frame.
+                // Committing it up front was the bug: one early frame with no
+                // node meant the cameras were never docked at all.
             }
         }
 
