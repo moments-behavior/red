@@ -26,6 +26,7 @@ struct DisplayState {
     float contrast = 1.0f;
     bool pivot_midgray = true;
     bool show_keypoints = true;
+    bool show_keypoint_names = false;
     bool show_bboxes = true;
 };
 

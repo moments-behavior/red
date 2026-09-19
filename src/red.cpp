@@ -1278,7 +1278,8 @@ int main(int argc, char **argv) {
                                             scene->num_cams,
                                             active_keypoint_color(user_settings),
                                             (int)inst,
-                                            (int)inst == active_instance))
+                                            (int)inst == active_instance,
+                                            display.show_keypoint_names))
                                         grabbed = (int)inst;
                                 // Grabbing an animal's keypoint selects that
                                 // animal, so the table, Triangulate and the
@@ -1302,7 +1303,8 @@ int main(int argc, char **argv) {
                                 if (pose)
                                     gui_plot_prediction_overlay(
                                         pose, j, &skeleton, pm.camera_params,
-                                        scene);
+                                        scene, 0.0f, 0.9f,
+                                        display.show_keypoint_names);
                             }
 
                         }

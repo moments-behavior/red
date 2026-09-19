@@ -37,7 +37,8 @@ inline ImVec4 instance_tint(int instance) {
 inline bool gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
                                int view_idx, int num_cams,
                                ImVec4 active_color = ImVec4(1, 1, 1, 1),
-                               int instance = 0, bool is_active = true) {
+                               int instance = 0, bool is_active = true,
+                               bool show_names = false) {
     if (view_idx >= (int)fa.cameras.size()) return false;
     auto &cam = fa.cameras[view_idx];
     bool touched = false;
@@ -74,15 +75,40 @@ inline bool gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
                 fa.kp3d[node].clear();
                 touched = true;
             }
-            if (drag_point_hovered) {
-                if (fa.kp3d[node].triangulated) {
 
+            // Draw the skeleton name just to the right of each point when
+            // requested. PlotToPixels keeps the label attached while the user
+            // pans or zooms the image.
+            if (show_names && node < skeleton->node_names.size()) {
+                const std::string &name = skeleton->node_names[node];
+                if (!name.empty()) {
+                    const ImVec2 point_px = ImPlot::PlotToPixels(
+                        cam.keypoints[node].x, cam.keypoints[node].y);
+                    const float font_size = ImGui::GetFontSize() * 0.75f;
+                    ImDrawList *draw_list = ImPlot::GetPlotDrawList();
+                    const ImVec2 text_pos(point_px.x + 9.0f,
+                                          point_px.y - font_size * 0.5f);
+                    draw_list->AddText(ImGui::GetFont(), font_size,
+                                       text_pos,
+                                       ImGui::ColorConvertFloat4ToU32(node_color),
+                                       name.c_str());
+                }
+            }
+
+            if (drag_point_hovered) {
+                std::string label;
+                if (node < skeleton->node_names.size())
+                    label = skeleton->node_names[node];
+                if (fa.kp3d[node].triangulated) {
                     std::ostringstream oss;
                     oss << std::fixed << std::setprecision(2);
                     oss << "(" << fa.kp3d[node].x << ", "
                         << fa.kp3d[node].y << ", "
                         << fa.kp3d[node].z << ")";
-                    std::string label = oss.str();
+                    if (!label.empty()) label += ": ";
+                    label += oss.str();
+                }
+                if (!label.empty()) {
                     ImVec2 mouse_pos = ImGui::GetMousePos();
                     ImVec2 textPos = ImVec2(mouse_pos.x + 10, mouse_pos.y + 10);
                     ImGui::GetForegroundDrawList()->AddText(

@@ -19,6 +19,7 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
     auto &pm = ctx.pm;
     auto &ps = ctx.ps;
     auto &user_settings = ctx.user_settings;
+    auto &display = ctx.display;
 
     if (!ImGui::BeginMainMenuBar())
         return;
@@ -150,6 +151,9 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
         if (ImGui::MenuItem("Frame Drops")) {
             win.frame_drops.show = true;
         }
+        ImGui::Separator();
+        ImGui::MenuItem("Show keypoint names", nullptr,
+                        &display.show_keypoint_names);
         ImGui::Separator();
         if (ImGui::MenuItem("Help")) {
             show_help_window = true;
