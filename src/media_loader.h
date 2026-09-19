@@ -170,7 +170,8 @@ inline bool scan_per_camera_dirs(const std::string &root,
             return false;
         }
         for (const auto &f : fs::directory_iterator(cam.path())) {
-            if (!f.is_regular_file()) continue;
+            if (!f.is_regular_file() ||
+                !is_image_ext(f.path().extension().string())) continue;
             out[cam_name + "_" + f.path().filename().string()] = f.path().string();
         }
     }
@@ -423,7 +424,17 @@ load_images(std::map<std::string, std::string> &selected_files,
     if (imgs_names.size() < (size_t)label_buffer_size) {
         label_buffer_size = imgs_names.size();
     }
+    // image_loader decodes with stb into host memory and copies directly into
+    // each ring slot. Never give it CUDA device pointers when the user has
+    // selected GPU Buffer; image projects must use host-backed slots and do
+    // not need CUDA/GL PBO interop for texture upload either.
+    scene->use_cpu_buffer = true;
+    scene->force_host_upload = true;
     render_allocate_scene_memory(scene, label_buffer_size);
+    for (const auto &name : pm.camera_names) {
+        auto [it, inserted] = latest_decoded_frame.try_emplace(name);
+        it->second.store(0, std::memory_order_relaxed);
+    }
     for (int i = 0; i < scene->num_cams; i++) {
         decoder_threads.push_back(
             std::thread(&image_loader, dc_context, imgs_names,
@@ -666,6 +677,7 @@ load_videos(std::map<std::string, std::string> &selected_files,
     }
 
     t_stage = load_timing::Clock::now();
+    scene->force_host_upload = false;
     render_allocate_scene_memory(scene, label_buffer_size);
     t_alloc = load_timing::ms(t_stage);
 
@@ -694,6 +706,10 @@ load_videos(std::map<std::string, std::string> &selected_files,
     // Software decode sizes each camera's libavcodec thread pool off this;
     // must be set before the first decoder thread starts.
     red::sw_decode_set_camera_count(scene->num_cams);
+    for (const auto &name : pm.camera_names) {
+        auto [it, inserted] = latest_decoded_frame.try_emplace(name);
+        it->second.store(0, std::memory_order_relaxed);
+    }
     for (int i = 0; i < scene->num_cams; i++) {
         const sync_plan::SyncCam *sync_cam =
             splan.usable() ? splan.cam(pm.camera_names[i]) : nullptr;

@@ -32,7 +32,8 @@ void render_allocate_scene_memory(RenderScene *scene, u32 size_of_buffer) {
     // The backend decides the whole upload path, so resolve it once here and
     // let the render loop and unload_media read scene->gpu_upload rather than
     // asking again -- the three must not be able to disagree.
-    scene->gpu_upload = !red::decode_backend_is_software();
+    scene->gpu_upload = !red::decode_backend_is_software() &&
+                        !scene->force_host_upload;
 #ifdef __APPLE__
     scene->gpu_upload = false; // Metal owns its own upload path
 #endif

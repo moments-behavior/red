@@ -276,6 +276,7 @@ int main(int argc, char **argv) {
     // CPU Buffer — see UserSettings::use_cpu_buffer for rationale.
     scene->use_cpu_buffer = true;
     scene->gpu_upload = false; // set for real in render_allocate_scene_memory
+    scene->force_host_upload = false;
     std::string red_data_dir;
     std::string media_root_dir;
     prepare_application_folders(red_data_dir, media_root_dir);

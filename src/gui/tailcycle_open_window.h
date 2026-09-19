@@ -187,6 +187,11 @@ inline bool tailcycle_open_session(AppContext &ctx, const std::string &session_d
                     ctx.user_settings.default_realtime_playback);
     }
 
+    if (!ctx.ps.video_loaded) {
+        if (status) *status = "Media failed to load for " + s.session_id + "/" + s.group_id;
+        return false;
+    }
+
     if (remember) {
         remember->open_valid = true;
         remember->open_dir = session_dir;
@@ -254,7 +259,11 @@ inline bool tailcycle_save_session(AppContext &ctx, TailcycleOpenState &st,
     cfg.units = st.open_units.empty() ? "mm" : st.open_units;
     cfg.n_frames = st.open_n_frames;
     cfg.fps = st.open_fps;
-    cfg.source_frame_start = st.open_source_frame_start;
+    // TailcycleImport rebases frames to group-local indices in ctx.annotations.
+    // The original source_frame_start is preserved in groups.pq (which an
+    // in-place save leaves untouched), so applying it again would make every
+    // imported frame negative and leave the old label tables unchanged.
+    cfg.source_frame_start = 0;
     cfg.camera_names = st.open_camera_names;
     cfg.calibration = st.open_calibration;
     cfg.node_names = st.open_node_names;

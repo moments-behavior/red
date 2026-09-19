@@ -960,6 +960,7 @@ if(Arrow_FOUND AND Parquet_FOUND)
     add_executable(test_tailcycle_export
         ${CMAKE_SOURCE_DIR}/tests/test_tailcycle_export.cpp
         ${CMAKE_SOURCE_DIR}/src/tailcycle_export.cpp
+        ${CMAKE_SOURCE_DIR}/src/tailcycle_import.cpp
     )
     target_include_directories(test_tailcycle_export PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_definitions(test_tailcycle_export PRIVATE RED_HAVE_PARQUET)

@@ -134,8 +134,9 @@ bool write_calibration_toml(const fs::path &dir, const ExportConfig &cfg, std::s
         o << "rotation = [ " << c.rvec(0) << ", " << c.rvec(1) << ", " << c.rvec(2) << ",]\n";
         o << "translation = [ " << c.tvec(0) << ", " << c.tvec(1) << ", " << c.tvec(2) << ",]\n";
         o << "fisheye = false\n";
-        // red has no crop model: its calibration already describes the stored
-        // image, so the origin is the image origin.
+        // Red keeps calibration in stored-image coordinates (the importer
+        // folds any source crop offset into the principal point), so exports
+        // use the image origin as their crop offset.
         o << "offset = [ 0.0, 0.0,]\n";
         o << "moving = false\n\n";
     }

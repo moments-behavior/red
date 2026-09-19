@@ -13,6 +13,8 @@
 #include "sync_plan.h"
 
 extern std::unordered_map<std::string, std::atomic<bool>> window_need_decoding;
+// Entries are initialized on the main thread before decoder threads spawn;
+// worker threads only update existing atomics while media is loaded.
 extern std::unordered_map<std::string, std::atomic<int>> latest_decoded_frame;
 
 // Canonical-timeline desync fix. The plan is built (from Cam*_meta.csv

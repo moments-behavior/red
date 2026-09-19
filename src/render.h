@@ -34,6 +34,9 @@ struct RenderScene {
     // by the render loop and the teardown path, which must agree with it --
     // freeing a calloc'd buffer with cudaFree is the failure mode here.
     bool gpu_upload;
+    // Image sequences are decoded by stb into host memory and do not need the
+    // CUDA/GL PBO interop path. This is set by load_images before allocation.
+    bool force_host_upload;
 };
 
 void render_initialize_target(gx_context *context);

@@ -10,6 +10,7 @@
 #include "annotation.h"
 #include "camera.h"
 #include "tailcycle_export.h"
+#include "tailcycle_import.h"
 
 #include <filesystem>
 #include <fstream>
@@ -95,6 +96,14 @@ static int32_t int_at(const std::shared_ptr<arrow::Table> &t, const char *name,
 static std::string slurp(const fs::path &p) {
     std::ifstream f(p);
     return std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+}
+
+static bool replace_once(std::string &text, const std::string &from,
+                         const std::string &to) {
+    const size_t p = text.find(from);
+    if (p == std::string::npos) return false;
+    text.replace(p, from.size(), to);
+    return true;
 }
 
 // ── fixture ──────────────────────────────────────────────────────────────────
@@ -238,6 +247,66 @@ int main(int argc, char **argv) {
         // frames (see the header).
         CHECK(fs::is_directory(A / "groups" / "sess1"), "group folder created");
         CHECK(fs::is_empty(A / "groups" / "sess1"), "group folder left for the caller to fill");
+
+        // Tailcycle stores crop-local labels but sensor-coordinate intrinsics.
+        // Simulate a cropped source by adding an offset and restoring the
+        // sensor-space principal point in the exported calibration; import
+        // must normalize it back to red's stored-image calibration.
+        std::string cropped_calib = slurp(A / "calibration.toml");
+        CHECK(replace_once(cropped_calib,
+                           "matrix = [ [ 1000,0,640,], [ 0,1000,480,], [ 0,0,1,],]",
+                           "matrix = [ [ 1000,0,760,], [ 0,1000,620,], [ 0,0,1,],]"),
+              "crop fixture restores sensor-space principal point");
+        CHECK(replace_once(cropped_calib, "offset = [ 0.0, 0.0,]",
+                           "offset = [ 120, 140,]"),
+              "crop fixture writes a non-zero offset");
+        {
+            std::ofstream f(A / "calibration.toml");
+            f << cropped_calib;
+        }
+        // Tailcycle also permits each skeleton entry to be a polyline. The
+        // importer should connect consecutive names without crossing paths,
+        // and collapse the repeated-anchor reverse edge.
+        {
+            std::string session = slurp(A / "session.toml");
+            CHECK(replace_once(
+                      session,
+                      "skeleton = [ [ \"Snout\", \"EarL\",], [ \"Snout\", \"TailBase\",],]",
+                      "skeleton = [\n"
+                      " [ \"Snout\", \"EarL\", \"Snout\",],\n"
+                      " [ \"Snout\", \"TailBase\",],\n"
+                      "]"),
+                  "polyline skeleton fixture written");
+            std::ofstream f(A / "session.toml");
+            f << session;
+        }
+        TailcycleImport::Session imported;
+        TailcycleImport::ImportStats ist;
+        std::string import_status;
+        CHECK(TailcycleImport::read_session(A.string(), "sess1", &imported, &ist,
+                                            &import_status),
+              "cropped calibration imports: " + import_status);
+        const std::vector<std::pair<int, int>> expected_edges{{0, 1}, {0, 2}};
+        CHECK(imported.edges == expected_edges,
+              "polyline skeleton imports as unique consecutive edges");
+        CHECK(imported.calibration.size() == NC, "all cropped cameras import");
+        CHECK(imported.calibration.size() == NC &&
+              std::abs(imported.calibration[0].k(0, 2) - 640.0) < 1e-9 &&
+              std::abs(imported.calibration[0].k(1, 2) - 480.0) < 1e-9,
+              "crop offset is folded into the principal point");
+        CHECK(imported.calibration.size() == NC &&
+              (imported.calibration[0].projection_mat -
+               red_math::projectionFromKRt(imported.calibration[0].k,
+                                           imported.calibration[0].r,
+                                           imported.calibration[0].tvec)).norm() < 1e-9,
+              "projection matrix uses the crop-normalized calibration");
+        CHECK(ist.keypoint_rows == 22, "cropped import keeps crop-local keypoint rows");
+        const auto frame0 = imported.annotations.find(0);
+        CHECK(frame0 != imported.annotations.end() && !frame0->second.empty() &&
+              frame0->second.front().cameras.size() == NC &&
+              std::abs(frame0->second.front().cameras[0].keypoints[0].x - 100.0) < 1e-6 &&
+              std::abs(frame0->second.front().cameras[0].keypoints[0].y - 200.0) < 1e-6,
+              "crop offset does not shift crop-local keypoint labels");
     }
 
     // ── 2. an unlabelled point writes no row at all ──
@@ -316,6 +385,46 @@ int main(int argc, char **argv) {
         CHECK(k && k->num_rows() == 28, "all rows land in the one session");
         CHECK(slurp(d / "session.toml").find("labels = \"tracked\"") != std::string::npos,
               "the forced label is written");
+    }
+
+    // ── 3e. in-place saves replace label tables without creating a sibling ──
+    {
+        const std::string out = root + "/t3e";
+        auto cfg = make_config(out);
+        cfg.source_frame_start = 100;
+        cfg.force_labels = "annotated";
+        cfg.layers = TailcycleExport::ExportConfig::Layers::TwoDAndThreeD;
+        TailcycleExport::ExportStats st;
+        std::string status;
+        CHECK(TailcycleExport::export_session(cfg, make_annotations(100), &st, &status),
+              "initial in-place fixture export succeeds: " + status);
+        const fs::path d = fs::path(out) / "train" / "sess1";
+        CHECK(fs::exists(d / "keypoints.pq"), "in-place fixture has keypoints.pq");
+        TailcycleImport::Session imported;
+        TailcycleImport::ImportStats ist;
+        CHECK(TailcycleImport::read_session(d.string(), "sess1", &imported, &ist,
+                                            &status),
+              "in-place fixture imports: " + status);
+        AnnotationMap amap = imported.annotations;
+        amap.at(0).front().cameras[0].keypoints[0].x = 777.0;
+        // Imported annotations are rebased to group-local frames, as they are
+        // in the GUI. The save path must not apply source_frame_start twice.
+        cfg.source_frame_start = 0;
+        cfg.in_place = true;
+        st = {};
+        CHECK(TailcycleExport::export_session(cfg, amap, &st, &status),
+              "in-place overwrite succeeds: " + status);
+        auto k = read_pq(d / "keypoints.pq");
+        bool found = false;
+        for (int64_t r = 0; k && r < k->num_rows(); r++) {
+            if (int_at(k, "frame", r) == 0 && dict_at(k, "camera", r) == "camA" &&
+                dict_at(k, "bodypart", r) == "Snout") {
+                auto col = k->GetColumnByName("x");
+                auto arr = std::static_pointer_cast<arrow::FloatArray>(col->chunk(0));
+                found = std::abs(arr->Value(r) - 777.0f) < 0.01f;
+            }
+        }
+        CHECK(found, "in-place overwrite replaces the existing label table");
     }
 
     // ── 3d. every animal gets its own animal_id ──

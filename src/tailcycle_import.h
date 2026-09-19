@@ -94,10 +94,11 @@ bool list_groups(const std::string &session_dir, std::vector<std::string> *out,
 // Read `session_dir` (a <split>/<session>/ directory). `group_id` empty takes
 // the only group, and fails if there is more than one.
 //
+// Normalizes a camera's non-zero `offset` into red's calibration by shifting
+// the principal point into stored-image (crop-local) coordinates. This is the
+// format's pure pixel-crop transform; labels themselves are already crop-local.
 // Refuses rather than silently misreading:
-//   - a non-zero camera `offset`: red has no crop model, and loading these
-//     coordinates against uncorrected calibration is the 2.38mm -> 16.9mm
-//     error the format's §5 documents
+//   - a malformed or non-finite camera `offset`
 //   - a bodypart outside the session's `names`
 bool read_session(const std::string &session_dir, const std::string &group_id,
                   Session *out, ImportStats *stats, std::string *status);

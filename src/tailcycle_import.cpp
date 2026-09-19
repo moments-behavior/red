@@ -137,16 +137,76 @@ std::vector<std::string> toml_strings(const std::string &text, const std::string
     const size_t p = text.find(key + " = [");
     if (p == std::string::npos) return out;
     size_t e = text.find(']', p);
-    // names/skeleton may nest; take to the last ] on the logical line
-    const size_t line_end = text.find('\n', p);
-    if (line_end != std::string::npos) e = text.rfind(']', line_end);
-    std::string body = text.substr(p, e - p + 1);
+    // names may be on one line; stop at that array's closing bracket.
+    int depth = 0;
+    bool quoted = false;
+    bool escaped = false;
+    for (e = text.find('[', p); e != std::string::npos && e < text.size(); ++e) {
+        const char c = text[e];
+        if (quoted) {
+            if (escaped) escaped = false;
+            else if (c == '\\') escaped = true;
+            else if (c == '"') quoted = false;
+            continue;
+        }
+        if (c == '"') quoted = true;
+        else if (c == '[') ++depth;
+        else if (c == ']' && --depth == 0) break;
+    }
+    if (e == std::string::npos) return out;
+    const std::string body = text.substr(p, e - p + 1);
     size_t q = 0;
     while ((q = body.find('"', q)) != std::string::npos) {
         const size_t r = body.find('"', q + 1);
         if (r == std::string::npos) break;
         out.push_back(body.substr(q + 1, r - q - 1));
         q = r + 1;
+    }
+    return out;
+}
+
+// Read an array of string arrays, preserving each inner array. Tailcycle uses
+// those inner arrays as polylines: every consecutive pair is one skeleton edge.
+std::vector<std::vector<std::string>> toml_string_arrays(
+    const std::string &text, const std::string &key) {
+    std::vector<std::vector<std::string>> out;
+    const size_t p = text.find(key + " = [");
+    if (p == std::string::npos) return out;
+    const size_t s = text.find('[', p);
+    if (s == std::string::npos) return out;
+
+    int depth = 0;
+    bool quoted = false;
+    bool escaped = false;
+    std::string value;
+    std::vector<std::string> current;
+    for (size_t i = s; i < text.size(); ++i) {
+        const char c = text[i];
+        if (quoted) {
+            if (escaped) {
+                value += c;
+                escaped = false;
+            } else if (c == '\\') {
+                escaped = true;
+            } else if (c == '"') {
+                quoted = false;
+                if (depth == 2) current.push_back(value);
+                value.clear();
+            } else {
+                value += c;
+            }
+            continue;
+        }
+        if (c == '"') {
+            quoted = true;
+            value.clear();
+        } else if (c == '[') {
+            ++depth;
+            if (depth == 2) current.clear();
+        } else if (c == ']') {
+            if (depth == 2) out.push_back(current);
+            if (--depth == 0) break;
+        }
     }
     return out;
 }
@@ -259,13 +319,22 @@ bool read_session(const std::string &session_dir, const std::string &group_id,
         out->node_names = toml_strings(text, "names");
         if (out->node_names.empty()) return fail("session.toml has no `names`.");
 
-        const std::vector<std::string> sk = toml_strings(text, "skeleton");
-        for (size_t i = 0; i + 1 < sk.size(); i += 2) {
-            const auto a = std::find(out->node_names.begin(), out->node_names.end(), sk[i]);
-            const auto b = std::find(out->node_names.begin(), out->node_names.end(), sk[i + 1]);
-            if (a == out->node_names.end() || b == out->node_names.end()) continue;
-            out->edges.push_back({(int)(a - out->node_names.begin()),
-                                  (int)(b - out->node_names.begin())});
+        const auto paths = toml_string_arrays(text, "skeleton");
+        std::set<std::pair<int, int>> seen_edges;
+        for (const auto &path : paths) {
+            for (size_t i = 1; i < path.size(); ++i) {
+                const auto a = std::find(out->node_names.begin(), out->node_names.end(),
+                                         path[i - 1]);
+                const auto b = std::find(out->node_names.begin(), out->node_names.end(),
+                                         path[i]);
+                if (a == out->node_names.end() || b == out->node_names.end()) continue;
+                int ai = (int)(a - out->node_names.begin());
+                int bi = (int)(b - out->node_names.begin());
+                if (ai == bi) continue;
+                if (ai > bi) std::swap(ai, bi);
+                if (seen_edges.insert({ai, bi}).second)
+                    out->edges.push_back({ai, bi});
+            }
         }
     }
 
@@ -280,11 +349,11 @@ bool read_session(const std::string &session_dir, const std::string &group_id,
             if (name.empty()) return fail("A camera in calibration.toml has no name (rule 4).");
 
             const auto off = toml_numbers(sec, "offset");
-            if (off.size() == 2 && (off[0] != 0.0 || off[1] != 0.0))
-                return fail("Camera " + name + " has offset [" + std::to_string(off[0]) + ", " +
-                            std::to_string(off[1]) + "]. red has no crop model, so these "
-                            "coordinates would be read against calibration that does not "
-                            "describe them.");
+            const bool has_offset = sec.find("offset = [") != std::string::npos;
+            if (has_offset && off.size() != 2)
+                return fail("Camera " + name + " has an invalid offset; expected [x, y].");
+            if (off.size() == 2 && (!std::isfinite(off[0]) || !std::isfinite(off[1])))
+                return fail("Camera " + name + " has a non-finite crop offset.");
 
             CameraParams c;
             const auto K = toml_numbers(sec, "matrix");
@@ -304,6 +373,15 @@ bool read_session(const std::string &session_dir, const std::string &group_id,
             if (size.size() >= 2) {
                 c.image_width = (int)size[0];
                 c.image_height = (int)size[1];
+            }
+            // Tailcycle's matrix is expressed in full-sensor pixels while
+            // labels and media are in stored-image (crop-local) pixels. Red
+            // has no separate crop state, so normalize the calibration to the
+            // stored image by translating the principal point. Focal lengths,
+            // distortion, and extrinsics are unchanged by a pure pixel crop.
+            if (off.size() == 2) {
+                c.k(0, 2) -= off[0];
+                c.k(1, 2) -= off[1];
             }
             c.projection_mat = red_math::projectionFromKRt(c.k, c.r, c.tvec);
             out->camera_names.push_back(name);
