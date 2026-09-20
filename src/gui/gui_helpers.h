@@ -23,6 +23,27 @@ inline void HelpMarker(const char *desc) {
 // Overlay drawn INSIDE an ImPlot plot over a camera image whose current ring
 // slot is a duplicate standing in for a frame the camera dropped (desync-fix
 // mode): red border + badge, so held frames are never mistaken for real ones.
+// This camera's recording ended before the frame being shown. Distinct from
+// DrawDroppedFrameBadge, which means "a frame is missing HERE but the camera
+// runs on": this one is the end of the camera, and there is nothing further to
+// come. Drawn INSTEAD of the image rather than over it, because the texture
+// still holds the last decoded frame and leaving it up reads as current.
+inline void DrawCameraEndedBadge(float image_width, float image_height) {
+    ImDrawList *dl = ImPlot::GetPlotDrawList();
+    ImVec2 a = ImPlot::PlotToPixels(ImPlotPoint(0, 0));
+    ImVec2 b = ImPlot::PlotToPixels(ImPlotPoint(image_width, image_height));
+    ImVec2 mn(std::min(a.x, b.x), std::min(a.y, b.y));
+    ImVec2 mx(std::max(a.x, b.x), std::max(a.y, b.y));
+    dl->AddRectFilled(mn, mx, IM_COL32(18, 18, 18, 255));
+    const ImU32 grey = IM_COL32(150, 150, 150, 255);
+    dl->AddRect(mn, mx, IM_COL32(90, 90, 90, 255), 0.0f, 0, 2.0f);
+    const char *msg = "no frame - this camera ended earlier";
+    ImVec2 ts = ImGui::CalcTextSize(msg);
+    dl->AddText(ImVec2((mn.x + mx.x - ts.x) * 0.5f,
+                       (mn.y + mx.y - ts.y) * 0.5f),
+                grey, msg);
+}
+
 inline void DrawDroppedFrameBadge(float image_width, float image_height) {
     ImDrawList *dl = ImPlot::GetPlotDrawList();
     ImVec2 a = ImPlot::PlotToPixels(ImPlotPoint(0, 0));

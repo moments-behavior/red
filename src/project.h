@@ -62,6 +62,17 @@ struct ProjectManager {
     // are keyed by canonical trigger slot, OFF by raw mp4 index.
     bool sync_fix_enabled = false;
 
+    // Restrict the timeline to the window where EVERY camera has a frame.
+    // Default false, i.e. show everything recorded -- matching what the sync
+    // plan does for an uneven recording, where canonical_len is the longest
+    // camera and the cameras that ended early are marked rather than hidden
+    // (sync_plan.h). The plan keeps a second span for the work that needs all
+    // views at once (predict_start/predict_len, the intersection); this flag
+    // is that span, for the user who would rather the timeline simply not
+    // offer frames they cannot triangulate. Project-scoped for the same
+    // reason sync_fix_enabled is: it changes which frames the project has.
+    bool timeline_common_only = false;
+
     // empty means "auto-discover in the recording folder", the normal case.
 
     // Restore the JARVIS Predict panel's open state when the project is
@@ -153,6 +164,7 @@ inline void to_json(nlohmann::json &j, const ProjectManager &p) {
                        {"telecentric", p.telecentric},
                        {"annotation_2d", p.annotation_2d},
                        {"sync_fix_enabled", p.sync_fix_enabled},
+                       {"timeline_common_only", p.timeline_common_only},
                        {"annotation_config", p.annotation_config},
                        {"jarvis_models", p.jarvis_models},
                        {"active_jarvis_model", p.active_jarvis_model},
@@ -176,6 +188,7 @@ inline void from_json(const nlohmann::json &j, ProjectManager &p) {
     p.telecentric = j.value("telecentric", false);
     p.annotation_2d = j.value("annotation_2d", false);
     p.sync_fix_enabled = j.value("sync_fix_enabled", false);
+    p.timeline_common_only = j.value("timeline_common_only", false);
     if (j.contains("annotation_config"))
         p.annotation_config = j["annotation_config"].get<AnnotationConfig>();
     if (j.contains("jarvis_models"))

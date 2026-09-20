@@ -696,15 +696,33 @@ load_videos(std::map<std::string, std::string> &selected_files,
     const sync_plan::SyncPlan &splan = g_sync_fix.plan;
     bool sync_enable = pm.sync_fix_enabled && splan.usable() &&
                        splan.status != sync_plan::Status::Clean;
-    // The labeling timeline uses one stable reference-camera length. Do not
-    // let the per-camera decoder threads race to overwrite it.
-    if (!sync_enable) {
-        if (demuxers[0]->GetNumFrames() == 0)
-            dc_context->estimated_num_frames =
-                (int)(demuxers[0]->GetDuration() * demuxers[0]->GetFramerate());
-        else
-            dc_context->estimated_num_frames =
-                (int)demuxers[0]->GetNumFrames() - 1;
+    // Record what each camera actually holds, before any decoder thread runs.
+    // PR #28 stopped the threads racing to set the timeline length by taking
+    // camera 0's; this takes the whole set instead, because camera 0 is
+    // whichever file sorted first and is neither the shortest nor the longest
+    // on purpose.
+    dc_context->per_cam_frames.clear();
+    for (auto &d : demuxers) {
+        int n = (int)d->GetNumFrames();
+        if (n == 0) n = (int)(d->GetDuration() * d->GetFramerate());
+        dc_context->per_cam_frames.push_back(n);
+    }
+    // Run to the LONGEST camera, which is what the sync plan does for an
+    // uneven recording (canonical_len = max end_slot, sync_plan.h): everything
+    // recorded stays reachable, and a camera that ended early is marked rather
+    // than hidden. The stall this would otherwise cause -- playback is capped
+    // at the slowest decoded camera -- is handled by excluding finished
+    // cameras from that cap (red.cpp) instead of by fabricating duplicate
+    // frames the way the sync path's trailing fill does.
+    //
+    // timeline_common_only is the other span the plan keeps: the intersection,
+    // where every camera has a frame and a point can be triangulated across
+    // all views.
+    if (!sync_enable && !dc_context->per_cam_frames.empty()) {
+        const int len = pm.timeline_common_only
+                            ? dc_context->shortest_cam_frames()
+                            : dc_context->longest_cam_frames();
+        dc_context->estimated_num_frames = len - 1;
     }
     dc_context->sync_fix_active = sync_enable;
     dc_context->sync_canonical_len = splan.canonical_len;

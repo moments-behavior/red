@@ -1187,6 +1187,21 @@ int main(int argc, char **argv) {
                         ImPlot::SetupAxisLimits(
                             ImAxis_Y1, 0, scene->image_height[j],
                             ImPlotCond_Once);
+                        // Past this camera's own last frame there is nothing
+                        // to show. The texture still holds its final decoded
+                        // frame, so drawing it would present a stale image as
+                        // though it were this instant -- the one thing a view
+                        // being annotated must not do.
+                        const bool cam_ended =
+                            j < dc_context->per_cam_frames.size() &&
+                            dc_context->per_cam_frames[j] > 0 &&
+                            current_frame_num >=
+                                dc_context->per_cam_frames[j];
+                        if (cam_ended) {
+                            DrawCameraEndedBadge(
+                                (float)scene->image_width[j],
+                                (float)scene->image_height[j]);
+                        } else {
                         ImPlot::PlotImage(
                             "##no_image_name",
 #ifdef __APPLE__
@@ -1197,6 +1212,7 @@ int main(int argc, char **argv) {
                             ImVec2(0, 0),
                             ImVec2(scene->image_width[j],
                                    scene->image_height[j]));
+                        }
 
                         // Desync fix: the displayed slot is a duplicate
                         // standing in for a frame this camera dropped.
@@ -1643,14 +1659,28 @@ int main(int argc, char **argv) {
             if (dc_context->decoding_flag && ps.play_video &&
                 scene->num_cams > 0 && scene->display_buffer) {
                 int frame_to_show = ps.to_display_frame_number;
-                // Cap to slowest decoded camera (applied in both modes)
+                // Cap to slowest decoded camera (applied in both modes).
+                // A camera that has reached its own last frame is not slow,
+                // it is finished, and counting it would peg the cap at its
+                // end and stall every other camera -- the same stall the sync
+                // path avoids with trailing fill. Skipped here instead, and
+                // its view is drawn blank past that point. With every camera
+                // the same length (the normal case) nothing is ever skipped
+                // before the timeline ends, so this changes nothing there.
                 int min_decoded_frame = INT_MAX;
-                for (const auto &[cam_name, visible] : window_need_decoding) {
-                    if (visible.load()) {
-                        int decoded = latest_decoded_frame[cam_name].load();
-                        min_decoded_frame =
-                            std::min(min_decoded_frame, decoded);
-                    }
+                for (size_t ci = 0; ci < pm.camera_names.size(); ci++) {
+                    const std::string &cam_name = pm.camera_names[ci];
+                    auto vis = window_need_decoding.find(cam_name);
+                    if (vis == window_need_decoding.end() ||
+                        !vis->second.load())
+                        continue;
+                    int decoded = latest_decoded_frame[cam_name].load();
+                    if (ci < dc_context->per_cam_frames.size() &&
+                        dc_context->per_cam_frames[ci] > 0 &&
+                        decoded >= dc_context->per_cam_frames[ci] - 1)
+                        continue;
+                    min_decoded_frame =
+                        std::min(min_decoded_frame, decoded);
                 }
 
                 // CHOOSE MODE

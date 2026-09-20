@@ -91,6 +91,19 @@ inline void sync_fix_toggle(AppContext &ctx, bool enable) {
     }
 }
 
+// Persisted like sync_fix_enabled, and for the same reason: it changes which
+// frames the project has. Not applied live -- the length is read once when the
+// decoders start, and moving it under a running pipeline would leave the ring
+// buffers and the timeline disagreeing about what frame 240 is.
+inline void timeline_length_toggle(AppContext &ctx, bool common_only) {
+    ctx.pm.timeline_common_only = common_only;
+    if (!ctx.pm.project_path.empty() && !ctx.pm.project_name.empty()) {
+        std::string redproj =
+            ctx.pm.project_path + "/" + ctx.pm.project_name + ".redproj";
+        save_project_manager_json(ctx.pm, redproj);
+    }
+}
+
 inline void DrawTransportBar(TransportBarState &state, AppContext &ctx) {
     int &current_frame_num = ctx.current_frame_num;
     if (!ctx.ps.video_loaded) return;
@@ -377,6 +390,53 @@ inline void DrawTransportBar(TransportBarState &state, AppContext &ctx) {
                 "it means. The fractions are relative to this \xE2\x80\x94 at 30, "
                 "1/16x plays about 2 frames a second.\n"
                 "Drag or double-click to type a value.");
+    }
+
+    // === Uneven camera lengths ===
+    // A separate diagnosis from the sync plan below, and deliberately not
+    // routed through it: the plan answers "is frame i the same instant in
+    // every view", which needs trigger timestamps most recordings do not
+    // ship. This answers "do the cameras even hold the same number of
+    // frames", which every demuxer can say. So it is the one that shows up
+    // for a bare folder of mp4s -- exactly the case where the timeline used
+    // to take a racing thread's word for its length.
+    if (dc->cams_uneven() && !ctx.input_is_imgs) {
+        ImGui::SameLine(0, spacing);
+        ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
+        ImGui::SameLine(0, spacing);
+
+        ImGui::TextColored(label_col, "Lengths");
+        ImGui::SameLine(0, spacing);
+        const int lo = dc->shortest_cam_frames();
+        const int hi = dc->longest_cam_frames();
+        ImGui::TextColored(ImVec4(0.9f, 0.9f, 0.4f, 1.0f), "Uneven");
+        if (ImGui::IsItemHovered()) {
+            ImGui::BeginTooltip();
+            ImGui::Text("Cameras hold different numbers of frames: "
+                        "%d to %d.", lo, hi);
+            ImGui::Separator();
+            ImGui::TextUnformatted(
+                "This is not a sync problem -- no frames are missing, the "
+                "cameras just stopped at different times.\n"
+                "The timeline runs to the longest; past its own end a "
+                "camera shows no frame rather than holding its last one.");
+            ImGui::EndTooltip();
+        }
+
+        ImGui::SameLine(0, spacing);
+        bool common_only = ctx.pm.timeline_common_only;
+        if (ImGui::Checkbox("All views only", &common_only))
+            timeline_length_toggle(ctx, common_only);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip(
+                "Off: the timeline runs to %d, every frame that was "
+                "recorded. Cameras that\nended earlier are drawn blank "
+                "for the rest.\n"
+                "On: it stops at %d, the last frame present in every "
+                "camera -- the range where\na point can be triangulated "
+                "across all views.\n\n"
+                "Takes effect when the project is reloaded.",
+                hi, lo);
     }
 
     // === Desync fix (canonical trigger timeline) ===

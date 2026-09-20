@@ -1,5 +1,7 @@
 #ifndef RED_DECODER
 #define RED_DECODER
+#include <algorithm>
+#include <vector>
 #include "red_build_config.h"
 #include "ColorSpace.h"
 #include "FFmpegDemuxer.h"
@@ -83,6 +85,28 @@ struct DecoderContext {
     // a seek), so a decoder never mixes modes within one seek epoch.
     std::atomic<bool> sync_fix_active;
     int64_t sync_canonical_len;
+
+    // Each camera's own frame count, as its demuxer reported it at load.
+    // Cameras of unequal length are a real recording, not a fault -- one
+    // started or stopped at a different time -- but the timeline is a single
+    // axis and has to pick a length. Keeping the individual counts lets three
+    // separate questions be answered honestly: whether to tell the user at all
+    // (min != max), where the timeline should end, and, for any given frame,
+    // which cameras genuinely have nothing to show rather than being slow.
+    std::vector<int> per_cam_frames;
+
+    int shortest_cam_frames() const {
+        if (per_cam_frames.empty()) return 0;
+        return *std::min_element(per_cam_frames.begin(), per_cam_frames.end());
+    }
+    int longest_cam_frames() const {
+        if (per_cam_frames.empty()) return 0;
+        return *std::max_element(per_cam_frames.begin(), per_cam_frames.end());
+    }
+    bool cams_uneven() const {
+        return !per_cam_frames.empty() &&
+               shortest_cam_frames() != longest_cam_frames();
+    }
 };
 
 #if defined(RED_HAVE_CUDA)
