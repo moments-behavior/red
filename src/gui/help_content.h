@@ -94,7 +94,7 @@ inline const std::vector<Group> &shortcut_groups() {
             {S::DeleteAllKp, nullptr, "Delete all keypoints on this frame"},
             {S::Triangulate, nullptr, "Triangulate the current frame", Gate::Need3D,
                  "Needs the same keypoint in \xE2\x89\xA5 2 cameras"},
-            {S::PlotMenu, nullptr, "Open the image context menu (fit axes, toggle keypoint/bbox layers)"},
+            {S::PlotMenu, nullptr, "Show/hide the image context menu (fit axes, toggle keypoint/bbox layers)"},
             {S::PeekRaw, nullptr, "Hide this view's labels to peek at the raw image underneath"},
         }},
         {"Labeling \xE2\x80\x94 hovering a keypoint", "Hover an existing (drawn) keypoint", Gate::Always, {

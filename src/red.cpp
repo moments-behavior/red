@@ -1493,12 +1493,22 @@ int main(int argc, char **argv) {
 
                         }
 
-                        // Plot context menu: press 1 key while hovering
-                        if (ImPlot::IsPlotHovered() &&
+                        // Plot context menu: the key toggles it. Both halves
+                        // are gated on whether it is already up, so one press
+                        // only ever does one of the two -- without that, the
+                        // press that opens it is still down when BeginPopup
+                        // runs later in the SAME frame, and the menu would
+                        // close itself the instant it appeared.
+                        const bool plot_menu_open =
+                            ImGui::IsPopupOpen("##plot_settings");
+                        if (!plot_menu_open && ImPlot::IsPlotHovered() &&
                             keys::pressed(keys::Sc::PlotMenu)) {
                             ImGui::OpenPopup("##plot_settings");
                         }
                         if (ImGui::BeginPopup("##plot_settings")) {
+                            if (plot_menu_open &&
+                                keys::pressed(keys::Sc::PlotMenu))
+                                ImGui::CloseCurrentPopup();
                             ImGui::SeparatorText("Plot Settings");
                             if (ImGui::MenuItem("Fit X Axis"))
                                 ImPlot::SetupAxisLimits(ImAxis_X1, 0, scene->image_width[j]);
