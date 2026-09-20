@@ -23,6 +23,21 @@ struct AnnotationDialogState {
     std::vector<std::string> discovered_cameras;
     std::vector<bool> camera_selected;
     std::string status;
+
+    // Opening the form is always a fresh start, and every entry point goes
+    // through here. They used to each clear a different subset: the menu
+    // cleared the camera lists but not the folder, both Welcome buttons
+    // cleared nothing. Since the seed-from-open-media below only fires on an
+    // empty folder, a leftover one made the field look filled with no cameras
+    // under it, and re-picking that same folder was the only way back.
+    void open(bool two_d) {
+        show = true;
+        two_d_mode = two_d;
+        media_folder.clear();
+        discovered_cameras.clear();
+        camera_selected.clear();
+        status.clear();
+    }
 };
 
 // Callback signature: called after "Create Project" succeeds at setting up pm.
@@ -75,8 +90,9 @@ inline void DrawAnnotationDialog(AnnotationDialogState &state,
     // was the whole point of File > Create Project, which could only ever wrap
     // the open media and was greyed out otherwise; here it is a starting
     // value, and pointing the field somewhere else switches media instead of
-    // being impossible. Only when the field is empty, so it never overwrites
-    // a folder the user typed and then reopened the dialog on.
+    // being impossible. The empty check now only guards against re-seeding
+    // while the form is already up -- open() clears the folder, so reopening
+    // deliberately picks up whatever media is open NOW.
     if (state.show && !state.was_shown && state.media_folder.empty() &&
         ctx.ps.video_loaded && !pm.media_folder.empty()) {
         state.media_folder = pm.media_folder;

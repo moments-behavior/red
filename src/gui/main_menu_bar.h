@@ -48,13 +48,7 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
         // used to be left at whatever the last creation put there, so making a
         // 2D project once meant every later "Create Project" quietly opened in
         // 2D mode too.
-        auto open_create = [&](bool two_d) {
-            annot_state.show = true;
-            annot_state.two_d_mode = two_d;
-            annot_state.discovered_cameras.clear();
-            annot_state.camera_selected.clear();
-            annot_state.status.clear();
-        };
+        auto open_create = [&](bool two_d) { annot_state.open(two_d); };
         // "Annotation" is kept rather than trimmed: it is the kind of project
         // this makes, and calibration projects are expected to come back as a
         // second kind. The welcome screen and the dialog title use the same
@@ -190,11 +184,7 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
 
     // New Project
     if (ImGui::MenuItem(ICON_FK_FILE_O "##toolbar_new")) {
-        annot_state.show = true;
-        annot_state.two_d_mode = false;
-        annot_state.discovered_cameras.clear();
-        annot_state.camera_selected.clear();
-        annot_state.status.clear();
+        annot_state.open(false);
     }
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
         ImGui::SetTooltip("Create Project");
