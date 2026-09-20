@@ -91,19 +91,6 @@ inline void sync_fix_toggle(AppContext &ctx, bool enable) {
     }
 }
 
-// Persisted like sync_fix_enabled, and for the same reason: it changes which
-// frames the project has. Not applied live -- the length is read once when the
-// decoders start, and moving it under a running pipeline would leave the ring
-// buffers and the timeline disagreeing about what frame 240 is.
-inline void timeline_length_toggle(AppContext &ctx, bool common_only) {
-    ctx.pm.timeline_common_only = common_only;
-    if (!ctx.pm.project_path.empty() && !ctx.pm.project_name.empty()) {
-        std::string redproj =
-            ctx.pm.project_path + "/" + ctx.pm.project_name + ".redproj";
-        save_project_manager_json(ctx.pm, redproj);
-    }
-}
-
 inline void DrawTransportBar(TransportBarState &state, AppContext &ctx) {
     int &current_frame_num = ctx.current_frame_num;
     if (!ctx.ps.video_loaded) return;
@@ -422,21 +409,6 @@ inline void DrawTransportBar(TransportBarState &state, AppContext &ctx) {
                 "camera shows no frame rather than holding its last one.");
             ImGui::EndTooltip();
         }
-
-        ImGui::SameLine(0, spacing);
-        bool common_only = ctx.pm.timeline_common_only;
-        if (ImGui::Checkbox("All views only", &common_only))
-            timeline_length_toggle(ctx, common_only);
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip(
-                "Off: the timeline runs to %d, every frame that was "
-                "recorded. Cameras that\nended earlier are drawn blank "
-                "for the rest.\n"
-                "On: it stops at %d, the last frame present in every "
-                "camera -- the range where\na point can be triangulated "
-                "across all views.\n\n"
-                "Takes effect when the project is reloaded.",
-                hi, lo);
     }
 
     // === Desync fix (canonical trigger timeline) ===

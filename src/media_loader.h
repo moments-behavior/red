@@ -715,15 +715,9 @@ load_videos(std::map<std::string, std::string> &selected_files,
     // cameras from that cap (red.cpp) instead of by fabricating duplicate
     // frames the way the sync path's trailing fill does.
     //
-    // timeline_common_only is the other span the plan keeps: the intersection,
-    // where every camera has a frame and a point can be triangulated across
-    // all views.
-    if (!sync_enable && !dc_context->per_cam_frames.empty()) {
-        const int len = pm.timeline_common_only
-                            ? dc_context->shortest_cam_frames()
-                            : dc_context->longest_cam_frames();
-        dc_context->estimated_num_frames = len - 1;
-    }
+    if (!sync_enable && !dc_context->per_cam_frames.empty())
+        dc_context->estimated_num_frames =
+            dc_context->longest_cam_frames() - 1;
     dc_context->sync_fix_active = sync_enable;
     dc_context->sync_canonical_len = splan.canonical_len;
     if (sync_enable) {
