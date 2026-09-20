@@ -346,7 +346,8 @@ int main(int argc, char **argv) {
         projected.set_predicted();
         projected.reprojected = true;
 
-        mark_keypoint2d_occluded(fa.cameras[0].keypoints[2]);
+        fa.cameras[0].keypoints[2].set_manual();
+        fa.cameras[0].keypoints[2].set_occluded();
         amap[0] = FrameInstances{std::move(fa)};
 
         TailcycleExport::ExportStats st;

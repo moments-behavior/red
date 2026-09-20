@@ -43,9 +43,22 @@ struct Keypoint2D {
     bool reprojected = false;   // the stored numbers came from the 3D
 
     // Independent of the above: an assessment that the point is not visible
-    // here. It has no coordinates, so `exist` is false while this is true.
-    // This is tailcycle's keypoints.pq `missing` status.
+    // here. It has no usable coordinates, so `exist` is false while this is
+    // true -- but it keeps its AUTHOR, because deciding a part is hidden is
+    // itself something a person or a model did. Without that, every occluded
+    // row bucketed as tracked and a single one split a hand-labelled session
+    // in two on export. This is tailcycle's keypoints.pq `missing` status.
     bool occluded = false;
+
+    // Marks the point not visible in this camera. x/y are LEFT ALONE: they are
+    // no longer usable -- `exist` says so, and every reader gates on it -- but
+    // remembering where it last was lets the overlay put a cross there when
+    // the frame has no 3D to project instead.
+    void set_occluded() {
+        exist = false;
+        reprojected = false;
+        occluded = true;
+    }
 
     // Authorship. A fresh placement also resets the coordinate origin: these
     // numbers came from the click, not from a solve.
@@ -70,10 +83,6 @@ inline bool keypoint2d_assessed(const Keypoint2D &kp) {
     return kp.exist || kp.occluded;
 }
 
-inline void mark_keypoint2d_occluded(Keypoint2D &kp) {
-    kp = Keypoint2D{};
-    kp.occluded = true;
-}
 
 // ── 3D label provenance ──
 // Tracks where a Keypoint3D's values came from.

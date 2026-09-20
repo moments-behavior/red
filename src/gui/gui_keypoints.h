@@ -252,7 +252,10 @@ inline bool gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
                     const bool fed_solve =
                         cam.keypoints[node].exist &&
                         cam.keypoints[node].manual;
-                    mark_keypoint2d_occluded(cam.keypoints[node]);
+                    // A person is making this call, so it is theirs: set the
+                    // author first, then the assessment, which keeps it.
+                    cam.keypoints[node].set_manual();
+                    cam.keypoints[node].set_occluded();
                     if (fed_solve && node < fa.kp3d.size())
                         fa.kp3d[node].clear();
                     // Advance, same as the active-node path below. M means
@@ -328,7 +331,8 @@ inline bool gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
                 if (ImGui::MenuItem("Mark occluded")) {
                     const bool fed_solve =
                         kp.exist && kp.manual;
-                    mark_keypoint2d_occluded(kp);
+                    kp.set_manual();
+                    kp.set_occluded();
                     if (fed_solve) fa.kp3d[t.node].clear();
                 }
                 if (ImGui::MenuItem("Delete")) {
@@ -369,7 +373,8 @@ inline bool gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
         const bool fed_solve =
             cam.keypoints[cam.active_id].exist &&
             cam.keypoints[cam.active_id].manual;
-        mark_keypoint2d_occluded(cam.keypoints[cam.active_id]);
+        cam.keypoints[cam.active_id].set_manual();
+        cam.keypoints[cam.active_id].set_occluded();
         if (fed_solve && cam.active_id < fa.kp3d.size())
             fa.kp3d[cam.active_id].clear();
         if (cam.active_id < skeleton->num_nodes - 1)

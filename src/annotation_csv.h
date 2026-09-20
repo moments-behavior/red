@@ -353,7 +353,11 @@ inline bool load_2d_csv(const std::string &path, AnnotationMap &amap,
             char  src  = parse_csv_char(ptr);
 
             if (src == 'M') {
-                mark_keypoint2d_occluded(cam.keypoints[k]);
+                // 'M' sits in the source column, so the file cannot also say
+                // who made the assessment; treat it as the user's, which is
+                // what every other unmarked row means.
+                cam.keypoints[k].set_manual();
+                cam.keypoints[k].set_occluded();
             } else if (has_x && has_y) {
                 cam.keypoints[k].x = x;
                 cam.keypoints[k].y = y;

@@ -477,7 +477,9 @@ bool read_session(const std::string &session_dir, const std::string &group_id,
                 // session's provenance here used to be harmless because a
                 // separate `labeled` flag carried presence, but source is
                 // presence now and the point would claim to be placed.
-                mark_keypoint2d_occluded(kp);
+                if (out->labels == Tailcycle::labels::kTracked) kp.set_predicted();
+                else                                            kp.set_manual();
+                kp.set_occluded();
                 st.keypoint_rows++;
                 continue;
             }
