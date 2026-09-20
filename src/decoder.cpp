@@ -290,7 +290,7 @@ static void nvdec_decoder_process(DecoderContext *dc_context,
                         std::cout << "Demux error..." << std::endl;
                         nFrameReturned =
                             dec.Decode(NULL, 0, CUVID_PKT_DISCONTINUITY);
-                        if (!sync_on)
+                        if (!sync_on && !dc_context->total_owned_by_loader)
                             dc_context->total_num_frame = nFrame + nFrameReturned;
                     } else {
                         nFrameReturned = dec.Decode(pVideo, nVideoBytes, 0, pktinfo.pts);
@@ -414,7 +414,7 @@ static void nvdec_decoder_process(DecoderContext *dc_context,
                     if (!demux_success) {
                         nFrameReturned =
                             dec.Decode(NULL, 0, CUVID_PKT_DISCONTINUITY);
-                        if (!sync_on)
+                        if (!sync_on && !dc_context->total_owned_by_loader)
                             dc_context->total_num_frame = nFrame + nFrameReturned;
                     } else {
                         nFrameReturned = dec.Decode(pVideo, nVideoBytes, 0, pktinfo.pts);
@@ -824,7 +824,7 @@ static void vt_decoder_process(DecoderContext *dc_context,
                           timebase, (pktinfo.flags & AV_PKT_FLAG_KEY) != 0);
             packets_in_flight++;
             eof_stall = 0;
-        } else if (!sync_on) {
+        } else if (!sync_on && !dc_context->total_owned_by_loader) {
             // End of stream
             dc_context->total_num_frame = nFrame;
         } else if (packets_in_flight > 0 && eof_stall < 100) {

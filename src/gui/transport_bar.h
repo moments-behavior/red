@@ -397,18 +397,9 @@ inline void DrawTransportBar(TransportBarState &state, AppContext &ctx) {
         const int lo = dc->shortest_cam_frames();
         const int hi = dc->longest_cam_frames();
         ImGui::TextColored(ImVec4(0.9f, 0.9f, 0.4f, 1.0f), "Uneven");
-        if (ImGui::IsItemHovered()) {
-            ImGui::BeginTooltip();
-            ImGui::Text("Cameras hold different numbers of frames: "
-                        "%d to %d.", lo, hi);
-            ImGui::Separator();
-            ImGui::TextUnformatted(
-                "This is not a sync problem -- no frames are missing, the "
-                "cameras just stopped at different times.\n"
-                "The timeline runs to the longest; past its own end a "
-                "camera shows no frame rather than holding its last one.");
-            ImGui::EndTooltip();
-        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Videos are of different length: %d to %d "
+                              "frames.", lo, hi);
     }
 
     // === Desync fix (canonical trigger timeline) ===

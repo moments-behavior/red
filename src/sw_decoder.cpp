@@ -466,7 +466,7 @@ void sw_decoder_process(DecoderContext *dc_context, FFmpegDemuxer *demuxer,
                         demuxer->Demux(pVideo, nVideoBytes, pktinfo);
                     if (!demux_success) {
                         nFrameReturned = dec.Drain();
-                        if (!sync_on)
+                        if (!sync_on && !dc_context->total_owned_by_loader)
                             dc_context->total_num_frame = nFrame + nFrameReturned;
                     } else {
                         nFrameReturned = dec.Decode(pVideo, nVideoBytes);
@@ -508,7 +508,7 @@ void sw_decoder_process(DecoderContext *dc_context, FFmpegDemuxer *demuxer,
                         demuxer->Demux(pVideo, nVideoBytes, pktinfo);
                     if (!demux_success) {
                         nFrameReturned = dec.Drain();
-                        if (!sync_on)
+                        if (!sync_on && !dc_context->total_owned_by_loader)
                             dc_context->total_num_frame = nFrame + nFrameReturned;
                         stream_exhausted = (nFrameReturned == 0);
                     } else {

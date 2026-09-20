@@ -1674,13 +1674,21 @@ int main(int argc, char **argv) {
                     if (vis == window_need_decoding.end() ||
                         !vis->second.load())
                         continue;
-                    int decoded = latest_decoded_frame[cam_name].load();
-                    if (ci < dc_context->per_cam_frames.size() &&
-                        dc_context->per_cam_frames[ci] > 0 &&
-                        decoded >= dc_context->per_cam_frames[ci] - 1)
+                    // Compared against the camera's own last frame, not
+                    // against how far it has decoded: a seek resets the
+                    // latter, so keying off it left an already-finished
+                    // camera pinning the cap wherever it happened to sit.
+                    const int cam_end =
+                        (ci < dc_context->per_cam_frames.size() &&
+                         dc_context->per_cam_frames[ci] > 0)
+                            ? dc_context->per_cam_frames[ci] - 1
+                            : -1;
+                    if (cam_end >= 0 &&
+                        cam_end <= ps.to_display_frame_number)
                         continue;
-                    min_decoded_frame =
-                        std::min(min_decoded_frame, decoded);
+                    min_decoded_frame = std::min(
+                        min_decoded_frame,
+                        latest_decoded_frame[cam_name].load());
                 }
 
                 // CHOOSE MODE

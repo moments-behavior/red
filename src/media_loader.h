@@ -715,9 +715,12 @@ load_videos(std::map<std::string, std::string> &selected_files,
     // cameras from that cap (red.cpp) instead of by fabricating duplicate
     // frames the way the sync path's trailing fill does.
     //
-    if (!sync_enable && !dc_context->per_cam_frames.empty())
+    if (!sync_enable && !dc_context->per_cam_frames.empty()) {
         dc_context->estimated_num_frames =
             dc_context->longest_cam_frames() - 1;
+        dc_context->total_num_frame = dc_context->longest_cam_frames();
+        dc_context->total_owned_by_loader = true;
+    }
     dc_context->sync_fix_active = sync_enable;
     dc_context->sync_canonical_len = splan.canonical_len;
     if (sync_enable) {

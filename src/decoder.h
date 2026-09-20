@@ -95,6 +95,15 @@ struct DecoderContext {
     // which cameras genuinely have nothing to show rather than being slow.
     std::vector<int> per_cam_frames;
 
+    // Set when the loader has real per-camera counts and has therefore set
+    // total_num_frame itself. Decoder threads must then leave it alone: each
+    // one writes it at ITS OWN end of stream, so the shortest camera's end
+    // became everybody's, and after a seek the value written is only what
+    // that camera decoded SINCE the seek -- a partial count, which is why
+    // playback stopped at arbitrary frames. Same ownership rule sync mode
+    // already uses, just not conditional on sync.
+    bool total_owned_by_loader = false;
+
     int shortest_cam_frames() const {
         if (per_cam_frames.empty()) return 0;
         return *std::min_element(per_cam_frames.begin(), per_cam_frames.end());
