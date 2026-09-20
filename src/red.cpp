@@ -805,8 +805,8 @@ int main(int argc, char **argv) {
                             kp2d.x = px; kp2d.y = py;
                             kp2d.occluded = false;
                             kp2d.confidence = c;
-                            kp2d.source = Source2d::Predicted;
-                            kp2d.projected = true;
+                            kp2d.set_predicted();
+                            kp2d.reprojected = true;
                         }
                     }
                 }
@@ -1274,8 +1274,8 @@ int main(int argc, char **argv) {
                                         kp2d.x = mouse.x;
                                         kp2d.y = mouse.y;
                                         kp2d.occluded = false;
-                                        kp2d.source = Source2d::Manual;
-                                        kp2d.projected = false;
+                                        kp2d.set_manual();
+                                        kp2d.reprojected = false;
                                         // Moving a 2D point invalidates the 3D
                                         // solved from it. Dragging already did
                                         // this (gui_keypoints); placing did

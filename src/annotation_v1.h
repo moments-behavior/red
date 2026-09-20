@@ -31,7 +31,7 @@ inline FrameAnnotation frame_from_keypoints(const KeyPoints *kp,
             fa.kp3d[k].x = kp->kp3d[k].position.x;
             fa.kp3d[k].y = kp->kp3d[k].position.y;
             fa.kp3d[k].z = kp->kp3d[k].position.z;
-            // V1 had no Source3d; default to Triangulated if present.
+            // V1 had no 3D origin; default to triangulated if present.
             if (kp->kp3d[k].is_triangulated) {
                 fa.kp3d[k].set_triangulated(kp->kp3d[k].confidence);
             } else {
@@ -46,7 +46,7 @@ inline FrameAnnotation frame_from_keypoints(const KeyPoints *kp,
                 fa.cameras[c].keypoints[k].x = kp->kp2d[c][k].position.x;
                 fa.cameras[c].keypoints[k].y = kp->kp2d[c][k].position.y;
                 if (kp->kp2d[c][k].is_labeled)
-                    fa.cameras[c].keypoints[k].source = Source2d::Manual;
+                    fa.cameras[c].keypoints[k].set_manual();
                 fa.cameras[c].keypoints[k].confidence = kp->kp2d[c][k].confidence;
             }
         }
@@ -106,7 +106,7 @@ inline void refresh_keypoints_in_amap(AnnotationMap &amap,
                         fa.cameras[c].keypoints[k].x = kp->kp2d[c][k].position.x;
                         fa.cameras[c].keypoints[k].y = kp->kp2d[c][k].position.y;
                         if (kp->kp2d[c][k].is_labeled)
-                    fa.cameras[c].keypoints[k].source = Source2d::Manual;
+                    fa.cameras[c].keypoints[k].set_manual();
                         fa.cameras[c].keypoints[k].confidence = kp->kp2d[c][k].confidence;
                     }
                 }
@@ -143,7 +143,7 @@ inline void populate_keypoints_from_amap(std::map<u32, KeyPoints *> &km,
             kp->kp3d[k].position.x = fa.kp3d[k].x;
             kp->kp3d[k].position.y = fa.kp3d[k].y;
             kp->kp3d[k].position.z = fa.kp3d[k].z;
-            kp->kp3d[k].is_triangulated = fa.kp3d[k].solved();
+            kp->kp3d[k].is_triangulated = fa.kp3d[k].exist;
             kp->kp3d[k].confidence = fa.kp3d[k].confidence;
         }
         for (int c = 0; c < nc; ++c) {
@@ -151,7 +151,7 @@ inline void populate_keypoints_from_amap(std::map<u32, KeyPoints *> &km,
             for (int k = 0; k < nn; ++k) {
                 kp->kp2d[c][k].position.x = fa.cameras[c].keypoints[k].x;
                 kp->kp2d[c][k].position.y = fa.cameras[c].keypoints[k].y;
-                kp->kp2d[c][k].is_labeled = fa.cameras[c].keypoints[k].placed();
+                kp->kp2d[c][k].is_labeled = fa.cameras[c].keypoints[k].exist;
                 kp->kp2d[c][k].confidence = fa.cameras[c].keypoints[k].confidence;
             }
         }

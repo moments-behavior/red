@@ -946,7 +946,7 @@ inline nlohmann::json generate_annotation_json_from_amap(
                 const auto &cam = it->second.front().cameras[cam_idx];
                 bool any_unlabeled = false;
                 for (int k = 0; k < config.num_keypoints && k < (int)cam.keypoints.size(); ++k) {
-                    if (!cam.keypoints[k].placed()) { any_unlabeled = true; break; }
+                    if (!cam.keypoints[k].exist) { any_unlabeled = true; break; }
                 }
                 if (!any_unlabeled && !cam.keypoints.empty())
                     has_valid_2d = true;

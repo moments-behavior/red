@@ -20,57 +20,43 @@
 static constexpr double UNLABELED = 1E7;
 
 // ── Label provenance ──
-// Who produced a 2D keypoint. `None` is the absence of one, which is why
-// there is no separate `labeled` flag any more: two fields encoding one fact
-// can disagree, and the old default (`Manual` on an empty keypoint) meant a
-// path that filled coordinates and forgot the source silently claimed a human
-// had placed them.
-enum class Source2d : int {
-    None      = 0,
-    Manual    = 1,   // a person placed it here
-    Predicted = 2,   // derived: reprojected from 3D, or from a model
-};
-
-// ── Per-keypoint 2D annotation ──
-//
-// `y` has its ORIGIN AT THE BOTTOM of the image: these are ImPlot coordinates,
-// which is what the labelling views work in. Image files, calibration and every
-// export format use a top-left origin, so anything leaving red must write
-// `image_height - y`. Every exporter does this (jarvis_export.h,
-// build_coco_json, export_yolo, export_deeplabcut); getting it wrong produces
-// coordinates that sit inside the frame and move smoothly, pass every
-// structural check, and fail to triangulate.
 struct Keypoint2D {
     double x = UNLABELED;
     double y = UNLABELED;   // bottom-origin; see above
     float  confidence = 0.0f;
-    Source2d source = Source2d::None;
-    // True when x/y were generated from a 3D point. `source == Manual` keeps
-    // the Tailcycle status `visible` even when a projection refreshed its
-    // coordinates; non-manual projected values are exported as `projected`.
-    bool projected = false;
-    // Explicitly assessed as not visible in this camera (occluded or outside
-    // the image). This is tailcycle's keypoints.pq `missing` status.
+
+    // `exist` is presence: are there coordinates here at all.
+    // The three origin flags are mutually exclusive -- a coordinate came from
+    // exactly one place -- and are kept that way by the setters below. Write
+    // through those, never to the flags directly, or a point can end up
+    // claiming two origins and every reader has to invent a precedence rule.
+    bool exist       = false;
+    bool manual      = false;   // a person clicked it in this camera
+    bool reprojected = false;   // computed from this frame's 3D
+    bool predicted   = false;   // a model produced it directly in this view
+
+    // Independent of the above: an assessment that the point is not visible
+    // here. It has no coordinates, so `exist` is false while this is true.
+    // This is tailcycle's keypoints.pq `missing` status.
     bool occluded = false;
 
-    // Presence. Was a `labeled` bool; `source` already says it, and one field
-    // cannot disagree with itself.
-    bool placed() const { return source != Source2d::None; }
-
     void set_manual() {
-        source = Source2d::Manual;
-        projected = false;
-        occluded = false;
+        exist = true; manual = true;
+        reprojected = predicted = occluded = false;
+    }
+    void set_reprojected() {
+        exist = true; reprojected = true;
+        manual = predicted = occluded = false;
     }
     void set_predicted(float conf = 0.0f) {
-        source = Source2d::Predicted;
-        confidence = conf;
-        occluded = false;
+        exist = true; predicted = true; confidence = conf;
+        manual = reprojected = occluded = false;
     }
+    void clear() { *this = Keypoint2D{}; }
 };
 
 inline bool keypoint2d_assessed(const Keypoint2D &kp) {
-    return kp.placed() || kp.occluded;
+    return kp.exist || kp.occluded;
 }
 
 inline void mark_keypoint2d_occluded(Keypoint2D &kp) {
@@ -83,45 +69,28 @@ inline void mark_keypoint2d_occluded(Keypoint2D &kp) {
 // Values 2 (HybridNet) and 3 (Manual) were removed: nothing ever produced
 // them. red has no UI for placing a 3D point directly, and HybridNet output
 // arrives through set_predicted(). The numbering is left alone so the two are
-// not silently reused -- Source3d is in-memory only and never serialised,
+// not silently reused -- the 3D origin flags are in-memory only and never serialised,
 // but a reader comparing this against older code should see the gap.
-// Who produced a 3D keypoint. Mirrors Source2d: `None` is absence, and the
-// middle value is the one this program can vouch for.
-enum class Source3d : int {
-    None         = 0,
-    Triangulated = 1,   // DLT-solved from 2D labels, here or by whoever made
-                        // the dataset -- a human-annotated session's 3D is
-                        // this, not a prediction
-    Predicted    = 2,   // a model produced it
-};
-
-// ── Per-keypoint 3D annotation ──
 struct Keypoint3D {
     double x = UNLABELED;
     double y = UNLABELED;
     double z = UNLABELED;
-    Source3d source = Source3d::None;        // provenance, and presence
-    float  confidence   = 0.0f;
+    float  confidence = 0.0f;
 
-    // Always set through these, so presence and provenance stay one fact.
-    bool solved() const { return source != Source3d::None; }
+    // Same shape as Keypoint2D: presence, then mutually exclusive origins held
+    // exclusive by the setters.
+    bool exist        = false;
+    bool triangulated = false;   // DLT-solved from 2D, here or by whoever made
+                                 // the dataset
+    bool predicted    = false;   // a model produced it
 
     void set_triangulated(float conf = 1.0f) {
-        source = Source3d::Triangulated;
-        confidence = conf;
+        exist = true; triangulated = true; predicted = false; confidence = conf;
     }
     void set_predicted(float conf = 1.0f) {
-        source = Source3d::Predicted;
-        confidence = conf;
+        exist = true; predicted = true; triangulated = false; confidence = conf;
     }
-    void clear() {
-        // Reset the values too. Leaving them behind kept a stale position on a
-        // point that reads as unset -- invisible while `triangulated` is false,
-        // but resurrected by anything that checks the flag less carefully.
-        x = y = z = UNLABELED;
-        source = Source3d::None;
-        confidence = 0.0f;
-    }
+    void clear() { *this = Keypoint3D{}; }
 };
 
 // ── Optional per-camera extras (bbox, OBB, mask) ──
@@ -358,8 +327,8 @@ inline bool frame_has_any_manual_labels(const FrameAnnotation &fa) {
     // hand-made data is caught by the 2D pass below or by needs_improvement.
     for (const auto &cam : fa.cameras)
         for (const auto &kp : cam.keypoints)
-            if ((kp.occluded && kp.source == Source2d::Manual) ||
-                (kp.placed() && kp.source == Source2d::Manual)) return true;
+            if ((kp.occluded && kp.manual) ||
+                (kp.exist && kp.manual)) return true;
     return false;
 }
 
@@ -387,11 +356,11 @@ inline bool frame_is_fully_triangulated(const FrameAnnotation &fa, int num_nodes
     for (int k = 0; k < num_nodes; ++k) {
         bool visible = false;
         for (const auto &cam : fa.cameras)
-            if (k < (int)cam.keypoints.size() && cam.keypoints[k].placed()) {
+            if (k < (int)cam.keypoints.size() && cam.keypoints[k].exist) {
                 visible = true;
                 break;
             }
-        if (visible && (k >= (int)fa.kp3d.size() || !fa.kp3d[k].solved()))
+        if (visible && (k >= (int)fa.kp3d.size() || !fa.kp3d[k].exist))
             return false;
     }
     return true;
@@ -442,10 +411,10 @@ inline KpProgress frame_kp_progress(const FrameAnnotation &fa, int num_nodes,
                 node_placed = true;
                 break;
             }
-        bool node_tri = n < (int)fa.kp3d.size() && fa.kp3d[n].solved();
+        bool node_tri = n < (int)fa.kp3d.size() && fa.kp3d[n].exist;
         bool node_visible = false;
         for (const auto &cam : fa.cameras)
-            if (n < (int)cam.keypoints.size() && cam.keypoints[n].placed()) {
+            if (n < (int)cam.keypoints.size() && cam.keypoints[n].exist) {
                 node_visible = true;
                 break;
             }

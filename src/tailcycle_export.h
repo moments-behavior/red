@@ -60,7 +60,7 @@ struct ExportConfig {
     Layers layers = Layers::TwoD;
 
     // `labels` is closed at annotated|tracked and a session that is both must
-    // be two sessions (§2.6). Rows partition by Source2d/Source3d; a
+    // be two sessions (§2.6). Rows partition by the keypoints' origin flags; a
     // project with both produces <session>_annotated and <session>_tracked.
     bool export_annotated = true;
     bool export_tracked = true;

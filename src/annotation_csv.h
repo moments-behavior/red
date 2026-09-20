@@ -129,7 +129,7 @@ inline bool save_2d_csv(const std::string &path, const std::string &skeleton_nam
                 // Assessed missing/occluded: no coordinates, but retain the
                 // determination instead of collapsing it into unlabeled.
                 f << ",,,M";
-            } else if (k < (int)cam.keypoints.size() && cam.keypoints[k].placed()) {
+            } else if (k < (int)cam.keypoints.size() && cam.keypoints[k].exist) {
                 const auto &kp = cam.keypoints[k];
                 f << "," << kp.x << "," << kp.y << ",";
                 if (kp.confidence > 0.0f)
@@ -138,7 +138,7 @@ inline bool save_2d_csv(const std::string &path, const std::string &skeleton_nam
                 // 'I' is no longer written: Imported and Predicted were the
                 // same claim -- "not placed by a person here" -- and keeping
                 // two spellings of it meant two code paths that had to agree.
-                if (kp.source == Source2d::Predicted) f << "P";
+                if (kp.predicted) f << "P";
             } else {
                 f << ",,,,";
             }
@@ -170,7 +170,7 @@ inline bool save_3d_csv(const std::string &path, const std::string &skeleton_nam
       for (const auto &fa : fis) {
         f << frame << "," << fa.instance_id;
         for (int k = 0; k < num_nodes; ++k) {
-            if (k < (int)fa.kp3d.size() && fa.kp3d[k].solved()) {
+            if (k < (int)fa.kp3d.size() && fa.kp3d[k].exist) {
                 const auto &kp = fa.kp3d[k];
                 f << "," << kp.x << "," << kp.y << "," << kp.z << ",";
                 if (kp.confidence > 0.0f)
@@ -358,14 +358,15 @@ inline bool load_2d_csv(const std::string &path, AnnotationMap &amap,
                 cam.keypoints[k].x = x;
                 cam.keypoints[k].y = y;
                 cam.keypoints[k].occluded = false;
-                cam.keypoints[k].projected = false;
+                cam.keypoints[k].reprojected = false;
                 cam.keypoints[k].confidence = has_c ? (float)c : 0.0f;
-                // 'I' still READS, as Predicted: files written before the
-                // two were merged are still out there.
-                if (src == 'P' || src == 'I')
-                    cam.keypoints[k].source = Source2d::Predicted;
-                else
-                    cam.keypoints[k].source = Source2d::Manual;
+                // 'R' is new. 'P' and the legacy 'I' both read as predicted:
+                // files written before reprojection and model output were
+                // told apart cannot say which they were, and predicted is the
+                // safer reading -- it keeps them out of the annotated bucket.
+                if (src == 'R')      cam.keypoints[k].set_reprojected();
+                else if (src == 'P' || src == 'I') cam.keypoints[k].set_predicted();
+                else                 cam.keypoints[k].set_manual();
             }
             // else: stays at default (UNLABELED, labeled=false)
         }

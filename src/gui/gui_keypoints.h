@@ -84,10 +84,10 @@ inline bool gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
     for (u32 n = 0; n < skeleton->num_nodes; n++) {
         if (n >= (u32)cam.keypoints.size()) break;
         const Keypoint2D &kp = cam.keypoints[n];
-        if (kp.placed()) {
+        if (kp.exist) {
             draw_pos[n] = {kp.x, kp.y, true, false};
         } else if (kp.occluded && calib && scene && n < fa.kp3d.size() &&
-                   fa.kp3d[n].solved() && view_idx < (int)calib->size()) {
+                   fa.kp3d[n].exist && view_idx < (int)calib->size()) {
             double rx = 0.0, ry = 0.0;
             const Eigen::Vector3d p3(fa.kp3d[n].x, fa.kp3d[n].y, fa.kp3d[n].z);
             if (reproject_3d_to_cam(p3, (*calib)[view_idx],
@@ -130,7 +130,7 @@ inline bool gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
                         col, 1.6f);
         }
 
-        if (cam.keypoints[node].placed()) {
+        if (cam.keypoints[node].exist) {
             ImVec4 node_color;
             if (cam.active_id == node) {
                 node_color = active_color; // active keypoint: user-selected color
@@ -159,7 +159,7 @@ inline bool gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
             // given, so a transparent colour hides the marker while keeping
             // its hit-testing and dragging intact, and the triangle goes on
             // top by hand.
-            const bool derived = cam.keypoints[node].projected;
+            const bool derived = cam.keypoints[node].reprojected;
             ImVec4 marker_color = node_color;
             if (derived) marker_color.w = 0.0f;
 
@@ -182,8 +182,7 @@ inline bool gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
             }
             if (drag_point_modified) {
                 // A drag turns a projected point back into a user annotation.
-                cam.keypoints[node].source = Source2d::Manual;
-                cam.keypoints[node].projected = false;
+                cam.keypoints[node].set_manual();
                 fa.kp3d[node].clear();
                 touched = true;
             }
@@ -212,7 +211,7 @@ inline bool gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
                 std::string label;
                 if (node < skeleton->node_names.size())
                     label = skeleton->node_names[node];
-                if (fa.kp3d[node].solved()) {
+                if (fa.kp3d[node].exist) {
                     std::ostringstream oss;
                     oss << std::fixed << std::setprecision(2);
                     oss << "(" << fa.kp3d[node].x << ", "
@@ -248,8 +247,8 @@ inline bool gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
                     // Manual point does invalidate the solve, so that one
                     // still clears.
                     const bool fed_solve =
-                        cam.keypoints[node].placed() &&
-                        cam.keypoints[node].source == Source2d::Manual;
+                        cam.keypoints[node].exist &&
+                        cam.keypoints[node].manual;
                     mark_keypoint2d_occluded(cam.keypoints[node]);
                     if (fed_solve && node < fa.kp3d.size())
                         fa.kp3d[node].clear();
@@ -311,19 +310,19 @@ inline bool gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
                 // Only Manual points feed triangulation, so this is what
                 // promotes a reprojection you have judged correct into an
                 // input for the next solve.
-                ImGui::BeginDisabled(!kp.projected);
+                ImGui::BeginDisabled(!kp.reprojected);
                 if (ImGui::MenuItem("Accept as manual")) {
-                    kp.source = Source2d::Manual;
-                    kp.projected = false;
+                    kp.set_manual();
+                    kp.reprojected = false;
                 }
                 ImGui::EndDisabled();
-                if (!kp.projected && ImGui::IsItemHovered(
+                if (!kp.reprojected && ImGui::IsItemHovered(
                                          ImGuiHoveredFlags_AllowWhenDisabled))
                     ImGui::SetTooltip("Already a manual label");
 
                 if (ImGui::MenuItem("Mark occluded")) {
                     const bool fed_solve =
-                        kp.placed() && kp.source == Source2d::Manual;
+                        kp.exist && kp.manual;
                     mark_keypoint2d_occluded(kp);
                     if (fed_solve) fa.kp3d[t.node].clear();
                 }
@@ -363,8 +362,8 @@ inline bool gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
     // purpose.
     if (plot_keys_ok && ImGui::IsKeyPressed(ImGuiKey_M, false)) {
         const bool fed_solve =
-            cam.keypoints[cam.active_id].placed() &&
-            cam.keypoints[cam.active_id].source == Source2d::Manual;
+            cam.keypoints[cam.active_id].exist &&
+            cam.keypoints[cam.active_id].manual;
         mark_keypoint2d_occluded(cam.keypoints[cam.active_id]);
         if (fed_solve && cam.active_id < fa.kp3d.size())
             fa.kp3d[cam.active_id].clear();
@@ -533,7 +532,7 @@ inline bool solve_midline_constraint(FrameAnnotation &fa,
     for (u32 node = 0; node < skeleton->num_nodes; node++) {
         if (node >= (u32)fa.cameras[side].keypoints.size()) break;
         const auto &kp = fa.cameras[side].keypoints[node];
-        if (!kp.placed()) continue;
+        if (!kp.exist) continue;
         Eigen::Vector2d pu = midline_undistort_px(kp.x, kp.y, cp[side],
                                                   scene->image_height[side], telecentric);
         red_math::Ray3D ray = midline_backproject(pu, cp[side], telecentric);
@@ -559,8 +558,8 @@ inline bool solve_midline_constraint(FrameAnnotation &fa,
                 fa.cameras[v].keypoints[node].x = rx;
                 fa.cameras[v].keypoints[node].y = ry;
                 fa.cameras[v].keypoints[node].occluded = false;
-                fa.cameras[v].keypoints[node].source = Source2d::Predicted;
-                fa.cameras[v].keypoints[node].projected = true;
+                fa.cameras[v].keypoints[node].set_reprojected();
+                fa.cameras[v].keypoints[node].reprojected = true;
             }
         }
     }
@@ -602,8 +601,8 @@ inline void reprojection(FrameAnnotation &fa, SkeletonContext *skeleton,
         for (u32 view_idx = 0; view_idx < scene->num_cams; view_idx++) {
             if (view_idx < (u32)fa.cameras.size() &&
                 node < (u32)fa.cameras[view_idx].keypoints.size() &&
-                fa.cameras[view_idx].keypoints[node].placed() &&
-                fa.cameras[view_idx].keypoints[node].source == Source2d::Manual) {
+                fa.cameras[view_idx].keypoints[node].exist &&
+                fa.cameras[view_idx].keypoints[node].manual) {
                 num_views_labeled++;
             }
         }
@@ -616,8 +615,8 @@ inline void reprojection(FrameAnnotation &fa, SkeletonContext *skeleton,
             for (u32 view_idx = 0; view_idx < scene->num_cams; view_idx++) {
                 if (view_idx >= (u32)fa.cameras.size()) continue;
                 if (node >= (u32)fa.cameras[view_idx].keypoints.size()) continue;
-                if (fa.cameras[view_idx].keypoints[node].placed() &&
-                    fa.cameras[view_idx].keypoints[node].source == Source2d::Manual) {
+                if (fa.cameras[view_idx].keypoints[node].exist &&
+                    fa.cameras[view_idx].keypoints[node].manual) {
                     Eigen::Vector2d pt(
                         fa.cameras[view_idx].keypoints[node].x,
                         (double)scene->image_height[view_idx] -
@@ -664,7 +663,7 @@ inline void reprojection(FrameAnnotation &fa, SkeletonContext *skeleton,
                 // refreshing the other views from a 3D solve.
                 if (kp2d.occluded) continue;
                 const bool user_annotated =
-                    kp2d.placed() && kp2d.source == Source2d::Manual;
+                    kp2d.exist && kp2d.manual;
                 if (!user_annotated) kp2d = Keypoint2D{};
 
                 if (telecentric) {
@@ -683,11 +682,10 @@ inline void reprojection(FrameAnnotation &fa, SkeletonContext *skeleton,
                         kp2d.x = x;
                         kp2d.y = y;
                         kp2d.occluded = false;
-                        kp2d.source = user_annotated ? Source2d::Manual
-                                                      : Source2d::Predicted;
+                        if (user_annotated) kp2d.set_manual(); else kp2d.set_reprojected();
                         // A T-key refresh may move a user annotation, but it
                         // must not turn that camera into a derived label.
-                        kp2d.projected = !user_annotated;
+                        kp2d.reprojected = !user_annotated;
                     }
                 } else {
                     // Perspective reprojection (matrix-based, safe for det(R)=-1)
@@ -709,11 +707,10 @@ inline void reprojection(FrameAnnotation &fa, SkeletonContext *skeleton,
                             kp2d.x = x;
                             kp2d.y = y;
                             kp2d.occluded = false;
-                            kp2d.source = user_annotated ? Source2d::Manual
-                                                          : Source2d::Predicted;
+                            if (user_annotated) kp2d.set_manual(); else kp2d.set_reprojected();
                             // Preserve the per-camera user annotation state
                             // even though T refreshed its coordinates.
-                            kp2d.projected = !user_annotated;
+                            kp2d.reprojected = !user_annotated;
                         }
                     }
                 }

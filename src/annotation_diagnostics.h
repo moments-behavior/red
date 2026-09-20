@@ -39,7 +39,7 @@ struct Diagnostics {
     bool success = false;
     std::string error;
     ReprojectionDiagnostics::Diagnostics base;
-    // Aligned with base.solved() / base.residuals.point_id: the (frame, kp)
+    // Aligned with base.exist / base.residuals.point_id: the (frame, kp)
     // that each virtual point index corresponds to.
     std::vector<PointLabel> point_labels;
     std::vector<PerKeypointStats> per_keypoint;
@@ -116,7 +116,7 @@ inline Diagnostics compute(
                 if (m >= (int)fa.cameras.size()) continue;
                 if (kp >= (int)fa.cameras[m].keypoints.size()) continue;
                 const Keypoint2D &k2 = fa.cameras[m].keypoints[kp];
-                if (!k2.placed()) continue;
+                if (!k2.exist) continue;
                 if (k2.x >= UNLABELED * 0.9 || k2.y >= UNLABELED * 0.9) continue;
                 if (!std::isfinite(k2.x) || !std::isfinite(k2.y)) continue;
                 c.cams_labeled.push_back(m);

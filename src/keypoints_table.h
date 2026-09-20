@@ -219,16 +219,15 @@ inline void DrawKeypointsTable(AppContext &ctx, float height) {
                                 const bool labeled =
                                     row < (int)fa.cameras.size() &&
                                     node < (int)fa.cameras[row].keypoints.size() &&
-                                    fa.cameras[row].keypoints[node].placed();
+                                    fa.cameras[row].keypoints[node].exist;
                                 const bool occluded =
                                     row < (int)fa.cameras.size() &&
                                     node < (int)fa.cameras[row].keypoints.size() &&
                                     fa.cameras[row].keypoints[node].occluded;
                                 const bool user_annotated =
-                                    labeled && fa.cameras[row].keypoints[node].source ==
-                                                   Source2d::Manual;
+                                    labeled && fa.cameras[row].keypoints[node].manual;
                                 const bool projected =
-                                    labeled && fa.cameras[row].keypoints[node].projected;
+                                    labeled && fa.cameras[row].keypoints[node].reprojected;
                                 ImVec4 node_color = ImVec4(0, 0, 0, 0);
 
                                 // Fill shows placement status regardless of
@@ -362,18 +361,18 @@ inline void DrawKeypointsTable(AppContext &ctx, float height) {
                         ImGui::InvisibleButton(
                             "##kp3dcell",
                             ImVec2(cell_w, ImGui::GetFrameHeight()));
-                        if (k3.solved() && ImGui::IsItemHovered())
+                        if (k3.exist && ImGui::IsItemHovered())
                             ImGui::SetTooltip(
                                 "%s\n%s\n(%.2f, %.2f, %.2f)",
                                 node < (int)skeleton.node_names.size()
                                     ? skeleton.node_names[node].c_str() : "",
-                                k3.source == Source3d::Predicted
+                                k3.predicted
                                     ? "predicted" : "triangulated",
                                 k3.x, k3.y, k3.z);
                         ImGui::PopID();
 
-                        if (k3.solved() &&
-                            k3.source == Source3d::Predicted) {
+                        if (k3.exist &&
+                            k3.predicted) {
                             const ImVec2 cp = ImGui::GetStyle().CellPadding;
                             const ImVec2 rmin = ImGui::GetItemRectMin();
                             const ImVec2 rmax = ImGui::GetItemRectMax();
@@ -382,7 +381,7 @@ inline void DrawKeypointsTable(AppContext &ctx, float height) {
                                 ImVec2(rmax.x + cp.x, rmax.y + cp.y),
                                 ImGui::ColorConvertFloat4ToU32(
                                     kLabelTriangulated));
-                        } else if (k3.solved()) {
+                        } else if (k3.exist) {
                             ImVec4 c = kLabelTriangulated;
                             c.w = 0.65f;
                             ImGui::TableSetBgColor(ImGuiTableBgTarget_CellBg,

@@ -46,25 +46,20 @@ enum class Bucket { Annotated, Tracked };
 // with the comment "predicted, awaiting review". If a future import path
 // brings in genuine human labels, it should set Manual rather than teach this
 // function a new case.
-Bucket bucket_2d(Source2d s) {
-    switch (s) {
-    case Source2d::Manual:    return Bucket::Annotated;
-    case Source2d::Predicted: return Bucket::Tracked;
-    case Source2d::None:      return Bucket::Annotated;  // nothing to claim
-    }
-    return Bucket::Annotated;
+Bucket bucket_2d(const Keypoint2D &kp) {
+    // A point a person clicked is annotated; anything derived or predicted is
+    // tracked. A reprojection buckets as tracked to match what this did when
+    // reprojection and prediction shared one enum value -- whether a
+    // reprojection of YOUR labels ought to count as annotated is a separate
+    // question, and it needs kp3d's origin to answer.
+    return kp.manual ? Bucket::Annotated : Bucket::Tracked;
 }
 
-Bucket bucket_3d(Source3d s) {
-    switch (s) {
+Bucket bucket_3d(const Keypoint3D &k3) {
     // Solved from 2D labels -- by red, or by whoever made the dataset. An
     // imported session that declares itself annotated lands here, which is
     // what stops red re-exporting human work as machine output.
-    case Source3d::Triangulated: return Bucket::Annotated;
-    case Source3d::Predicted:    return Bucket::Tracked;
-    case Source3d::None:         return Bucket::Annotated;
-    }
-    return Bucket::Annotated;
+    return k3.predicted ? Bucket::Tracked : Bucket::Annotated;
 }
 
 std::string toml_str(const std::string &v) { return "\"" + v + "\""; }
@@ -197,12 +192,12 @@ bool export_session(const ExportConfig &cfg, const AnnotationMap &amap,
       for (const FrameAnnotation &fa : fis) {
         for (const auto &cam : fa.cameras)
             for (const auto &kp : cam.keypoints)
-                if (kp.placed() || kp.occluded)
-                    has[(int)bucket_2d(kp.source)] = true;
+                if (kp.exist || kp.occluded)
+                    has[(int)bucket_2d(kp)] = true;
         for (const auto &k3 : fa.kp3d) {
-            if (k3.source == Source3d::None) continue;
+            if (!k3.exist) continue;
             if (cfg.layers == ExportConfig::Layers::TwoD) continue;
-            has[(int)bucket_3d(k3.source)] = true;
+            has[(int)bucket_3d(k3)] = true;
         }
     }
     if (!has[0] && !has[1]) return fail("Nothing to export: no labelled points.");
@@ -303,17 +298,17 @@ bool export_session(const ExportConfig &cfg, const AnnotationMap &amap,
                     const double img_h = (double)cfg.calibration[ci].image_height;
                     for (size_t ni = 0; ni < cam.keypoints.size() && ni < cfg.node_names.size(); ni++) {
                         const Keypoint2D &kp = cam.keypoints[ni];
-                        if (!kp.placed() && !kp.occluded)
+                        if (!kp.exist && !kp.occluded)
                             continue;   // no row, not `unlabeled` (§7)
                         if (cfg.force_labels.empty() &&
-                            bucket_2d(kp.source) != job.b) continue;
+                            bucket_2d(kp) != job.b) continue;
                         if (!g_b.Append(gid).ok() || !f_b.Append(frame).ok() ||
                             !a_b.Append(animal_id_of(fa.instance_id)).ok() ||
                             !c_b.Append(cfg.camera_names[ci]).ok() ||
                             !p_b.Append(cfg.node_names[ni]).ok() ||
                             !s_b.Append(kp.occluded
                                              ? Tailcycle::status::kMissing
-                                             : (kp.source == Source2d::Manual
+                                             : (kp.manual
                                                     ? Tailcycle::status::kVisible
                                                     : Tailcycle::status::kProjected)).ok())
                             return fail("keypoints.pq: builder append failed.");
@@ -328,7 +323,7 @@ bool export_session(const ExportConfig &cfg, const AnnotationMap &amap,
                         // and passing that through would ship every hand-placed
                         // point with a score of zero (§7 says null).
                         const bool scored = !kp.occluded &&
-                                             kp.source != Source2d::Manual &&
+                                             !kp.manual &&
                                              kp.confidence > 0.0f;
                         if (scored) any_score = true;
                         if (!(scored ? sc_b.Append(kp.confidence) : sc_b.AppendNull()).ok())
@@ -368,10 +363,10 @@ bool export_session(const ExportConfig &cfg, const AnnotationMap &amap,
                 if (frame < 0 || frame >= cfg.n_frames) continue;
                 for (size_t ni = 0; ni < fa.kp3d.size() && ni < cfg.node_names.size(); ni++) {
                     const Keypoint3D &k3 = fa.kp3d[ni];
-                    if (k3.source == Source3d::None) continue;
+                    if (!k3.exist) continue;
                     if (cfg.layers == ExportConfig::Layers::TwoD) continue;
                     if (cfg.force_labels.empty() &&
-                        bucket_3d(k3.source) != job.b) continue;
+                        bucket_3d(k3) != job.b) continue;
                     if (!g_b.Append(gid).ok() || !f_b.Append(frame).ok() ||
                         !a_b.Append(animal_id_of(fa.instance_id)).ok() ||
                         !p_b.Append(cfg.node_names[ni]).ok() ||
@@ -379,7 +374,7 @@ bool export_session(const ExportConfig &cfg, const AnnotationMap &amap,
                         !x_b.Append((float)k3.x).ok() || !y_b.Append((float)k3.y).ok() ||
                         !z_b.Append((float)k3.z).ok())
                         return fail("points3d.pq: builder append failed.");
-                    const bool scored = k3.source == Source3d::Predicted && k3.confidence > 0.0f;
+                    const bool scored = k3.predicted && k3.confidence > 0.0f;
                     if (scored) any_score = true;
                     if (!(scored ? sc_b.Append(k3.confidence) : sc_b.AppendNull()).ok())
                         return fail("points3d.pq: score append failed.");

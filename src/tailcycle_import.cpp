@@ -490,13 +490,12 @@ bool read_session(const std::string &session_dir, const std::string &group_id,
             // image, red works in ImPlot coordinates measured from the bottom.
             kp.y = (double)out->calibration[ci].image_height - y.vals[i];
             kp.occluded = false;
-            kp.projected = (s == Tailcycle::status::kProjected);
             // `status` is the per-point truth. A visible row remains a
             // visible/manual observation even when it came from a session
             // declared `tracked`; the session label must not turn it into a
             // projected row on the next export.
-            kp.source = kp.projected ? Source2d::Predicted
-                                      : Source2d::Manual;
+            if (s == Tailcycle::status::kProjected) kp.set_reprojected();
+            else                                    kp.set_manual();
             if (sc.ok && i < sc.null.size() && !sc.null[i]) kp.confidence = (float)sc.vals[i];
             st.keypoint_rows++;
         }
