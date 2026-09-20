@@ -1192,13 +1192,31 @@ int main(int argc, char **argv) {
                         // frame, so drawing it would present a stale image as
                         // though it were this instant -- the one thing a view
                         // being annotated must not do.
+                        //
+                        // The position is taken as the highest frame number
+                        // any camera has in the slot being displayed, NOT from
+                        // current_frame_num. When paused, that is read out of
+                        // one camera's buffer (see find_visible_cam above), and
+                        // a camera asked to seek past its end lands on its last
+                        // real frame instead -- so if that camera happened to
+                        // be the one sampled, the position read back as 239
+                        // however far past the end you actually were, and every
+                        // view then drew its stale image. At least one camera
+                        // does have the frame, so the maximum is the position.
+                        const int disp_head =
+                            ps.play_video ? ps.read_head : select_corr_head;
+                        int shown_frame = 0;
+                        for (u32 c = 0; c < scene->num_cams; c++)
+                            shown_frame = std::max(
+                                shown_frame,
+                                scene->display_buffer[c][disp_head]
+                                    .frame_number.load());
                         const int cam_frames_j =
                             dc_context->per_cam_contiguous
                                 ? dc_context->cam_frames((int)j)
                                 : 0;
                         const bool cam_ended =
-                            cam_frames_j > 0 &&
-                            current_frame_num >= cam_frames_j;
+                            cam_frames_j > 0 && shown_frame >= cam_frames_j;
                         if (cam_ended) {
                             DrawCameraEndedBadge(
                                 (float)scene->image_width[j],
