@@ -563,6 +563,30 @@ int main(int argc, char **argv) {
                 [&]() { DrawSwitchSkeletonWindow(win.switch_skeleton, ctx); },
                 nullptr});
 
+    // The frame actually on screen in a given ring slot: the highest frame
+    // number among cameras that are currently decoding.
+    //
+    // One camera cannot answer this once the cameras differ in length. Asked
+    // to seek past its own end, a camera lands on its last real frame (the
+    // EOF guard in the decoders), so sampling it reports that end however far
+    // past it you are. current_frame_num is the ANNOTATION KEY -- it is what
+    // get_or_create_frame() is called with -- so reading it from an ended
+    // camera would file a label under the wrong frame, not merely draw the
+    // wrong picture.
+    //
+    // Restricted to decoding cameras because a hidden view stops being
+    // refilled, and after a backward seek its slots still hold the higher
+    // numbers from before, which would drag the maximum forward.
+    auto displayed_frame_at = [&](int head) -> int {
+        int best = -1;
+        for (int i = 0; i < scene->num_cams; i++) {
+            if (!window_was_decoding[pm.camera_names[i]]) continue;
+            best = std::max(best,
+                            scene->display_buffer[i][head].frame_number.load());
+        }
+        return best;
+    };
+
     // Helper: find the first visible camera index (for frame-buffer display).
     auto find_visible_cam = [&]() -> int {
         if (ps.pause_seeked) return 0;
@@ -889,9 +913,14 @@ int main(int argc, char **argv) {
 
             select_corr_head =
                 (ps.pause_selected + ps.read_head) % scene->size_of_buffer;
-            current_frame_num =
-                scene->display_buffer[visible_idx][select_corr_head]
-                    .frame_number;
+            {
+                const int shown = displayed_frame_at(select_corr_head);
+                current_frame_num =
+                    shown >= 0
+                        ? shown
+                        : scene->display_buffer[visible_idx][select_corr_head]
+                              .frame_number.load();
+            }
         }
 
         DrawFrameBufferWindow(ctx, select_corr_head);
@@ -1205,16 +1234,15 @@ int main(int argc, char **argv) {
                         // does have the frame, so the maximum is the position.
                         const int disp_head =
                             ps.play_video ? ps.read_head : select_corr_head;
-                        int shown_frame = 0;
-                        for (u32 c = 0; c < scene->num_cams; c++)
-                            shown_frame = std::max(
-                                shown_frame,
-                                scene->display_buffer[c][disp_head]
-                                    .frame_number.load());
+                        const int shown_frame =
+                            displayed_frame_at(disp_head);
                         const int cam_frames_j =
                             dc_context->per_cam_contiguous
                                 ? dc_context->cam_frames((int)j)
                                 : 0;
+                        // shown_frame is -1 when no camera is decoding, and
+                        // that compares false here, so an unknown position
+                        // draws the image rather than blanking every view.
                         const bool cam_ended =
                             cam_frames_j > 0 && shown_frame >= cam_frames_j;
                         if (cam_ended) {
