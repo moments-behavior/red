@@ -13,6 +13,7 @@
 #include "deferred_queue.h"
 #include "global.h"
 #include "gui.h"
+#include "gui/gui_keypoints.h"
 #include "annotation_csv.h"
 #include "gui/popup_stack.h"
 #include "gui/toast.h"
@@ -601,6 +602,156 @@ static void test_playback_state_defaults() {
     EXPECT_FALSE(ps.slider_text_editing);
 }
 
+
+// ---------------------------------------------------------------------------
+// reprojection(): what a triangulate does to an occluded view
+// ---------------------------------------------------------------------------
+
+// Three pinhole cameras on a baseline, no distortion, 1280x720. Camera 1 sits
+// at the origin looking down +Z; 0 and 2 are shifted a metre either side, so a
+// point in front of the rig is comfortably inside all three images.
+static void build_rig(std::vector<CameraParams> &cams, RenderScene &scene,
+                      std::vector<u32> &w, std::vector<u32> &h,
+                      double shift_cam2 = 1.0) {
+    const double f = 1000.0, cx = 640.0, cy = 360.0;
+    Eigen::Matrix3d K = Eigen::Matrix3d::Identity();
+    K(0, 0) = f; K(1, 1) = f; K(0, 2) = cx; K(1, 2) = cy;
+
+    const double tx[3] = {1.0, 0.0, -shift_cam2};
+    cams.resize(3);
+    for (int i = 0; i < 3; i++) {
+        cams[i].telecentric = false;
+        cams[i].k = K;
+        cams[i].dist_coeffs.setZero();
+        cams[i].r = Eigen::Matrix3d::Identity();
+        cams[i].tvec = Eigen::Vector3d(tx[i], 0.0, 0.0);
+        Eigen::Matrix<double, 3, 4> Rt;
+        Rt.setZero();
+        Rt.block<3, 3>(0, 0) = cams[i].r;
+        Rt.col(3) = cams[i].tvec;
+        cams[i].projection_mat = K * Rt;
+    }
+    w.assign(3, 1280);
+    h.assign(3, 720);
+    scene.num_cams = 3;
+    scene.image_width = w.data();
+    scene.image_height = h.data();
+}
+
+// Place `p` in view v as a manual label, using the same bottom-origin
+// convention the rest of red stores keypoints in.
+static void place_manual(FrameAnnotation &fa, const std::vector<CameraParams> &cams,
+                         const RenderScene &scene, int v, u32 node,
+                         const Eigen::Vector3d &p) {
+    Eigen::Matrix<double, 5, 1> zero; zero.setZero();
+    Eigen::Vector2d px = red_math::projectPointR(p, cams[v].r, cams[v].tvec,
+                                                 cams[v].k, zero);
+    fa.cameras[v].keypoints[node].x = px(0);
+    fa.cameras[v].keypoints[node].y = (double)scene.image_height[v] - px(1);
+    fa.cameras[v].keypoints[node].set_manual();
+}
+
+static void make_frame(FrameAnnotation &fa, u32 nodes) {
+    fa.cameras.resize(3);
+    for (auto &c : fa.cameras) c.keypoints.assign(nodes, Keypoint2D{});
+    fa.kp3d.assign(nodes, Keypoint3D{});
+}
+
+// The question this answers: mark a node occluded in one view, label it in the
+// other two, triangulate -- does the occluded view get a position to draw its
+// cross at, without the occlusion assessment being lost?
+static void test_reprojection_refreshes_occluded_view() {
+    SkeletonContext skel;
+    skel.num_nodes = 1;
+    skel.num_edges = 0;
+
+    std::vector<CameraParams> cams;
+    RenderScene scene{};
+    std::vector<u32> w, h;
+    build_rig(cams, scene, w, h);
+
+    FrameAnnotation fa;
+    make_frame(fa, skel.num_nodes);
+
+    const Eigen::Vector3d P(0.10, 0.05, 5.0);
+    place_manual(fa, cams, scene, 1, 0, P);
+    place_manual(fa, cams, scene, 2, 0, P);
+
+    // View 0: judged hidden, and never placed -- no coordinates at all.
+    fa.cameras[0].keypoints[0].set_manual();
+    fa.cameras[0].keypoints[0].set_occluded();
+    fa.cameras[0].keypoints[0].x = UNLABELED;
+    fa.cameras[0].keypoints[0].y = UNLABELED;
+
+    reprojection(fa, &skel, cams, &scene);
+
+    // Two manual views were enough to solve.
+    EXPECT_TRUE(fa.kp3d[0].exist);
+    EXPECT_TRUE(fa.kp3d[0].triangulated);
+    EXPECT_NEAR(fa.kp3d[0].x, P(0), 1e-6);
+    EXPECT_NEAR(fa.kp3d[0].z, P(2), 1e-6);
+
+    const Keypoint2D &occ = fa.cameras[0].keypoints[0];
+    // The assessment stands, and it is still not a point you can use.
+    EXPECT_TRUE(occ.occluded);
+    EXPECT_FALSE(occ.exist);
+    EXPECT_TRUE(occ.manual);          // the author of the assessment survives
+    // ...but it now has somewhere to draw the cross, and says where that
+    // position came from.
+    EXPECT_TRUE(occ.x != UNLABELED && occ.y != UNLABELED);
+    EXPECT_TRUE(occ.reprojected);
+    Eigen::Matrix<double, 5, 1> zero; zero.setZero();
+    Eigen::Vector2d expect = red_math::projectPointR(P, cams[0].r, cams[0].tvec,
+                                                     cams[0].k, zero);
+    EXPECT_NEAR(occ.x, expect(0), 1e-4);
+    EXPECT_NEAR(occ.y, (double)scene.image_height[0] - expect(1), 1e-4);
+
+    // The views that were labelled keep their authorship through the refresh.
+    EXPECT_TRUE(fa.cameras[1].keypoints[0].manual);
+    EXPECT_TRUE(fa.cameras[1].keypoints[0].exist);
+}
+
+// The other half of the same path: if the solve lands outside this camera's
+// image there is nowhere to put the cross, so the position must go rather than
+// sit at a stale spot. Regression for the bug in 6d97e65.
+static void test_reprojection_drops_offscreen_occluded_position() {
+    SkeletonContext skel;
+    skel.num_nodes = 1;
+    skel.num_edges = 0;
+
+    std::vector<CameraParams> cams;
+    RenderScene scene{};
+    std::vector<u32> w, h;
+    build_rig(cams, scene, w, h);
+
+    FrameAnnotation fa;
+    make_frame(fa, skel.num_nodes);
+
+    // First solve: in front of the rig, visible everywhere.
+    const Eigen::Vector3d P1(0.0, 0.0, 5.0);
+    place_manual(fa, cams, scene, 1, 0, P1);
+    place_manual(fa, cams, scene, 2, 0, P1);
+    fa.cameras[0].keypoints[0].set_manual();
+    fa.cameras[0].keypoints[0].set_occluded();
+    reprojection(fa, &skel, cams, &scene);
+    EXPECT_TRUE(fa.cameras[0].keypoints[0].x != UNLABELED);
+
+    // Second solve: far off to the side, still in front of the rig but well
+    // outside camera 0's 1280px image.
+    const Eigen::Vector3d P2(-40.0, 0.0, 5.0);
+    place_manual(fa, cams, scene, 1, 0, P2);
+    place_manual(fa, cams, scene, 2, 0, P2);
+    reprojection(fa, &skel, cams, &scene);
+
+    const Keypoint2D &occ = fa.cameras[0].keypoints[0];
+    EXPECT_TRUE(occ.occluded);       // still judged hidden
+    EXPECT_TRUE(occ.manual);         // still that judgement's author
+    EXPECT_FALSE(occ.exist);
+    EXPECT_TRUE(occ.x == UNLABELED); // but no position, so nothing is drawn
+    EXPECT_TRUE(occ.y == UNLABELED);
+    EXPECT_FALSE(occ.reprojected);
+}
+
 // ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
@@ -627,6 +778,10 @@ int main() {
     test_ini_migration_idempotent();
     test_playback_speed_computation();
     test_playback_state_defaults();
+
+    // Reprojection write-back
+    test_reprojection_refreshes_occluded_view();
+    test_reprojection_drops_offscreen_occluded_position();
 
     printf("\n%d passed, %d failed\n", g_pass, g_fail);
     return g_fail > 0 ? 1 : 0;
