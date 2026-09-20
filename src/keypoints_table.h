@@ -326,9 +326,9 @@ inline void DrawKeypointsTable(AppContext &ctx, float height) {
                 // The solve, per keypoint, pinned under the header and above
                 // the 2D rows it came from. Its state used to be reachable
                 // only by hovering each point in a camera view one at a time,
-                // and the Triangulated/Imported split was not visible at all
+                // and the Triangulated/Predicted split was not visible at all
                 // -- which matters most on a tailcycle session, where every
-                // node arrives Imported and you need to see which ones you
+                // node arrives Predicted and you need to see which ones you
                 // have actually re-solved.
                 if (keypoints_find && !project_is_2d(ctx.pm) &&
                     scene->num_cams > 1) {
@@ -348,7 +348,7 @@ inline void DrawKeypointsTable(AppContext &ctx, float height) {
                         ImGui::SetTooltip(
                             "Triangulated position per keypoint, for the animal "
                             "being edited.\nFilled = solved here, outlined = "
-                            "imported with the data.");
+                            "predicted by a model.");
 
                     for (int column = 1; column < columns_count; column++) {
                         if (!ImGui::TableSetColumnIndex(column)) continue;
@@ -368,7 +368,7 @@ inline void DrawKeypointsTable(AppContext &ctx, float height) {
                                 node < (int)skeleton.node_names.size()
                                     ? skeleton.node_names[node].c_str() : "",
                                 k3.source == Source3d::Predicted
-                                    ? "imported" : "triangulated",
+                                    ? "predicted" : "triangulated",
                                 k3.x, k3.y, k3.z);
                         ImGui::PopID();
 
