@@ -490,18 +490,13 @@ bool read_session(const std::string &session_dir, const std::string &group_id,
             // image, red works in ImPlot coordinates measured from the bottom.
             kp.y = (double)out->calibration[ci].image_height - y.vals[i];
             kp.occluded = false;
-            // Two separate facts, and they were both being read off `status`.
-            //   projected = the VISIBILITY channel: were these coordinates
-            //               derived from a 3D point (§7 status)
-            //   source    = WHO produced them, which only the session's
-            //               annotated/tracked claim can answer
-            // Deriving source from status got it wrong in both directions: a
-            // tracked session's visible rows imported as Manual and would
-            // re-export as annotated, and an annotated session's projected
-            // rows imported as Predicted and re-exported as tracked.
             kp.projected = (s == Tailcycle::status::kProjected);
-            kp.source = out->labels == Tailcycle::labels::kTracked
-                            ? Source2d::Predicted : Source2d::Manual;
+            // `status` is the per-point truth. A visible row remains a
+            // visible/manual observation even when it came from a session
+            // declared `tracked`; the session label must not turn it into a
+            // projected row on the next export.
+            kp.source = kp.projected ? Source2d::Predicted
+                                      : Source2d::Manual;
             if (sc.ok && i < sc.null.size() && !sc.null[i]) kp.confidence = (float)sc.vals[i];
             st.keypoint_rows++;
         }
