@@ -671,9 +671,9 @@ inline void reprojection(FrameAnnotation &fa, SkeletonContext *skeleton,
                 // Preserve an explicit missing/occluded assessment when
                 // refreshing the other views from a 3D solve.
                 if (kp2d.occluded) continue;
-                const bool user_annotated =
-                    kp2d.exist && kp2d.manual;
-                if (!user_annotated) kp2d = Keypoint2D{};
+                // `manual` alone: the occluded case, the one place a manual
+                // point has no coordinates, already continued above.
+                if (!kp2d.manual) kp2d = Keypoint2D{};
 
                 if (telecentric) {
                     // Telecentric reprojection
