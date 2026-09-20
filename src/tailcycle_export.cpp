@@ -313,9 +313,9 @@ bool export_session(const ExportConfig &cfg, const AnnotationMap &amap,
                             !p_b.Append(cfg.node_names[ni]).ok() ||
                             !s_b.Append(kp.occluded
                                              ? Tailcycle::status::kMissing
-                                             : (kp.source == Source2d::Manual
-                                                    ? Tailcycle::status::kVisible
-                                                    : Tailcycle::status::kProjected)).ok())
+                                             : (kp.projected
+                                                    ? Tailcycle::status::kProjected
+                                                    : Tailcycle::status::kVisible)).ok())
                             return fail("keypoints.pq: builder append failed.");
                         if (kp.occluded) {
                             if (!x_b.AppendNull().ok() || !y_b.AppendNull().ok())
