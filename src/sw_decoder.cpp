@@ -350,16 +350,9 @@ void sw_decoder_process(DecoderContext *dc_context, FFmpegDemuxer *demuxer,
     bool first_store_done = false;
     bool have_reported_info = false;
 
-    double video_length = demuxer->GetDuration();
-    double frame_rate = demuxer->GetFramerate();
     // In sync mode the loader owns total/estimated (both = canonical_len).
-    if (!sync_on) {
-        if (demuxer->GetNumFrames() == 0) {
-            dc_context->estimated_num_frames = int(video_length * frame_rate);
-        } else {
-            dc_context->estimated_num_frames = demuxer->GetNumFrames() - 1;
-        }
-    }
+    // Otherwise the loader has already set estimated_num_frames from the
+    // reference camera; decoder threads must not race to replace it.
     bool skip_first_decode_after_seek = false;
 
     // Convert one decoded frame into the staging buffer.

@@ -123,16 +123,9 @@ static void nvdec_decoder_process(DecoderContext *dc_context,
     bool have_content = false;      // pTmpImage holds a frame of this epoch
     bool first_store_done = false;
 
-    double video_length = demuxer->GetDuration();
-    double frame_rate = demuxer->GetFramerate();
     // In sync mode the loader owns total/estimated (both = canonical_len).
-    if (!sync_on) {
-        if (demuxer->GetNumFrames() == 0) {
-            dc_context->estimated_num_frames = int(video_length * frame_rate);
-        } else {
-            dc_context->estimated_num_frames = demuxer->GetNumFrames() - 1;
-        }
-    }
+    // Otherwise the loader has already set estimated_num_frames from the
+    // reference camera; decoder threads must not race to replace it.
     int size_in_bytes;
     bool skip_first_decode_after_seek = false;
     // The seek block identifies the target frame by timestamp, which means
@@ -579,16 +572,10 @@ static void vt_decoder_process(DecoderContext *dc_context,
 
     int w = (int)demuxer->GetWidth();
     int h = (int)demuxer->GetHeight();
-    double video_length = demuxer->GetDuration();
-    double frame_rate   = demuxer->GetFramerate();
     double timebase     = demuxer->GetTimebase();
     // In sync mode the loader owns total/estimated (both = canonical_len).
-    if (!sync_on) {
-        if (demuxer->GetNumFrames() == 0)
-            dc_context->estimated_num_frames = (int)(video_length * frame_rate);
-        else
-            dc_context->estimated_num_frames = (int)demuxer->GetNumFrames() - 1;
-    }
+    // Otherwise the loader has already set estimated_num_frames from the
+    // reference camera; decoder threads must not race to replace it.
 
     (void)w; (void)h;  // used by caller via scene->image_width/height
 
@@ -1014,8 +1001,8 @@ void image_loader(DecoderContext *dc_context,
                   std::string file_ext, ImageLayout layout) {
     int buffer_head = 0;
     int frame_number = 0;
-    dc_context->total_num_frame = img_list_vector.size();
-    dc_context->estimated_num_frames = img_list_vector.size();
+    // load_images initializes the shared frame count before starting one
+    // loader thread per camera; do not race-write it here.
     while (!(dc_context->stop_flag)) {
         if (seek_info->use_seek) {
             // reset the display buffer after seeking

@@ -430,6 +430,11 @@ load_images(std::map<std::string, std::string> &selected_files,
     // not need CUDA/GL PBO interop for texture upload either.
     scene->use_cpu_buffer = true;
     scene->force_host_upload = true;
+    // Decoder threads share this context. Set the timeline length before they
+    // start; image_loader used to rewrite it from every camera thread, making
+    // the UI oscillate when camera folders had different frame counts.
+    dc_context->total_num_frame = (int)imgs_names.size();
+    dc_context->estimated_num_frames = (int)imgs_names.size();
     render_allocate_scene_memory(scene, label_buffer_size);
     for (const auto &name : pm.camera_names) {
         auto [it, inserted] = latest_decoded_frame.try_emplace(name);
@@ -691,6 +696,16 @@ load_videos(std::map<std::string, std::string> &selected_files,
     const sync_plan::SyncPlan &splan = g_sync_fix.plan;
     bool sync_enable = pm.sync_fix_enabled && splan.usable() &&
                        splan.status != sync_plan::Status::Clean;
+    // The labeling timeline uses one stable reference-camera length. Do not
+    // let the per-camera decoder threads race to overwrite it.
+    if (!sync_enable) {
+        if (demuxers[0]->GetNumFrames() == 0)
+            dc_context->estimated_num_frames =
+                (int)(demuxers[0]->GetDuration() * demuxers[0]->GetFramerate());
+        else
+            dc_context->estimated_num_frames =
+                (int)demuxers[0]->GetNumFrames() - 1;
+    }
     dc_context->sync_fix_active = sync_enable;
     dc_context->sync_canonical_len = splan.canonical_len;
     if (sync_enable) {
