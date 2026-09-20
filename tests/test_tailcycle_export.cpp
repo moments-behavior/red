@@ -151,8 +151,8 @@ static AnnotationMap make_annotations(u32 first_frame = 0) {
                 Keypoint2D &kp = fa.cameras[c].keypoints[n];
                 kp.x = 100.0 + i * 10 + n;
                 kp.y = 200.0 + c;
-                kp.labeled = true;
-                kp.source = (i == 4) ? LabelSource::Predicted : LabelSource::Manual;
+                kp.source = Source2d::Manual;
+                kp.source = (i == 4) ? Source2d::Predicted : Source2d::Manual;
                 // A refreshed manual observation may have projected
                 // coordinates, but it must still export as visible.
                 kp.projected = (i == 4) || (i == 0 && c == 1 && n == 0);
@@ -161,7 +161,7 @@ static AnnotationMap make_annotations(u32 first_frame = 0) {
         fa.kp3d[0].x = 1; fa.kp3d[0].y = 2; fa.kp3d[0].z = 3;
         fa.kp3d[0].set_triangulated();
         fa.kp3d[1].x = 4; fa.kp3d[1].y = 5; fa.kp3d[1].z = 6;
-        fa.kp3d[1].set_imported(0.9f);
+        fa.kp3d[1].set_predicted(0.9f);
         amap[f] = FrameInstances{std::move(fa)};
     }
     return amap;
@@ -337,12 +337,12 @@ int main(int argc, char **argv) {
         FrameAnnotation fa = make_frame(NN, NC, 0);
 
         auto &visible = fa.cameras[0].keypoints[0];
-        visible.x = 11.0; visible.y = 22.0; visible.labeled = true;
-        visible.source = LabelSource::Manual;
+        visible.x = 11.0; visible.y = 22.0; visible.source = Source2d::Manual;
+        visible.source = Source2d::Manual;
 
         auto &projected = fa.cameras[0].keypoints[1];
-        projected.x = 33.0; projected.y = 44.0; projected.labeled = true;
-        projected.source = LabelSource::Predicted;
+        projected.x = 33.0; projected.y = 44.0; projected.source = Source2d::Manual;
+        projected.source = Source2d::Predicted;
         projected.projected = true;
 
         mark_keypoint2d_occluded(fa.cameras[0].keypoints[2]);
@@ -369,17 +369,17 @@ int main(int argc, char **argv) {
               "all-status import retains the frame");
         if (fit != imported.annotations.end() && !fit->second.empty()) {
             const auto &if0 = fit->second.front();
-            CHECK(if0.cameras[0].keypoints[0].labeled &&
+            CHECK(if0.cameras[0].keypoints[0].placed() &&
                   !if0.cameras[0].keypoints[0].occluded &&
                   std::abs(if0.cameras[0].keypoints[0].x - 11.0) < 1e-6,
                   "visible imports as a labeled point");
-            CHECK(if0.cameras[0].keypoints[1].labeled &&
+            CHECK(if0.cameras[0].keypoints[1].placed() &&
                   if0.cameras[0].keypoints[1].projected,
                   "projected imports as a projected point");
-            CHECK(!if0.cameras[0].keypoints[2].labeled &&
+            CHECK(!if0.cameras[0].keypoints[2].placed() &&
                   if0.cameras[0].keypoints[2].occluded,
                   "missing imports as an occluded point");
-            CHECK(!if0.cameras[1].keypoints[0].labeled,
+            CHECK(!if0.cameras[1].keypoints[0].placed(),
                   "unlabeled remains the default empty point");
         }
     }
@@ -394,8 +394,8 @@ int main(int argc, char **argv) {
         AnnotationMap amap;
         FrameAnnotation fa = make_frame(NN, NC, 0);
         auto &kp = fa.cameras[0].keypoints[0];
-        kp.x = 12.0; kp.y = 23.0; kp.labeled = true;
-        kp.source = LabelSource::Manual;
+        kp.x = 12.0; kp.y = 23.0; kp.source = Source2d::Manual;
+        kp.source = Source2d::Manual;
         amap[0] = FrameInstances{std::move(fa)};
         TailcycleExport::ExportStats st;
         std::string status;
@@ -409,7 +409,7 @@ int main(int argc, char **argv) {
                                             &status),
               "tracked visible import succeeds: " + status);
         CHECK(imported.annotations.at(0).front().cameras[0].keypoints[0].source ==
-                  LabelSource::Manual,
+                  Source2d::Manual,
               "tracked session preserves visible provenance");
 
         cfg.in_place = true;

@@ -95,7 +95,7 @@ static void test_make_frame_basic() {
         EXPECT_NEAR(fa.kp3d[k].x, UNLABELED, 1.0);
         EXPECT_NEAR(fa.kp3d[k].y, UNLABELED, 1.0);
         EXPECT_NEAR(fa.kp3d[k].z, UNLABELED, 1.0);
-        EXPECT_FALSE(fa.kp3d[k].triangulated);
+        EXPECT_FALSE(fa.kp3d[k].solved());
     }
 
     // All 2D keypoints should be UNLABELED
@@ -103,7 +103,7 @@ static void test_make_frame_basic() {
         EXPECT_EQ((int)fa.cameras[c].keypoints.size(), 6);
         for (int k = 0; k < 6; ++k) {
             EXPECT_NEAR(fa.cameras[c].keypoints[k].x, UNLABELED, 1.0);
-            EXPECT_FALSE(fa.cameras[c].keypoints[k].labeled);
+            EXPECT_FALSE(fa.cameras[c].keypoints[k].placed());
         }
     }
 }
@@ -151,7 +151,7 @@ static void test_frame_has_any_labels() {
     EXPECT_FALSE(frame_has_any_labels(fa));
 
     // Label one keypoint on camera 1
-    fa.cameras[1].keypoints[2].labeled = true;
+    fa.cameras[1].keypoints[2].source = Source2d::Manual;
     EXPECT_TRUE(frame_has_any_labels(fa));
 }
 
@@ -196,20 +196,20 @@ static void test_migration_roundtrip() {
     auto &fa = amap[10].front();
 
     // Check 2D keypoints survived migration
-    EXPECT_TRUE(fa.cameras[0].keypoints[0].labeled);
+    EXPECT_TRUE(fa.cameras[0].keypoints[0].placed());
     EXPECT_NEAR(fa.cameras[0].keypoints[0].x, 100.0, 0.001);
     EXPECT_NEAR(fa.cameras[0].keypoints[0].y, 200.0, 0.001);
-    EXPECT_TRUE(fa.cameras[0].keypoints[1].labeled);
-    EXPECT_FALSE(fa.cameras[0].keypoints[2].labeled); // node 2, cam 0 not labeled
-    EXPECT_TRUE(fa.cameras[1].keypoints[2].labeled);
+    EXPECT_TRUE(fa.cameras[0].keypoints[1].placed());
+    EXPECT_FALSE(fa.cameras[0].keypoints[2].placed()); // node 2, cam 0 not labeled
+    EXPECT_TRUE(fa.cameras[1].keypoints[2].placed());
     EXPECT_NEAR(fa.cameras[1].keypoints[2].x, 500.0, 0.001);
 
     // Check 3D keypoints survived migration
-    EXPECT_TRUE(fa.kp3d[0].triangulated);
+    EXPECT_TRUE(fa.kp3d[0].solved());
     EXPECT_NEAR(fa.kp3d[0].x, 1.0, 0.001);
     EXPECT_NEAR(fa.kp3d[0].y, 2.0, 0.001);
     EXPECT_NEAR(fa.kp3d[0].z, 3.0, 0.001);
-    EXPECT_FALSE(fa.kp3d[1].triangulated); // not triangulated
+    EXPECT_FALSE(fa.kp3d[1].solved()); // not triangulated
 
     // Check active_id
     EXPECT_EQ(fa.cameras[0].active_id, 1u);
@@ -278,7 +278,7 @@ static void test_json_empty_extended_data() {
     // Keypoints-only frame: should produce empty frames array in JSON
     AnnotationMap amap;
     auto &fa = get_or_create_frame(amap, 0, 3, 2);
-    fa.cameras[0].keypoints[0].labeled = true; // only keypoints
+    fa.cameras[0].keypoints[0].source = Source2d::Manual; // only keypoints
 
     auto j = annotations_to_json(amap);
     EXPECT_TRUE(j["frames"].empty()); // no extended data to serialize
@@ -457,14 +457,14 @@ static void test_get_labeled_frames() {
 
     // Frame 5: has labels
     auto &fa5 = get_or_create_frame(amap, 5, 2, 1);
-    fa5.cameras[0].keypoints[0].labeled = true;
+    fa5.cameras[0].keypoints[0].source = Source2d::Manual;
 
     // Frame 10: no labels
     get_or_create_frame(amap, 10, 2, 1);
 
     // Frame 15: has labels
     auto &fa15 = get_or_create_frame(amap, 15, 2, 1);
-    fa15.cameras[0].keypoints[1].labeled = true;
+    fa15.cameras[0].keypoints[1].source = Source2d::Manual;
 
     auto labeled = ExportFormats::get_labeled_frames(amap);
     EXPECT_EQ((int)labeled.size(), 2);
@@ -481,9 +481,9 @@ static void test_build_coco_json() {
     auto &fa = get_or_create_frame(amap, 1, 3, 2);
     // Label 2 of 3 keypoints on cam 0
     fa.cameras[0].keypoints[0].x = 100.0; fa.cameras[0].keypoints[0].y = 900.0; // ImPlot coords (Y from bottom)
-    fa.cameras[0].keypoints[0].labeled = true;
+    fa.cameras[0].keypoints[0].source = Source2d::Manual;
     fa.cameras[0].keypoints[1].x = 200.0; fa.cameras[0].keypoints[1].y = 800.0;
-    fa.cameras[0].keypoints[1].labeled = true;
+    fa.cameras[0].keypoints[1].source = Source2d::Manual;
     // keypoint 2 unlabeled
 
     ExportFormats::ExportConfig cfg;
@@ -562,7 +562,7 @@ static void test_build_coco_json_img_id_consistency() {
     // Frame 2: visible keypoints
     auto &fa2 = get_or_create_frame(amap, 2, 2, 1);
     fa2.cameras[0].keypoints[0].x = 50.0; fa2.cameras[0].keypoints[0].y = 50.0;
-    fa2.cameras[0].keypoints[0].labeled = true;
+    fa2.cameras[0].keypoints[0].source = Source2d::Manual;
 
     ExportFormats::ExportConfig cfg;
     cfg.node_names = {"a", "b"};
@@ -822,13 +822,13 @@ struct ExportTestFixture {
             for (int k = 0; k < 3; ++k) {
                 fa.cameras[0].keypoints[k].x = 100.0 + k * 50;
                 fa.cameras[0].keypoints[k].y = 300.0 - k * 20;
-                fa.cameras[0].keypoints[k].labeled = true;
+                fa.cameras[0].keypoints[k].source = Source2d::Manual;
             }
             // Label 2 of 3 on cam 1
             fa.cameras[1].keypoints[0].x = 120.0; fa.cameras[1].keypoints[0].y = 280.0;
-            fa.cameras[1].keypoints[0].labeled = true;
+            fa.cameras[1].keypoints[0].source = Source2d::Manual;
             fa.cameras[1].keypoints[1].x = 180.0; fa.cameras[1].keypoints[1].y = 250.0;
-            fa.cameras[1].keypoints[1].labeled = true;
+            fa.cameras[1].keypoints[1].source = Source2d::Manual;
         }
 
         // Config
@@ -1106,7 +1106,7 @@ static void test_export_missing_calibration() {
 
     AnnotationMap amap;
     auto &fa = get_or_create_frame(amap, 0, 2, 1);
-    fa.cameras[0].keypoints[0].labeled = true;
+    fa.cameras[0].keypoints[0].source = Source2d::Manual;
     fa.cameras[0].keypoints[0].x = 50; fa.cameras[0].keypoints[0].y = 50;
 
     ExportFormats::ExportConfig cfg;
@@ -1151,9 +1151,9 @@ static void test_build_coco_json_with_explicit_bbox() {
 
     // Label keypoints
     fa.cameras[0].keypoints[0].x = 100.0; fa.cameras[0].keypoints[0].y = 400.0;
-    fa.cameras[0].keypoints[0].labeled = true;
+    fa.cameras[0].keypoints[0].source = Source2d::Manual;
     fa.cameras[0].keypoints[1].x = 200.0; fa.cameras[0].keypoints[1].y = 300.0;
-    fa.cameras[0].keypoints[1].labeled = true;
+    fa.cameras[0].keypoints[1].source = Source2d::Manual;
 
     // Set explicit bbox (should be used instead of deriving from keypoints)
     auto &ext = fa.cameras[0].get_extras();
@@ -1198,19 +1198,19 @@ static void test_save_load_keypoints_roundtrip() {
         // Label some keypoints on cam 0
         fa.cameras[0].keypoints[0].x = 100.0 + f;
         fa.cameras[0].keypoints[0].y = 200.0 + f;
-        fa.cameras[0].keypoints[0].labeled = true;
+        fa.cameras[0].keypoints[0].source = Source2d::Manual;
         fa.cameras[0].keypoints[2].x = 300.0 + f;
         fa.cameras[0].keypoints[2].y = 400.0 + f;
-        fa.cameras[0].keypoints[2].labeled = true;
+        fa.cameras[0].keypoints[2].source = Source2d::Manual;
         // Label one keypoint on cam 1
         fa.cameras[1].keypoints[1].x = 500.0 + f;
         fa.cameras[1].keypoints[1].y = 600.0 + f;
-        fa.cameras[1].keypoints[1].labeled = true;
+        fa.cameras[1].keypoints[1].source = Source2d::Manual;
         // Set 3D for triangulated keypoint 0
         fa.kp3d[0].x = 1.0 + f;
         fa.kp3d[0].y = 2.0 + f;
         fa.kp3d[0].z = 3.0 + f;
-        fa.kp3d[0].triangulated = true;
+        fa.kp3d[0].set_triangulated();
     }
     EXPECT_EQ((int)amap.size(), 3);
 
@@ -1242,23 +1242,23 @@ static void test_save_load_keypoints_roundtrip() {
         auto &fa = amap2[f].front();
 
         // Cam 0, keypoint 0
-        EXPECT_TRUE(fa.cameras[0].keypoints[0].labeled);
+        EXPECT_TRUE(fa.cameras[0].keypoints[0].placed());
         EXPECT_NEAR(fa.cameras[0].keypoints[0].x, 100.0 + f, 0.01);
         EXPECT_NEAR(fa.cameras[0].keypoints[0].y, 200.0 + f, 0.01);
 
         // Cam 0, keypoint 1 should be unlabeled
-        EXPECT_FALSE(fa.cameras[0].keypoints[1].labeled);
+        EXPECT_FALSE(fa.cameras[0].keypoints[1].placed());
 
         // Cam 0, keypoint 2
-        EXPECT_TRUE(fa.cameras[0].keypoints[2].labeled);
+        EXPECT_TRUE(fa.cameras[0].keypoints[2].placed());
         EXPECT_NEAR(fa.cameras[0].keypoints[2].x, 300.0 + f, 0.01);
 
         // Cam 1, keypoint 1
-        EXPECT_TRUE(fa.cameras[1].keypoints[1].labeled);
+        EXPECT_TRUE(fa.cameras[1].keypoints[1].placed());
         EXPECT_NEAR(fa.cameras[1].keypoints[1].x, 500.0 + f, 0.01);
 
         // 3D keypoint 0
-        EXPECT_TRUE(fa.kp3d[0].triangulated);
+        EXPECT_TRUE(fa.kp3d[0].solved());
         EXPECT_NEAR(fa.kp3d[0].x, 1.0 + f, 0.01);
         EXPECT_NEAR(fa.kp3d[0].y, 2.0 + f, 0.01);
         EXPECT_NEAR(fa.kp3d[0].z, 3.0 + f, 0.01);
@@ -1282,7 +1282,7 @@ static void test_save_load_with_extended_data() {
     auto &fa = get_or_create_frame(amap, 10, 2, 1);
     fa.cameras[0].keypoints[0].x = 50.0;
     fa.cameras[0].keypoints[0].y = 100.0;
-    fa.cameras[0].keypoints[0].labeled = true;
+    fa.cameras[0].keypoints[0].source = Source2d::Manual;
     auto &bext = fa.cameras[0].get_extras();
     bext.bbox_x = 10.0;
     bext.bbox_y = 20.0;
@@ -1304,7 +1304,7 @@ static void test_save_load_with_extended_data() {
     EXPECT_EQ(rc, 0);
 
     // Verify keypoints survived
-    EXPECT_TRUE(amap2[10].front().cameras[0].keypoints[0].labeled);
+    EXPECT_TRUE(amap2[10].front().cameras[0].keypoints[0].placed());
     EXPECT_NEAR(amap2[10].front().cameras[0].keypoints[0].x, 50.0, 0.01);
 
     // Verify bbox survived
@@ -1335,7 +1335,7 @@ static void test_yolo_pose_y_flip() {
     auto &fa = get_or_create_frame(amap, 100, 1, 1);
     // ImPlot y=400, image_height=480 → image y = 480-400 = 80
     fa.cameras[0].keypoints[0].x = 320.0; fa.cameras[0].keypoints[0].y = 400.0;
-    fa.cameras[0].keypoints[0].labeled = true;
+    fa.cameras[0].keypoints[0].source = Source2d::Manual;
 
     ExportFormats::ExportConfig cfg;
     cfg.calibration_folder = calib_dir;
@@ -1387,7 +1387,7 @@ static void test_dlc_y_flip() {
     auto &fa = get_or_create_frame(amap, 100, 1, 1);
     // Same coords: ImPlot y=400, h=480 → DLC y = 480-400 = 80
     fa.cameras[0].keypoints[0].x = 320.0; fa.cameras[0].keypoints[0].y = 400.0;
-    fa.cameras[0].keypoints[0].labeled = true;
+    fa.cameras[0].keypoints[0].source = Source2d::Manual;
 
     ExportFormats::ExportConfig cfg;
     cfg.calibration_folder = calib_dir;
@@ -1562,7 +1562,7 @@ static void test_bridge_keypoints_and_extended_roundtrip() {
     // Step 2: Bridge → AnnotationMap
     AnnotationMap amap = migrate_keypoints_map(km, skel, &scene);
     EXPECT_EQ((int)amap.size(), 1);
-    EXPECT_TRUE(amap[50].front().cameras[0].keypoints[0].labeled);
+    EXPECT_TRUE(amap[50].front().cameras[0].keypoints[0].placed());
 
     // Step 3: Add bbox via AnnotationMap (simulating annotation tool)
     auto &bext = amap[50].front().cameras[0].get_extras();
@@ -1588,11 +1588,11 @@ static void test_bridge_keypoints_and_extended_roundtrip() {
     // Step 6: Verify keypoints survived
     EXPECT_EQ((int)amap2.size(), 1);
     EXPECT_TRUE(amap2.count(50));
-    EXPECT_TRUE(amap2[50].front().cameras[0].keypoints[0].labeled);
+    EXPECT_TRUE(amap2[50].front().cameras[0].keypoints[0].placed());
     EXPECT_NEAR(amap2[50].front().cameras[0].keypoints[0].x, 100.0, 0.01);
     EXPECT_NEAR(amap2[50].front().cameras[0].keypoints[0].y, 200.0, 0.01);
-    EXPECT_TRUE(amap2[50].front().cameras[0].keypoints[1].labeled);
-    EXPECT_TRUE(amap2[50].front().cameras[1].keypoints[0].labeled);
+    EXPECT_TRUE(amap2[50].front().cameras[0].keypoints[1].placed());
+    EXPECT_TRUE(amap2[50].front().cameras[1].keypoints[0].placed());
 
     // Step 7: Verify bbox survived
     EXPECT_TRUE(amap2[50].front().cameras[0].has_bbox());
@@ -1609,7 +1609,7 @@ static void test_bridge_keypoints_and_extended_roundtrip() {
     EXPECT_TRUE(amap[50].front().cameras[0].has_bbox());
     EXPECT_NEAR(amap[50].front().cameras[0].extras->bbox_x, 50.0, 0.01);
     // New keypoint should be reflected
-    EXPECT_TRUE(amap[50].front().cameras[0].keypoints[2].labeled);
+    EXPECT_TRUE(amap[50].front().cameras[0].keypoints[2].placed());
     EXPECT_NEAR(amap[50].front().cameras[0].keypoints[2].x, 175.0, 0.01);
 
     // Cleanup
@@ -1629,7 +1629,7 @@ static void test_refresh_empty_keypoints_map() {
     // Start with populated amap, sync from empty km → amap should become empty
     AnnotationMap amap;
     get_or_create_frame(amap, 10, 3, 2);
-    amap[10].front().cameras[0].keypoints[0].labeled = true;
+    amap[10].front().cameras[0].keypoints[0].source = Source2d::Manual;
     amap[10].front().cameras[0].get_extras().has_bbox = true;
     EXPECT_EQ((int)amap.size(), 1);
 
@@ -1661,7 +1661,7 @@ static void test_refresh_null_keypoints_skipped() {
     EXPECT_EQ((int)amap.size(), 1);
     EXPECT_TRUE(amap.count(20));
     EXPECT_FALSE(amap.count(10));
-    EXPECT_TRUE(amap[20].front().cameras[0].keypoints[0].labeled);
+    EXPECT_TRUE(amap[20].front().cameras[0].keypoints[0].placed());
     EXPECT_NEAR(amap[20].front().cameras[0].keypoints[0].x, 42.0, 0.001);
 
     free_keypoints(km[20], &scene);
@@ -1693,7 +1693,7 @@ static void test_refresh_preserves_bbox_on_update() {
     // Refresh should update keypoints but keep bbox/obb
     refresh_keypoints_in_amap(amap, km, skel, &scene);
 
-    EXPECT_TRUE(amap[5].front().cameras[0].keypoints[0].labeled);
+    EXPECT_TRUE(amap[5].front().cameras[0].keypoints[0].placed());
     EXPECT_NEAR(amap[5].front().cameras[0].keypoints[0].x, 10.0, 0.001);
     EXPECT_TRUE(amap[5].front().cameras[0].has_bbox());
     EXPECT_NEAR(amap[5].front().cameras[0].extras->bbox_x, 100.0, 0.001);
@@ -1728,7 +1728,7 @@ static void test_refresh_adds_new_frames() {
     EXPECT_EQ((int)amap.size(), 2);
     EXPECT_TRUE(amap.count(10));
     EXPECT_TRUE(amap.count(20));
-    EXPECT_TRUE(amap[20].front().cameras[0].keypoints[0].labeled);
+    EXPECT_TRUE(amap[20].front().cameras[0].keypoints[0].placed());
 
     for (auto &[f, kp] : km) free_keypoints(kp, &scene);
 }
@@ -1779,7 +1779,7 @@ static void test_refresh_new_frame_gets_keypoints() {
     // Should have created the frame with keypoints
     EXPECT_EQ((int)amap.size(), 1);
     EXPECT_TRUE(amap.count(5));
-    EXPECT_TRUE(amap[5].front().cameras[0].keypoints[0].labeled);
+    EXPECT_TRUE(amap[5].front().cameras[0].keypoints[0].placed());
     EXPECT_NEAR(amap[5].front().cameras[0].keypoints[0].x, 99.0, 0.001);
 
     free_keypoints(km[5], &scene);
@@ -1830,7 +1830,7 @@ static void test_migrate_multi_frame() {
         EXPECT_TRUE(amap.count(f));
         EXPECT_EQ((int)amap[f].front().cameras.size(), 2);
         EXPECT_EQ((int)amap[f].front().kp3d.size(), 4);
-        EXPECT_TRUE(amap[f].front().cameras[0].keypoints[0].labeled);
+        EXPECT_TRUE(amap[f].front().cameras[0].keypoints[0].placed());
         EXPECT_NEAR(amap[f].front().cameras[0].keypoints[0].x, (double)f, 0.001);
     }
 
@@ -1865,7 +1865,7 @@ static void test_export_coco_single_camera() {
     AnnotationMap amap;
     auto &fa = get_or_create_frame(amap, 10, 2, 1);
     fa.cameras[0].keypoints[0].x = 100.0; fa.cameras[0].keypoints[0].y = 300.0;
-    fa.cameras[0].keypoints[0].labeled = true;
+    fa.cameras[0].keypoints[0].source = Source2d::Manual;
 
     ExportFormats::ExportConfig cfg;
     cfg.calibration_folder = calib_dir;
@@ -1946,7 +1946,7 @@ static void test_export_coco_y_flip_consistency() {
     auto &fa = get_or_create_frame(amap, 10, 1, 1);
     // ImPlot y=400, h=480 → image y = 80
     fa.cameras[0].keypoints[0].x = 320.0; fa.cameras[0].keypoints[0].y = 400.0;
-    fa.cameras[0].keypoints[0].labeled = true;
+    fa.cameras[0].keypoints[0].source = Source2d::Manual;
 
     ExportFormats::ExportConfig cfg;
     cfg.calibration_folder = calib_dir;
@@ -1982,9 +1982,9 @@ static void test_export_yolo_detect_has_no_keypoints() {
     AnnotationMap amap;
     auto &fa = get_or_create_frame(amap, 10, 2, 1);
     fa.cameras[0].keypoints[0].x = 100.0; fa.cameras[0].keypoints[0].y = 300.0;
-    fa.cameras[0].keypoints[0].labeled = true;
+    fa.cameras[0].keypoints[0].source = Source2d::Manual;
     fa.cameras[0].keypoints[1].x = 200.0; fa.cameras[0].keypoints[1].y = 250.0;
-    fa.cameras[0].keypoints[1].labeled = true;
+    fa.cameras[0].keypoints[1].source = Source2d::Manual;
 
     ExportFormats::ExportConfig cfg;
     cfg.calibration_folder = calib_dir;
@@ -2086,12 +2086,12 @@ static void test_get_or_create_frame_idempotent() {
     AnnotationMap amap;
 
     auto &fa1 = get_or_create_frame(amap, 10, 3, 2);
-    fa1.cameras[0].keypoints[0].labeled = true;
+    fa1.cameras[0].keypoints[0].source = Source2d::Manual;
 
     auto &fa2 = get_or_create_frame(amap, 10, 3, 2);
     // Should return same frame, not create a new one
     EXPECT_EQ((int)amap.size(), 1);
-    EXPECT_TRUE(fa2.cameras[0].keypoints[0].labeled);
+    EXPECT_TRUE(fa2.cameras[0].keypoints[0].placed());
 }
 
 static void test_make_frame_sizes_match() {
@@ -2135,8 +2135,8 @@ static void test_keypoint_clipboard_ops() {
 
     // Source: node0 labeled in cam0; node1 labeled in cam1 + 3D; node2 empty
     FrameAnnotation src = make_frame(NN, NC, 10);
-    src.cameras[0].keypoints[0] = Keypoint2D{100.0, 200.0, true, 0.5f, LabelSource::Manual};
-    src.cameras[1].keypoints[1] = Keypoint2D{ 11.0,  22.0, true, 0.0f, LabelSource::Manual};
+    src.cameras[0].keypoints[0] = Keypoint2D{100.0, 200.0, 0.5f, Source2d::Manual};
+    src.cameras[1].keypoints[1] = Keypoint2D{ 11.0,  22.0, 0.0f, Source2d::Manual};
     src.kp3d[1].x = 1.0; src.kp3d[1].y = 2.0; src.kp3d[1].z = 3.0;
     src.kp3d[1].set_triangulated();
 
@@ -2155,45 +2155,45 @@ static void test_keypoint_clipboard_ops() {
 
     // Paste overwrites, including a pre-existing label on node0/cam0
     FrameAnnotation dst = make_frame(NN, NC, 20);
-    dst.cameras[0].keypoints[0] = Keypoint2D{5.0, 5.0, true, 1.0f, LabelSource::Predicted};
+    dst.cameras[0].keypoints[0] = Keypoint2D{5.0, 5.0, 1.0f, Source2d::Predicted};
     int pasted = paste_keypoints(kc, dst, NN, NC);
     EXPECT_EQ(pasted, 2);
-    EXPECT_TRUE(dst.cameras[0].keypoints[0].labeled);
+    EXPECT_TRUE(dst.cameras[0].keypoints[0].placed());
     EXPECT_NEAR(dst.cameras[0].keypoints[0].x, 100.0, 1e-9);
     EXPECT_NEAR(dst.cameras[0].keypoints[0].y, 200.0, 1e-9);
-    EXPECT_TRUE(dst.cameras[1].keypoints[1].labeled);
+    EXPECT_TRUE(dst.cameras[1].keypoints[1].placed());
     EXPECT_NEAR(dst.cameras[1].keypoints[1].x, 11.0, 1e-9);
-    EXPECT_TRUE(dst.kp3d[1].triangulated);
+    EXPECT_TRUE(dst.kp3d[1].solved());
     EXPECT_NEAR(dst.kp3d[1].z, 3.0, 1e-9);
     // node2 (skipped) and node3 (unselected) stay unlabeled
-    EXPECT_FALSE(dst.cameras[0].keypoints[2].labeled);
-    EXPECT_FALSE(dst.cameras[0].keypoints[3].labeled);
+    EXPECT_FALSE(dst.cameras[0].keypoints[2].placed());
+    EXPECT_FALSE(dst.cameras[0].keypoints[3].placed());
 
     // Delete one camera only
     delete_node_from_camera(dst, 0, 0);
-    EXPECT_FALSE(dst.cameras[0].keypoints[0].labeled);
+    EXPECT_FALSE(dst.cameras[0].keypoints[0].placed());
 
     // Delete a node across all cameras also clears its (now unsupported) 3D
     delete_node_all_cameras(dst, 1, NC);
     for (int c = 0; c < NC; ++c)
-        EXPECT_FALSE(dst.cameras[c].keypoints[1].labeled);
-    EXPECT_FALSE(dst.kp3d[1].triangulated);
+        EXPECT_FALSE(dst.cameras[c].keypoints[1].placed());
+    EXPECT_FALSE(dst.kp3d[1].solved());
 
     // Delete a selected set from all cameras
     FrameAnnotation d2 = make_frame(NN, NC, 30);
     for (int c = 0; c < NC; ++c)
         for (int k = 0; k < NN; ++k)
-            d2.cameras[c].keypoints[k].labeled = true;
+            d2.cameras[c].keypoints[k].source = Source2d::Manual;
     KeypointClipboard kc2;
     kc2.ensure_size(NN);
     kc2.selected[0] = kc2.selected[3] = 1; // delete nodes 0 and 3
     int del = delete_selected_all_cameras(kc2, d2, NN, NC);
     EXPECT_EQ(del, 2);
     for (int c = 0; c < NC; ++c) {
-        EXPECT_FALSE(d2.cameras[c].keypoints[0].labeled);
-        EXPECT_TRUE(d2.cameras[c].keypoints[1].labeled);
-        EXPECT_TRUE(d2.cameras[c].keypoints[2].labeled);
-        EXPECT_FALSE(d2.cameras[c].keypoints[3].labeled);
+        EXPECT_FALSE(d2.cameras[c].keypoints[0].placed());
+        EXPECT_TRUE(d2.cameras[c].keypoints[1].placed());
+        EXPECT_TRUE(d2.cameras[c].keypoints[2].placed());
+        EXPECT_FALSE(d2.cameras[c].keypoints[3].placed());
     }
 
     // Resizing to a new node count drops any stale selection

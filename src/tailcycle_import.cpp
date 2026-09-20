@@ -471,12 +471,13 @@ bool read_session(const std::string &session_dir, const std::string &group_id,
             if (ci < 0) return fail("keypoints.pq: camera \"" + cam.vals[i] +
                                     "\" is not in calibration.toml (rule 6).");
             Keypoint2D &kp = frame_of((u32)f, inst).cameras[ci].keypoints[ni];
-            const LabelSource session_source =
-                out->labels == Tailcycle::labels::kTracked
-                    ? LabelSource::Predicted : LabelSource::Manual;
             if (s == Tailcycle::status::kMissing) {
+                // Source is left None. It means "who produced these
+                // coordinates", and a missing row has none -- assigning the
+                // session's provenance here used to be harmless because a
+                // separate `labeled` flag carried presence, but source is
+                // presence now and the point would claim to be placed.
                 mark_keypoint2d_occluded(kp);
-                kp.source = session_source;
                 st.keypoint_rows++;
                 continue;
             }
@@ -488,15 +489,14 @@ bool read_session(const std::string &session_dir, const std::string &group_id,
             // Mirror of the export: the format stores y from the top of the
             // image, red works in ImPlot coordinates measured from the bottom.
             kp.y = (double)out->calibration[ci].image_height - y.vals[i];
-            kp.labeled = true;
             kp.occluded = false;
             kp.projected = (s == Tailcycle::status::kProjected);
             // `status` is the per-point truth. A visible row remains a
             // visible/manual observation even when it came from a session
             // declared `tracked`; the session label must not turn it into a
             // projected row on the next export.
-            kp.source = kp.projected ? LabelSource::Predicted
-                                      : LabelSource::Manual;
+            kp.source = kp.projected ? Source2d::Predicted
+                                      : Source2d::Manual;
             if (sc.ok && i < sc.null.size() && !sc.null[i]) kp.confidence = (float)sc.vals[i];
             st.keypoint_rows++;
         }
@@ -521,7 +521,19 @@ bool read_session(const std::string &session_dir, const std::string &group_id,
             if (x.null[i] || y.null[i] || z.null[i]) continue;
             Keypoint3D &k3 = frame_of((u32)f, inst).kp3d[ni];
             k3.x = x.vals[i]; k3.y = y.vals[i]; k3.z = z.vals[i];
-            k3.set_imported(sc.ok && i < sc.null.size() && !sc.null[i] ? (float)sc.vals[i] : 1.0f);
+            // The session's own claim decides. A session declaring
+            // labels="annotated" holds 3D a person stands behind, solved from
+            // their 2D -- Triangulated, even though red did not do the
+            // solving. Treating every imported 3D as a prediction meant
+            // exporting such a session through the Export Tool relabelled
+            // human work as machine output, and "annotated" vs "tracked" is
+            // the one field the format uses to tell them apart.
+            const float conf =
+                sc.ok && i < sc.null.size() && !sc.null[i] ? (float)sc.vals[i] : 1.0f;
+            if (out->labels == Tailcycle::labels::kTracked)
+                k3.set_predicted(conf);
+            else
+                k3.set_triangulated(conf);
             st.points3d_rows++;
         }
     }

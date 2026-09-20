@@ -129,14 +129,16 @@ inline bool save_2d_csv(const std::string &path, const std::string &skeleton_nam
                 // Assessed missing/occluded: no coordinates, but retain the
                 // determination instead of collapsing it into unlabeled.
                 f << ",,,M";
-            } else if (k < (int)cam.keypoints.size() && cam.keypoints[k].labeled) {
+            } else if (k < (int)cam.keypoints.size() && cam.keypoints[k].placed()) {
                 const auto &kp = cam.keypoints[k];
                 f << "," << kp.x << "," << kp.y << ",";
                 if (kp.confidence > 0.0f)
                     f << kp.confidence;
                 f << ",";
-                if (kp.source == LabelSource::Predicted) f << "P";
-                else if (kp.source == LabelSource::Imported) f << "I";
+                // 'I' is no longer written: Imported and Predicted were the
+                // same claim -- "not placed by a person here" -- and keeping
+                // two spellings of it meant two code paths that had to agree.
+                if (kp.source == Source2d::Predicted) f << "P";
             } else {
                 f << ",,,,";
             }
@@ -168,7 +170,7 @@ inline bool save_3d_csv(const std::string &path, const std::string &skeleton_nam
       for (const auto &fa : fis) {
         f << frame << "," << fa.instance_id;
         for (int k = 0; k < num_nodes; ++k) {
-            if (k < (int)fa.kp3d.size() && fa.kp3d[k].triangulated) {
+            if (k < (int)fa.kp3d.size() && fa.kp3d[k].solved()) {
                 const auto &kp = fa.kp3d[k];
                 f << "," << kp.x << "," << kp.y << "," << kp.z << ",";
                 if (kp.confidence > 0.0f)
@@ -355,13 +357,15 @@ inline bool load_2d_csv(const std::string &path, AnnotationMap &amap,
             } else if (has_x && has_y) {
                 cam.keypoints[k].x = x;
                 cam.keypoints[k].y = y;
-                cam.keypoints[k].labeled = true;
                 cam.keypoints[k].occluded = false;
                 cam.keypoints[k].projected = false;
                 cam.keypoints[k].confidence = has_c ? (float)c : 0.0f;
-                if (src == 'P') cam.keypoints[k].source = LabelSource::Predicted;
-                else if (src == 'I') cam.keypoints[k].source = LabelSource::Imported;
-                else cam.keypoints[k].source = LabelSource::Manual;
+                // 'I' still READS, as Predicted: files written before the
+                // two were merged are still out there.
+                if (src == 'P' || src == 'I')
+                    cam.keypoints[k].source = Source2d::Predicted;
+                else
+                    cam.keypoints[k].source = Source2d::Manual;
             }
             // else: stays at default (UNLABELED, labeled=false)
         }

@@ -791,7 +791,7 @@ int main(int argc, char **argv) {
                     float z = pose[k * 4 + 2], c = pose[k * 4 + 3];
                     if (std::isnan(x) || std::isnan(y) || std::isnan(z)) continue;
                     fa.kp3d[k].x = x; fa.kp3d[k].y = y; fa.kp3d[k].z = z;
-                    fa.kp3d[k].set_imported(c);  // predicted, awaiting review
+                    fa.kp3d[k].set_predicted(c);  // predicted, awaiting review
                     placed_3d++;
                     Eigen::Vector3d p3d(x, y, z);
                     for (int cam = 0; cam < scene->num_cams &&
@@ -802,10 +802,10 @@ int main(int argc, char **argv) {
                                                 (int)scene->image_height[cam],
                                                 px, py)) {
                             auto &kp2d = fa.cameras[cam].keypoints[k];
-                            kp2d.x = px; kp2d.y = py; kp2d.labeled = true;
+                            kp2d.x = px; kp2d.y = py;
                             kp2d.occluded = false;
                             kp2d.confidence = c;
-                            kp2d.source = LabelSource::Predicted;
+                            kp2d.source = Source2d::Predicted;
                             kp2d.projected = true;
                         }
                     }
@@ -1273,9 +1273,8 @@ int main(int argc, char **argv) {
                                         auto &kp2d = fa.cameras[j].keypoints[*kp];
                                         kp2d.x = mouse.x;
                                         kp2d.y = mouse.y;
-                                        kp2d.labeled = true;
                                         kp2d.occluded = false;
-                                        kp2d.source = LabelSource::Manual;
+                                        kp2d.source = Source2d::Manual;
                                         kp2d.projected = false;
                                         // Moving a 2D point invalidates the 3D
                                         // solved from it. Dragging already did

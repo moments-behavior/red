@@ -144,7 +144,7 @@ inline bool tailcycle_open_session(AppContext &ctx, const std::string &session_d
           for (auto &fa : fis) {
             for (size_t n = 0; n < fa.kp3d.size(); n++) {
                 const Keypoint3D &k3 = fa.kp3d[n];
-                if (k3.source == Kp3DSource::None) continue;
+                if (k3.source == Source3d::None) continue;
                 const Eigen::Vector3d p3d(k3.x, k3.y, k3.z);
                 for (size_t c = 0; c < fa.cameras.size() && c < s.calibration.size(); c++) {
                     double px = 0, py = 0;
@@ -155,9 +155,8 @@ inline bool tailcycle_open_session(AppContext &ctx, const std::string &session_d
                     Keypoint2D &kp = fa.cameras[c].keypoints[n];
                     kp.x = px;
                     kp.y = py;
-                    kp.labeled = true;
                     kp.occluded = false;
-                    kp.source = LabelSource::Predicted;
+                    kp.source = Source2d::Predicted;
                     kp.confidence = k3.confidence;
                     kp.projected = true;
                     reprojected++;

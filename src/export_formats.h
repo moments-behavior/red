@@ -253,7 +253,7 @@ inline nlohmann::json build_coco_json(
         // Count visible keypoints
         int num_visible = 0;
         for (size_t k = 0; k < cam.keypoints.size(); ++k)
-            if (cam.keypoints[k].labeled) ++num_visible;
+            if (cam.keypoints[k].placed()) ++num_visible;
 
         // Skip frames with no keypoints
         if (num_visible == 0) { img_id++; continue; }
@@ -262,7 +262,7 @@ inline nlohmann::json build_coco_json(
         nlohmann::json kp_flat = nlohmann::json::array();
         double x_min = 1e9, x_max = -1e9, y_min = 1e9, y_max = -1e9;
         for (size_t k = 0; k < cam.keypoints.size(); ++k) {
-            if (cam.keypoints[k].labeled) {
+            if (cam.keypoints[k].placed()) {
                 double x = cam.keypoints[k].x;
                 double y = img_h - cam.keypoints[k].y; // ImPlot Y-flip
                 kp_flat.push_back(x); kp_flat.push_back(y); kp_flat.push_back(2);
@@ -434,7 +434,7 @@ inline bool export_yolo(const ExportConfig &cfg, const AnnotationMap &amap,
                     double xmin = 1e9, xmax = -1e9, ymin = 1e9, ymax = -1e9;
                     bool any = false;
                     for (size_t k = 0; k < c2d.keypoints.size(); ++k) {
-                        if (!c2d.keypoints[k].labeled) continue;
+                        if (!c2d.keypoints[k].placed()) continue;
                         double x = c2d.keypoints[k].x;
                         double y = h - c2d.keypoints[k].y; // Y-flip
                         xmin = std::min(xmin, x); xmax = std::max(xmax, x);
@@ -460,7 +460,7 @@ inline bool export_yolo(const ExportConfig &cfg, const AnnotationMap &amap,
 
                 if (include_keypoints) {
                     for (size_t k = 0; k < c2d.keypoints.size(); ++k) {
-                        if (c2d.keypoints[k].labeled) {
+                        if (c2d.keypoints[k].placed()) {
                             double kx = c2d.keypoints[k].x / w;
                             double ky = (h - c2d.keypoints[k].y) / h; // Y-flip
                             lbl << " " << kx << " " << ky << " 2";
@@ -570,7 +570,7 @@ inline bool export_deeplabcut(const ExportConfig &cfg, const AnnotationMap &amap
 
             f << "labeled-data/" << cam << "/Frame_" << frame << ".jpg";
             for (size_t k = 0; k < c2d.keypoints.size(); ++k) {
-                if (c2d.keypoints[k].labeled) {
+                if (c2d.keypoints[k].placed()) {
                     double x = c2d.keypoints[k].x;
                     double y = h - c2d.keypoints[k].y; // Y-flip
                     f << "," << std::fixed << std::setprecision(2) << x << "," << y;

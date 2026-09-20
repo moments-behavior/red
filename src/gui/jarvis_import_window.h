@@ -143,17 +143,17 @@ inline std::string jarvis_import_to_labels(
             fa.kp3d[k].x = p3d.x();
             fa.kp3d[k].y = p3d.y();
             fa.kp3d[k].z = p3d.z();
-            fa.kp3d[k].set_imported(c);
+            fa.kp3d[k].set_predicted(c);
             for (int cam = 0; cam < ncam && cam < (int)cams.size(); ++cam) {
                 double px, py;
                 if (reproject_3d_to_cam(p3d, cams[cam],
                                         (int)scene->image_width[cam],
                                         (int)scene->image_height[cam], px, py)) {
                     auto &kp2d = fa.cameras[cam].keypoints[k];
-                    kp2d.x = px; kp2d.y = py; kp2d.labeled = true;
+                    kp2d.x = px; kp2d.y = py;
                     kp2d.occluded = false;
                     kp2d.confidence = c;
-                    kp2d.source = LabelSource::Predicted;
+                    kp2d.source = Source2d::Predicted;
                     kp2d.projected = true;
                 }
             }

@@ -96,7 +96,7 @@ inline int copy_selected_keypoints(KeypointClipboard &kc, const FrameAnnotation 
         bool any_labeled = false;
         for (int c = 0; c < num_cams && c < (int)fa.cameras.size(); ++c)
             if (node < (int)fa.cameras[c].keypoints.size() &&
-                fa.cameras[c].keypoints[node].labeled) {
+                fa.cameras[c].keypoints[node].placed()) {
                 any_labeled = true;
                 break;
             }
