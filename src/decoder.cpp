@@ -290,8 +290,14 @@ static void nvdec_decoder_process(DecoderContext *dc_context,
                         std::cout << "Demux error..." << std::endl;
                         nFrameReturned =
                             dec.Decode(NULL, 0, CUVID_PKT_DISCONTINUITY);
-                        if (!sync_on && !dc_context->total_owned_by_loader)
-                            dc_context->total_num_frame = nFrame + nFrameReturned;
+                        if (!sync_on) {
+                            if (dc_context->total_owned_by_loader)
+                                dc_context->refine_cam_length(
+                                    cam_name, nFrame + nFrameReturned);
+                            else
+                                dc_context->total_num_frame =
+                                    nFrame + nFrameReturned;
+                        }
                     } else {
                         nFrameReturned = dec.Decode(pVideo, nVideoBytes, 0, pktinfo.pts);
                         RED_SEEKDBG("  packet pts=%lld -> %d frames "
@@ -414,8 +420,14 @@ static void nvdec_decoder_process(DecoderContext *dc_context,
                     if (!demux_success) {
                         nFrameReturned =
                             dec.Decode(NULL, 0, CUVID_PKT_DISCONTINUITY);
-                        if (!sync_on && !dc_context->total_owned_by_loader)
-                            dc_context->total_num_frame = nFrame + nFrameReturned;
+                        if (!sync_on) {
+                            if (dc_context->total_owned_by_loader)
+                                dc_context->refine_cam_length(
+                                    cam_name, nFrame + nFrameReturned);
+                            else
+                                dc_context->total_num_frame =
+                                    nFrame + nFrameReturned;
+                        }
                     } else {
                         nFrameReturned = dec.Decode(pVideo, nVideoBytes, 0, pktinfo.pts);
                     }
@@ -824,9 +836,12 @@ static void vt_decoder_process(DecoderContext *dc_context,
                           timebase, (pktinfo.flags & AV_PKT_FLAG_KEY) != 0);
             packets_in_flight++;
             eof_stall = 0;
-        } else if (!sync_on && !dc_context->total_owned_by_loader) {
+        } else if (!sync_on) {
             // End of stream
-            dc_context->total_num_frame = nFrame;
+            if (dc_context->total_owned_by_loader)
+                dc_context->refine_cam_length(cam_name, nFrame);
+            else
+                dc_context->total_num_frame = nFrame;
         } else if (packets_in_flight > 0 && eof_stall < 100) {
             // End of stream but async decodes are still in flight — filling
             // now would make the late real frames look stale and get dropped.

@@ -1,6 +1,9 @@
 #ifndef RED_DECODER
 #define RED_DECODER
 #include <algorithm>
+#include <memory>
+#include <climits>
+#include <string>
 #include <vector>
 #include "red_build_config.h"
 #include "ColorSpace.h"
@@ -86,36 +89,104 @@ struct DecoderContext {
     std::atomic<bool> sync_fix_active;
     int64_t sync_canonical_len;
 
-    // Each camera's own frame count, as its demuxer reported it at load.
-    // Cameras of unequal length are a real recording, not a fault -- one
-    // started or stopped at a different time -- but the timeline is a single
-    // axis and has to pick a length. Keeping the individual counts lets three
-    // separate questions be answered honestly: whether to tell the user at all
-    // (min != max), where the timeline should end, and, for any given frame,
-    // which cameras genuinely have nothing to show rather than being slow.
-    std::vector<int> per_cam_frames;
+    // --- Per-camera lengths -------------------------------------------
+    // Each camera's own frame count. Cameras of unequal length are a real
+    // recording, not a fault, but the timeline is a single axis and has to
+    // end somewhere, so the individual counts have to be kept rather than
+    // collapsed at load.
+    //
+    // One slot per camera, written only by that camera's decoder thread and
+    // read by the UI, which is why these are atomics rather than a plain
+    // vector: the shared-total write they replace was the race that made
+    // playback stop at the shortest camera's end (and, after a seek, at
+    // whatever partial count it had reached).
+    //
+    // `exact` distinguishes a count the container declared from one derived
+    // as duration x framerate. A derived count can be off by a frame from
+    // rounding, so two identical cameras can look uneven; it is replaced by
+    // the true count when that camera decodes through to its end, at which
+    // point exact becomes true and the reading settles.
+    std::unique_ptr<std::atomic<int>[]> per_cam_frames;
+    std::unique_ptr<std::atomic<bool>[]> per_cam_exact;
+    int per_cam_count = 0;
 
-    // Set when the loader has real per-camera counts and has therefore set
-    // total_num_frame itself. Decoder threads must then leave it alone: each
-    // one writes it at ITS OWN end of stream, so the shortest camera's end
-    // became everybody's, and after a seek the value written is only what
-    // that camera decoded SINCE the seek -- a partial count, which is why
-    // playback stopped at arbitrary frames. Same ownership rule sync mode
-    // already uses, just not conditional on sync.
-    bool total_owned_by_loader = false;
+    // Written once by the loader before any decoder thread starts, read-only
+    // afterwards, so a decoder can find its own slot without locking. Decoders
+    // are handed a camera name rather than an index.
+    std::vector<std::string> per_cam_names;
 
+    int cam_slot(const std::string &name) const {
+        for (size_t i = 0; i < per_cam_names.size(); i++)
+            if (per_cam_names[i] == name) return (int)i;
+        return -1;
+    }
+
+    // A camera reached the true end of its own stream. Each thread writes only
+    // its own slot, so unlike the shared total_num_frame write this replaces,
+    // nothing races -- and a count that was derived from duration x framerate
+    // is corrected here, which is what makes an uncertain reading settle once
+    // the recording has been played through.
+    void refine_cam_length(const std::string &name, int frames) {
+        const int i = cam_slot(name);
+        if (i < 0 || frames <= 0) return;
+        per_cam_frames[i].store(frames);
+        per_cam_exact[i].store(true);
+    }
+
+    void alloc_per_cam(int n) {
+        per_cam_frames = std::make_unique<std::atomic<int>[]>(n > 0 ? n : 1);
+        per_cam_exact = std::make_unique<std::atomic<bool>[]>(n > 0 ? n : 1);
+        for (int i = 0; i < n; i++) {
+            per_cam_frames[i].store(0);
+            per_cam_exact[i].store(false);
+        }
+        per_cam_count = n;
+    }
+    int cam_frames(int i) const {
+        return (i >= 0 && i < per_cam_count) ? per_cam_frames[i].load() : 0;
+    }
     int shortest_cam_frames() const {
-        if (per_cam_frames.empty()) return 0;
-        return *std::min_element(per_cam_frames.begin(), per_cam_frames.end());
+        int lo = INT_MAX;
+        for (int i = 0; i < per_cam_count; i++) lo = std::min(lo, cam_frames(i));
+        return per_cam_count ? lo : 0;
     }
     int longest_cam_frames() const {
-        if (per_cam_frames.empty()) return 0;
-        return *std::max_element(per_cam_frames.begin(), per_cam_frames.end());
+        int hi = 0;
+        for (int i = 0; i < per_cam_count; i++) hi = std::max(hi, cam_frames(i));
+        return hi;
+    }
+    bool any_cam_zero() const {
+        for (int i = 0; i < per_cam_count; i++)
+            if (cam_frames(i) <= 0) return true;
+        return per_cam_count == 0;
+    }
+    bool any_cam_estimated() const {
+        for (int i = 0; i < per_cam_count; i++)
+            if (!per_cam_exact[i].load()) return true;
+        return false;
     }
     bool cams_uneven() const {
-        return !per_cam_frames.empty() &&
+        return per_cam_count > 1 &&
                shortest_cam_frames() != longest_cam_frames();
     }
+
+    // What the transport bar reports. Ordered by severity: a camera with no
+    // frames at all is worse than an uneven set, and an uncertain reading is
+    // not worth calling a problem until the numbers are known.
+    enum class Lengths { NoCameras, ZeroFrames, Uneven, Uncertain, Even };
+    Lengths lengths_status() const {
+        if (per_cam_count == 0) return Lengths::NoCameras;
+        if (any_cam_zero()) return Lengths::ZeroFrames;
+        if (any_cam_estimated()) return Lengths::Uncertain;
+        if (cams_uneven()) return Lengths::Uneven;
+        return Lengths::Even;
+    }
+
+    // Set when the loader owns total_num_frame, i.e. it has per-camera counts
+    // to derive it from. Decoder threads then refine their OWN slot at end of
+    // stream instead of writing the shared total -- which is how a derived
+    // count is corrected without reintroducing the race.
+    bool total_owned_by_loader = false;
 };
 
 #if defined(RED_HAVE_CUDA)

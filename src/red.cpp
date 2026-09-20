@@ -1192,11 +1192,11 @@ int main(int argc, char **argv) {
                         // frame, so drawing it would present a stale image as
                         // though it were this instant -- the one thing a view
                         // being annotated must not do.
+                        const int cam_frames_j =
+                            dc_context->cam_frames((int)j);
                         const bool cam_ended =
-                            j < dc_context->per_cam_frames.size() &&
-                            dc_context->per_cam_frames[j] > 0 &&
-                            current_frame_num >=
-                                dc_context->per_cam_frames[j];
+                            cam_frames_j > 0 &&
+                            current_frame_num >= cam_frames_j;
                         if (cam_ended) {
                             DrawCameraEndedBadge(
                                 (float)scene->image_width[j],
@@ -1658,6 +1658,16 @@ int main(int argc, char **argv) {
         } else {
             if (dc_context->decoding_flag && ps.play_video &&
                 scene->num_cams > 0 && scene->display_buffer) {
+                // A camera that decoded through to its end has replaced a
+                // derived count with the real one, so the timeline's length
+                // follows rather than being fixed at load.
+                if (dc_context->total_owned_by_loader) {
+                    const int len = dc_context->longest_cam_frames();
+                    if (len > 0) {
+                        dc_context->total_num_frame = len;
+                        dc_context->estimated_num_frames = len - 1;
+                    }
+                }
                 int frame_to_show = ps.to_display_frame_number;
                 // Cap to slowest decoded camera (applied in both modes).
                 // A camera that has reached its own last frame is not slow,
@@ -1678,11 +1688,9 @@ int main(int argc, char **argv) {
                     // against how far it has decoded: a seek resets the
                     // latter, so keying off it left an already-finished
                     // camera pinning the cap wherever it happened to sit.
-                    const int cam_end =
-                        (ci < dc_context->per_cam_frames.size() &&
-                         dc_context->per_cam_frames[ci] > 0)
-                            ? dc_context->per_cam_frames[ci] - 1
-                            : -1;
+                    const int cam_frames =
+                        dc_context->cam_frames((int)ci);
+                    const int cam_end = cam_frames > 0 ? cam_frames - 1 : -1;
                     if (cam_end >= 0 &&
                         cam_end <= ps.to_display_frame_number)
                         continue;

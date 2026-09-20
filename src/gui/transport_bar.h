@@ -379,27 +379,81 @@ inline void DrawTransportBar(TransportBarState &state, AppContext &ctx) {
                 "Drag or double-click to type a value.");
     }
 
-    // === Uneven camera lengths ===
-    // A separate diagnosis from the sync plan below, and deliberately not
-    // routed through it: the plan answers "is frame i the same instant in
-    // every view", which needs trigger timestamps most recordings do not
-    // ship. This answers "do the cameras even hold the same number of
-    // frames", which every demuxer can say. So it is the one that shows up
-    // for a bare folder of mp4s -- exactly the case where the timeline used
-    // to take a racing thread's word for its length.
-    if (dc->cams_uneven() && !ctx.input_is_imgs) {
+    // === Camera lengths ===
+    // Always shown, never hidden: "no warning" and "not checked" look the
+    // same when a readout only appears on trouble, and this one is cheap
+    // enough to state either way. A separate diagnosis from the sync plan
+    // below and deliberately not routed through it -- that one answers "is
+    // frame i the same instant in every view", which needs trigger timestamps
+    // most recordings do not ship. This answers "do the cameras hold the same
+    // number of frames", which every demuxer and every image folder can say,
+    // so it is the one that shows up for a bare folder of mp4s.
+    {
+        const int lo = dc->shortest_cam_frames();
+        const int hi = dc->longest_cam_frames();
+        const bool sync_handling = dc->sync_fix_active.load();
+
+        const ImVec4 green(0.4f, 0.9f, 0.4f, 1.0f);
+        const ImVec4 yellow(0.9f, 0.9f, 0.4f, 1.0f);
+        const ImVec4 red(1.0f, 0.45f, 0.35f, 1.0f);
+
+        const char *text = nullptr;
+        ImVec4 col = green;
+        std::string tip;
+        switch (dc->lengths_status()) {
+            case DecoderContext::Lengths::NoCameras:
+                text = "no cameras";
+                col = red;
+                tip = "No camera lengths were recorded for this project.";
+                break;
+            case DecoderContext::Lengths::ZeroFrames:
+                text = "zero frames";
+                col = red;
+                tip = "A camera reports no frames at all -- it failed to "
+                      "open, or its folder is empty.";
+                break;
+            case DecoderContext::Lengths::Uneven:
+                // Sync mode remaps every camera onto one canonical timeline,
+                // so the same condition is no longer anything the user has to
+                // deal with. Saying "problem" next to the control that fixed
+                // it would be telling them about work already done.
+                text = sync_handling ? "uneven (realigned)" : "uneven";
+                col = sync_handling ? green : red;
+                tip = "Videos are of different length: " +
+                      std::to_string(lo) + " to " + std::to_string(hi) +
+                      " frames.";
+                if (sync_handling)
+                    tip += "\nRealign is on, so every camera is mapped onto "
+                           "the canonical timeline.";
+                break;
+            case DecoderContext::Lengths::Uncertain:
+                // The container did not declare a frame count, so it was
+                // derived from duration x framerate and can be a frame out
+                // either way. Playing a camera through to its end replaces
+                // the estimate with the real count.
+                text = "possibly uneven";
+                col = yellow;
+                tip = "A camera does not declare its frame count, so the "
+                      "length was estimated (" + std::to_string(lo) + " to " +
+                      std::to_string(hi) + " frames).\nPlay through to "
+                      "replace the estimate with the true count.";
+                break;
+            case DecoderContext::Lengths::Even:
+                text = "even";
+                col = green;
+                tip = "Every camera holds " + std::to_string(hi) +
+                      " frames.";
+                break;
+        }
+
         ImGui::SameLine(0, spacing);
         ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
         ImGui::SameLine(0, spacing);
-
         ImGui::TextColored(label_col, "Lengths");
         ImGui::SameLine(0, spacing);
-        const int lo = dc->shortest_cam_frames();
-        const int hi = dc->longest_cam_frames();
-        ImGui::TextColored(ImVec4(0.9f, 0.9f, 0.4f, 1.0f), "Uneven");
+        ImGui::TextColored(col, "%s", text);
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Videos are of different length: %d to %d "
-                              "frames.", lo, hi);
+            ImGui::SetTooltip("%s", tip.c_str());
     }
 
     // === Desync fix (canonical trigger timeline) ===

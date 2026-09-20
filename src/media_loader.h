@@ -435,6 +435,26 @@ load_images(std::map<std::string, std::string> &selected_files,
     // the UI oscillate when camera folders had different frame counts.
     dc_context->total_num_frame = (int)imgs_names.size();
     dc_context->estimated_num_frames = (int)imgs_names.size();
+    // Per-camera counts, for the same readout the video path gets. The
+    // timeline itself stays the union of frame names -- that is what the
+    // image loaders decode against -- but a camera folder that is missing
+    // frames was previously papered over by that union without a word.
+    // Counts are exact here: they are files on disk, nothing is inferred.
+    {
+        std::map<std::string, int> per_cam;
+        for (const auto &elem : selected_files) {
+            std::size_t sep = elem.first.find("_");
+            per_cam[elem.first.substr(0, sep)]++;
+        }
+        dc_context->alloc_per_cam((int)pm.camera_names.size());
+        dc_context->per_cam_names = pm.camera_names;
+        for (size_t i = 0; i < pm.camera_names.size(); i++) {
+            auto it = per_cam.find(pm.camera_names[i]);
+            dc_context->per_cam_frames[i].store(
+                it == per_cam.end() ? 0 : it->second);
+            dc_context->per_cam_exact[i].store(true);
+        }
+    }
     render_allocate_scene_memory(scene, label_buffer_size);
     for (const auto &name : pm.camera_names) {
         auto [it, inserted] = latest_decoded_frame.try_emplace(name);
@@ -701,11 +721,24 @@ load_videos(std::map<std::string, std::string> &selected_files,
     // camera 0's; this takes the whole set instead, because camera 0 is
     // whichever file sorted first and is neither the shortest nor the longest
     // on purpose.
-    dc_context->per_cam_frames.clear();
-    for (auto &d : demuxers) {
-        int n = (int)d->GetNumFrames();
-        if (n == 0) n = (int)(d->GetDuration() * d->GetFramerate());
-        dc_context->per_cam_frames.push_back(n);
+    dc_context->alloc_per_cam((int)demuxers.size());
+    dc_context->per_cam_names = pm.camera_names;
+    for (size_t i = 0; i < demuxers.size(); i++) {
+        // nb_frames straight from the container (FFmpegDemuxer.cpp). Present
+        // for an ordinary mp4; absent for a fragmented one, which has no
+        // top-level sample count. Only then is the count derived, and it is
+        // flagged so the UI can say the reading is not yet certain -- the
+        // decoder replaces it with the true count on reaching end of stream.
+        const int declared = (int)demuxers[i]->GetNumFrames();
+        if (declared > 0) {
+            dc_context->per_cam_frames[i].store(declared);
+            dc_context->per_cam_exact[i].store(true);
+        } else {
+            dc_context->per_cam_frames[i].store(
+                (int)(demuxers[i]->GetDuration() *
+                      demuxers[i]->GetFramerate()));
+            dc_context->per_cam_exact[i].store(false);
+        }
     }
     // Run to the LONGEST camera, which is what the sync plan does for an
     // uneven recording (canonical_len = max end_slot, sync_plan.h): everything
@@ -715,7 +748,7 @@ load_videos(std::map<std::string, std::string> &selected_files,
     // cameras from that cap (red.cpp) instead of by fabricating duplicate
     // frames the way the sync path's trailing fill does.
     //
-    if (!sync_enable && !dc_context->per_cam_frames.empty()) {
+    if (!sync_enable && dc_context->per_cam_count > 0) {
         dc_context->estimated_num_frames =
             dc_context->longest_cam_frames() - 1;
         dc_context->total_num_frame = dc_context->longest_cam_frames();
