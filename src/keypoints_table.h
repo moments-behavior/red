@@ -234,6 +234,25 @@ inline void DrawKeypointsTable(AppContext &ctx, float height) {
                                 const bool reproj =
                                     labeled &&
                                     fa.cameras[row].keypoints[node].reprojected;
+                                const bool model_made =
+                                    labeled &&
+                                    fa.cameras[row].keypoints[node].predicted;
+
+                                // Both axes, spelled out. The tooltip is the
+                                // one place the full state is legible, so it
+                                // reports the combination rather than picking
+                                // whichever half the marker happens to show.
+                                const char *state_text =
+                                    occluded     ? "occluded / outside frame"
+                                    : !labeled   ? "not placed"
+                                    : user_annotated
+                                        ? (reproj ? "user annotated, reprojected"
+                                                  : "user annotated")
+                                    : model_made
+                                        ? (reproj ? "model predicted, reprojected"
+                                                  : "model predicted")
+                                    : reproj     ? "reprojected from 3D"
+                                                 : "placed";
                                 ImVec4 node_color = ImVec4(0, 0, 0, 0);
 
                                 // Fill shows placement status regardless of
@@ -289,20 +308,14 @@ inline void DrawKeypointsTable(AppContext &ctx, float height) {
                                                 "Click: set active   Delete: remove selected set (%d)",
                                                 pm.camera_names[row].c_str(),
                                                 skeleton.node_names[node].c_str(),
-                                                occluded ? "occluded / outside frame" :
-                                                (user_annotated ? "user annotated" : "projected from 3D"),
-                                                kc.count());
+                                                state_text, kc.count());
                                         else
                                             ImGui::SetTooltip(
                                                 "%s / %s\n%s\n"
                                                 "Click: set active   Delete: remove from this camera",
                                                 pm.camera_names[row].c_str(),
                                                 skeleton.node_names[node].c_str(),
-                                                occluded ? "occluded / outside frame" :
-                                                (user_annotated
-                                                     ? (reproj ? "user annotated, refreshed from 3D"
-                                                               : "user annotated")
-                                                     : "projected from 3D"));
+                                                state_text);
                                     }
                                 }
                                 // T marks coordinates that came from the 3D,
