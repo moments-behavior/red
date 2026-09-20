@@ -68,15 +68,25 @@ inline void sync_fix_toggle(AppContext &ctx, bool enable) {
         int64_t slot = std::clamp<int64_t>(cur, 0, plan.canonical_len - 1);
         target = cam0->seek_pos(slot);
         dc->sync_fix_active = false;
-        // Restore native counts/fps from the reference demuxer; decoders
-        // repopulate total_num_frame when they hit EOF (as at initial load).
+        // Restore the native counts the same way the loader derives them: the
+        // longest camera, from the per-camera lengths. This used to read
+        // demuxers[0] and leave total_num_frame at INT_MAX for the decoders to
+        // repopulate at EOF -- both of which are gone. Camera 0 is whichever
+        // file sorted first, and the EOF write is now a refinement of that
+        // camera's own slot rather than of the shared total.
         dc->video_fps = ctx.demuxers[0]->GetFramerate();
-        if (ctx.demuxers[0]->GetNumFrames() == 0)
-            dc->estimated_num_frames =
-                (int)(ctx.demuxers[0]->GetDuration() * dc->video_fps);
-        else
-            dc->estimated_num_frames = (int)ctx.demuxers[0]->GetNumFrames() - 1;
-        dc->total_num_frame = INT_MAX;
+        if (dc->per_cam_count > 0) {
+            dc->total_num_frame = dc->longest_cam_frames();
+            dc->estimated_num_frames = dc->longest_cam_frames() - 1;
+        } else {
+            if (ctx.demuxers[0]->GetNumFrames() == 0)
+                dc->estimated_num_frames =
+                    (int)(ctx.demuxers[0]->GetDuration() * dc->video_fps);
+            else
+                dc->estimated_num_frames =
+                    (int)ctx.demuxers[0]->GetNumFrames() - 1;
+            dc->total_num_frame = INT_MAX;
+        }
     }
 
     seek_all_cameras(ctx.scene, (int)target, dc->video_fps, ctx.ps, true);
