@@ -159,7 +159,10 @@ inline bool gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
             // given, so a transparent colour hides the marker while keeping
             // its hit-testing and dragging intact, and the triangle goes on
             // top by hand.
-            const bool derived = cam.keypoints[node].reprojected;
+            // Authorship, not coordinate origin: T rewrites the numbers in
+            // every view, so keying the marker off `reprojected` would turn
+            // every point into a triangle the moment you triangulated.
+            const bool derived = !cam.keypoints[node].manual;
             ImVec4 marker_color = node_color;
             if (derived) marker_color.w = 0.0f;
 
@@ -310,13 +313,15 @@ inline bool gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
                 // Only Manual points feed triangulation, so this is what
                 // promotes a reprojection you have judged correct into an
                 // input for the next solve.
-                ImGui::BeginDisabled(!kp.reprojected);
+                ImGui::BeginDisabled(kp.manual);
                 if (ImGui::MenuItem("Accept as manual")) {
+                    // Accepting the position as your own: it is yours now, and
+                    // the numbers are the ones you accepted rather than a
+                    // pending solve's.
                     kp.set_manual();
-                    kp.reprojected = false;
                 }
                 ImGui::EndDisabled();
-                if (!kp.reprojected && ImGui::IsItemHovered(
+                if (kp.manual && ImGui::IsItemHovered(
                                          ImGuiHoveredFlags_AllowWhenDisabled))
                     ImGui::SetTooltip("Already a manual label");
 
@@ -559,7 +564,6 @@ inline bool solve_midline_constraint(FrameAnnotation &fa,
                 fa.cameras[v].keypoints[node].y = ry;
                 fa.cameras[v].keypoints[node].occluded = false;
                 fa.cameras[v].keypoints[node].set_reprojected();
-                fa.cameras[v].keypoints[node].reprojected = true;
             }
         }
     }
@@ -682,10 +686,11 @@ inline void reprojection(FrameAnnotation &fa, SkeletonContext *skeleton,
                         kp2d.x = x;
                         kp2d.y = y;
                         kp2d.occluded = false;
-                        if (user_annotated) kp2d.set_manual(); else kp2d.set_reprojected();
-                        // A T-key refresh may move a user annotation, but it
-                        // must not turn that camera into a derived label.
-                        kp2d.reprojected = !user_annotated;
+                        // Coordinate origin only. Authorship is untouched: a
+                        // hand-placed point stays manual through a refresh,
+                        // and one nobody placed simply has no author -- it was
+                        // not predicted by anything, it was computed.
+                        kp2d.set_reprojected();
                     }
                 } else {
                     // Perspective reprojection (matrix-based, safe for det(R)=-1)
@@ -707,10 +712,7 @@ inline void reprojection(FrameAnnotation &fa, SkeletonContext *skeleton,
                             kp2d.x = x;
                             kp2d.y = y;
                             kp2d.occluded = false;
-                            if (user_annotated) kp2d.set_manual(); else kp2d.set_reprojected();
-                            // Preserve the per-camera user annotation state
-                            // even though T refreshed its coordinates.
-                            kp2d.reprojected = !user_annotated;
+                            kp2d.set_reprojected();
                         }
                     }
                 }

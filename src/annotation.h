@@ -26,31 +26,42 @@ struct Keypoint2D {
     float  confidence = 0.0f;
 
     // `exist` is presence: are there coordinates here at all.
-    // The three origin flags are mutually exclusive -- a coordinate came from
-    // exactly one place -- and are kept that way by the setters below. Write
-    // through those, never to the flags directly, or a point can end up
-    // claiming two origins and every reader has to invent a precedence rule.
+    //
+    // Two independent questions, so two axes:
+    //
+    //   AUTHORSHIP -- who decided this keypoint belongs here. `manual` and
+    //   `predicted` are mutually exclusive; the setters keep them so.
+    //
+    //   COORDINATE ORIGIN -- `reprojected` says the numbers currently stored
+    //   came from this frame's 3D. It is independent of authorship: a point
+    //   YOU placed and then refreshed with T is both manual and reprojected,
+    //   and must still export as `visible`. Collapsing the two is what made
+    //   a T refresh erase the record that you had placed a point at all.
     bool exist       = false;
     bool manual      = false;   // a person clicked it in this camera
-    bool reprojected = false;   // computed from this frame's 3D
     bool predicted   = false;   // a model produced it directly in this view
+    bool reprojected = false;   // the stored numbers came from the 3D
 
     // Independent of the above: an assessment that the point is not visible
     // here. It has no coordinates, so `exist` is false while this is true.
     // This is tailcycle's keypoints.pq `missing` status.
     bool occluded = false;
 
+    // Authorship. A fresh placement also resets the coordinate origin: these
+    // numbers came from the click, not from a solve.
     void set_manual() {
         exist = true; manual = true;
-        reprojected = predicted = occluded = false;
-    }
-    void set_reprojected() {
-        exist = true; reprojected = true;
-        manual = predicted = occluded = false;
+        predicted = reprojected = occluded = false;
     }
     void set_predicted(float conf = 0.0f) {
         exist = true; predicted = true; confidence = conf;
         manual = reprojected = occluded = false;
+    }
+
+    // Coordinate origin only -- authorship is deliberately left alone, so a
+    // refreshed hand label stays manual.
+    void set_reprojected() {
+        exist = true; reprojected = true; occluded = false;
     }
     void clear() { *this = Keypoint2D{}; }
 };

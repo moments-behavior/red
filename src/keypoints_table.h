@@ -227,7 +227,7 @@ inline void DrawKeypointsTable(AppContext &ctx, float height) {
                                 const bool user_annotated =
                                     labeled && fa.cameras[row].keypoints[node].manual;
                                 const bool projected =
-                                    labeled && fa.cameras[row].keypoints[node].reprojected;
+                                    labeled && !fa.cameras[row].keypoints[node].manual;
                                 ImVec4 node_color = ImVec4(0, 0, 0, 0);
 
                                 // Fill shows placement status regardless of
