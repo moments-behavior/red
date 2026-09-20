@@ -228,6 +228,12 @@ inline void DrawKeypointsTable(AppContext &ctx, float height) {
                                     labeled && fa.cameras[row].keypoints[node].manual;
                                 const bool projected =
                                     labeled && !fa.cameras[row].keypoints[node].manual;
+                                // Coordinate origin, independent of the above:
+                                // a point you placed and then refreshed with T
+                                // is both manual and reprojected.
+                                const bool reproj =
+                                    labeled &&
+                                    fa.cameras[row].keypoints[node].reprojected;
                                 ImVec4 node_color = ImVec4(0, 0, 0, 0);
 
                                 // Fill shows placement status regardless of
@@ -293,16 +299,26 @@ inline void DrawKeypointsTable(AppContext &ctx, float height) {
                                                 pm.camera_names[row].c_str(),
                                                 skeleton.node_names[node].c_str(),
                                                 occluded ? "occluded / outside frame" :
-                                                (user_annotated ? "user annotated" : "projected from 3D"));
+                                                (user_annotated
+                                                     ? (reproj ? "user annotated, refreshed from 3D"
+                                                               : "user annotated")
+                                                     : "projected from 3D"));
                                     }
                                 }
-                                // Keep the legacy T marker, but make it
-                                // per-camera: it marks a value projected from
-                                // 3D, while a manually annotated view has no T.
-                                if (projected)
+                                // T marks coordinates that came from the 3D,
+                                // which a hand-placed point acquires the
+                                // moment you press T -- so it shows on those
+                                // too. Alpha carries the other axis: solid
+                                // where nobody placed the point, faint where
+                                // the position is yours and was merely
+                                // refreshed.
+                                if (reproj)
                                     ImGui::GetWindowDrawList()->AddText(
                                         ImVec2(p0.x + 2.0f, p0.y),
-                                        IM_COL32(255, 255, 255, 255), "T");
+                                        user_annotated
+                                            ? IM_COL32(255, 255, 255, 130)
+                                            : IM_COL32(255, 255, 255, 255),
+                                        "T");
                                 if (occluded)
                                     ImGui::GetWindowDrawList()->AddText(
                                         ImVec2(p0.x + 2.0f, p0.y),
