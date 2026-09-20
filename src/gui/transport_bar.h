@@ -401,11 +401,6 @@ inline void DrawTransportBar(TransportBarState &state, AppContext &ctx) {
         ImVec4 col = green;
         std::string tip;
         switch (dc->lengths_status()) {
-            case DecoderContext::Lengths::NoCameras:
-                text = "no cameras";
-                col = red;
-                tip = "No camera lengths were recorded for this project.";
-                break;
             case DecoderContext::Lengths::ZeroFrames:
                 text = "zero frames";
                 col = red;
@@ -419,9 +414,8 @@ inline void DrawTransportBar(TransportBarState &state, AppContext &ctx) {
                 // it would be telling them about work already done.
                 text = sync_handling ? "uneven (realigned)" : "uneven";
                 col = sync_handling ? green : red;
-                tip = "Videos are of different length: " +
-                      std::to_string(lo) + " to " + std::to_string(hi) +
-                      " frames.";
+                tip = "Cameras hold different numbers of frames: " +
+                      std::to_string(lo) + " to " + std::to_string(hi) + ".";
                 if (sync_handling)
                     tip += "\nRealign is on, so every camera is mapped onto "
                            "the canonical timeline.";

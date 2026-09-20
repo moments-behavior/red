@@ -448,6 +448,7 @@ load_images(std::map<std::string, std::string> &selected_files,
         }
         dc_context->alloc_per_cam((int)pm.camera_names.size());
         dc_context->per_cam_names = pm.camera_names;
+        dc_context->per_cam_contiguous = false;
         for (size_t i = 0; i < pm.camera_names.size(); i++) {
             auto it = per_cam.find(pm.camera_names[i]);
             dc_context->per_cam_frames[i].store(
@@ -753,6 +754,7 @@ load_videos(std::map<std::string, std::string> &selected_files,
             dc_context->longest_cam_frames() - 1;
         dc_context->total_num_frame = dc_context->longest_cam_frames();
         dc_context->total_owned_by_loader = true;
+        dc_context->per_cam_contiguous = true;
     }
     dc_context->sync_fix_active = sync_enable;
     dc_context->sync_canonical_len = splan.canonical_len;

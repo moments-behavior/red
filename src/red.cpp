@@ -1193,7 +1193,9 @@ int main(int argc, char **argv) {
                         // though it were this instant -- the one thing a view
                         // being annotated must not do.
                         const int cam_frames_j =
-                            dc_context->cam_frames((int)j);
+                            dc_context->per_cam_contiguous
+                                ? dc_context->cam_frames((int)j)
+                                : 0;
                         const bool cam_ended =
                             cam_frames_j > 0 &&
                             current_frame_num >= cam_frames_j;
@@ -1689,7 +1691,9 @@ int main(int argc, char **argv) {
                     // latter, so keying off it left an already-finished
                     // camera pinning the cap wherever it happened to sit.
                     const int cam_frames =
-                        dc_context->cam_frames((int)ci);
+                        dc_context->per_cam_contiguous
+                            ? dc_context->cam_frames((int)ci)
+                            : 0;
                     const int cam_end = cam_frames > 0 ? cam_frames - 1 : -1;
                     if (cam_end >= 0 &&
                         cam_end <= ps.to_display_frame_number)

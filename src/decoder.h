@@ -173,9 +173,12 @@ struct DecoderContext {
     // What the transport bar reports. Ordered by severity: a camera with no
     // frames at all is worse than an uneven set, and an uncertain reading is
     // not worth calling a problem until the numbers are known.
-    enum class Lengths { NoCameras, ZeroFrames, Uneven, Uncertain, Even };
+    enum class Lengths { ZeroFrames, Uneven, Uncertain, Even };
     Lengths lengths_status() const {
-        if (per_cam_count == 0) return Lengths::NoCameras;
+        // No separate "no cameras" state: the transport bar only draws once
+        // media is loaded, and both loaders allocate these slots before
+        // saying so, so an empty set cannot reach the readout. If it somehow
+        // did, any_cam_zero() reports it, which is the accurate wording.
         if (any_cam_zero()) return Lengths::ZeroFrames;
         if (any_cam_estimated()) return Lengths::Uncertain;
         if (cams_uneven()) return Lengths::Uneven;
@@ -187,6 +190,17 @@ struct DecoderContext {
     // stream instead of writing the shared total -- which is how a derived
     // count is corrected without reintroducing the race.
     bool total_owned_by_loader = false;
+
+    // True when each camera's frames ARE the contiguous range [0, n), so a
+    // count can be read as a last index -- the video case, where the timeline
+    // is frame positions in the stream.
+    //
+    // False for images, where the timeline is the UNION of frame names across
+    // cameras (media_loader.h). There a camera holding 45 of 70 names does not
+    // hold names 0..44, it holds 45 scattered ones, and treating its count as
+    // an end would blank it at frame 45 while it still has files. The counts
+    // are still worth reporting; they just cannot say where a camera stops.
+    bool per_cam_contiguous = false;
 };
 
 #if defined(RED_HAVE_CUDA)
