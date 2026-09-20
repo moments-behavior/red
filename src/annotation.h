@@ -50,13 +50,17 @@ struct Keypoint2D {
     // in two on export. This is tailcycle's keypoints.pq `missing` status.
     bool occluded = false;
 
-    // Marks the point not visible in this camera. x/y are LEFT ALONE: they are
-    // no longer usable -- `exist` says so, and every reader gates on it -- but
-    // remembering where it last was lets the overlay put a cross there when
-    // the frame has no 3D to project instead.
+    // Marks the point not visible in this camera. x/y are LEFT ALONE: they no
+    // longer assert the part is visible -- `exist` says otherwise, and every
+    // reader gates on it -- but they still say where it is, which is what the
+    // overlay draws the cross from.
+    //
+    // `reprojected` is left alone for the same reason. It describes where the
+    // stored numbers came from, and they are still here and still came from
+    // the solve; clearing it would make the flag lie about them. Only the two
+    // questions this actually answers change: presence, and visibility.
     void set_occluded() {
         exist = false;
-        reprojected = false;
         occluded = true;
     }
 

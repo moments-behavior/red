@@ -86,14 +86,12 @@ inline bool gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
         const Keypoint2D &kp = cam.keypoints[n];
         if (kp.exist) {
             draw_pos[n] = {kp.x, kp.y, true, false};
-        } else if (kp.occluded && calib && scene && n < fa.kp3d.size() &&
-                   fa.kp3d[n].exist && view_idx < (int)calib->size()) {
-            double rx = 0.0, ry = 0.0;
-            const Eigen::Vector3d p3(fa.kp3d[n].x, fa.kp3d[n].y, fa.kp3d[n].z);
-            if (reproject_3d_to_cam(p3, (*calib)[view_idx],
-                                    (int)scene->image_width[view_idx],
-                                    (int)scene->image_height[view_idx], rx, ry))
-                draw_pos[n] = {rx, ry, true, true};
+        } else if (kp.occluded && kp.x != UNLABELED && kp.y != UNLABELED) {
+            // Just the stored position. set_occluded keeps x/y, and the
+            // reprojection below refreshes it for occluded nodes too, so this
+            // is already where the solve says the hidden part is -- no reason
+            // to project it a second time here.
+            draw_pos[n] = {kp.x, kp.y, true, true};
         }
     }
 
@@ -181,20 +179,15 @@ inline bool gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
                     ImGui::OpenPopup("##keypoint_menu");
                 }
 
-                // M is a toggle here. set_occluded kept the author and the
-                // last position, so taking it back is a real undo rather than
-                // a re-placement: restore presence, and take the coordinates
-                // the cross was drawn at. Those are the current 3D's when
-                // there is one, which makes the restored point a reprojection
-                // -- it is not a fresh observation and should not feed the
-                // next solve as if it were.
+                // M is a toggle here, and taking the assessment back is a
+                // two-field undo: set_occluded changed presence and
+                // visibility and nothing else, so restoring them restores the
+                // whole point. Author, position and origin were never lost --
+                // a point that was a reprojection comes back as one, and so
+                // does not feed the next solve as a fresh observation.
                 if (ImGui::IsKeyPressed(ImGuiKey_M, false)) {
-                    okp.x = draw_pos[node].x;
-                    okp.y = draw_pos[node].y;
                     okp.occluded = false;
                     okp.exist = true;
-                    if (node < fa.kp3d.size() && fa.kp3d[node].exist)
-                        okp.reprojected = true;
                     touched = true;
                 }
 
@@ -410,7 +403,6 @@ inline bool gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
                     if (ImGui::MenuItem("Clear occlusion")) {
                         kp.occluded = false;
                         kp.exist = true;
-                        if (fa.kp3d[t.node].exist) kp.reprojected = true;
                     }
                 } else if (ImGui::MenuItem("Mark occluded")) {
                     const bool fed_solve =
@@ -752,12 +744,16 @@ inline void reprojection(FrameAnnotation &fa, SkeletonContext *skeleton,
                 // refreshed user annotation remains visible; derived values
                 // are marked projected and are excluded from the next solve.
                 auto &kp2d = fa.cameras[view_idx].keypoints[node];
-                // Preserve an explicit missing/occluded assessment when
-                // refreshing the other views from a 3D solve.
-                if (kp2d.occluded) continue;
-                // `manual` alone: the occluded case, the one place a manual
-                // point has no coordinates, already continued above.
-                if (!kp2d.manual) kp2d = Keypoint2D{};
+                // An occluded node gets its coordinates refreshed too -- the
+                // overlay draws the cross straight from x/y, so this is what
+                // keeps it on the part as the solve moves. Only the position
+                // and its origin are touched: `exist` stays false and the
+                // assessment stands, because where the part is and whether you
+                // can see it are different questions.
+                const bool coords_only = kp2d.occluded;
+                // `manual` alone: an occluded point is the one place a manual
+                // point has no coordinates, and it is excluded just above.
+                if (!coords_only && !kp2d.manual) kp2d = Keypoint2D{};
 
                 if (telecentric) {
                     // Telecentric reprojection
@@ -774,6 +770,10 @@ inline void reprojection(FrameAnnotation &fa, SkeletonContext *skeleton,
                         y < scene->image_height[view_idx]) {
                         kp2d.x = x;
                         kp2d.y = y;
+                        if (coords_only) {
+                            kp2d.reprojected = true;
+                            continue;
+                        }
                         kp2d.occluded = false;
                         // Coordinate origin only. Authorship is untouched: a
                         // hand-placed point stays manual through a refresh,
@@ -800,6 +800,10 @@ inline void reprojection(FrameAnnotation &fa, SkeletonContext *skeleton,
                             y > 0 && y < scene->image_height[view_idx]) {
                             kp2d.x = x;
                             kp2d.y = y;
+                            if (coords_only) {
+                                kp2d.reprojected = true;
+                                continue;
+                            }
                             kp2d.occluded = false;
                             kp2d.set_reprojected();
                         }
