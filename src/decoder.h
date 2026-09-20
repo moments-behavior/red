@@ -121,14 +121,27 @@ struct DecoderContext {
         return -1;
     }
 
-    // A camera reached the true end of its own stream. Each thread writes only
-    // its own slot, so unlike the shared total_num_frame write this replaces,
-    // nothing races -- and a count that was derived from duration x framerate
-    // is corrected here, which is what makes an uncertain reading settle once
-    // the recording has been played through.
+    // A camera reached the end of its own stream. Each thread writes only its
+    // own slot, so unlike the shared total_num_frame write this replaces,
+    // nothing races.
+    //
+    // Only ever replaces an ESTIMATE. The caller's count is nFrame +
+    // nFrameReturned, and nFrame is a POSITION -- a seek sets it to the
+    // requested target (sw_decoder.cpp) whether or not this camera can reach
+    // it. Seek a 240-frame camera to 500 and it lands on its last real frame
+    // by the EOF guard, but nFrame still says 500, so the count offered here
+    // is fiction. A container that declared nb_frames already knows better
+    // than anything derived this way, so it wins and this is ignored.
+    //
+    // That leaves the fragmented-mp4 case, where nothing was declared: a seek
+    // past the end BEFORE the first natural end of stream can still record a
+    // length that is too long. It takes a deliberate seek past the end of a
+    // file that does not declare its own length, and the reading is marked
+    // uncertain until then either way.
     void refine_cam_length(const std::string &name, int frames) {
         const int i = cam_slot(name);
         if (i < 0 || frames <= 0) return;
+        if (per_cam_exact[i].load()) return;
         per_cam_frames[i].store(frames);
         per_cam_exact[i].store(true);
     }
