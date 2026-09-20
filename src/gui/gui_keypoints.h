@@ -128,6 +128,82 @@ inline bool gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
                         col, 1.6f);
             dl->AddLine(ImVec2(px.x - r, px.y + r), ImVec2(px.x + r, px.y - r),
                         col, 1.6f);
+
+            // The cross is a target, not just a note. Marking a point occluded
+            // used to put it out of reach entirely -- no hover, no tooltip, no
+            // menu, no drag -- and the only way back was to make the node
+            // active from the keyboard and place it again. An invisible
+            // DragPoint (alpha 0, the same trick the triangle uses) gives it
+            // every interaction a visible point has. Safe to share the id
+            // formula: `occluded` implies `!exist`, so only one of the two
+            // branches ever runs for a node.
+            double hx = draw_pos[node].x, hy = draw_pos[node].y;
+            bool occ_clicked = false, occ_hovered = false;
+            const int occ_id = (skeleton->num_nodes * num_cams) * instance +
+                               skeleton->num_nodes * view_idx + node;
+            const bool occ_dragged = ImPlot::DragPoint(
+                occ_id, &hx, &hy, ImVec4(0, 0, 0, 0), r + 2.0f,
+                ImPlotDragToolFlags_None, &occ_clicked, &occ_hovered);
+
+            Keypoint2D &okp = cam.keypoints[node];
+            if (occ_dragged) {
+                // Dragging it onto the part takes the assessment back: you
+                // could see it after all, and you have just said where. Same
+                // as dragging a derived point -- it becomes yours, and the
+                // old solve it no longer agrees with goes.
+                okp.x = hx;
+                okp.y = hy;
+                okp.set_manual();
+                if (node < fa.kp3d.size()) fa.kp3d[node].clear();
+                touched = true;
+            }
+            if (occ_clicked) {
+                cam.active_id = node;
+                touched = true;
+            }
+            if (occ_hovered) {
+                any_point_hovered = true;
+                std::string label;
+                if (node < skeleton->node_names.size())
+                    label = skeleton->node_names[node];
+                if (!label.empty()) label += ": ";
+                label += "occluded";
+                ImVec2 mouse_pos = ImGui::GetMousePos();
+                ImGui::GetForegroundDrawList()->AddText(
+                    ImVec2(mouse_pos.x + 10, mouse_pos.y + 10),
+                    IM_COL32(220, 20, 60, 255), label.c_str());
+
+                if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+                    KeypointMenuTarget &t = keypoint_menu_target();
+                    t.view = view_idx;
+                    t.instance = instance;
+                    t.node = node;
+                    ImGui::OpenPopup("##keypoint_menu");
+                }
+
+                // M is a toggle here. set_occluded kept the author and the
+                // last position, so taking it back is a real undo rather than
+                // a re-placement: restore presence, and take the coordinates
+                // the cross was drawn at. Those are the current 3D's when
+                // there is one, which makes the restored point a reprojection
+                // -- it is not a fresh observation and should not feed the
+                // next solve as if it were.
+                if (ImGui::IsKeyPressed(ImGuiKey_M, false)) {
+                    okp.x = draw_pos[node].x;
+                    okp.y = draw_pos[node].y;
+                    okp.occluded = false;
+                    okp.exist = true;
+                    if (node < fa.kp3d.size() && fa.kp3d[node].exist)
+                        okp.reprojected = true;
+                    touched = true;
+                }
+
+                if (ImGui::IsKeyPressed(ImGuiKey_R, false)) {
+                    okp = Keypoint2D{};
+                    cam.active_id = node;
+                    touched = true;
+                }
+            }
         }
 
         if (cam.keypoints[node].exist) {
@@ -328,7 +404,15 @@ inline bool gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
                                          ImGuiHoveredFlags_AllowWhenDisabled))
                     ImGui::SetTooltip("Already a manual label");
 
-                if (ImGui::MenuItem("Mark occluded")) {
+                // Same item both ways round, so the menu on an occluded point
+                // is not a dead end.
+                if (kp.occluded) {
+                    if (ImGui::MenuItem("Clear occlusion")) {
+                        kp.occluded = false;
+                        kp.exist = true;
+                        if (fa.kp3d[t.node].exist) kp.reprojected = true;
+                    }
+                } else if (ImGui::MenuItem("Mark occluded")) {
                     const bool fed_solve =
                         kp.exist && kp.manual;
                     kp.set_manual();
