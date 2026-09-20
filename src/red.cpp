@@ -350,6 +350,20 @@ int main(int argc, char **argv) {
 
     int label_buffer_size = user_settings.default_buffer_size;
     std::vector<bool> is_view_focused;
+    // Which view the cursor was last inside. Focus follows the cursor, but
+    // only when the cursor MOVES to a different view -- otherwise Tab's choice
+    // would be overwritten on the very next frame, since the cursor has not
+    // gone anywhere. -1 = no view entered yet.
+    int last_hovered_view = -1;
+    // Which camera window ImGui last made focused. Tracked separately from the
+    // hover so each can trigger on CHANGE: a persistent "this window is
+    // focused" would otherwise fight the cursor every frame in a split layout.
+    int last_focused_view = -1;
+    // Which dock node each camera window sits in, refreshed every frame. Views
+    // tabbed together share one; a view split off has its own. Tab cycles
+    // within a node, because a view in another node is already on screen --
+    // cycling to it would just steal focus from what you are looking at.
+    std::vector<ImGuiID> view_dock_id;
     bool input_is_imgs = false;
     PopupStack popups;
     ToastQueue toasts;
@@ -789,8 +803,10 @@ int main(int argc, char **argv) {
                                                 px, py)) {
                             auto &kp2d = fa.cameras[cam].keypoints[k];
                             kp2d.x = px; kp2d.y = py; kp2d.labeled = true;
+                            kp2d.occluded = false;
                             kp2d.confidence = c;
                             kp2d.source = LabelSource::Predicted;
+                            kp2d.projected = true;
                         }
                     }
                 }
@@ -895,6 +911,22 @@ int main(int argc, char **argv) {
                                          ImGuiCond_FirstUseEver);
                 bool is_visible = ImGui::Begin(win_name.c_str());
                 window_is_visible[win_name] = is_visible;
+                if ((int)view_dock_id.size() < scene->num_cams)
+                    view_dock_id.resize(scene->num_cams, 0);
+                view_dock_id[j] = ImGui::GetWindowDockID();
+
+                // Selecting this camera's tab focuses its window but leaves
+                // the cursor on the tab bar, outside every plot -- so the
+                // hover rule below never fires and the Keypoints table went on
+                // floating the previous camera's row until the mouse was moved
+                // into the view. Focus follows either signal now.
+                if (is_visible && ImGui::IsWindowFocused() &&
+                    last_focused_view != j) {
+                    last_focused_view = j;
+                    last_hovered_view = j;
+                    for (int v = 0; v < (int)is_view_focused.size(); ++v)
+                        is_view_focused[v] = (v == j);
+                }
 
                 if (!window_was_decoding[win_name] && is_visible &&
                     ps.play_video) {
@@ -1181,17 +1213,41 @@ int main(int argc, char **argv) {
                         if (pm.plot_keypoints_flag) {
                             // labeling (keypoints)
                             // OBB tool uses G key (not W), so no keypoint conflict
-                            if (ImPlot::IsPlotHovered()) {
+                            //
+                            // NOT ImPlot::IsPlotHovered(): keypoints are
+                            // ImPlot::DragPoint items, and hovering one makes
+                            // IsPlotHovered() false. Every shortcut below was
+                            // therefore dead exactly while the cursor was on a
+                            // keypoint -- so M could not mark the point you
+                            // were looking at, and A/D/Q/E could not step off
+                            // it. The plot rectangle is what "this view is
+                            // under the cursor" actually means here, so ask
+                            // that directly and let the drag tools keep their
+                            // own hover for dragging.
+                            const ImVec2 plot_pos = ImPlot::GetPlotPos();
+                            const ImVec2 plot_size = ImPlot::GetPlotSize();
+                            const bool view_under_cursor =
+                                ImGui::IsWindowHovered(
+                                    ImGuiHoveredFlags_ChildWindows |
+                                    ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) &&
+                                ImGui::IsMouseHoveringRect(
+                                    plot_pos,
+                                    ImVec2(plot_pos.x + plot_size.x,
+                                           plot_pos.y + plot_size.y));
+                            if (view_under_cursor) {
                                 // Focus is sticky: the last view the cursor
-                                // entered stays focused until another view is
-                                // entered. It must NOT clear on hover-exit --
-                                // keypoints are ImPlot::DragPoint items, and
-                                // hovering one makes IsPlotHovered() false, so
-                                // clearing here would un-float this camera's row
-                                // in the Keypoints table exactly while the user
-                                // is working on a keypoint in it.
-                                for (int v = 0; v < (int)is_view_focused.size(); ++v)
-                                    is_view_focused[v] = (v == j);
+                                // ENTERED stays focused until it enters
+                                // another. Rewriting this every frame made Tab
+                                // useless with split views -- it set the next
+                                // view, and this put it straight back to
+                                // whichever one the motionless cursor happened
+                                // to be over.
+                                if (last_hovered_view != j) {
+                                    last_hovered_view = j;
+                                    for (int v = 0;
+                                         v < (int)is_view_focused.size(); ++v)
+                                        is_view_focused[v] = (v == j);
+                                }
                                 if (keys::pressed(keys::Sc::CreateFrame)) {
                                     // create frame annotation
                                     if (!keypoints_find) {
@@ -1218,6 +1274,9 @@ int main(int argc, char **argv) {
                                         kp2d.x = mouse.x;
                                         kp2d.y = mouse.y;
                                         kp2d.labeled = true;
+                                        kp2d.occluded = false;
+                                        kp2d.source = LabelSource::Manual;
+                                        kp2d.projected = false;
                                         // Moving a 2D point invalidates the 3D
                                         // solved from it. Dragging already did
                                         // this (gui_keypoints); placing did
@@ -1227,6 +1286,46 @@ int main(int argc, char **argv) {
                                         if (*kp < (skeleton.num_nodes - 1)) {
                                             (*kp)++;
                                         }
+                                    }
+
+                                    // 0-9 pick which animal is being edited,
+                                    // by the id ON the radio button rather
+                                    // than by position: those labels are
+                                    // instance_id, which is 0-based because
+                                    // that is what the data carries (a00..a04
+                                    // in tailcycle), and they need not be
+                                    // contiguous. The animal being edited
+                                    // draws on top, so this is also how you
+                                    // reach a keypoint stacked under another
+                                    // animal's.
+                                    if (!ImGui::GetIO().WantTextInput &&
+                                        !ImGui::GetIO().KeyCtrl &&
+                                        !ImGui::GetIO().KeyAlt &&
+                                        !ImGui::GetIO().KeySuper) {
+                                        auto &fis =
+                                            annotations.at(current_frame_num);
+                                        for (int d = 0; d <= 9; ++d) {
+                                            if (!ImGui::IsKeyPressed(
+                                                    (ImGuiKey)(ImGuiKey_0 + d),
+                                                    false))
+                                                continue;
+                                            for (size_t i = 0; i < fis.size();
+                                                 ++i)
+                                                if (fis[i].instance_id == d) {
+                                                    active_instance = (int)i;
+                                                    break;
+                                                }
+                                            break;
+                                        }
+                                    }
+
+                                    if (keys::pressed(keys::Sc::NextInstance)) {
+                                        auto &fis =
+                                            annotations.at(current_frame_num);
+                                        if (!fis.empty())
+                                            active_instance =
+                                                (active_instance + 1) %
+                                                (int)fis.size();
                                     }
 
                                     if (keys::pressed(keys::Sc::ActivePrev)) {
@@ -1252,9 +1351,32 @@ int main(int argc, char **argv) {
                                     }
 
                                     // delete all keypoints on a frame
+                                    // Confirmed: this erases every keypoint
+                                    // for every animal on the frame, and the
+                                    // key sits next to the ones that delete a
+                                    // single point. Lifting the hover gate
+                                    // also made it reachable with the cursor
+                                    // on a keypoint, where a stray press is
+                                    // most likely to be aimed at that one.
                                     if (keys::pressed(keys::Sc::DeleteAllKp)) {
-                                        annotations.erase(current_frame_num);
-                                        keypoints_find = false;
+                                        const int frame = current_frame_num;
+                                        const auto it = annotations.find(frame);
+                                        const size_t n_animals =
+                                            it != annotations.end()
+                                                ? it->second.size() : 0;
+                                        if (n_animals > 0)
+                                            popups.pushConfirm(
+                                                "Delete all keypoints?",
+                                                "Frame " + std::to_string(frame) +
+                                                    ": every keypoint on every "
+                                                    "camera for " +
+                                                    std::to_string(n_animals) +
+                                                    (n_animals == 1 ? " animal"
+                                                                    : " animals") +
+                                                    " will be removed.",
+                                                [&annotations, frame]() {
+                                                    annotations.erase(frame);
+                                                });
                                     }
                                 }
                             }
@@ -1273,15 +1395,36 @@ int main(int argc, char **argv) {
                                 // tinted and dimmed so they read as context.
                                 auto &fis_draw = annotations.at(current_frame_num);
                                 int grabbed = -1;
-                                for (size_t inst = 0; inst < fis_draw.size(); inst++)
+                                // The animal being edited is drawn LAST.
+                                // Coincident keypoints are legitimate -- two
+                                // fish whose noses overlap in one view really
+                                // do share a pixel -- and ImGui gives a
+                                // contested hover to whichever item was
+                                // submitted last. Drawing in index order meant
+                                // the highest-numbered animal always won that
+                                // tie, so reaching for the one you were editing
+                                // could grab another and, since a grab selects
+                                // its animal, switch you to it. Last-drawn now
+                                // matches what already looks foremost: the
+                                // active animal draws full strength, the rest
+                                // dimmed.
+                                auto draw_instance = [&](size_t inst) {
                                     if (gui_plot_keypoints(
                                             fis_draw[inst], &skeleton, j,
                                             scene->num_cams,
                                             active_keypoint_color(user_settings),
                                             (int)inst,
                                             (int)inst == active_instance,
-                                            display.show_keypoint_names))
+                                            display.show_keypoint_names,
+                                            &pm.camera_params, scene))
                                         grabbed = (int)inst;
+                                };
+                                for (size_t inst = 0; inst < fis_draw.size(); inst++)
+                                    if ((int)inst != active_instance)
+                                        draw_instance(inst);
+                                if (active_instance >= 0 &&
+                                    active_instance < (int)fis_draw.size())
+                                    draw_instance((size_t)active_instance);
                                 // Grabbing an animal's keypoint selects that
                                 // animal, so the table, Triangulate and the
                                 // rest follow the hand rather than needing a
@@ -1378,6 +1521,50 @@ int main(int argc, char **argv) {
                     ImGui::EndChild();
                 }
                 ImGui::End();
+            }
+
+            // Cycle which camera view is in front. The default layout docks
+            // every camera into the central node as tabs, so only one is
+            // visible at a time and reaching another meant clicking its tab.
+            // Focusing a docked window is what selects its tab.
+            if (ps.video_loaded && scene->num_cams > 1 &&
+                !pm.camera_names.empty() &&
+                (int)view_dock_id.size() >= scene->num_cams &&
+                keys::pressed(keys::Sc::NextView)) {
+                const int n = std::min((int)scene->num_cams,
+                                       (int)pm.camera_names.size());
+                int cur = 0;
+                for (int v = 0; v < n && v < (int)is_view_focused.size(); ++v)
+                    if (is_view_focused[v]) { cur = v; break; }
+
+                // Only the views sharing the focused view's dock node, in
+                // order. Cycling across nodes was the bug with a split layout:
+                // the other pane is already visible, so bringing one of its
+                // tabs forward moved focus away from the pane the cursor was
+                // in, and hover put it straight back.
+                std::vector<int> group;
+                for (int v = 0; v < n; ++v)
+                    if (view_dock_id[v] == view_dock_id[cur])
+                        group.push_back(v);
+
+                if (group.size() > 1) {
+                    int at = 0;
+                    for (size_t i = 0; i < group.size(); ++i)
+                        if (group[i] == cur) { at = (int)i; break; }
+                    // Shift reverses, like the seek keys. Not a second binding
+                    // with shift=true: mods_ok only enforces the modifiers a
+                    // binding requires and does not forbid extras, so plain Tab
+                    // would match Shift+Tab as well and both would fire.
+                    const int step = ImGui::GetIO().KeyShift
+                                         ? (int)group.size() - 1 : 1;
+                    const int next = group[(at + step) % (int)group.size()];
+                    ImGui::SetWindowFocus(pm.camera_names[next].c_str());
+                    for (int v = 0; v < (int)is_view_focused.size(); ++v)
+                        is_view_focused[v] = (v == next);
+                    // The cursor has not moved, so let it re-assert focus only
+                    // once it actually enters a different view.
+                    last_hovered_view = next;
+                }
             }
 
             if (keys::pressed(keys::Sc::PlayPause)) {

@@ -12,7 +12,8 @@
 //
 // Empty cells = unlabeled (no 1E7 sentinel in file).
 // c = confidence (empty = manual, float = predicted).
-// s = source flag (empty = Manual, P = Predicted, I = Imported).
+// s = source flag (empty = Manual, P = Predicted, I = Imported,
+// M = assessed missing/occluded).
 // Coordinates in ImPlot space (Y=0 at bottom).
 
 #include "annotation.h"
@@ -124,7 +125,11 @@ inline bool save_2d_csv(const std::string &path, const std::string &skeleton_nam
 
         f << frame << "," << fa.instance_id;
         for (int k = 0; k < num_nodes; ++k) {
-            if (k < (int)cam.keypoints.size() && cam.keypoints[k].labeled) {
+            if (k < (int)cam.keypoints.size() && cam.keypoints[k].occluded) {
+                // Assessed missing/occluded: no coordinates, but retain the
+                // determination instead of collapsing it into unlabeled.
+                f << ",,,M";
+            } else if (k < (int)cam.keypoints.size() && cam.keypoints[k].labeled) {
                 const auto &kp = cam.keypoints[k];
                 f << "," << kp.x << "," << kp.y << ",";
                 if (kp.confidence > 0.0f)
@@ -345,10 +350,14 @@ inline bool load_2d_csv(const std::string &path, AnnotationMap &amap,
             bool has_c = parse_csv_double(ptr, c);
             char  src  = parse_csv_char(ptr);
 
-            if (has_x && has_y) {
+            if (src == 'M') {
+                mark_keypoint2d_occluded(cam.keypoints[k]);
+            } else if (has_x && has_y) {
                 cam.keypoints[k].x = x;
                 cam.keypoints[k].y = y;
                 cam.keypoints[k].labeled = true;
+                cam.keypoints[k].occluded = false;
+                cam.keypoints[k].projected = false;
                 cam.keypoints[k].confidence = has_c ? (float)c : 0.0f;
                 if (src == 'P') cam.keypoints[k].source = LabelSource::Predicted;
                 else if (src == 'I') cam.keypoints[k].source = LabelSource::Imported;

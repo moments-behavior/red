@@ -36,7 +36,7 @@ namespace {
 
 // Which of the two sessions (§2.6) a point belongs to. The partition is per
 // *point*, not per frame: red lets a frame hold hand-placed keypoints in one
-// camera and predicted ones in another.
+// camera and projected/predicted ones in another.
 enum class Bucket { Annotated, Tracked };
 
 // `Imported` is machine output, not a third category. Nothing in red imports
@@ -194,7 +194,8 @@ bool export_session(const ExportConfig &cfg, const AnnotationMap &amap,
       for (const FrameAnnotation &fa : fis) {
         for (const auto &cam : fa.cameras)
             for (const auto &kp : cam.keypoints)
-                if (kp.labeled) has[(int)bucket_2d(kp.source)] = true;
+                if (kp.labeled || kp.occluded)
+                    has[(int)bucket_2d(kp.source)] = true;
         for (const auto &k3 : fa.kp3d) {
             if (k3.source == Kp3DSource::None) continue;
             if (cfg.layers == ExportConfig::Layers::TwoD) continue;
@@ -271,9 +272,10 @@ bool export_session(const ExportConfig &cfg, const AnnotationMap &amap,
         }
 
         // ── keypoints.pq ──
-        // Every point red exports is `projected`: red records placement, not
-        // visibility, and §7 is explicit that labels which assert nothing about
-        // occlusion must not be written as `visible`.
+        // Red keeps the user provenance (`Manual`) as `visible`, even when a
+        // triangulation refreshes that point's coordinates. Non-manual 2D
+        // values filled from 3D are `projected`; explicit occlusions are
+        // `missing`. An unlabelled point has no row (§7).
         {
             arrow::StringDictionary32Builder g_b, a_b, c_b, p_b, s_b;
             arrow::Int32Builder f_b;
@@ -298,21 +300,33 @@ bool export_session(const ExportConfig &cfg, const AnnotationMap &amap,
                     const double img_h = (double)cfg.calibration[ci].image_height;
                     for (size_t ni = 0; ni < cam.keypoints.size() && ni < cfg.node_names.size(); ni++) {
                         const Keypoint2D &kp = cam.keypoints[ni];
-                        if (!kp.labeled) continue;   // no row, not `unlabeled` (§7)
+                        if (!kp.labeled && !kp.occluded)
+                            continue;   // no row, not `unlabeled` (§7)
                         if (cfg.force_labels.empty() &&
                             bucket_2d(kp.source) != job.b) continue;
                         if (!g_b.Append(gid).ok() || !f_b.Append(frame).ok() ||
                             !a_b.Append(animal_id_of(fa.instance_id)).ok() ||
                             !c_b.Append(cfg.camera_names[ci]).ok() ||
                             !p_b.Append(cfg.node_names[ni]).ok() ||
-                            !s_b.Append(Tailcycle::status::kProjected).ok() ||
-                            !x_b.Append((float)kp.x).ok() ||
-                            !y_b.Append((float)(img_h - kp.y)).ok())
+                            !s_b.Append(kp.occluded
+                                             ? Tailcycle::status::kMissing
+                                             : (kp.source == LabelSource::Manual
+                                                    ? Tailcycle::status::kVisible
+                                                    : Tailcycle::status::kProjected)).ok())
                             return fail("keypoints.pq: builder append failed.");
+                        if (kp.occluded) {
+                            if (!x_b.AppendNull().ok() || !y_b.AppendNull().ok())
+                                return fail("keypoints.pq: coordinate append failed.");
+                        } else if (!x_b.Append((float)kp.x).ok() ||
+                                   !y_b.Append((float)(img_h - kp.y)).ok()) {
+                            return fail("keypoints.pq: coordinate append failed.");
+                        }
                         // A human label carries no confidence -- red stores 0.0f,
                         // and passing that through would ship every hand-placed
                         // point with a score of zero (§7 says null).
-                        const bool scored = kp.source != LabelSource::Manual && kp.confidence > 0.0f;
+                        const bool scored = !kp.occluded &&
+                                             kp.source != LabelSource::Manual &&
+                                             kp.confidence > 0.0f;
                         if (scored) any_score = true;
                         if (!(scored ? sc_b.Append(kp.confidence) : sc_b.AppendNull()).ok())
                             return fail("keypoints.pq: score append failed.");

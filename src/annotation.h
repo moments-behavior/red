@@ -41,7 +41,23 @@ struct Keypoint2D {
     bool   labeled    = false;
     float  confidence = 0.0f;
     LabelSource source = LabelSource::Manual;
+    // True when x/y were generated from a 3D point. `source == Manual` keeps
+    // the Tailcycle status `visible` even when a projection refreshed its
+    // coordinates; non-manual projected values are exported as `projected`.
+    bool projected = false;
+    // Explicitly assessed as not visible in this camera (occluded or outside
+    // the image). This is tailcycle's keypoints.pq `missing` status.
+    bool occluded = false;
 };
+
+inline bool keypoint2d_assessed(const Keypoint2D &kp) {
+    return kp.labeled || kp.occluded;
+}
+
+inline void mark_keypoint2d_occluded(Keypoint2D &kp) {
+    kp = Keypoint2D{};
+    kp.occluded = true;
+}
 
 // ── 3D label provenance ──
 // Tracks where a Keypoint3D's values came from.
@@ -297,17 +313,18 @@ inline bool any_instance_has_manual_labels(const FrameInstances &fis) {
 inline bool frame_has_any_labels(const FrameAnnotation &fa) {
     for (const auto &cam : fa.cameras) {
         for (const auto &kp : cam.keypoints)
-            if (kp.labeled) return true;
+            if (keypoint2d_assessed(kp)) return true;
         if (cam.has_bbox() || cam.has_obb()) return true;
     }
     return false;
 }
 
-// Check if any keypoint in the frame is labeled (any camera)
+// Check if any keypoint in the frame is assessed (placed or explicitly
+// occluded) in any camera.
 inline bool frame_has_any_keypoints(const FrameAnnotation &fa) {
     for (const auto &cam : fa.cameras)
         for (const auto &kp : cam.keypoints)
-            if (kp.labeled) return true;
+            if (keypoint2d_assessed(kp)) return true;
     return false;
 }
 
@@ -322,7 +339,8 @@ inline bool frame_has_any_manual_labels(const FrameAnnotation &fa) {
     // hand-made data is caught by the 2D pass below or by needs_improvement.
     for (const auto &cam : fa.cameras)
         for (const auto &kp : cam.keypoints)
-            if (kp.labeled && kp.source == LabelSource::Manual) return true;
+            if ((kp.occluded && kp.source == LabelSource::Manual) ||
+                (kp.labeled && kp.source == LabelSource::Manual)) return true;
     return false;
 }
 
@@ -333,20 +351,30 @@ inline bool project_has_any_manual_labels(const AnnotationMap &amap) {
     return false;
 }
 
-// Check if all keypoints on all cameras are labeled
+// Check if all keypoints on all cameras are assessed (visible or explicitly
+// occluded).
 inline bool frame_is_complete(const FrameAnnotation &fa) {
     if (fa.cameras.empty()) return false;
     for (const auto &cam : fa.cameras)
         for (const auto &kp : cam.keypoints)
-            if (!kp.labeled) return false;
+            if (!keypoint2d_assessed(kp)) return false;
     return true;
 }
 
-// Check if all 3D keypoints are triangulated
+// Check if all keypoints that are visible in at least one camera are
+// triangulated. A point assessed as missing in every camera has no 3D point to
+// triangulate and therefore does not make a frame incomplete.
 inline bool frame_is_fully_triangulated(const FrameAnnotation &fa, int num_nodes) {
-    for (int k = 0; k < num_nodes; ++k)
-        if (k >= (int)fa.kp3d.size() || !fa.kp3d[k].triangulated)
+    for (int k = 0; k < num_nodes; ++k) {
+        bool visible = false;
+        for (const auto &cam : fa.cameras)
+            if (k < (int)cam.keypoints.size() && cam.keypoints[k].labeled) {
+                visible = true;
+                break;
+            }
+        if (visible && (k >= (int)fa.kp3d.size() || !fa.kp3d[k].triangulated))
             return false;
+    }
     return true;
 }
 
@@ -390,14 +418,22 @@ inline KpProgress frame_kp_progress(const FrameAnnotation &fa, int num_nodes,
     for (int n = 0; n < num_nodes; ++n) {
         bool node_placed = false;
         for (const auto &cam : fa.cameras)
-            if (n < (int)cam.keypoints.size() && cam.keypoints[n].labeled) {
+            if (n < (int)cam.keypoints.size() &&
+                keypoint2d_assessed(cam.keypoints[n])) {
                 node_placed = true;
                 break;
             }
         bool node_tri = n < (int)fa.kp3d.size() && fa.kp3d[n].triangulated;
+        bool node_visible = false;
+        for (const auto &cam : fa.cameras)
+            if (n < (int)cam.keypoints.size() && cam.keypoints[n].labeled) {
+                node_visible = true;
+                break;
+            }
         if (node_placed) {
             ++placed;
-            if (!node_tri) ++placed_untriangulated;
+            // A node missing in every camera has no 3D observation to solve.
+            if (node_visible && !node_tri) ++placed_untriangulated;
         }
     }
     if (placed > 0 && placed_untriangulated == 0) return KpProgress::Triangulated;

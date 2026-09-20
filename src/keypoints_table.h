@@ -87,7 +87,10 @@ inline void DrawKeypointsTable(AppContext &ctx, float height) {
                 // call TableHeadersRow(): its horizontal cells duplicated the
                 // angled labels. Clicking a keypoint's angled header is handled
                 // after the body rows, gated to the header Y-band.
-                ImGui::TableSetupScrollFreeze(1, 1);
+                // 1 column + 2 rows: the angled header and the 3D row
+                // submitted right below it, so a sixteen-camera rig cannot
+                // scroll the solve out of sight.
+                ImGui::TableSetupScrollFreeze(1, 2);
 
                 // Angled header row, but with per-column TEXT color so a
                 // selected keypoint's slanted NAME itself changes color. This
@@ -169,18 +172,35 @@ inline void DrawKeypointsTable(AppContext &ctx, float height) {
                         is_view_focused[row] && keypoints_find;
 
                     ImGui::TableSetColumnIndex(0);
-                    // Highlight only the camera-name cell, not the whole row:
-                    // tinting every column fights with the per-cell keypoint
-                    // state colors drawn below.
-                    if (row_focused)
-                        ImGui::TableSetBgColor(
-                            ImGuiTableBgTarget_CellBg,
-                            ImGui::GetColorU32(ImVec4(0.7f, 0.3f, 0.3f, 0.65f)));
                     if (first_body_top < 0.0f)
                         first_body_top = ImGui::GetCursorScreenPos().y;
                     ImGui::AlignTextToFramePadding();
-                    ImGui::Text("%s", row < (int)pm.camera_names.size()
-                        ? pm.camera_names[row].c_str() : "?");
+                    // Clicking the name brings that camera's view to the
+                    // front. Only SetWindowFocus is needed: red.cpp notices
+                    // the focus change next frame and moves the highlight
+                    // here, so the two cannot disagree about which view is
+                    // current.
+                    if (row < (int)pm.camera_names.size()) {
+                        const std::string &cam_name = pm.camera_names[row];
+                        ImGui::PushID(row);
+                        // The Selectable IS the focus highlight, restyled to
+                        // the red the cell tint used, so there is one thing
+                        // drawing this state rather than two.
+                        ImGui::PushStyleColor(ImGuiCol_Header,
+                                              ImVec4(0.7f, 0.3f, 0.3f, 0.65f));
+                        const bool clicked =
+                            ImGui::Selectable(cam_name.c_str(), row_focused,
+                                              ImGuiSelectableFlags_None);
+                        ImGui::PopStyleColor();
+                        if (clicked)
+                            ImGui::SetWindowFocus(cam_name.c_str());
+                        if (ImGui::IsItemHovered())
+                            ImGui::SetTooltip("Bring %s to the front",
+                                              cam_name.c_str());
+                        ImGui::PopID();
+                    } else {
+                        ImGui::Text("?");
+                    }
 
                     for (int column = 1; column < columns_count; column++) {
                         if (ImGui::TableSetColumnIndex(column)) {
@@ -200,6 +220,15 @@ inline void DrawKeypointsTable(AppContext &ctx, float height) {
                                     row < (int)fa.cameras.size() &&
                                     node < (int)fa.cameras[row].keypoints.size() &&
                                     fa.cameras[row].keypoints[node].labeled;
+                                const bool occluded =
+                                    row < (int)fa.cameras.size() &&
+                                    node < (int)fa.cameras[row].keypoints.size() &&
+                                    fa.cameras[row].keypoints[node].occluded;
+                                const bool user_annotated =
+                                    labeled && fa.cameras[row].keypoints[node].source ==
+                                                   LabelSource::Manual;
+                                const bool projected =
+                                    labeled && fa.cameras[row].keypoints[node].projected;
                                 ImVec4 node_color = ImVec4(0, 0, 0, 0);
 
                                 // Fill shows placement status regardless of
@@ -210,16 +239,14 @@ inline void DrawKeypointsTable(AppContext &ctx, float height) {
                                 if (labeled) {
                                     node_color =
                                         skeleton.node_colors[node];
-                                    node_color.w = 0.9f;
+                                    node_color.w = projected ? 0.5f : 0.9f;
+                                } else if (occluded) {
+                                    node_color = ImVec4(0.85f, 0.25f, 0.25f, 0.9f);
                                 } else if (kc.is_selected(node)) {
                                     // Selected but empty: tint so the selection
                                     // is visible in the body too.
                                     node_color = sel_fill;
                                 }
-
-                                const bool triangulated =
-                                    node < (int)fa.kp3d.size() &&
-                                    fa.kp3d[node].triangulated;
 
                                 // The whole cell is a click target: clicking
                                 // sets this keypoint active for this camera view.
@@ -253,24 +280,34 @@ inline void DrawKeypointsTable(AppContext &ctx, float height) {
                                         row < (int)pm.camera_names.size()) {
                                         if (kc.count() >= 2)
                                             ImGui::SetTooltip(
-                                                "%s / %s\n"
+                                                "%s / %s\n%s\n"
                                                 "Click: set active   Delete: remove selected set (%d)",
                                                 pm.camera_names[row].c_str(),
                                                 skeleton.node_names[node].c_str(),
+                                                occluded ? "occluded / outside frame" :
+                                                (user_annotated ? "user annotated" : "projected from 3D"),
                                                 kc.count());
                                         else
                                             ImGui::SetTooltip(
-                                                "%s / %s\n"
+                                                "%s / %s\n%s\n"
                                                 "Click: set active   Delete: remove from this camera",
                                                 pm.camera_names[row].c_str(),
-                                                skeleton.node_names[node].c_str());
+                                                skeleton.node_names[node].c_str(),
+                                                occluded ? "occluded / outside frame" :
+                                                (user_annotated ? "user annotated" : "projected from 3D"));
                                     }
                                 }
-                                // Triangulated marker, drawn over the cell.
-                                if (triangulated)
+                                // Keep the legacy T marker, but make it
+                                // per-camera: it marks a value projected from
+                                // 3D, while a manually annotated view has no T.
+                                if (projected)
                                     ImGui::GetWindowDrawList()->AddText(
                                         ImVec2(p0.x + 2.0f, p0.y),
                                         IM_COL32(255, 255, 255, 255), "T");
+                                if (occluded)
+                                    ImGui::GetWindowDrawList()->AddText(
+                                        ImVec2(p0.x + 2.0f, p0.y),
+                                        IM_COL32(255, 120, 120, 255), "X");
                                 ImGui::PopID();
 
                                 ImU32 cell_bg_color =
@@ -284,6 +321,76 @@ inline void DrawKeypointsTable(AppContext &ctx, float height) {
 
                     ImGui::PopID();
                 };
+
+                // === 3D row ===
+                // The solve, per keypoint, pinned under the header and above
+                // the 2D rows it came from. Its state used to be reachable
+                // only by hovering each point in a camera view one at a time,
+                // and the Triangulated/Imported split was not visible at all
+                // -- which matters most on a tailcycle session, where every
+                // node arrives Imported and you need to see which ones you
+                // have actually re-solved.
+                if (keypoints_find && !project_is_2d(ctx.pm) &&
+                    scene->num_cams > 1) {
+                    const auto &fa = instance_or_first(
+                        annotations.at(current_frame_num), ctx.active_instance);
+                    ImGui::PushID("row3d");
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0);
+                    // First body row now, so it marks where the angled-header
+                    // band ends -- otherwise clicks here would be taken for
+                    // header clicks and would select keypoint columns.
+                    if (first_body_top < 0.0f)
+                        first_body_top = ImGui::GetCursorScreenPos().y;
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::TextUnformatted("3D");
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip(
+                            "Triangulated position per keypoint, for the animal "
+                            "being edited.\nFilled = solved here, outlined = "
+                            "imported with the data.");
+
+                    for (int column = 1; column < columns_count; column++) {
+                        if (!ImGui::TableSetColumnIndex(column)) continue;
+                        const int node = column - 1;
+                        if (node >= (int)fa.kp3d.size()) continue;
+                        const Keypoint3D &k3 = fa.kp3d[node];
+
+                        float cell_w = ImGui::GetContentRegionAvail().x;
+                        if (cell_w < 1.0f) cell_w = 1.0f;
+                        ImGui::PushID(column);
+                        ImGui::InvisibleButton(
+                            "##kp3dcell",
+                            ImVec2(cell_w, ImGui::GetFrameHeight()));
+                        if (k3.triangulated && ImGui::IsItemHovered())
+                            ImGui::SetTooltip(
+                                "%s\n%s\n(%.2f, %.2f, %.2f)",
+                                node < (int)skeleton.node_names.size()
+                                    ? skeleton.node_names[node].c_str() : "",
+                                k3.source == Kp3DSource::Imported
+                                    ? "imported" : "triangulated",
+                                k3.x, k3.y, k3.z);
+                        ImGui::PopID();
+
+                        if (k3.triangulated &&
+                            k3.source == Kp3DSource::Imported) {
+                            const ImVec2 cp = ImGui::GetStyle().CellPadding;
+                            const ImVec2 rmin = ImGui::GetItemRectMin();
+                            const ImVec2 rmax = ImGui::GetItemRectMax();
+                            ImGui::GetWindowDrawList()->AddRect(
+                                ImVec2(rmin.x - cp.x, rmin.y - cp.y),
+                                ImVec2(rmax.x + cp.x, rmax.y + cp.y),
+                                ImGui::ColorConvertFloat4ToU32(
+                                    kLabelTriangulated));
+                        } else if (k3.triangulated) {
+                            ImVec4 c = kLabelTriangulated;
+                            c.w = 0.65f;
+                            ImGui::TableSetBgColor(ImGuiTableBgTarget_CellBg,
+                                                   ImGui::GetColorU32(c));
+                        }
+                    }
+                    ImGui::PopID();
+                }
 
                 // Render focused row first
                 if (focused_row != -1) {

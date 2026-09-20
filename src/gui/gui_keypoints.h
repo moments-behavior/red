@@ -34,29 +34,113 @@ inline ImVec4 instance_tint(int instance) {
 // (clicked or dragged). The caller uses that to make the animal you just
 // grabbed the one the Labeling Tool is editing -- otherwise you drag animal 2
 // and every panel keeps reporting animal 0.
+// Which keypoint the right-click context menu is acting on. gui_plot_keypoints
+// runs once per (view, instance), so the menu has to remember which call owns
+// it -- otherwise every view would draw the same popup.
+struct KeypointMenuTarget {
+    int view = -1;
+    int instance = -1;
+    u32 node = 0;
+};
+inline KeypointMenuTarget &keypoint_menu_target() {
+    static KeypointMenuTarget t;
+    return t;
+}
+
+inline bool reproject_3d_to_cam(const Eigen::Vector3d &pt3d,
+                                const CameraParams &cp, int W, int H,
+                                double &out_x, double &out_y);
+
+// `calib` and `scene` are optional and only used to place the cross that marks
+// an occluded keypoint: the 2D is gone by definition, so the only position
+// worth showing is where the frame's 3D lands in this view.
 inline bool gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
                                int view_idx, int num_cams,
                                ImVec4 active_color = ImVec4(1, 1, 1, 1),
                                int instance = 0, bool is_active = true,
-                               bool show_names = false) {
+                               bool show_names = false,
+                               const std::vector<CameraParams> *calib = nullptr,
+                               const RenderScene *scene = nullptr) {
     if (view_idx >= (int)fa.cameras.size()) return false;
     auto &cam = fa.cameras[view_idx];
     bool touched = false;
+    // Whether the cursor is on a marker. R means "delete what you are pointing
+    // at", and that is only knowable here: the shortcut block in red.cpp runs
+    // before this function each frame, so it cannot see the hover state.
+    bool any_point_hovered = false;
+
+    // Where each node is drawn in this view, and why. A labelled node is at
+    // its own 2D; an occluded one has none, so it falls back to where the
+    // frame's 3D projects. Computed once because both the marker and the
+    // skeleton edges need it -- edges used to require both ends `labeled`, so
+    // occluding one node cut every limb through it and the skeleton fell apart.
+    struct NodeDraw { double x = 0, y = 0; bool has = false; bool inferred = false; };
+    // Reused rather than allocated: this runs once per camera per animal per
+    // frame -- eighty times on a sixteen-camera, five-animal rig -- and a
+    // fresh vector each time would be eighty allocations a frame for a buffer
+    // that is always the same size. ImGui is single-threaded, so one is safe.
+    static std::vector<NodeDraw> draw_pos;
+    draw_pos.assign((size_t)skeleton->num_nodes, NodeDraw{});
+    for (u32 n = 0; n < skeleton->num_nodes; n++) {
+        if (n >= (u32)cam.keypoints.size()) break;
+        const Keypoint2D &kp = cam.keypoints[n];
+        if (kp.labeled) {
+            draw_pos[n] = {kp.x, kp.y, true, false};
+        } else if (kp.occluded && calib && scene && n < fa.kp3d.size() &&
+                   fa.kp3d[n].triangulated && view_idx < (int)calib->size()) {
+            double rx = 0.0, ry = 0.0;
+            const Eigen::Vector3d p3(fa.kp3d[n].x, fa.kp3d[n].y, fa.kp3d[n].z);
+            if (reproject_3d_to_cam(p3, (*calib)[view_idx],
+                                    (int)scene->image_width[view_idx],
+                                    (int)scene->image_height[view_idx], rx, ry))
+                draw_pos[n] = {rx, ry, true, true};
+        }
+    }
 
     float pt_size = 6.0f;
-    for (u32 node = 0; node < skeleton->num_nodes; node++) {
-        if (node >= (u32)cam.keypoints.size()) break;
+    // The ACTIVE node is drawn last. Two keypoints of one animal can sit on
+    // the same pixel -- and legitimately do, when the anatomy overlaps in a
+    // view -- and ImGui gives a contested hover to whichever item was
+    // submitted last. Drawing 0..n-1 in order meant the higher node index
+    // always won, so the other one could not be grabbed at all. Now A/D/Q/E
+    // choose which node is reachable, and hit-testing agrees with the
+    // highlight that already marks the active node as foremost.
+    auto draw_node = [&](u32 node) {
+        if (node >= (u32)cam.keypoints.size()) return;
+
+        // An occluded keypoint has no 2D coordinates -- that is what the
+        // assessment means -- but the frame's 3D for that node usually still
+        // exists, solved from the cameras that CAN see it. Drawing nothing
+        // made an assessed node look identical to one nobody has reached yet.
+        // A cross marks where that 3D lands in this view: not something to
+        // drag, a note saying "it is here, you just cannot see it".
+        if (draw_pos[node].has && draw_pos[node].inferred) {
+            const ImVec2 px = ImPlot::PlotToPixels(draw_pos[node].x,
+                                                   draw_pos[node].y);
+            ImVec4 c = (node < skeleton->node_colors.size())
+                           ? skeleton->node_colors.at(node)
+                           : ImVec4(1, 1, 1, 1);
+            c.w = is_active ? 0.85f : 0.45f;
+            const ImU32 col = ImGui::ColorConvertFloat4ToU32(c);
+            const float r = 5.0f;
+            ImDrawList *dl = ImPlot::GetPlotDrawList();
+            dl->AddLine(ImVec2(px.x - r, px.y - r), ImVec2(px.x + r, px.y + r),
+                        col, 1.6f);
+            dl->AddLine(ImVec2(px.x - r, px.y + r), ImVec2(px.x + r, px.y - r),
+                        col, 1.6f);
+        }
+
         if (cam.keypoints[node].labeled) {
             ImVec4 node_color;
             if (cam.active_id == node) {
                 node_color = active_color; // active keypoint: user-selected color
-                node_color.w = 0.9;
                 pt_size = 8.0f;
             } else {
                 node_color = skeleton->node_colors.at(node);
-                node_color.w = 0.9;
                 pt_size = 6.0f;
             }
+            node_color.w = 0.9f;
+
             // Tint by animal, and dim the ones that are not being edited.
             const ImVec4 tint = instance_tint(instance);
             node_color.x *= tint.x; node_color.y *= tint.y; node_color.z *= tint.z;
@@ -66,12 +150,40 @@ inline bool gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
             bool drag_point_clicked;
             bool drag_point_hovered;
             bool drag_point_modified;
+            // A derived point is drawn as a TRIANGLE, a point you placed as a
+            // circle. Shape reads against any background; the dimmed alpha
+            // this replaces had to compete with whatever the frame showed
+            // underneath, which is the one thing a keypoint must not do.
+            //
+            // DragPoint only ever draws AddCircleFilled in the colour it is
+            // given, so a transparent colour hides the marker while keeping
+            // its hit-testing and dragging intact, and the triangle goes on
+            // top by hand.
+            const bool derived = cam.keypoints[node].projected;
+            ImVec4 marker_color = node_color;
+            if (derived) marker_color.w = 0.0f;
+
             drag_point_modified = ImPlot::DragPoint(
                 id, &cam.keypoints[node].x,
-                &cam.keypoints[node].y, node_color,
+                &cam.keypoints[node].y, marker_color,
                 pt_size, ImPlotDragToolFlags_None, &drag_point_clicked,
                 &drag_point_hovered);
+
+            if (derived) {
+                const ImVec2 c = ImPlot::PlotToPixels(cam.keypoints[node].x,
+                                                      cam.keypoints[node].y);
+                // Equilateral, same visual weight as the circle it replaces.
+                const float r = pt_size * 1.25f;
+                const ImVec2 a(c.x, c.y - r);
+                const ImVec2 b(c.x - r * 0.866f, c.y + r * 0.5f);
+                const ImVec2 d(c.x + r * 0.866f, c.y + r * 0.5f);
+                ImPlot::GetPlotDrawList()->AddTriangleFilled(
+                    a, b, d, ImGui::ColorConvertFloat4ToU32(node_color));
+            }
             if (drag_point_modified) {
+                // A drag turns a projected point back into a user annotation.
+                cam.keypoints[node].source = LabelSource::Manual;
+                cam.keypoints[node].projected = false;
                 fa.kp3d[node].clear();
                 touched = true;
             }
@@ -96,6 +208,7 @@ inline bool gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
             }
 
             if (drag_point_hovered) {
+                any_point_hovered = true;
                 std::string label;
                 if (node < skeleton->node_names.size())
                     label = skeleton->node_names[node];
@@ -115,8 +228,44 @@ inline bool gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
                         textPos, IM_COL32(220, 20, 60, 255), label.c_str());
                 }
 
+                if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+                    KeypointMenuTarget &t = keypoint_menu_target();
+                    t.view = view_idx;
+                    t.instance = instance;
+                    t.node = node;
+                    ImGui::OpenPopup("##keypoint_menu");
+                }
+
+                if (ImGui::IsKeyPressed(ImGuiKey_M,
+                                        false)) // occlude the hovered keypoint
+                {
+                    // Clear the 3D only if this point was an INPUT to it.
+                    // Triangulation uses Manual points alone, so occluding a
+                    // projected point -- the common case: a reprojection
+                    // landing where the body hides the part -- says nothing
+                    // about a solve it never fed, and clearing would throw
+                    // away a 3D point the other views earned. Occluding a
+                    // Manual point does invalidate the solve, so that one
+                    // still clears.
+                    const bool fed_solve =
+                        cam.keypoints[node].labeled &&
+                        cam.keypoints[node].source == LabelSource::Manual;
+                    mark_keypoint2d_occluded(cam.keypoints[node]);
+                    if (fed_solve && node < fa.kp3d.size())
+                        fa.kp3d[node].clear();
+                    // Advance, same as the active-node path below. M means
+                    // "mark this one occluded and move on" wherever it is
+                    // pressed: without this, marking a hovered keypoint left
+                    // the active node where it was, and since the marked point
+                    // stops being drawn the NEXT press fell through to that
+                    // path instead -- so M appeared to mark on one press and
+                    // merely advance on the next.
+                    cam.active_id =
+                        (node < skeleton->num_nodes - 1) ? node + 1 : node;
+                }
+
                 if (ImGui::IsKeyPressed(ImGuiKey_R,
-                                        false)) // delete active keypoint
+                                        false)) // delete the hovered keypoint
                 {
                     cam.keypoints[node] = Keypoint2D{}; // reset all fields
                     cam.active_id = node;
@@ -124,7 +273,7 @@ inline bool gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
 
                 if (ImGui::IsKeyPressed(
                         ImGuiKey_F,
-                        false)) // Delete active keypoints from all the views
+                        false)) // Delete this keypoint from all the views
                 {
                     for (int cam_idx = 0; cam_idx < num_cams; cam_idx++) {
                         if (cam_idx >= (int)fa.cameras.size()) break;
@@ -139,15 +288,123 @@ inline bool gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
                 touched = true;
             }
         }
+    };
+    for (u32 node = 0; node < skeleton->num_nodes; node++)
+        if (node != cam.active_id)
+            draw_node(node);
+    if (cam.active_id < skeleton->num_nodes)
+        draw_node(cam.active_id);
+
+    // The context menu for the keypoint that was right-clicked. Drawn after
+    // the node loop so it is not nested inside a DragPoint's item scope.
+    {
+        KeypointMenuTarget &t = keypoint_menu_target();
+        if (t.view == view_idx && t.instance == instance &&
+            t.node < (u32)cam.keypoints.size() && t.node < fa.kp3d.size()) {
+            if (ImGui::BeginPopup("##keypoint_menu")) {
+                Keypoint2D &kp = cam.keypoints[t.node];
+                if (t.node < skeleton->node_names.size())
+                    ImGui::TextDisabled("%s",
+                                        skeleton->node_names[t.node].c_str());
+                ImGui::Separator();
+
+                // Only Manual points feed triangulation, so this is what
+                // promotes a reprojection you have judged correct into an
+                // input for the next solve.
+                ImGui::BeginDisabled(!kp.projected);
+                if (ImGui::MenuItem("Accept as manual")) {
+                    kp.source = LabelSource::Manual;
+                    kp.projected = false;
+                }
+                ImGui::EndDisabled();
+                if (!kp.projected && ImGui::IsItemHovered(
+                                         ImGuiHoveredFlags_AllowWhenDisabled))
+                    ImGui::SetTooltip("Already a manual label");
+
+                if (ImGui::MenuItem("Mark occluded")) {
+                    const bool fed_solve =
+                        kp.labeled && kp.source == LabelSource::Manual;
+                    mark_keypoint2d_occluded(kp);
+                    if (fed_solve) fa.kp3d[t.node].clear();
+                }
+                if (ImGui::MenuItem("Delete")) {
+                    kp = Keypoint2D{};
+                    cam.active_id = t.node;
+                }
+                ImGui::EndPopup();
+            }
+        }
+    }
+
+    // M handles both cases, which widens what PR #26 wrote. Its comment said M
+    // was "intentionally tied to the active node, not to hovering an existing
+    // point", reasoning that an occluded point has no coordinates and so has
+    // no marker to aim at. That holds for the node-with-no-marker case, which
+    // is exactly this fallback -- but the common case is the other one: a
+    // point is drawn, you can see it, and you have decided it is occluded.
+    // Requiring it to be made active first is a step for nothing.
+    //
+    // With no marker under the cursor there is nothing to point at, so R and M
+    // fall back to the active node -- neither then needs pixel-perfect
+    // placement. Both live here rather than with the other shortcuts in
+    // red.cpp because that block runs BEFORE this function each frame and so
+    // cannot know what the cursor is on.
+    const bool plot_keys_ok = is_active && !any_point_hovered &&
+                              ImPlot::IsPlotHovered() &&
+                              !ImGui::GetIO().WantTextInput &&
+                              cam.active_id < cam.keypoints.size();
+
+    if (plot_keys_ok && ImGui::IsKeyPressed(ImGuiKey_R, false)) {
+        cam.keypoints[cam.active_id] = Keypoint2D{};
+    }
+
+    // Advances afterwards, so M can be tapped down a skeleton. The hovered
+    // case above does not advance: there you are pointing at one keypoint on
+    // purpose.
+    if (plot_keys_ok && ImGui::IsKeyPressed(ImGuiKey_M, false)) {
+        const bool fed_solve =
+            cam.keypoints[cam.active_id].labeled &&
+            cam.keypoints[cam.active_id].source == LabelSource::Manual;
+        mark_keypoint2d_occluded(cam.keypoints[cam.active_id]);
+        if (fed_solve && cam.active_id < fa.kp3d.size())
+            fa.kp3d[cam.active_id].clear();
+        if (cam.active_id < skeleton->num_nodes - 1)
+            cam.active_id++;
     }
 
     for (u32 edge = 0; edge < skeleton->num_edges; edge++) {
         auto [a, b] = skeleton->edges[edge];
 
-        if (a < (u32)cam.keypoints.size() && b < (u32)cam.keypoints.size() &&
-            cam.keypoints[a].labeled && cam.keypoints[b].labeled) {
-            double xs[2]{cam.keypoints[a].x, cam.keypoints[b].x};
-            double ys[2]{cam.keypoints[a].y, cam.keypoints[b].y};
+        if (a >= (u32)draw_pos.size() || b >= (u32)draw_pos.size()) continue;
+        if (!draw_pos[a].has || !draw_pos[b].has) continue;
+
+        double xs[2]{draw_pos[a].x, draw_pos[b].x};
+        double ys[2]{draw_pos[a].y, draw_pos[b].y};
+        if (draw_pos[a].inferred || draw_pos[b].inferred) {
+            // A limb reaching an occluded node is DASHED: the segment is real,
+            // but one end is inferred from the 3D rather than seen in this
+            // camera. Dashes rather than a fainter line, for the same reason
+            // the markers use shape -- a washed-out line has to compete with
+            // whatever the frame shows underneath it.
+            //
+            // Drawn by hand: ImPlot::PlotLine has no dash pattern.
+            const ImVec2 p0 = ImPlot::PlotToPixels(xs[0], ys[0]);
+            const ImVec2 p1 = ImPlot::PlotToPixels(xs[1], ys[1]);
+            const float dx = p1.x - p0.x, dy = p1.y - p0.y;
+            const float len = std::sqrt(dx * dx + dy * dy);
+            if (len > 0.5f) {
+                const float ux = dx / len, uy = dy / len;
+                const ImU32 col = ImGui::ColorConvertFloat4ToU32(
+                    ImVec4(0.85f, 0.85f, 0.85f, is_active ? 0.9f : 0.45f));
+                ImDrawList *dl = ImPlot::GetPlotDrawList();
+                const float dash = 6.0f, gap = 4.0f;
+                for (float t = 0.0f; t < len; t += dash + gap) {
+                    const float e = std::min(t + dash, len);
+                    dl->AddLine(ImVec2(p0.x + ux * t, p0.y + uy * t),
+                                ImVec2(p0.x + ux * e, p0.y + uy * e), col, 1.6f);
+                }
+            }
+        } else {
             ImPlot::PlotLine("##line", xs, ys, 2);
         }
     }
@@ -295,13 +552,16 @@ inline bool solve_midline_constraint(FrameAnnotation &fa,
             if (v == side) continue;
             if (v >= (int)fa.cameras.size()) continue;
             if (node >= (u32)fa.cameras[v].keypoints.size()) continue;
+            if (fa.cameras[v].keypoints[node].occluded) continue;
             double rx, ry;
             if (reproject_3d_to_cam(X, cp[v], scene->image_width[v],
                                     scene->image_height[v], rx, ry)) {
                 fa.cameras[v].keypoints[node].x = rx;
                 fa.cameras[v].keypoints[node].y = ry;
                 fa.cameras[v].keypoints[node].labeled = true;
+                fa.cameras[v].keypoints[node].occluded = false;
                 fa.cameras[v].keypoints[node].source = LabelSource::Predicted;
+                fa.cameras[v].keypoints[node].projected = true;
             }
         }
     }
@@ -343,7 +603,8 @@ inline void reprojection(FrameAnnotation &fa, SkeletonContext *skeleton,
         for (u32 view_idx = 0; view_idx < scene->num_cams; view_idx++) {
             if (view_idx < (u32)fa.cameras.size() &&
                 node < (u32)fa.cameras[view_idx].keypoints.size() &&
-                fa.cameras[view_idx].keypoints[node].labeled) {
+                fa.cameras[view_idx].keypoints[node].labeled &&
+                fa.cameras[view_idx].keypoints[node].source == LabelSource::Manual) {
                 num_views_labeled++;
             }
         }
@@ -356,7 +617,8 @@ inline void reprojection(FrameAnnotation &fa, SkeletonContext *skeleton,
             for (u32 view_idx = 0; view_idx < scene->num_cams; view_idx++) {
                 if (view_idx >= (u32)fa.cameras.size()) continue;
                 if (node >= (u32)fa.cameras[view_idx].keypoints.size()) continue;
-                if (fa.cameras[view_idx].keypoints[node].labeled) {
+                if (fa.cameras[view_idx].keypoints[node].labeled &&
+                    fa.cameras[view_idx].keypoints[node].source == LabelSource::Manual) {
                     Eigen::Vector2d pt(
                         fa.cameras[view_idx].keypoints[node].x,
                         (double)scene->image_height[view_idx] -
@@ -380,6 +642,8 @@ inline void reprojection(FrameAnnotation &fa, SkeletonContext *skeleton,
                 }
             }
 
+            // Always solve from the current 2D observations, even if this
+            // keypoint already has a triangulated 3D value.
             Eigen::Vector3d pt3d =
                 red_math::triangulatePoints(undist_pts, proj_mats);
 
@@ -391,6 +655,18 @@ inline void reprojection(FrameAnnotation &fa, SkeletonContext *skeleton,
             for (u32 view_idx = 0; view_idx < scene->num_cams; view_idx++) {
                 if (view_idx >= (u32)fa.cameras.size()) continue;
                 if (node >= (u32)fa.cameras[view_idx].keypoints.size()) continue;
+
+                // Refresh every camera's coordinates, but retain the visible
+                // status of a point that was explicitly user-annotated. A
+                // refreshed user annotation remains visible; derived values
+                // are marked projected and are excluded from the next solve.
+                auto &kp2d = fa.cameras[view_idx].keypoints[node];
+                // Preserve an explicit missing/occluded assessment when
+                // refreshing the other views from a 3D solve.
+                if (kp2d.occluded) continue;
+                const bool user_annotated =
+                    kp2d.labeled && kp2d.source == LabelSource::Manual;
+                if (!user_annotated) kp2d = Keypoint2D{};
 
                 if (telecentric) {
                     // Telecentric reprojection
@@ -405,9 +681,15 @@ inline void reprojection(FrameAnnotation &fa, SkeletonContext *skeleton,
                                reproj(1);
                     if (x > 0 && x < scene->image_width[view_idx] && y > 0 &&
                         y < scene->image_height[view_idx]) {
-                        fa.cameras[view_idx].keypoints[node].x = x;
-                        fa.cameras[view_idx].keypoints[node].y = y;
-                        fa.cameras[view_idx].keypoints[node].labeled = true;
+                        kp2d.x = x;
+                        kp2d.y = y;
+                        kp2d.labeled = true;
+                        kp2d.occluded = false;
+                        kp2d.source = user_annotated ? LabelSource::Manual
+                                                      : LabelSource::Predicted;
+                        // A T-key refresh may move a user annotation, but it
+                        // must not turn that camera into a derived label.
+                        kp2d.projected = !user_annotated;
                     }
                 } else {
                     // Perspective reprojection (matrix-based, safe for det(R)=-1)
@@ -426,9 +708,15 @@ inline void reprojection(FrameAnnotation &fa, SkeletonContext *skeleton,
                                    reproj(1);
                         if (x > 0 && x < scene->image_width[view_idx] &&
                             y > 0 && y < scene->image_height[view_idx]) {
-                            fa.cameras[view_idx].keypoints[node].x = x;
-                            fa.cameras[view_idx].keypoints[node].y = y;
-                            fa.cameras[view_idx].keypoints[node].labeled = true;
+                            kp2d.x = x;
+                            kp2d.y = y;
+                            kp2d.labeled = true;
+                            kp2d.occluded = false;
+                            kp2d.source = user_annotated ? LabelSource::Manual
+                                                          : LabelSource::Predicted;
+                            // Preserve the per-camera user annotation state
+                            // even though T refreshed its coordinates.
+                            kp2d.projected = !user_annotated;
                         }
                     }
                 }

@@ -174,31 +174,36 @@ inline void DrawLabelingToolWindow(
         if (scene->num_cams > 1) {
             ImGui::SameLine();
 
-            bool keypoint_triangulated_all = true;
-            if (keypoints_find && scene->num_cams > 1) {
+            // Tinted with the state of the frame you are on, in the same
+            // colours the timeline ticks and the legend chips use -- so the
+            // button and the chip for this frame always agree. It used to be a
+            // magenta that meant only "not everything is triangulated", a
+            // third thing to learn for a binary the legend already says
+            // better.
+            bool apply_color = false;
+            if (keypoints_find) {
                 const auto &fa = instance_or_first(
                     annotations.at(current_frame_num), ctx.active_instance);
-                for (int j = 0; j < skeleton.num_nodes; j++) {
-                    if (!fa.kp3d[j].triangulated) {
-                        keypoint_triangulated_all = false;
-                        break;
-                    }
+                const KpProgress st = frame_kp_progress(
+                    fa, skeleton.num_nodes, (int)scene->num_cams,
+                    project_is_2d(pm), skeleton.has_skeleton);
+                const ImVec4 *c = nullptr;
+                switch (st) {
+                case KpProgress::Complete:       c = &kLabelComplete; break;
+                case KpProgress::Triangulated:   c = &kLabelTriangulated; break;
+                case KpProgress::Untriangulated: c = &kLabelUntriangulated; break;
+                case KpProgress::None:
+                default: break;
                 }
-            } else {
-                keypoint_triangulated_all = false;
-            }
-            bool apply_color =
-                !keypoint_triangulated_all && keypoints_find;
-            if (apply_color) {
-                ImGui::PushStyleColor(
-                    ImGuiCol_Button,
-                    (ImVec4)ImColor::HSV(0.8, 1.0f, 1.0f));
-                ImGui::PushStyleColor(
-                    ImGuiCol_ButtonHovered,
-                    (ImVec4)ImColor::HSV(0.8, 0.9f, 0.8f));
-                ImGui::PushStyleColor(
-                    ImGuiCol_ButtonActive,
-                    (ImVec4)ImColor::HSV(0.8, 0.9f, 0.5f));
+                if (c) {
+                    apply_color = true;
+                    auto shade = [](const ImVec4 &v, float k) {
+                        return ImVec4(v.x * k, v.y * k, v.z * k, 1.0f);
+                    };
+                    ImGui::PushStyleColor(ImGuiCol_Button, shade(*c, 0.80f));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, shade(*c, 1.0f));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonActive, shade(*c, 0.60f));
+                }
             }
 
             bool can_triangulate = keypoints_find &&

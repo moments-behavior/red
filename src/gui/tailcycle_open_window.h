@@ -156,8 +156,10 @@ inline bool tailcycle_open_session(AppContext &ctx, const std::string &session_d
                     kp.x = px;
                     kp.y = py;
                     kp.labeled = true;
+                    kp.occluded = false;
                     kp.source = LabelSource::Predicted;
                     kp.confidence = k3.confidence;
+                    kp.projected = true;
                     reprojected++;
                 }
             }

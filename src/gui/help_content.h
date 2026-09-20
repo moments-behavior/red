@@ -82,6 +82,11 @@ inline const std::vector<Group> &shortcut_groups() {
         {"Labeling \xE2\x80\x94 hovering an image", "With a skeleton loaded; hover a camera view", Gate::Always, {
             {S::CreateFrame, nullptr, "Create the keypoint set for this frame"},
             {S::PlaceKeypoint, nullptr, "Place the active keypoint at the cursor, then advance to the next node"},
+            {S::MarkOccluded, nullptr, "Mark a keypoint occluded in this camera: the one under the cursor, or the active one (then advance)"},
+            {S::COUNT, "0-9", "Edit the animal with that id, as shown on the Animals buttons. The one being edited draws on top, so this is how you reach a keypoint stacked under another animal's"},
+            {S::NextInstance, nullptr, "Edit the next animal"},
+            {S::NextView, nullptr, "Bring the next camera view to the front (Shift for the previous one)"},
+            {S::COUNT, "R", "Delete the active keypoint on this camera"},
             {S::ActivePrev, nullptr, "Previous active keypoint"},
             {S::ActiveNext, nullptr, "Next active keypoint"},
             {S::ActiveFirst, nullptr, "Jump active keypoint to the first node"},

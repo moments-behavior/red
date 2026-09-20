@@ -459,9 +459,9 @@ bool read_session(const std::string &session_dir, const std::string &group_id,
             if (gid.ok && gid.vals[i] != out->group_id) continue;
             const int inst = instance_of(aid.ok ? aid.vals[i] : std::string("a00"));
             const std::string &s = stt.vals[i];
-            // `unlabeled` is a progress marker a consumer treats as an absent
-            // row; `missing` is an assessed occlusion red cannot represent.
-            if (s == Tailcycle::status::kUnlabeled || s == Tailcycle::status::kMissing) continue;
+            // `unlabeled` is semantically identical to an absent row (§7),
+            // so red intentionally does not materialize it.
+            if (s == Tailcycle::status::kUnlabeled) continue;
             const int f = (int)fr.vals[i];
             if (f < 0 || f >= out->n_frames) continue;
             const int ci = name_index(out->camera_names, cam.vals[i]);
@@ -470,14 +470,33 @@ bool read_session(const std::string &session_dir, const std::string &group_id,
                                     "\" is not in the session's names (rule 6).");
             if (ci < 0) return fail("keypoints.pq: camera \"" + cam.vals[i] +
                                     "\" is not in calibration.toml (rule 6).");
-            if (x.null[i] || y.null[i]) continue;
             Keypoint2D &kp = frame_of((u32)f, inst).cameras[ci].keypoints[ni];
+            const LabelSource session_source =
+                out->labels == Tailcycle::labels::kTracked
+                    ? LabelSource::Predicted : LabelSource::Manual;
+            if (s == Tailcycle::status::kMissing) {
+                mark_keypoint2d_occluded(kp);
+                kp.source = session_source;
+                st.keypoint_rows++;
+                continue;
+            }
+            if (s != Tailcycle::status::kVisible &&
+                s != Tailcycle::status::kProjected)
+                return fail("keypoints.pq: unknown status \"" + s + "\".");
+            if (x.null[i] || y.null[i]) continue;
             kp.x = x.vals[i];
             // Mirror of the export: the format stores y from the top of the
             // image, red works in ImPlot coordinates measured from the bottom.
             kp.y = (double)out->calibration[ci].image_height - y.vals[i];
             kp.labeled = true;
-            kp.source = LabelSource::Imported;
+            kp.occluded = false;
+            kp.projected = (s == Tailcycle::status::kProjected);
+            // `status` is the per-point truth. A visible row remains a
+            // visible/manual observation even when it came from a session
+            // declared `tracked`; the session label must not turn it into a
+            // projected row on the next export.
+            kp.source = kp.projected ? LabelSource::Predicted
+                                      : LabelSource::Manual;
             if (sc.ok && i < sc.null.size() && !sc.null[i]) kp.confidence = (float)sc.vals[i];
             st.keypoint_rows++;
         }
