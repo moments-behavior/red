@@ -1236,15 +1236,40 @@ int main(int argc, char **argv) {
                             ps.play_video ? ps.read_head : select_corr_head;
                         const int shown_frame =
                             displayed_frame_at(disp_head);
+
+                        // The badge means one thing: this view has no frame
+                        // for the instant being shown. Ask that directly --
+                        // is the frame sitting in THIS camera's slot behind
+                        // the frame the others are showing.
+                        //
+                        // Deriving it from the camera's length instead needs
+                        // per_cam_frames to stay accurate across seeks, and
+                        // that has now failed twice: once because nFrame is a
+                        // seek target rather than a count, and once because a
+                        // camera that lands on its last real frame reports
+                        // that as the position. This test reads the buffers
+                        // themselves, so no bookkeeping can drift out from
+                        // under it -- and it needs no contiguity assumption,
+                        // which is what kept image projects out before.
+                        const int this_cam_frame =
+                            scene->display_buffer[j][disp_head]
+                                .frame_number.load();
+                        const bool behind_shown =
+                            shown_frame >= 0 && this_cam_frame < shown_frame;
+
+                        // Kept as a second route in: a camera known to have
+                        // ended is drawn blank even if its stale slot happens
+                        // to agree with the current position. -1 (nothing
+                        // decoding) compares false, so an unknown position
+                        // draws the image rather than blanking every view.
                         const int cam_frames_j =
                             dc_context->per_cam_contiguous
                                 ? dc_context->cam_frames((int)j)
                                 : 0;
-                        // shown_frame is -1 when no camera is decoding, and
-                        // that compares false here, so an unknown position
-                        // draws the image rather than blanking every view.
-                        const bool cam_ended =
+                        const bool past_own_end =
                             cam_frames_j > 0 && shown_frame >= cam_frames_j;
+
+                        const bool cam_ended = behind_shown || past_own_end;
                         if (cam_ended) {
                             DrawCameraEndedBadge(
                                 (float)scene->image_width[j],
