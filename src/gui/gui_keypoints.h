@@ -755,59 +755,69 @@ inline void reprojection(FrameAnnotation &fa, SkeletonContext *skeleton,
                 // point has no coordinates, and it is excluded just above.
                 if (!coords_only && !kp2d.manual) kp2d = Keypoint2D{};
 
+                // Land the projection first, decide what it means second.
+                // Both camera models answer the same question -- is there a
+                // pixel in THIS image for that 3D point -- and the answer has
+                // to be acted on in one place, because "no" is not the same as
+                // "leave whatever was there".
+                double x = 0.0, y = 0.0;
+                bool in_frame = false;
                 if (telecentric) {
-                    // Telecentric reprojection
                     auto reproj = red_math::projectPointTelecentric(
                         pt3d,
                         camera_params[view_idx].projection_mat,
                         camera_params[view_idx].k,
                         camera_params[view_idx].dist_coeffs,
                         camera_params[view_idx].dist_center);
-                    double x = reproj(0);
-                    double y = double(scene->image_height[view_idx]) -
-                               reproj(1);
-                    if (x > 0 && x < scene->image_width[view_idx] && y > 0 &&
-                        y < scene->image_height[view_idx]) {
+                    x = reproj(0);
+                    y = double(scene->image_height[view_idx]) - reproj(1);
+                    in_frame = x > 0 && x < scene->image_width[view_idx] &&
+                               y > 0 && y < scene->image_height[view_idx];
+                } else if (is_in_camera_fov(pt3d, camera_params[view_idx].r,
+                                            camera_params[view_idx].tvec,
+                                            camera_params[view_idx].k,
+                                            scene->image_width[view_idx],
+                                            scene->image_height[view_idx])) {
+                    // Matrix-based, safe for det(R)=-1.
+                    auto reproj = red_math::projectPointR(
+                        pt3d, camera_params[view_idx].r,
+                        camera_params[view_idx].tvec,
+                        camera_params[view_idx].k,
+                        camera_params[view_idx].dist_coeffs);
+                    x = reproj(0);
+                    y = double(scene->image_height[view_idx]) - reproj(1);
+                    in_frame = x > 0 && x < scene->image_width[view_idx] &&
+                               y > 0 && y < scene->image_height[view_idx];
+                }
+
+                if (coords_only) {
+                    // The assessment and its author stand either way; only the
+                    // position is in question. Out of frame there is nowhere to
+                    // put the cross, and the old coordinates are a place the
+                    // solve has already left -- so drop them rather than draw a
+                    // marker at a spot nothing is at any more. The next solve
+                    // that lands in frame puts them back.
+                    if (in_frame) {
                         kp2d.x = x;
                         kp2d.y = y;
-                        if (coords_only) {
-                            kp2d.reprojected = true;
-                            continue;
-                        }
-                        kp2d.occluded = false;
-                        // Coordinate origin only. Authorship is untouched: a
-                        // hand-placed point stays manual through a refresh,
-                        // and one nobody placed simply has no author -- it was
-                        // not predicted by anything, it was computed.
-                        kp2d.set_reprojected();
+                        kp2d.reprojected = true;
+                    } else {
+                        kp2d.x = UNLABELED;
+                        kp2d.y = UNLABELED;
+                        kp2d.reprojected = false;
                     }
-                } else {
-                    // Perspective reprojection (matrix-based, safe for det(R)=-1)
-                    if (is_in_camera_fov(pt3d, camera_params[view_idx].r,
-                                         camera_params[view_idx].tvec,
-                                         camera_params[view_idx].k,
-                                         scene->image_width[view_idx],
-                                         scene->image_height[view_idx])) {
-                        auto reproj = red_math::projectPointR(
-                            pt3d, camera_params[view_idx].r,
-                            camera_params[view_idx].tvec,
-                            camera_params[view_idx].k,
-                            camera_params[view_idx].dist_coeffs);
-                        double x = reproj(0);
-                        double y = double(scene->image_height[view_idx]) -
-                                   reproj(1);
-                        if (x > 0 && x < scene->image_width[view_idx] &&
-                            y > 0 && y < scene->image_height[view_idx]) {
-                            kp2d.x = x;
-                            kp2d.y = y;
-                            if (coords_only) {
-                                kp2d.reprojected = true;
-                                continue;
-                            }
-                            kp2d.occluded = false;
-                            kp2d.set_reprojected();
-                        }
-                    }
+                    continue;
+                }
+
+                if (in_frame) {
+                    kp2d.x = x;
+                    kp2d.y = y;
+                    kp2d.occluded = false;
+                    // Coordinate origin only. Authorship is untouched: a
+                    // hand-placed point stays manual through a refresh, and one
+                    // nobody placed simply has no author -- it was not
+                    // predicted by anything, it was computed.
+                    kp2d.set_reprojected();
                 }
             }
         }
