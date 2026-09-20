@@ -51,16 +51,14 @@ inline bool reproject_3d_to_cam(const Eigen::Vector3d &pt3d,
                                 const CameraParams &cp, int W, int H,
                                 double &out_x, double &out_y);
 
-// `calib` and `scene` are optional and only used to place the cross that marks
-// an occluded keypoint: the 2D is gone by definition, so the only position
-// worth showing is where the frame's 3D lands in this view.
+// Draws only. Every position it needs is already in the keypoints, including
+// an occluded node's -- reprojection() refreshes those -- so it takes no
+// calibration and does no projecting of its own.
 inline bool gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
                                int view_idx, int num_cams,
                                ImVec4 active_color = ImVec4(1, 1, 1, 1),
                                int instance = 0, bool is_active = true,
-                               bool show_names = false,
-                               const std::vector<CameraParams> *calib = nullptr,
-                               const RenderScene *scene = nullptr) {
+                               bool show_names = false) {
     if (view_idx >= (int)fa.cameras.size()) return false;
     auto &cam = fa.cameras[view_idx];
     bool touched = false;

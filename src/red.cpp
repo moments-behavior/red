@@ -1414,8 +1414,7 @@ int main(int argc, char **argv) {
                                             active_keypoint_color(user_settings),
                                             (int)inst,
                                             (int)inst == active_instance,
-                                            display.show_keypoint_names,
-                                            &pm.camera_params, scene))
+                                            display.show_keypoint_names))
                                         grabbed = (int)inst;
                                 };
                                 for (size_t inst = 0; inst < fis_draw.size(); inst++)
