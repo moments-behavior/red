@@ -923,6 +923,33 @@ int main(int argc, char **argv) {
             }
         }
 
+        // RED_ENDBADGE_DEBUG=1: one line per camera per ~20 frames, from
+        // OUTSIDE the draw loop. A camera whose view is a background tab is
+        // never drawn, so instrumenting the draw site only ever reported
+        // whichever view was on screen.
+        {
+            static const bool dbg = getenv("RED_ENDBADGE_DEBUG") != nullptr;
+            static int dbg_tick = 0;
+            if (dbg && (dbg_tick++ % 20) == 0) {
+                const int head =
+                    ps.play_video ? ps.read_head : select_corr_head;
+                fprintf(stderr,
+                        "[endbadge] play=%d head=%d disp=%d cur=%d shown=%d\n",
+                        (int)ps.play_video, head, ps.to_display_frame_number,
+                        current_frame_num, displayed_frame_at(head));
+                for (int i = 0; i < scene->num_cams; i++)
+                    fprintf(stderr,
+                            "[endbadge]   cam%d dec=%d slot=%d latest=%d "
+                            "len=%d exact=%d\n",
+                            i,
+                            (int)window_was_decoding[pm.camera_names[i]],
+                            scene->display_buffer[i][head].frame_number.load(),
+                            latest_decoded_frame[pm.camera_names[i]].load(),
+                            dc_context->cam_frames(i),
+                            (int)dc_context->per_cam_exact[i].load());
+            }
+        }
+
         DrawFrameBufferWindow(ctx, select_corr_head);
 
         // Render a video frame
@@ -1232,44 +1259,33 @@ int main(int argc, char **argv) {
                         // however far past the end you actually were, and every
                         // view then drew its stale image. At least one camera
                         // does have the frame, so the maximum is the position.
-                        const int disp_head =
-                            ps.play_video ? ps.read_head : select_corr_head;
-                        const int shown_frame =
-                            displayed_frame_at(disp_head);
-
-                        // The badge means one thing: this view has no frame
-                        // for the instant being shown. Ask that directly --
-                        // is the frame sitting in THIS camera's slot behind
-                        // the frame the others are showing.
+                        // Two quantities, both of which have to be right,
+                        // and neither of which can be read off the buffers.
                         //
-                        // Deriving it from the camera's length instead needs
-                        // per_cam_frames to stay accurate across seeks, and
-                        // that has now failed twice: once because nFrame is a
-                        // seek target rather than a count, and once because a
-                        // camera that lands on its last real frame reports
-                        // that as the position. This test reads the buffers
-                        // themselves, so no bookkeeping can drift out from
-                        // under it -- and it needs no contiguity assumption,
-                        // which is what kept image projects out before.
-                        const int this_cam_frame =
-                            scene->display_buffer[j][disp_head]
-                                .frame_number.load();
-                        const bool behind_shown =
-                            shown_frame >= 0 && this_cam_frame < shown_frame;
-
-                        // Kept as a second route in: a camera known to have
-                        // ended is drawn blank even if its stale slot happens
-                        // to agree with the current position. -1 (nothing
-                        // decoding) compares false, so an unknown position
-                        // draws the image rather than blanking every view.
+                        // A camera that has run out does NOT stop publishing:
+                        // it keeps advancing frame_number past its own end
+                        // while holding its last real image. A 240-frame
+                        // camera was observed reporting slot 244 and latest
+                        // 251. So "is this view behind the others" can never
+                        // expose it -- the view claims to be current.
+                        //
+                        // Nor can the position come from the slots. Only a
+                        // VISIBLE camera decodes, so with one view up the
+                        // maximum is taken over that camera alone, and its
+                        // ring still holds numbers from the initial fill:
+                        // head 12 read back as frame 12 while the timeline
+                        // was at 252.
+                        //
+                        // current_frame_num is the position in both modes,
+                        // and per_cam_frames is the length the container
+                        // declared. Those two, nothing else.
                         const int cam_frames_j =
                             dc_context->per_cam_contiguous
                                 ? dc_context->cam_frames((int)j)
                                 : 0;
-                        const bool past_own_end =
-                            cam_frames_j > 0 && shown_frame >= cam_frames_j;
-
-                        const bool cam_ended = behind_shown || past_own_end;
+                        const bool cam_ended =
+                            cam_frames_j > 0 &&
+                            current_frame_num >= cam_frames_j;
                         if (cam_ended) {
                             DrawCameraEndedBadge(
                                 (float)scene->image_width[j],
