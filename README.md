@@ -145,6 +145,15 @@ Remove-Item Env:RED_DECODE_BACKEND       # back to the default
 
 red prints which backend it chose at startup.
 
+### PoseTail tracker (this branch)
+
+`multianimal_posetail` adds **Tools → PoseTail Tracker**: label one frame,
+triangulate, and PoseTail predicts the next frames for that animal across
+all cameras (3D + reprojected 2D, marked *Predicted*). The default backend
+talks to a `posetail` HTTP server and needs nothing extra to build; the
+local ONNX backend is compiled in when an ONNX Runtime bundle sits at
+`lib/onnxruntime`. See [`docs/POSETAIL.md`](docs/POSETAIL.md).
+
 ## Authors
 
 **Red** is developed by Jinyao Yan, with contributions from Wilson Chen, Diptodip Deb, Ratan Othayoth, and Rob Johnson.

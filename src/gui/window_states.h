@@ -16,6 +16,7 @@
 #include "gui/midline_tool.h"
 #include "gui/triangulation_diagnostics_window.h"
 #include "gui/switch_skeleton_window.h"
+#include "gui/posetail_window.h"
 #include <string>
 
 // Bundle of all tool-window states.
@@ -37,6 +38,7 @@ struct WindowStates {
     MidlineToolState midline;
     TriangulationDiagnosticsState triangulation_diag;
     SwitchSkeletonState switch_skeleton;
+    PosetailWindowState posetail;
     bool show_help = false;
     // Set by the Welcome window's Recent Projects list; consumed by the
     // main loop, which has the load callbacks in scope.
@@ -112,6 +114,14 @@ struct WindowStates {
         midline = MidlineToolState{};
         triangulation_diag = TriangulationDiagnosticsState{};
         switch_skeleton = SwitchSkeletonState{};
+        // PoseTail: keep the backend choice, URL and ONNX path (they are
+        // per-workstation, not per-project); drop everything derived from
+        // the project.
+        posetail.show = false;
+        posetail.forward_requested = false;
+        posetail.server_probe_requested = false;
+        posetail.last_result.clear();
+        posetail.server_status.clear();
         show_help = false;
         load_project_request.clear();
     }

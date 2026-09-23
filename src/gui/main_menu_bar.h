@@ -134,6 +134,14 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
         if (ImGui::MenuItem("Triangulation Diagnostics")) {
             triangulation_diag_state.show = true;
         }
+        ImGui::Separator();
+        if (ImGui::MenuItem("PoseTail Tracker")) {
+            win.posetail.show = true;
+        }
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+            ImGui::SetTooltip("Predict the next frames from the current "
+                              "frame's 3D keypoints (forward temporal "
+                              "tracker).");
         ImGui::EndDisabled();
         ImGui::EndMenu();
     }

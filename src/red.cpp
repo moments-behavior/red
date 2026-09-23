@@ -74,6 +74,9 @@
 #include "../lib/ImGuiFileDialog/stb/stb_image.h"
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
+// PoseTail forward tracker (after stb_image_write: the HTTP client PNG-encodes
+// crops with it). Owns the ONNX / httplib includes; see posetail_actions.h.
+#include "posetail_actions.h"
 #ifndef __APPLE__
 #include "kernel.cuh"  // CUDA display kernels; empty without RED_HAVE_CUDA
 #endif
@@ -311,6 +314,10 @@ int main(int argc, char **argv) {
 
     // Annotation model
     AnnotationMap annotations;
+
+    // PoseTail forward tracker: local ONNX session + HTTP client state.
+    // Lives for the whole process (a model load survives project switches).
+    PosetailRuntime posetail_rt;
 
     // Predictions live in a separate, memory-mapped store rather than in
     // `annotations`, so importing a whole video never floods the Labeling Tool.
@@ -562,6 +569,9 @@ int main(int argc, char **argv) {
     panels.add({"Switch Skeleton",
                 [&]() { DrawSwitchSkeletonWindow(win.switch_skeleton, ctx); },
                 nullptr});
+    panels.add({"PoseTail Tracker",
+                [&]() { DrawPosetailWindow(win.posetail, ctx); },
+                nullptr});
 
     // Helper: seek by a signed multiplier of the seek interval.
     auto seek_relative = [&](int multiplier) {
@@ -762,6 +772,11 @@ int main(int argc, char **argv) {
             active_store_path.clear();
             ctx.toasts.push("Prediction store closed (skeleton changed)");
         }
+
+        // PoseTail Tracker: Probe / Load / Forward requests from the panel.
+        // Runs synchronously on the main thread (one chunk is ~1-3 s on the
+        // server, so the UI stalls for that long -- same as the T key).
+        posetail_handle_requests(win.posetail, posetail_rt, ctx);
 
         // Pose Stats "Fix this frame": promote one predicted frame into the
         // editable Labeling Tool. Reprojects the stored 3D to each camera as

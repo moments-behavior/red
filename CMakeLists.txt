@@ -71,13 +71,47 @@ endmacro()
 # compiler runs at -O0, which cripples hot host loops (e.g. the HybridNet
 # reprojection: 3200ms at -O0 vs ~450ms at -O3). Respects an explicit
 # -DCMAKE_BUILD_TYPE=... and multi-config generators.
+# PoseTail forward tracker (src/posetail_*.h). The HTTP backend needs only the
+# vendored cpp-httplib + miniz. The local ONNX backend additionally needs an
+# ONNX Runtime bundle unpacked at lib/onnxruntime (gitignored):
+#     lib/onnxruntime/include/onnxruntime_cxx_api.h
+#     lib/onnxruntime/lib/libonnxruntime.{so,dylib} | onnxruntime.lib
+# Optional: without it red builds with the server backend only.
+set(DIR_HTTPLIB "${CMAKE_SOURCE_DIR}/lib/httplib")
+set(DIR_MINIZ   "${CMAKE_SOURCE_DIR}/lib/miniz")
+set(MINIZ_SRC   "${DIR_MINIZ}/miniz.c")   # C source: project() lists C below
+set(ONNXRUNTIME_DIR "${CMAKE_SOURCE_DIR}/lib/onnxruntime" CACHE PATH
+    "ONNX Runtime bundle for the local PoseTail backend")
+if(EXISTS "${ONNXRUNTIME_DIR}/include/onnxruntime_cxx_api.h")
+    set(HAS_ONNXRUNTIME TRUE)
+    message(STATUS "ONNX Runtime found at ${ONNXRUNTIME_DIR} -- local PoseTail backend enabled")
+else()
+    set(HAS_ONNXRUNTIME FALSE)
+    message(STATUS "ONNX Runtime not found at ${ONNXRUNTIME_DIR} -- PoseTail server backend only")
+endif()
+# Wire ONNX Runtime into a target (no-op when the bundle is absent).
+function(red_link_onnxruntime TARGET)
+    if(NOT HAS_ONNXRUNTIME)
+        return()
+    endif()
+    target_compile_definitions(${TARGET} PRIVATE RED_HAS_ONNXRUNTIME)
+    target_include_directories(${TARGET} PRIVATE "${ONNXRUNTIME_DIR}/include")
+    if(APPLE)
+        target_link_libraries(${TARGET} PRIVATE "${ONNXRUNTIME_DIR}/lib/libonnxruntime.dylib")
+    elseif(WIN32)
+        target_link_libraries(${TARGET} PRIVATE "${ONNXRUNTIME_DIR}/lib/onnxruntime.lib")
+    else()
+        target_link_libraries(${TARGET} PRIVATE "${ONNXRUNTIME_DIR}/lib/libonnxruntime.so")
+    endif()
+endfunction()
+
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING
         "Build type (Debug/Release/RelWithDebInfo/MinSizeRel)" FORCE)
 endif()
 
 if(APPLE)
-    project(red LANGUAGES CXX OBJCXX)
+    project(red LANGUAGES C CXX OBJCXX)
     red_resolve_parquet()
 
     # Where the macOS dependencies live (Eigen, FFmpeg, GLFW, Ceres,
@@ -148,6 +182,7 @@ if(APPLE)
         ${MM_SRC_FILES}
         ${IMGUI_SRC}
         ${IMPLOT_SRC}
+        ${MINIZ_SRC}   # posetail server NPZ decode
     )
 
     target_include_directories(red PRIVATE
@@ -156,6 +191,8 @@ if(APPLE)
         ${DIR_IMGUI}/backends
         ${DIR_IMPLOT}
         ${DIR_FILEBROWSER}
+        ${DIR_HTTPLIB}
+        ${DIR_MINIZ}
         lib/nvcodec
         lib/IconFontCppHeaders
         ${FFMPEG_INCLUDE_DIRS}
@@ -186,6 +223,7 @@ if(APPLE)
         Ceres::ceres
         pthread
     )
+    red_link_onnxruntime(red)
     # Removed: Vulkan::Vulkan
 
 
@@ -464,7 +502,7 @@ if(APPLE)
 
 elseif(WIN32)
     # Windows build with NVIDIA CUDA support (RTX 3090)
-    project(red LANGUAGES CXX)
+    project(red LANGUAGES C CXX)
     red_resolve_cuda()
     red_resolve_parquet()
     if(RED_CUDA)
@@ -582,6 +620,7 @@ elseif(WIN32)
         ${IMGUI_SRC}
         ${IMPLOT_SRC}
         ${CUDA_SRC_FILES}
+        ${MINIZ_SRC}   # posetail server NPZ decode
     )
 
 
@@ -604,6 +643,8 @@ elseif(WIN32)
         ${DIR_FILEBROWSER}
         ${DIR_ICONFONT}
         ${DIR_NVCODEC}
+        ${DIR_HTTPLIB}
+        ${DIR_MINIZ}
         ${CUDA_DIR}/include
         ${FFMPEG_INCLUDE_DIRS}
     )
@@ -622,7 +663,10 @@ elseif(WIN32)
         opengl32
         # CUDA + bundled NVDEC (empty without RED_ENABLE_CUDA)
         ${RED_CUDA_LIBS}
+        # WinSock for cpp-httplib (PoseTail server client)
+        ws2_32
     )
+    red_link_onnxruntime(red)
 
     # FFmpeg libraries
     if(FFMPEG_FOUND AND TARGET PkgConfig::FFMPEG)
@@ -732,7 +776,7 @@ else()
     # links read-only against those shared installs.
     # No OpenCV, no LibTorch.
     # ────────────────────────────────────────────────────────────────────────
-    project(red LANGUAGES CXX)
+    project(red LANGUAGES C CXX)
     red_resolve_cuda()
     red_resolve_parquet()
     if(RED_CUDA)
@@ -741,6 +785,12 @@ else()
         # -DCMAKE_CUDA_ARCHITECTURES=... on the cmake command line if needed.
         if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
             set(CMAKE_CUDA_ARCHITECTURES 86 89)
+        endif()
+        # The .cu files are plain C++17. Without this, CXX_STANDARD 20 below
+        # propagates to them as "CUDA20", which CMake < 3.24 cannot translate
+        # into an nvcc flag and configure fails.
+        if(NOT DEFINED CMAKE_CUDA_STANDARD)
+            set(CMAKE_CUDA_STANDARD 17)
         endif()
     endif()
     set(CMAKE_CXX_STANDARD 20)
@@ -834,6 +884,7 @@ else()
         ${IMGUI_SRC}
         ${IMPLOT_SRC}
         ${CUDA_SRC_FILES}
+        ${MINIZ_SRC}   # posetail server NPZ decode
     )
 
 
@@ -853,6 +904,8 @@ else()
         ${DIR_FILEBROWSER}
         ${DIR_ICONFONT}
         ${DIR_NVCODEC}
+        ${DIR_HTTPLIB}
+        ${DIR_MINIZ}
     )
 
     # Link libraries
@@ -869,13 +922,19 @@ else()
         Threads::Threads
         ${CMAKE_DL_LIBS}
     )
-
+    red_link_onnxruntime(red)
 
     # RPATH: isolate bundled ML libs from system / orange's toolchain.
     # $ORIGIN so the installed binary finds them relative to itself; build
     # rpath points at the absolute bundle paths for running from build/.
     set(RED_RPATH_BUILD "")
     set(RED_RPATH_INSTALL "$ORIGIN")
+    if(HAS_ONNXRUNTIME)
+        # libonnxruntime.so and its providers (CUDA EP, cuDNN) live next to
+        # each other in the bundle; ORT dlopen()s the providers by rpath.
+        set(RED_RPATH_BUILD "${ONNXRUNTIME_DIR}/lib")
+        set(RED_RPATH_INSTALL "$ORIGIN;${ONNXRUNTIME_DIR}/lib")
+    endif()
 
     set_target_properties(red PROPERTIES
         CXX_STANDARD 20
