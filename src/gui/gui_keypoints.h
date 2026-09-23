@@ -113,17 +113,27 @@ inline bool gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
         if (draw_pos[node].has && draw_pos[node].inferred) {
             const ImVec2 px = ImPlot::PlotToPixels(draw_pos[node].x,
                                                    draw_pos[node].y);
-            ImVec4 c = (node < skeleton->node_colors.size())
-                           ? skeleton->node_colors.at(node)
-                           : ImVec4(1, 1, 1, 1);
+            // Marked as the active node the same way a live point is: the
+            // user's active colour, drawn bigger and heavier. Without it an
+            // occluded node could be selected with no sign of it, so there
+            // was no way to tell which node M was about to act on -- and M is
+            // a toggle, so that is the difference between marking and
+            // unmarking. `is_active` below is the ANIMAL, a separate thing.
+            const bool node_is_active = (cam.active_id == node);
+            ImVec4 c = node_is_active
+                           ? active_color
+                           : (node < skeleton->node_colors.size()
+                                  ? skeleton->node_colors.at(node)
+                                  : ImVec4(1, 1, 1, 1));
             c.w = is_active ? 0.85f : 0.45f;
             const ImU32 col = ImGui::ColorConvertFloat4ToU32(c);
-            const float r = 5.0f;
+            const float r = node_is_active ? 7.0f : 5.0f;
+            const float thick = node_is_active ? 2.4f : 1.6f;
             ImDrawList *dl = ImPlot::GetPlotDrawList();
             dl->AddLine(ImVec2(px.x - r, px.y - r), ImVec2(px.x + r, px.y + r),
-                        col, 1.6f);
+                        col, thick);
             dl->AddLine(ImVec2(px.x - r, px.y + r), ImVec2(px.x + r, px.y - r),
-                        col, 1.6f);
+                        col, thick);
 
             // The cross is a target, not just a note. Marking a point occluded
             // used to put it out of reach entirely -- no hover, no tooltip, no
@@ -440,19 +450,27 @@ inline bool gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
         cam.keypoints[cam.active_id] = Keypoint2D{};
     }
 
-    // Advances afterwards, so M can be tapped down a skeleton. The hovered
-    // case above does not advance: there you are pointing at one keypoint on
-    // purpose.
+    // A toggle, like the hovered case above: M on a node already marked
+    // occluded takes the assessment back. set_occluded changed presence and
+    // visibility and nothing else, so clearing those two restores the whole
+    // point -- author, position and origin were never lost.
+    //
+    // Only MARKING advances, so M can still be tapped down a skeleton.
+    // Unmarking stays put: you are undoing this node, not moving past it.
     if (plot_keys_ok && ImGui::IsKeyPressed(ImGuiKey_M, false)) {
-        const bool fed_solve =
-            cam.keypoints[cam.active_id].exist &&
-            cam.keypoints[cam.active_id].manual;
-        cam.keypoints[cam.active_id].set_manual();
-        cam.keypoints[cam.active_id].set_occluded();
-        if (fed_solve && cam.active_id < fa.kp3d.size())
-            fa.kp3d[cam.active_id].clear();
-        if (cam.active_id < skeleton->num_nodes - 1)
-            cam.active_id++;
+        Keypoint2D &akp = cam.keypoints[cam.active_id];
+        if (akp.occluded) {
+            akp.occluded = false;
+            akp.exist = true;
+        } else {
+            const bool fed_solve = akp.exist && akp.manual;
+            akp.set_manual();
+            akp.set_occluded();
+            if (fed_solve && cam.active_id < fa.kp3d.size())
+                fa.kp3d[cam.active_id].clear();
+            if (cam.active_id < skeleton->num_nodes - 1)
+                cam.active_id++;
+        }
     }
 
     for (u32 edge = 0; edge < skeleton->num_edges; edge++) {
