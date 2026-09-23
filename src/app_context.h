@@ -106,12 +106,15 @@ struct AppContext {
 // dockspace in the context every panel came up floating and the camera-docking
 // pass found no central node to dock into.
 inline std::string resolve_project_layout_path(const AppContext &ctx,
-                                               const std::string &proj_path) {
+                                               const std::string &proj_path,
+                                               bool *created_fresh = nullptr) {
     namespace fs = std::filesystem;
+    if (created_fresh) *created_fresh = false;
     const fs::path in_project = fs::path(proj_path) / "imgui_layout.ini";
     std::error_code ec;
     if (fs::exists(in_project, ec))
         return in_project.string();
+    if (created_fresh) *created_fresh = true;
 
     const std::string src = ctx.window->exe_dir + "/../default_imgui_layout.ini";
     const bool have_src = fs::exists(src, ec);
@@ -245,11 +248,27 @@ inline void migrate_ini_window_names(const std::string &ini_path) {
 // projects come up with a broken layout (camera windows hard-docked to
 // 0x05-0x08 collide, Keypoints/Labeling Tool orphaned and invisible).
 inline void switch_ini_to_path(AppContext &ctx, const std::string &project_path) {
-    ctx.project_ini_path = resolve_project_layout_path(ctx, project_path);
+    bool fresh = false;
+    ctx.project_ini_path =
+        resolve_project_layout_path(ctx, project_path, &fresh);
     migrate_ini_window_names(ctx.project_ini_path);
     if (!ctx.main_loop_running) {
         // Startup path: NewFrame() loads io.IniFilename itself.
         ImGui::GetIO().IniFilename = ctx.project_ini_path.c_str();
+        return;
+    }
+    // A project created around media that is already open keeps the
+    // arrangement on screen. The layout it was just given is the shipped
+    // default, which names six windows and no cameras -- loading it rebuilt
+    // the dock tree without them, and the camera views, whose
+    // SetNextWindowDockID is ImGuiCond_FirstUseEver and had already fired,
+    // came back floating. Adopt the live layout instead and write it there.
+    if (fresh) {
+        ctx.preframe.enqueue([&ctx]() {
+            ImGuiIO &io = ImGui::GetIO();
+            io.IniFilename = ctx.project_ini_path.c_str();
+            ImGui::SaveIniSettingsToDisk(ctx.project_ini_path.c_str());
+        });
         return;
     }
     ctx.preframe.enqueue([&ctx]() {
