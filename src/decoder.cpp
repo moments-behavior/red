@@ -294,8 +294,15 @@ static void nvdec_decoder_process(DecoderContext *dc_context,
                         demuxer->Demux(pVideo, nVideoBytes, pktinfo);
                     if (!demux_success) {
                         std::cout << "Demux error..." << std::endl;
+                        // ENDOFSTREAM, not DISCONTINUITY: only the former
+                        // tells NVDEC this is the last packet and makes it
+                        // give up the frames still held for reordering.
+                        // Discontinuity says "there is a gap" and keeps them,
+                        // so a camera stopped short of its own end -- 237 of
+                        // 240. The post-seek flush above is a real
+                        // discontinuity and stays one.
                         nFrameReturned =
-                            dec.Decode(NULL, 0, CUVID_PKT_DISCONTINUITY);
+                            dec.Decode(NULL, 0, CUVID_PKT_ENDOFSTREAM);
                         if (!sync_on) {
                             if (dc_context->total_owned_by_loader)
                                 dc_context->refine_cam_length(
@@ -435,8 +442,10 @@ static void nvdec_decoder_process(DecoderContext *dc_context,
                     demux_success =
                         demuxer->Demux(pVideo, nVideoBytes, pktinfo);
                     if (!demux_success) {
+                        // End of stream: see the note above -- ENDOFSTREAM is
+                        // what flushes NVDEC's reorder queue.
                         nFrameReturned =
-                            dec.Decode(NULL, 0, CUVID_PKT_DISCONTINUITY);
+                            dec.Decode(NULL, 0, CUVID_PKT_ENDOFSTREAM);
                         if (!sync_on) {
                             if (dc_context->total_owned_by_loader)
                                 dc_context->refine_cam_length(
