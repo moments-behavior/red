@@ -64,6 +64,16 @@ public:
     // Releases all retained CVPixelBuffers.
     void flush();
 
+    // End of stream: let pop_next() emit the frames still held back for
+    // reordering, instead of dropping them the way flush() does.
+    //
+    // pop_next() withholds until it has REORDER_DEPTH frames in hand -- that
+    // is how it guarantees PTS order from a min-heap. At the end of a stream
+    // the last few never reach that depth, so without this a camera silently
+    // loses up to REORDER_DEPTH-1 frames off its end. submit() clears it, so
+    // ordinary reordering resumes as soon as packets flow again.
+    void drain_at_eos();
+
     // Invalidate the VT session and release all resources.
     void destroy();
 

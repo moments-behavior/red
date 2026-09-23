@@ -865,27 +865,40 @@ static void vt_decoder_process(DecoderContext *dc_context,
                           timebase, (pktinfo.flags & AV_PKT_FLAG_KEY) != 0);
             packets_in_flight++;
             eof_stall = 0;
-        } else if (!sync_on) {
-            // End of stream
-            if (dc_context->total_owned_by_loader)
-                dc_context->refine_cam_length(cam_name, nFrame);
-            else
-                dc_context->total_num_frame = nFrame;
-        } else if (packets_in_flight > 0 && eof_stall < 100) {
-            // End of stream but async decodes are still in flight — filling
-            // now would make the late real frames look stale and get dropped.
-            eof_stall++;
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
         } else {
-            // End of stream, sync mode: total_num_frame is owned by the
-            // loader (= canonical_len). Trailing fill: a camera whose span
-            // ends before canonical_len must keep publishing duplicate slots,
-            // or the shared min-decoded playback cap would freeze at its last
-            // real frame and stall every camera.
-            while (next_slot < canonical_len && held_pb) {
-                CFRetain(held_pb);
-                if (!store_slot(held_pb, next_slot, true)) break;
-                next_slot++;
+            // End of stream. First, let the decoder give up the frames it is
+            // still holding back for reordering. pop_next() withholds until
+            // it has REORDER_DEPTH (8) in hand -- that is how it guarantees
+            // PTS order out of a min-heap -- so the last few never come out
+            // on their own and the camera silently loses its tail. A
+            // 240-frame camera published 232 and stopped there. Idempotent,
+            // so calling it on each iteration while stalled here is fine.
+            vt_dec.drain_at_eos();
+
+            if (packets_in_flight > 0 && eof_stall < 100) {
+                // Async decodes still in flight. Waited in EITHER mode: this
+                // test used to sit after the !sync_on branch below, so normal
+                // playback never reached it. In sync mode it also matters
+                // that filling now would make the late real frames look stale
+                // and get dropped.
+                eof_stall++;
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            } else if (!sync_on) {
+                if (dc_context->total_owned_by_loader)
+                    dc_context->refine_cam_length(cam_name, nFrame);
+                else
+                    dc_context->total_num_frame = nFrame;
+            } else {
+                // Sync mode: total_num_frame is owned by the loader (=
+                // canonical_len). Trailing fill -- a camera whose span ends
+                // before canonical_len must keep publishing duplicate slots,
+                // or the shared min-decoded playback cap would freeze at its
+                // last real frame and stall every camera.
+                while (next_slot < canonical_len && held_pb) {
+                    CFRetain(held_pb);
+                    if (!store_slot(held_pb, next_slot, true)) break;
+                    next_slot++;
+                }
             }
         }
 
