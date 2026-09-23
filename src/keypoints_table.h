@@ -358,10 +358,19 @@ inline void DrawKeypointsTable(AppContext &ctx, float height) {
                 // -- which matters most on a tailcycle session, where every
                 // node arrives Predicted and you need to see which ones you
                 // have actually re-solved.
-                if (keypoints_find && !project_is_2d(ctx.pm) &&
-                    scene->num_cams > 1) {
-                    const auto &fa = instance_or_first(
-                        annotations.at(current_frame_num), ctx.active_instance);
+                // Shown whenever the project HAS a 3D layer, not only once a
+                // frame does. The 2D rows below already work this way -- they
+                // draw and leave their cells empty -- and the row going
+                // missing until the first B made the table look like it had
+                // no 3D row at all, on exactly the frames where you are
+                // deciding whether to start one.
+                if (!project_is_2d(ctx.pm) && scene->num_cams > 1) {
+                    const FrameAnnotation *fa3d =
+                        keypoints_find
+                            ? &instance_or_first(
+                                  annotations.at(current_frame_num),
+                                  ctx.active_instance)
+                            : nullptr;
                     ImGui::PushID("row3d");
                     ImGui::TableNextRow();
                     ImGui::TableSetColumnIndex(0);
@@ -375,14 +384,19 @@ inline void DrawKeypointsTable(AppContext &ctx, float height) {
                     if (ImGui::IsItemHovered())
                         ImGui::SetTooltip(
                             "Triangulated position per keypoint, for the animal "
-                            "being edited.\nFilled = solved here, outlined = "
+                            "being edited.\nStrong = solved here, faint = "
                             "predicted by a model.");
 
                     for (int column = 1; column < columns_count; column++) {
                         if (!ImGui::TableSetColumnIndex(column)) continue;
                         const int node = column - 1;
-                        if (node >= (int)fa.kp3d.size()) continue;
-                        const Keypoint3D &k3 = fa.kp3d[node];
+                        // No frame yet: the cell is drawn, just empty, so the
+                        // row keeps its shape and its column alignment.
+                        static const Keypoint3D kNo3D{};
+                        const Keypoint3D &k3 =
+                            (fa3d && node < (int)fa3d->kp3d.size())
+                                ? fa3d->kp3d[node]
+                                : kNo3D;
 
                         float cell_w = ImGui::GetContentRegionAvail().x;
                         if (cell_w < 1.0f) cell_w = 1.0f;
@@ -400,19 +414,16 @@ inline void DrawKeypointsTable(AppContext &ctx, float height) {
                                 k3.x, k3.y, k3.z);
                         ImGui::PopID();
 
-                        if (k3.exist &&
-                            k3.predicted) {
-                            const ImVec2 cp = ImGui::GetStyle().CellPadding;
-                            const ImVec2 rmin = ImGui::GetItemRectMin();
-                            const ImVec2 rmax = ImGui::GetItemRectMax();
-                            ImGui::GetWindowDrawList()->AddRect(
-                                ImVec2(rmin.x - cp.x, rmin.y - cp.y),
-                                ImVec2(rmax.x + cp.x, rmax.y + cp.y),
-                                ImGui::ColorConvertFloat4ToU32(
-                                    kLabelTriangulated));
-                        } else if (k3.exist) {
-                            ImVec4 c = kLabelTriangulated;
-                            c.w = 0.65f;
+                        // Coloured the way the 2D cells above are: the node's
+                        // own colour, with alpha carrying how the position was
+                        // arrived at. There it is placed 0.9 against
+                        // reprojected 0.5; the 3D counterpart is solved here
+                        // against predicted by a model. One reading for the
+                        // whole column -- the hue says which keypoint, the
+                        // strength says how much of it is yours.
+                        if (k3.exist && node < (int)skeleton.node_colors.size()) {
+                            ImVec4 c = skeleton.node_colors[node];
+                            c.w = k3.predicted ? 0.5f : 0.9f;
                             ImGui::TableSetBgColor(ImGuiTableBgTarget_CellBg,
                                                    ImGui::GetColorU32(c));
                         }
