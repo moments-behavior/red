@@ -563,31 +563,6 @@ int main(int argc, char **argv) {
                 [&]() { DrawSwitchSkeletonWindow(win.switch_skeleton, ctx); },
                 nullptr});
 
-    // The frame actually on screen in a given ring slot: the highest frame
-    // number among cameras that are currently decoding.
-    //
-    // One camera cannot answer this once the cameras differ in length. Asked
-    // to seek past its own end, a camera lands on its last real frame (the
-    // EOF guard in the decoders), so sampling it reports that end however far
-    // past it you are. current_frame_num is the ANNOTATION KEY -- it is what
-    // get_or_create_frame() is called with -- so reading it from an ended
-    // camera would file a label under the wrong frame, not merely draw the
-    // wrong picture.
-    //
-    // Restricted to decoding cameras because a hidden view stops being
-    // refilled, and after a backward seek its slots still hold the higher
-    // numbers from before, which would drag the maximum forward.
-    auto displayed_frame_at = [&](int head) -> int {
-        int best = -1;
-        for (int i = 0; i < scene->num_cams; i++) {
-            if (!window_was_decoding[pm.camera_names[i]]) continue;
-            best = std::max(best,
-                            scene->display_buffer[i][head].frame_number.load());
-        }
-        return best;
-    };
-
-
     // Helper: seek by a signed multiplier of the seek interval.
     auto seek_relative = [&](int multiplier) {
         int target = std::clamp(current_frame_num + multiplier * dc_context->seek_interval,
@@ -918,37 +893,9 @@ int main(int argc, char **argv) {
             // get_or_create_frame() is called with it -- so that filed labels
             // under a frame a hundred back from the one on screen.
             current_frame_num = ps.to_display_frame_number + ps.pause_selected;
-            if (current_frame_num < 0) current_frame_num = 0;
             if (dc_context->total_num_frame > 0 &&
                 current_frame_num > dc_context->total_num_frame - 1)
                 current_frame_num = dc_context->total_num_frame - 1;
-        }
-
-        // RED_ENDBADGE_DEBUG=1: one line per camera per ~20 frames, from
-        // OUTSIDE the draw loop. A camera whose view is a background tab is
-        // never drawn, so instrumenting the draw site only ever reported
-        // whichever view was on screen.
-        {
-            static const bool dbg = getenv("RED_ENDBADGE_DEBUG") != nullptr;
-            static int dbg_tick = 0;
-            if (dbg && (dbg_tick++ % 20) == 0) {
-                const int head =
-                    ps.play_video ? ps.read_head : select_corr_head;
-                fprintf(stderr,
-                        "[endbadge] play=%d head=%d disp=%d cur=%d shown=%d\n",
-                        (int)ps.play_video, head, ps.to_display_frame_number,
-                        current_frame_num, displayed_frame_at(head));
-                for (int i = 0; i < scene->num_cams; i++)
-                    fprintf(stderr,
-                            "[endbadge]   cam%d dec=%d slot=%d latest=%d "
-                            "len=%d exact=%d\n",
-                            i,
-                            (int)window_was_decoding[pm.camera_names[i]],
-                            scene->display_buffer[i][head].frame_number.load(),
-                            latest_decoded_frame[pm.camera_names[i]].load(),
-                            dc_context->cam_frames(i),
-                            (int)dc_context->per_cam_exact[i].load());
-            }
         }
 
         DrawFrameBufferWindow(ctx, select_corr_head);
@@ -1249,17 +1196,6 @@ int main(int argc, char **argv) {
                         // frame, so drawing it would present a stale image as
                         // though it were this instant -- the one thing a view
                         // being annotated must not do.
-                        //
-                        // The position is taken as the highest frame number
-                        // any camera has in the slot being displayed, NOT from
-                        // current_frame_num. When paused, that is read out of
-                        // one camera's buffer, and
-                        // a camera asked to seek past its end lands on its last
-                        // real frame instead -- so if that camera happened to
-                        // be the one sampled, the position read back as 239
-                        // however far past the end you actually were, and every
-                        // view then drew its stale image. At least one camera
-                        // does have the frame, so the maximum is the position.
                         // Two quantities, both of which have to be right,
                         // and neither of which can be read off the buffers.
                         //
