@@ -350,6 +350,11 @@ void sw_decoder_process(DecoderContext *dc_context, FFmpegDemuxer *demuxer,
     bool first_store_done = false;
     bool have_reported_info = false;
 
+    // This camera's slot in the per-camera length table, resolved once. The
+    // length itself is read fresh each time it is needed, because a stream
+    // that did not declare its count has it filled in at end of stream.
+    const int cam_len_slot = dc_context->cam_slot(cam_name);
+
     // In sync mode the loader owns total/estimated (both = canonical_len).
     // Otherwise the loader has already set estimated_num_frames from the
     // reference camera; decoder threads must not race to replace it.
@@ -500,7 +505,14 @@ void sw_decoder_process(DecoderContext *dc_context, FFmpegDemuxer *demuxer,
                 latest_decoded_frame[cam_name].store((int)target);
             } else {
                 nFrame = seek_info->seek_frame;
-                latest_decoded_frame[cam_name].store(seek_info->seek_frame);
+                // Same clamp on the seek landing point: seeking past the end
+                // must not advertise a position this camera cannot hold.
+                const int cam_len = dc_context->cam_frames(cam_len_slot);
+                const int landed =
+                    (cam_len > 0 && (int)seek_info->seek_frame > cam_len - 1)
+                        ? cam_len - 1
+                        : (int)seek_info->seek_frame;
+                latest_decoded_frame[cam_name].store(landed);
             }
             first_store_done = true;
             display_buffer[0].frame_number = -1;
@@ -535,7 +547,23 @@ void sw_decoder_process(DecoderContext *dc_context, FFmpegDemuxer *demuxer,
                     if (!frame) break;
                     if (!sync_on) {
                         stage(frame);
-                        store_slot(nFrame, false);
+                        // Never publish a frame number this camera does not
+                        // have. nFrame is seeded from the seek target
+                        // (seek_info->seek_frame, below), and that target is
+                        // never clamped to the stream -- so after a seek past
+                        // the end, the frames this camera does emit get
+                        // labelled with numbers beyond its last. A 240-frame
+                        // camera was observed publishing 244 and 251.
+                        //
+                        // Everything downstream reads those labels as the
+                        // truth, so the camera appears current while showing
+                        // its final image, and nothing can tell it has ended.
+                        // Past its end it now publishes nothing, which is the
+                        // honest answer: there is no frame here.
+                        const int cam_len =
+                            dc_context->cam_frames(cam_len_slot);
+                        if (cam_len <= 0 || nFrame < cam_len)
+                            store_slot(nFrame, false);
                         nFrame = nFrame + 1;
                     } else {
                         int64_t c = sync_cam->slot_of_pos(nFrame);
