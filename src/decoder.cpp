@@ -93,6 +93,12 @@ static void nvdec_decoder_process(DecoderContext *dc_context,
                                  bool use_cpu_buffer,
                                  const sync_plan::SyncCam *sync_cam) {
   try {
+    // See sw_decoder.cpp: nFrame is a POSITION seeded from the seek target,
+    // which is never clamped to the stream, so a camera seeked past its end
+    // would label the frames it emits with numbers it does not have. Every
+    // consumer reads those as truth and the camera then looks current while
+    // showing its last image.
+    const int cam_len_slot = dc_context->cam_slot(cam_name);
     CUdeviceptr pTmpImage = 0;
     ck(cuInit(0));
     CUcontext cuContext = NULL;
@@ -335,7 +341,12 @@ static void nvdec_decoder_process(DecoderContext *dc_context,
                 latest_decoded_frame[cam_name].store((int)target);
             } else {
                 nFrame = seek_info->seek_frame;
-                latest_decoded_frame[cam_name].store(seek_info->seek_frame);
+                const int cam_len = dc_context->cam_frames(cam_len_slot);
+                const int landed =
+                    (cam_len > 0 && (int)seek_info->seek_frame > cam_len - 1)
+                        ? cam_len - 1
+                        : (int)seek_info->seek_frame;
+                latest_decoded_frame[cam_name].store(landed);
             }
             first_store_done = true;
             display_buffer[0].frame_number = -1;
@@ -370,7 +381,10 @@ static void nvdec_decoder_process(DecoderContext *dc_context,
                     have_content = true;
                     if (store_slot(next_slot, false)) next_slot++;
                 } else {
-                    if (!store_slot(nFrame, false))
+                    const int cam_len = dc_context->cam_frames(cam_len_slot);
+                    if (cam_len > 0 && nFrame >= cam_len)
+                        RED_SEEKDBG("past this camera's end, not published");
+                    else if (!store_slot(nFrame, false))
                         RED_SEEKDBG("target store rejected");
                 }
                 last_published_pts = land_ts;
@@ -402,8 +416,11 @@ static void nvdec_decoder_process(DecoderContext *dc_context,
                     if (sync_on) {
                         if (!store_slot(next_slot, false)) break;
                         next_slot++;
-                    } else if (!store_slot(nFrame, false)) {
-                        break;
+                    } else {
+                        const int cam_len =
+                            dc_context->cam_frames(cam_len_slot);
+                        if (cam_len > 0 && nFrame >= cam_len) break;
+                        if (!store_slot(nFrame, false)) break;
                     }
                     nFrame++;
                 }
@@ -464,7 +481,10 @@ static void nvdec_decoder_process(DecoderContext *dc_context,
                             pFrame, dec.GetWidth(), (uint8_t *)pTmpImage,
                             4 * dec.GetWidth(), dec.GetWidth(),
                             dec.GetHeight(), iMatrix);
-                        store_slot(nFrame, false);
+                        const int cam_len =
+                            dc_context->cam_frames(cam_len_slot);
+                        if (cam_len <= 0 || nFrame < cam_len)
+                            store_slot(nFrame, false);
                         nFrame = nFrame + 1;
                     } else {
                         int64_t c = sync_cam->slot_of_pos(nFrame);
@@ -574,6 +594,9 @@ static void vt_decoder_process(DecoderContext *dc_context,
                               bool /*use_cpu_buffer*/,
                               const sync_plan::SyncCam *sync_cam) {
   try {
+    // As in nvdec_decoder_process above: never publish a frame number this
+    // camera does not have.
+    const int cam_len_slot = dc_context->cam_slot(cam_name);
     // Run on performance cores
     pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
 
@@ -659,6 +682,12 @@ static void vt_decoder_process(DecoderContext *dc_context,
     // -----------------------------------------------------------------------
     auto store_frame = [&](CVPixelBufferRef pb, int frame_num) {
         if (!sync_on) {
+            const int cam_len = dc_context->cam_frames(cam_len_slot);
+            if (cam_len > 0 && frame_num >= cam_len) {
+                CFRelease(pb);  // ours to release, as in the stale-frame case
+                nFrame++;
+                return true;
+            }
             if (!store_slot(pb, frame_num, false)) return false;
             nFrame++;
             return true;
