@@ -587,13 +587,6 @@ int main(int argc, char **argv) {
         return best;
     };
 
-    // Helper: find the first visible camera index (for frame-buffer display).
-    auto find_visible_cam = [&]() -> int {
-        if (ps.pause_seeked) return 0;
-        for (int i = 0; i < scene->num_cams; i++)
-            if (window_was_decoding[pm.camera_names[i]]) return i;
-        return 0;
-    };
 
     // Helper: seek by a signed multiplier of the seek interval.
     auto seek_relative = [&](int multiplier) {
@@ -885,7 +878,6 @@ int main(int argc, char **argv) {
 
         static int select_corr_head = 0;
         if (ps.video_loaded && (!ps.play_video)) {
-            int visible_idx = find_visible_cam();
 
             // Frame buffer keyboard navigation — global so it works
             // even when the "Frames in the buffer" tab is hidden.
@@ -913,14 +905,23 @@ int main(int argc, char **argv) {
 
             select_corr_head =
                 (ps.pause_selected + ps.read_head) % scene->size_of_buffer;
-            {
-                const int shown = displayed_frame_at(select_corr_head);
-                current_frame_num =
-                    shown >= 0
-                        ? shown
-                        : scene->display_buffer[visible_idx][select_corr_head]
-                              .frame_number.load();
-            }
+            // The slot at read_head holds to_display_frame_number, and
+            // pause_selected is a fixed offset from it, so the position is
+            // arithmetic rather than something to look up. seek_all_cameras
+            // sets all three together, so this holds after a seek as well.
+            //
+            // It used to be read out of the ring, which only works while the
+            // cameras are still filling it. With one view open and that
+            // camera ended, the slot still held whatever was there several
+            // wraps earlier: the position was reported as 189 while the
+            // timeline was at 317. current_frame_num is the annotation key --
+            // get_or_create_frame() is called with it -- so that filed labels
+            // under a frame a hundred back from the one on screen.
+            current_frame_num = ps.to_display_frame_number + ps.pause_selected;
+            if (current_frame_num < 0) current_frame_num = 0;
+            if (dc_context->total_num_frame > 0 &&
+                current_frame_num > dc_context->total_num_frame - 1)
+                current_frame_num = dc_context->total_num_frame - 1;
         }
 
         // RED_ENDBADGE_DEBUG=1: one line per camera per ~20 frames, from
@@ -1252,7 +1253,7 @@ int main(int argc, char **argv) {
                         // The position is taken as the highest frame number
                         // any camera has in the slot being displayed, NOT from
                         // current_frame_num. When paused, that is read out of
-                        // one camera's buffer (see find_visible_cam above), and
+                        // one camera's buffer, and
                         // a camera asked to seek past its end lands on its last
                         // real frame instead -- so if that camera happened to
                         // be the one sampled, the position read back as 239
