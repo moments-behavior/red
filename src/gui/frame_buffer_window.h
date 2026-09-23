@@ -47,8 +47,21 @@ inline void DrawFrameBufferWindow(AppContext &ctx, int select_corr_head) {
             for (u32 i = 0; i < scene.size_of_buffer; i++) {
                 int buf_idx =
                     (i + ps.read_head) % scene.size_of_buffer;
-                int frame_num =
-                    scene.display_buffer[visible_idx][buf_idx].frame_number;
+                // This list is the TIMELINE, not one camera's holdings: it
+                // is read off a single camera's ring (visible_idx) only
+                // because the ring is where the numbers happen to live.
+                //
+                // So take the position from the ring's own invariant -- slot
+                // read_head+i is frame to_display+i -- rather than from what
+                // that slot stores. A camera stops writing at its own last
+                // frame, and the slots past it keep whatever was there from
+                // an earlier pass, which is how 202 and 203 came to sit after
+                // 239. Worse, their annotation state was looked up too, so a
+                // row was coloured by the labels of a frame it was not
+                // showing. Frame 240 exists -- in the longer cameras -- and
+                // belongs in this list under its own number, whether or not
+                // the camera being read has it.
+                const int frame_num = ps.to_display_frame_number + (int)i;
 
                 // The frame number is the label. For images the source file
                 // name is worth appending only when it differs from the frame
