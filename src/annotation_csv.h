@@ -16,6 +16,7 @@
 // Coordinates in ImPlot space (Y=0 at bottom).
 
 #include "annotation.h"
+#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -100,8 +101,11 @@ inline std::string current_timestamp() {
 
 // Write v2 2D CSV for a single camera.
 // Path should be e.g. "<folder>/camera1.csv".
+// blank = write every keypoint as unlabeled (camera excluded for bad
+// calibration: its 2D must not reach downstream training data).
 inline bool save_2d_csv(const std::string &path, const std::string &skeleton_name,
-                         const AnnotationMap &amap, int cam_idx, int num_nodes) {
+                         const AnnotationMap &amap, int cam_idx, int num_nodes,
+                         bool blank = false) {
     std::ofstream f(path);
     if (!f) return false;
 
@@ -122,7 +126,8 @@ inline bool save_2d_csv(const std::string &path, const std::string &skeleton_nam
 
         f << frame;
         for (int k = 0; k < num_nodes; ++k) {
-            if (k < (int)cam.keypoints.size() && cam.keypoints[k].labeled) {
+            if (!blank && k < (int)cam.keypoints.size() &&
+                cam.keypoints[k].labeled) {
                 const auto &kp = cam.keypoints[k];
                 f << "," << kp.x << "," << kp.y << ",";
                 if (kp.confidence > 0.0f)
@@ -175,11 +180,14 @@ inline bool save_3d_csv(const std::string &path, const std::string &skeleton_nam
 }
 
 // Create a timestamped subfolder under root_dir, save 3D + all 2D CSVs.
+// Cameras in excluded_cameras (bad calibration) get a CSV with every
+// keypoint blank, and are listed in excluded_cameras.txt.
 // Returns the folder path on success, or empty string on error.
 inline std::string save_all(const std::string &root_dir, const std::string &skeleton_name,
                              const AnnotationMap &amap, int num_cameras, int num_nodes,
                              const std::vector<std::string> &camera_names,
-                             std::string *error = nullptr) {
+                             std::string *error = nullptr,
+                             const std::vector<std::string> &excluded_cameras = {}) {
     std::string ts = current_timestamp();
     std::string folder = root_dir + "/" + ts;
 
@@ -202,14 +210,21 @@ inline std::string save_all(const std::string &root_dir, const std::string &skel
                                     ? camera_names[c]
                                     : "camera" + std::to_string(c);
         std::string cam_path = folder + "/" + cam_name + ".csv";
-        if (!save_2d_csv(cam_path, skeleton_name, amap, c, num_nodes)) {
+        bool blank = std::find(excluded_cameras.begin(), excluded_cameras.end(),
+                               cam_name) != excluded_cameras.end();
+        if (!save_2d_csv(cam_path, skeleton_name, amap, c, num_nodes, blank)) {
             if (error) *error = "Failed to write " + cam_name + ".csv";
             return {};
         }
     }
 
+    if (!excluded_cameras.empty()) {
+        std::ofstream ex(folder + "/excluded_cameras.txt");
+        for (const auto &cam : excluded_cameras) ex << cam << "\n";
+    }
+
     // Save extended annotations (bbox, obb, mask) if any
-    save_annotations_json(amap, folder);
+    save_annotations_json(amap, folder, camera_names, excluded_cameras);
 
     return folder;
 }
@@ -412,7 +427,7 @@ inline int load_all(const std::string &folder, AnnotationMap &amap,
     }
 
     // Load extended annotations (bbox, obb, mask) if present
-    load_annotations_json(amap, folder);
+    load_annotations_json(amap, folder, camera_names);
 
     return has_error ? 1 : 0;
 }

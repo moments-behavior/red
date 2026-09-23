@@ -220,7 +220,7 @@ inline void close_project(AppContext &ctx) {
         AnnotationCSV::save_all(ctx.pm.keypoints_root_folder,
             ctx.skeleton.name, ctx.annotations,
             ctx.scene->num_cams, ctx.skeleton.num_nodes,
-            ctx.pm.camera_names, &save_err);
+            ctx.pm.camera_names, &save_err, ctx.pm.excluded_cameras);
     }
 
     // 2. Save ImGui ini
@@ -261,6 +261,8 @@ inline void close_project(AppContext &ctx) {
     ctx.pm.annotation_config = AnnotationConfig{};
     ctx.pm.jarvis_models.clear();
     ctx.pm.active_jarvis_model = -1;
+    ctx.pm.excluded_cameras.clear();
+    ctx.pm.camera_check.clear();
 
     // 7. Reset display state (project-specific: different videos need different settings)
     ctx.display = DisplayState{};

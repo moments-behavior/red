@@ -129,8 +129,9 @@ inline void DrawLabelingToolWindow(
                                    !pm.camera_params.empty();
             ImGui::BeginDisabled(!can_triangulate);
             if (ImGui::Button("Triangulate")) {
-                reprojection(annotations.at(current_frame_num),
-                             &skeleton, pm.camera_params, scene);
+                triangulate_frame(annotations.at(current_frame_num),
+                                  (u32)current_frame_num, &skeleton, pm,
+                                  scene);
             }
             ImGui::EndDisabled();
             if (keypoints_find && pm.camera_params.empty()) {
@@ -557,7 +558,7 @@ inline void DrawLabelingToolWindow(
         std::string saved_folder = AnnotationCSV::save_all(
             pm.keypoints_root_folder, skeleton.name,
             annotations, scene->num_cams, skeleton.num_nodes,
-            pm.camera_names, &save_err);
+            pm.camera_names, &save_err, pm.excluded_cameras);
         if (saved_folder.empty()) {
             toasts.pushError("Save failed: " + save_err);
         } else {

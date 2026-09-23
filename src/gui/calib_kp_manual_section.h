@@ -322,7 +322,7 @@ inline void DrawCalibKPManualSection(
             std::string saved = AnnotationCSV::save_all(
                 pm.keypoints_root_folder, ctx.skeleton.name,
                 ctx.annotations, scene->num_cams, ctx.skeleton.num_nodes,
-                pm.camera_names, &save_err);
+                pm.camera_names, &save_err, pm.excluded_cameras);
             if (saved.empty())
                 state.kp_status = "Save failed: " + save_err;
             else

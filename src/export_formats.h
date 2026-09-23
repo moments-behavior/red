@@ -79,7 +79,34 @@ struct ExportConfig {
 
     // Nerfstudio-specific: frame list (if empty, uses annotated frames)
     std::vector<int> nerfstudio_frames;
+
+    // Cameras with bad calibration — dropped from every format by
+    // export_dataset() (names, calibration and 2D all removed together).
+    std::vector<std::string> excluded_cameras;
 };
+
+// Remove excluded cameras from the config and the annotation map in
+// lock-step, so camera indices in `amap` keep matching `camera_names`.
+inline void drop_excluded_cameras(ExportConfig &cfg, AnnotationMap &amap) {
+    if (cfg.excluded_cameras.empty()) return;
+    std::vector<int> keep;
+    for (int c = 0; c < (int)cfg.camera_names.size(); ++c)
+        if (std::find(cfg.excluded_cameras.begin(), cfg.excluded_cameras.end(),
+                      cfg.camera_names[c]) == cfg.excluded_cameras.end())
+            keep.push_back(c);
+    if (keep.size() == cfg.camera_names.size()) return;
+
+    auto pick = [&](auto &v) {
+        std::remove_reference_t<decltype(v)> out;
+        for (int c : keep)
+            if (c < (int)v.size()) out.push_back(std::move(v[c]));
+        v = std::move(out);
+    };
+    pick(cfg.camera_names);
+    pick(cfg.camera_params);
+    for (auto &[f, fa] : amap) pick(fa.cameras);
+    cfg.excluded_cameras.clear();
+}
 
 // ── Train/val split helper ──
 inline void split_train_val(const std::vector<u32> &frames, float train_ratio,
@@ -919,6 +946,13 @@ inline bool export_dataset(Format fmt, const ExportConfig &cfg,
                            std::atomic<int> *img_counter = nullptr) {
     namespace fs = std::filesystem;
     fs::create_directories(cfg.output_folder);
+
+    if (!cfg.excluded_cameras.empty()) {
+        ExportConfig c2 = cfg;
+        AnnotationMap a2 = amap;
+        drop_excluded_cameras(c2, a2);
+        return export_dataset(fmt, c2, a2, status, img_counter);
+    }
 
     switch (fmt) {
     case JARVIS:      return export_jarvis(cfg, amap, status, img_counter);

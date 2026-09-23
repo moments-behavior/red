@@ -68,6 +68,50 @@ Opens after a proofread project is created/loaded. Scoped to the loaded
   `seek_all_cameras` to that video frame. The seek path is source-agnostic.
 - `min gap` debounces clusters of adjacent bad frames down to one pick.
 
+### Bad-calibration cameras
+
+A proofread session's calibration is sometimes wrong for one or two cameras,
+which drags every triangulated keypoint off. Such cameras are **excluded**:
+they are not loaded at all (no view), take no part in Triangulate / Refine,
+and their data is not saved or exported.
+
+- **Auto (server):** on *Create*, red calls `/api/session_camera_check` and
+  pre-excludes every camera the dashboard flags (see below). If that would
+  leave fewer than 2 cameras, nothing is auto-excluded.
+- **Auto (red):** every Triangulate records the frame's raw 2D (predictions /
+  manual labels, before they are overwritten by reprojections). The
+  *Cameras* section of the Proofread Queue analyzes those samples and marks
+  a camera **suggest exclude** when it is the outlier:
+  - its median error against a triangulation from the other cameras is
+    ≥ 8 px and ≥ 3× the typical camera's (decisive with many cameras), or
+  - leaving it out makes the rest agree ≥ 3× better (decisive with few
+    cameras, where one bad camera inflates everyone's error).
+
+  Applied greedily, so a second bad camera shows up once the first is set
+  aside. *Scan annotated frames* adds every frame with un-triangulated 2D
+  (e.g. after batch predict).
+- **Manual:** untick **Use** next to any camera; tick it to bring one back.
+  The change is saved to `.redproj` right away, and triangulation, save and
+  export ignore the camera immediately. **Apply (reload project)** saves
+  labels and reloads so the camera stops being loaded; it returns to the
+  same frame.
+
+Columns: **Error px** is red's measurement; **Server** is the calibration
+solve's landmark reprojection error (`dropped` = excluded by the prediction
+pipeline, `n/a` = not verifiable, e.g. JARVIS-format calibration). Hover
+for details.
+
+What exclusion changes:
+
+| Where | Effect |
+| --- | --- |
+| Load (`setup_project`) | Excluded cameras are removed from `camera_names` — not decoded, no view, no calibration. |
+| Triangulate / T / Refine 3D | Excluded cameras are left out, and their 2D is never overwritten with a reprojection through the bad calibration. |
+| Save (`save_all`) | An excluded-but-loaded camera's CSV is written blank; `excluded_cameras.txt` lists them. `annotations.json` stores `cam_name`, so bbox/mask data maps by name when the camera set changes. |
+| Export (JARVIS window, all formats in Export) | Excluded cameras get no images, labels or calibration yaml. |
+
+Persisted as `"excluded_cameras": ["Cam2006515"]` in `.redproj`.
+
 ### Load Proofread Project
 
 Reopens a saved `.redproj`; the Proofread Queue re-fetches the bad-frame list
@@ -83,6 +127,7 @@ All on the dashboard (`mouse_dashboard/app.py`):
 | `GET /api/bad_frames_all` | Cross-session IK-residual bad frames (fills the pickers + the IK queue). |
 | `GET /api/scorer_bad_frames_all` | Cross-session **scorer**-labelled bad frames (the `Scorer` source). Mirrors `bad_frames_all` but sourced from `scorer.parquet`. |
 | `GET /api/session_calib_zip` | ZIP of the session's `Cam*.yaml` calibration. |
+| `GET /api/session_camera_check` | Per-camera verdicts for that same calibration (`mouse_dashboard/camera_check.py`): `suspect` when the calibration solve's landmark reprojection error is > 8 px, or when the prediction pipeline excluded the camera (`excluded_cams` in the session's `info.yaml` — blur, desync or bad reprojection). The server has no per-camera 2D predictions, so it can't run red's pose-based check. |
 
 ### Auth / trusted-IP bypass
 
@@ -106,7 +151,8 @@ Anything off the list falls back to the normal login.
 ```json
 "proofread_server_url": "http://10.102.10.138:8000",
 "proofread_animal":     "rat",
-"proofread_session":    "2026_05_21_12_57_09"
+"proofread_session":    "2026_05_21_12_57_09",
+"excluded_cameras":     ["Cam2006515"]
 ```
 
 ## Code layout
@@ -118,7 +164,9 @@ Anything off the list falls back to the normal login.
 | `src/gui/proofread_window.h` | `Proofread Queue` panel: source toggle, filters, bad-frame table with per-row Seek. |
 | `src/gui/main_menu_bar.h`, `welcome_window.h` | `Proofread` menu + Welcome-screen section. |
 | `src/project.h` | `proofread_*` fields, persisted in `.redproj`. |
-| `src/red.cpp` | Seek handler: turns a queue `Seek` into an accurate `seek_all_cameras`. |
+| `src/red.cpp` | Seek handler: turns a queue `Seek` into an accurate `seek_all_cameras`; *Apply (reload project)* handler. |
+| `src/camera_check.h` | Raw-2D samples for the camera check, thresholds, exclusion mask. |
+| `src/gui/gui_keypoints.h` | `reprojection` / `refine_3d_ba` take the exclusion mask; `analyze_camera_check`; `triangulate_frame`. |
 
 ## Known limits
 

@@ -4,8 +4,10 @@
 #include "render.h"
 #include "skeleton.h"
 #include "camera.h"
+#include "project.h"
 #include "red_math.h"
 #include <ceres/ceres.h>
+#include <Eigen/Eigenvalues>
 #include <cmath>
 #include <sstream>
 #include <vector>
@@ -109,17 +111,24 @@ inline bool is_in_camera_fov(const Eigen::Vector3d &point_world,
     return (x > 0 && x < image_width && y > 0 && y < image_height);
 }
 
+// `excluded[c]` true = camera c's calibration is not trusted: it is left out
+// of the triangulation and its 2D is left untouched (neither used nor
+// overwritten with a reprojection through the bad calibration).
 inline void reprojection(FrameAnnotation &fa, SkeletonContext *skeleton,
                          const std::vector<CameraParams> &camera_params,
-                         RenderScene *scene) {
+                         RenderScene *scene,
+                         const std::vector<bool> &excluded = {}) {
 
     bool telecentric = !camera_params.empty() && camera_params[0].telecentric;
+    auto is_excluded = [&](u32 c) {
+        return c < (u32)excluded.size() && excluded[c];
+    };
 
     for (u32 node = 0; node < skeleton->num_nodes; node++) {
 
         u32 num_views_labeled{0};
         for (u32 view_idx = 0; view_idx < scene->num_cams; view_idx++) {
-            if (view_idx < (u32)fa.cameras.size() &&
+            if (!is_excluded(view_idx) && view_idx < (u32)fa.cameras.size() &&
                 node < (u32)fa.cameras[view_idx].keypoints.size() &&
                 fa.cameras[view_idx].keypoints[node].labeled) {
                 num_views_labeled++;
@@ -132,6 +141,7 @@ inline void reprojection(FrameAnnotation &fa, SkeletonContext *skeleton,
             std::vector<Eigen::Matrix<double, 3, 4>> proj_mats;
 
             for (u32 view_idx = 0; view_idx < scene->num_cams; view_idx++) {
+                if (is_excluded(view_idx)) continue;
                 if (view_idx >= (u32)fa.cameras.size()) continue;
                 if (node >= (u32)fa.cameras[view_idx].keypoints.size()) continue;
                 if (fa.cameras[view_idx].keypoints[node].labeled) {
@@ -166,6 +176,7 @@ inline void reprojection(FrameAnnotation &fa, SkeletonContext *skeleton,
             fa.kp3d[node].triangulated = true;
 
             for (u32 view_idx = 0; view_idx < scene->num_cams; view_idx++) {
+                if (is_excluded(view_idx)) continue;
                 if (view_idx >= (u32)fa.cameras.size()) continue;
                 if (node >= (u32)fa.cameras[view_idx].keypoints.size()) continue;
 
@@ -284,14 +295,19 @@ struct Refine3DReprojErr {
 // reprojects onto every camera so the 2D overlay reflects the new 3D.
 // Telecentric cameras fall back to the closed-form reprojection() path since
 // we haven't wired up a telecentric cost functor yet.
+// `excluded` has the same meaning as in reprojection().
 inline void refine_3d_ba(FrameAnnotation &fa, SkeletonContext *skeleton,
                          const std::vector<CameraParams> &camera_params,
-                         RenderScene *scene) {
+                         RenderScene *scene,
+                         const std::vector<bool> &excluded = {}) {
     if (camera_params.empty() || !skeleton || !scene) return;
     if (camera_params[0].telecentric) {
-        reprojection(fa, skeleton, camera_params, scene);
+        reprojection(fa, skeleton, camera_params, scene, excluded);
         return;
     }
+    auto is_excluded = [&](u32 c) {
+        return c < (u32)excluded.size() && excluded[c];
+    };
 
     int nodes_refined = 0;
     double err_before_sum = 0.0, err_after_sum = 0.0;
@@ -306,6 +322,7 @@ inline void refine_3d_ba(FrameAnnotation &fa, SkeletonContext *skeleton,
         std::vector<int> cam_idx;
         std::vector<Eigen::Vector2d> obs_pix;
         for (u32 ci = 0; ci < scene->num_cams; ci++) {
+            if (is_excluded(ci)) continue;
             if (ci >= (u32)fa.cameras.size()) continue;
             if (node >= (u32)fa.cameras[ci].keypoints.size()) continue;
             const auto &kp = fa.cameras[ci].keypoints[node];
@@ -396,6 +413,7 @@ inline void refine_3d_ba(FrameAnnotation &fa, SkeletonContext *skeleton,
         // project into are unlabeled so stale 2D can't skew the next
         // triangulation.
         for (u32 view_idx = 0; view_idx < scene->num_cams; view_idx++) {
+            if (is_excluded(view_idx)) continue;
             if (view_idx >= (u32)fa.cameras.size()) continue;
             if (node >= (u32)fa.cameras[view_idx].keypoints.size()) continue;
             bool placed = false;
@@ -433,4 +451,220 @@ inline void refine_3d_ba(FrameAnnotation &fa, SkeletonContext *skeleton,
                 "%.3f → %.3f px\n",
                 nodes_refined, obs_total, rms_before, rms_after);
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Camera calibration check (see camera_check.h for the method).
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Raw labeled 2D of one frame, for CameraCheckStats::record(). raw_only:
+// skip nodes whose 3D is already triangulated — their 2D is then a
+// reprojection, consistent by construction, and says nothing about the
+// calibration.
+inline CameraCheckStats::FrameObs
+collect_camera_check_obs(const FrameAnnotation &fa,
+                         const SkeletonContext *skeleton,
+                         const RenderScene *scene, bool raw_only = true) {
+    CameraCheckStats::FrameObs out;
+    if (!skeleton || !scene) return out;
+    out.resize(skeleton->num_nodes);
+    for (u32 node = 0; node < (u32)skeleton->num_nodes; node++) {
+        if (raw_only && node < (u32)fa.kp3d.size() && fa.kp3d[node].triangulated)
+            continue;
+        for (u32 c = 0; c < scene->num_cams && c < (u32)fa.cameras.size(); c++) {
+            if (node >= (u32)fa.cameras[c].keypoints.size()) continue;
+            const auto &kp = fa.cameras[c].keypoints[node];
+            if (kp.labeled)
+                out[node].push_back(
+                    {(int)c, Eigen::Vector2d(
+                                 kp.x, (double)scene->image_height[c] - kp.y)});
+        }
+    }
+    return out;
+}
+
+// Greedy bad-camera detection over all recorded samples. Each round scores
+// every active camera two ways and sets aside the worst one if either is
+// decisive:
+//   loo  — its error against a triangulation from the other active cameras.
+//          Decisive with many cameras (the bad one barely leaks into each
+//          other camera's reference set).
+//   drop — how well the *other* active cameras agree when it is left out.
+//          Decisive with few cameras, where the bad one inflates everyone's
+//          loo but dropping it makes the rest agree.
+// Cameras already in `excluded` never serve as reference; they are still
+// scored (loo_px). Perspective cameras only.
+//
+// DLT here uses unit-normalized rows accumulated into a 4x4 normal matrix
+// per view, so dropping a view is a subtraction instead of a new SVD.
+inline CameraCheckResult
+analyze_camera_check(const CameraCheckStats &st,
+                     const std::vector<CameraParams> &cp, int nc,
+                     const std::vector<bool> &excluded = {}) {
+    CameraCheckResult r;
+    r.cams.resize(nc);
+    r.frames = (int)st.per_frame.size();
+    if (nc < 3 || (int)cp.size() < nc || cp[0].telecentric) return r;
+
+    struct V { int cam; Eigen::Vector2d px; Eigen::Matrix4d M; };
+    std::vector<std::vector<V>> nodes;
+    for (const auto &[f, fobs] : st.per_frame) {
+        for (const auto &obs : fobs) {
+            if (obs.size() < 3) continue;
+            std::vector<V> vs;
+            for (const auto &o : obs) {
+                if (o.cam < 0 || o.cam >= nc) continue;
+                const auto &c = cp[o.cam];
+                Eigen::Vector2d u =
+                    red_math::undistortPoint(o.px, c.k, c.dist_coeffs);
+                Eigen::Matrix4d M = Eigen::Matrix4d::Zero();
+                for (int i = 0; i < 2; ++i) {
+                    Eigen::Vector4d row =
+                        (u(i) * c.projection_mat.row(2) -
+                         c.projection_mat.row(i)).transpose();
+                    double nrm = row.norm();
+                    if (nrm > 0) row /= nrm;
+                    M += row * row.transpose();
+                }
+                vs.push_back({o.cam, o.px, M});
+            }
+            if (vs.size() >= 3) nodes.push_back(std::move(vs));
+        }
+    }
+
+    auto solve = [](const Eigen::Matrix4d &M, Eigen::Vector3d &X) {
+        Eigen::SelfAdjointEigenSolver<Eigen::Matrix4d> es(M);
+        Eigen::Vector4d h = es.eigenvectors().col(0);
+        if (std::abs(h(3)) < 1e-12) return false;
+        X = h.head<3>() / h(3);
+        return X.allFinite();
+    };
+    auto err_px = [&](const Eigen::Vector3d &X, const V &v) {
+        const auto &c = cp[v.cam];
+        if ((c.r * X + c.tvec)(2) <= 0) return NAN;  // behind the camera
+        return (float)(red_math::projectPointR(X, c.r, c.tvec, c.k,
+                                               c.dist_coeffs) - v.px).norm();
+    };
+    auto median = [](std::vector<float> v) {
+        if (v.empty()) return (float)NAN;
+        std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end());
+        return v[v.size() / 2];
+    };
+
+    // One pass over all samples with the given active set.
+    auto score = [&](const std::vector<bool> &active,
+                     std::vector<std::vector<float>> &loo,
+                     std::vector<std::vector<float>> *drop) {
+        loo.assign(nc, {});
+        if (drop) drop->assign(nc, {});
+        for (const auto &vs : nodes) {
+            Eigen::Matrix4d Mact = Eigen::Matrix4d::Zero();
+            int n_act = 0;
+            for (const auto &v : vs)
+                if (active[v.cam]) { Mact += v.M; n_act++; }
+            if (n_act < 2) continue;
+            Eigen::Vector3d Xall;
+            bool have_all = false, tried_all = false;
+            for (const auto &k : vs) {
+                Eigen::Vector3d X;
+                if (!active[k.cam]) {  // scored against every active camera
+                    if (!tried_all) {
+                        have_all = solve(Mact, Xall);
+                        tried_all = true;
+                    }
+                    if (!have_all) continue;
+                    X = Xall;
+                } else {
+                    if (n_act < 3 || !solve(Mact - k.M, X)) continue;
+                }
+                float e = err_px(X, k);
+                if (std::isfinite(e)) loo[k.cam].push_back(e);
+                // Agreement of the rest (>= 3 needed to mean anything).
+                if (drop && active[k.cam] && n_act >= 4) {
+                    double sum = 0;
+                    int n = 0;
+                    for (const auto &v : vs) {
+                        if (!active[v.cam] || v.cam == k.cam) continue;
+                        float ev = err_px(X, v);
+                        if (std::isfinite(ev)) { sum += ev; n++; }
+                    }
+                    if (n > 0) (*drop)[k.cam].push_back((float)(sum / n));
+                }
+            }
+        }
+    };
+
+    std::vector<bool> active(nc);
+    for (int c = 0; c < nc; ++c)
+        active[c] = !(c < (int)excluded.size() && excluded[c]);
+
+    std::vector<std::vector<float>> loo, drop;
+    for (int round = 0; round < nc; ++round) {
+        score(active, loo, &drop);
+        int n_active = 0;
+        std::vector<float> loo_med(nc, NAN), drop_med(nc, NAN);
+        std::vector<float> loo_all, drop_all;
+        int worst = -1, most_agree = -1;
+        for (int c = 0; c < nc; ++c) {
+            if (!active[c]) continue;
+            n_active++;
+            if ((int)loo[c].size() >= kCamCheckMinSamples) {
+                loo_med[c] = median(loo[c]);
+                loo_all.push_back(loo_med[c]);
+                if (worst < 0 || loo_med[c] > loo_med[worst]) worst = c;
+            }
+            if ((int)drop[c].size() >= kCamCheckMinSamples) {
+                drop_med[c] = median(drop[c]);
+                drop_all.push_back(drop_med[c]);
+                if (most_agree < 0 || drop_med[c] < drop_med[most_agree])
+                    most_agree = c;
+            }
+        }
+        float typical_drop = drop_all.size() >= 3 ? median(drop_all) : NAN;
+        if (round == 0) {
+            r.typical_drop_px = typical_drop;
+            for (int c = 0; c < nc; ++c) r.cams[c].drop_px = drop_med[c];
+        }
+        if (n_active <= 3) break;  // keep >= 3 reference cameras
+
+        int flag = -1;
+        if (loo_all.size() >= 3) {
+            float typical = median(loo_all);
+            if (loo_med[worst] >= kCamCheckMinPx &&
+                loo_med[worst] >= kCamCheckGain * typical)
+                flag = worst;
+        }
+        if (flag < 0 && std::isfinite(typical_drop) &&
+            typical_drop >= kCamCheckMinPx / 2 &&
+            typical_drop >= kCamCheckGain * std::max(drop_med[most_agree], 0.25f))
+            flag = most_agree;
+        if (flag < 0) break;
+        r.cams[flag].suggested = true;
+        active[flag] = false;
+    }
+
+    // Final per-camera error against the consistent (active) set.
+    score(active, loo, nullptr);
+    for (int c = 0; c < nc; ++c) {
+        r.cams[c].samples = (int)loo[c].size();
+        r.cams[c].loo_px = median(loo[c]);
+    }
+    return r;
+}
+
+// Triangulate one frame honoring the project's excluded cameras. Records the
+// frame's raw 2D first (into pm.camera_check) so the Proofread panel can
+// suggest badly calibrated cameras.
+inline void triangulate_frame(FrameAnnotation &fa, u32 frame,
+                              SkeletonContext *skeleton, ProjectManager &pm,
+                              RenderScene *scene) {
+    pm.camera_check.record(frame,
+                           collect_camera_check_obs(fa, skeleton, scene));
+    reprojection(fa, skeleton, pm.camera_params, scene,
+                 excluded_camera_mask(pm));
+}
+
+// New 2D (e.g. a fresh prediction) invalidates the frame's 3D.
+inline void mark_frame_untriangulated(FrameAnnotation &fa) {
+    for (auto &k : fa.kp3d) k.triangulated = false;
 }

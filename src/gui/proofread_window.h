@@ -4,6 +4,13 @@
 // dashboard's /api/bad_frames_all endpoint, scoped to (pm.proofread_animal,
 // pm.proofread_session), and lets the user click any frame to seek.
 //
+// Cameras section: per-camera calibration check + exclusion. A camera can be
+// flagged by the dashboard (/api/session_camera_check — calibration-solve
+// reprojection error, or dropped by the prediction pipeline) or by red's own
+// leave-one-out check on the 2D it triangulates (camera_check.h). Unticking
+// "Use" adds the camera to pm.excluded_cameras: triangulation, save and
+// export then ignore it.
+//
 // Action signal:
 //   - open_requested + requested_frame
 //     The main loop reads these and issues an accurate seek_all_cameras
@@ -12,6 +19,7 @@
 #include "imgui.h"
 #include "proofread_client.h"
 #include "app_context.h"
+#include "gui/gui_keypoints.h"
 
 #include <misc/cpp/imgui_stdlib.h>
 
@@ -37,6 +45,20 @@ struct ProofreadWindowState {
 
     // True once we've auto-fetched on first show.
     bool initial_fetch_done = false;
+
+    // Server-side per-camera calibration verdicts for the loaded session.
+    ProofreadCameraCheck cam_check;
+
+    // Cached client-side analysis of pm.camera_check (recomputed only when
+    // the samples or the exclusion set change).
+    CameraCheckResult analysis;
+    int analysis_version = -1;
+    std::vector<bool> analysis_mask;
+
+    // Camera set changed (excluded / re-included): the main loop reloads the
+    // project so excluded cameras disappear (see setup_project).
+    bool cameras_dirty = false;
+    bool reload_requested = false;
 };
 
 
@@ -49,6 +71,186 @@ inline const ProofreadSession *find_session(const ProofreadState &s,
         if (ps.animal == animal && ps.session == session) return &ps;
     }
     return nullptr;
+}
+
+inline void save_redproj(const ProjectManager &pm) {
+    if (pm.project_path.empty() || pm.project_name.empty()) return;
+    save_project_manager_json(pm, std::filesystem::path(pm.project_path) /
+                                      (pm.project_name + ".redproj"));
+}
+
+inline void draw_cameras_section(ProofreadWindowState &w, AppContext &ctx) {
+    auto &pm = ctx.pm;
+    const int nc = (int)pm.camera_names.size();
+    if (nc == 0 || pm.camera_params.empty() || !ctx.scene) {
+        ImGui::TextDisabled("(no cameras / calibration loaded)");
+        return;
+    }
+
+    const auto excluded = excluded_camera_mask(pm);
+    int n_used = 0;
+    for (bool ex : excluded) n_used += !ex;
+    if (ImGui::SmallButton("Scan annotated frames")) {
+        for (const auto &[frame, fa] : ctx.annotations)
+            pm.camera_check.record(frame, collect_camera_check_obs(
+                                              fa, &ctx.skeleton, ctx.scene));
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Sample every frame with un-triangulated 2D "
+                          "(e.g. after batch predict).\n"
+                          "Frames are also sampled automatically on each "
+                          "Triangulate.");
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Reset samples")) pm.camera_check.clear();
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Re-check server"))
+        proofread_fetch_camera_check(w.server.url, pm.proofread_animal,
+                                     pm.proofread_session, w.cam_check);
+    if (w.analysis_version != pm.camera_check.version ||
+        w.analysis_mask != excluded) {
+        w.analysis = analyze_camera_check(pm.camera_check, pm.camera_params,
+                                          nc, excluded);
+        w.analysis_version = pm.camera_check.version;
+        w.analysis_mask = excluded;
+    }
+    const auto &res = w.analysis;
+    ImGui::TextDisabled("Error = median reprojection error vs. the "
+                        "consistent cameras, %d frame(s) sampled",
+                        res.frames);
+    if (!w.cam_check.status.empty())
+        ImGui::TextDisabled("%s", w.cam_check.status.c_str());
+
+    const ImVec4 red(1.0f, 0.45f, 0.45f, 1.0f);
+    if (ImGui::BeginTable("##cams", 5,
+                          ImGuiTableFlags_RowBg |
+                              ImGuiTableFlags_BordersInnerH |
+                              ImGuiTableFlags_SizingFixedFit)) {
+        ImGui::TableSetupColumn("Use");
+        ImGui::TableSetupColumn("Camera");
+        ImGui::TableSetupColumn("Error px");
+        ImGui::TableSetupColumn("Server");
+        ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableHeadersRow();
+
+        for (int c = 0; c < nc; ++c) {
+            const std::string &cam = pm.camera_names[c];
+            const auto *sv = w.cam_check.find(cam);
+            const bool server_bad = sv && sv->suspect;
+            ImGui::PushID(c);
+            ImGui::TableNextRow();
+
+            ImGui::TableNextColumn();
+            bool use = !excluded[c];
+            // Keep >= 2 cameras: triangulation needs two views.
+            ImGui::BeginDisabled(use && n_used <= 2);
+            if (ImGui::Checkbox("##use", &use)) {
+                auto &ex = pm.excluded_cameras;
+                if (use)
+                    ex.erase(std::remove(ex.begin(), ex.end(), cam), ex.end());
+                else
+                    ex.push_back(cam);
+                save_redproj(pm);
+                w.cameras_dirty = true;
+            }
+            ImGui::EndDisabled();
+
+            ImGui::TableNextColumn();
+            if (excluded[c]) ImGui::TextDisabled("%s", cam.c_str());
+            else ImGui::TextUnformatted(cam.c_str());
+
+            ImGui::TableNextColumn();
+            const auto &rc = res.cams[c];
+            if (rc.samples == 0)
+                ImGui::TextDisabled("-");
+            else if (rc.suggested)
+                ImGui::TextColored(red, "%.1f", rc.loo_px);
+            else
+                ImGui::Text("%.1f", rc.loo_px);
+            if (rc.samples > 0 && ImGui::IsItemHovered()) {
+                if (std::isfinite(rc.drop_px))
+                    ImGui::SetTooltip(
+                        "%d keypoint samples\nWith this camera left out, the "
+                        "others agree to %.1f px\n(typical: %.1f px)",
+                        rc.samples, rc.drop_px, res.typical_drop_px);
+                else
+                    ImGui::SetTooltip("%d keypoint samples", rc.samples);
+            }
+
+            ImGui::TableNextColumn();
+            if (!sv) {
+                ImGui::TextDisabled("-");
+            } else {
+                char buf[32];
+                if (sv->reproj_px >= 0)
+                    std::snprintf(buf, sizeof(buf), "%.1f px", sv->reproj_px);
+                else
+                    std::snprintf(buf, sizeof(buf), "%s",
+                                  sv->pipeline_excluded ? "dropped" : "n/a");
+                if (server_bad) ImGui::TextColored(red, "%s", buf);
+                else ImGui::TextUnformatted(buf);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip(
+                        "%s", !sv->reason.empty() ? sv->reason.c_str()
+                              : sv->reproj_px >= 0
+                                  ? "calibration-solve landmark reprojection error"
+                                  : "not verified (no calibration-solve artifacts)");
+            }
+
+            ImGui::TableNextColumn();
+            if (!excluded[c] && (rc.suggested || server_bad))
+                ImGui::TextColored(red, "suggest exclude");
+            else if (excluded[c])
+                ImGui::TextDisabled("excluded");
+            ImGui::PopID();
+        }
+
+        // Excluded cameras that were never loaded (bad calibration): listed
+        // so they can be brought back.
+        for (const auto &cam : std::vector<std::string>(pm.excluded_cameras)) {
+            if (std::find(pm.camera_names.begin(), pm.camera_names.end(),
+                          cam) != pm.camera_names.end())
+                continue;
+            const auto *sv = w.cam_check.find(cam);
+            ImGui::PushID(cam.c_str());
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            bool use = false;
+            if (ImGui::Checkbox("##use", &use) && use) {
+                auto &ex = pm.excluded_cameras;
+                ex.erase(std::remove(ex.begin(), ex.end(), cam), ex.end());
+                pm.camera_names.push_back(cam);
+                std::sort(pm.camera_names.begin(), pm.camera_names.end());
+                save_redproj(pm);
+                w.cameras_dirty = true;
+            }
+            ImGui::TableNextColumn();
+            ImGui::TextDisabled("%s", cam.c_str());
+            ImGui::TableNextColumn();
+            ImGui::TextDisabled("-");
+            ImGui::TableNextColumn();
+            if (sv && sv->reproj_px >= 0)
+                ImGui::TextColored(red, "%.1f px", sv->reproj_px);
+            else
+                ImGui::TextDisabled(sv && sv->pipeline_excluded ? "dropped" : "-");
+            if (sv && !sv->reason.empty() && ImGui::IsItemHovered())
+                ImGui::SetTooltip("%s", sv->reason.c_str());
+            ImGui::TableNextColumn();
+            ImGui::TextDisabled("not loaded");
+            ImGui::PopID();
+        }
+        ImGui::EndTable();
+    }
+
+    if (w.cameras_dirty) {
+        ImGui::TextColored(red, "Camera set changed.");
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Apply (reload project)"))
+            w.reload_requested = true;
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Saves labels, then reloads so excluded "
+                              "cameras are not loaded.\nUntil then they are "
+                              "already ignored by Triangulate, save and export.");
+    }
 }
 
 }  // namespace proofread_window_detail
@@ -85,6 +287,8 @@ inline void DrawProofreadWindow(ProofreadWindowState &w, AppContext &ctx) {
         if (!pm.proofread_server_url.empty())
             w.server.url = pm.proofread_server_url;
         proofread_fetch(w.server);
+        proofread_fetch_camera_check(w.server.url, pm.proofread_animal,
+                                     pm.proofread_session, w.cam_check);
         w.initial_fetch_done = true;
     }
 
@@ -147,6 +351,12 @@ inline void DrawProofreadWindow(ProofreadWindowState &w, AppContext &ctx) {
         ImGui::TextColored(col, "%s", w.server.status.c_str());
     }
     ImGui::Separator();
+
+    // ── Cameras: calibration check + exclusion ───────────────────────
+    if (ImGui::CollapsingHeader("Cameras", ImGuiTreeNodeFlags_DefaultOpen)) {
+        proofread_window_detail::draw_cameras_section(w, ctx);
+        ImGui::Separator();
+    }
 
     // ── Per-session header ────────────────────────────────────────────
     ImGui::Text("%s   %s",

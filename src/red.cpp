@@ -560,8 +560,9 @@ int main(int argc, char **argv) {
                             toasts.push("No calibration loaded",
                                         Toast::Warning, 3.0f);
                         } else if (annotations.count(current_frame_num)) {
-                            reprojection(annotations.at(current_frame_num),
-                                         &skeleton, pm.camera_params, scene);
+                            triangulate_frame(
+                                annotations.at(current_frame_num),
+                                (u32)current_frame_num, &skeleton, pm, scene);
                         }
                     }
                 },
@@ -715,18 +716,47 @@ int main(int argc, char **argv) {
         panels.drawAll();
 
         // Handle main menu file dialogs
-        HandleMainMenuDialogs(ctx, win, media_root_dir,
-                              print_metadata, print_summary,
-                              [&]() {
-                                  sam_state = SamState{};
-                                  jarvis_state = JarvisState{};
+        auto nuke_inference = [&]() {
+            sam_state = SamState{};
+            jarvis_state = JarvisState{};
 #ifdef RED_HAS_MUJOCO
-                                  mujoco_ctx.unload();
+            mujoco_ctx.unload();
 #endif
 #ifdef __APPLE__
-                                  jarvis_coreml_state = JarvisCoreMLState{};
+            jarvis_coreml_state = JarvisCoreMLState{};
 #endif
-                              });
+        };
+        HandleMainMenuDialogs(ctx, win, media_root_dir,
+                              print_metadata, print_summary, nuke_inference);
+
+        // --- Proofread Queue: apply a changed camera set ---
+        // Reload the project from its (already updated) .redproj so
+        // excluded cameras are not loaded; close_project() saves labels
+        // first. Returns to the same frame.
+        if (win.proofread.reload_requested) {
+            win.proofread.reload_requested = false;
+            const int frame = current_frame_num;
+            std::filesystem::path path =
+                std::filesystem::path(pm.project_path) /
+                (pm.project_name + ".redproj");
+            ProjectManager loaded;
+            std::string err;
+            if (!load_project_manager_json(&loaded, path, &err)) {
+                popups.pushError(err);
+            } else {
+                close_project(ctx);
+                win.reset();
+                nuke_inference();
+                pm = loaded;
+                if (setup_project(pm, skeleton, skeleton_map, &err)) {
+                    on_project_loaded(ctx, print_metadata, print_summary);
+                    win.proofread.show = true;
+                    win.proofread.pending_seek_frame = frame;
+                } else {
+                    popups.pushError(err);
+                }
+            }
+        }
 
         static int select_corr_head = 0;
         if (ps.video_loaded && (!ps.play_video)) {
@@ -1415,8 +1445,10 @@ int main(int argc, char **argv) {
                         skeleton, (int)scene->num_cams,
                         win.jarvis_predict.confidence_threshold);
                     // Triangulate (reprojection is in gui_keypoints.h, only in this TU)
-                    reprojection(annotations.at(current_frame_num),
-                                 &skeleton, pm.camera_params, scene);
+                    mark_frame_untriangulated(annotations.at(current_frame_num));
+                    triangulate_frame(annotations.at(current_frame_num),
+                                      (u32)current_frame_num, &skeleton, pm,
+                                      scene);
                     printf("[JARVIS CoreML] %s (%d/%d cameras)\n",
                            jarvis_coreml_state.status.c_str(),
                            cams_used, (int)scene->num_cams);
@@ -1577,6 +1609,9 @@ int main(int argc, char **argv) {
                     (u32)current_frame_num, rgb_bufs, widths, heights,
                     skeleton, pm.camera_params, scene,
                     win.jarvis_predict.confidence_threshold);
+                if (annotations.count(current_frame_num))
+                    mark_frame_untriangulated(
+                        annotations.at(current_frame_num));
                 // NOTE: deliberately NOT calling reprojection() here.
                 // Prediction is a 2D-only step on the visible cameras; the
                 // user triggers 3D triangulation separately via the
@@ -1596,8 +1631,9 @@ int main(int argc, char **argv) {
                 win.jarvis_predict.triangulate_requested = false;
                 if (!pm.camera_params.empty() &&
                     annotations.count(current_frame_num)) {
-                    reprojection(annotations.at(current_frame_num),
-                                 &skeleton, pm.camera_params, scene);
+                    triangulate_frame(annotations.at(current_frame_num),
+                                      (u32)current_frame_num, &skeleton, pm,
+                                      scene);
                     printf("[Triangulate] frame %d\n", current_frame_num);
                 } else {
                     printf("[Triangulate] skipped (no camera_params or no "
@@ -1615,7 +1651,8 @@ int main(int argc, char **argv) {
                 if (!pm.camera_params.empty() &&
                     annotations.count(current_frame_num)) {
                     refine_3d_ba(annotations.at(current_frame_num),
-                                 &skeleton, pm.camera_params, scene);
+                                 &skeleton, pm.camera_params, scene,
+                                 excluded_camera_mask(pm));
                 } else {
                     printf("[Refine3D] skipped (no camera_params or no "
                            "annotations for frame %d)\n", current_frame_num);
@@ -2243,9 +2280,11 @@ int main(int argc, char **argv) {
                                     annotations, frame, pbs, w_b, h_b,
                                     skeleton, (int)scene->num_cams,
                                     bp.confidence_threshold);
+                                mark_frame_untriangulated(annotations.at(frame));
                                 if (!pm.camera_params.empty())
-                                    reprojection(annotations.at(frame),
-                                                 &skeleton, pm.camera_params, scene);
+                                    triangulate_frame(annotations.at(frame),
+                                                      frame, &skeleton, pm,
+                                                      scene);
                                 auto tp1 = std::chrono::steady_clock::now();
                                 bp.batch_predict_ms += std::chrono::duration<float, std::milli>(tp1 - tp0).count();
                                 bp.batch_completed++;

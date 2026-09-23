@@ -1,5 +1,6 @@
 #pragma once
 #include "camera.h"
+#include "camera_check.h"
 #include "project_handler.h"
 #include "skeleton.h"
 #include "utils.h"
@@ -67,7 +68,19 @@ struct ProjectManager {
     std::string proofread_server_url;
     std::string proofread_animal;
     std::string proofread_session;
+
+    // Cameras (by name) left out of triangulation, save and export — set
+    // when a camera's calibration is bad. Persisted in .redproj.
+    std::vector<std::string> excluded_cameras;
+
+    // Runtime only (not persisted): leave-one-out reprojection samples used
+    // to suggest which camera's calibration is bad.
+    CameraCheckStats camera_check;
 };
+
+inline std::vector<bool> excluded_camera_mask(const ProjectManager &pm) {
+    return camera_exclusion_mask(pm.camera_names, pm.excluded_cameras);
+}
 
 inline void to_json(nlohmann::json &j, const ProjectManager::JarvisModelEntry &m) {
     j = {{"name", m.name}, {"relative_path", m.relative_path},
@@ -100,7 +113,8 @@ inline void to_json(nlohmann::json &j, const ProjectManager &p) {
                        {"active_jarvis_model", p.active_jarvis_model},
                        {"proofread_server_url", p.proofread_server_url},
                        {"proofread_animal", p.proofread_animal},
-                       {"proofread_session", p.proofread_session}};
+                       {"proofread_session", p.proofread_session},
+                       {"excluded_cameras", p.excluded_cameras}};
 }
 
 inline void from_json(const nlohmann::json &j, ProjectManager &p) {
@@ -124,6 +138,8 @@ inline void from_json(const nlohmann::json &j, ProjectManager &p) {
     p.proofread_server_url = j.value("proofread_server_url", std::string{});
     p.proofread_animal     = j.value("proofread_animal", std::string{});
     p.proofread_session    = j.value("proofread_session", std::string{});
+    p.excluded_cameras =
+        j.value("excluded_cameras", std::vector<std::string>{});
 }
 
 inline bool save_project_manager_json(const ProjectManager &p,
@@ -193,6 +209,18 @@ inline bool setup_project(ProjectManager &pm, SkeletonContext &skeleton,
                    std::string *err) {
     if (!ensure_dir_exists(pm.project_path, err))
         return false;
+
+    // Cameras excluded for bad calibration are not loaded at all — no view,
+    // no decode, no calibration. They stay listed in excluded_cameras so the
+    // Proofread panel can offer to bring them back.
+    auto &names = pm.camera_names;
+    names.erase(std::remove_if(names.begin(), names.end(),
+                               [&](const std::string &c) {
+                                   return std::find(pm.excluded_cameras.begin(),
+                                                    pm.excluded_cameras.end(),
+                                                    c) != pm.excluded_cameras.end();
+                               }),
+                names.end());
 
     pm.camera_params.clear();
     if (pm.camera_names.size() > 1 && !pm.calibration_folder.empty()) {

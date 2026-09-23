@@ -95,6 +95,19 @@ struct ExportConfig {
     // proofread calibrations fetched from the dashboard omit them).
     std::map<std::string, int> fallback_image_width;
     std::map<std::string, int> fallback_image_height;
+    // Cameras with bad calibration: no images, labels or calib yaml are
+    // written for them. Skipped in place (not erased from camera_names) so
+    // camera indices keep matching the annotation data.
+    std::vector<std::string> excluded_cameras;
+    bool is_excluded(const std::string &cam) const {
+        return std::find(excluded_cameras.begin(), excluded_cameras.end(),
+                         cam) != excluded_cameras.end();
+    }
+    int num_included_cameras() const {
+        int n = 0;
+        for (const auto &c : camera_names) n += !is_excluded(c);
+        return n;
+    }
 };
 
 // Resolve per-camera image dimensions: prefer the calibration yaml's
@@ -106,6 +119,7 @@ inline bool resolve_image_dims(const ExportConfig &config,
                                std::map<std::string, int> &image_height,
                                std::string *status) {
     for (const auto &cam : config.camera_names) {
+        if (config.is_excluded(cam)) continue;
         std::string calib_path =
             config.calibration_folder + "/" + cam + ".yaml";
         bool have = false;
@@ -411,6 +425,7 @@ inline nlohmann::json generate_annotation_json(
     // Outer loop = cameras, inner loop = frames (matches Python iteration order)
     for (int cam_idx = 0; cam_idx < (int)config.camera_names.size(); ++cam_idx) {
         const auto &cam = config.camera_names[cam_idx];
+        if (config.is_excluded(cam)) continue;
         int img_h = image_height.at(cam);
         int img_w = image_width.at(cam);
 
@@ -552,6 +567,7 @@ inline nlohmann::json generate_annotation_json(
     // Calibrations
     nlohmann::json calib_dict;
     for (const auto &cam : config.camera_names) {
+        if (config.is_excluded(cam)) continue;
         calib_dict[cam] = "calib_params/" + trial_name + "/" + cam + ".yaml";
     }
 
@@ -592,6 +608,7 @@ inline bool write_calibration_yamls(const ExportConfig &config,
     fs::create_directories(save_dir);
 
     for (const auto &cam : config.camera_names) {
+        if (config.is_excluded(cam)) continue;
         std::string input_path = config.calibration_folder + "/" + cam + ".yaml";
 
         try {
@@ -758,6 +775,7 @@ inline nlohmann::json generate_annotation_json_from_amap(
     // Outer loop = cameras, inner loop = frames (matches JARVIS Python iteration order)
     for (int cam_idx = 0; cam_idx < (int)config.camera_names.size(); ++cam_idx) {
         const auto &cam_name = config.camera_names[cam_idx];
+        if (config.is_excluded(cam_name)) continue;
         int img_h = image_height.at(cam_name);
         int img_w = image_width.at(cam_name);
 
@@ -884,6 +902,7 @@ inline nlohmann::json generate_annotation_json_from_amap(
     // Calibrations
     nlohmann::json calib_dict;
     for (const auto &cam : config.camera_names) {
+        if (config.is_excluded(cam)) continue;
         calib_dict[cam] = "calib_params/" + trial_name + "/" + cam + ".yaml";
     }
 
@@ -947,7 +966,7 @@ inline bool export_jarvis_dataset(const ExportConfig &config_in,
 
     ExportStats stats;
     stats.output_folder = config.output_folder;
-    stats.num_cameras = static_cast<int>(config.camera_names.size());
+    stats.num_cameras = config.num_included_cameras();
 
     // 1. Get valid frames from AnnotationMap (all 3D keypoints triangulated)
     std::vector<int> valid_frames;
@@ -1061,6 +1080,7 @@ inline bool export_jarvis_dataset(const ExportConfig &config_in,
     std::mutex status_mutex;
     std::vector<std::thread> threads;
     for (const auto &cam : config.camera_names) {
+        if (config.is_excluded(cam)) continue;
         std::string video_path =
             config.media_folder + "/" + cam + ".mp4";
         threads.emplace_back(extract_jpegs_for_camera, cam, trial_name,
@@ -1096,7 +1116,7 @@ inline bool export_jarvis_dataset(const ExportConfig &config_in,
         *status = "Export completed successfully! Train: " +
                   std::to_string(train_frames.size()) +
                   ", Val: " + std::to_string(val_frames.size()) +
-                  " frames x " + std::to_string(config.camera_names.size()) +
+                  " frames x " + std::to_string(config.num_included_cameras()) +
                   " cameras";
     return true;
 }
@@ -1137,7 +1157,7 @@ inline bool export_jarvis_dataset(const ExportConfig &config_in,
 
     ExportStats stats;
     stats.output_folder = config.output_folder;
-    stats.num_cameras = static_cast<int>(config.camera_names.size());
+    stats.num_cameras = config.num_included_cameras();
 
     if (status)
         *status = "Reading 3D keypoints...";
@@ -1256,7 +1276,7 @@ inline bool export_jarvis_dataset(const ExportConfig &config_in,
     // 8. Extract JPEG frames — one thread per camera
     if (status)
         *status = "Extracting JPEG frames (" +
-                  std::to_string(config.camera_names.size()) + " cameras)...";
+                  std::to_string(config.num_included_cameras()) + " cameras)...";
 
     // Build frame→mode map
     std::map<int, std::string> frame_to_mode;
@@ -1268,6 +1288,7 @@ inline bool export_jarvis_dataset(const ExportConfig &config_in,
     std::mutex status_mutex;
     std::vector<std::thread> threads;
     for (const auto &cam : config.camera_names) {
+        if (config.is_excluded(cam)) continue;
         std::string video_path =
             config.media_folder + "/" + cam + ".mp4";
         threads.emplace_back(extract_jpegs_for_camera, cam, trial_name,
@@ -1303,7 +1324,7 @@ inline bool export_jarvis_dataset(const ExportConfig &config_in,
         *status = "Export completed successfully! Train: " +
                   std::to_string(train_frames.size()) +
                   ", Val: " + std::to_string(val_frames.size()) +
-                  " frames x " + std::to_string(config.camera_names.size()) +
+                  " frames x " + std::to_string(config.num_included_cameras()) +
                   " cameras";
     return true;
 }

@@ -173,6 +173,7 @@ inline void DrawJarvisExportWindow(JarvisExportState &state, AppContext &ctx) {
                     jcfg.media_folder = pm.media_folder;
                     jcfg.output_folder = state.output_dir;
                     jcfg.camera_names = pm.camera_names;
+                    jcfg.excluded_cameras = pm.excluded_cameras;
                     jcfg.skeleton_name = skeleton.name;
                     jcfg.num_keypoints = skeleton.num_nodes;
                     jcfg.margin_pixel = state.margin;

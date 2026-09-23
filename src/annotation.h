@@ -8,6 +8,7 @@
 
 #include "types.h"
 #include "json.hpp"
+#include <algorithm>
 #include <map>
 #include <memory>
 #include <string>
@@ -199,7 +200,13 @@ inline bool frame_is_fully_triangulated(const FrameAnnotation &fa, int num_nodes
 // continue to use the existing CSV format for backward compatibility.
 // ═══════════════════════════════════════════════════════════════════════════
 
-inline nlohmann::json annotations_to_json(const AnnotationMap &amap) {
+// camera_names (optional) stamps each camera entry with "cam_name" so a load
+// with a different camera set (e.g. after excluding a camera) maps by name
+// rather than by index. Cameras in `excluded` are not written.
+inline nlohmann::json annotations_to_json(
+    const AnnotationMap &amap,
+    const std::vector<std::string> &camera_names = {},
+    const std::vector<std::string> &excluded = {}) {
     nlohmann::json root;
     root["version"] = 2;
     nlohmann::json frames_arr = nlohmann::json::array();
@@ -225,9 +232,14 @@ inline nlohmann::json annotations_to_json(const AnnotationMap &amap) {
             const auto &cam = fa.cameras[c];
             if (!cam.extras) continue;
             const auto &ext = *cam.extras;
+            const bool named = c < camera_names.size();
+            if (named && std::find(excluded.begin(), excluded.end(),
+                                   camera_names[c]) != excluded.end())
+                continue;
 
             nlohmann::json jc;
             jc["cam"] = (int)c;
+            if (named) jc["cam_name"] = camera_names[c];
 
             if (ext.has_bbox) {
                 jc["bbox"] = {ext.bbox_x, ext.bbox_y, ext.bbox_w, ext.bbox_h};
@@ -246,7 +258,7 @@ inline nlohmann::json annotations_to_json(const AnnotationMap &amap) {
                 jc["mask"] = polys;
             }
 
-            if (jc.size() > 1) // more than just "cam"
+            if (jc.size() > (named ? 2u : 1u)) // more than the cam id
                 cams.push_back(jc);
         }
 
@@ -260,7 +272,8 @@ inline nlohmann::json annotations_to_json(const AnnotationMap &amap) {
     return root;
 }
 
-inline void annotations_from_json(const nlohmann::json &root, AnnotationMap &amap) {
+inline void annotations_from_json(const nlohmann::json &root, AnnotationMap &amap,
+                                  const std::vector<std::string> &camera_names = {}) {
     if (!root.contains("frames")) return;
 
     for (const auto &jf : root["frames"]) {
@@ -280,6 +293,12 @@ inline void annotations_from_json(const nlohmann::json &root, AnnotationMap &ama
 
         for (const auto &jc : jf["cameras"]) {
             int c = jc["cam"].get<int>();
+            if (jc.contains("cam_name") && !camera_names.empty()) {
+                auto it_n = std::find(camera_names.begin(), camera_names.end(),
+                                      jc["cam_name"].get<std::string>());
+                if (it_n == camera_names.end()) continue;  // camera not loaded
+                c = (int)(it_n - camera_names.begin());
+            }
             if (c < 0 || c >= (int)fa.cameras.size()) continue;
             auto &ext = fa.cameras[c].get_extras();
 
@@ -310,8 +329,10 @@ inline void annotations_from_json(const nlohmann::json &root, AnnotationMap &ama
 }
 
 // Save extended annotations to a JSON file alongside keypoint CSVs
-inline bool save_annotations_json(const AnnotationMap &amap, const std::string &folder) {
-    auto j = annotations_to_json(amap);
+inline bool save_annotations_json(const AnnotationMap &amap, const std::string &folder,
+                                  const std::vector<std::string> &camera_names = {},
+                                  const std::vector<std::string> &excluded = {}) {
+    auto j = annotations_to_json(amap, camera_names, excluded);
     if (j["frames"].empty()) return true; // nothing to save
     std::ofstream f(folder + "/annotations.json");
     if (!f) return false;
@@ -320,14 +341,15 @@ inline bool save_annotations_json(const AnnotationMap &amap, const std::string &
 }
 
 // Load extended annotations from JSON (call after loading keypoint CSVs)
-inline bool load_annotations_json(AnnotationMap &amap, const std::string &folder) {
+inline bool load_annotations_json(AnnotationMap &amap, const std::string &folder,
+                                  const std::vector<std::string> &camera_names = {}) {
     std::string path = folder + "/annotations.json";
     if (!std::filesystem::exists(path)) return true; // no extended data, ok
     try {
         std::ifstream f(path);
         nlohmann::json j;
         f >> j;
-        annotations_from_json(j, amap);
+        annotations_from_json(j, amap, camera_names);
         return true;
     } catch (...) {
         return false;

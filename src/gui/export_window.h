@@ -218,7 +218,8 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
                         std::string saved = AnnotationCSV::save_all(
                             pm.keypoints_root_folder, skeleton.name,
                             amap, ctx.scene ? (int)ctx.scene->num_cams : 0,
-                            skeleton.num_nodes, pm.camera_names, &save_err);
+                            skeleton.num_nodes, pm.camera_names, &save_err,
+                            pm.excluded_cameras);
                         if (!saved.empty()) {
                             // Update label folder to the freshly saved one
                             state.label_folder = saved;
@@ -232,7 +233,9 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
 
                     // Compute total expected images for progress bar
                     state.images_saved.store(0, std::memory_order_relaxed);
-                    state.images_total = total_count * (int)pm.camera_names.size();
+                    int n_export_cams = 0;
+                    for (bool ex : excluded_camera_mask(pm)) n_export_cams += !ex;
+                    state.images_total = total_count * n_export_cams;
                     state.in_progress.store(true, std::memory_order_relaxed);
                     state.status = "Exporting...";
 
@@ -250,6 +253,7 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
                     ecfg.seed               = state.seed;
                     ecfg.jpeg_quality       = state.jpeg_quality;
                     ecfg.camera_params      = pm.camera_params;
+                    ecfg.excluded_cameras   = pm.excluded_cameras;
                     ecfg.node_names         = skeleton.node_names;
                     for (const auto &e : skeleton.edges)
                         ecfg.edges.push_back({e.x, e.y});

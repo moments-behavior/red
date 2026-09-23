@@ -166,6 +166,12 @@ struct WindowStates {
         proofread.open_requested = false;
         proofread.pending_seek_frame = -1;
         proofread.initial_fetch_done = false;
+        proofread.cam_check = ProofreadCameraCheck{};
+        proofread.cameras_dirty = false;
+        proofread.analysis = CameraCheckResult{};
+        proofread.analysis_version = -1;
+        proofread.analysis_mask.clear();
+        proofread.reload_requested = false;
         export_win.show = false;
         export_win.format_idx = 0;
         export_win.include_video_index = false;
