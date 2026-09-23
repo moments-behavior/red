@@ -55,6 +55,14 @@ struct ProofreadWindowState {
     int analysis_version = -1;
     std::vector<bool> analysis_mask;
 
+    // Tailcycle prediction for the queue's frames. With auto_pred on, a Seek
+    // to an unlabeled frame overlays it on every camera (proofread instead
+    // of relabel).
+    ProofreadPrediction pred;
+    bool auto_pred = true;
+    std::string pred_note;   // last apply result, for the panel
+    int last_overlay_frame = -1;  // frame the auto-overlay last looked at
+
     // Camera set changed (excluded / re-included): the main loop reloads the
     // project so excluded cameras disappear (see setup_project).
     bool cameras_dirty = false;
@@ -253,7 +261,95 @@ inline void draw_cameras_section(ProofreadWindowState &w, AppContext &ctx) {
     }
 }
 
+// Prefer the prediction whose keypoint set matches the skeleton.
+inline std::string preferred_pred_source(const AppContext &ctx) {
+    return ctx.skeleton.num_nodes >= 47 ? "tailcycle47" : "tailcycle";
+}
+
+// (Re)fetch the prediction for every frame in the loaded session's queue.
+inline void fetch_queue_predictions(ProofreadWindowState &w, AppContext &ctx) {
+    const auto &pm = ctx.pm;
+    w.pred = ProofreadPrediction{};
+    const ProofreadSession *ps =
+        find_session(w.server, pm.proofread_animal, pm.proofread_session);
+    if (!ps || ps->frames.empty()) return;
+    proofread_fetch_prediction(w.server.url, pm.proofread_animal,
+                               pm.proofread_session, ps->frames,
+                               preferred_pred_source(ctx), w.pred);
+}
+
 }  // namespace proofread_window_detail
+
+// Overlay the tailcycle prediction for `frame` on every non-excluded camera.
+// Without `force`, a frame that already has labels is left alone (never
+// clobber the user's corrections). Fetches the frame on demand if it isn't
+// cached. Returns true if a pose was placed.
+inline bool proofread_apply_prediction(ProofreadWindowState &w,
+                                       AppContext &ctx, int frame,
+                                       bool force) {
+    auto &pm = ctx.pm;
+    if (pm.camera_params.empty() || !ctx.scene || !ctx.skeleton.has_skeleton)
+        return false;
+    auto it = ctx.annotations.find((u32)frame);
+    if (!force && it != ctx.annotations.end() &&
+        frame_has_any_labels(it->second)) {
+        w.pred_note = "Frame " + std::to_string(frame) +
+                      " already labeled - prediction not loaded";
+        return false;
+    }
+    if (!w.pred.frames.count(frame)) {
+        // Fetch a window around the frame so stepping through neighbours
+        // doesn't cost a round-trip each.
+        std::vector<int> win;
+        for (int f = std::max(0, frame - 30); f <= frame + 30; ++f)
+            if (!w.pred.frames.count(f)) win.push_back(f);
+        const std::string &url = !pm.proofread_server_url.empty()
+                                     ? pm.proofread_server_url
+                                     : w.server.url;
+        if (!proofread_fetch_prediction(
+                url, pm.proofread_animal, pm.proofread_session, win,
+                proofread_window_detail::preferred_pred_source(ctx), w.pred)) {
+            w.pred_note = w.pred.status;
+            return false;
+        }
+    }
+    auto pf = w.pred.frames.find(frame);
+    if (pf == w.pred.frames.end()) {
+        w.pred_note = "No prediction for frame " + std::to_string(frame);
+        return false;
+    }
+
+    // Map skeleton nodes to prediction keypoints by name.
+    auto lower = [](std::string v) {
+        for (auto &ch : v) ch = (char)std::tolower((unsigned char)ch);
+        return v;
+    };
+    const int nn = ctx.skeleton.num_nodes;
+    std::vector<Eigen::Vector3d> pts(nn, Eigen::Vector3d::Constant(NAN));
+    for (int n = 0; n < nn && n < (int)ctx.skeleton.node_names.size(); ++n) {
+        const std::string want = lower(ctx.skeleton.node_names[n]);
+        for (size_t k = 0; k < w.pred.keypoints.size() && k < pf->second.size();
+             ++k) {
+            if (lower(w.pred.keypoints[k]) != want) continue;
+            const auto &v = pf->second[k];
+            pts[n] = Eigen::Vector3d(v[0], v[1], v[2]);
+            break;
+        }
+    }
+    auto &fa = get_or_create_frame(ctx.annotations, (u32)frame, nn,
+                                   (int)ctx.scene->num_cams);
+    int placed = apply_predicted_pose(fa, &ctx.skeleton, pm.camera_params,
+                                      ctx.scene, pts,
+                                      excluded_camera_mask(pm));
+    if (placed > 0 && !force)   // unreviewed until dragged / Triangulated
+        pm.overlay_snapshots[(u32)frame] = snapshot_2d(fa);
+    else
+        pm.overlay_snapshots.erase((u32)frame);
+    w.pred_note = "Frame " + std::to_string(frame) + ": " + w.pred.source +
+                  " prediction on " + std::to_string(placed) + "/" +
+                  std::to_string(nn) + " keypoints";
+    return placed > 0;
+}
 
 
 // Draw the proofread bad-frame panel. Scopes to (pm.proofread_animal,
@@ -289,6 +385,7 @@ inline void DrawProofreadWindow(ProofreadWindowState &w, AppContext &ctx) {
         proofread_fetch(w.server);
         proofread_fetch_camera_check(w.server.url, pm.proofread_animal,
                                      pm.proofread_session, w.cam_check);
+        proofread_window_detail::fetch_queue_predictions(w, ctx);
         w.initial_fetch_done = true;
     }
 
@@ -300,6 +397,7 @@ inline void DrawProofreadWindow(ProofreadWindowState &w, AppContext &ctx) {
     ImGui::SameLine();
     if (ImGui::Button("Refresh##proof_panel")) {
         proofread_fetch(w.server);
+        proofread_window_detail::fetch_queue_predictions(w, ctx);
     }
 
     // ── Source selector: IK residual vs Scorer ────────────────────────
@@ -314,6 +412,7 @@ inline void DrawProofreadWindow(ProofreadWindowState &w, AppContext &ctx) {
             w.server.source = src == 1 ? ProofreadState::Source::Scorer
                                         : ProofreadState::Source::Residual;
             proofread_fetch(w.server);   // re-pull from the other endpoint
+            proofread_window_detail::fetch_queue_predictions(w, ctx);
         }
     }
 
@@ -339,6 +438,7 @@ inline void DrawProofreadWindow(ProofreadWindowState &w, AppContext &ctx) {
     ImGui::SameLine();
     if (ImGui::SmallButton("Apply##proof_panel")) {
         proofread_fetch(w.server);
+        proofread_window_detail::fetch_queue_predictions(w, ctx);
     }
 
     if (!w.server.status.empty()) {
@@ -357,6 +457,28 @@ inline void DrawProofreadWindow(ProofreadWindowState &w, AppContext &ctx) {
         proofread_window_detail::draw_cameras_section(w, ctx);
         ImGui::Separator();
     }
+
+    // ── Tailcycle prediction overlay ─────────────────────────────────
+    if (ImGui::Checkbox("Overlay tailcycle prediction", &w.auto_pred))
+        w.last_overlay_frame = -1;   // apply to the current frame now
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Every unlabeled frame you land on (while paused) "
+                          "starts from the pipeline's 3D prediction on every "
+                          "camera:\ndrag the wrong points and press T instead "
+                          "of labelling from scratch.\nFrames with labels are "
+                          "never overwritten. A prediction you haven't "
+                          "touched\n(dragged or Triangulated) is not saved "
+                          "or exported.");
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Load on this frame"))
+        proofread_apply_prediction(w, ctx, ctx.current_frame_num, true);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Replace this frame's keypoints with the prediction");
+    if (!w.pred.status.empty())
+        ImGui::TextDisabled("%s", w.pred.status.c_str());
+    if (!w.pred_note.empty())
+        ImGui::TextDisabled("%s", w.pred_note.c_str());
+    ImGui::Separator();
 
     // ── Per-session header ────────────────────────────────────────────
     ImGui::Text("%s   %s",
@@ -428,4 +550,22 @@ inline void DrawProofreadWindow(ProofreadWindowState &w, AppContext &ctx) {
         ImGui::EndTable();
     }
     ImGui::End();
+}
+
+// Called every UI frame: overlay the prediction on whatever frame is shown
+// (including the first frame after the project opens), once per frame
+// change, while paused. Frames that already have labels are left alone.
+inline void proofread_auto_overlay(ProofreadWindowState &w, AppContext &ctx,
+                                   bool playing) {
+    const auto &pm = ctx.pm;
+    if (!w.auto_pred || playing || pm.proofread_animal.empty() ||
+        pm.proofread_session.empty() || !pm.plot_keypoints_flag)
+        return;
+    const int f = ctx.current_frame_num;
+    if (f == w.last_overlay_frame) return;
+    w.last_overlay_frame = f;
+    auto it = ctx.annotations.find((u32)f);
+    if (it != ctx.annotations.end() && frame_has_any_labels(it->second))
+        return;
+    proofread_apply_prediction(w, ctx, f, false);
 }

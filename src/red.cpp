@@ -1715,6 +1715,12 @@ int main(int argc, char **argv) {
                 win.proofread.pending_seek_frame = -1;
             }
 
+            // Proofread: start every shown frame from the pipeline's
+            // prediction instead of a blank frame (while paused; frames
+            // with labels are left alone).
+            if (ps.video_loaded)
+                proofread_auto_overlay(win.proofread, ctx, ps.play_video);
+
             // --- PoseTail: Load model ---
             if (win.jarvis_predict.posetail_load_requested) {
                 win.jarvis_predict.posetail_load_requested = false;

@@ -111,6 +111,29 @@ inline bool is_in_camera_fov(const Eigen::Vector3d &point_world,
     return (x > 0 && x < image_width && y > 0 && y < image_height);
 }
 
+// Project a world point into one view, in ImPlot coords (y up). False when
+// it lands behind the camera or outside the image.
+inline bool project_to_view(const Eigen::Vector3d &pt3d, u32 view_idx,
+                            const std::vector<CameraParams> &camera_params,
+                            const RenderScene *scene, double &x, double &y) {
+    const auto &cp = camera_params[view_idx];
+    const double W = scene->image_width[view_idx];
+    const double H = scene->image_height[view_idx];
+    Eigen::Vector2d p;
+    if (cp.telecentric) {
+        p = red_math::projectPointTelecentric(pt3d, cp.projection_mat, cp.k,
+                                              cp.dist_coeffs);
+    } else {
+        // Perspective reprojection (matrix-based, safe for det(R)=-1)
+        if (!is_in_camera_fov(pt3d, cp.r, cp.tvec, cp.k, (int)W, (int)H))
+            return false;
+        p = red_math::projectPointR(pt3d, cp.r, cp.tvec, cp.k, cp.dist_coeffs);
+    }
+    x = p(0);
+    y = H - p(1);
+    return x > 0 && x < W && y > 0 && y < H;
+}
+
 // `excluded[c]` true = camera c's calibration is not trusted: it is left out
 // of the triangulation and its 2D is left untouched (neither used nor
 // overwritten with a reprojection through the bad calibration).
@@ -186,47 +209,13 @@ inline void reprojection(FrameAnnotation &fa, SkeletonContext *skeleton,
                 // feeds a point inconsistent with the 3D into the *next*
                 // triangulation, which visibly drags all views on every
                 // subsequent Triangulate/T press.
-                bool placed = false;
-                if (telecentric) {
-                    // Telecentric reprojection
-                    auto reproj = red_math::projectPointTelecentric(
-                        pt3d,
-                        camera_params[view_idx].projection_mat,
-                        camera_params[view_idx].k,
-                        camera_params[view_idx].dist_coeffs);
-                    double x = reproj(0);
-                    double y = double(scene->image_height[view_idx]) -
-                               reproj(1);
-                    if (x > 0 && x < scene->image_width[view_idx] && y > 0 &&
-                        y < scene->image_height[view_idx]) {
-                        fa.cameras[view_idx].keypoints[node].x = x;
-                        fa.cameras[view_idx].keypoints[node].y = y;
-                        fa.cameras[view_idx].keypoints[node].labeled = true;
-                        placed = true;
-                    }
-                } else {
-                    // Perspective reprojection (matrix-based, safe for det(R)=-1)
-                    if (is_in_camera_fov(pt3d, camera_params[view_idx].r,
-                                         camera_params[view_idx].tvec,
-                                         camera_params[view_idx].k,
-                                         scene->image_width[view_idx],
-                                         scene->image_height[view_idx])) {
-                        auto reproj = red_math::projectPointR(
-                            pt3d, camera_params[view_idx].r,
-                            camera_params[view_idx].tvec,
-                            camera_params[view_idx].k,
-                            camera_params[view_idx].dist_coeffs);
-                        double x = reproj(0);
-                        double y = double(scene->image_height[view_idx]) -
-                                   reproj(1);
-                        if (x > 0 && x < scene->image_width[view_idx] &&
-                            y > 0 && y < scene->image_height[view_idx]) {
-                            fa.cameras[view_idx].keypoints[node].x = x;
-                            fa.cameras[view_idx].keypoints[node].y = y;
-                            fa.cameras[view_idx].keypoints[node].labeled = true;
-                            placed = true;
-                        }
-                    }
+                double x, y;
+                bool placed = project_to_view(pt3d, view_idx, camera_params,
+                                              scene, x, y);
+                if (placed) {
+                    fa.cameras[view_idx].keypoints[node].x = x;
+                    fa.cameras[view_idx].keypoints[node].y = y;
+                    fa.cameras[view_idx].keypoints[node].labeled = true;
                 }
                 if (!placed) {
                     fa.cameras[view_idx].keypoints[node].labeled = false;
@@ -660,6 +649,7 @@ inline void triangulate_frame(FrameAnnotation &fa, u32 frame,
                               RenderScene *scene) {
     pm.camera_check.record(frame,
                            collect_camera_check_obs(fa, skeleton, scene));
+    pm.overlay_snapshots.erase(frame);  // Triangulate = prediction reviewed
     reprojection(fa, skeleton, pm.camera_params, scene,
                  excluded_camera_mask(pm));
 }
@@ -667,4 +657,44 @@ inline void triangulate_frame(FrameAnnotation &fa, u32 frame,
 // New 2D (e.g. a fresh prediction) invalidates the frame's 3D.
 inline void mark_frame_untriangulated(FrameAnnotation &fa) {
     for (auto &k : fa.kp3d) k.triangulated = false;
+}
+
+// Place a predicted 3D pose on a frame (e.g. the tailcycle prediction in
+// proofread mode): kp3d from `pts` (per skeleton node; non-finite = none) and
+// its reprojection on every non-excluded camera, marked Predicted, so the
+// user corrects it rather than labelling from scratch. Excluded cameras are
+// left untouched. Returns the number of nodes placed.
+inline int apply_predicted_pose(FrameAnnotation &fa, SkeletonContext *skeleton,
+                                const std::vector<CameraParams> &camera_params,
+                                RenderScene *scene,
+                                const std::vector<Eigen::Vector3d> &pts,
+                                const std::vector<bool> &excluded = {}) {
+    int placed_nodes = 0;
+    for (u32 node = 0; node < (u32)skeleton->num_nodes && node < pts.size() &&
+                       node < (u32)fa.kp3d.size();
+         node++) {
+        if (!pts[node].allFinite()) continue;
+        fa.kp3d[node].x = pts[node](0);
+        fa.kp3d[node].y = pts[node](1);
+        fa.kp3d[node].z = pts[node](2);
+        fa.kp3d[node].triangulated = true;
+        placed_nodes++;
+        for (u32 v = 0; v < scene->num_cams && v < (u32)fa.cameras.size() &&
+                        v < (u32)camera_params.size();
+             v++) {
+            if (v < excluded.size() && excluded[v]) continue;
+            if (node >= (u32)fa.cameras[v].keypoints.size()) continue;
+            auto &kp = fa.cameras[v].keypoints[node];
+            double x, y;
+            if (project_to_view(pts[node], v, camera_params, scene, x, y)) {
+                kp.x = x;
+                kp.y = y;
+                kp.labeled = true;
+                kp.source = LabelSource::Predicted;
+            } else {
+                kp.labeled = false;
+            }
+        }
+    }
+    return placed_nodes;
 }

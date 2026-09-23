@@ -22,6 +22,7 @@
 #include <fstream>
 #include <future>
 #include <regex>
+#include <set>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -187,7 +188,16 @@ inline std::string save_all(const std::string &root_dir, const std::string &skel
                              const AnnotationMap &amap, int num_cameras, int num_nodes,
                              const std::vector<std::string> &camera_names,
                              std::string *error = nullptr,
-                             const std::vector<std::string> &excluded_cameras = {}) {
+                             const std::vector<std::string> &excluded_cameras = {},
+                             const std::set<u32> &skip_frames = {}) {
+    // Frames to leave out entirely (e.g. unreviewed auto-overlaid predictions).
+    if (!skip_frames.empty()) {
+        AnnotationMap kept;
+        for (const auto &[f, fa] : amap)
+            if (!skip_frames.count(f)) kept.emplace(f, fa);
+        return save_all(root_dir, skeleton_name, kept, num_cameras, num_nodes,
+                        camera_names, error, excluded_cameras);
+    }
     std::string ts = current_timestamp();
     std::string folder = root_dir + "/" + ts;
 

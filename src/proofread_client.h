@@ -48,6 +48,9 @@
 #include <filesystem>
 #include <string>
 #include <vector>
+#include <array>
+#include <cmath>
+#include <map>
 
 
 struct ProofreadSession {
@@ -352,5 +355,89 @@ inline bool proofread_fetch_camera_check(const std::string &url,
         return false;
     }
     out.fetched = true;
+    return true;
+}
+
+
+// Tailcycle 3D prediction for chosen frames, from the dashboard's
+// GET /api/session_prediction (mouse_dashboard/session_prediction.py):
+//   { "source": "tailcycle", "frame": "canonical",
+//     "keypoints": ["Snout", "EarL", ...],
+//     "frames": { "5000": [[x, y, z, conf] | null, ...], ... } }
+// Points are already in the world frame of the calibration that
+// /api/session_calib_zip serves, so they reproject directly.
+struct ProofreadPrediction {
+    bool fetched = false;
+    std::string source;          // tailcycle / tailcycle47
+    std::string frame;           // world-frame note from the server
+    std::vector<std::string> keypoints;
+    // frame -> per keypoint (x, y, z, conf); NaN x = no prediction
+    std::map<int, std::vector<std::array<float, 4>>> frames;
+    std::string status;
+};
+
+inline bool proofread_fetch_prediction(const std::string &url,
+                                        const std::string &animal,
+                                        const std::string &session,
+                                        const std::vector<int> &frames,
+                                        const std::string &prefer_source,
+                                        ProofreadPrediction &out) {
+    if (url.empty() || animal.empty() || session.empty()) {
+        out.status = "Prediction: no server / session";
+        return false;
+    }
+    httplib::Client cli(proofread_client_detail::normalize_url(url));
+    cli.set_connection_timeout(3, 0);
+    cli.set_read_timeout(60, 0);   // first request parses the session CSV
+    const size_t kBatch = 200;     // keep the query string short
+    for (size_t i = 0; i < frames.size(); i += kBatch) {
+        std::string list;
+        for (size_t j = i; j < std::min(frames.size(), i + kBatch); ++j)
+            list += (list.empty() ? "" : ",") + std::to_string(frames[j]);
+        std::string path = "/api/session_prediction?animal=" + animal +
+                           "&session=" + session + "&frames=" + list;
+        if (!prefer_source.empty()) path += "&source=" + prefer_source;
+        auto res = cli.Get(path);
+        if (!res) {
+            out.status = "Prediction: cannot reach server: " +
+                         httplib::to_string(res.error());
+            return false;
+        }
+        if (res->status != 200) {
+            std::string detail;
+            try {
+                detail = nlohmann::json::parse(res->body).value("detail", "");
+            } catch (...) {}
+            out.status = "Prediction: HTTP " + std::to_string(res->status) +
+                         (detail.empty() ? "" : " - " + detail);
+            return false;
+        }
+        try {
+            auto j = nlohmann::json::parse(res->body);
+            out.source = j.value("source", std::string{});
+            out.frame = j.value("frame", std::string{});
+            out.keypoints = j.value("keypoints", std::vector<std::string>{});
+            // Hold the object: iterating .items() of a temporary dangles.
+            const nlohmann::json jframes =
+                j.value("frames", nlohmann::json::object());
+            for (auto &[f, kps] : jframes.items()) {
+                std::vector<std::array<float, 4>> v;
+                for (const auto &k : kps) {
+                    if (k.is_array() && k.size() >= 4)
+                        v.push_back({k[0].get<float>(), k[1].get<float>(),
+                                     k[2].get<float>(), k[3].get<float>()});
+                    else
+                        v.push_back({NAN, NAN, NAN, 0.0f});
+                }
+                out.frames[std::stoi(f)] = std::move(v);
+            }
+        } catch (const std::exception &e) {
+            out.status = std::string("Prediction: bad JSON: ") + e.what();
+            return false;
+        }
+    }
+    out.fetched = true;
+    out.status = "Prediction: " + out.source + " (" + out.frame + "), " +
+                 std::to_string(out.frames.size()) + " frames";
     return true;
 }

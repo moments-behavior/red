@@ -171,6 +171,9 @@ struct WindowStates {
         proofread.analysis = CameraCheckResult{};
         proofread.analysis_version = -1;
         proofread.analysis_mask.clear();
+        proofread.pred = ProofreadPrediction{};
+        proofread.pred_note.clear();
+        proofread.last_overlay_frame = -1;
         proofread.reload_requested = false;
         export_win.show = false;
         export_win.format_idx = 0;

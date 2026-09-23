@@ -68,6 +68,27 @@ Opens after a proofread project is created/loaded. Scoped to the loaded
   `seek_all_cameras` to that video frame. The seek path is source-agnostic.
 - `min gap` debounces clusters of adjacent bad frames down to one pick.
 
+### Tailcycle prediction overlay
+
+With **Overlay tailcycle prediction on Seek** on (default), seeking to a
+frame that has no labels places the pipeline's tailcycle 3D prediction on
+it and reprojects it onto every camera that isn't excluded. Keypoints are
+marked Predicted (`P` in the saved CSV). The user drags the wrong ones and
+presses T, rather than labelling from scratch. Frames that already have
+labels are never overwritten; **Load on this frame** replaces the current
+frame's keypoints with the prediction on purpose.
+
+- Predictions for every frame in the queue are fetched in one go when the
+  queue loads (and again on Refresh / Apply / source change); a frame
+  outside the queue is fetched on demand.
+- Keypoints map to the skeleton by name (case-insensitive). A skeleton with
+  47+ nodes asks for `tailcycle47`, otherwise `tailcycle`; the server falls
+  back to whichever exists.
+- The server converts the 3D into the world frame of the calibration it
+  serves (canonical vs. a date's native frame, via
+  `jarvis_calibrations/world_alignment/<date>.json`), so the overlay lines
+  up with the views.
+
 ### Bad-calibration cameras
 
 A proofread session's calibration is sometimes wrong for one or two cameras,
@@ -127,6 +148,7 @@ All on the dashboard (`mouse_dashboard/app.py`):
 | `GET /api/bad_frames_all` | Cross-session IK-residual bad frames (fills the pickers + the IK queue). |
 | `GET /api/scorer_bad_frames_all` | Cross-session **scorer**-labelled bad frames (the `Scorer` source). Mirrors `bad_frames_all` but sourced from `scorer.parquet`. |
 | `GET /api/session_calib_zip` | ZIP of the session's `Cam*.yaml` calibration. |
+| `GET /api/session_prediction` | Tailcycle 3D for `frames=` (comma-separated), in the served calibration's world frame (`mouse_dashboard/session_prediction.py`). 404 when the session has no tailcycle prediction; 409 when its frame can't be matched to the calibration. |
 | `GET /api/session_camera_check` | Per-camera verdicts for that same calibration (`mouse_dashboard/camera_check.py`): `suspect` when the calibration solve's landmark reprojection error is > 8 px, or when the prediction pipeline excluded the camera (`excluded_cams` in the session's `info.yaml` — blur, desync or bad reprojection). The server has no per-camera 2D predictions, so it can't run red's pose-based check. |
 
 ### Auth / trusted-IP bypass

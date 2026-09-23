@@ -219,7 +219,8 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
                             pm.keypoints_root_folder, skeleton.name,
                             amap, ctx.scene ? (int)ctx.scene->num_cams : 0,
                             skeleton.num_nodes, pm.camera_names, &save_err,
-                            pm.excluded_cameras);
+                            pm.excluded_cameras,
+                            untouched_overlay_frames(pm, amap));
                         if (!saved.empty()) {
                             // Update label folder to the freshly saved one
                             state.label_folder = saved;
@@ -260,6 +261,8 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
 
                     // Copy the annotation map for thread safety
                     AnnotationMap amap_copy = amap;
+                    for (u32 f : untouched_overlay_frames(pm, amap))
+                        amap_copy.erase(f);   // unreviewed predictions
 
                     // Allocate shared_ptr for thread → main status handoff.
                     // The thread writes the final status into this string,

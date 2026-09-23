@@ -1,4 +1,5 @@
 #pragma once
+#include "annotation.h"
 #include "camera.h"
 #include "camera_check.h"
 #include "project_handler.h"
@@ -7,6 +8,7 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <set>
 #include <vector>
 
 // Annotation capabilities — saved in project JSON
@@ -76,7 +78,36 @@ struct ProjectManager {
     // Runtime only (not persisted): leave-one-out reprojection samples used
     // to suggest which camera's calibration is bad.
     CameraCheckStats camera_check;
+
+    // Runtime only: frames where the proofread prediction was auto-overlaid,
+    // with the 2D as placed. A frame whose 2D still matches (not dragged, not
+    // Triangulated) is an unreviewed prediction and is not saved or exported.
+    std::map<u32, std::vector<double>> overlay_snapshots;
 };
+
+// Flatten a frame's 2D (x, y, labeled per camera per node) for comparison.
+inline std::vector<double> snapshot_2d(const FrameAnnotation &fa) {
+    std::vector<double> v;
+    for (const auto &cam : fa.cameras)
+        for (const auto &kp : cam.keypoints) {
+            v.push_back(kp.x);
+            v.push_back(kp.y);
+            v.push_back(kp.labeled ? 1.0 : 0.0);
+        }
+    return v;
+}
+
+// Auto-overlaid prediction frames the user has not touched.
+inline std::set<u32> untouched_overlay_frames(const ProjectManager &pm,
+                                              const AnnotationMap &amap) {
+    std::set<u32> out;
+    for (const auto &[f, snap] : pm.overlay_snapshots) {
+        auto it = amap.find(f);
+        if (it != amap.end() && snapshot_2d(it->second) == snap)
+            out.insert(f);
+    }
+    return out;
+}
 
 inline std::vector<bool> excluded_camera_mask(const ProjectManager &pm) {
     return camera_exclusion_mask(pm.camera_names, pm.excluded_cameras);
