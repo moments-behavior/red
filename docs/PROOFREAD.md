@@ -92,35 +92,30 @@ frame's keypoints with the prediction on purpose.
 ### Bad-calibration cameras
 
 A proofread session's calibration is sometimes wrong for one or two cameras,
-which drags every triangulated keypoint off. Such cameras are **excluded**:
-they are not loaded at all (no view), take no part in Triangulate / Refine,
-and their data is not saved or exported.
+which drags every triangulated keypoint off. The **user decides** which
+cameras are bad:
 
-- **Auto (server):** on *Create*, red calls `/api/session_camera_check` and
-  pre-excludes every camera the dashboard flags (see below). If that would
-  leave fewer than 2 cameras, nothing is auto-excluded.
-- **Auto (red):** every Triangulate records the frame's raw 2D (predictions /
-  manual labels, before they are overwritten by reprojections). The
-  *Cameras* section of the Proofread Queue analyzes those samples and marks
-  a camera **suggest exclude** when it is the outlier:
-  - its median error against a triangulation from the other cameras is
-    ≥ 8 px and ≥ 3× the typical camera's (decisive with many cameras), or
-  - leaving it out makes the rest agree ≥ 3× better (decisive with few
-    cameras, where one bad camera inflates everyone's error).
+1. Every camera loads, and the tailcycle prediction is drawn on all of
+   them, so a camera whose points sit off the animal stands out.
+2. In the Proofread Queue's **Cameras** section, untick **Use** on that
+   camera. Its keypoints are cleared on every frame and it gets no more
+   predictions; it is saved to `.redproj` right away, and from then on
+   Triangulate / T / Refine 3D, save and export ignore it. Tick it to bring
+   it back: frames you haven't touched get the prediction on it again;
+   frames you already fixed get its points on the next T.
+3. Fix the points on the good cameras and press T.
+4. Export: excluded cameras get no images, labels or calibration.
 
-  Applied greedily, so a second bad camera shows up once the first is set
-  aside. *Scan annotated frames* adds every frame with un-triangulated 2D
-  (e.g. after batch predict).
-- **Manual:** untick **Use** next to any camera; tick it to bring one back.
-  The change is saved to `.redproj` right away, and triangulation, save and
-  export ignore the camera immediately. **Apply (reload project)** saves
-  labels and reloads so the camera stops being loaded; it returns to the
-  same frame.
+**Apply (reload project)** (optional) saves labels and reloads so excluded
+cameras stop being loaded at all; it returns to the same frame.
 
-Columns: **Error px** is red's measurement; **Server** is the calibration
-solve's landmark reprojection error (`dropped` = excluded by the prediction
-pipeline, `n/a` = not verifiable, e.g. JARVIS-format calibration). Hover
-for details.
+**Error px** is a hint from red's own check, not a decision: every
+Triangulate records the frame's raw 2D (before it is overwritten by
+reprojections), and a camera is marked **suggest exclude** when it is the
+outlier — its median error against a triangulation from the other cameras
+is ≥ 8 px and ≥ 3× the typical camera's, or leaving it out makes the rest
+agree ≥ 3× better. *Scan annotated frames* adds every frame with
+un-triangulated 2D.
 
 What exclusion changes:
 
@@ -149,7 +144,6 @@ All on the dashboard (`mouse_dashboard/app.py`):
 | `GET /api/scorer_bad_frames_all` | Cross-session **scorer**-labelled bad frames (the `Scorer` source). Mirrors `bad_frames_all` but sourced from `scorer.parquet`. |
 | `GET /api/session_calib_zip` | ZIP of the session's `Cam*.yaml` calibration. |
 | `GET /api/session_prediction` | Tailcycle 3D for `frames=` (comma-separated), in the served calibration's world frame (`mouse_dashboard/session_prediction.py`). 404 when the session has no tailcycle prediction; 409 when its frame can't be matched to the calibration. |
-| `GET /api/session_camera_check` | Per-camera verdicts for that same calibration (`mouse_dashboard/camera_check.py`): `suspect` when the calibration solve's landmark reprojection error is > 8 px, or when the prediction pipeline excluded the camera (`excluded_cams` in the session's `info.yaml` — blur, desync or bad reprojection). The server has no per-camera 2D predictions, so it can't run red's pose-based check. |
 
 ### Auth / trusted-IP bypass
 

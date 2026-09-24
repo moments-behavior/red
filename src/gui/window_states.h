@@ -166,7 +166,6 @@ struct WindowStates {
         proofread.open_requested = false;
         proofread.pending_seek_frame = -1;
         proofread.initial_fetch_done = false;
-        proofread.cam_check = ProofreadCameraCheck{};
         proofread.cameras_dirty = false;
         proofread.analysis = CameraCheckResult{};
         proofread.analysis_version = -1;
@@ -174,6 +173,10 @@ struct WindowStates {
         proofread.pred = ProofreadPrediction{};
         proofread.pred_note.clear();
         proofread.last_overlay_frame = -1;
+        proofread.pred_job.reset();
+        proofread.pred_queue.clear();
+        proofread.pred_asked.clear();
+        proofread.force_frame = -1;
         proofread.reload_requested = false;
         export_win.show = false;
         export_win.format_idx = 0;

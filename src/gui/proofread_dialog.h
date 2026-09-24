@@ -501,38 +501,11 @@ inline void DrawProofreadDialog(ProofreadDialogState &state,
                     pm.proofread_animal     = state.selected_animal;
                     pm.proofread_session    = state.selected_session;
 
-                    // Pre-exclude cameras the server says have bad
-                    // calibration (or that the prediction pipeline dropped).
-                    // Editable later in the Proofread Queue panel. Always
-                    // assigned: pm may still hold the previous project's list.
+                    // Every camera loads; the user decides in the
+                    // Proofread Queue's Cameras section which ones are bad.
+                    // Always assigned: pm may hold the previous project's.
                     pm.excluded_cameras.clear();
                     pm.camera_check.clear();
-                    ProofreadCameraCheck cc;
-                    if (proofread_fetch_camera_check(
-                            state.server.url, state.selected_animal,
-                            state.selected_session, cc)) {
-                        for (const auto &cam : pm.camera_names) {
-                            const auto *v = cc.find(cam);
-                            if (v && v->suspect)
-                                pm.excluded_cameras.push_back(cam);
-                        }
-                    }
-                    if (pm.camera_names.size() - pm.excluded_cameras.size() < 2) {
-                        fprintf(stderr, "[Proofread] server flagged %zu of %zu "
-                                        "cameras; not auto-excluding (need "
-                                        ">= 2 for triangulation)\n",
-                                pm.excluded_cameras.size(),
-                                pm.camera_names.size());
-                        pm.excluded_cameras.clear();
-                    }
-                    if (!pm.excluded_cameras.empty()) {
-                        std::string list;
-                        for (const auto &c : pm.excluded_cameras)
-                            list += (list.empty() ? "" : ", ") + c;
-                        fprintf(stderr, "[Proofread] server flagged bad "
-                                        "calibration, excluding: %s\n",
-                                list.c_str());
-                    }
 
                     // 4) Hand off to the host's project setup callback.
                     std::string err;

@@ -45,6 +45,7 @@
 
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -278,83 +279,6 @@ inline bool proofread_fetch_calib(const ProofreadState &s,
         }
     }
     mz_zip_reader_end(&zip);
-    return true;
-}
-
-
-// Per-camera calibration verdicts for one session, from the dashboard's
-// GET /api/session_camera_check (mouse_dashboard/camera_check.py):
-//   { "verified": true, "threshold_px": 8.0, "suspect": ["Cam2006515"],
-//     "cameras": [ { "name": "Cam2006515", "reproj_px": 110.95,
-//                    "pipeline_excluded": true, "suspect": true,
-//                    "reason": "calibration reprojection 111.0 px > 8 px; ..." },
-//                  ... ] }
-// `reproj_px` is the calibration solve's own landmark reprojection error
-// (null when the solve artifacts are unavailable, e.g. JARVIS-format calib).
-struct ProofreadCameraVerdict {
-    std::string name;
-    float reproj_px = -1.0f;   // < 0 = not measured
-    bool pipeline_excluded = false;
-    bool suspect = false;
-    std::string reason;
-};
-
-struct ProofreadCameraCheck {
-    bool fetched = false;
-    bool verified = false;     // calibration landmark errors were available
-    std::vector<ProofreadCameraVerdict> cameras;
-    std::string status;
-
-    const ProofreadCameraVerdict *find(const std::string &cam) const {
-        for (const auto &c : cameras)
-            if (c.name == cam) return &c;
-        return nullptr;
-    }
-};
-
-inline bool proofread_fetch_camera_check(const std::string &url,
-                                          const std::string &animal,
-                                          const std::string &session,
-                                          ProofreadCameraCheck &out) {
-    out = ProofreadCameraCheck{};
-    if (url.empty() || animal.empty() || session.empty()) {
-        out.status = "No server / session";
-        return false;
-    }
-    httplib::Client cli(proofread_client_detail::normalize_url(url));
-    cli.set_connection_timeout(3, 0);
-    cli.set_read_timeout(15, 0);
-    const std::string path = "/api/session_camera_check?animal=" + animal +
-                             "&session=" + session;
-    auto res = cli.Get(path);
-    if (!res) {
-        out.status = "Camera check: cannot reach server: " +
-                     httplib::to_string(res.error());
-        return false;
-    }
-    if (res->status != 200) {
-        // 404 on older dashboards that don't have the endpoint yet.
-        out.status = "Camera check: HTTP " + std::to_string(res->status);
-        return false;
-    }
-    try {
-        auto j = nlohmann::json::parse(res->body);
-        out.verified = j.value("verified", false);
-        for (const auto &c : j.value("cameras", nlohmann::json::array())) {
-            ProofreadCameraVerdict v;
-            v.name = c.value("name", std::string{});
-            if (c.contains("reproj_px") && c["reproj_px"].is_number())
-                v.reproj_px = c["reproj_px"].get<float>();
-            v.pipeline_excluded = c.value("pipeline_excluded", false);
-            v.suspect = c.value("suspect", false);
-            v.reason = c.value("reason", std::string{});
-            out.cameras.push_back(std::move(v));
-        }
-    } catch (const std::exception &e) {
-        out.status = std::string("Camera check: bad JSON: ") + e.what();
-        return false;
-    }
-    out.fetched = true;
     return true;
 }
 
