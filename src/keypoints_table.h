@@ -178,6 +178,16 @@ inline void DrawKeypointsTable(AppContext &ctx, float height) {
                 const bool focus_changed = (focused_row != last_focused_row);
                 last_focused_row = focused_row;
 
+                // ...except when the focus change came from a click in this
+                // table. Then the row was already in front of you -- you just
+                // clicked it -- and scrolling would move it out from under the
+                // cursor. SetWindowFocus lands next frame, so the flag set by
+                // a click is read on the frame the change shows up, and
+                // cleared there.
+                static bool focus_from_table = false;
+                const bool suppress_scroll = focus_from_table;
+                if (focus_changed) focus_from_table = false;
+
                 auto render_row = [&](int row) {
                     ImGui::PushID(row);
                     ImGui::TableNextRow();
@@ -206,7 +216,8 @@ inline void DrawKeypointsTable(AppContext &ctx, float height) {
                     //
                     // Still only on a CHANGE of focus, which is what keeps it
                     // from fighting you when you scroll to look elsewhere.
-                    if (row == focused_row && focus_changed)
+                    if (row == focused_row && focus_changed &&
+                        !suppress_scroll)
                         ImGui::SetScrollHereY(0.0f);
                     ImGui::AlignTextToFramePadding();
                     // Clicking the name brings that camera's view to the
@@ -226,8 +237,10 @@ inline void DrawKeypointsTable(AppContext &ctx, float height) {
                             ImGui::Selectable(cam_name.c_str(), row_focused,
                                               ImGuiSelectableFlags_None);
                         ImGui::PopStyleColor();
-                        if (clicked)
+                        if (clicked) {
                             ImGui::SetWindowFocus(cam_name.c_str());
+                            focus_from_table = true;
+                        }
                         if (ImGui::IsItemHovered())
                             ImGui::SetTooltip("Bring %s to the front",
                                               cam_name.c_str());
@@ -340,9 +353,11 @@ inline void DrawKeypointsTable(AppContext &ctx, float height) {
                                         ImVec2(cell_w, ImGui::GetFrameHeight()))) {
                                     if (row < (int)fa.cameras.size())
                                         fa.cameras[row].active_id = (u32)node;
-                                    if (row < (int)pm.camera_names.size())
+                                    if (row < (int)pm.camera_names.size()) {
                                         ImGui::SetWindowFocus(
                                             pm.camera_names[row].c_str());
+                                        focus_from_table = true;
+                                    }
                                 }
                                 // Active keypoint: outline the cell (in the
                                 // user's "Active Keypoint" color) rather than
