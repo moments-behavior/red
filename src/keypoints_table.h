@@ -163,6 +163,21 @@ inline void DrawKeypointsTable(AppContext &ctx, float height) {
                     }
                 }
 
+                // Focusing a view should bring its row into sight -- the
+                // table is short by design and most rows are scrolled out.
+                // That is what the reordering below used to do, by drawing the
+                // focused row first; the cost was that rows are labelled by
+                // camera and moved under you every time you switched views.
+                //
+                // Scrolling to it gets the same row in the same place while
+                // the order stays put, so the rows around it are its actual
+                // neighbours. Only when the focus CHANGES: doing it every
+                // frame would fight you the moment you scrolled to look at
+                // anything else.
+                static int last_focused_row = -1;
+                const bool focus_changed = (focused_row != last_focused_row);
+                last_focused_row = focused_row;
+
                 auto render_row = [&](int row) {
                     ImGui::PushID(row);
                     ImGui::TableNextRow();
@@ -174,6 +189,25 @@ inline void DrawKeypointsTable(AppContext &ctx, float height) {
                     ImGui::TableSetColumnIndex(0);
                     if (first_body_top < 0.0f)
                         first_body_top = ImGui::GetCursorScreenPos().y;
+
+                    // Bring this row to the top, unconditionally. The point
+                    // of the reordering this replaces was that the row you are
+                    // working on is AT THE TOP of a deliberately short table,
+                    // so putting it there every time is the behaviour, not an
+                    // overreaction to it.
+                    //
+                    // An "only if off-screen" test was worse than useless
+                    // here: TableSetupScrollFreeze pins two header rows above
+                    // the scroll area, so a row hidden BEHIND the header still
+                    // has y > GetScrollY() and read as visible -- exactly the
+                    // case where scrolling was wanted. Measuring the viewport
+                    // from inside a cell is unreliable for the same sort of
+                    // reason.
+                    //
+                    // Still only on a CHANGE of focus, which is what keeps it
+                    // from fighting you when you scroll to look elsewhere.
+                    if (row == focused_row && focus_changed)
+                        ImGui::SetScrollHereY(0.0f);
                     ImGui::AlignTextToFramePadding();
                     // Clicking the name brings that camera's view to the
                     // front. Only SetWindowFocus is needed: red.cpp notices
@@ -488,17 +522,9 @@ inline void DrawKeypointsTable(AppContext &ctx, float height) {
                     ImGui::PopID();
                 }
 
-                // Render focused row first
-                if (focused_row != -1) {
-                    render_row(focused_row);
-                }
-
-                // Render remaining rows
-                for (int row = 0; row < rows_count; row++) {
-                    if (row == focused_row)
-                        continue;
+                // Camera order, always.
+                for (int row = 0; row < rows_count; row++)
                     render_row(row);
-                }
 
                 // Angled-header interaction: the header band is the strip
                 // between band_top and the first body row. TableGetHoveredColumn
