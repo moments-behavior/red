@@ -42,6 +42,8 @@ inline void gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
                 &drag_point_hovered);
             if (drag_point_modified) {
                 fa.kp3d[node].triangulated = false;
+                // A dragged point is the user's label, whatever placed it.
+                cam.keypoints[node].source = LabelSource::Manual;
             }
             if (drag_point_hovered) {
                 if (fa.kp3d[node].triangulated) {
@@ -137,10 +139,15 @@ inline bool project_to_view(const Eigen::Vector3d &pt3d, u32 view_idx,
 // `excluded[c]` true = camera c's calibration is not trusted: it is left out
 // of the triangulation and its 2D is left untouched (neither used nor
 // overwritten with a reprojection through the bad calibration).
+// `prefer_manual`: a node with >= 2 Manual views is triangulated from those
+// only. Used in proofread projects, where the other views hold reprojections
+// of the prediction's own (possibly wrong) 3D rather than independent
+// observations, so they would pull a correction back toward the prediction.
 inline void reprojection(FrameAnnotation &fa, SkeletonContext *skeleton,
                          const std::vector<CameraParams> &camera_params,
                          RenderScene *scene,
-                         const std::vector<bool> &excluded = {}) {
+                         const std::vector<bool> &excluded = {},
+                         bool prefer_manual = false) {
 
     bool telecentric = !camera_params.empty() && camera_params[0].telecentric;
     auto is_excluded = [&](u32 c) {
@@ -158,6 +165,16 @@ inline void reprojection(FrameAnnotation &fa, SkeletonContext *skeleton,
             }
         }
 
+        u32 num_manual{0};
+        if (prefer_manual) {
+            for (u32 v = 0; v < scene->num_cams && v < (u32)fa.cameras.size(); v++)
+                if (!is_excluded(v) && node < (u32)fa.cameras[v].keypoints.size() &&
+                    fa.cameras[v].keypoints[node].labeled &&
+                    fa.cameras[v].keypoints[node].source == LabelSource::Manual)
+                    num_manual++;
+        }
+        const bool manual_only = num_manual >= 2;
+
         if (num_views_labeled >= 2) {
 
             std::vector<Eigen::Vector2d> undist_pts;
@@ -167,6 +184,9 @@ inline void reprojection(FrameAnnotation &fa, SkeletonContext *skeleton,
                 if (is_excluded(view_idx)) continue;
                 if (view_idx >= (u32)fa.cameras.size()) continue;
                 if (node >= (u32)fa.cameras[view_idx].keypoints.size()) continue;
+                if (manual_only && fa.cameras[view_idx].keypoints[node].source !=
+                                       LabelSource::Manual)
+                    continue;
                 if (fa.cameras[view_idx].keypoints[node].labeled) {
                     Eigen::Vector2d pt(
                         fa.cameras[view_idx].keypoints[node].x,
@@ -651,7 +671,7 @@ inline void triangulate_frame(FrameAnnotation &fa, u32 frame,
                            collect_camera_check_obs(fa, skeleton, scene));
     pm.overlay_snapshots.erase(frame);  // Triangulate = prediction reviewed
     reprojection(fa, skeleton, pm.camera_params, scene,
-                 excluded_camera_mask(pm));
+                 excluded_camera_mask(pm), !pm.proofread_session.empty());
 }
 
 // New 2D (e.g. a fresh prediction) invalidates the frame's 3D.

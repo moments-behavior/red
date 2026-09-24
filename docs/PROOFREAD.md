@@ -89,6 +89,35 @@ frame's keypoints with the prediction on purpose.
   `jarvis_calibrations/world_alignment/<date>.json`), so the overlay lines
   up with the views.
 
+### Export: corrected tailcycle CSV
+
+The end product is the 3D pose. **Export corrected CSV** (Proofread Queue)
+writes the session's tailcycle prediction with the user's corrections
+swapped in, in exactly the tailcycle `data3D.csv` format (two header rows,
+one row per video frame, x/y/z/confidence per keypoint, same world frame as
+the original):
+
+- **On the server**, next to the original, as its own prediction source:
+  `<session>/tailcycle_proofread/` (or `tailcycle47_proofread/`) with
+  `data3D.csv`, `corrections.json` (every corrected frame/keypoint, who,
+  when, excluded cameras) and a copy of the source's `info.yaml` (same
+  calibration). The original `data3D.csv` is never modified. In the
+  dashboard the session gets a **PR** badge and the viewer a **proofread**
+  toggle next to *tailcycle*, to compare the two side by side.
+- **Locally**, a copy of both files in `<project>/proofread_export/`.
+
+What counts as corrected: a keypoint the user **dragged** on a used camera
+and then **Triangulated (T)**; it gets red's 3D and confidence 1.0. All
+other keypoints/frames keep the prediction's values. Exports accumulate:
+each one merges into `corrections.json` and rebuilds the CSV. red only sends
+the corrected keypoints (a small JSON POST), so it works from any machine
+that can reach the dashboard.
+
+Fixing a point: drag it in **at least 2 cameras**, then press T. In a
+proofread project a keypoint with 2+ dragged views is triangulated from
+those views only — the other views hold reprojections of the prediction's
+own (wrong) 3D and would pull the fix back.
+
 ### Bad-calibration cameras
 
 A proofread session's calibration is sometimes wrong for one or two cameras,
@@ -143,6 +172,8 @@ All on the dashboard (`mouse_dashboard/app.py`):
 | `GET /api/bad_frames_all` | Cross-session IK-residual bad frames (fills the pickers + the IK queue). |
 | `GET /api/scorer_bad_frames_all` | Cross-session **scorer**-labelled bad frames (the `Scorer` source). Mirrors `bad_frames_all` but sourced from `scorer.parquet`. |
 | `GET /api/session_calib_zip` | ZIP of the session's `Cam*.yaml` calibration. |
+| `POST /api/session_corrections` | Merge corrected keypoints (`{frame: {keypoint: [x,y,z]}}`, served-calibration frame) and rewrite `<source>_proofread/data3D.csv` in the prediction's frame. |
+| `GET /api/session_corrected_file` | Download that `data3D.csv` (`which=csv`) or `corrections.json` (`which=info`). |
 | `GET /api/session_prediction` | Tailcycle 3D for `frames=` (comma-separated), in the served calibration's world frame (`mouse_dashboard/session_prediction.py`). 404 when the session has no tailcycle prediction; 409 when its frame can't be matched to the calibration. |
 
 ### Auth / trusted-IP bypass

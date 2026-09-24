@@ -177,6 +177,8 @@ struct WindowStates {
         proofread.pred_queue.clear();
         proofread.pred_asked.clear();
         proofread.force_frame = -1;
+        proofread.export_job.reset();
+        proofread.export_status.clear();
         proofread.reload_requested = false;
         export_win.show = false;
         export_win.format_idx = 0;

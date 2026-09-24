@@ -47,6 +47,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <vector>
 #include <array>
@@ -363,5 +364,65 @@ inline bool proofread_fetch_prediction(const std::string &url,
     out.fetched = true;
     out.status = "Prediction: " + out.source + " (" + out.frame + "), " +
                  std::to_string(out.frames.size()) + " frames";
+    return true;
+}
+
+
+// Send proofread corrections (POST /api/session_corrections) and download
+// the resulting files. The dashboard merges them into
+// <session>/<source>_proofread/ next to the original prediction —
+// data3D.csv (tailcycle format, corrected keypoints replaced) and
+// corrections.json — then we save a copy of both into `local_dir`.
+// `body` holds {animal, session, source, frames:{f:{kp:[x,y,z]}}, ...}.
+inline bool proofread_export_corrections(const std::string &url,
+                                         const nlohmann::json &body,
+                                         const std::filesystem::path &local_dir,
+                                         std::string &status) {
+    httplib::Client cli(proofread_client_detail::normalize_url(url));
+    cli.set_connection_timeout(3, 0);
+    cli.set_read_timeout(300, 0);   // server rewrites a ~170k-row CSV
+    auto res = cli.Post("/api/session_corrections", body.dump(),
+                        "application/json");
+    if (!res) {
+        status = "Export: cannot reach server: " + httplib::to_string(res.error());
+        return false;
+    }
+    std::string server_csv;
+    int n_frames = 0;
+    try {
+        auto j = nlohmann::json::parse(res->body);
+        if (res->status != 200) {
+            status = "Export: HTTP " + std::to_string(res->status) + " - " +
+                     j.value("detail", std::string{});
+            return false;
+        }
+        server_csv = j.value("csv", std::string{});
+        n_frames = j.value("n_frames_corrected", 0);
+    } catch (const std::exception &e) {
+        status = std::string("Export: bad reply: ") + e.what();
+        return false;
+    }
+
+    std::error_code ec;
+    std::filesystem::create_directories(local_dir, ec);
+    const std::string q = "/api/session_corrected_file?animal=" +
+                          body.value("animal", std::string{}) + "&session=" +
+                          body.value("session", std::string{}) +
+                          (body.contains("source") && body["source"].is_string()
+                               ? "&source=" + body["source"].get<std::string>()
+                               : "");
+    for (auto [which, name] : {std::pair{"csv", "data3D.csv"},
+                               std::pair{"info", "corrections.json"}}) {
+        auto r = cli.Get(q + "&which=" + which);
+        if (!r || r->status != 200) {
+            status = std::string("Export: saved on server (") + server_csv +
+                     ") but downloading " + name + " failed";
+            return false;
+        }
+        std::ofstream(local_dir / name, std::ios::binary) << r->body;
+    }
+    status = "Exported: " + std::to_string(n_frames) +
+             " corrected frame(s) total. Server: " + server_csv +
+             "  Local: " + (local_dir / "data3D.csv").string();
     return true;
 }

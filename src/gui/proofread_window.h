@@ -41,6 +41,14 @@ struct ProofreadPredJob {
     std::atomic<bool> done{false};
 };
 
+// "Export corrected CSV": runs in the background (server rewrites the
+// session CSV; can take several seconds).
+struct ProofreadExportJob {
+    std::string status;
+    bool ok = false;
+    std::atomic<bool> done{false};
+};
+
 struct ProofreadWindowState {
     bool show = false;
     ProofreadState server;   // url, threshold, sessions (fetched lazily)
@@ -78,6 +86,9 @@ struct ProofreadWindowState {
     std::vector<int> pred_queue;
     std::set<int> pred_asked;     // ever requested since the last refresh
     int force_frame = -1;         // "Load on this frame" waiting on data
+
+    std::shared_ptr<ProofreadExportJob> export_job;
+    std::string export_status;
 
     // Camera set changed (excluded / re-included): the main loop reloads the
     // project so excluded cameras disappear (see setup_project).
@@ -440,6 +451,73 @@ inline void proofread_set_camera_used(ProofreadWindowState &w,
 }
 
 
+// Collect the keypoints the user corrected (dragged on a used camera, then
+// Triangulated) and send them to the dashboard, which writes the corrected
+// tailcycle-format CSV next to the prediction; a copy lands in
+// <project>/proofread_export/. Keypoints that were dragged but not yet
+// Triangulated have no 3D and are reported instead of sent.
+inline void proofread_export_corrected(ProofreadWindowState &w,
+                                       AppContext &ctx) {
+    const auto &pm = ctx.pm;
+    if (w.export_job) return;
+    const auto excluded = excluded_camera_mask(pm);
+    const auto skipped = untouched_overlay_frames(pm, ctx.annotations);
+    nlohmann::json frames = nlohmann::json::object();
+    int n_kp = 0, n_pending = 0;
+    for (const auto &[f, fa] : ctx.annotations) {
+        if (skipped.count(f)) continue;
+        nlohmann::json kps = nlohmann::json::object();
+        for (int n = 0; n < ctx.skeleton.num_nodes && n < (int)fa.kp3d.size();
+             ++n) {
+            bool manual = false;
+            for (size_t c = 0; c < fa.cameras.size(); ++c) {
+                if (c < excluded.size() && excluded[c]) continue;
+                if (n >= (int)fa.cameras[c].keypoints.size()) continue;
+                const auto &kp = fa.cameras[c].keypoints[n];
+                manual |= kp.labeled && kp.source == LabelSource::Manual;
+            }
+            if (!manual) continue;
+            if (!fa.kp3d[n].triangulated) { n_pending++; continue; }
+            if (n >= (int)ctx.skeleton.node_names.size()) continue;
+            kps[ctx.skeleton.node_names[n]] = {fa.kp3d[n].x, fa.kp3d[n].y,
+                                               fa.kp3d[n].z};
+            n_kp++;
+        }
+        if (!kps.empty()) frames[std::to_string(f)] = kps;
+    }
+    if (n_pending > 0) {
+        w.export_status = std::to_string(n_pending) +
+                          " dragged keypoint(s) have no 3D yet - press T on "
+                          "those frames first";
+        return;
+    }
+    if (frames.empty()) {
+        w.export_status = "Nothing to export: no corrected keypoints yet "
+                          "(drag points, then press T)";
+        return;
+    }
+    const char *user = std::getenv("USER");
+    nlohmann::json body = {
+        {"animal", pm.proofread_animal}, {"session", pm.proofread_session},
+        {"frames", frames}, {"who", user ? user : ""},
+        {"project", pm.project_name},
+        {"excluded_cameras", pm.excluded_cameras}};
+    if (!w.pred.source.empty()) body["source"] = w.pred.source;
+    const std::string url = !pm.proofread_server_url.empty()
+                                ? pm.proofread_server_url
+                                : w.server.url;
+    const auto local = std::filesystem::path(pm.project_path) / "proofread_export";
+    auto job = std::make_shared<ProofreadExportJob>();
+    std::thread([job, url, body, local]() {
+        job->ok = proofread_export_corrections(url, body, local, job->status);
+        job->done.store(true, std::memory_order_release);
+    }).detach();
+    w.export_job = std::move(job);
+    w.export_status = "Exporting " + std::to_string(n_kp) + " keypoint(s) on " +
+                      std::to_string(frames.size()) + " frame(s)...";
+}
+
+
 // Draw the proofread bad-frame panel. Scopes to (pm.proofread_animal,
 // pm.proofread_session) — i.e. the session loaded by the current project.
 inline void DrawProofreadWindow(ProofreadWindowState &w, AppContext &ctx) {
@@ -564,6 +642,26 @@ inline void DrawProofreadWindow(ProofreadWindowState &w, AppContext &ctx) {
         ImGui::TextDisabled("%s", w.pred.status.c_str());
     if (!w.pred_note.empty())
         ImGui::TextDisabled("%s", w.pred_note.c_str());
+
+    // ── Export corrected tailcycle CSV ────────────────────────────────
+    if (w.export_job && w.export_job->done.load(std::memory_order_acquire)) {
+        w.export_status = w.export_job->status;
+        w.export_job.reset();
+    }
+    ImGui::BeginDisabled((bool)w.export_job);
+    if (ImGui::Button("Export corrected CSV"))
+        proofread_export_corrected(w, ctx);
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Writes the tailcycle prediction with your corrected "
+                          "keypoints replaced (same format as data3D.csv)\n"
+                          "next to the original on the server "
+                          "(<session>/<source>_proofread/) and a copy in "
+                          "<project>/proofread_export/.\nOnly keypoints you "
+                          "dragged and then Triangulated (T) count as "
+                          "corrected; exports add up across sessions.");
+    if (!w.export_status.empty())
+        ImGui::TextWrapped("%s", w.export_status.c_str());
     ImGui::Separator();
 
     // ── Per-session header ────────────────────────────────────────────
