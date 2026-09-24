@@ -475,10 +475,20 @@ bool read_session(const std::string &session_dir, const std::string &group_id,
                 // Source is left None. It means "who produced these
                 // coordinates", and a missing row has none -- assigning the
                 // session's provenance here used to be harmless because a
-                // separate `labeled` flag carried presence, but source is
-                // presence now and the point would claim to be placed.
-                if (out->labels == Tailcycle::labels::kTracked) kp.set_predicted();
-                else                                            kp.set_manual();
+                // A `missing` row carries null coordinates (§7), so has_pos
+                // stays false and the setters are not used -- they would turn
+                // it on. This point genuinely has no position, unlike one you
+                // occlude in the UI with the coordinates on screen in front
+                // of you; the two flags being independent is what lets both
+                // be said.
+                //
+                // Only a tracked session's missing rows get an author, and it
+                // is `predicted`. An annotated session's get none: bucket_2d
+                // reads an occlusion with nothing claiming to predict it as a
+                // person's call, so saying `manual` would add nothing and
+                // would assert a click that never happened.
+                if (out->labels == Tailcycle::labels::kTracked)
+                    kp.author = Keypoint2D::Author::Predicted;
                 kp.set_occluded();
                 st.keypoint_rows++;
                 continue;
@@ -491,13 +501,29 @@ bool read_session(const std::string &session_dir, const std::string &group_id,
             // Mirror of the export: the format stores y from the top of the
             // image, red works in ImPlot coordinates measured from the bottom.
             kp.y = (double)out->calibration[ci].image_height - y.vals[i];
-            kp.occluded = false;
-            // `status` is the per-point truth. A visible row remains a
-            // visible/manual observation even when it came from a session
-            // declared `tracked`; the session label must not turn it into a
-            // projected row on the next export.
-            if (s == Tailcycle::status::kProjected) kp.set_reprojected();
-            else                                    kp.set_manual();
+            kp.vis = Keypoint2D::Vis::Unknown;
+            // Two axes, from two fields, neither answering the other's
+            // question.
+            //
+            // `status` is the per-point VISIBILITY, and it is the per-point
+            // truth: a visible row stays visible even in a session declared
+            // `tracked`, and the session label must not turn it into a
+            // projected row on the next export. `projected` additionally says
+            // the position was derived rather than observed.
+            //
+            // `labels` is the session's AUTHORSHIP, and it is the only thing
+            // that knows who made these points. This used to read set_manual()
+            // for any visible row -- taking "you can see the part here" to
+            // mean "a person clicked here". So every point of a tracked
+            // session imported as hand-made, and on export its visible points
+            // bucketed annotated while its missing ones bucketed tracked: one
+            // machine-produced session split in two, or refused outright.
+            kp.has_pos = true;
+            if (s == Tailcycle::status::kProjected) kp.reprojected = true;
+            else                                    kp.vis = Keypoint2D::Vis::Observed;
+            kp.author = (out->labels == Tailcycle::labels::kTracked)
+                            ? Keypoint2D::Author::Predicted
+                            : Keypoint2D::Author::Manual;
             if (sc.ok && i < sc.null.size() && !sc.null[i]) kp.confidence = (float)sc.vals[i];
             st.keypoint_rows++;
         }

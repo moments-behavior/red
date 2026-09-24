@@ -151,7 +151,7 @@ inline void populate_keypoints_from_amap(std::map<u32, KeyPoints *> &km,
             for (int k = 0; k < nn; ++k) {
                 kp->kp2d[c][k].position.x = fa.cameras[c].keypoints[k].x;
                 kp->kp2d[c][k].position.y = fa.cameras[c].keypoints[k].y;
-                kp->kp2d[c][k].is_labeled = fa.cameras[c].keypoints[k].exist;
+                kp->kp2d[c][k].is_labeled = fa.cameras[c].keypoints[k].usable();
                 kp->kp2d[c][k].confidence = fa.cameras[c].keypoints[k].confidence;
             }
         }

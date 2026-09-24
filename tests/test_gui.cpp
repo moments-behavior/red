@@ -687,15 +687,16 @@ static void test_reprojection_refreshes_occluded_view() {
 
     // Two manual views were enough to solve.
     EXPECT_TRUE(fa.kp3d[0].exist);
-    EXPECT_TRUE(fa.kp3d[0].triangulated);
+    EXPECT_TRUE(fa.kp3d[0].is_triangulated());
     EXPECT_NEAR(fa.kp3d[0].x, P(0), 1e-6);
     EXPECT_NEAR(fa.kp3d[0].z, P(2), 1e-6);
 
     const Keypoint2D &occ = fa.cameras[0].keypoints[0];
     // The assessment stands, and it is still not a point you can use.
-    EXPECT_TRUE(occ.occluded);
-    EXPECT_FALSE(occ.exist);
-    EXPECT_TRUE(occ.manual);          // the author of the assessment survives
+    EXPECT_TRUE(occ.is_occluded());
+    EXPECT_FALSE(occ.usable());       // a position, but not one to act on
+    EXPECT_TRUE(occ.has_pos);         // the solve gave it one to draw at
+    EXPECT_TRUE(occ.is_manual());          // the author of the assessment survives
     // ...but it now has somewhere to draw the cross, and says where that
     // position came from.
     EXPECT_TRUE(occ.x != UNLABELED && occ.y != UNLABELED);
@@ -707,8 +708,8 @@ static void test_reprojection_refreshes_occluded_view() {
     EXPECT_NEAR(occ.y, (double)scene.image_height[0] - expect(1), 1e-4);
 
     // The views that were labelled keep their authorship through the refresh.
-    EXPECT_TRUE(fa.cameras[1].keypoints[0].manual);
-    EXPECT_TRUE(fa.cameras[1].keypoints[0].exist);
+    EXPECT_TRUE(fa.cameras[1].keypoints[0].is_manual());
+    EXPECT_TRUE(fa.cameras[1].keypoints[0].has_pos);
 }
 
 // The other half of the same path: if the solve lands outside this camera's
@@ -744,10 +745,11 @@ static void test_reprojection_drops_offscreen_occluded_position() {
     reprojection(fa, &skel, cams, &scene);
 
     const Keypoint2D &occ = fa.cameras[0].keypoints[0];
-    EXPECT_TRUE(occ.occluded);       // still judged hidden
-    EXPECT_TRUE(occ.manual);         // still that judgement's author
-    EXPECT_FALSE(occ.exist);
-    EXPECT_TRUE(occ.x == UNLABELED); // but no position, so nothing is drawn
+    EXPECT_TRUE(occ.is_occluded());       // still judged hidden
+    EXPECT_TRUE(occ.is_manual());         // still that judgement's author
+    EXPECT_FALSE(occ.usable());
+    EXPECT_FALSE(occ.has_pos);       // the solve left the frame, so none
+    EXPECT_TRUE(occ.x == UNLABELED); // nothing to draw
     EXPECT_TRUE(occ.y == UNLABELED);
     EXPECT_FALSE(occ.reprojected);
 }

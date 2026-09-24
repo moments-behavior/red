@@ -47,19 +47,27 @@ enum class Bucket { Annotated, Tracked };
 // brings in genuine human labels, it should set Manual rather than teach this
 // function a new case.
 Bucket bucket_2d(const Keypoint2D &kp) {
-    // A point a person clicked is annotated; anything derived or predicted is
-    // tracked. A reprojection buckets as tracked to match what this did when
-    // reprojection and prediction shared one enum value -- whether a
-    // reprojection of YOUR labels ought to count as annotated is a separate
-    // question, and it needs kp3d's origin to answer.
-    return kp.manual ? Bucket::Annotated : Bucket::Tracked;
+    // An OCCLUSION is a judgement, and only a model makes a predicted one.
+    // So an occluded point is annotated unless something claimed to predict
+    // it -- including one with no author at all, which is what marking a
+    // never-placed node hidden produces. Requiring `manual` here instead made
+    // every such row bucket as tracked, and a session containing both split
+    // in two: half your afternoon filed as machine output.
+    if (kp.is_occluded()) return kp.is_predicted() ? Bucket::Tracked : Bucket::Annotated;
+
+    // A POSITION is annotated only if a person put it there; anything derived
+    // or predicted is tracked. A reprojection buckets as tracked to match
+    // what this did when reprojection and prediction shared one enum value --
+    // whether a reprojection of YOUR labels ought to count as annotated is a
+    // separate question, and it needs kp3d's origin to answer.
+    return kp.is_manual() ? Bucket::Annotated : Bucket::Tracked;
 }
 
 Bucket bucket_3d(const Keypoint3D &k3) {
     // Solved from 2D labels -- by red, or by whoever made the dataset. An
     // imported session that declares itself annotated lands here, which is
     // what stops red re-exporting human work as machine output.
-    return k3.predicted ? Bucket::Tracked : Bucket::Annotated;
+    return k3.is_predicted() ? Bucket::Tracked : Bucket::Annotated;
 }
 
 std::string toml_str(const std::string &v) { return "\"" + v + "\""; }
@@ -192,7 +200,7 @@ bool export_session(const ExportConfig &cfg, const AnnotationMap &amap,
       for (const FrameAnnotation &fa : fis) {
         for (const auto &cam : fa.cameras)
             for (const auto &kp : cam.keypoints)
-                if (kp.exist || kp.occluded)
+                if (keypoint2d_assessed(kp))
                     has[(int)bucket_2d(kp)] = true;
         for (const auto &k3 : fa.kp3d) {
             if (!k3.exist) continue;
@@ -298,7 +306,7 @@ bool export_session(const ExportConfig &cfg, const AnnotationMap &amap,
                     const double img_h = (double)cfg.calibration[ci].image_height;
                     for (size_t ni = 0; ni < cam.keypoints.size() && ni < cfg.node_names.size(); ni++) {
                         const Keypoint2D &kp = cam.keypoints[ni];
-                        if (!kp.exist && !kp.occluded)
+                        if (!keypoint2d_assessed(kp))
                             continue;   // no row, not `unlabeled` (§7)
                         if (cfg.force_labels.empty() &&
                             bucket_2d(kp) != job.b) continue;
@@ -306,13 +314,23 @@ bool export_session(const ExportConfig &cfg, const AnnotationMap &amap,
                             !a_b.Append(animal_id_of(fa.instance_id)).ok() ||
                             !c_b.Append(cfg.camera_names[ci]).ok() ||
                             !p_b.Append(cfg.node_names[ni]).ok() ||
-                            !s_b.Append(kp.occluded
-                                             ? Tailcycle::status::kMissing
-                                             : (kp.manual
-                                                    ? Tailcycle::status::kVisible
-                                                    : Tailcycle::status::kProjected)).ok())
+                            // The visibility CLAIM, which is its own field --
+                            // not authorship. Reading `manual` here is why the
+                            // importer had to mark a tracked session's visible
+                            // rows hand-placed: it was the only way to get
+                            // `visible` back out, and it cost the session its
+                            // provenance.
+                            // One field, one question, three answers --
+                            // and the three statuses are exactly those
+                            // answers, so this is a straight mapping.
+                            !s_b.Append(
+                                 kp.vis == Keypoint2D::Vis::Occluded
+                                     ? Tailcycle::status::kMissing
+                                 : kp.vis == Keypoint2D::Vis::Observed
+                                     ? Tailcycle::status::kVisible
+                                     : Tailcycle::status::kProjected).ok())
                             return fail("keypoints.pq: builder append failed.");
-                        if (kp.occluded) {
+                        if (kp.is_occluded()) {
                             if (!x_b.AppendNull().ok() || !y_b.AppendNull().ok())
                                 return fail("keypoints.pq: coordinate append failed.");
                         } else if (!x_b.Append((float)kp.x).ok() ||
@@ -322,8 +340,8 @@ bool export_session(const ExportConfig &cfg, const AnnotationMap &amap,
                         // A human label carries no confidence -- red stores 0.0f,
                         // and passing that through would ship every hand-placed
                         // point with a score of zero (§7 says null).
-                        const bool scored = !kp.occluded &&
-                                             !kp.manual &&
+                        const bool scored = !kp.is_occluded() &&
+                                             !kp.is_manual() &&
                                              kp.confidence > 0.0f;
                         if (scored) any_score = true;
                         if (!(scored ? sc_b.Append(kp.confidence) : sc_b.AppendNull()).ok())
@@ -374,7 +392,7 @@ bool export_session(const ExportConfig &cfg, const AnnotationMap &amap,
                         !x_b.Append((float)k3.x).ok() || !y_b.Append((float)k3.y).ok() ||
                         !z_b.Append((float)k3.z).ok())
                         return fail("points3d.pq: builder append failed.");
-                    const bool scored = k3.predicted && k3.confidence > 0.0f;
+                    const bool scored = k3.is_predicted() && k3.confidence > 0.0f;
                     if (scored) any_score = true;
                     if (!(scored ? sc_b.Append(k3.confidence) : sc_b.AppendNull()).ok())
                         return fail("points3d.pq: score append failed.");

@@ -37,9 +37,29 @@ struct Keypoint2D {
     //   YOU placed and then refreshed with T is both manual and reprojected,
     //   and must still export as `visible`. Collapsing the two is what made
     //   a T refresh erase the record that you had placed a point at all.
-    bool exist       = false;
-    bool manual      = false;   // a person clicked it in this camera
-    bool predicted   = false;   // a model produced it directly in this view
+    // Renamed from `exist` deliberately: it answers only "are there
+    // coordinates here", and the readers that matter want a second question
+    // answered too -- see usable() below. The rename turned all ~70 call
+    // sites into compile errors so each could be re-decided rather than
+    // silently keeping the old meaning.
+    bool has_pos     = false;
+    // Who put this point here. Three states, held exclusive by the type
+    // rather than by the setters remembering to clear each other.
+    //
+    //   Derived    red computed it by reprojecting this frame's 3D
+    //   Manual     a person clicked it in this camera
+    //   Predicted  a model produced it directly in this view
+    //
+    // `Derived` rather than `Unknown`: set_reprojected() is the only way a
+    // point gets a position without an author, so for anything with has_pos
+    // this state says exactly where the numbers came from. It is also the
+    // default, which on a point with no position means nothing at all -- the
+    // same way x and y mean nothing there.
+    enum class Author : unsigned char { Derived, Manual, Predicted };
+    Author author = Author::Derived;
+
+    bool is_manual() const { return author == Author::Manual; }
+    bool is_predicted() const { return author == Author::Predicted; }
     bool reprojected = false;   // the stored numbers came from the 3D
 
     // Independent of the above: an assessment that the point is not visible
@@ -48,43 +68,71 @@ struct Keypoint2D {
     // itself something a person or a model did. Without that, every occluded
     // row bucketed as tracked and a single one split a hand-labelled session
     // in two on export. This is tailcycle's keypoints.pq `missing` status.
-    bool occluded = false;
-
-    // Marks the point not visible in this camera. x/y are LEFT ALONE: they no
-    // longer assert the part is visible -- `exist` says otherwise, and every
-    // reader gates on it -- but they still say where it is, which is what the
-    // overlay draws the cross from.
+    // Can you see the part in this image? Three answers, so one field with
+    // three values rather than a pair of booleans that could contradict each
+    // other. This is the format's own shape: vis2d is an int8, not a flag.
     //
-    // `reprojected` is left alone for the same reason. It describes where the
-    // stored numbers came from, and they are still here and still came from
-    // the solve; clearing it would make the flag lie about them. Only the two
-    // questions this actually answers change: presence, and visibility.
-    void set_occluded() {
-        exist = false;
-        occluded = true;
+    // Its own axis, separate from authorship and from where the coordinates
+    // came from. Red used to answer it with `manual`, which is why importing
+    // a tracked session marked every machine-made point hand-placed -- the
+    // only way to get `visible` back out -- and then split the session in two
+    // on export.
+    //
+    //   Unknown   nobody has judged this view      -> `projected`
+    //   Observed  someone says the part is visible -> `visible`
+    //   Occluded  someone says it is not           -> `missing`
+    enum class Vis : unsigned char { Unknown, Observed, Occluded };
+    Vis vis = Vis::Unknown;
+
+    bool is_occluded() const { return vis == Vis::Occluded; }
+    bool is_observed() const { return vis == Vis::Observed; }
+
+    // There is a position here, and it is one you can act on: not an
+    // assessment that the part is hidden in this view. Triangulation,
+    // drawing and export all want this rather than has_pos -- an occluded
+    // point keeps its coordinates (the overlay draws the cross from them)
+    // but must not feed a solve or export as visible.
+    bool usable() const { return has_pos && vis != Vis::Occluded; }
+
+    // Occlusion is ONE flag and touches nothing else. It used to clear
+    // has_pos too, which said the point had no coordinates while x/y sat
+    // right there holding them -- and x/y is what the cross is drawn from.
+    // Presence and visibility are separate questions; this answers only the
+    // second. Authorship and coordinate origin are likewise untouched: a
+    // point you placed is still yours after you judge it hidden, and one
+    // whose numbers came from a solve still came from a solve.
+    void set_occluded() { vis = Vis::Occluded; }
+
+    // Back to what it was before. Merging the two booleans cost one thing: an
+    // Observed that M overwrote cannot be read back. It is reconstructible
+    // though -- placing a point IS an observation, so a manual point returns
+    // to Observed and anything else to Unknown, which is what it was.
+    void clear_occluded() {
+        vis = is_manual() ? Vis::Observed : Vis::Unknown;
     }
 
     // Authorship. A fresh placement also resets the coordinate origin: these
     // numbers came from the click, not from a solve.
     void set_manual() {
-        exist = true; manual = true;
-        predicted = reprojected = occluded = false;
+        has_pos = true; author = Author::Manual; vis = Vis::Observed;
+        reprojected = false;
     }
     void set_predicted(float conf = 0.0f) {
-        exist = true; predicted = true; confidence = conf;
-        manual = reprojected = occluded = false;
+        has_pos = true; author = Author::Predicted; confidence = conf;
+        reprojected = false; vis = Vis::Unknown;
     }
 
     // Coordinate origin only -- authorship is deliberately left alone, so a
     // refreshed hand label stays manual.
     void set_reprojected() {
-        exist = true; reprojected = true; occluded = false;
+        has_pos = true; reprojected = true;
+        if (vis == Vis::Occluded) vis = Vis::Unknown;
     }
     void clear() { *this = Keypoint2D{}; }
 };
 
 inline bool keypoint2d_assessed(const Keypoint2D &kp) {
-    return kp.exist || kp.occluded;
+    return kp.has_pos || kp.is_occluded();
 }
 
 
@@ -101,18 +149,31 @@ struct Keypoint3D {
     double z = UNLABELED;
     float  confidence = 0.0f;
 
-    // Same shape as Keypoint2D: presence, then mutually exclusive origins held
-    // exclusive by the setters.
-    bool exist        = false;
-    bool triangulated = false;   // DLT-solved from 2D, here or by whoever made
-                                 // the dataset
-    bool predicted    = false;   // a model produced it
+    // Is there a position here. No `usable()` counterpart, and no rename to
+    // has_pos: the 2D split exists because an occluded point keeps its
+    // coordinates while ceasing to be usable, and the 3D layer has no
+    // occlusion to model. Should it ever gain one -- points3d.pq does carry a
+    // `missing` status (§8) that red cannot currently express -- this becomes
+    // has_pos and the pair comes with it.
+    bool exist = false;
+    // Where this 3D point came from. Same shape as Keypoint2D::author, with
+    // the values the 3D layer actually has -- red cannot hand-place a 3D
+    // point, so `Manual` has no counterpart here.
+    //
+    //   Unknown       not established
+    //   Triangulated  DLT-solved from 2D, here or by whoever made the dataset
+    //   Predicted     a model produced it
+    enum class Origin : unsigned char { Unknown, Triangulated, Predicted };
+    Origin origin = Origin::Unknown;
+
+    bool is_triangulated() const { return origin == Origin::Triangulated; }
+    bool is_predicted() const { return origin == Origin::Predicted; }
 
     void set_triangulated(float conf = 1.0f) {
-        exist = true; triangulated = true; predicted = false; confidence = conf;
+        exist = true; origin = Origin::Triangulated; confidence = conf;
     }
     void set_predicted(float conf = 1.0f) {
-        exist = true; predicted = true; triangulated = false; confidence = conf;
+        exist = true; origin = Origin::Predicted; confidence = conf;
     }
     void clear() { *this = Keypoint3D{}; }
 };
@@ -351,8 +412,12 @@ inline bool frame_has_any_manual_labels(const FrameAnnotation &fa) {
     // hand-made data is caught by the 2D pass below or by needs_improvement.
     for (const auto &cam : fa.cameras)
         for (const auto &kp : cam.keypoints)
-            if ((kp.occluded && kp.manual) ||
-                (kp.exist && kp.manual)) return true;
+            // Same split bucket_2d makes. An occlusion is hand-made unless
+            // a model claimed it, so it is `!predicted` here rather than
+            // `manual` -- marking a never-placed node hidden sets no author
+            // at all, and that frame is still your work.
+            if ((kp.is_occluded() && !kp.is_predicted()) ||
+                (kp.usable() && kp.is_manual())) return true;
     return false;
 }
 
@@ -380,7 +445,7 @@ inline bool frame_is_fully_triangulated(const FrameAnnotation &fa, int num_nodes
     for (int k = 0; k < num_nodes; ++k) {
         bool visible = false;
         for (const auto &cam : fa.cameras)
-            if (k < (int)cam.keypoints.size() && cam.keypoints[k].exist) {
+            if (k < (int)cam.keypoints.size() && cam.keypoints[k].usable()) {
                 visible = true;
                 break;
             }
@@ -438,7 +503,7 @@ inline KpProgress frame_kp_progress(const FrameAnnotation &fa, int num_nodes,
         bool node_tri = n < (int)fa.kp3d.size() && fa.kp3d[n].exist;
         bool node_visible = false;
         for (const auto &cam : fa.cameras)
-            if (n < (int)cam.keypoints.size() && cam.keypoints[n].exist) {
+            if (n < (int)cam.keypoints.size() && cam.keypoints[n].usable()) {
                 node_visible = true;
                 break;
             }

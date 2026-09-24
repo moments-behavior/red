@@ -155,7 +155,7 @@ inline bool tailcycle_open_session(AppContext &ctx, const std::string &session_d
                     Keypoint2D &kp = fa.cameras[c].keypoints[n];
                     kp.x = px;
                     kp.y = py;
-                    kp.occluded = false;
+                    kp.vis = Keypoint2D::Vis::Unknown;
                     kp.set_predicted();
                     kp.confidence = k3.confidence;
                     kp.reprojected = true;

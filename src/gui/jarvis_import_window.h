@@ -151,7 +151,7 @@ inline std::string jarvis_import_to_labels(
                                         (int)scene->image_height[cam], px, py)) {
                     auto &kp2d = fa.cameras[cam].keypoints[k];
                     kp2d.x = px; kp2d.y = py;
-                    kp2d.occluded = false;
+                    kp2d.vis = Keypoint2D::Vis::Unknown;
                     kp2d.confidence = c;
                     kp2d.set_predicted();
                     kp2d.reprojected = true;

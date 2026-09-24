@@ -125,11 +125,11 @@ inline bool save_2d_csv(const std::string &path, const std::string &skeleton_nam
 
         f << frame << "," << fa.instance_id;
         for (int k = 0; k < num_nodes; ++k) {
-            if (k < (int)cam.keypoints.size() && cam.keypoints[k].occluded) {
+            if (k < (int)cam.keypoints.size() && cam.keypoints[k].is_occluded()) {
                 // Assessed missing/occluded: no coordinates, but retain the
                 // determination instead of collapsing it into unlabeled.
                 f << ",,,M";
-            } else if (k < (int)cam.keypoints.size() && cam.keypoints[k].exist) {
+            } else if (k < (int)cam.keypoints.size() && cam.keypoints[k].usable()) {
                 const auto &kp = cam.keypoints[k];
                 f << "," << kp.x << "," << kp.y << ",";
                 if (kp.confidence > 0.0f)
@@ -138,7 +138,7 @@ inline bool save_2d_csv(const std::string &path, const std::string &skeleton_nam
                 // 'I' is no longer written: Imported and Predicted were the
                 // same claim -- "not placed by a person here" -- and keeping
                 // two spellings of it meant two code paths that had to agree.
-                if (kp.predicted) f << "P";
+                if (kp.is_predicted()) f << "P";
             } else {
                 f << ",,,,";
             }
@@ -356,12 +356,16 @@ inline bool load_2d_csv(const std::string &path, AnnotationMap &amap,
                 // 'M' sits in the source column, so the file cannot also say
                 // who made the assessment; treat it as the user's, which is
                 // what every other unmarked row means.
-                cam.keypoints[k].set_manual();
+                // Just the assessment. 'M' occupies the source column, so
+                // the file cannot say who made the call -- and it does not
+                // need to: an occluded point with no `predicted` buckets as
+                // annotated, which is what an unmarked row means everywhere
+                // else in this format.
                 cam.keypoints[k].set_occluded();
             } else if (has_x && has_y) {
                 cam.keypoints[k].x = x;
                 cam.keypoints[k].y = y;
-                cam.keypoints[k].occluded = false;
+                cam.keypoints[k].vis = Keypoint2D::Vis::Unknown;
                 cam.keypoints[k].reprojected = false;
                 cam.keypoints[k].confidence = has_c ? (float)c : 0.0f;
                 // 'R' is new. 'P' and the legacy 'I' both read as predicted:

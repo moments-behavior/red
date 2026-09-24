@@ -82,9 +82,9 @@ inline bool gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
     for (u32 n = 0; n < skeleton->num_nodes; n++) {
         if (n >= (u32)cam.keypoints.size()) break;
         const Keypoint2D &kp = cam.keypoints[n];
-        if (kp.exist) {
+        if (kp.usable()) {
             draw_pos[n] = {kp.x, kp.y, true, false};
-        } else if (kp.occluded && kp.x != UNLABELED && kp.y != UNLABELED) {
+        } else if (kp.is_occluded() && kp.x != UNLABELED && kp.y != UNLABELED) {
             // Just the stored position. set_occluded keeps x/y, and the
             // reprojection below refreshes it for occluded nodes too, so this
             // is already where the solve says the hidden part is -- no reason
@@ -139,9 +139,9 @@ inline bool gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
             // used to put it out of reach entirely -- no hover, no tooltip, no
             // menu, no drag -- and the only way back was to make the node
             // active from the keyboard and place it again. An invisible
-            // DragPoint (alpha 0, the same trick the triangle uses) gives it
+            // DragPoint (alpha 0, the same trick the ring uses) gives it
             // every interaction a visible point has. Safe to share the id
-            // formula: `occluded` implies `!exist`, so only one of the two
+            // formula: usable() is has_pos && !occluded, so only one of the two
             // branches ever runs for a node.
             double hx = draw_pos[node].x, hy = draw_pos[node].y;
             bool occ_clicked = false, occ_hovered = false;
@@ -187,15 +187,12 @@ inline bool gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
                     ImGui::OpenPopup("##keypoint_menu");
                 }
 
-                // M is a toggle here, and taking the assessment back is a
-                // two-field undo: set_occluded changed presence and
-                // visibility and nothing else, so restoring them restores the
-                // whole point. Author, position and origin were never lost --
-                // a point that was a reprojection comes back as one, and so
-                // does not feed the next solve as a fresh observation.
+                // M here takes the assessment back. set_occluded touched only
+                // visibility, so this restores the whole point -- author,
+                // position and origin were never lost, and a point you placed
+                // returns to Observed rather than to "not judged".
                 if (ImGui::IsKeyPressed(ImGuiKey_M, false)) {
-                    okp.occluded = false;
-                    okp.exist = true;
+                    okp.clear_occluded();
                     touched = true;
                 }
 
@@ -207,7 +204,7 @@ inline bool gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
             }
         }
 
-        if (cam.keypoints[node].exist) {
+        if (cam.keypoints[node].usable()) {
             ImVec4 node_color;
             if (cam.active_id == node) {
                 node_color = active_color; // active keypoint: user-selected color
@@ -227,21 +224,28 @@ inline bool gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
             bool drag_point_clicked;
             bool drag_point_hovered;
             bool drag_point_modified;
-            // A derived point is drawn as a TRIANGLE, a point you placed as a
-            // circle. Shape reads against any background; the dimmed alpha
-            // this replaces had to compete with whatever the frame showed
-            // underneath, which is the one thing a keypoint must not do.
+            // Every point is a circle. What the fill says is the one thing
+            // that changes what happens next: FILLED will feed the next
+            // solve, RING will not.
             //
-            // DragPoint only ever draws AddCircleFilled in the colour it is
-            // given, so a transparent colour hides the marker while keeping
-            // its hit-testing and dragging intact, and the triangle goes on
-            // top by hand.
-            // Authorship, not coordinate origin: T rewrites the numbers in
-            // every view, so keying the marker off `reprojected` would turn
-            // every point into a triangle the moment you triangulated.
-            const bool derived = !cam.keypoints[node].manual;
+            // The same predicate reprojection() counts with, so the overlay
+            // cannot disagree with the solve about which points are inputs --
+            // that was the question the old triangle was standing in for, one
+            // step removed, by showing provenance and leaving you to work out
+            // the consequence.
+            //
+            // Provenance itself is a per-node question and the keypoints
+            // table answers it properly: author, coordinate origin and
+            // visibility as separate columns, rather than one shape trying to
+            // carry a three-valued field.
+            const Keypoint2D &kpn = cam.keypoints[node];
+            const bool feeds_solve = kpn.usable() && kpn.is_manual();
+
+            // DragPoint only ever draws a filled circle in the colour given,
+            // so a transparent one keeps the hit-testing and drag while the
+            // ring goes on by hand.
             ImVec4 marker_color = node_color;
-            if (derived) marker_color.w = 0.0f;
+            if (!feeds_solve) marker_color.w = 0.0f;
 
             drag_point_modified = ImPlot::DragPoint(
                 id, &cam.keypoints[node].x,
@@ -249,17 +253,13 @@ inline bool gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
                 pt_size, ImPlotDragToolFlags_None, &drag_point_clicked,
                 &drag_point_hovered);
 
-            if (derived) {
-                const ImVec2 c = ImPlot::PlotToPixels(cam.keypoints[node].x,
-                                                      cam.keypoints[node].y);
-                // Equilateral, same visual weight as the circle it replaces.
-                const float r = pt_size * 1.25f;
-                const ImVec2 a(c.x, c.y - r);
-                const ImVec2 b(c.x - r * 0.866f, c.y + r * 0.5f);
-                const ImVec2 d(c.x + r * 0.866f, c.y + r * 0.5f);
-                ImPlot::GetPlotDrawList()->AddTriangleFilled(
-                    a, b, d, ImGui::ColorConvertFloat4ToU32(node_color));
+            if (!feeds_solve) {
+                const ImVec2 c = ImPlot::PlotToPixels(kpn.x, kpn.y);
+                ImPlot::GetPlotDrawList()->AddCircle(
+                    c, pt_size, ImGui::ColorConvertFloat4ToU32(node_color),
+                    0, 2.0f);
             }
+
             if (drag_point_modified) {
                 // A drag turns a projected point back into a user annotation.
                 cam.keypoints[node].set_manual();
@@ -315,33 +315,19 @@ inline bool gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
                     ImGui::OpenPopup("##keypoint_menu");
                 }
 
-                if (ImGui::IsKeyPressed(ImGuiKey_M,
-                                        false)) // occlude the hovered keypoint
-                {
+                if (ImGui::IsKeyPressed(ImGuiKey_M, false)) {
                     // Clear the 3D only if this point was an INPUT to it.
-                    // Triangulation uses Manual points alone, so occluding a
-                    // projected point -- the common case: a reprojection
-                    // landing where the body hides the part -- says nothing
-                    // about a solve it never fed, and clearing would throw
-                    // away a 3D point the other views earned. Occluding a
-                    // Manual point does invalidate the solve, so that one
-                    // still clears.
-                    const bool fed_solve =
-                        cam.keypoints[node].exist &&
-                        cam.keypoints[node].manual;
-                    // A person is making this call, so it is theirs: set the
-                    // author first, then the assessment, which keeps it.
-                    cam.keypoints[node].set_manual();
+                    // Triangulation uses manual points alone, so occluding a
+                    // reprojection -- the common case, a solve landing where
+                    // the body hides the part -- says nothing about a solve it
+                    // never fed. Authorship is untouched either way.
+                    const bool fed_solve = cam.keypoints[node].usable() &&
+                                           cam.keypoints[node].is_manual();
                     cam.keypoints[node].set_occluded();
                     if (fed_solve && node < fa.kp3d.size())
                         fa.kp3d[node].clear();
-                    // Advance, same as the active-node path below. M means
-                    // "mark this one occluded and move on" wherever it is
-                    // pressed: without this, marking a hovered keypoint left
-                    // the active node where it was, and since the marked point
-                    // stops being drawn the NEXT press fell through to that
-                    // path instead -- so M appeared to mark on one press and
-                    // merely advance on the next.
+                    // Advance, same as the active-node path. M means "mark
+                    // this one and move on" wherever it is pressed.
                     cam.active_id =
                         (node < skeleton->num_nodes - 1) ? node + 1 : node;
                 }
@@ -393,7 +379,7 @@ inline bool gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
                 // Only Manual points feed triangulation, so this is what
                 // promotes a reprojection you have judged correct into an
                 // input for the next solve.
-                ImGui::BeginDisabled(kp.manual);
+                ImGui::BeginDisabled(kp.is_manual());
                 if (ImGui::MenuItem("Accept as manual")) {
                     // Accepting the position as your own: it is yours now, and
                     // the numbers are the ones you accepted rather than a
@@ -401,24 +387,35 @@ inline bool gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
                     kp.set_manual();
                 }
                 ImGui::EndDisabled();
-                if (kp.manual && ImGui::IsItemHovered(
+                if (kp.is_manual() && ImGui::IsItemHovered(
                                          ImGuiHoveredFlags_AllowWhenDisabled))
                     ImGui::SetTooltip("Already a manual label");
 
-                // Same item both ways round, so the menu on an occluded point
-                // is not a dead end.
-                if (kp.occluded) {
-                    if (ImGui::MenuItem("Clear occlusion")) {
-                        kp.occluded = false;
-                        kp.exist = true;
-                    }
-                } else if (ImGui::MenuItem("Mark occluded")) {
-                    const bool fed_solve =
-                        kp.exist && kp.manual;
-                    kp.set_manual();
+                ImGui::Separator();
+
+                // Visibility, all three states spelled out, with the one you
+                // are already in shown as selected. A judgement you make now
+                // and then, not something to type -- which is why there is no
+                // shortcut for any of them.
+                ImGui::TextDisabled("Can you see it here?");
+                if (ImGui::MenuItem("Visible", nullptr, kp.is_observed())) {
+                    kp.vis = Keypoint2D::Vis::Observed;
+                }
+                if (ImGui::MenuItem("Occluded", nullptr, kp.is_occluded())) {
+                    // Clearing the 3D only if this point was an INPUT to it.
+                    // Triangulation uses manual points alone, so occluding a
+                    // reprojection -- the common case, a solve landing where
+                    // the body hides the part -- says nothing about a solve it
+                    // never fed.
+                    const bool fed_solve = kp.usable() && kp.is_manual();
                     kp.set_occluded();
                     if (fed_solve) fa.kp3d[t.node].clear();
                 }
+                if (ImGui::MenuItem("Not judged", nullptr,
+                                    kp.vis == Keypoint2D::Vis::Unknown)) {
+                    kp.vis = Keypoint2D::Vis::Unknown;
+                }
+                ImGui::Separator();
                 if (ImGui::MenuItem("Delete")) {
                     kp = Keypoint2D{};
                     cam.active_id = t.node;
@@ -450,21 +447,19 @@ inline bool gui_plot_keypoints(FrameAnnotation &fa, SkeletonContext *skeleton,
         cam.keypoints[cam.active_id] = Keypoint2D{};
     }
 
-    // A toggle, like the hovered case above: M on a node already marked
-    // occluded takes the assessment back. set_occluded changed presence and
-    // visibility and nothing else, so clearing those two restores the whole
-    // point -- author, position and origin were never lost.
+    // With nothing under the cursor, M acts on the active node. This is the
+    // case the menu cannot reach: an unlabelled node has no marker to
+    // right-click, so without this there is no way to mark it occluded at all.
     //
-    // Only MARKING advances, so M can still be tapped down a skeleton.
-    // Unmarking stays put: you are undoing this node, not moving past it.
+    // A toggle, like the hovered paths. Only MARKING advances, so M can be
+    // tapped down a skeleton; unmarking stays put, because you are undoing
+    // this node rather than moving past it.
     if (plot_keys_ok && ImGui::IsKeyPressed(ImGuiKey_M, false)) {
         Keypoint2D &akp = cam.keypoints[cam.active_id];
-        if (akp.occluded) {
-            akp.occluded = false;
-            akp.exist = true;
+        if (akp.is_occluded()) {
+            akp.clear_occluded();
         } else {
-            const bool fed_solve = akp.exist && akp.manual;
-            akp.set_manual();
+            const bool fed_solve = akp.usable() && akp.is_manual();
             akp.set_occluded();
             if (fed_solve && cam.active_id < fa.kp3d.size())
                 fa.kp3d[cam.active_id].clear();
@@ -634,7 +629,7 @@ inline bool solve_midline_constraint(FrameAnnotation &fa,
     for (u32 node = 0; node < skeleton->num_nodes; node++) {
         if (node >= (u32)fa.cameras[side].keypoints.size()) break;
         const auto &kp = fa.cameras[side].keypoints[node];
-        if (!kp.exist) continue;
+        if (!kp.usable()) continue;
         Eigen::Vector2d pu = midline_undistort_px(kp.x, kp.y, cp[side],
                                                   scene->image_height[side], telecentric);
         red_math::Ray3D ray = midline_backproject(pu, cp[side], telecentric);
@@ -653,13 +648,13 @@ inline bool solve_midline_constraint(FrameAnnotation &fa,
             if (v == side) continue;
             if (v >= (int)fa.cameras.size()) continue;
             if (node >= (u32)fa.cameras[v].keypoints.size()) continue;
-            if (fa.cameras[v].keypoints[node].occluded) continue;
+            if (fa.cameras[v].keypoints[node].is_occluded()) continue;
             double rx, ry;
             if (reproject_3d_to_cam(X, cp[v], scene->image_width[v],
                                     scene->image_height[v], rx, ry)) {
                 fa.cameras[v].keypoints[node].x = rx;
                 fa.cameras[v].keypoints[node].y = ry;
-                fa.cameras[v].keypoints[node].occluded = false;
+                fa.cameras[v].keypoints[node].vis = Keypoint2D::Vis::Unknown;
                 fa.cameras[v].keypoints[node].set_reprojected();
             }
         }
@@ -702,8 +697,8 @@ inline void reprojection(FrameAnnotation &fa, SkeletonContext *skeleton,
         for (u32 view_idx = 0; view_idx < scene->num_cams; view_idx++) {
             if (view_idx < (u32)fa.cameras.size() &&
                 node < (u32)fa.cameras[view_idx].keypoints.size() &&
-                fa.cameras[view_idx].keypoints[node].exist &&
-                fa.cameras[view_idx].keypoints[node].manual) {
+                fa.cameras[view_idx].keypoints[node].usable() &&
+                fa.cameras[view_idx].keypoints[node].is_manual()) {
                 num_views_labeled++;
             }
         }
@@ -716,8 +711,8 @@ inline void reprojection(FrameAnnotation &fa, SkeletonContext *skeleton,
             for (u32 view_idx = 0; view_idx < scene->num_cams; view_idx++) {
                 if (view_idx >= (u32)fa.cameras.size()) continue;
                 if (node >= (u32)fa.cameras[view_idx].keypoints.size()) continue;
-                if (fa.cameras[view_idx].keypoints[node].exist &&
-                    fa.cameras[view_idx].keypoints[node].manual) {
+                if (fa.cameras[view_idx].keypoints[node].usable() &&
+                    fa.cameras[view_idx].keypoints[node].is_manual()) {
                     Eigen::Vector2d pt(
                         fa.cameras[view_idx].keypoints[node].x,
                         (double)scene->image_height[view_idx] -
@@ -766,10 +761,10 @@ inline void reprojection(FrameAnnotation &fa, SkeletonContext *skeleton,
                 // and its origin are touched: `exist` stays false and the
                 // assessment stands, because where the part is and whether you
                 // can see it are different questions.
-                const bool coords_only = kp2d.occluded;
+                const bool coords_only = kp2d.is_occluded();
                 // `manual` alone: an occluded point is the one place a manual
                 // point has no coordinates, and it is excluded just above.
-                if (!coords_only && !kp2d.manual) kp2d = Keypoint2D{};
+                if (!coords_only && !kp2d.is_manual()) kp2d = Keypoint2D{};
 
                 // Land the projection first, decide what it means second.
                 // Both camera models answer the same question -- is there a
@@ -813,13 +808,19 @@ inline void reprojection(FrameAnnotation &fa, SkeletonContext *skeleton,
                     // solve has already left -- so drop them rather than draw a
                     // marker at a spot nothing is at any more. The next solve
                     // that lands in frame puts them back.
+                    // has_pos follows the coordinates, which is the whole
+                    // point of it being its own flag: an occluded node the
+                    // solve can place HAS a position (the cross is drawn from
+                    // it), and one the solve cannot place does not.
                     if (in_frame) {
                         kp2d.x = x;
                         kp2d.y = y;
+                        kp2d.has_pos = true;
                         kp2d.reprojected = true;
                     } else {
                         kp2d.x = UNLABELED;
                         kp2d.y = UNLABELED;
+                        kp2d.has_pos = false;
                         kp2d.reprojected = false;
                     }
                     continue;
@@ -828,7 +829,7 @@ inline void reprojection(FrameAnnotation &fa, SkeletonContext *skeleton,
                 if (in_frame) {
                     kp2d.x = x;
                     kp2d.y = y;
-                    kp2d.occluded = false;
+                    kp2d.vis = Keypoint2D::Vis::Unknown;
                     // Coordinate origin only. Authorship is untouched: a
                     // hand-placed point stays manual through a refresh, and one
                     // nobody placed simply has no author -- it was not

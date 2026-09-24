@@ -103,7 +103,7 @@ static void test_make_frame_basic() {
         EXPECT_EQ((int)fa.cameras[c].keypoints.size(), 6);
         for (int k = 0; k < 6; ++k) {
             EXPECT_NEAR(fa.cameras[c].keypoints[k].x, UNLABELED, 1.0);
-            EXPECT_FALSE(fa.cameras[c].keypoints[k].exist);
+            EXPECT_FALSE(fa.cameras[c].keypoints[k].has_pos);
         }
     }
 }
@@ -196,12 +196,12 @@ static void test_migration_roundtrip() {
     auto &fa = amap[10].front();
 
     // Check 2D keypoints survived migration
-    EXPECT_TRUE(fa.cameras[0].keypoints[0].exist);
+    EXPECT_TRUE(fa.cameras[0].keypoints[0].has_pos);
     EXPECT_NEAR(fa.cameras[0].keypoints[0].x, 100.0, 0.001);
     EXPECT_NEAR(fa.cameras[0].keypoints[0].y, 200.0, 0.001);
-    EXPECT_TRUE(fa.cameras[0].keypoints[1].exist);
-    EXPECT_FALSE(fa.cameras[0].keypoints[2].exist); // node 2, cam 0 not labeled
-    EXPECT_TRUE(fa.cameras[1].keypoints[2].exist);
+    EXPECT_TRUE(fa.cameras[0].keypoints[1].has_pos);
+    EXPECT_FALSE(fa.cameras[0].keypoints[2].has_pos); // node 2, cam 0 not labeled
+    EXPECT_TRUE(fa.cameras[1].keypoints[2].has_pos);
     EXPECT_NEAR(fa.cameras[1].keypoints[2].x, 500.0, 0.001);
 
     // Check 3D keypoints survived migration
@@ -1242,19 +1242,19 @@ static void test_save_load_keypoints_roundtrip() {
         auto &fa = amap2[f].front();
 
         // Cam 0, keypoint 0
-        EXPECT_TRUE(fa.cameras[0].keypoints[0].exist);
+        EXPECT_TRUE(fa.cameras[0].keypoints[0].has_pos);
         EXPECT_NEAR(fa.cameras[0].keypoints[0].x, 100.0 + f, 0.01);
         EXPECT_NEAR(fa.cameras[0].keypoints[0].y, 200.0 + f, 0.01);
 
         // Cam 0, keypoint 1 should be unlabeled
-        EXPECT_FALSE(fa.cameras[0].keypoints[1].exist);
+        EXPECT_FALSE(fa.cameras[0].keypoints[1].has_pos);
 
         // Cam 0, keypoint 2
-        EXPECT_TRUE(fa.cameras[0].keypoints[2].exist);
+        EXPECT_TRUE(fa.cameras[0].keypoints[2].has_pos);
         EXPECT_NEAR(fa.cameras[0].keypoints[2].x, 300.0 + f, 0.01);
 
         // Cam 1, keypoint 1
-        EXPECT_TRUE(fa.cameras[1].keypoints[1].exist);
+        EXPECT_TRUE(fa.cameras[1].keypoints[1].has_pos);
         EXPECT_NEAR(fa.cameras[1].keypoints[1].x, 500.0 + f, 0.01);
 
         // 3D keypoint 0
@@ -1304,7 +1304,7 @@ static void test_save_load_with_extended_data() {
     EXPECT_EQ(rc, 0);
 
     // Verify keypoints survived
-    EXPECT_TRUE(amap2[10].front().cameras[0].keypoints[0].exist);
+    EXPECT_TRUE(amap2[10].front().cameras[0].keypoints[0].has_pos);
     EXPECT_NEAR(amap2[10].front().cameras[0].keypoints[0].x, 50.0, 0.01);
 
     // Verify bbox survived
@@ -1562,7 +1562,7 @@ static void test_bridge_keypoints_and_extended_roundtrip() {
     // Step 2: Bridge → AnnotationMap
     AnnotationMap amap = migrate_keypoints_map(km, skel, &scene);
     EXPECT_EQ((int)amap.size(), 1);
-    EXPECT_TRUE(amap[50].front().cameras[0].keypoints[0].exist);
+    EXPECT_TRUE(amap[50].front().cameras[0].keypoints[0].has_pos);
 
     // Step 3: Add bbox via AnnotationMap (simulating annotation tool)
     auto &bext = amap[50].front().cameras[0].get_extras();
@@ -1588,11 +1588,11 @@ static void test_bridge_keypoints_and_extended_roundtrip() {
     // Step 6: Verify keypoints survived
     EXPECT_EQ((int)amap2.size(), 1);
     EXPECT_TRUE(amap2.count(50));
-    EXPECT_TRUE(amap2[50].front().cameras[0].keypoints[0].exist);
+    EXPECT_TRUE(amap2[50].front().cameras[0].keypoints[0].has_pos);
     EXPECT_NEAR(amap2[50].front().cameras[0].keypoints[0].x, 100.0, 0.01);
     EXPECT_NEAR(amap2[50].front().cameras[0].keypoints[0].y, 200.0, 0.01);
-    EXPECT_TRUE(amap2[50].front().cameras[0].keypoints[1].exist);
-    EXPECT_TRUE(amap2[50].front().cameras[1].keypoints[0].exist);
+    EXPECT_TRUE(amap2[50].front().cameras[0].keypoints[1].has_pos);
+    EXPECT_TRUE(amap2[50].front().cameras[1].keypoints[0].has_pos);
 
     // Step 7: Verify bbox survived
     EXPECT_TRUE(amap2[50].front().cameras[0].has_bbox());
@@ -1609,7 +1609,7 @@ static void test_bridge_keypoints_and_extended_roundtrip() {
     EXPECT_TRUE(amap[50].front().cameras[0].has_bbox());
     EXPECT_NEAR(amap[50].front().cameras[0].extras->bbox_x, 50.0, 0.01);
     // New keypoint should be reflected
-    EXPECT_TRUE(amap[50].front().cameras[0].keypoints[2].exist);
+    EXPECT_TRUE(amap[50].front().cameras[0].keypoints[2].has_pos);
     EXPECT_NEAR(amap[50].front().cameras[0].keypoints[2].x, 175.0, 0.01);
 
     // Cleanup
@@ -1661,7 +1661,7 @@ static void test_refresh_null_keypoints_skipped() {
     EXPECT_EQ((int)amap.size(), 1);
     EXPECT_TRUE(amap.count(20));
     EXPECT_FALSE(amap.count(10));
-    EXPECT_TRUE(amap[20].front().cameras[0].keypoints[0].exist);
+    EXPECT_TRUE(amap[20].front().cameras[0].keypoints[0].has_pos);
     EXPECT_NEAR(amap[20].front().cameras[0].keypoints[0].x, 42.0, 0.001);
 
     free_keypoints(km[20], &scene);
@@ -1693,7 +1693,7 @@ static void test_refresh_preserves_bbox_on_update() {
     // Refresh should update keypoints but keep bbox/obb
     refresh_keypoints_in_amap(amap, km, skel, &scene);
 
-    EXPECT_TRUE(amap[5].front().cameras[0].keypoints[0].exist);
+    EXPECT_TRUE(amap[5].front().cameras[0].keypoints[0].has_pos);
     EXPECT_NEAR(amap[5].front().cameras[0].keypoints[0].x, 10.0, 0.001);
     EXPECT_TRUE(amap[5].front().cameras[0].has_bbox());
     EXPECT_NEAR(amap[5].front().cameras[0].extras->bbox_x, 100.0, 0.001);
@@ -1728,7 +1728,7 @@ static void test_refresh_adds_new_frames() {
     EXPECT_EQ((int)amap.size(), 2);
     EXPECT_TRUE(amap.count(10));
     EXPECT_TRUE(amap.count(20));
-    EXPECT_TRUE(amap[20].front().cameras[0].keypoints[0].exist);
+    EXPECT_TRUE(amap[20].front().cameras[0].keypoints[0].has_pos);
 
     for (auto &[f, kp] : km) free_keypoints(kp, &scene);
 }
@@ -1779,7 +1779,7 @@ static void test_refresh_new_frame_gets_keypoints() {
     // Should have created the frame with keypoints
     EXPECT_EQ((int)amap.size(), 1);
     EXPECT_TRUE(amap.count(5));
-    EXPECT_TRUE(amap[5].front().cameras[0].keypoints[0].exist);
+    EXPECT_TRUE(amap[5].front().cameras[0].keypoints[0].has_pos);
     EXPECT_NEAR(amap[5].front().cameras[0].keypoints[0].x, 99.0, 0.001);
 
     free_keypoints(km[5], &scene);
@@ -1830,7 +1830,7 @@ static void test_migrate_multi_frame() {
         EXPECT_TRUE(amap.count(f));
         EXPECT_EQ((int)amap[f].front().cameras.size(), 2);
         EXPECT_EQ((int)amap[f].front().kp3d.size(), 4);
-        EXPECT_TRUE(amap[f].front().cameras[0].keypoints[0].exist);
+        EXPECT_TRUE(amap[f].front().cameras[0].keypoints[0].has_pos);
         EXPECT_NEAR(amap[f].front().cameras[0].keypoints[0].x, (double)f, 0.001);
     }
 
@@ -2091,7 +2091,7 @@ static void test_get_or_create_frame_idempotent() {
     auto &fa2 = get_or_create_frame(amap, 10, 3, 2);
     // Should return same frame, not create a new one
     EXPECT_EQ((int)amap.size(), 1);
-    EXPECT_TRUE(fa2.cameras[0].keypoints[0].exist);
+    EXPECT_TRUE(fa2.cameras[0].keypoints[0].has_pos);
 }
 
 static void test_make_frame_sizes_match() {
@@ -2165,25 +2165,25 @@ static void test_keypoint_clipboard_ops() {
     dst.cameras[0].keypoints[0].set_predicted(1.0f);
     int pasted = paste_keypoints(kc, dst, NN, NC);
     EXPECT_EQ(pasted, 2);
-    EXPECT_TRUE(dst.cameras[0].keypoints[0].exist);
+    EXPECT_TRUE(dst.cameras[0].keypoints[0].has_pos);
     EXPECT_NEAR(dst.cameras[0].keypoints[0].x, 100.0, 1e-9);
     EXPECT_NEAR(dst.cameras[0].keypoints[0].y, 200.0, 1e-9);
-    EXPECT_TRUE(dst.cameras[1].keypoints[1].exist);
+    EXPECT_TRUE(dst.cameras[1].keypoints[1].has_pos);
     EXPECT_NEAR(dst.cameras[1].keypoints[1].x, 11.0, 1e-9);
     EXPECT_TRUE(dst.kp3d[1].exist);
     EXPECT_NEAR(dst.kp3d[1].z, 3.0, 1e-9);
     // node2 (skipped) and node3 (unselected) stay unlabeled
-    EXPECT_FALSE(dst.cameras[0].keypoints[2].exist);
-    EXPECT_FALSE(dst.cameras[0].keypoints[3].exist);
+    EXPECT_FALSE(dst.cameras[0].keypoints[2].has_pos);
+    EXPECT_FALSE(dst.cameras[0].keypoints[3].has_pos);
 
     // Delete one camera only
     delete_node_from_camera(dst, 0, 0);
-    EXPECT_FALSE(dst.cameras[0].keypoints[0].exist);
+    EXPECT_FALSE(dst.cameras[0].keypoints[0].has_pos);
 
     // Delete a node across all cameras also clears its (now unsupported) 3D
     delete_node_all_cameras(dst, 1, NC);
     for (int c = 0; c < NC; ++c)
-        EXPECT_FALSE(dst.cameras[c].keypoints[1].exist);
+        EXPECT_FALSE(dst.cameras[c].keypoints[1].has_pos);
     EXPECT_FALSE(dst.kp3d[1].exist);
 
     // Delete a selected set from all cameras
@@ -2197,10 +2197,10 @@ static void test_keypoint_clipboard_ops() {
     int del = delete_selected_all_cameras(kc2, d2, NN, NC);
     EXPECT_EQ(del, 2);
     for (int c = 0; c < NC; ++c) {
-        EXPECT_FALSE(d2.cameras[c].keypoints[0].exist);
-        EXPECT_TRUE(d2.cameras[c].keypoints[1].exist);
-        EXPECT_TRUE(d2.cameras[c].keypoints[2].exist);
-        EXPECT_FALSE(d2.cameras[c].keypoints[3].exist);
+        EXPECT_FALSE(d2.cameras[c].keypoints[0].has_pos);
+        EXPECT_TRUE(d2.cameras[c].keypoints[1].has_pos);
+        EXPECT_TRUE(d2.cameras[c].keypoints[2].has_pos);
+        EXPECT_FALSE(d2.cameras[c].keypoints[3].has_pos);
     }
 
     // Resizing to a new node count drops any stale selection

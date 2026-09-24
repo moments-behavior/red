@@ -346,7 +346,9 @@ int main(int argc, char **argv) {
         projected.set_predicted();
         projected.reprojected = true;
 
-        fa.cameras[0].keypoints[2].set_manual();
+        // Author only: an occluded point here has no coordinates, so it
+        // must not claim a position.
+        fa.cameras[0].keypoints[2].author = Keypoint2D::Author::Manual;
         fa.cameras[0].keypoints[2].set_occluded();
         amap[0] = FrameInstances{std::move(fa)};
 
@@ -371,17 +373,16 @@ int main(int argc, char **argv) {
               "all-status import retains the frame");
         if (fit != imported.annotations.end() && !fit->second.empty()) {
             const auto &if0 = fit->second.front();
-            CHECK(if0.cameras[0].keypoints[0].exist &&
-                  !if0.cameras[0].keypoints[0].occluded &&
+            CHECK(if0.cameras[0].keypoints[0].is_observed() &&
                   std::abs(if0.cameras[0].keypoints[0].x - 11.0) < 1e-6,
                   "visible imports as a labeled point");
-            CHECK(if0.cameras[0].keypoints[1].exist &&
+            CHECK(if0.cameras[0].keypoints[1].has_pos &&
                   if0.cameras[0].keypoints[1].reprojected,
                   "projected imports as a projected point");
-            CHECK(!if0.cameras[0].keypoints[2].exist &&
-                  if0.cameras[0].keypoints[2].occluded,
+            CHECK(!if0.cameras[0].keypoints[2].has_pos &&
+                  if0.cameras[0].keypoints[2].is_occluded(),
                   "missing imports as an occluded point");
-            CHECK(!if0.cameras[1].keypoints[0].exist,
+            CHECK(!if0.cameras[1].keypoints[0].has_pos,
                   "unlabeled remains the default empty point");
         }
     }
@@ -410,8 +411,18 @@ int main(int argc, char **argv) {
         CHECK(TailcycleImport::read_session(d.string(), "sess1", &imported, &ist,
                                             &status),
               "tracked visible import succeeds: " + status);
-        CHECK(imported.annotations.at(0).front().cameras[0].keypoints[0].manual,
-              "tracked session preserves visible provenance");
+        // What this has always been about is the visible STATUS surviving,
+        // not authorship: it was written when one enum carried both. A tracked
+        // session's points are the model's, so `predicted` -- and `visible`
+        // shows up as a position that is present and not derived.
+        {
+            const Keypoint2D &k0 =
+                imported.annotations.at(0).front().cameras[0].keypoints[0];
+            CHECK(k0.usable() && !k0.is_occluded(),
+                  "tracked session preserves visible status");
+            CHECK(k0.is_predicted() && !k0.is_manual(),
+                  "tracked session's points are the model's");
+        }
 
         cfg.in_place = true;
         CHECK(TailcycleExport::export_session(cfg, imported.annotations, &st, &status),

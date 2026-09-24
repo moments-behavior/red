@@ -116,7 +116,7 @@ inline Diagnostics compute(
                 if (m >= (int)fa.cameras.size()) continue;
                 if (kp >= (int)fa.cameras[m].keypoints.size()) continue;
                 const Keypoint2D &k2 = fa.cameras[m].keypoints[kp];
-                if (!k2.exist) continue;
+                if (!k2.usable()) continue;
                 if (k2.x >= UNLABELED * 0.9 || k2.y >= UNLABELED * 0.9) continue;
                 if (!std::isfinite(k2.x) || !std::isfinite(k2.y)) continue;
                 c.cams_labeled.push_back(m);

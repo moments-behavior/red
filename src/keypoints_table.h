@@ -219,15 +219,15 @@ inline void DrawKeypointsTable(AppContext &ctx, float height) {
                                 const bool labeled =
                                     row < (int)fa.cameras.size() &&
                                     node < (int)fa.cameras[row].keypoints.size() &&
-                                    fa.cameras[row].keypoints[node].exist;
+                                    fa.cameras[row].keypoints[node].usable();
                                 const bool occluded =
                                     row < (int)fa.cameras.size() &&
                                     node < (int)fa.cameras[row].keypoints.size() &&
-                                    fa.cameras[row].keypoints[node].occluded;
+                                    fa.cameras[row].keypoints[node].is_occluded();
                                 const bool user_annotated =
-                                    labeled && fa.cameras[row].keypoints[node].manual;
+                                    labeled && fa.cameras[row].keypoints[node].is_manual();
                                 const bool projected =
-                                    labeled && !fa.cameras[row].keypoints[node].manual;
+                                    labeled && !fa.cameras[row].keypoints[node].is_manual();
                                 // Coordinate origin, independent of the above:
                                 // a point you placed and then refreshed with T
                                 // is both manual and reprojected.
@@ -236,12 +236,20 @@ inline void DrawKeypointsTable(AppContext &ctx, float height) {
                                     fa.cameras[row].keypoints[node].reprojected;
                                 const bool model_made =
                                     labeled &&
-                                    fa.cameras[row].keypoints[node].predicted;
+                                    fa.cameras[row].keypoints[node].is_predicted();
 
-                                // Both axes, spelled out. The tooltip is the
-                                // one place the full state is legible, so it
-                                // reports the combination rather than picking
-                                // whichever half the marker happens to show.
+                                const bool observed =
+                                    labeled &&
+                                    fa.cameras[row].keypoints[node].is_observed();
+
+                                // All THREE axes, spelled out. The tooltip is
+                                // the one place the full state is legible, so
+                                // it reports the combination rather than
+                                // picking whichever part a marker can show.
+                                // Visibility used to be missing from it
+                                // entirely: a reprojection someone had
+                                // confirmed and one nobody had looked at both
+                                // read "reprojected from 3D".
                                 const char *state_text =
                                     occluded     ? "occluded / outside frame"
                                     : !labeled   ? "not placed"
@@ -253,6 +261,11 @@ inline void DrawKeypointsTable(AppContext &ctx, float height) {
                                                   : "model predicted")
                                     : reproj     ? "reprojected from 3D"
                                                  : "placed";
+                                const char *vis_text =
+                                    occluded   ? nullptr   // the state IS the visibility
+                                    : !labeled ? nullptr
+                                    : observed ? "confirmed visible here"
+                                               : "visibility not judged";
                                 ImVec4 node_color = ImVec4(0, 0, 0, 0);
 
                                 // Fill shows placement status regardless of
@@ -272,14 +285,30 @@ inline void DrawKeypointsTable(AppContext &ctx, float height) {
                                     node_color = sel_fill;
                                 }
 
-                                // The whole cell is a click target: clicking
-                                // sets this keypoint active for this camera view.
+                                // The whole cell is a click target, and it
+                                // does both halves of "work on this one":
+                                // makes the keypoint active in that camera,
+                                // and brings that camera's view to the front.
+                                //
+                                // Picking a cell is already a statement about
+                                // which view you mean -- the row IS a camera.
+                                // Leaving the view behind meant reading the
+                                // table to find the cell worth fixing and then
+                                // hunting for the tab it belonged to.
+                                //
+                                // SetWindowFocus alone, as with the camera
+                                // names above: red.cpp sees the focus change
+                                // next frame and moves the highlight, so the
+                                // two cannot disagree about the current view.
                                 ImGui::PushID(column);
                                 if (ImGui::InvisibleButton(
                                         "##kpcell",
                                         ImVec2(cell_w, ImGui::GetFrameHeight()))) {
                                     if (row < (int)fa.cameras.size())
                                         fa.cameras[row].active_id = (u32)node;
+                                    if (row < (int)pm.camera_names.size())
+                                        ImGui::SetWindowFocus(
+                                            pm.camera_names[row].c_str());
                                 }
                                 // Active keypoint: outline the cell (in the
                                 // user's "Active Keypoint" color) rather than
@@ -304,18 +333,25 @@ inline void DrawKeypointsTable(AppContext &ctx, float height) {
                                         row < (int)pm.camera_names.size()) {
                                         if (kc.count() >= 2)
                                             ImGui::SetTooltip(
-                                                "%s / %s\n%s\n"
-                                                "Click: set active   Delete: remove selected set (%d)",
+                                                "%s / %s\n%s%s%s\n"
+                                                "Click: set active + show view   "
+                                                "Delete: remove selected set (%d)",
                                                 pm.camera_names[row].c_str(),
                                                 skeleton.node_names[node].c_str(),
-                                                state_text, kc.count());
+                                                state_text,
+                                                vis_text ? "\n" : "",
+                                                vis_text ? vis_text : "",
+                                                kc.count());
                                         else
                                             ImGui::SetTooltip(
-                                                "%s / %s\n%s\n"
-                                                "Click: set active   Delete: remove from this camera",
+                                                "%s / %s\n%s%s%s\n"
+                                                "Click: set active + show view   "
+                                                "Delete: remove from this camera",
                                                 pm.camera_names[row].c_str(),
                                                 skeleton.node_names[node].c_str(),
-                                                state_text);
+                                                state_text,
+                                                vis_text ? "\n" : "",
+                                                vis_text ? vis_text : "");
                                     }
                                 }
                                 // T marks coordinates that came from the 3D,
@@ -336,6 +372,27 @@ inline void DrawKeypointsTable(AppContext &ctx, float height) {
                                     ImGui::GetWindowDrawList()->AddText(
                                         ImVec2(p0.x + 2.0f, p0.y),
                                         IM_COL32(255, 120, 120, 255), "X");
+
+                                // A confirmed-visible point that you did NOT
+                                // place: a reprojection someone looked at and
+                                // vouched for, or an imported one a model
+                                // vouched for. Marked because it is the state
+                                // you cannot otherwise tell from a
+                                // reprojection nobody has judged.
+                                //
+                                // Not marked on your own points: placing one
+                                // already means you saw it, so a tick on every
+                                // cell you filled in would say nothing and
+                                // clutter the common case. Bottom-right, clear
+                                // of the T and X at the top-left.
+                                if (observed && !user_annotated) {
+                                    const ImVec2 tsz = ImGui::CalcTextSize("v");
+                                    ImGui::GetWindowDrawList()->AddText(
+                                        ImVec2(p0.x + cell_w - tsz.x - 2.0f,
+                                               p0.y + ImGui::GetFrameHeight() -
+                                                   tsz.y),
+                                        IM_COL32(210, 255, 210, 220), "v");
+                                }
                                 ImGui::PopID();
 
                                 ImU32 cell_bg_color =
@@ -409,7 +466,7 @@ inline void DrawKeypointsTable(AppContext &ctx, float height) {
                                 "%s\n%s\n(%.2f, %.2f, %.2f)",
                                 node < (int)skeleton.node_names.size()
                                     ? skeleton.node_names[node].c_str() : "",
-                                k3.predicted
+                                k3.is_predicted()
                                     ? "predicted" : "triangulated",
                                 k3.x, k3.y, k3.z);
                         ImGui::PopID();
@@ -423,7 +480,7 @@ inline void DrawKeypointsTable(AppContext &ctx, float height) {
                         // strength says how much of it is yours.
                         if (k3.exist && node < (int)skeleton.node_colors.size()) {
                             ImVec4 c = skeleton.node_colors[node];
-                            c.w = k3.predicted ? 0.5f : 0.9f;
+                            c.w = k3.is_predicted() ? 0.5f : 0.9f;
                             ImGui::TableSetBgColor(ImGuiTableBgTarget_CellBg,
                                                    ImGui::GetColorU32(c));
                         }
