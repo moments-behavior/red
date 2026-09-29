@@ -114,9 +114,8 @@ struct WindowStates {
         midline = MidlineToolState{};
         triangulation_diag = TriangulationDiagnosticsState{};
         switch_skeleton = SwitchSkeletonState{};
-        // PoseTail: keep the backend choice, URL and ONNX path (they are
-        // per-workstation, not per-project); drop everything derived from
-        // the project.
+        // PoseTail: keep the server URL (it is per-workstation, not
+        // per-project); drop everything derived from the project.
         posetail.show = false;
         posetail.forward_requested = false;
         posetail.server_probe_requested = false;

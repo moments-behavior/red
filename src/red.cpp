@@ -75,7 +75,7 @@
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
 // PoseTail forward tracker (after stb_image_write: the HTTP client PNG-encodes
-// crops with it). Owns the ONNX / httplib includes; see posetail_actions.h.
+// crops with it). Owns the httplib include; see posetail_actions.h.
 #include "posetail_actions.h"
 #ifndef __APPLE__
 #include "kernel.cuh"  // CUDA display kernels; empty without RED_HAVE_CUDA
@@ -314,8 +314,8 @@ int main(int argc, char **argv) {
     // Annotation model
     AnnotationMap annotations;
 
-    // PoseTail forward tracker: local ONNX session + HTTP client state.
-    // Lives for the whole process (a model load survives project switches).
+    // PoseTail forward tracker: HTTP client state. Lives for the whole
+    // process (the server URL survives project switches).
     PosetailRuntime posetail_rt;
 
     // Predictions live in a separate, memory-mapped store rather than in
@@ -766,7 +766,7 @@ int main(int argc, char **argv) {
             ctx.toasts.push("Prediction store closed (skeleton changed)");
         }
 
-        // PoseTail Tracker: Probe / Load / Forward requests from the panel.
+        // PoseTail Tracker: Probe / Forward requests from the panel.
         // Runs synchronously on the main thread (one chunk is ~1-3 s on the
         // server, so the UI stalls for that long -- same as the T key).
         posetail_handle_requests(win.posetail, posetail_rt, ctx);

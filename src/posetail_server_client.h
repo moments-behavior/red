@@ -1,10 +1,9 @@
 #pragma once
 // posetail_server_client.h — Client for the posetail HTTP inference server.
 //
-// One round-trip = one 16-frame chunk × N cameras × N query points. Mirrors
-// the I/O of posetail_predict_chunk() in posetail_infer.h so the same callers
-// can swap between local ONNX and remote server. The server is server/server.py
-// in github.com/AI-HHMI/tracktail — see its server/SERVER.md for the wire format.
+// One round-trip = one 16-frame chunk × N cameras × N query points. The
+// server is server/server.py in github.com/AI-HHMI/tracktail — see its
+// server/SERVER.md for the wire format.
 //
 // Wire format:
 //   POST /predict
@@ -22,7 +21,7 @@
 //   OpenCV, so the crop + bilinear resize is done by hand below.
 
 #include "camera.h"
-#include "posetail_infer.h"  // for posetail_detail::compute_crop_box / T_CHUNK / CROP_SIZE
+#include "red_math.h"
 // stb_image_write.h has no include guard around its IMPLEMENTATION block, so
 // including it a second time in the TU that defines
 // STB_IMAGE_WRITE_IMPLEMENTATION (red.cpp) would re-emit every function.
@@ -52,6 +51,128 @@
 // the CMake level; here we only include the header.
 #include "miniz.h"
 
+// CUDA is optional on this branch (RED_ENABLE_CUDA=OFF defines RED_NO_CUDA),
+// and never present on macOS. Everything GPU-side keys off this one macro.
+#if !defined(__APPLE__) && !defined(RED_NO_CUDA)
+#define POSETAIL_HAS_CUDA 1
+#include <cuda_runtime.h>
+#endif
+
+// Byte order of the display buffer (see decoder.h). The model wants RGB, so
+// a BGRA buffer needs its R/B swapped while cropping.
+#if defined(RED_FRAME_BGRA)
+#define POSETAIL_SRC_R 2
+#define POSETAIL_SRC_B 0
+#else
+#define POSETAIL_SRC_R 0
+#define POSETAIL_SRC_B 2
+#endif
+
+// ── Fixed model dimensions; the server reports its own in GET /info ──
+namespace posetail_detail {
+static constexpr int T_CHUNK = 16;     // frames per chunk
+static constexpr int CROP_SIZE = 256;  // model input H == W
+static constexpr int CROP_PAD = 20;    // bbox pad before expanding to CROP_SIZE
+
+// One per-camera crop window, in image pixel coordinates.
+// The model receives the crop resized to CROP_SIZE × CROP_SIZE, plus the
+// crop's top-left as cam_offset, plus K scaled by CROP_SIZE/crop_w in fx,cx
+// and CROP_SIZE/crop_h in fy,cy.
+struct CropBox {
+    int x0, y0, w, h;
+    Eigen::Matrix3d K_scaled;  // K' = S · K with S = diag(sx, sy, 1)
+    Eigen::Vector2f offset;    // [x0, y0] for the model's cam_offset input
+};
+
+// Project all 3D queries onto a camera, build a crop box that covers the
+// projected bbox + padding, expand to at least CROP_SIZE on each side,
+// and clamp to the image rectangle. If clamping shrinks below CROP_SIZE the
+// model still works but loses some context — we keep going.
+inline CropBox compute_crop_box(const std::vector<Eigen::Vector3d> &queries_3d,
+                                const CameraParams &cam, int img_w, int img_h) {
+    CropBox box;
+
+    // Project queries to image-space pixels.
+    double xmin = (double)img_w, ymin = (double)img_h;
+    double xmax = 0.0, ymax = 0.0;
+    int n_in = 0;
+    for (const auto &X : queries_3d) {
+        Eigen::Vector2d p = red_math::projectPoint(
+            X, cam.rvec, cam.tvec, cam.k, cam.dist_coeffs);
+        if (!std::isfinite(p(0)) || !std::isfinite(p(1))) continue;
+        if (p(0) < 0 || p(0) >= img_w || p(1) < 0 || p(1) >= img_h) {
+            // Project still counts toward the bbox so a partially-visible
+            // animal keeps its center-of-mass in the crop.
+        }
+        xmin = std::min(xmin, p(0));
+        ymin = std::min(ymin, p(1));
+        xmax = std::max(xmax, p(0));
+        ymax = std::max(ymax, p(1));
+        n_in++;
+    }
+    if (n_in == 0) {
+        // No valid projection — fall back to image center.
+        xmin = ymin = 0;
+        xmax = (double)img_w;
+        ymax = (double)img_h;
+    }
+
+    // Pad and expand to ≥ CROP_SIZE on each side.
+    double cx = 0.5 * (xmin + xmax);
+    double cy = 0.5 * (ymin + ymax);
+    double half = std::max(0.5 * (xmax - xmin), 0.5 * (ymax - ymin)) + CROP_PAD;
+    double crop_dim = std::max((double)CROP_SIZE, 2.0 * half);
+
+    // Centered square crop, clamped to image bounds.
+    double x0 = cx - crop_dim * 0.5;
+    double y0 = cy - crop_dim * 0.5;
+    double x1 = cx + crop_dim * 0.5;
+    double y1 = cy + crop_dim * 0.5;
+    if (x0 < 0) { x1 -= x0; x0 = 0; }
+    if (y0 < 0) { y1 -= y0; y0 = 0; }
+    if (x1 > img_w) { x0 -= (x1 - img_w); x1 = img_w; }
+    if (y1 > img_h) { y0 -= (y1 - img_h); y1 = img_h; }
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > img_w) x1 = img_w;
+    if (y1 > img_h) y1 = img_h;
+
+    box.x0 = (int)std::round(x0);
+    box.y0 = (int)std::round(y0);
+    box.w = std::max(1, (int)std::round(x1 - x0));
+    box.h = std::max(1, (int)std::round(y1 - y0));
+
+    // Scale K so projection produces pixels inside the resized 256-crop.
+    // Original projection p in image space → after subtracting (x0, y0) the
+    // pixel is in crop space → after scaling by 256/crop_dim the pixel is in
+    // model space. We bake the scale into K (model multiplies internally:
+    // K_scaled[*, 2] - cam_offset = pixel in 256 crop). The offset is
+    // handled by the cam_offset input separately.
+    double sx = (double)CROP_SIZE / (double)box.w;
+    double sy = (double)CROP_SIZE / (double)box.h;
+    box.K_scaled = cam.k;
+    box.K_scaled(0, 0) *= sx;
+    box.K_scaled(1, 1) *= sy;
+    box.K_scaled(0, 2) *= sx;
+    box.K_scaled(1, 2) *= sy;
+    box.offset = Eigen::Vector2f((float)box.x0 * (float)sx,
+                                 (float)box.y0 * (float)sy);
+    return box;
+}
+
+}  // namespace posetail_detail
+
+// One chunk of predictions: T_CHUNK frames × N query points × 3D.
+struct PosetailChunkResult {
+    bool ok = false;
+    std::string error;
+    // [T_CHUNK][N] 3D positions in world space.
+    std::vector<std::vector<Eigen::Vector3d>> kp3d;
+    // [T_CHUNK][N] visibility ∈ [0, 1].
+    std::vector<std::vector<float>> vis;
+    // [T_CHUNK][N] 2D-localization confidence ∈ [0, 1].
+    std::vector<std::vector<float>> conf;
+};
 
 struct PosetailServerState {
     // User-editable URL like "http://10.102.10.88:8000".
@@ -69,7 +190,7 @@ struct PosetailServerState {
     float last_request_ms = 0.0f;     // POST round-trip
     float last_decode_ms = 0.0f;      // npz/npy parse + tensor unpack
 
-    // Last call's vis/conf for UI display. Indexed [t][n] like the local path.
+    // Last call's vis/conf for UI display. Indexed [t][n].
     std::vector<std::vector<float>> last_vis;
     std::vector<std::vector<float>> last_conf;
 };
@@ -266,8 +387,7 @@ inline const std::vector<uint8_t> &grey_png() {
 }
 
 // Crop+resize one camera's full-resolution RGBA (or BGRA, see decoder.h)
-// frame to a 256×256 RGB PNG, using the same crop box logic as the local
-// ONNX path. The crop box must match across the whole 16-frame chunk for
+// frame to a 256×256 RGB PNG. The crop box must match across the whole 16-frame chunk for
 // that camera, so callers pass the pre-computed CropBox (one per camera,
 // shared across all 16 frames).
 inline std::vector<uint8_t> encode_crop_png(
@@ -389,8 +509,7 @@ inline bool posetail_server_probe(PosetailServerState &s) {
 }
 
 
-// Run one chunk through the remote server. Drop-in replacement for
-// posetail_predict_chunk() — same inputs, same PosetailChunkResult layout.
+// Run one chunk through the remote server.
 //
 // cam_names_opt : optional per-camera names. If empty, uses "0", "1", ... in
 //                 order. The server matches uploaded images to cameras by
@@ -425,8 +544,7 @@ inline PosetailChunkResult posetail_server_predict_chunk(
 
     auto t0 = std::chrono::steady_clock::now();
 
-    // Per-camera crop boxes from seed 3D — identical to the local path so the
-    // model sees the same input geometry.
+    // Per-camera crop boxes from seed 3D, one per camera for the whole chunk.
     std::vector<CropBox> boxes(num_cams);
     for (int c = 0; c < num_cams; ++c) {
         boxes[c] = compute_crop_box(seed_3d, cams[c], cam_widths[c],

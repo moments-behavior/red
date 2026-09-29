@@ -67,44 +67,16 @@ macro(red_resolve_parquet)
     endif()
 endmacro()
 
+# PoseTail forward tracker (src/posetail_*.h): an HTTP client for the
+# tracktail server, built on cpp-httplib (submodule) + vendored miniz.
+set(DIR_HTTPLIB "${CMAKE_SOURCE_DIR}/lib/httplib")
+set(DIR_MINIZ   "${CMAKE_SOURCE_DIR}/lib/miniz")
+set(MINIZ_SRC   "${DIR_MINIZ}/miniz.c")   # C source: project() lists C below
+
 # Default to an optimized build. Without this the build type is empty and the
 # compiler runs at -O0, which cripples hot host loops (e.g. the HybridNet
 # reprojection: 3200ms at -O0 vs ~450ms at -O3). Respects an explicit
 # -DCMAKE_BUILD_TYPE=... and multi-config generators.
-# PoseTail forward tracker (src/posetail_*.h). The HTTP backend needs only the
-# vendored cpp-httplib + miniz. The local ONNX backend additionally needs an
-# ONNX Runtime bundle unpacked at lib/onnxruntime (gitignored):
-#     lib/onnxruntime/include/onnxruntime_cxx_api.h
-#     lib/onnxruntime/lib/libonnxruntime.{so,dylib} | onnxruntime.lib
-# Optional: without it red builds with the server backend only.
-set(DIR_HTTPLIB "${CMAKE_SOURCE_DIR}/lib/httplib")
-set(DIR_MINIZ   "${CMAKE_SOURCE_DIR}/lib/miniz")
-set(MINIZ_SRC   "${DIR_MINIZ}/miniz.c")   # C source: project() lists C below
-set(ONNXRUNTIME_DIR "${CMAKE_SOURCE_DIR}/lib/onnxruntime" CACHE PATH
-    "ONNX Runtime bundle for the local PoseTail backend")
-if(EXISTS "${ONNXRUNTIME_DIR}/include/onnxruntime_cxx_api.h")
-    set(HAS_ONNXRUNTIME TRUE)
-    message(STATUS "ONNX Runtime found at ${ONNXRUNTIME_DIR} -- local PoseTail backend enabled")
-else()
-    set(HAS_ONNXRUNTIME FALSE)
-    message(STATUS "ONNX Runtime not found at ${ONNXRUNTIME_DIR} -- PoseTail server backend only")
-endif()
-# Wire ONNX Runtime into a target (no-op when the bundle is absent).
-function(red_link_onnxruntime TARGET)
-    if(NOT HAS_ONNXRUNTIME)
-        return()
-    endif()
-    target_compile_definitions(${TARGET} PRIVATE RED_HAS_ONNXRUNTIME)
-    target_include_directories(${TARGET} PRIVATE "${ONNXRUNTIME_DIR}/include")
-    if(APPLE)
-        target_link_libraries(${TARGET} PRIVATE "${ONNXRUNTIME_DIR}/lib/libonnxruntime.dylib")
-    elseif(WIN32)
-        target_link_libraries(${TARGET} PRIVATE "${ONNXRUNTIME_DIR}/lib/onnxruntime.lib")
-    else()
-        target_link_libraries(${TARGET} PRIVATE "${ONNXRUNTIME_DIR}/lib/libonnxruntime.so")
-    endif()
-endfunction()
-
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING
         "Build type (Debug/Release/RelWithDebInfo/MinSizeRel)" FORCE)
@@ -223,7 +195,6 @@ if(APPLE)
         Ceres::ceres
         pthread
     )
-    red_link_onnxruntime(red)
     # Removed: Vulkan::Vulkan
 
 
@@ -666,7 +637,6 @@ elseif(WIN32)
         # WinSock for cpp-httplib (PoseTail server client)
         ws2_32
     )
-    red_link_onnxruntime(red)
 
     # FFmpeg libraries
     if(FFMPEG_FOUND AND TARGET PkgConfig::FFMPEG)
@@ -922,19 +892,12 @@ else()
         Threads::Threads
         ${CMAKE_DL_LIBS}
     )
-    red_link_onnxruntime(red)
 
     # RPATH: isolate bundled ML libs from system / orange's toolchain.
     # $ORIGIN so the installed binary finds them relative to itself; build
     # rpath points at the absolute bundle paths for running from build/.
     set(RED_RPATH_BUILD "")
     set(RED_RPATH_INSTALL "$ORIGIN")
-    if(HAS_ONNXRUNTIME)
-        # libonnxruntime.so and its providers (CUDA EP, cuDNN) live next to
-        # each other in the bundle; ORT dlopen()s the providers by rpath.
-        set(RED_RPATH_BUILD "${ONNXRUNTIME_DIR}/lib")
-        set(RED_RPATH_INSTALL "$ORIGIN;${ONNXRUNTIME_DIR}/lib")
-    endif()
 
     set_target_properties(red PROPERTIES
         CXX_STANDARD 20
