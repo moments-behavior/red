@@ -10,3 +10,6 @@
 [submodule "lib/ImGuiFileDialog"]
 	path = lib/ImGuiFileDialog
 	url = https://github.com/aiekick/ImGuiFileDialog.git
+[submodule "lib/httplib"]
+	path = lib/httplib
+	url = https://github.com/yhirose/cpp-httplib.git
