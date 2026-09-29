@@ -8,7 +8,8 @@
 //
 // Two backends:
 //   Server (HTTP) — default. One 16-frame chunk per click sent to
-//                   posetail/server/server.py; no GPU / ONNX needed locally.
+//                   server/server.py in github.com/AI-HHMI/tracktail;
+//                   no GPU / ONNX needed locally.
 //   Local ONNX    — chains 16-frame chunks to reach +N; needs the ONNX
 //                   Runtime bundle at lib/onnxruntime (RED_HAS_ONNXRUNTIME).
 //

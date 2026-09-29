@@ -3,8 +3,8 @@
 //
 // One round-trip = one 16-frame chunk × N cameras × N query points. Mirrors
 // the I/O of posetail_predict_chunk() in posetail_infer.h so the same callers
-// can swap between local ONNX and remote server. The server lives at
-// posetail/server/server.py — see SERVER.md for the wire format.
+// can swap between local ONNX and remote server. The server is server/server.py
+// in github.com/AI-HHMI/tracktail — see its server/SERVER.md for the wire format.
 //
 // Wire format:
 //   POST /predict

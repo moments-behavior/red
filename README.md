@@ -150,9 +150,10 @@ red prints which backend it chose at startup.
 `multianimal_posetail` adds **Tools → PoseTail Tracker**: label one frame,
 triangulate, and PoseTail predicts the next frames for that animal across
 all cameras (3D + reprojected 2D, marked *Predicted*). The default backend
-talks to a `posetail` HTTP server and needs nothing extra to build; the
-local ONNX backend is compiled in when an ONNX Runtime bundle sits at
-`lib/onnxruntime`. See [`docs/POSETAIL.md`](docs/POSETAIL.md).
+talks to the PoseTail HTTP server in
+[tracktail](https://github.com/AI-HHMI/tracktail) (`server/server.py`)
+and needs nothing extra to build; the local ONNX backend is compiled in
+when an ONNX Runtime bundle sits at `lib/onnxruntime`. See [`docs/POSETAIL.md`](docs/POSETAIL.md).
 
 ## Authors
 

@@ -36,7 +36,7 @@ sent as a grey image and a warning is printed.
 
 | | Server (HTTP) — default | Local ONNX |
 |---|---|---|
-| Needs | a running `posetail/server/server.py` | `lib/onnxruntime` bundle at build time, the exported `*tracker*.onnx`, a GPU with ~6–8 GB free (or *Use CPU*) |
+| Needs | a running [tracktail](https://github.com/AI-HHMI/tracktail) server (`server/server.py`) | `lib/onnxruntime` bundle at build time, the exported `*tracker*.onnx`, a GPU with ~6–8 GB free (or *Use CPU*) |
 | Per click | one 16-frame chunk → up to 15 future frames (*N future frames to keep*) | chunks are chained to reach *N forward frames* (1–200) |
 | Cost | ~1–3 s round trip; the UI stalls for that long | ~30 ms/frame on GPU, ~3 s/frame on CPU, plus ~1 s model reload after every run |
 
@@ -55,6 +55,10 @@ session is dropped and reloaded after every Forward: reusing it produced
 slowly drifting predictions.
 
 ## Wire format (server backend)
+
+The server is `server/server.py` in
+[AI-HHMI/tracktail](https://github.com/AI-HHMI/tracktail); its
+`server/SERVER.md` is the authoritative description.
 
 One `POST /predict` (`multipart/form-data`) per click:
 
