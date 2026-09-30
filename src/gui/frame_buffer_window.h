@@ -1,6 +1,7 @@
 #pragma once
 #include "app_context.h"
 #include "keypoint_colors.h"
+#include <climits>
 
 // Draw the Frame Buffer window — a vertical list of buffered frames, one row
 // per slot, newest-first order matching the read head.
@@ -44,7 +45,18 @@ inline void DrawFrameBufferWindow(AppContext &ctx, int select_corr_head) {
             float item_w = ImGui::GetContentRegionAvail().x;
             ImDrawList *dl = ImGui::GetWindowDrawList();
 
+            // The ring has size_of_buffer slots whatever the timeline's
+            // length, so stop at total_num_frame rather than list frames past
+            // the end. INT_MAX means not known yet (a video still being
+            // measured): list every slot then.
+            const int total = ctx.dc_context ? ctx.dc_context->total_num_frame
+                                             : 0;
+            const bool total_known = total > 0 && total < INT_MAX;
+
             for (u32 i = 0; i < scene.size_of_buffer; i++) {
+                if (total_known &&
+                    ps.to_display_frame_number + (int)i >= total)
+                    break;
                 int buf_idx =
                     (i + ps.read_head) % scene.size_of_buffer;
                 // This list is the TIMELINE, not one camera's holdings: it
