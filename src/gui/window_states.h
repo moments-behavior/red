@@ -118,6 +118,7 @@ struct WindowStates {
         // per-project); drop everything derived from the project.
         tracktail.show = false;
         tracktail.forward_requested = false;
+        tracktail.staging = false;  // drops a request waiting for frames
         tracktail.server_probe_requested = false;
         tracktail.last_result.clear();
         tracktail.server_status.clear();

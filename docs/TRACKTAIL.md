@@ -17,31 +17,39 @@ frame — no JARVIS, no prediction store, no separate detector.
 3. Press **T** to triangulate, or leave *Triangulate 2D labels first if there
    is no 3D* ticked and the panel does it for you.
 4. **Tools → tracktail**, set the server URL, click **tracktail Forward**.
-5. Step forward: frames `current+1 … current+N` now carry the predicted 3D and
-   its 2D reprojection in every camera, marked *Predicted*, for that animal
-   only. Fix them in the Labeling Tool like any other label; Save writes them
-   with the rest.
+   Tick **Predict backwards** to track into the frames before the current one
+   instead.
+5. Step forward (or back): frames `current+1 … current+N` (or
+   `current−N … current−1`) now carry the predicted 3D and its 2D reprojection
+   in every camera, marked *Predicted*, for that animal only. Fix them in the
+   Labeling Tool like any other label; Save writes them with the rest.
 
 The seed is the active animal's 3D keypoints on the current frame, whether
 triangulated or predicted by an earlier click (so clicking again from the
 last predicted frame continues the track). Only those keypoints are tracked;
 nodes with no 3D are left alone. Other
-animals in the future frames are untouched (the prediction is written into
+animals in the target frames are untouched (the prediction is written into
 the FrameAnnotation whose `instance_id` matches the seed, created if the
-frame has none yet).
+frame has none yet). A tracked keypoint placed by hand on a target frame is
+kept, and so are occluded marks, unless *Overwrite hand-placed labels* is
+ticked.
 
-All cameras must have the next `n_frames` frames (the model's chunk length,
-see below) in the display buffer, which is the
-normal case when paused on a frame. A camera / frame that is not staged is
-sent as a grey image and a warning is printed.
+Every image sent is looked up in the display buffer by frame number. The
+buffer holds frames from the last seek onwards, so when the clip is not all
+there (always for *Predict backwards*) red seeks to the clip's first frame,
+waits for every camera to decode it (the panel shows *Loading frames …*;
+20 s timeout, and starting playback cancels), then returns to the seed frame
+and sends the request. N is shortened at the start/end of the video.
 
 ## Server
 
 Inference runs on the tracktail HTTP server, `server/server.py` in
 [AI-HHMI/tracktail](https://github.com/AI-HHMI/tracktail); red needs no GPU
-or model of its own. Each click sends one chunk of `n_frames` frames and gets
-back `n_frames − 1` future frames, of which *N future frames to keep* (1–24,
-default 4) are written; a larger N is clamped to what the model returns. The
+or model of its own. Each click sends the seed plus *N frames to keep* (1–24,
+default 4) on one side, rounded up to an even count and at most `n_frames`,
+and writes those N predictions; a larger N is clamped to `n_frames − 1`.
+Forward, the seed is the clip's first frame; backward, its last, and
+`query_times` says so. The
 round trip takes ~1–3 s, during which the UI stalls.
 
 The chunk length (`n_frames`) and crop size (`image_size`) belong to the
@@ -102,8 +110,8 @@ flag and configure fails).
 
 ## Known limits
 
-- One chunk per click, so at most `n_frames − 1` frames ahead; click again
-  from the last predicted frame to go further.
+- One chunk per click, so at most `n_frames − 1` frames either way; click
+  again from the last predicted frame to go further.
 - The request runs on the main thread; the window is unresponsive while a
   request is in flight.
 - Timeouts are hardcoded: 3 s for `/info`, 10 s connect + 120 s read for

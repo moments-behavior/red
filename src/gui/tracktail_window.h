@@ -3,8 +3,9 @@
 //
 // Seeds from the CURRENT frame's annotations of the active animal (its
 // triangulated 3D keypoints; 2D labels are triangulated first if needed),
-// predicts the next N frames with tracktail, and writes the predicted 3D +
-// reprojected 2D into the annotation buffer for frames [current+1 .. current+N].
+// predicts the next N frames with tracktail (or the previous N, with Predict
+// backwards), and writes the predicted 3D + reprojected 2D into the
+// annotation buffer for those frames.
 //
 // Inference runs on the tracktail HTTP server (server/server.py in
 // github.com/AI-HHMI/tracktail): one chunk of the model's n_frames per click, no GPU needed
@@ -39,6 +40,8 @@ struct TracktailWindowState {
     // How many future frames to write back. One chunk of n_frames holds
     // n_frames-1 of them; a larger value is clamped to that at Forward.
     int server_n_keep = 4;
+    // Seed at the END of the clip: predict the N frames before the current one.
+    bool predict_backwards = false;
     // Cached /info reply for display.
     int server_n_frames = 0;
     int server_image_size = 0;
@@ -51,7 +54,12 @@ struct TracktailWindowState {
     float server_last_decode_ms = 0.0f;
 
     // ── Run ──
+    // Hand-placed keypoints on the target frames are kept unless this is set.
+    bool overwrite_manual = false;
     bool forward_requested = false;
+    // Set while the request waits for its frames to be decoded.
+    bool staging = false;
+    std::string staging_msg;
     std::string last_result;  // one-line summary of the last Forward
     bool last_result_ok = true;
 };
@@ -150,23 +158,35 @@ inline void DrawTracktailWindow(TracktailWindowState &st, AppContext &ctx) {
                 st.server_last_total_ms, st.server_last_encode_ms,
                 st.server_last_request_ms, st.server_last_decode_ms);
         }
-        ImGui::SetNextItemWidth(160);
-        ImGui::SliderInt("N future frames to keep", &st.server_n_keep, 1,
-                         24);
+        ImGui::Checkbox("Predict backwards", &st.predict_backwards);
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip(
-                "t=0 is the seed (current frame), the rest are future\n"
-                "predictions. Only the seed + N frames are sent, rounded up\n"
-                "to an even count (e.g. +5 sends 6), up to n_frames.\n"
-                "Writes frames [current+1 .. current+N], up to n_frames-1.");
+                "Use the current frame as the last (query) frame of the clip\n"
+                "and predict the frames before it.");
+        ImGui::SetNextItemWidth(160);
+        ImGui::SliderInt(st.predict_backwards ? "N previous frames to keep"
+                                              : "N future frames to keep",
+                         &st.server_n_keep, 1, 24);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip(
+                "The seed (current frame) + N frames on one side are sent,\n"
+                "rounded up to an even count (e.g. 4 sends 6), up to\n"
+                "n_frames. N is at most n_frames-1 and is shortened at the\n"
+                "start/end of the video.");
 
         // ── Run ──
         ImGui::SeparatorText("Run");
         char fwd_label[64];
-        std::snprintf(fwd_label, sizeof(fwd_label), "tracktail Forward +%d",
-                      st.server_n_keep);
-        const bool can_run = !is_2d && videos_loaded && (n_3d > 0 ||
-                             (st.auto_triangulate && n_2d >= 2));
+        std::snprintf(fwd_label, sizeof(fwd_label), "tracktail %s %c%d",
+                      st.predict_backwards ? "Backward" : "Forward",
+                      st.predict_backwards ? '-' : '+', st.server_n_keep);
+        ImGui::Checkbox("Overwrite hand-placed labels", &st.overwrite_manual);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip(
+                "Off: a tracked keypoint placed by hand on a target frame is\n"
+                "kept, and so are occluded marks. On: predictions replace them.");
+        const bool can_run = !is_2d && videos_loaded && !st.staging &&
+                             (n_3d > 0 || (st.auto_triangulate && n_2d >= 2));
         ImGui::BeginDisabled(!can_run);
         if (ImGui::Button(fwd_label)) st.forward_requested = true;
         ImGui::EndDisabled();
@@ -175,9 +195,12 @@ inline void DrawTracktailWindow(TracktailWindowState &st, AppContext &ctx) {
                 "Seed from the current frame's 3D keypoints of the active\n"
                 "animal, send all cameras x the frames needed to the\n"
                 "server (even count, up to n_frames), and\n"
-                "write the first N future-frame predictions (3D +\n"
+                "write the N nearest predictions on that side (3D +\n"
                 "reprojected 2D) into annotations for that animal.\n"
-                "Requires all cameras to have frames in the display buffer.");
+                "Frames not in the display buffer are decoded first.");
+        if (st.staging)
+            ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1.0f), "%s",
+                               st.staging_msg.c_str());
         if (!st.last_result.empty()) {
             ImVec4 col = st.last_result_ok ? ImVec4(0.5f, 1.0f, 0.5f, 1.0f)
                                            : ImVec4(1.0f, 0.6f, 0.3f, 1.0f);
