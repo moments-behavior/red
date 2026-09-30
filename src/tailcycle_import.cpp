@@ -9,6 +9,7 @@
 #include <arrow/io/file.h>
 #include <parquet/arrow/reader.h>
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -186,6 +187,45 @@ bool list_groups(const std::string &session_dir, std::vector<std::string> *out,
     return !out->empty();
 }
 
+namespace {
+// Name order with runs of digits compared by value, so "rank2" < "rank10" and
+// "..._7092" < "..._115308". Plain string order puts "10" before "2".
+bool natural_less(const std::string &a, const std::string &b) {
+    size_t i = 0, j = 0;
+    while (i < a.size() && j < b.size()) {
+        const bool da = std::isdigit((unsigned char)a[i]);
+        const bool db = std::isdigit((unsigned char)b[j]);
+        if (da && db) {
+            size_t ie = i, je = j;
+            while (ie < a.size() && std::isdigit((unsigned char)a[ie])) ++ie;
+            while (je < b.size() && std::isdigit((unsigned char)b[je])) ++je;
+            // Compare by value without parsing (runs can exceed 64 bits):
+            // drop leading zeros, then the longer run is larger, then digits.
+            size_t is = i, js = j;
+            while (is + 1 < ie && a[is] == '0') ++is;
+            while (js + 1 < je && b[js] == '0') ++js;
+            if (ie - is != je - js) return ie - is < je - js;
+            const int c = a.compare(is, ie - is, b, js, je - js);
+            if (c != 0) return c < 0;
+            i = ie; j = je;
+        } else {
+            if (a[i] != b[j]) return a[i] < b[j];
+            ++i; ++j;
+        }
+    }
+    return a.size() - i < b.size() - j;
+}
+
+// train, val, test first, in the order a dataset is used; any other split
+// after them, by name.
+int split_rank(const std::string &split) {
+    if (split == "train") return 0;
+    if (split == "val") return 1;
+    if (split == "test") return 2;
+    return 3;
+}
+}  // namespace
+
 bool scan_dataset(const std::string &root, std::vector<SessionInfo> *out,
                   std::string *status) {
     if (!fs::is_directory(root)) {
@@ -237,7 +277,11 @@ bool scan_dataset(const std::string &root, std::vector<SessionInfo> *out,
         }
     }
     std::sort(out->begin(), out->end(), [](const SessionInfo &a, const SessionInfo &b) {
-        return a.split != b.split ? a.split < b.split : a.session_id < b.session_id;
+        if (a.split != b.split) {
+            const int ra = split_rank(a.split), rb = split_rank(b.split);
+            return ra != rb ? ra < rb : a.split < b.split;
+        }
+        return natural_less(a.session_id, b.session_id);
     });
     if (out->empty() && status)
         *status = "No sessions under " + root + " (looked for <split>/<session>/session.toml)";

@@ -423,7 +423,13 @@ inline void DrawTailcycleDatasetWindow(TailcycleOpenState &state,
                                        ImGuiTableFlags_SizingFixedFit |
                                        ImGuiTableFlags_ScrollX |
                                        ImGuiTableFlags_ScrollY;
-            if (ImGui::BeginTable("##tc_sessions", 7, tf, ImVec2(0, 180))) {
+            // Tall enough for 15 sessions before it scrolls, and no taller
+            // than the rows it has. Header + rows + the horizontal scrollbar.
+            const int visible_rows = std::min((int)state.sessions.size(), 15);
+            const float table_h =
+                ImGui::GetFrameHeightWithSpacing() * (visible_rows + 1) +
+                ImGui::GetStyle().ScrollbarSize;
+            if (ImGui::BeginTable("##tc_sessions", 7, tf, ImVec2(0, table_h))) {
                 ImGui::TableSetupScrollFreeze(0, 1);
                 for (const char *h : {"Split", "Session", "Labels", "Cams", "Frames",
                                       "Layers", "Groups"})
