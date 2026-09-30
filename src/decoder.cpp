@@ -309,8 +309,8 @@ static void nvdec_decoder_process(DecoderContext *dc_context,
                                 dc_context->refine_cam_length(
                                     cam_name, nFrame + nFrameReturned);
                             else
-                                dc_context->total_num_frame =
-                                    nFrame + nFrameReturned;
+                                dc_context->set_frame_count(
+                                    nFrame + nFrameReturned);
                         }
                     } else {
                         nFrameReturned = dec.Decode(pVideo, nVideoBytes, 0, pktinfo.pts);
@@ -452,8 +452,8 @@ static void nvdec_decoder_process(DecoderContext *dc_context,
                                 dc_context->refine_cam_length(
                                     cam_name, nFrame + nFrameReturned);
                             else
-                                dc_context->total_num_frame =
-                                    nFrame + nFrameReturned;
+                                dc_context->set_frame_count(
+                                    nFrame + nFrameReturned);
                         }
                     } else {
                         nFrameReturned = dec.Decode(pVideo, nVideoBytes, 0, pktinfo.pts);
@@ -898,7 +898,7 @@ static void vt_decoder_process(DecoderContext *dc_context,
                 if (dc_context->total_owned_by_loader)
                     dc_context->refine_cam_length(cam_name, nFrame);
                 else
-                    dc_context->total_num_frame = nFrame;
+                    dc_context->set_frame_count(nFrame);
             } else {
                 // Sync mode: total_num_frame is owned by the loader (=
                 // canonical_len). Trailing fill -- a camera whose span ends

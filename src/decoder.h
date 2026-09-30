@@ -61,8 +61,11 @@ struct PictureBuffer {
 struct DecoderContext {
     std::atomic<bool> decoding_flag;
     std::atomic<bool> stop_flag;
-    // The timeline: frames 0 .. last_frame_index, so total_num_frame (a count)
-    // is last_frame_index + 1 once known, and INT_MAX while it is not.
+    // The timeline: frames 0 .. last_frame_index. Once the length is known,
+    // total_num_frame is the count and last_frame_index = total_num_frame - 1;
+    // set both with set_frame_count() so they cannot drift apart. While it is
+    // not known, total_num_frame is INT_MAX and last_frame_index holds the
+    // loader's estimate (duration x fps - 1), which is what the slider shows.
     int total_num_frame;
     int last_frame_index;
     // Which CUDA device to decode on. Never assigned anywhere -- it is 0
@@ -140,6 +143,11 @@ struct DecoderContext {
     // length that is too long. It takes a deliberate seek past the end of a
     // file that does not declare its own length, and the reading is marked
     // uncertain until then either way.
+    void set_frame_count(int count) {
+        total_num_frame = count;
+        last_frame_index = count - 1;
+    }
+
     void refine_cam_length(const std::string &name, int frames) {
         const int i = cam_slot(name);
         if (i < 0 || frames <= 0) return;

@@ -319,8 +319,7 @@ int main(int argc, char **argv) {
     dc.gpu_index = 0;
     dc.seek_interval = (int)demuxer.FindKeyFrameInterval();
     dc.video_fps = demuxer.GetFramerate();
-    dc.total_num_frame = n_frames;
-    dc.last_frame_index = n_frames - 1;
+    dc.set_frame_count(n_frames);
     dc.sync_fix_active = false;
     dc.sync_canonical_len = 0;
 

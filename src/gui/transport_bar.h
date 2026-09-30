@@ -58,8 +58,7 @@ inline void sync_fix_toggle(AppContext &ctx, bool enable) {
         target = std::clamp<int64_t>(cam0->slot_of_pos(p), 0,
                                      plan.canonical_len - 1);
         dc->sync_canonical_len = plan.canonical_len;
-        dc->total_num_frame = (int)plan.canonical_len;
-        dc->last_frame_index = (int)plan.canonical_len - 1;
+        dc->set_frame_count((int)plan.canonical_len);
         // Canonical slots are uniform in trigger time — pace playback by the
         // trigger interval.
         dc->video_fps = 1e9 / (double)plan.delta_ns;
@@ -76,8 +75,7 @@ inline void sync_fix_toggle(AppContext &ctx, bool enable) {
         // camera's own slot rather than of the shared total.
         dc->video_fps = ctx.demuxers[0]->GetFramerate();
         if (dc->per_cam_count > 0) {
-            dc->total_num_frame = dc->longest_cam_frames();
-            dc->last_frame_index = dc->longest_cam_frames() - 1;
+            dc->set_frame_count(dc->longest_cam_frames());
         } else {
             if (ctx.demuxers[0]->GetNumFrames() == 0)
                 dc->last_frame_index =

@@ -477,8 +477,8 @@ void sw_decoder_process(DecoderContext *dc_context, FFmpegDemuxer *demuxer,
                                 dc_context->refine_cam_length(
                                     cam_name, nFrame + nFrameReturned);
                             else
-                                dc_context->total_num_frame =
-                                    nFrame + nFrameReturned;
+                                dc_context->set_frame_count(
+                                    nFrame + nFrameReturned);
                         }
                     } else {
                         nFrameReturned = dec.Decode(pVideo, nVideoBytes);
@@ -532,8 +532,8 @@ void sw_decoder_process(DecoderContext *dc_context, FFmpegDemuxer *demuxer,
                                 dc_context->refine_cam_length(
                                     cam_name, nFrame + nFrameReturned);
                             else
-                                dc_context->total_num_frame =
-                                    nFrame + nFrameReturned;
+                                dc_context->set_frame_count(
+                                    nFrame + nFrameReturned);
                         }
                         stream_exhausted = (nFrameReturned == 0);
                     } else {

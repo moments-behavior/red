@@ -1705,8 +1705,7 @@ int main(int argc, char **argv) {
                 if (dc_context->total_owned_by_loader) {
                     const int len = dc_context->longest_cam_frames();
                     if (len > 0) {
-                        dc_context->total_num_frame = len;
-                        dc_context->last_frame_index = len - 1;
+                        dc_context->set_frame_count(len);
                     }
                 }
                 int frame_to_show = ps.to_display_frame_number;
