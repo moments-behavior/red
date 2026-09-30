@@ -1,11 +1,11 @@
-# tracktail Tracker
+# tracktail
 
 Branch: `multianimal_posetail` (= `multianimal` + the tracktail forward
 temporal tracker ported from `pose_proofread_client`).
 
 tracktail takes the 3D pose on one frame and tracks it forward through the
 next frames across all cameras at once. In red it lives in
-**Tools → tracktail Tracker** and works on whatever is labeled on the current
+**Tools → tracktail** and works on whatever is labeled on the current
 frame — no JARVIS, no prediction store, no separate detector.
 
 ## Workflow
@@ -16,7 +16,7 @@ frame — no JARVIS, no prediction store, no separate detector.
    the Labeling Tool (the panel shows `animal i/n (id k)`).
 3. Press **T** to triangulate, or leave *Triangulate 2D labels first if there
    is no 3D* ticked and the panel does it for you.
-4. **Tools → tracktail Tracker**, set the server URL, click **tracktail Forward**.
+4. **Tools → tracktail**, set the server URL, click **tracktail Forward**.
 5. Step forward: frames `current+1 … current+N` now carry the predicted 3D and
    its 2D reprojection in every camera, marked *Predicted*, for that animal
    only. Fix them in the Labeling Tool like any other label; Save writes them

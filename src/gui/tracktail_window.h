@@ -69,7 +69,7 @@ inline bool looks_like_error(const std::string &s) {
 }  // namespace tracktail_ui_detail
 
 inline void DrawTracktailWindow(TracktailWindowState &st, AppContext &ctx) {
-    DrawPanel("tracktail Tracker", st.show, [&]() {
+    DrawPanel("tracktail", st.show, [&]() {
         auto &pm = ctx.pm;
         auto *scene = ctx.scene;
         const bool is_2d = project_is_2d(pm);

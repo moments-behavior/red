@@ -1,5 +1,5 @@
 #pragma once
-// tracktail_actions.h — main-loop side of the tracktail Tracker panel.
+// tracktail_actions.h — main-loop side of the tracktail panel.
 //
 // Consumes the request flags set by DrawTracktailWindow (gui/tracktail_window.h)
 // and owns the HTTP state. Called once per render tick from red.cpp:

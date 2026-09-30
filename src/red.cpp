@@ -554,7 +554,7 @@ int main(int argc, char **argv) {
     panels.add({"Switch Skeleton",
                 [&]() { DrawSwitchSkeletonWindow(win.switch_skeleton, ctx); },
                 nullptr});
-    panels.add({"tracktail Tracker",
+    panels.add({"tracktail",
                 [&]() { DrawTracktailWindow(win.tracktail, ctx); },
                 nullptr});
 
@@ -766,7 +766,7 @@ int main(int argc, char **argv) {
             ctx.toasts.push("Prediction store closed (skeleton changed)");
         }
 
-        // tracktail Tracker: Probe / Forward requests from the panel.
+        // tracktail: Probe / Forward requests from the panel.
         // Runs synchronously on the main thread (one chunk is ~1-3 s on the
         // server, so the UI stalls for that long -- same as the T key).
         tracktail_handle_requests(win.tracktail, tracktail_rt, ctx);

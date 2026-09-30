@@ -140,7 +140,7 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
             triangulation_diag_state.show = true;
         }
         ImGui::Separator();
-        if (ImGui::MenuItem("tracktail Tracker")) {
+        if (ImGui::MenuItem("tracktail")) {
             win.tracktail.show = true;
         }
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))

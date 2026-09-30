@@ -145,9 +145,9 @@ Remove-Item Env:RED_DECODE_BACKEND       # back to the default
 
 red prints which backend it chose at startup.
 
-### tracktail tracker (this branch)
+### tracktail (this branch)
 
-`multianimal_posetail` adds **Tools → tracktail Tracker**: label one frame,
+`multianimal_posetail` adds **Tools → tracktail**: label one frame,
 triangulate, and tracktail predicts the next frames for that animal across
 all cameras (3D + reprojected 2D, marked *Predicted*). Inference runs on
 the tracktail HTTP server (`server/server.py` in
