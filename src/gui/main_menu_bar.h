@@ -140,8 +140,8 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
             triangulation_diag_state.show = true;
         }
         ImGui::Separator();
-        if (ImGui::MenuItem("PoseTail Tracker")) {
-            win.posetail.show = true;
+        if (ImGui::MenuItem("tracktail Tracker")) {
+            win.tracktail.show = true;
         }
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
             ImGui::SetTooltip("Predict the next frames from the current "

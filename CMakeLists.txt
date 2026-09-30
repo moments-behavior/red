@@ -67,7 +67,7 @@ macro(red_resolve_parquet)
     endif()
 endmacro()
 
-# PoseTail forward tracker (src/posetail_*.h): an HTTP client for the
+# tracktail forward tracker (src/tracktail_*.h): an HTTP client for the
 # tracktail server, built on cpp-httplib (submodule) + vendored miniz.
 set(DIR_HTTPLIB "${CMAKE_SOURCE_DIR}/lib/httplib")
 set(DIR_MINIZ   "${CMAKE_SOURCE_DIR}/lib/miniz")
@@ -154,7 +154,7 @@ if(APPLE)
         ${MM_SRC_FILES}
         ${IMGUI_SRC}
         ${IMPLOT_SRC}
-        ${MINIZ_SRC}   # posetail server NPZ decode
+        ${MINIZ_SRC}   # tracktail server NPZ decode
     )
 
     target_include_directories(red PRIVATE
@@ -591,7 +591,7 @@ elseif(WIN32)
         ${IMGUI_SRC}
         ${IMPLOT_SRC}
         ${CUDA_SRC_FILES}
-        ${MINIZ_SRC}   # posetail server NPZ decode
+        ${MINIZ_SRC}   # tracktail server NPZ decode
     )
 
 
@@ -634,7 +634,7 @@ elseif(WIN32)
         opengl32
         # CUDA + bundled NVDEC (empty without RED_ENABLE_CUDA)
         ${RED_CUDA_LIBS}
-        # WinSock for cpp-httplib (PoseTail server client)
+        # WinSock for cpp-httplib (tracktail server client)
         ws2_32
     )
 
@@ -854,7 +854,7 @@ else()
         ${IMGUI_SRC}
         ${IMPLOT_SRC}
         ${CUDA_SRC_FILES}
-        ${MINIZ_SRC}   # posetail server NPZ decode
+        ${MINIZ_SRC}   # tracktail server NPZ decode
     )
 
 

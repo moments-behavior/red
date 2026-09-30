@@ -1,11 +1,11 @@
-# PoseTail Tracker
+# tracktail Tracker
 
-Branch: `multianimal_posetail` (= `multianimal` + the PoseTail forward
+Branch: `multianimal_posetail` (= `multianimal` + the tracktail forward
 temporal tracker ported from `pose_proofread_client`).
 
-PoseTail takes the 3D pose on one frame and tracks it forward through the
+tracktail takes the 3D pose on one frame and tracks it forward through the
 next frames across all cameras at once. In red it lives in
-**Tools → PoseTail Tracker** and works on whatever is labeled on the current
+**Tools → tracktail Tracker** and works on whatever is labeled on the current
 frame — no JARVIS, no prediction store, no separate detector.
 
 ## Workflow
@@ -16,7 +16,7 @@ frame — no JARVIS, no prediction store, no separate detector.
    the Labeling Tool (the panel shows `animal i/n (id k)`).
 3. Press **T** to triangulate, or leave *Triangulate 2D labels first if there
    is no 3D* ticked and the panel does it for you.
-4. **Tools → PoseTail Tracker**, set the server URL, click **PoseTail Forward**.
+4. **Tools → tracktail Tracker**, set the server URL, click **tracktail Forward**.
 5. Step forward: frames `current+1 … current+N` now carry the predicted 3D and
    its 2D reprojection in every camera, marked *Predicted*, for that animal
    only. Fix them in the Labeling Tool like any other label; Save writes them
@@ -35,7 +35,7 @@ sent as a grey image and a warning is printed.
 
 ## Server
 
-Inference runs on the PoseTail HTTP server, `server/server.py` in
+Inference runs on the tracktail HTTP server, `server/server.py` in
 [AI-HHMI/tracktail](https://github.com/AI-HHMI/tracktail); red needs no GPU
 or model of its own. Each click sends one chunk of `n_frames` frames and gets
 back `n_frames − 1` future frames, of which *N future frames to keep* (1–24,
@@ -71,19 +71,19 @@ One `POST /predict` (`multipart/form-data`) per click:
 
 | Path | Purpose |
 |---|---|
-| `src/gui/posetail_window.h` | `PosetailWindowState` + `DrawPosetailWindow()`. UI only, no CUDA / httplib includes (it is pulled into `test_gui` via `window_states.h`). |
-| `src/posetail_actions.h` | `PosetailRuntime` (HTTP state) and `posetail_handle_requests()`, called once per tick from `red.cpp`. Seed collection, frame staging from the display buffer, the request, and the write-back into `AnnotationMap`. |
-| `src/posetail_server_client.h` | HTTP client: `posetail_server_probe()`, `posetail_server_predict_chunk()`. Crop-box geometry, own crop/resize + `stb_image_write` PNG encode (this branch has no OpenCV), minimal `.npy` parser, `miniz` `.npz` reader. |
+| `src/gui/tracktail_window.h` | `TracktailWindowState` + `DrawTracktailWindow()`. UI only, no CUDA / httplib includes (it is pulled into `test_gui` via `window_states.h`). |
+| `src/tracktail_actions.h` | `TracktailRuntime` (HTTP state) and `tracktail_handle_requests()`, called once per tick from `red.cpp`. Seed collection, frame staging from the display buffer, the request, and the write-back into `AnnotationMap`. |
+| `src/tracktail_server_client.h` | HTTP client: `tracktail_server_probe()`, `tracktail_server_predict_chunk()`. Crop-box geometry, own crop/resize + `stb_image_write` PNG encode (this branch has no OpenCV), minimal `.npy` parser, `miniz` `.npz` reader. |
 | `lib/httplib/` | cpp-httplib v0.18.5 (git submodule; `git submodule update --init lib/httplib`). |
 | `lib/miniz/` | miniz 3.0.2, amalgamated. `miniz.c` is compiled into `red` (`project()` now lists `C`). |
 | `CMakeLists.txt` | `DIR_HTTPLIB` / `DIR_MINIZ` include paths and `MINIZ_SRC` on all three platforms; `ws2_32` on Windows. |
 
 Platform notes baked into the headers:
 
-- `POSETAIL_HAS_CUDA` is defined only when not on macOS and not
+- `TRACKTAIL_HAS_CUDA` is defined only when not on macOS and not
   `RED_NO_CUDA` (`-DRED_ENABLE_CUDA=OFF`). Without it the GPU-resident
   display buffer cannot be read back, so use the CPU frame buffer
-  (Settings) — the default — for PoseTail on such builds.
+  (Settings) — the default — for tracktail on such builds.
 - The display buffer is BGRA on macOS (`RED_FRAME_BGRA`, see `decoder.h`);
   the crop swaps channels accordingly so the model always sees RGB.
 - Telecentric cameras: the 2D write-back uses `reproject_3d_to_cam()` and is
@@ -100,8 +100,8 @@ flag and configure fails).
 
 ## Known limits
 
-- One chunk per click, so at most `n_frames − 1` frames ahead; click again from the last
-  predicted frame to go further.
+- One chunk per click, so at most `n_frames − 1` frames ahead; click again
+  from the last predicted frame to go further.
 - The request runs on the main thread; the window is unresponsive while a
   request is in flight.
 - Timeouts are hardcoded: 3 s for `/info`, 10 s connect + 120 s read for

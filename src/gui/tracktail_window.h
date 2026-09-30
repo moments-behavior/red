@@ -1,17 +1,17 @@
 #pragma once
-// posetail_window.h — PoseTail forward temporal tracker panel.
+// tracktail_window.h — tracktail forward temporal tracker panel.
 //
 // Seeds from the CURRENT frame's annotations of the active animal (its
 // triangulated 3D keypoints; 2D labels are triangulated first if needed),
-// predicts the next N frames with PoseTail, and writes the predicted 3D +
+// predicts the next N frames with tracktail, and writes the predicted 3D +
 // reprojected 2D into the annotation buffer for frames [current+1 .. current+N].
 //
-// Inference runs on the PoseTail HTTP server (server/server.py in
+// Inference runs on the tracktail HTTP server (server/server.py in
 // github.com/AI-HHMI/tracktail): one chunk of the model's n_frames per click, no GPU needed
 // locally.
 //
 // This header is UI only. The request flags below are consumed by
-// posetail_handle_requests() in posetail_actions.h from the main loop, which
+// tracktail_handle_requests() in tracktail_actions.h from the main loop, which
 // is where the HTTP state lives. Keep it that way so this file stays
 // free of CUDA / httplib includes (it is pulled into test_gui via
 // window_states.h).
@@ -23,7 +23,7 @@
 #include <cstdio>
 #include <string>
 
-struct PosetailWindowState {
+struct TracktailWindowState {
     bool show = false;
 
     // ── Seed ──
@@ -56,7 +56,7 @@ struct PosetailWindowState {
     bool last_result_ok = true;
 };
 
-namespace posetail_ui_detail {
+namespace tracktail_ui_detail {
 
 inline bool looks_like_error(const std::string &s) {
     return s.find("WARNING") != std::string::npos ||
@@ -66,10 +66,10 @@ inline bool looks_like_error(const std::string &s) {
            s.find("error") != std::string::npos;
 }
 
-}  // namespace posetail_ui_detail
+}  // namespace tracktail_ui_detail
 
-inline void DrawPosetailWindow(PosetailWindowState &st, AppContext &ctx) {
-    DrawPanel("PoseTail Tracker", st.show, [&]() {
+inline void DrawTracktailWindow(TracktailWindowState &st, AppContext &ctx) {
+    DrawPanel("tracktail Tracker", st.show, [&]() {
         auto &pm = ctx.pm;
         auto *scene = ctx.scene;
         const bool is_2d = project_is_2d(pm);
@@ -99,7 +99,7 @@ inline void DrawPosetailWindow(PosetailWindowState &st, AppContext &ctx) {
                     n_3d, ctx.skeleton.num_nodes, n_2d);
         if (is_2d) {
             ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.3f, 1.0f),
-                               "No calibration loaded: PoseTail needs a 3D "
+                               "No calibration loaded: tracktail needs a 3D "
                                "project.");
         } else if (!videos_loaded) {
             ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.3f, 1.0f),
@@ -120,9 +120,9 @@ inline void DrawPosetailWindow(PosetailWindowState &st, AppContext &ctx) {
         ImGui::SeparatorText("Server");
         ImGui::Text("URL");
         ImGui::SetNextItemWidth(-160);
-        ImGui::InputText("##posetail_server_url", &st.server_url);
+        ImGui::InputText("##tracktail_server_url", &st.server_url);
         ImGui::SameLine();
-        if (ImGui::Button("Probe##posetail_server"))
+        if (ImGui::Button("Probe##tracktail_server"))
             st.server_probe_requested = true;
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip(
@@ -137,7 +137,7 @@ inline void DrawPosetailWindow(PosetailWindowState &st, AppContext &ctx) {
                 st.server_device.c_str(), st.server_mode_3d.c_str());
         }
         if (!st.server_status.empty()) {
-            ImVec4 col = posetail_ui_detail::looks_like_error(
+            ImVec4 col = tracktail_ui_detail::looks_like_error(
                              st.server_status)
                              ? ImVec4(1.0f, 0.6f, 0.3f, 1.0f)
                              : ImVec4(0.5f, 1.0f, 0.5f, 1.0f);
@@ -163,7 +163,7 @@ inline void DrawPosetailWindow(PosetailWindowState &st, AppContext &ctx) {
         // ── Run ──
         ImGui::SeparatorText("Run");
         char fwd_label[64];
-        std::snprintf(fwd_label, sizeof(fwd_label), "PoseTail Forward +%d",
+        std::snprintf(fwd_label, sizeof(fwd_label), "tracktail Forward +%d",
                       st.server_n_keep);
         const bool can_run = !is_2d && videos_loaded && (n_3d > 0 ||
                              (st.auto_triangulate && n_2d >= 2));

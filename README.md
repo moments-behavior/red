@@ -145,14 +145,14 @@ Remove-Item Env:RED_DECODE_BACKEND       # back to the default
 
 red prints which backend it chose at startup.
 
-### PoseTail tracker (this branch)
+### tracktail tracker (this branch)
 
-`multianimal_posetail` adds **Tools → PoseTail Tracker**: label one frame,
-triangulate, and PoseTail predicts the next frames for that animal across
+`multianimal_posetail` adds **Tools → tracktail Tracker**: label one frame,
+triangulate, and tracktail predicts the next frames for that animal across
 all cameras (3D + reprojected 2D, marked *Predicted*). Inference runs on
-the PoseTail HTTP server in [tracktail](https://github.com/AI-HHMI/tracktail)
-(`server/server.py`), so red needs nothing extra to build. See
-[`docs/POSETAIL.md`](docs/POSETAIL.md).
+the tracktail HTTP server (`server/server.py` in
+[AI-HHMI/tracktail](https://github.com/AI-HHMI/tracktail)), so red needs
+nothing extra to build. See [`docs/TRACKTAIL.md`](docs/TRACKTAIL.md).
 
 ## Authors
 

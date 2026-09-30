@@ -74,9 +74,9 @@
 #include "../lib/ImGuiFileDialog/stb/stb_image.h"
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
-// PoseTail forward tracker (after stb_image_write: the HTTP client PNG-encodes
-// crops with it). Owns the httplib include; see posetail_actions.h.
-#include "posetail_actions.h"
+// tracktail forward tracker (after stb_image_write: the HTTP client PNG-encodes
+// crops with it). Owns the httplib include; see tracktail_actions.h.
+#include "tracktail_actions.h"
 #ifndef __APPLE__
 #include "kernel.cuh"  // CUDA display kernels; empty without RED_HAVE_CUDA
 #endif
@@ -314,9 +314,9 @@ int main(int argc, char **argv) {
     // Annotation model
     AnnotationMap annotations;
 
-    // PoseTail forward tracker: HTTP client state. Lives for the whole
+    // tracktail forward tracker: HTTP client state. Lives for the whole
     // process (the server URL survives project switches).
-    PosetailRuntime posetail_rt;
+    TracktailRuntime tracktail_rt;
 
     // Predictions live in a separate, memory-mapped store rather than in
     // `annotations`, so importing a whole video never floods the Labeling Tool.
@@ -554,8 +554,8 @@ int main(int argc, char **argv) {
     panels.add({"Switch Skeleton",
                 [&]() { DrawSwitchSkeletonWindow(win.switch_skeleton, ctx); },
                 nullptr});
-    panels.add({"PoseTail Tracker",
-                [&]() { DrawPosetailWindow(win.posetail, ctx); },
+    panels.add({"tracktail Tracker",
+                [&]() { DrawTracktailWindow(win.tracktail, ctx); },
                 nullptr});
 
     // Helper: find the first visible camera index (for frame-buffer display).
@@ -766,10 +766,10 @@ int main(int argc, char **argv) {
             ctx.toasts.push("Prediction store closed (skeleton changed)");
         }
 
-        // PoseTail Tracker: Probe / Forward requests from the panel.
+        // tracktail Tracker: Probe / Forward requests from the panel.
         // Runs synchronously on the main thread (one chunk is ~1-3 s on the
         // server, so the UI stalls for that long -- same as the T key).
-        posetail_handle_requests(win.posetail, posetail_rt, ctx);
+        tracktail_handle_requests(win.tracktail, tracktail_rt, ctx);
 
         // Pose Stats "Fix this frame": promote one predicted frame into the
         // editable Labeling Tool. Reprojects the stored 3D to each camera as

@@ -1,5 +1,5 @@
 #pragma once
-// posetail_server_client.h — Client for the posetail HTTP inference server.
+// tracktail_server_client.h — Client for the tracktail HTTP inference server.
 //
 // One round-trip = one chunk of n_frames × N cameras × N query points. The
 // server is server/server.py in github.com/AI-HHMI/tracktail — see its
@@ -44,7 +44,7 @@
 
 // cpp-httplib brings in <thread>/<mutex>/<atomic>; keep it isolated to a TU
 // that defines CPPHTTPLIB_OPENSSL_SUPPORT only if we ever need HTTPS. The
-// posetail server is plain HTTP (port 8000), so we leave SSL off.
+// tracktail server is plain HTTP (port 8000), so we leave SSL off.
 #include "httplib.h"
 
 // miniz: ZIP reader for the .npz response. miniz.c is compiled once at
@@ -54,23 +54,23 @@
 // CUDA is optional on this branch (RED_ENABLE_CUDA=OFF defines RED_NO_CUDA),
 // and never present on macOS. Everything GPU-side keys off this one macro.
 #if !defined(__APPLE__) && !defined(RED_NO_CUDA)
-#define POSETAIL_HAS_CUDA 1
+#define TRACKTAIL_HAS_CUDA 1
 #include <cuda_runtime.h>
 #endif
 
 // Byte order of the display buffer (see decoder.h). The model wants RGB, so
 // a BGRA buffer needs its R/B swapped while cropping.
 #if defined(RED_FRAME_BGRA)
-#define POSETAIL_SRC_R 2
-#define POSETAIL_SRC_B 0
+#define TRACKTAIL_SRC_R 2
+#define TRACKTAIL_SRC_B 0
 #else
-#define POSETAIL_SRC_R 0
-#define POSETAIL_SRC_B 2
+#define TRACKTAIL_SRC_R 0
+#define TRACKTAIL_SRC_B 2
 #endif
 
 // The chunk length (n_frames) and crop size (image_size) are the model's;
 // GET /info reports both, and everything below takes them from there.
-namespace posetail_detail {
+namespace tracktail_detail {
 static constexpr int CROP_PAD = 20;    // bbox pad before expanding to the crop size
 
 // One per-camera crop window, in image pixel coordinates.
@@ -160,10 +160,10 @@ inline CropBox compute_crop_box(const std::vector<Eigen::Vector3d> &queries_3d,
     return box;
 }
 
-}  // namespace posetail_detail
+}  // namespace tracktail_detail
 
 // One chunk of predictions: n_frames × N query points × 3D.
-struct PosetailChunkResult {
+struct TracktailChunkResult {
     bool ok = false;
     std::string error;
     // [n_frames][N] 3D positions in world space.
@@ -174,7 +174,7 @@ struct PosetailChunkResult {
     std::vector<std::vector<float>> conf;
 };
 
-struct PosetailServerState {
+struct TracktailServerState {
     // User-editable URL like "http://10.102.10.88:8000".
     std::string url;
     bool reachable = false;
@@ -196,7 +196,7 @@ struct PosetailServerState {
 };
 
 
-namespace posetail_server_detail {
+namespace tracktail_server_detail {
 
 // Split "http://host:port" into ("http://host:port", "/") for httplib::Client.
 // cpp-httplib's Client takes scheme+host[+port] only; the path goes on Get/Post.
@@ -387,7 +387,7 @@ inline std::vector<uint8_t> grey_png(int S) {
 // shared across all of its frames).
 inline std::vector<uint8_t> encode_crop_png(
     const uint8_t *rgba, int src_w, int src_h,
-    const posetail_detail::CropBox &box, int S, int png_compress_level = 1) {
+    const tracktail_detail::CropBox &box, int S, int png_compress_level = 1) {
     if (!rgba) return {};
     // Clamp box to image bounds defensively (compute_crop_box already does
     // this, but the display buffer may have stale dims for transitions).
@@ -418,8 +418,8 @@ inline std::vector<uint8_t> encode_crop_png(
             const uint8_t *p11 = rgba + ((size_t)iy1 * src_w + ix1) * 4;
             uint8_t *o = rgb.data() + ((size_t)y * S + x) * 3;
             for (int c = 0; c < 3; ++c) {
-                const int sc = (c == 0) ? POSETAIL_SRC_R
-                             : (c == 2) ? POSETAIL_SRC_B : 1;
+                const int sc = (c == 0) ? TRACKTAIL_SRC_R
+                             : (c == 2) ? TRACKTAIL_SRC_B : 1;
                 float v = (1 - wy) * ((1 - wx) * p00[sc] + wx * p01[sc]) +
                           wy * ((1 - wx) * p10[sc] + wx * p11[sc]);
                 o[c] = (uint8_t)std::clamp((int)std::lround(v), 0, 255);
@@ -429,18 +429,18 @@ inline std::vector<uint8_t> encode_crop_png(
     return encode_rgb_png(rgb.data(), S, png_compress_level);
 }
 
-}  // namespace posetail_server_detail
+}  // namespace tracktail_server_detail
 
 
 // Hit /info and populate state. Returns true if the server responded with a
 // usable n_frames and image_size.
-inline bool posetail_server_probe(PosetailServerState &s) {
+inline bool tracktail_server_probe(TracktailServerState &s) {
     s.reachable = false;
     if (s.url.empty()) {
         s.status = "Server URL is empty";
         return false;
     }
-    std::string base = posetail_server_detail::normalize_url(s.url);
+    std::string base = tracktail_server_detail::normalize_url(s.url);
     httplib::Client cli(base);
     cli.set_connection_timeout(3, 0);
     cli.set_read_timeout(5, 0);
@@ -508,8 +508,8 @@ inline bool posetail_server_probe(PosetailServerState &s) {
 // cam_names_opt : optional per-camera names. If empty, uses "0", "1", ... in
 //                 order. The server matches uploaded images to cameras by
 //                 name, so anything consistent is fine.
-inline PosetailChunkResult posetail_server_predict_chunk(
-    PosetailServerState &s,
+inline TracktailChunkResult tracktail_server_predict_chunk(
+    TracktailServerState &s,
     const std::vector<const uint8_t *> &frames_rgba_per_cam_per_t,
     const std::vector<int> &cam_widths,
     const std::vector<int> &cam_heights,
@@ -517,10 +517,10 @@ inline PosetailChunkResult posetail_server_predict_chunk(
     const std::vector<Eigen::Vector3d> &seed_3d,
     int seed_t = 0,
     const std::vector<std::string> &cam_names_opt = {}) {
-    using namespace posetail_detail;
-    using namespace posetail_server_detail;
+    using namespace tracktail_detail;
+    using namespace tracktail_server_detail;
 
-    PosetailChunkResult r;
+    TracktailChunkResult r;
     int num_cams = (int)cams.size();
     int N = (int)seed_3d.size();
     if (num_cams == 0 || N == 0) {
@@ -757,7 +757,7 @@ inline PosetailChunkResult posetail_server_predict_chunk(
     s.last_conf = r.conf;
 
     fprintf(stderr,
-            "[PoseTail/server] cams=%d N=%d T=%d  encode=%.1f ms (%d ok, %d "
+            "[tracktail/server] cams=%d N=%d T=%d  encode=%.1f ms (%d ok, %d "
             "filled) request=%.1f ms decode=%.1f ms  total=%.1f ms\n",
             num_cams, N, T, s.last_encode_ms, encoded, skipped,
             s.last_request_ms, s.last_decode_ms, s.last_total_ms);

@@ -1,10 +1,10 @@
 #pragma once
-// posetail_actions.h — main-loop side of the PoseTail Tracker panel.
+// tracktail_actions.h — main-loop side of the tracktail Tracker panel.
 //
-// Consumes the request flags set by DrawPosetailWindow (gui/posetail_window.h)
+// Consumes the request flags set by DrawTracktailWindow (gui/tracktail_window.h)
 // and owns the HTTP state. Called once per render tick from red.cpp:
 //
-//     posetail_handle_requests(win.posetail, posetail_rt, ctx);
+//     tracktail_handle_requests(win.tracktail, tracktail_rt, ctx);
 //
 // Seed = the active animal's triangulated 3D keypoints on the current frame
 // (2D labels are triangulated first when the panel's checkbox is on). The
@@ -15,8 +15,8 @@
 
 #include "app_context.h"
 #include "gui/gui_keypoints.h"   // reprojection() (triangulate), reproject_3d_to_cam()
-#include "gui/posetail_window.h"
-#include "posetail_server_client.h"
+#include "gui/tracktail_window.h"
+#include "tracktail_server_client.h"
 
 #include <Eigen/Core>
 #include <algorithm>
@@ -28,11 +28,11 @@
 #include <vector>
 
 // Server state. One instance in main(), outlives every project.
-struct PosetailRuntime {
-    PosetailServerState server;
+struct TracktailRuntime {
+    TracktailServerState server;
 };
 
-namespace posetail_actions_detail {
+namespace tracktail_actions_detail {
 
 // Host pointer to camera `cam`'s frame `frame_off` frames after the current
 // one, or nullptr if it isn't staged. Looks the ring buffer up by frame
@@ -62,7 +62,7 @@ inline const uint8_t *pull_frame_host(AppContext &ctx, int cam, int frame_off,
     auto &pb = scene->display_buffer[cam][slot];
     if (!pb.frame) return nullptr;
     if (scene->use_cpu_buffer) return (const uint8_t *)pb.frame;
-#ifdef POSETAIL_HAS_CUDA
+#ifdef TRACKTAIL_HAS_CUDA
     size_t npix = (size_t)scene->image_width[cam] * scene->image_height[cam];
     scratch.emplace_back(npix * 4);
     if (cudaMemcpy(scratch.back().data(), pb.frame, npix * 4,
@@ -105,7 +105,7 @@ inline void write_prediction(FrameAnnotation &fa, int k, const Eigen::Vector3d &
 // Collect the seed from the active animal on the current frame. Triangulates
 // first when asked and there is no 3D yet. Returns false (with a message)
 // when there is nothing to seed from.
-inline bool collect_seed(PosetailWindowState &st, AppContext &ctx,
+inline bool collect_seed(TracktailWindowState &st, AppContext &ctx,
                          std::vector<Eigen::Vector3d> &seed,
                          std::vector<int> &seed_node_idx, int &instance_id,
                          std::string &why_not) {
@@ -128,7 +128,7 @@ inline bool collect_seed(PosetailWindowState &st, AppContext &ctx,
     if (count_3d() == 0 && st.auto_triangulate) {
         // Same call as pressing T in the Labeling Tool.
         reprojection(fa, &ctx.skeleton, ctx.pm.camera_params, ctx.scene);
-        printf("[PoseTail] Triangulated frame %d (animal id %d) for the seed\n",
+        printf("[tracktail] Triangulated frame %d (animal id %d) for the seed\n",
                ctx.current_frame_num, instance_id);
     }
     for (int k = 0; k < (int)fa.kp3d.size() && k < ctx.skeleton.num_nodes; ++k) {
@@ -144,11 +144,11 @@ inline bool collect_seed(PosetailWindowState &st, AppContext &ctx,
     return true;
 }
 
-}  // namespace posetail_actions_detail
+}  // namespace tracktail_actions_detail
 
-inline void posetail_handle_requests(PosetailWindowState &st,
-                                     PosetailRuntime &rt, AppContext &ctx) {
-    using namespace posetail_actions_detail;
+inline void tracktail_handle_requests(TracktailWindowState &st,
+                                      TracktailRuntime &rt, AppContext &ctx) {
+    using namespace tracktail_actions_detail;
     auto *scene = ctx.scene;
     auto &pm = ctx.pm;
 
@@ -156,7 +156,7 @@ inline void posetail_handle_requests(PosetailWindowState &st,
     if (st.server_probe_requested) {
         st.server_probe_requested = false;
         rt.server.url = st.server_url;
-        bool ok = posetail_server_probe(rt.server);
+        bool ok = tracktail_server_probe(rt.server);
         st.server_status = rt.server.status;
         if (ok) {
             st.server_n_frames = rt.server.n_frames;
@@ -164,7 +164,7 @@ inline void posetail_handle_requests(PosetailWindowState &st,
             st.server_device = rt.server.device;
             st.server_mode_3d = rt.server.mode_3d;
         }
-        printf("[PoseTail/server] %s\n", rt.server.status.c_str());
+        printf("[tracktail/server] %s\n", rt.server.status.c_str());
     }
 
     if (!st.forward_requested) return;
@@ -191,7 +191,7 @@ inline void posetail_handle_requests(PosetailWindowState &st,
         st.last_result = why_not;
         st.last_result_ok = false;
         ctx.toasts.push(why_not, Toast::Warning, 4.0f);
-        printf("[PoseTail] %s\n", why_not.c_str());
+        printf("[tracktail] %s\n", why_not.c_str());
         return;
     }
 
@@ -217,7 +217,7 @@ inline void posetail_handle_requests(PosetailWindowState &st,
     // size come from the server, not from red.
     if (rt.server.url != st.server_url || rt.server.n_frames <= 0) {
         rt.server.url = st.server_url;
-        bool ok = posetail_server_probe(rt.server);
+        bool ok = tracktail_server_probe(rt.server);
         st.server_status = rt.server.status;
         st.server_n_frames = rt.server.n_frames;
         st.server_image_size = rt.server.image_size;
@@ -241,14 +241,14 @@ inline void posetail_handle_requests(PosetailWindowState &st,
             if (!frames[c * T + t]) missing++;
         }
     if (missing)
-        printf("[PoseTail/server] WARNING: %d of %d (cam, frame) slots not "
+        printf("[tracktail/server] WARNING: %d of %d (cam, frame) slots not "
                "staged; sending grey for those\n", missing, num_cams * T);
 
-    printf("[PoseTail/server] Sending %d cams x %d frames x %d queries "
+    printf("[tracktail/server] Sending %d cams x %d frames x %d queries "
            "(animal id %d) to %s\n", num_cams, T, (int)seed.size(),
            instance_id, rt.server.url.c_str());
     auto t_start = std::chrono::steady_clock::now();
-    PosetailChunkResult chunk = posetail_server_predict_chunk(
+    TracktailChunkResult chunk = tracktail_server_predict_chunk(
         rt.server, frames, widths, heights, pm.camera_params, seed,
         /*seed_t=*/0, cam_names);
     float ms = std::chrono::duration<float, std::milli>(
@@ -263,13 +263,13 @@ inline void posetail_handle_requests(PosetailWindowState &st,
         st.last_result = st.server_status;
         st.last_result_ok = false;
         ctx.toasts.pushError(st.last_result);
-        printf("[PoseTail/server] FAILED: %s\n", chunk.error.c_str());
+        printf("[tracktail/server] FAILED: %s\n", chunk.error.c_str());
         return;
     }
     // t=0 is the seed; write t=1..n_keep. A chunk holds T-1 future frames.
     const int n_keep = std::clamp(st.server_n_keep, 1, T - 1);
     if (n_keep < st.server_n_keep)
-        printf("[PoseTail/server] Model predicts %d frames ahead; keeping %d "
+        printf("[tracktail/server] Model predicts %d frames ahead; keeping %d "
                "of the %d asked for\n", T - 1, n_keep, st.server_n_keep);
     for (int t = 1; t <= n_keep && t < (int)chunk.kp3d.size(); ++t) {
         FrameAnnotation &fa = future_frame(t);
@@ -285,8 +285,8 @@ inline void posetail_handle_requests(PosetailWindowState &st,
     st.server_status = buf;
     st.last_result = buf;
     st.last_result_ok = true;
-    ctx.toasts.pushSuccess("PoseTail: +" + std::to_string(n_keep) +
+    ctx.toasts.pushSuccess("tracktail: +" + std::to_string(n_keep) +
                            " frames (animal id " +
                            std::to_string(instance_id) + ")");
-    printf("[PoseTail/server] %s\n", buf);
+    printf("[tracktail/server] %s\n", buf);
 }
