@@ -129,8 +129,9 @@ static void nvdec_decoder_process(DecoderContext *dc_context,
     bool have_content = false;      // pTmpImage holds a frame of this epoch
     bool first_store_done = false;
 
-    // In sync mode the loader owns total/estimated (both = canonical_len).
-    // Otherwise the loader has already set estimated_num_frames from the
+    // In sync mode the loader owns total_num_frame (canonical_len) and
+    // last_frame_index (canonical_len - 1).
+    // Otherwise the loader has already set last_frame_index from the
     // reference camera; decoder threads must not race to replace it.
     int size_in_bytes;
     bool skip_first_decode_after_seek = false;
@@ -617,8 +618,9 @@ static void vt_decoder_process(DecoderContext *dc_context,
     int w = (int)demuxer->GetWidth();
     int h = (int)demuxer->GetHeight();
     double timebase     = demuxer->GetTimebase();
-    // In sync mode the loader owns total/estimated (both = canonical_len).
-    // Otherwise the loader has already set estimated_num_frames from the
+    // In sync mode the loader owns total_num_frame (canonical_len) and
+    // last_frame_index (canonical_len - 1).
+    // Otherwise the loader has already set last_frame_index from the
     // reference camera; decoder threads must not race to replace it.
 
     (void)w; (void)h;  // used by caller via scene->image_width/height

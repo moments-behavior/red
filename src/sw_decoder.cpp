@@ -355,8 +355,9 @@ void sw_decoder_process(DecoderContext *dc_context, FFmpegDemuxer *demuxer,
     // that did not declare its count has it filled in at end of stream.
     const int cam_len_slot = dc_context->cam_slot(cam_name);
 
-    // In sync mode the loader owns total/estimated (both = canonical_len).
-    // Otherwise the loader has already set estimated_num_frames from the
+    // In sync mode the loader owns total_num_frame (canonical_len) and
+    // last_frame_index (canonical_len - 1).
+    // Otherwise the loader has already set last_frame_index from the
     // reference camera; decoder threads must not race to replace it.
     bool skip_first_decode_after_seek = false;
 

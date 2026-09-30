@@ -433,9 +433,9 @@ inline void DrawLabelingToolWindow(
         // at all and you are hunting an absence. A button that walks the list
         // is the only thing that reliably reaches it.
         // A COUNT -- frames 0 .. total_frames-1 -- which the gap scan below
-        // needs. estimated_num_frames is the last index, hence +1; read as the
+        // needs. last_frame_index is the last index, hence +1; read as the
         // count, it left the final frame out of the unlabelled list.
-        int total_frames = dc_context->estimated_num_frames + 1;
+        int total_frames = dc_context->last_frame_index + 1;
         if (per_video_timeline && !ctx.input_is_imgs &&
             timeline_camera < (int)ctx.demuxers.size() &&
             ctx.demuxers[timeline_camera]) {

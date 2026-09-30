@@ -61,8 +61,10 @@ struct PictureBuffer {
 struct DecoderContext {
     std::atomic<bool> decoding_flag;
     std::atomic<bool> stop_flag;
+    // The timeline: frames 0 .. last_frame_index, so total_num_frame (a count)
+    // is last_frame_index + 1 once known, and INT_MAX while it is not.
     int total_num_frame;
-    int estimated_num_frames;
+    int last_frame_index;
     // Which CUDA device to decode on. Never assigned anywhere -- it is 0
     // because DecoderContext is value-initialised -- so red is single-GPU by
     // accident rather than by decision. Stated here so the NVDEC capability

@@ -59,7 +59,7 @@ inline void sync_fix_toggle(AppContext &ctx, bool enable) {
                                      plan.canonical_len - 1);
         dc->sync_canonical_len = plan.canonical_len;
         dc->total_num_frame = (int)plan.canonical_len;
-        dc->estimated_num_frames = (int)plan.canonical_len - 1;
+        dc->last_frame_index = (int)plan.canonical_len - 1;
         // Canonical slots are uniform in trigger time — pace playback by the
         // trigger interval.
         dc->video_fps = 1e9 / (double)plan.delta_ns;
@@ -77,13 +77,13 @@ inline void sync_fix_toggle(AppContext &ctx, bool enable) {
         dc->video_fps = ctx.demuxers[0]->GetFramerate();
         if (dc->per_cam_count > 0) {
             dc->total_num_frame = dc->longest_cam_frames();
-            dc->estimated_num_frames = dc->longest_cam_frames() - 1;
+            dc->last_frame_index = dc->longest_cam_frames() - 1;
         } else {
             if (ctx.demuxers[0]->GetNumFrames() == 0)
-                dc->estimated_num_frames =
-                    (int)(ctx.demuxers[0]->GetDuration() * dc->video_fps);
+                dc->last_frame_index =
+                    (int)(ctx.demuxers[0]->GetDuration() * dc->video_fps) - 1;
             else
-                dc->estimated_num_frames =
+                dc->last_frame_index =
                     (int)ctx.demuxers[0]->GetNumFrames() - 1;
             dc->total_num_frame = INT_MAX;
         }
@@ -219,7 +219,7 @@ inline void DrawTransportBar(TransportBarState &state, AppContext &ctx) {
             // seek_accurate = true forward-decodes from the keyframe to the
             // requested frame (same precise path the Labeling Tool uses),
             // instead of snapping to the previous keyframe like scrubbing.
-            state.edit_buf = std::clamp(state.edit_buf, 0, dc->estimated_num_frames);
+            state.edit_buf = std::clamp(state.edit_buf, 0, dc->last_frame_index);
             seek_all_cameras(ctx.scene, state.edit_buf, dc->video_fps, ps, true);
             state.slider_text_editing = false;
             ps.slider_text_editing = false;
@@ -233,7 +233,7 @@ inline void DrawTransportBar(TransportBarState &state, AppContext &ctx) {
         state.edit_buf = ps.slider_frame_number;
         ImGui::SetNextItemWidth(200.0f);
         bool changed = ImGui::SliderInt(
-            "##timeline", &state.edit_buf, 0, dc->estimated_num_frames);
+            "##timeline", &state.edit_buf, 0, dc->last_frame_index);
 
         if (ImGui::TempInputIsActive(ImGui::GetItemID())) {
             // Cmd+click detected — pause and switch to InputInt next frame
@@ -267,7 +267,7 @@ inline void DrawTransportBar(TransportBarState &state, AppContext &ctx) {
                 const sync_plan::SyncCam *cam0 =
                     plan.cam(ctx.pm.camera_names[0]);
                 const int64_t range =
-                    std::max<int64_t>(1, dc->estimated_num_frames + 1);
+                    std::max<int64_t>(1, dc->last_frame_index + 1);
                 for (const auto &kv : plan.cams) {
                     for (const auto &g : kv.second.gaps) {
                         int64_t pos = fix_on || !cam0 ? g.slot
@@ -300,10 +300,10 @@ inline void DrawTransportBar(TransportBarState &state, AppContext &ctx) {
         // so the clock would read 00:00:07 for frame 7, which looks like a
         // duration and is not one. Count frames instead.
         ImGui::Text("frame %d / %d", (int)state.edit_buf,
-                    (int)dc->estimated_num_frames);
+                    (int)dc->last_frame_index);
     } else {
         float current_time_sec = state.edit_buf / dc->video_fps;
-        float total_time_sec = dc->estimated_num_frames / dc->video_fps;
+        float total_time_sec = dc->last_frame_index / dc->video_fps;
         std::string current_str = format_time(current_time_sec);
         std::string total_str = format_time(total_time_sec);
         ImGui::Text("%s / %s", current_str.c_str(), total_str.c_str());

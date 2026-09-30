@@ -282,7 +282,7 @@ unload_media(PlaybackState &ps, ProjectManager &pm,
     ps.pause_seeked = false;
     dc_context->decoding_flag = false;
     dc_context->total_num_frame = INT_MAX;
-    dc_context->estimated_num_frames = 0;
+    dc_context->last_frame_index = 0;
 
     // Clear stale per-camera decoded frame counters
     latest_decoded_frame.clear();
@@ -426,10 +426,9 @@ load_images(std::map<std::string, std::string> &selected_files,
     // Decoder threads share this context. Set the timeline length before they
     // start; image_loader used to rewrite it from every camera thread, making
     // the UI oscillate when camera folders had different frame counts.
-    // estimated_num_frames is the LAST frame index, as every other loader sets
-    // it (count - 1); the count here let a 48-image sequence run to frame 48.
+    // last_frame_index is count - 1, as every other loader sets it.
     dc_context->total_num_frame = (int)imgs_names.size();
-    dc_context->estimated_num_frames = (int)imgs_names.size() - 1;
+    dc_context->last_frame_index = (int)imgs_names.size() - 1;
     // Per-camera counts, for the same readout the video path gets. The
     // timeline itself stays the union of frame names -- that is what the
     // image loaders decode against -- but a camera folder that is missing
@@ -745,7 +744,7 @@ load_videos(std::map<std::string, std::string> &selected_files,
     // frames the way the sync path's trailing fill does.
     //
     if (!sync_enable && dc_context->per_cam_count > 0) {
-        dc_context->estimated_num_frames =
+        dc_context->last_frame_index =
             dc_context->longest_cam_frames() - 1;
         dc_context->total_num_frame = dc_context->longest_cam_frames();
         dc_context->total_owned_by_loader = true;
@@ -755,7 +754,7 @@ load_videos(std::map<std::string, std::string> &selected_files,
     dc_context->sync_canonical_len = splan.canonical_len;
     if (sync_enable) {
         dc_context->total_num_frame = (int)splan.canonical_len;
-        dc_context->estimated_num_frames = (int)splan.canonical_len - 1;
+        dc_context->last_frame_index = (int)splan.canonical_len - 1;
         // Canonical slots are uniform in trigger time — pace playback by the
         // trigger interval, not the (nominal) container frame rate.
         dc_context->video_fps = 1e9 / (double)splan.delta_ns;

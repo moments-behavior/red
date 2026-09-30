@@ -320,7 +320,7 @@ int main(int argc, char **argv) {
     dc.seek_interval = (int)demuxer.FindKeyFrameInterval();
     dc.video_fps = demuxer.GetFramerate();
     dc.total_num_frame = n_frames;
-    dc.estimated_num_frames = n_frames - 1;
+    dc.last_frame_index = n_frames - 1;
     dc.sync_fix_active = false;
     dc.sync_canonical_len = 0;
 
