@@ -233,6 +233,15 @@ inline void DrawTransportBar(TransportBarState &state, AppContext &ctx) {
         bool changed = ImGui::SliderInt(
             "##timeline", &state.edit_buf, 0, dc->last_frame_index);
 
+        // Grabbing the timeline pauses, as the Pause button does: a seek is
+        // for looking at a frame, and playback would carry straight on past
+        // it. On press rather than on change, so a drag scrubs through paused
+        // frames and a click on the current position still stops.
+        if (ImGui::IsItemActivated() && ps.play_video) {
+            ps.play_video = false;
+            ps.pause_selected = 0;
+        }
+
         if (ImGui::TempInputIsActive(ImGui::GetItemID())) {
             // Cmd+click detected — pause and switch to InputInt next frame
             if (ps.play_video) {
