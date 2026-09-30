@@ -34,6 +34,9 @@ struct TailcycleOpenState {
     int group_idx = 0;                // for a session holding several groups
     int selected = -1;                // row currently open
     std::string status;
+    // Height of the session table, in pixels. 0 = fit the rows, up to 15.
+    // Set by dragging the splitter under it; double-click goes back to 0.
+    float table_height = 0.0f;
 
     // Enough of the open session to write corrections back over it. Held
     // rather than re-read because a save must reproduce the session's own
@@ -423,12 +426,16 @@ inline void DrawTailcycleDatasetWindow(TailcycleOpenState &state,
                                        ImGuiTableFlags_SizingFixedFit |
                                        ImGuiTableFlags_ScrollX |
                                        ImGuiTableFlags_ScrollY;
-            // Tall enough for 15 sessions before it scrolls, and no taller
-            // than the rows it has. Header + rows + the horizontal scrollbar.
+            // By default tall enough for 15 sessions before it scrolls, and
+            // no taller than the rows it has (header + rows + the horizontal
+            // scrollbar) -- until you drag the splitter under it.
             const int visible_rows = std::min((int)state.sessions.size(), 15);
-            const float table_h =
+            const float fit_h =
                 ImGui::GetFrameHeightWithSpacing() * (visible_rows + 1) +
                 ImGui::GetStyle().ScrollbarSize;
+            const float table_h = state.table_height > 0.0f
+                                      ? ImMax(state.table_height, 60.0f)
+                                      : fit_h;
             if (ImGui::BeginTable("##tc_sessions", 7, tf, ImVec2(0, table_h))) {
                 ImGui::TableSetupScrollFreeze(0, 1);
                 for (const char *h : {"Split", "Session", "Labels", "Cams", "Frames",
@@ -467,6 +474,33 @@ inline void DrawTailcycleDatasetWindow(TailcycleOpenState &state,
                     ImGui::TableNextColumn(); ImGui::Text("%d", (int)si.groups.size());
                 }
                 ImGui::EndTable();
+            }
+            // Splitter, as under the Labeling Tool's keypoints table.
+            {
+                const float splitter_h = 6.0f;
+                ImGui::InvisibleButton("##tc_sessions_splitter",
+                                       ImVec2(-1.0f, splitter_h));
+                const bool active = ImGui::IsItemActive();
+                const bool hover = ImGui::IsItemHovered();
+                if (active || hover)
+                    ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
+                if (active)
+                    state.table_height = table_h + ImGui::GetIO().MouseDelta.y;
+                if (hover && ImGui::IsMouseDoubleClicked(0))
+                    state.table_height = 0.0f;
+                if (hover && !active)
+                    ImGui::SetTooltip("Drag to resize the list, double-click "
+                                      "to fit the sessions");
+                const ImVec2 mn = ImGui::GetItemRectMin();
+                const ImVec2 mx = ImGui::GetItemRectMax();
+                const float y = (mn.y + mx.y) * 0.5f;
+                const ImU32 col = ImGui::GetColorU32(
+                    active  ? ImGuiCol_SeparatorActive
+                    : hover ? ImGuiCol_SeparatorHovered
+                            : ImGuiCol_Separator);
+                ImGui::GetWindowDrawList()->AddLine(ImVec2(mn.x, y),
+                                                    ImVec2(mx.x, y), col,
+                                                    active ? 3.0f : 2.0f);
             }
             ImGui::TextDisabled("Click a row to open it.");
         }
