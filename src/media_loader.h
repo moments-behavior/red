@@ -426,8 +426,10 @@ load_images(std::map<std::string, std::string> &selected_files,
     // Decoder threads share this context. Set the timeline length before they
     // start; image_loader used to rewrite it from every camera thread, making
     // the UI oscillate when camera folders had different frame counts.
+    // estimated_num_frames is the LAST frame index, as every other loader sets
+    // it (count - 1); the count here let a 48-image sequence run to frame 48.
     dc_context->total_num_frame = (int)imgs_names.size();
-    dc_context->estimated_num_frames = (int)imgs_names.size();
+    dc_context->estimated_num_frames = (int)imgs_names.size() - 1;
     // Per-camera counts, for the same readout the video path gets. The
     // timeline itself stays the union of frame names -- that is what the
     // image loaders decode against -- but a camera folder that is missing

@@ -188,13 +188,13 @@ inline void DrawTransportBar(TransportBarState &state, AppContext &ctx) {
 
     ImGui::SameLine(0.0f, spacing);
     if (ImGui::Button(ICON_FK_STEP_FORWARD)) {
-        int f = std::min(dc->total_num_frame,
+        int f = std::min(std::max(0, dc->total_num_frame - 1),
                          current_frame_num + dc->seek_interval);
         seek_all_cameras(ctx.scene, f, dc->video_fps, ps, false);
     }
     ImGui::SameLine(0.0f, spacing);
     if (ImGui::Button(ICON_FK_FAST_FORWARD)) {
-        int f = std::min(dc->total_num_frame,
+        int f = std::min(std::max(0, dc->total_num_frame - 1),
                          current_frame_num + 10 * dc->seek_interval);
         seek_all_cameras(ctx.scene, f, dc->video_fps, ps, false);
     }

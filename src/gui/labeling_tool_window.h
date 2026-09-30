@@ -432,14 +432,17 @@ inline void DrawLabelingToolWindow(
         // that was never labelled has no annotation entry, so it has no tick
         // at all and you are hunting an absence. A button that walks the list
         // is the only thing that reliably reaches it.
-        int total_frames = dc_context->estimated_num_frames;
+        // A COUNT -- frames 0 .. total_frames-1 -- which the gap scan below
+        // needs. estimated_num_frames is the last index, hence +1; read as the
+        // count, it left the final frame out of the unlabelled list.
+        int total_frames = dc_context->estimated_num_frames + 1;
         if (per_video_timeline && !ctx.input_is_imgs &&
             timeline_camera < (int)ctx.demuxers.size() &&
             ctx.demuxers[timeline_camera]) {
             const auto *demuxer = ctx.demuxers[timeline_camera];
             total_frames = demuxer->GetNumFrames() == 0
                 ? (int)(demuxer->GetDuration() * demuxer->GetFramerate())
-                : (int)demuxer->GetNumFrames() - 1;
+                : (int)demuxer->GetNumFrames();
         }
         // Are the never-labelled frames the exception, or the norm? On a
         // video where 100 frames of 8000 are labelled they are the norm: an
@@ -495,8 +498,7 @@ inline void DrawLabelingToolWindow(
             if (!needs_fix_frames.empty()) overview_lines++;
             // Plot plus up to two wrapped rows of class chips.
             const float timeline_block =
-                (dc_context->estimated_num_frames > 0) ? 78.0f + 2.0f * line_h
-                                                       : 0.0f;
+                (total_frames > 0) ? 78.0f + 2.0f * line_h : 0.0f;
             const float splitter_h = 6.0f;
             const float reserved =
                 overview_lines * line_h + timeline_block + splitter_h +
@@ -716,7 +718,7 @@ inline void DrawLabelingToolWindow(
             const double px_per_frame_full =
                 timeline_w / (double)ImMax(1, total_frames);
             const double x_pad = 6.0 / ImMax(px_per_frame_full, 1e-9);
-            const double x_lo = -x_pad, x_hi = (double)total_frames + x_pad;
+            const double x_lo = -x_pad, x_hi = (double)(total_frames - 1) + x_pad;
 
             if (state.timeline_reset_pending) {
                 ImPlot::SetNextAxesLimits(x_lo, x_hi, 0, 1);

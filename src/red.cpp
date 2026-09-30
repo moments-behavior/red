@@ -576,7 +576,7 @@ int main(int argc, char **argv) {
     // Helper: seek by a signed multiplier of the seek interval.
     auto seek_relative = [&](int multiplier) {
         int target = std::clamp(current_frame_num + multiplier * dc_context->seek_interval,
-                                0, dc_context->total_num_frame);
+                                0, std::max(0, dc_context->total_num_frame - 1));
         seek_all_cameras(scene, target, dc_context->video_fps, ps, false);
     };
 
