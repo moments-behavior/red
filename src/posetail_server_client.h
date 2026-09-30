@@ -1,7 +1,7 @@
 #pragma once
 // posetail_server_client.h — Client for the posetail HTTP inference server.
 //
-// One round-trip = one 16-frame chunk × N cameras × N query points. The
+// One round-trip = one chunk of n_frames × N cameras × N query points. The
 // server is server/server.py in github.com/AI-HHMI/tracktail — see its
 // server/SERVER.md for the wire format.
 //
@@ -9,7 +9,7 @@
 //   POST /predict
 //     form field "metadata" : JSON {cameras, coords, query_times?}
 //     repeated file "images" : <cam_name>__<frame_idx>.png   (PNG of the
-//                                                              256×256 crop)
+//                                        image_size × image_size crop)
 //   Response: an .npz (ZIP of .npy) with keys coords_pred, vis_pred, conf_pred,
 //   ... we only read those three.
 //
@@ -68,16 +68,15 @@
 #define POSETAIL_SRC_B 2
 #endif
 
-// ── Fixed model dimensions; the server reports its own in GET /info ──
+// The chunk length (n_frames) and crop size (image_size) are the model's;
+// GET /info reports both, and everything below takes them from there.
 namespace posetail_detail {
-static constexpr int T_CHUNK = 16;     // frames per chunk
-static constexpr int CROP_SIZE = 256;  // model input H == W
-static constexpr int CROP_PAD = 20;    // bbox pad before expanding to CROP_SIZE
+static constexpr int CROP_PAD = 20;    // bbox pad before expanding to the crop size
 
 // One per-camera crop window, in image pixel coordinates.
-// The model receives the crop resized to CROP_SIZE × CROP_SIZE, plus the
-// crop's top-left as cam_offset, plus K scaled by CROP_SIZE/crop_w in fx,cx
-// and CROP_SIZE/crop_h in fy,cy.
+// The model receives the crop resized to S × S (S = image_size), plus the
+// crop's top-left as cam_offset, plus K scaled by S/crop_w in fx,cx and
+// S/crop_h in fy,cy.
 struct CropBox {
     int x0, y0, w, h;
     Eigen::Matrix3d K_scaled;  // K' = S · K with S = diag(sx, sy, 1)
@@ -85,11 +84,12 @@ struct CropBox {
 };
 
 // Project all 3D queries onto a camera, build a crop box that covers the
-// projected bbox + padding, expand to at least CROP_SIZE on each side,
-// and clamp to the image rectangle. If clamping shrinks below CROP_SIZE the
+// projected bbox + padding, expand to at least crop_size on each side,
+// and clamp to the image rectangle. If clamping shrinks below crop_size the
 // model still works but loses some context — we keep going.
 inline CropBox compute_crop_box(const std::vector<Eigen::Vector3d> &queries_3d,
-                                const CameraParams &cam, int img_w, int img_h) {
+                                const CameraParams &cam, int img_w, int img_h,
+                                int crop_size) {
     CropBox box;
 
     // Project queries to image-space pixels.
@@ -117,11 +117,11 @@ inline CropBox compute_crop_box(const std::vector<Eigen::Vector3d> &queries_3d,
         ymax = (double)img_h;
     }
 
-    // Pad and expand to ≥ CROP_SIZE on each side.
+    // Pad and expand to ≥ crop_size on each side.
     double cx = 0.5 * (xmin + xmax);
     double cy = 0.5 * (ymin + ymax);
     double half = std::max(0.5 * (xmax - xmin), 0.5 * (ymax - ymin)) + CROP_PAD;
-    double crop_dim = std::max((double)CROP_SIZE, 2.0 * half);
+    double crop_dim = std::max((double)crop_size, 2.0 * half);
 
     // Centered square crop, clamped to image bounds.
     double x0 = cx - crop_dim * 0.5;
@@ -142,14 +142,14 @@ inline CropBox compute_crop_box(const std::vector<Eigen::Vector3d> &queries_3d,
     box.w = std::max(1, (int)std::round(x1 - x0));
     box.h = std::max(1, (int)std::round(y1 - y0));
 
-    // Scale K so projection produces pixels inside the resized 256-crop.
+    // Scale K so projection produces pixels inside the resized crop.
     // Original projection p in image space → after subtracting (x0, y0) the
     // pixel is in crop space → after scaling by 256/crop_dim the pixel is in
     // model space. We bake the scale into K (model multiplies internally:
     // K_scaled[*, 2] - cam_offset = pixel in 256 crop). The offset is
     // handled by the cam_offset input separately.
-    double sx = (double)CROP_SIZE / (double)box.w;
-    double sy = (double)CROP_SIZE / (double)box.h;
+    double sx = (double)crop_size / (double)box.w;
+    double sy = (double)crop_size / (double)box.h;
     box.K_scaled = cam.k;
     box.K_scaled(0, 0) *= sx;
     box.K_scaled(1, 1) *= sy;
@@ -162,15 +162,15 @@ inline CropBox compute_crop_box(const std::vector<Eigen::Vector3d> &queries_3d,
 
 }  // namespace posetail_detail
 
-// One chunk of predictions: T_CHUNK frames × N query points × 3D.
+// One chunk of predictions: n_frames × N query points × 3D.
 struct PosetailChunkResult {
     bool ok = false;
     std::string error;
-    // [T_CHUNK][N] 3D positions in world space.
+    // [n_frames][N] 3D positions in world space.
     std::vector<std::vector<Eigen::Vector3d>> kp3d;
-    // [T_CHUNK][N] visibility ∈ [0, 1].
+    // [n_frames][N] visibility ∈ [0, 1].
     std::vector<std::vector<float>> vis;
-    // [T_CHUNK][N] 2D-localization confidence ∈ [0, 1].
+    // [n_frames][N] 2D-localization confidence ∈ [0, 1].
     std::vector<std::vector<float>> conf;
 };
 
@@ -178,8 +178,8 @@ struct PosetailServerState {
     // User-editable URL like "http://10.102.10.88:8000".
     std::string url;
     bool reachable = false;
-    int n_frames = 0;       // from /info — must match posetail_detail::T_CHUNK
-    int image_size = 0;     // from /info — must match posetail_detail::CROP_SIZE
+    int n_frames = 0;       // from /info: frames per chunk (0 = not probed)
+    int image_size = 0;     // from /info: crop side in pixels
     std::string device;     // from /info, informational only
     std::string mode_3d;    // from /info, informational only
     std::string status;     // last-action message for the UI
@@ -363,36 +363,31 @@ inline void png_append_cb(void *ctx, void *data, int size) {
     out->insert(out->end(), p, p + size);
 }
 
-// PNG-encode a CROP_SIZE×CROP_SIZE RGB8 buffer. Level 1 (fastest) — the
-// crops are small and the model wants lossless input, so speed wins.
-inline std::vector<uint8_t> encode_rgb_png(const uint8_t *rgb,
+// PNG-encode an S×S RGB8 buffer. Level 1 (fastest) — the crops are small
+// and the model wants lossless input, so speed wins.
+inline std::vector<uint8_t> encode_rgb_png(const uint8_t *rgb, int S,
                                            int png_compress_level = 1) {
     std::vector<uint8_t> out;
     out.reserve(64 * 1024);
-    const int S = posetail_detail::CROP_SIZE;
     stbi_write_png_compression_level = png_compress_level;
     stbi_write_png_to_func(png_append_cb, &out, S, S, 3, rgb, S * 3);
     return out;
 }
 
-// A solid mid-grey placeholder so the server still sees T_CHUNK images for
-// a camera whose frame isn't staged in the display buffer.
-inline const std::vector<uint8_t> &grey_png() {
-    static const std::vector<uint8_t> png = [] {
-        const int S = posetail_detail::CROP_SIZE;
-        std::vector<uint8_t> grey((size_t)S * S * 3, 128);
-        return encode_rgb_png(grey.data());
-    }();
-    return png;
+// A solid mid-grey S×S placeholder so the server still sees n_frames images
+// for a camera whose frame isn't staged in the display buffer.
+inline std::vector<uint8_t> grey_png(int S) {
+    std::vector<uint8_t> grey((size_t)S * S * 3, 128);
+    return encode_rgb_png(grey.data(), S);
 }
 
 // Crop+resize one camera's full-resolution RGBA (or BGRA, see decoder.h)
-// frame to a 256×256 RGB PNG. The crop box must match across the whole 16-frame chunk for
+// frame to an S×S RGB PNG. The crop box must match across the whole chunk for
 // that camera, so callers pass the pre-computed CropBox (one per camera,
-// shared across all 16 frames).
+// shared across all of its frames).
 inline std::vector<uint8_t> encode_crop_png(
     const uint8_t *rgba, int src_w, int src_h,
-    const posetail_detail::CropBox &box, int png_compress_level = 1) {
+    const posetail_detail::CropBox &box, int S, int png_compress_level = 1) {
     if (!rgba) return {};
     // Clamp box to image bounds defensively (compute_crop_box already does
     // this, but the display buffer may have stale dims for transitions).
@@ -404,7 +399,6 @@ inline std::vector<uint8_t> encode_crop_png(
 
     // Bilinear resample of ONLY the crop region straight into an RGB8
     // buffer -- never touches the rest of the (large) source frame.
-    const int S = posetail_detail::CROP_SIZE;
     std::vector<uint8_t> rgb((size_t)S * S * 3);
     const float sx = (float)w / (float)S;
     const float sy = (float)h / (float)S;
@@ -432,14 +426,14 @@ inline std::vector<uint8_t> encode_crop_png(
             }
         }
     }
-    return encode_rgb_png(rgb.data(), png_compress_level);
+    return encode_rgb_png(rgb.data(), S, png_compress_level);
 }
 
 }  // namespace posetail_server_detail
 
 
-// Hit /info and populate state. Returns true if the server responded and
-// the model matches what red expects (n_frames=16, image_size=256).
+// Hit /info and populate state. Returns true if the server responded with a
+// usable n_frames and image_size.
 inline bool posetail_server_probe(PosetailServerState &s) {
     s.reachable = false;
     if (s.url.empty()) {
@@ -501,9 +495,9 @@ inline bool posetail_server_probe(PosetailServerState &s) {
                   s.n_frames, s.image_size, s.device.c_str(),
                   s.mode_3d.c_str());
     s.status = buf;
-    if (s.n_frames != posetail_detail::T_CHUNK ||
-        s.image_size != posetail_detail::CROP_SIZE) {
-        s.status += "  (WARNING: doesn't match red's hardcoded 16×256)";
+    if (s.n_frames < 2 || s.image_size <= 0) {
+        s.status += "  (unusable: need n_frames >= 2 and image_size > 0)";
+        return false;
     }
     return true;
 }
@@ -533,8 +527,13 @@ inline PosetailChunkResult posetail_server_predict_chunk(
         r.error = "No cameras or queries";
         return r;
     }
-    if ((int)frames_rgba_per_cam_per_t.size() != num_cams * T_CHUNK) {
-        r.error = "frames buffer size mismatch (need cams*16)";
+    const int T = s.n_frames, S = s.image_size;
+    if (T < 2 || S <= 0) {
+        r.error = "Server not probed (no n_frames / image_size)";
+        return r;
+    }
+    if ((int)frames_rgba_per_cam_per_t.size() != num_cams * T) {
+        r.error = "frames buffer size mismatch (need cams*n_frames)";
         return r;
     }
     if (s.url.empty()) {
@@ -548,32 +547,34 @@ inline PosetailChunkResult posetail_server_predict_chunk(
     std::vector<CropBox> boxes(num_cams);
     for (int c = 0; c < num_cams; ++c) {
         boxes[c] = compute_crop_box(seed_3d, cams[c], cam_widths[c],
-                                    cam_heights[c]);
+                                    cam_heights[c], S);
     }
 
     // ── Encode all (cam, frame) images to PNG ──
-    // PNG @ compression level 1 ≈ ~2-3× JPEG-90 in bytes for 256×256 crops but
+    // PNG @ compression level 1 ≈ ~2-3× JPEG-90 in bytes for these crops but
     // lossless; the model was trained on raw frames so we keep it lossless.
     // Switch to JPEG here if upload time is the bottleneck.
     httplib::MultipartFormDataItems items;
-    items.reserve((size_t)num_cams * T_CHUNK + 1);
+    items.reserve((size_t)num_cams * T + 1);
 
     auto t_enc0 = std::chrono::steady_clock::now();
     int encoded = 0, skipped = 0;
+    std::vector<uint8_t> grey;  // built on first use
     for (int c = 0; c < num_cams; ++c) {
         std::string cam_name = (c < (int)cam_names_opt.size() &&
                                  !cam_names_opt[c].empty())
             ? cam_names_opt[c]
             : std::to_string(c);
-        for (int t = 0; t < T_CHUNK; ++t) {
-            const uint8_t *rgba = frames_rgba_per_cam_per_t[c * T_CHUNK + t];
+        for (int t = 0; t < T; ++t) {
+            const uint8_t *rgba = frames_rgba_per_cam_per_t[c * T + t];
             std::vector<uint8_t> png =
-                encode_crop_png(rgba, cam_widths[c], cam_heights[c], boxes[c]);
+                encode_crop_png(rgba, cam_widths[c], cam_heights[c], boxes[c], S);
             if (png.empty()) {
                 skipped++;
                 // Send a solid-grey PNG instead so the server still sees
-                // T_CHUNK images and we don't break the request.
-                png = grey_png();
+                // n_frames images and we don't break the request.
+                if (grey.empty()) grey = grey_png(S);
+                png = grey;
             } else {
                 encoded++;
             }
@@ -593,9 +594,9 @@ inline PosetailChunkResult posetail_server_predict_chunk(
         std::chrono::duration<float, std::milli>(t_enc1 - t_enc0).count();
 
     // ── Build the metadata JSON ──
-    // mat = K_scaled (256×256-space), dist = first 5 distortion coeffs,
+    // mat = K_scaled (S×S crop space), dist = first 5 distortion coeffs,
     // ext = [R | t; 0 0 0 1] world→camera, offset = scaled (x0*sx, y0*sy).
-    // Because the uploaded PNG is already 256×256, the server's
+    // Because the uploaded PNG is already image_size × image_size, the server's
     // resize_camera_group computes scale=1.0 and leaves everything alone.
     std::ostringstream meta;
     meta << std::scientific;
@@ -703,14 +704,14 @@ inline PosetailChunkResult posetail_server_predict_chunk(
             // coords_pred: (B=1, T, N, 3)
             if (v.shape.size() != 4 ||
                 v.shape[0] != 1 ||
-                v.shape[1] != T_CHUNK ||
+                v.shape[1] != T ||
                 v.shape[2] != N ||
                 v.shape[3] != 3) {
                 r.error = std::string("Bad shape for ") + key;
                 return false;
             }
-            dst_kp->assign(T_CHUNK, std::vector<Eigen::Vector3d>(N));
-            for (int t = 0; t < T_CHUNK; ++t)
+            dst_kp->assign(T, std::vector<Eigen::Vector3d>(N));
+            for (int t = 0; t < T; ++t)
                 for (int n = 0; n < N; ++n) {
                     const float *p = fp + ((t * N) + n) * 3;
                     (*dst_kp)[t][n] = Eigen::Vector3d(p[0], p[1], p[2]);
@@ -722,19 +723,19 @@ inline PosetailChunkResult posetail_server_predict_chunk(
             // float layout in memory either way.
             bool ok_shape = false;
             if (v.shape.size() == 4 &&
-                v.shape[0] == 1 && v.shape[1] == T_CHUNK &&
+                v.shape[0] == 1 && v.shape[1] == T &&
                 v.shape[2] == N && v.shape[3] == 1)
                 ok_shape = true;
             else if (v.shape.size() == 3 &&
-                     v.shape[0] == 1 && v.shape[1] == T_CHUNK &&
+                     v.shape[0] == 1 && v.shape[1] == T &&
                      v.shape[2] == N)
                 ok_shape = true;
             if (!ok_shape) {
                 r.error = std::string("Bad shape for ") + key;
                 return false;
             }
-            dst_2d_TN1.assign(T_CHUNK, std::vector<float>(N, 0.0f));
-            for (int t = 0; t < T_CHUNK; ++t)
+            dst_2d_TN1.assign(T, std::vector<float>(N, 0.0f));
+            for (int t = 0; t < T; ++t)
                 for (int n = 0; n < N; ++n)
                     dst_2d_TN1[t][n] = fp[(t * N + n)];
         }
@@ -758,7 +759,7 @@ inline PosetailChunkResult posetail_server_predict_chunk(
     fprintf(stderr,
             "[PoseTail/server] cams=%d N=%d T=%d  encode=%.1f ms (%d ok, %d "
             "filled) request=%.1f ms decode=%.1f ms  total=%.1f ms\n",
-            num_cams, N, T_CHUNK, s.last_encode_ms, encoded, skipped,
+            num_cams, N, T, s.last_encode_ms, encoded, skipped,
             s.last_request_ms, s.last_decode_ms, s.last_total_ms);
     r.ok = true;
     return r;

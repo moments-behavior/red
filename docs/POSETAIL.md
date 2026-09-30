@@ -28,7 +28,8 @@ animals in the future frames are untouched (the prediction is written into
 the FrameAnnotation whose `instance_id` matches the seed, created if the
 frame has none yet).
 
-All cameras must have the next 16 frames in the display buffer, which is the
+All cameras must have the next `n_frames` frames (the model's chunk length,
+see below) in the display buffer, which is the
 normal case when paused on a frame. A camera / frame that is not staged is
 sent as a grey image and a warning is printed.
 
@@ -36,12 +37,15 @@ sent as a grey image and a warning is printed.
 
 Inference runs on the PoseTail HTTP server, `server/server.py` in
 [AI-HHMI/tracktail](https://github.com/AI-HHMI/tracktail); red needs no GPU
-or model of its own. Each click sends one 16-frame chunk and gets back up to
-15 future frames (*N future frames to keep*), in a ~1–3 s round trip during
-which the UI stalls.
+or model of its own. Each click sends one chunk of `n_frames` frames and gets
+back `n_frames − 1` future frames, of which *N future frames to keep* (1–24,
+default 4) are written; a larger N is clamped to what the model returns. The
+round trip takes ~1–3 s, during which the UI stalls.
 
-Set the URL (`http://host:8000`), click **Probe** to `GET /info` and confirm
-the model is the 16-frame × 256×256 one red expects. The status line goes
+The chunk length (`n_frames`) and crop size (`image_size`) belong to the
+model, not to red: `GET /info` reports them and red uses whatever it says.
+Set the URL (`http://host:8000`) and click **Probe** to read them; **Forward**
+probes by itself when the URL has not been probed yet. The status line goes
 green/orange; per-call `encode / request / decode` timings show under it. The
 URL is not persisted across launches.
 
@@ -51,12 +55,13 @@ tracktail's `server/SERVER.md` is the authoritative description.
 
 One `POST /predict` (`multipart/form-data`) per click:
 
-- `metadata`: JSON with `cameras` (`mat` = K scaled to the 256-crop, `dist`
+- `metadata`: JSON with `cameras` (`mat` = K scaled to the crop, `dist`
   = 5 coefficients, `ext` = `[R|t; 0 0 0 1]` world→camera, `offset` = crop
   origin), `coords` (seed 3D), `query_times`.
-- `images`: 16 × N_cams PNGs named `<cam_name>__<t>.png`, each the 256×256
-  crop for that camera (square crop around the projected seed bbox + 20 px
-  padding, expanded to ≥ 256, resized to 256). `cam_name` is the project's
+- `images`: `n_frames` × N_cams PNGs named `<cam_name>__<t>.png`, each the
+  `image_size` × `image_size` crop for that camera (square crop around the
+  projected seed bbox + 20 px padding, expanded to ≥ `image_size`, resized to
+  `image_size`). `cam_name` is the project's
   camera name.
 - Response: `.npz` (uncompressed ZIP of `.npy`); red reads `coords_pred`,
   `vis_pred`, `conf_pred` (`conf_pred` accepted with or without the trailing
@@ -95,7 +100,7 @@ flag and configure fails).
 
 ## Known limits
 
-- One chunk per click, so at most +15 frames; click again from the last
+- One chunk per click, so at most `n_frames − 1` frames ahead; click again from the last
   predicted frame to go further.
 - The request runs on the main thread; the window is unresponsive while a
   request is in flight.

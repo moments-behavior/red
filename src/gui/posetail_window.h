@@ -7,7 +7,7 @@
 // reprojected 2D into the annotation buffer for frames [current+1 .. current+N].
 //
 // Inference runs on the PoseTail HTTP server (server/server.py in
-// github.com/AI-HHMI/tracktail): one 16-frame chunk per click, no GPU needed
+// github.com/AI-HHMI/tracktail): one chunk of the model's n_frames per click, no GPU needed
 // locally.
 //
 // This header is UI only. The request flags below are consumed by
@@ -36,8 +36,9 @@ struct PosetailWindowState {
     std::string server_url = "http://10.102.10.88:8000";
     bool server_probe_requested = false;
     std::string server_status;
-    // How many of the 15 future frames from a 16-frame chunk to write back.
-    int server_n_keep = 15;
+    // How many future frames to write back. One chunk of n_frames holds
+    // n_frames-1 of them; a larger value is clamped to that at Forward.
+    int server_n_keep = 4;
     // Cached /info reply for display.
     int server_n_frames = 0;
     int server_image_size = 0;
@@ -126,8 +127,8 @@ inline void DrawPosetailWindow(PosetailWindowState &st, AppContext &ctx) {
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip(
                 "GET /info on the configured URL to check the server is\n"
-                "reachable and the model matches red's expected\n"
-                "16 frames x 256x256 input. Status appears below.");
+                "reachable and read the model's frames per chunk and\n"
+                "image size. Forward probes by itself if needed.");
 
         if (st.server_n_frames > 0) {
             ImGui::TextDisabled(
@@ -151,13 +152,13 @@ inline void DrawPosetailWindow(PosetailWindowState &st, AppContext &ctx) {
         }
         ImGui::SetNextItemWidth(160);
         ImGui::SliderInt("N future frames to keep", &st.server_n_keep, 1,
-                         15);
+                         24);
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip(
-                "Server returns one 16-frame chunk per click: t=0 is the\n"
-                "seed (current frame), t=1..15 are future predictions.\n"
-                "This slider picks how many of those 15 to write into\n"
-                "annotations for frames [current+1 .. current+N].");
+                "The server returns one chunk of n_frames per click: t=0 is\n"
+                "the seed (current frame), the rest are future predictions.\n"
+                "This slider picks how many to write into annotations for\n"
+                "frames [current+1 .. current+N], up to n_frames-1.");
 
         // ── Run ──
         ImGui::SeparatorText("Run");
@@ -172,7 +173,7 @@ inline void DrawPosetailWindow(PosetailWindowState &st, AppContext &ctx) {
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip(
                 "Seed from the current frame's 3D keypoints of the active\n"
-                "animal, send all cameras x 16 frames to the server, and\n"
+                "animal, send all cameras x n_frames to the server, and\n"
                 "write the first N future-frame predictions (3D +\n"
                 "reprojected 2D) into annotations for that animal.\n"
                 "Requires all cameras to have frames in the display buffer.");

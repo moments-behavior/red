@@ -212,9 +212,25 @@ inline void posetail_handle_requests(PosetailWindowState &st,
                                    joints_total, num_cams, instance_id);
     };
 
-    // ── One 16-frame chunk ──
-    rt.server.url = st.server_url;
-    const int T = posetail_detail::T_CHUNK;
+    // ── One chunk of n_frames (the model's, from /info) ──
+    // Probe first if this URL has not been probed: the chunk length and crop
+    // size come from the server, not from red.
+    if (rt.server.url != st.server_url || rt.server.n_frames <= 0) {
+        rt.server.url = st.server_url;
+        bool ok = posetail_server_probe(rt.server);
+        st.server_status = rt.server.status;
+        st.server_n_frames = rt.server.n_frames;
+        st.server_image_size = rt.server.image_size;
+        st.server_device = rt.server.device;
+        st.server_mode_3d = rt.server.mode_3d;
+        if (!ok) {
+            st.last_result = rt.server.status;
+            st.last_result_ok = false;
+            ctx.toasts.pushError(st.last_result);
+            return;
+        }
+    }
+    const int T = rt.server.n_frames;
 
     std::deque<std::vector<uint8_t>> scratch;
     std::vector<const uint8_t *> frames((size_t)num_cams * T, nullptr);
@@ -250,8 +266,11 @@ inline void posetail_handle_requests(PosetailWindowState &st,
         printf("[PoseTail/server] FAILED: %s\n", chunk.error.c_str());
         return;
     }
-    // t=0 is the seed; write t=1..n_keep.
+    // t=0 is the seed; write t=1..n_keep. A chunk holds T-1 future frames.
     const int n_keep = std::clamp(st.server_n_keep, 1, T - 1);
+    if (n_keep < st.server_n_keep)
+        printf("[PoseTail/server] Model predicts %d frames ahead; keeping %d "
+               "of the %d asked for\n", T - 1, n_keep, st.server_n_keep);
     for (int t = 1; t <= n_keep && t < (int)chunk.kp3d.size(); ++t) {
         FrameAnnotation &fa = future_frame(t);
         for (int q = 0; q < (int)seed_node_idx.size() &&
