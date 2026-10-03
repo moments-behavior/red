@@ -573,13 +573,6 @@ int main(int argc, char **argv) {
                 [&]() { DrawTracktailWindow(win.tracktail, ctx); },
                 nullptr});
 
-    // Helper: seek by a signed multiplier of the seek interval.
-    auto seek_relative = [&](int multiplier) {
-        int target = std::clamp(current_frame_num + multiplier * dc_context->seek_interval,
-                                0, std::max(0, dc_context->total_num_frame - 1));
-        seek_all_cameras(scene, target, dc_context->video_fps, ps, false);
-    };
-
     main_loop_running = true;
     while (!glfwWindowShouldClose(window->render_target)) {
         // Poll and handle events (inputs, window resize, etc.)
@@ -886,10 +879,43 @@ int main(int argc, char **argv) {
                 }
             }
 
+            // The last frame there is, when known. Neither key below may
+            // select past it: the ring has size_of_buffer slots whatever the
+            // timeline's length, and near the end the extra ones hold nothing.
+            const int last_frame =
+                dc_context->total_num_frame > 0 &&
+                        dc_context->total_num_frame < INT_MAX
+                    ? dc_context->total_num_frame - 1
+                    : INT_MAX;
+
             if (keys::pressed(keys::Sc::BufferNext)) {
-                if (ps.pause_selected < (int)scene->size_of_buffer - 1) {
+                if (ps.pause_selected < (int)scene->size_of_buffer - 1 &&
+                    ps.to_display_frame_number + ps.pause_selected < last_frame) {
                     ps.pause_selected++;
                     selection_changed = true;
+                }
+            }
+
+            // Left / Right: one frame (ten with Shift), paused only. Inside
+            // the decoded buffer that is a selection move, as , and . are;
+            // past either end it is an exact seek, so stepping carries on
+            // beyond what has been decoded instead of stopping at its edge.
+            int step = 0;
+            if (keys::pressed(keys::Sc::SeekBack)) step = -1;
+            if (keys::pressed(keys::Sc::SeekFwd)) step = 1;
+            if (step != 0) {
+                if (ImGui::GetIO().KeyShift) step *= 10;
+                const int cur = ps.to_display_frame_number + ps.pause_selected;
+                const int target = std::clamp(cur + step, 0, last_frame);
+                const int offset = target - ps.to_display_frame_number;
+                if (target != cur) {
+                    if (offset >= 0 && offset < (int)scene->size_of_buffer) {
+                        ps.pause_selected = offset;
+                        selection_changed = true;
+                    } else {
+                        seek_all_cameras(scene, target, dc_context->video_fps,
+                                         ps, true);
+                    }
                 }
             }
 
@@ -1646,13 +1672,6 @@ int main(int argc, char **argv) {
             }
 
 
-            if (keys::pressed(keys::Sc::SeekBack)) {
-                seek_relative(ImGui::GetIO().KeyShift ? -10 : -1);
-            }
-
-            if (keys::pressed(keys::Sc::SeekFwd)) {
-                seek_relative(ImGui::GetIO().KeyShift ? 10 : 1);
-            }
 
             for (const auto &[name, flag] : window_need_decoding) {
                 window_was_decoding[name] = flag.load();

@@ -71,8 +71,8 @@ inline const std::vector<Group> &shortcut_groups() {
         {"Global", "Available any time", Gate::Always, {
             {S::ToggleHelp, nullptr, "Toggle this Help window"},
             {S::PlayPause, nullptr, "Play / pause"},
-            {S::SeekBack, nullptr, "Step back one frame", Gate::Always, "Hold Shift for x10"},
-            {S::SeekFwd, nullptr, "Step forward one frame", Gate::Always, "Hold Shift for x10"},
+            {S::SeekBack, nullptr, "Step back one frame (paused)", Gate::Always, "Hold Shift for x10; holding the key repeats"},
+            {S::SeekFwd, nullptr, "Step forward one frame (paused)", Gate::Always, "Hold Shift for x10; holding the key repeats"},
             {S::SaveLabels, nullptr, "Save labels (writes a new timestamped labeled_data folder)"},
         }},
         {"When paused", "Stepping through the frame buffer", Gate::Always, {

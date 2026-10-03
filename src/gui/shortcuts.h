@@ -70,8 +70,8 @@ inline const Binding &binding(Sc s) {
     static const Binding table[] = {
         /* ToggleHelp     */ {ImGuiKey_H, false, false, false, false},
         /* PlayPause      */ {ImGuiKey_Space, false, false, false, false},
-        /* SeekBack       */ {ImGuiKey_LeftArrow, false, false, false, false},
-        /* SeekFwd        */ {ImGuiKey_RightArrow, false, false, false, false},
+        /* SeekBack       */ {ImGuiKey_LeftArrow, false, false, true, false},
+        /* SeekFwd        */ {ImGuiKey_RightArrow, false, false, true, false},
         /* SaveLabels     */ {ImGuiKey_S, true, false, false, false},
         /* BufferPrev     */ {ImGuiKey_Comma, false, false, true, false},
         /* BufferNext     */ {ImGuiKey_Period, false, false, true, false},
