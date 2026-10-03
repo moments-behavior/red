@@ -167,9 +167,21 @@ inline void DrawSkeletonCreatorWindow(SkeletonCreatorState &st, AppContext &ctx)
         }
         ImGui::EndDisabled();
 
+        // Editor on the left, its nodes on the right; drag the divider
+        // between them to share the width.
+        const float editor_h = 400.0f;
+        const bool layout = ImGui::BeginTable(
+            "##skel_layout", 2,
+            ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersInnerV);
+        if (layout) {
+            ImGui::TableSetupColumn("editor", ImGuiTableColumnFlags_WidthStretch, 0.6f);
+            ImGui::TableSetupColumn("nodes", ImGuiTableColumnFlags_WidthStretch, 0.4f);
+            ImGui::TableNextColumn();
+        }
+
         // NoMenus/NoBoxSelect: right-click belongs to the nodes here, not to
         // ImPlot's own context menu and box zoom.
-        if (ImPlot::BeginPlot("##skelcreator", ImVec2(-1, 400),
+        if (ImPlot::BeginPlot("##skelcreator", ImVec2(-1, editor_h),
                               ImPlotFlags_Equal | ImPlotFlags_NoMenus |
                                   ImPlotFlags_NoBoxSelect)) {
             ImPlot::SetupAxes("", "");
@@ -258,6 +270,42 @@ inline void DrawSkeletonCreatorWindow(SkeletonCreatorState &st, AppContext &ctx)
             ImPlot::EndPlot();
         }
 
+        if (layout) {
+            ImGui::TableNextColumn();
+            // Same height as the editor, scrolling past it.
+            if (ImGui::BeginTable("##skelnodes", 3,
+                                  ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+                                      ImGuiTableFlags_ScrollY,
+                                  ImVec2(0, editor_h))) {
+                ImGui::TableSetupScrollFreeze(0, 1);
+                ImGui::TableSetupColumn("ID", ImGuiTableColumnFlags_WidthFixed, 30.0f);
+                ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch);
+                ImGui::TableSetupColumn("Position", ImGuiTableColumnFlags_WidthFixed,
+                                        100.0f);
+                ImGui::TableHeadersRow();
+                for (size_t i = 0; i < st.nodes.size(); i++) {
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0);
+                    ImGui::Text("%d", st.nodes[i].id);
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::PushID((int)i);
+                    ImGui::SetNextItemWidth(-FLT_MIN);
+                    ImGui::InputText("##name", &st.nodes[i].name);
+                    ImGui::PopID();
+                    ImGui::TableSetColumnIndex(2);
+                    ImGui::Text("%.3f, %.3f", st.nodes[i].position.x,
+                                st.nodes[i].position.y);
+                }
+                if (st.nodes.empty()) {
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::TextDisabled("No nodes yet");
+                }
+                ImGui::EndTable();
+            }
+            ImGui::EndTable();
+        }
+
         // Right-click menu for one node.
         if (st.open_menu) {
             ImGui::OpenPopup("##skel_node_menu");
@@ -322,32 +370,6 @@ inline void DrawSkeletonCreatorWindow(SkeletonCreatorState &st, AppContext &ctx)
         ImGui::BulletText(RED_MOD_KEY "+Click two nodes to join or unjoin them");
         ImGui::BulletText("Esc cancels a pending join");
         ImGui::BulletText("R while hovering a node deletes it and its edges");
-
-        if (!st.nodes.empty()) {
-            ImGui::SeparatorText("Nodes");
-            if (ImGui::BeginTable("##skelnodes", 3,
-                                  ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
-                ImGui::TableSetupColumn("ID", ImGuiTableColumnFlags_WidthFixed, 40.0f);
-                ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch);
-                ImGui::TableSetupColumn("Position", ImGuiTableColumnFlags_WidthFixed,
-                                        120.0f);
-                ImGui::TableHeadersRow();
-                for (size_t i = 0; i < st.nodes.size(); i++) {
-                    ImGui::TableNextRow();
-                    ImGui::TableSetColumnIndex(0);
-                    ImGui::Text("%d", st.nodes[i].id);
-                    ImGui::TableSetColumnIndex(1);
-                    ImGui::PushID((int)i);
-                    ImGui::SetNextItemWidth(-FLT_MIN);
-                    ImGui::InputText("##name", &st.nodes[i].name);
-                    ImGui::PopID();
-                    ImGui::TableSetColumnIndex(2);
-                    ImGui::Text("%.3f, %.3f", st.nodes[i].position.x,
-                                st.nodes[i].position.y);
-                }
-                ImGui::EndTable();
-            }
-        }
 
         if (!st.status.empty())
             ImGui::TextDisabled("%s", st.status.c_str());
