@@ -860,11 +860,29 @@ int main(int argc, char **argv) {
         }
 
         static int select_corr_head = 0;
+        // Playing: an arrow seek recorded while paused is moot.
+        if (ps.play_video) ps.pending_seek = -1;
+
         if (ps.video_loaded && (!ps.play_video)) {
 
             // Frame buffer keyboard navigation — global so it works
             // even when the "Frames in the buffer" tab is hidden.
             bool selection_changed = false;
+
+            // An arrow seek recorded last frame, which was drawn with the
+            // Frame Buffer outlined in red: run it now. While it blocks, that
+            // red frame is what is on screen. If it is slow, the arrow presses
+            // made meanwhile arrive on the next frame, which drops them.
+            if (ps.pending_seek >= 0) {
+                const int target = ps.pending_seek;
+                ps.pending_seek = -1;
+                const auto t0 = std::chrono::steady_clock::now();
+                seek_all_cameras(scene, target, dc_context->video_fps, ps,
+                                 ps.pending_seek_accurate);
+                if (std::chrono::steady_clock::now() - t0 >
+                    std::chrono::milliseconds(100))
+                    ps.drop_arrows_on_frame = ImGui::GetFrameCount() + 1;
+            }
 
             // Clamp just in case
             if (ps.pause_selected < 0)
@@ -920,8 +938,8 @@ int main(int argc, char **argv) {
             // so each would run another blocking seek; drop them all instead
             // -- this frame's and those still queued -- so what happens
             // matches what could be seen happening.
-            if (ps.drop_stale_arrows) {
-                ps.drop_stale_arrows = false;
+            if (ps.drop_arrows_on_frame == ImGui::GetFrameCount()) {
+                ps.drop_arrows_on_frame = -1;
                 keys::drain_queued_arrows(jump_frames, nullptr);
                 step = 0;
             }
@@ -934,15 +952,13 @@ int main(int argc, char **argv) {
                         ps.pause_selected = offset;
                         selection_changed = true;
                     } else {
-                        // A video jump lands on the keyframe (fast); anything
-                        // that includes a single step must land on the frame
-                        // itself (exact).
-                        const auto t0 = std::chrono::steady_clock::now();
-                        seek_all_cameras(scene, target, dc_context->video_fps,
-                                         ps, !(only_jumps && !ctx.input_is_imgs));
-                        ps.drop_stale_arrows =
-                            std::chrono::steady_clock::now() - t0 >
-                            std::chrono::milliseconds(100);
+                        // Run next frame (above), once this one -- outlined
+                        // red -- is on screen. A video jump lands on the
+                        // keyframe (fast); anything with a single step must
+                        // land on the frame itself (exact).
+                        ps.pending_seek = target;
+                        ps.pending_seek_accurate =
+                            !(only_jumps && !ctx.input_is_imgs);
                     }
                 }
             }

@@ -35,9 +35,15 @@ struct PlaybackState {
     bool falling_behind = false;
     double behind_since = -1.0;   // ImGui::GetTime() when the gap opened, or -1
     bool slider_text_editing = false;  // true while user is typing in slider
-    // An arrow-key seek just took over ~100 ms, holding the main thread: the
-    // arrow presses made meanwhile arrive next frame and are dropped there.
-    bool drop_stale_arrows = false;
+    // An arrow-key seek past the decoded buffer, waiting to run. It is
+    // recorded on the frame of the key press -- that frame is drawn with a red
+    // border round the Frame Buffer -- and run at the start of the next one,
+    // so the red is what stays on screen while the seek blocks the thread.
+    int pending_seek = -1;
+    bool pending_seek_accurate = true;
+    // After an arrow seek that held the main thread over ~100 ms: the frame
+    // on which the presses made during it arrive, and are dropped. -1 = none.
+    int drop_arrows_on_frame = -1;
 };
 
 bool string_ends_with(const std::string &str, const std::string &suffix);

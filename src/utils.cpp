@@ -184,7 +184,8 @@ void seek_all_cameras(RenderScene *scene, int frame_number, double video_fps,
         scene->seek_context[i].seek_done = false;
     }
 
-    // Update playback state
+    // Update playback state. Any arrow seek still waiting is superseded.
+    state.pending_seek = -1;
     state.to_display_frame_number = scene->seek_context[0].seek_frame;
     state.pause_selected = 0;
     state.read_head = 0;
