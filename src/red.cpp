@@ -1751,6 +1751,29 @@ int main(int argc, char **argv) {
                     //     but never past what the decoder has filled ---
                     frame_to_show = ps.to_display_frame_number + 1;
                 }
+                // Is decoding keeping up? The clock's frame (capped at the
+                // last one, so reaching the end does not count) against what
+                // the decoders allow. Keeping up, the gap stays near one
+                // frame; not keeping up, it opens and grows. Half a second of
+                // video behind for over a second counts -- a frame count per
+                // window, which inst_speed is, jitters at slow speeds (1/4x is
+                // under four frames per half second) and read as a shortfall.
+                if (ps.realtime_playback) {
+                    const int clock_frame =
+                        std::min(frame_to_show, dc_context->total_num_frame - 1);
+                    const int gap = clock_frame - std::min(clock_frame,
+                                                           min_decoded_frame);
+                    const double half_second = std::max(
+                        2.0, 0.5 * dc_context->video_fps * ps.set_playback_speed);
+                    const double t = ImGui::GetTime();
+                    if (gap > half_second) {
+                        if (ps.behind_since < 0) ps.behind_since = t;
+                        ps.falling_behind = t - ps.behind_since > 1.0;
+                    } else {
+                        ps.behind_since = -1.0;
+                        ps.falling_behind = false;
+                    }
+                }
                 frame_to_show = std::min(frame_to_show, min_decoded_frame);
                 frame_to_show =
                     std::min(frame_to_show, dc_context->total_num_frame - 1);

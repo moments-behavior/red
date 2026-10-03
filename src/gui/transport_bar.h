@@ -662,8 +662,7 @@ inline void DrawTransportBar(TransportBarState &state, AppContext &ctx) {
             // Play Speed falling short of the speed asked for: decoding cannot
             // keep up. Said in colour, and how to help in the tooltip.
             const bool lagging = i == 1 && ps.play_video &&
-                                 ps.realtime_playback &&
-                                 ps.inst_speed < 0.9 * ps.set_playback_speed;
+                                 ps.realtime_playback && ps.falling_behind;
             if (lagging)
                 ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f), "%s",
                                    items[i].value);

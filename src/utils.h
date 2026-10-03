@@ -29,6 +29,11 @@ struct PlaybackState {
     bool realtime_playback = true;
     float set_playback_speed = 1.0f;
     double inst_speed = 1.0;
+    // Playing to the clock and not keeping up: the frame on screen has been
+    // more than half a second of video behind the clock for over a second.
+    // Set in the render loop; the transport bar colours Play Speed with it.
+    bool falling_behind = false;
+    double behind_since = -1.0;   // ImGui::GetTime() when the gap opened, or -1
     bool slider_text_editing = false;  // true while user is typing in slider
 };
 
