@@ -69,6 +69,8 @@ struct SkeletonCreatorState {
     // scaled to fit the pad with its proportions kept.
     ImageTexture background;
     float background_opacity = 0.5f;
+    // Show the whole pad (0..1) next frame -- on first open and on Reset View.
+    bool reset_view = true;
 };
 
 // The .json red loads: names and edges by index, plus positions so this window
@@ -172,6 +174,10 @@ inline void DrawSkeletonCreatorWindow(SkeletonCreatorState &st, AppContext &ctx)
         }
         ImGui::EndDisabled();
         ImGui::SameLine();
+        if (ImGui::Button("Reset View")) st.reset_view = true;
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+            ImGui::SetTooltip("Show the whole pad again after zooming or panning");
+        ImGui::SameLine();
         if (ImGui::Button("Background Image...")) {
             IGFD::FileDialogConfig cfg;
             cfg.countSelectionMax = 1;
@@ -197,11 +203,11 @@ inline void DrawSkeletonCreatorWindow(SkeletonCreatorState &st, AppContext &ctx)
         // Editor on the left, its nodes on the right; drag the divider
         // between them to share the width.
         // What sits below the pad: the splitter, a pending-join hint, the Help
-        // heading and its six bullets, and a status line. Reserved whether or
+        // heading and its seven bullets, and a status line. Reserved whether or
         // not the hint and status are showing, so the pad does not jump.
         const float line_h = ImGui::GetTextLineHeightWithSpacing();
         const ImGuiStyle &style = ImGui::GetStyle();
-        const float below = 6.0f + 9.0f * line_h + 2.0f * style.ItemSpacing.y +
+        const float below = 6.0f + 10.0f * line_h + 2.0f * style.ItemSpacing.y +
                             style.SeparatorTextPadding.y * 2.0f;
         const float fit_h = ImGui::GetContentRegionAvail().y - below;
         const float editor_h =
@@ -217,12 +223,25 @@ inline void DrawSkeletonCreatorWindow(SkeletonCreatorState &st, AppContext &ctx)
 
         // NoMenus/NoBoxSelect: right-click belongs to the nodes here, not to
         // ImPlot's own context menu and box zoom.
+        //
+        // Zoom with the scroll wheel; pan by RIGHT-dragging, since the left
+        // button already adds and drags nodes. Double-click-to-fit moves to
+        // the middle button so a double-click on the pad does not refit the
+        // view under the node it just added. The input map is global to
+        // ImPlot, so it is swapped in for this plot only and restored after.
+        ImPlotInputMap &input = ImPlot::GetInputMap();
+        const ImPlotInputMap saved_input = input;
+        input.Pan = ImGuiMouseButton_Right;
+        input.PanMod = ImGuiMod_None;
+        input.Fit = ImGuiMouseButton_Middle;
         if (ImPlot::BeginPlot("##skelcreator", ImVec2(-1, editor_h),
                               ImPlotFlags_Equal | ImPlotFlags_NoMenus |
                                   ImPlotFlags_NoBoxSelect)) {
             ImPlot::SetupAxes("", "");
-            ImPlot::SetupAxisLimits(ImAxis_X1, 0.0, 1.0, ImGuiCond_Always);
-            ImPlot::SetupAxisLimits(ImAxis_Y1, 0.0, 1.0, ImGuiCond_Always);
+            ImPlot::SetupAxesLimits(0.0, 1.0, 0.0, 1.0,
+                                    st.reset_view ? ImPlotCond_Always
+                                                  : ImPlotCond_Once);
+            st.reset_view = false;
             ImPlot::SetupAxisTicks(ImAxis_X1, nullptr, 0);
             ImPlot::SetupAxisTicks(ImAxis_Y1, nullptr, 0);
 
@@ -319,6 +338,7 @@ inline void DrawSkeletonCreatorWindow(SkeletonCreatorState &st, AppContext &ctx)
             }
             ImPlot::EndPlot();
         }
+        input = saved_input;
 
         if (layout) {
             ImGui::TableNextColumn();
@@ -451,6 +471,7 @@ inline void DrawSkeletonCreatorWindow(SkeletonCreatorState &st, AppContext &ctx)
         ImGui::SeparatorText("Help");
         ImGui::BulletText("Click empty space to add a node");
         ImGui::BulletText("Drag a node to move it");
+        ImGui::BulletText("Scroll to zoom, right-drag to pan, Reset View to see it all");
         ImGui::BulletText("Right-click a node to rename, join, unjoin or delete it");
         ImGui::BulletText(RED_MOD_KEY "+Click two nodes to join or unjoin them");
         ImGui::BulletText("Esc cancels a pending join");
