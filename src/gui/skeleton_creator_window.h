@@ -53,7 +53,6 @@ struct SkeletonCreatorState {
     int next_node_id = 0;
     int selected_for_edge = -1;
     std::string name = "CustomSkeleton";
-    bool has_bbox = false;
     std::string status;
     // Right-click menu: the node it is for, and a request to open it raised
     // inside the plot and acted on after EndPlot, where the popup lives.
@@ -71,7 +70,6 @@ inline nlohmann::json skeleton_creator_to_json(const SkeletonCreatorState &st) {
     nlohmann::json j;
     j["name"] = st.name;
     j["has_skeleton"] = true;
-    j["has_bbox"] = st.has_bbox;
     j["num_nodes"] = (int)st.nodes.size();
 
     std::vector<std::string> names;
@@ -136,8 +134,6 @@ inline void DrawSkeletonCreatorWindow(SkeletonCreatorState &st, AppContext &ctx)
         ImGui::SeparatorText("Skeleton");
         ImGui::SetNextItemWidth(240.0f);
         ImGui::InputText("Name", &st.name);
-        ImGui::SameLine();
-        ImGui::Checkbox("Has bounding box", &st.has_bbox);
 
         ImGui::SeparatorText("Editor");
         if (ImGui::Button("Clear All")) {
@@ -445,7 +441,6 @@ inline void DrawSkeletonCreatorWindow(SkeletonCreatorState &st, AppContext &ctx)
                     st.selected_for_edge = -1;
                     st.next_node_id = 0;
                     if (j.contains("name")) st.name = j["name"].get<std::string>();
-                    if (j.contains("has_bbox")) st.has_bbox = j["has_bbox"].get<bool>();
 
                     std::vector<std::string> names =
                         j.value("node_names", std::vector<std::string>{});
