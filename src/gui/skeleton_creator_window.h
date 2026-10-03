@@ -17,6 +17,7 @@
 #include "image_texture.h"
 #include "video_files.h"
 #include "imgui.h"
+#include "imgui_internal.h"  // SeparatorEx
 #include "implot.h"
 #include "json.hpp"
 #include "misc/cpp/imgui_stdlib.h"
@@ -173,10 +174,10 @@ inline void DrawSkeletonCreatorWindow(SkeletonCreatorState &st, AppContext &ctx)
                                                     "Save Skeleton", ".json", cfg);
         }
         ImGui::EndDisabled();
+        // The skeleton file on the left of the line, the tracing picture on
+        // the right.
         ImGui::SameLine();
-        if (ImGui::Button("Reset View")) st.reset_view = true;
-        if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
-            ImGui::SetTooltip("Show the whole pad again after zooming or panning");
+        ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
         ImGui::SameLine();
         if (ImGui::Button("Background Image...")) {
             IGFD::FileDialogConfig cfg;
@@ -193,7 +194,15 @@ inline void DrawSkeletonCreatorWindow(SkeletonCreatorState &st, AppContext &ctx)
                               "It is not saved with the skeleton.");
         if (st.background.valid()) {
             ImGui::SameLine();
-            if (ImGui::Button("Clear Image")) image_texture_free(&st.background);
+            if (ImGui::Button("Clear Image")) {
+                image_texture_free(&st.background);
+                st.reset_view = true;
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Reset View")) st.reset_view = true;
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+                ImGui::SetTooltip("Show the whole pad again after zooming or "
+                                  "panning");
             ImGui::SameLine();
             ImGui::SetNextItemWidth(120.0f);
             ImGui::SliderFloat("Opacity", &st.background_opacity, 0.1f, 1.0f,
@@ -229,15 +238,27 @@ inline void DrawSkeletonCreatorWindow(SkeletonCreatorState &st, AppContext &ctx)
         // the middle button so a double-click on the pad does not refit the
         // view under the node it just added. The input map is global to
         // ImPlot, so it is swapped in for this plot only and restored after.
+        //
+        // Only with a background image: there is nothing to look closer at on
+        // an empty pad, and the view stays pinned to 0..1 without one.
+        const bool can_zoom = st.background.valid();
+        if (!can_zoom) st.reset_view = true;
         ImPlotInputMap &input = ImPlot::GetInputMap();
         const ImPlotInputMap saved_input = input;
         input.Pan = ImGuiMouseButton_Right;
         input.PanMod = ImGuiMod_None;
         input.Fit = ImGuiMouseButton_Middle;
+        if (!can_zoom) input.ZoomRate = 0.0f;
         if (ImPlot::BeginPlot("##skelcreator", ImVec2(-1, editor_h),
                               ImPlotFlags_Equal | ImPlotFlags_NoMenus |
                                   ImPlotFlags_NoBoxSelect)) {
-            ImPlot::SetupAxes("", "");
+            // The axes carry no ticks and the view is locked (or panned with
+            // the mouse on the pad itself), so their hover highlight along the
+            // left and bottom edges promised a drag that did nothing.
+            const ImPlotAxisFlags axf =
+                ImPlotAxisFlags_NoDecorations | ImPlotAxisFlags_NoHighlight |
+                ImPlotAxisFlags_NoMenus;
+            ImPlot::SetupAxes("", "", axf, axf);
             ImPlot::SetupAxesLimits(0.0, 1.0, 0.0, 1.0,
                                     st.reset_view ? ImPlotCond_Always
                                                   : ImPlotCond_Once);
@@ -273,8 +294,10 @@ inline void DrawSkeletonCreatorWindow(SkeletonCreatorState &st, AppContext &ctx)
             }
 
             if (st.nodes.empty()) {
+                // Yellow, as the pending-join prompt is: it is the one thing
+                // to do on an empty pad.
                 ImPlot::PushStyleColor(ImPlotCol_InlayText,
-                                       ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+                                       ImVec4(1.0f, 1.0f, 0.0f, 1.0f));
                 ImPlot::PlotText("Click here to add a node", 0.5, 0.5);
                 ImPlot::PopStyleColor();
             }
@@ -471,7 +494,8 @@ inline void DrawSkeletonCreatorWindow(SkeletonCreatorState &st, AppContext &ctx)
         ImGui::SeparatorText("Help");
         ImGui::BulletText("Click empty space to add a node");
         ImGui::BulletText("Drag a node to move it");
-        ImGui::BulletText("Scroll to zoom, right-drag to pan, Reset View to see it all");
+        ImGui::BulletText("With a background image: scroll to zoom, right-drag "
+                          "to pan, Reset View to see it all");
         ImGui::BulletText("Right-click a node to rename, join, unjoin or delete it");
         ImGui::BulletText(RED_MOD_KEY "+Click two nodes to join or unjoin them");
         ImGui::BulletText("Esc cancels a pending join");
