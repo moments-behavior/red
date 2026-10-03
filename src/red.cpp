@@ -896,15 +896,23 @@ int main(int argc, char **argv) {
                 }
             }
 
-            // Left / Right: one frame (ten with Shift), paused only. Inside
-            // the decoded buffer that is a selection move, as , and . are;
-            // past either end it is an exact seek, so stepping carries on
-            // beyond what has been decoded instead of stopping at its edge.
+            // Left / Right: one frame. Up / Down: a jump -- one keyframe
+            // interval on video, landing on the keyframe, the cheapest place
+            // to seek to; ten frames on images, which have no keyframes and
+            // seek anywhere as cheaply. Paused only. Inside the decoded buffer
+            // a move is a selection change, as , and . are; past either end
+            // it is a seek, so stepping carries on beyond what is decoded.
             int step = 0;
+            bool jump = false;
             if (keys::pressed(keys::Sc::SeekBack)) step = -1;
             if (keys::pressed(keys::Sc::SeekFwd)) step = 1;
+            if (keys::pressed(keys::Sc::JumpBack)) { step = -1; jump = true; }
+            if (keys::pressed(keys::Sc::JumpFwd)) { step = 1; jump = true; }
             if (step != 0) {
-                if (ImGui::GetIO().KeyShift) step *= 10;
+                if (jump)
+                    step *= ctx.input_is_imgs
+                                ? 10
+                                : std::max(1, dc_context->seek_interval);
                 const int cur = ps.to_display_frame_number + ps.pause_selected;
                 const int target = std::clamp(cur + step, 0, last_frame);
                 const int offset = target - ps.to_display_frame_number;
@@ -913,8 +921,10 @@ int main(int argc, char **argv) {
                         ps.pause_selected = offset;
                         selection_changed = true;
                     } else {
+                        // A video jump lands on the keyframe (fast); a single
+                        // step must land on the frame itself (exact).
                         seek_all_cameras(scene, target, dc_context->video_fps,
-                                         ps, true);
+                                         ps, !(jump && !ctx.input_is_imgs));
                     }
                 }
             }

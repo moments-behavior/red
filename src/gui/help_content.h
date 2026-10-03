@@ -71,8 +71,10 @@ inline const std::vector<Group> &shortcut_groups() {
         {"Global", "Available any time", Gate::Always, {
             {S::ToggleHelp, nullptr, "Toggle this Help window"},
             {S::PlayPause, nullptr, "Play / pause"},
-            {S::SeekBack, nullptr, "Step back one frame (paused)", Gate::Always, "Hold Shift for x10; holding the key repeats"},
-            {S::SeekFwd, nullptr, "Step forward one frame (paused)", Gate::Always, "Hold Shift for x10; holding the key repeats"},
+            {S::SeekBack, nullptr, "Step back one frame (paused)", Gate::Always, "Holding the key repeats"},
+            {S::SeekFwd, nullptr, "Step forward one frame (paused)", Gate::Always, "Holding the key repeats"},
+            {S::JumpBack, nullptr, "Jump back (paused)", Gate::Always, "One keyframe interval for video, ten frames for images"},
+            {S::JumpFwd, nullptr, "Jump forward (paused)", Gate::Always, "One keyframe interval for video, ten frames for images"},
             {S::SaveLabels, nullptr, "Save labels (writes a new timestamped labeled_data folder)"},
         }},
         {"When paused", "Stepping through the frame buffer", Gate::Always, {
@@ -209,7 +211,7 @@ inline const std::vector<Workflow> &workflows() {
             "Create Project \xE2\x80\x94 videos load, one decoder per camera.",
         }},
         {"Label a frame", {
-            "Navigate to a frame (Space, the arrow keys, Shift+arrow for x10, or the timeline).",
+            "Navigate to a frame (Space, Left/Right for one frame, Up/Down to jump, or the timeline).",
             "Hover a camera view. Press W to place the active keypoint; A/D switch which node is active.",
             "Place the same keypoint in \xE2\x89\xA5 2 cameras, then press T (or Triangulate) for the 3D point.",
             "Prev/Next jump between labeled frames; Copy Prev seeds from the previous labeled frame.",

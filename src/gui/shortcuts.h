@@ -33,6 +33,8 @@ enum class Sc {
     PlayPause,
     SeekBack,
     SeekFwd,
+    JumpBack,       // a keyframe interval back (video), ten frames (images)
+    JumpFwd,
     SaveLabels,
     BufferPrev,
     BufferNext,
@@ -72,6 +74,8 @@ inline const Binding &binding(Sc s) {
         /* PlayPause      */ {ImGuiKey_Space, false, false, false, false},
         /* SeekBack       */ {ImGuiKey_LeftArrow, false, false, true, false},
         /* SeekFwd        */ {ImGuiKey_RightArrow, false, false, true, false},
+        /* JumpBack       */ {ImGuiKey_UpArrow, false, false, true, false},
+        /* JumpFwd        */ {ImGuiKey_DownArrow, false, false, true, false},
         /* SaveLabels     */ {ImGuiKey_S, true, false, false, false},
         /* BufferPrev     */ {ImGuiKey_Comma, false, false, true, false},
         /* BufferNext     */ {ImGuiKey_Period, false, false, true, false},
