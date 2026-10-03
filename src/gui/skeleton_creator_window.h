@@ -142,7 +142,7 @@ inline void DrawSkeletonCreatorWindow(SkeletonCreatorState &st, AppContext &ctx)
     ImGuiIO &io = ImGui::GetIO();
 
     DrawPanel("Skeleton Creator", st.show, [&]() {
-        if (ImGui::Button("Clear All")) {
+        if (ImGui::Button("Clear Nodes")) {
             st.nodes.clear();
             st.edges.clear();
             st.next_node_id = 0;
