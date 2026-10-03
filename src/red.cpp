@@ -915,15 +915,17 @@ int main(int argc, char **argv) {
             take(keys::Sc::SeekFwd, ImGuiKey_RightArrow, false);
             take(keys::Sc::JumpBack, ImGuiKey_UpArrow, true);
             take(keys::Sc::JumpFwd, ImGuiKey_DownArrow, true);
+            // A slow seek held this thread, and the presses made during it
+            // have just arrived together. ImGui hands them out one per frame,
+            // so each would run another blocking seek; drop them all instead
+            // -- this frame's and those still queued -- so what happens
+            // matches what could be seen happening.
+            if (ps.drop_stale_arrows) {
+                ps.drop_stale_arrows = false;
+                keys::drain_queued_arrows(jump_frames, nullptr);
+                step = 0;
+            }
             if (step != 0) {
-                // Presses made while an earlier seek held this thread are
-                // still in ImGui's input queue, which hands out one per frame
-                // -- so each would run a blocking seek of its own, back to
-                // back. Fold them into this move instead: five presses of
-                // Right become one seek five frames on. Their key-downs are
-                // taken out of the queue; the key-ups stay, and are harmless.
-                step += keys::drain_queued_arrows(jump_frames, &only_jumps);
-
                 const int cur = ps.to_display_frame_number + ps.pause_selected;
                 const int target = std::clamp(cur + step, 0, last_frame);
                 const int offset = target - ps.to_display_frame_number;
@@ -935,8 +937,12 @@ int main(int argc, char **argv) {
                         // A video jump lands on the keyframe (fast); anything
                         // that includes a single step must land on the frame
                         // itself (exact).
+                        const auto t0 = std::chrono::steady_clock::now();
                         seek_all_cameras(scene, target, dc_context->video_fps,
                                          ps, !(only_jumps && !ctx.input_is_imgs));
+                        ps.drop_stale_arrows =
+                            std::chrono::steady_clock::now() - t0 >
+                            std::chrono::milliseconds(100);
                     }
                 }
             }

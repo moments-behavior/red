@@ -35,6 +35,9 @@ struct PlaybackState {
     bool falling_behind = false;
     double behind_since = -1.0;   // ImGui::GetTime() when the gap opened, or -1
     bool slider_text_editing = false;  // true while user is typing in slider
+    // An arrow-key seek just took over ~100 ms, holding the main thread: the
+    // arrow presses made meanwhile arrive next frame and are dropped there.
+    bool drop_stale_arrows = false;
 };
 
 bool string_ends_with(const std::string &str, const std::string &suffix);

@@ -182,11 +182,11 @@ inline int arrow_delta(ImGuiKey k, int jump_frames) {
 }
 
 // Arrow presses still waiting in ImGui's input queue -- made while a blocking
-// seek held the main thread, and handed out one per frame from here on --
-// taken out and summed, so the caller can make one move for all of them
-// rather than one blocking seek each. Only the key-downs are removed; their
-// key-ups stay and change nothing. *only_jumps is cleared if any of them was
-// Left/Right. Uses ImGui internals (the queue is not public API).
+// seek held the main thread, and otherwise handed out one per frame from here
+// on -- taken out, so they do not each run a seek. Returns the move they add
+// up to. Only the key-downs are removed; their key-ups stay and change
+// nothing. *only_jumps (optional) is cleared if any was Left/Right. Uses
+// ImGui internals (the queue is not public API).
 inline int drain_queued_arrows(int jump_frames, bool *only_jumps) {
     ImVector<ImGuiInputEvent> &q = ImGui::GetCurrentContext()->InputEventsQueue;
     int total = 0;
