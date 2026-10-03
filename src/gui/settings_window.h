@@ -131,6 +131,8 @@ inline void DrawSettingsWindow(SettingsState &state, AppContext &ctx) {
             // fast?") rather than a mode checkbox plus a rate slider.
             struct DefSpeed { const char *label; float speed; bool clock_paced; };
             static const DefSpeed kDefSpeeds[] = {
+                {"4x",             4.0f,        true},
+                {"2x",             2.0f,        true},
                 {"1x (real time)", 1.0f,        true},
                 {"1/2x",           1.0f / 2.0f,  true},
                 {"1/4x",           1.0f / 4.0f,  true},

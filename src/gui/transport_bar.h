@@ -329,6 +329,8 @@ inline void DrawTransportBar(TransportBarState &state, AppContext &ctx) {
     // mode: no clock, one frame per render tick, nothing skipped.
     struct SpeedChoice { const char *label; float speed; bool clock_paced; };
     static const SpeedChoice kSpeeds[] = {
+        {"4x",             4.0f,        true},
+        {"2x",             2.0f,        true},
         {"1x (real time)", 1.0f,        true},
         {"1/2x",           1.0f / 2.0f,  true},
         {"1/4x",           1.0f / 4.0f,  true},
@@ -371,8 +373,10 @@ inline void DrawTransportBar(TransportBarState &state, AppContext &ctx) {
     }
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip(
-            "1x and the fractions play to the wall clock, so timing is "
-            "accurate and frames are skipped if decoding lags.\n"
+            "The multiples play to the wall clock, so timing is accurate and "
+            "frames are skipped to keep up -- though every frame is still\n"
+            "decoded, so 2x and 4x need decoding that fast. Play Speed on the "
+            "right turns orange when it falls short.\n"
             "\"Every frame\" shows every decoded frame instead \xE2\x80\x94 nothing is "
             "skipped, but the rate depends on decoding speed.");
 
@@ -655,8 +659,29 @@ inline void DrawTransportBar(TransportBarState &state, AppContext &ctx) {
                 ImGui::TextColored(label_col, "%s", l);
                 ImGui::SameLine(0, spacing);
             }
-            ImGui::TextDisabled("%s", items[i].value);
+            // Play Speed falling short of the speed asked for: decoding cannot
+            // keep up. Said in colour, and how to help in the tooltip.
+            const bool lagging = i == 1 && ps.play_video &&
+                                 ps.realtime_playback &&
+                                 ps.inst_speed < 0.9 * ps.set_playback_speed;
+            if (lagging)
+                ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f), "%s",
+                                   items[i].value);
+            else
+                ImGui::TextDisabled("%s", items[i].value);
             if (!ImGui::IsItemHovered()) continue;
+            if (lagging) {
+                // Video decoders skip collapsed views; the image loader does
+                // not yet, so do not suggest what will not help.
+                ImGui::SetTooltip(
+                    "Asked for %gx, getting %.2fx: decoding can't keep up.\n%s",
+                    ps.set_playback_speed, ps.inst_speed,
+                    ctx.input_is_imgs
+                        ? "Pick a lower speed."
+                        : "Collapse camera views you don't need (hidden views "
+                          "are not decoded),\nor pick a lower speed.");
+                continue;
+            }
             if (i == 0 && !dc->fps_declared)
                 ImGui::SetTooltip("%sThis source declares no frame rate, so "
                                   "playback runs at an assumed %.1f fps. Change "
