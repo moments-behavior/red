@@ -59,6 +59,10 @@ struct SkeletonCreatorState {
     // inside the plot and acted on after EndPlot, where the popup lives.
     int menu_node = -1;
     bool open_menu = false;
+    // Height of the drawing pad (and the nodes table beside it). Dragging the
+    // splitter under them sets it; double-click goes back to the default.
+    static constexpr float kDefaultEditorHeight = 520.0f;
+    float editor_height = kDefaultEditorHeight;
 };
 
 // The .json red loads: names and edges by index, plus positions so this window
@@ -169,7 +173,7 @@ inline void DrawSkeletonCreatorWindow(SkeletonCreatorState &st, AppContext &ctx)
 
         // Editor on the left, its nodes on the right; drag the divider
         // between them to share the width.
-        const float editor_h = 400.0f;
+        const float editor_h = ImMax(st.editor_height, 200.0f);
         const bool layout = ImGui::BeginTable(
             "##skel_layout", 2,
             ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersInnerV);
@@ -304,6 +308,34 @@ inline void DrawSkeletonCreatorWindow(SkeletonCreatorState &st, AppContext &ctx)
                 ImGui::EndTable();
             }
             ImGui::EndTable();
+        }
+
+        // Splitter under the pad and the table, as under the Labeling Tool's
+        // keypoints table.
+        {
+            const float splitter_h = 6.0f;
+            ImGui::InvisibleButton("##skel_editor_splitter",
+                                   ImVec2(-1.0f, splitter_h));
+            const bool active = ImGui::IsItemActive();
+            const bool hover = ImGui::IsItemHovered();
+            if (active || hover)
+                ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
+            if (active)
+                st.editor_height = editor_h + ImGui::GetIO().MouseDelta.y;
+            if (hover && ImGui::IsMouseDoubleClicked(0))
+                st.editor_height = SkeletonCreatorState::kDefaultEditorHeight;
+            if (hover && !active)
+                ImGui::SetTooltip("Drag to resize the drawing pad, double-click "
+                                  "for the default height");
+            const ImVec2 mn = ImGui::GetItemRectMin();
+            const ImVec2 mx = ImGui::GetItemRectMax();
+            const float y = (mn.y + mx.y) * 0.5f;
+            const ImU32 col = ImGui::GetColorU32(
+                active  ? ImGuiCol_SeparatorActive
+                : hover ? ImGuiCol_SeparatorHovered
+                        : ImGuiCol_Separator);
+            ImGui::GetWindowDrawList()->AddLine(ImVec2(mn.x, y), ImVec2(mx.x, y),
+                                                col, active ? 3.0f : 2.0f);
         }
 
         // Right-click menu for one node.
@@ -445,5 +477,5 @@ inline void DrawSkeletonCreatorWindow(SkeletonCreatorState &st, AppContext &ctx)
             ImGuiFileDialog::Instance()->Close();
         }
         },
-        ImVec2(820, 640));
+        ImVec2(900, 780));
 }
