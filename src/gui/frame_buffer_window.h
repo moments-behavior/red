@@ -53,6 +53,17 @@ inline void DrawFrameBufferWindow(AppContext &ctx, int select_corr_head) {
                                              : 0;
             const bool total_known = total > 0 && total < INT_MAX;
 
+            // Keep the selected frame in view: centre its row whenever the
+            // selection moves from elsewhere -- the arrow keys, , and ., a
+            // seek, the timeline. Not after a click in this list: the row is
+            // already under the mouse, and scrolling it away from there would
+            // be the list moving under the click.
+            static int last_selected_frame = -1;
+            const int selected_frame =
+                ps.to_display_frame_number + ps.pause_selected;
+            const bool center_selected = selected_frame != last_selected_frame;
+            last_selected_frame = selected_frame;
+
             for (u32 i = 0; i < scene.size_of_buffer; i++) {
                 if (total_known &&
                     ps.to_display_frame_number + (int)i >= total)
@@ -112,8 +123,12 @@ inline void DrawFrameBufferWindow(AppContext &ctx, int select_corr_head) {
                                       ImVec2(item_w, item_h))) {
                     if (!is_selected) {
                         ps.pause_selected = (int)i;
+                        // Chosen here: next frame must not re-centre on it.
+                        last_selected_frame = frame_num;
                     }
                 }
+                if (is_selected && center_selected)
+                    ImGui::SetScrollHereY(0.5f);
 
                 // Label state, in the shared vocabulary (keypoint_colors.h),
                 // classified by the shared frame_kp_progress so this and the
