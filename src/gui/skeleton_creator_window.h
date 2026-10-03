@@ -58,10 +58,11 @@ struct SkeletonCreatorState {
     // inside the plot and acted on after EndPlot, where the popup lives.
     int menu_node = -1;
     bool open_menu = false;
-    // Height of the drawing pad (and the nodes table beside it). Dragging the
-    // splitter under them sets it; double-click goes back to the default.
-    static constexpr float kDefaultEditorHeight = 480.0f;
-    float editor_height = kDefaultEditorHeight;
+    // Height of the drawing pad (and the nodes table beside it), in pixels.
+    // 0 = fit the window: take whatever the help text below does not need,
+    // so none of it is pushed out of view. Dragging the splitter under them
+    // sets a height; double-click goes back to 0.
+    float editor_height = 0.0f;
 };
 
 // The .json red loads: names and edges by index, plus positions so this window
@@ -131,11 +132,9 @@ inline void DrawSkeletonCreatorWindow(SkeletonCreatorState &st, AppContext &ctx)
     ImGuiIO &io = ImGui::GetIO();
 
     DrawPanel("Skeleton Creator", st.show, [&]() {
-        ImGui::SeparatorText("Skeleton");
         ImGui::SetNextItemWidth(240.0f);
         ImGui::InputText("Name", &st.name);
 
-        ImGui::SeparatorText("Editor");
         if (ImGui::Button("Clear All")) {
             st.nodes.clear();
             st.edges.clear();
@@ -169,7 +168,16 @@ inline void DrawSkeletonCreatorWindow(SkeletonCreatorState &st, AppContext &ctx)
 
         // Editor on the left, its nodes on the right; drag the divider
         // between them to share the width.
-        const float editor_h = ImMax(st.editor_height, 200.0f);
+        // What sits below the pad: the splitter, a pending-join hint, the Help
+        // heading and its six bullets, and a status line. Reserved whether or
+        // not the hint and status are showing, so the pad does not jump.
+        const float line_h = ImGui::GetTextLineHeightWithSpacing();
+        const ImGuiStyle &style = ImGui::GetStyle();
+        const float below = 6.0f + 9.0f * line_h + 2.0f * style.ItemSpacing.y +
+                            style.SeparatorTextPadding.y * 2.0f;
+        const float fit_h = ImGui::GetContentRegionAvail().y - below;
+        const float editor_h =
+            ImMax(st.editor_height > 0.0f ? st.editor_height : fit_h, 200.0f);
         const bool layout = ImGui::BeginTable(
             "##skel_layout", 2,
             ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersInnerV);
@@ -319,10 +327,10 @@ inline void DrawSkeletonCreatorWindow(SkeletonCreatorState &st, AppContext &ctx)
             if (active)
                 st.editor_height = editor_h + ImGui::GetIO().MouseDelta.y;
             if (hover && ImGui::IsMouseDoubleClicked(0))
-                st.editor_height = SkeletonCreatorState::kDefaultEditorHeight;
+                st.editor_height = 0.0f;
             if (hover && !active)
                 ImGui::SetTooltip("Drag to resize the drawing pad, double-click "
-                                  "for the default height");
+                                  "to fit the window");
             const ImVec2 mn = ImGui::GetItemRectMin();
             const ImVec2 mx = ImGui::GetItemRectMax();
             const float y = (mn.y + mx.y) * 0.5f;
