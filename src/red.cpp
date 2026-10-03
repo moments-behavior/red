@@ -902,17 +902,28 @@ int main(int argc, char **argv) {
             // seek anywhere as cheaply. Paused only. Inside the decoded buffer
             // a move is a selection change, as , and . are; past either end
             // it is a seek, so stepping carries on beyond what is decoded.
+            const int jump_frames =
+                ctx.input_is_imgs ? 10 : std::max(1, dc_context->seek_interval);
             int step = 0;
-            bool jump = false;
-            if (keys::pressed(keys::Sc::SeekBack)) step = -1;
-            if (keys::pressed(keys::Sc::SeekFwd)) step = 1;
-            if (keys::pressed(keys::Sc::JumpBack)) { step = -1; jump = true; }
-            if (keys::pressed(keys::Sc::JumpFwd)) { step = 1; jump = true; }
+            bool only_jumps = true;   // every press was Up/Down
+            auto take = [&](keys::Sc sc, ImGuiKey k, bool is_jump) {
+                if (!keys::pressed(sc)) return;
+                step += keys::arrow_delta(k, jump_frames);
+                only_jumps = only_jumps && is_jump;
+            };
+            take(keys::Sc::SeekBack, ImGuiKey_LeftArrow, false);
+            take(keys::Sc::SeekFwd, ImGuiKey_RightArrow, false);
+            take(keys::Sc::JumpBack, ImGuiKey_UpArrow, true);
+            take(keys::Sc::JumpFwd, ImGuiKey_DownArrow, true);
             if (step != 0) {
-                if (jump)
-                    step *= ctx.input_is_imgs
-                                ? 10
-                                : std::max(1, dc_context->seek_interval);
+                // Presses made while an earlier seek held this thread are
+                // still in ImGui's input queue, which hands out one per frame
+                // -- so each would run a blocking seek of its own, back to
+                // back. Fold them into this move instead: five presses of
+                // Right become one seek five frames on. Their key-downs are
+                // taken out of the queue; the key-ups stay, and are harmless.
+                step += keys::drain_queued_arrows(jump_frames, &only_jumps);
+
                 const int cur = ps.to_display_frame_number + ps.pause_selected;
                 const int target = std::clamp(cur + step, 0, last_frame);
                 const int offset = target - ps.to_display_frame_number;
@@ -921,10 +932,11 @@ int main(int argc, char **argv) {
                         ps.pause_selected = offset;
                         selection_changed = true;
                     } else {
-                        // A video jump lands on the keyframe (fast); a single
-                        // step must land on the frame itself (exact).
+                        // A video jump lands on the keyframe (fast); anything
+                        // that includes a single step must land on the frame
+                        // itself (exact).
                         seek_all_cameras(scene, target, dc_context->video_fps,
-                                         ps, !(jump && !ctx.input_is_imgs));
+                                         ps, !(only_jumps && !ctx.input_is_imgs));
                     }
                 }
             }

@@ -12,6 +12,7 @@
 // keep literal labels in help_content.h.
 #include "IconsForkAwesome.h"
 #include <imgui.h>
+#include <imgui_internal.h>  // InputEventsQueue (drain_queued_arrows)
 #include <string>
 
 // What to call the modifier ImGui reports as Ctrl. On macOS ImGui swaps Cmd
@@ -166,6 +167,42 @@ inline std::string display(Sc s) {
     out += key_name(b.key);
     if (b.hold)  out += "  (hold)";
     return out;
+}
+
+// The frame move one arrow press makes: Left/Right one frame, Up/Down
+// `jump_frames`. 0 for any other key.
+inline int arrow_delta(ImGuiKey k, int jump_frames) {
+    switch (k) {
+    case ImGuiKey_LeftArrow:  return -1;
+    case ImGuiKey_RightArrow: return 1;
+    case ImGuiKey_UpArrow:    return -jump_frames;
+    case ImGuiKey_DownArrow:  return jump_frames;
+    default:                  return 0;
+    }
+}
+
+// Arrow presses still waiting in ImGui's input queue -- made while a blocking
+// seek held the main thread, and handed out one per frame from here on --
+// taken out and summed, so the caller can make one move for all of them
+// rather than one blocking seek each. Only the key-downs are removed; their
+// key-ups stay and change nothing. *only_jumps is cleared if any of them was
+// Left/Right. Uses ImGui internals (the queue is not public API).
+inline int drain_queued_arrows(int jump_frames, bool *only_jumps) {
+    ImVector<ImGuiInputEvent> &q = ImGui::GetCurrentContext()->InputEventsQueue;
+    int total = 0;
+    for (int n = 0; n < q.Size;) {
+        const ImGuiInputEvent &e = q[n];
+        const int d = e.Type == ImGuiInputEventType_Key && e.Key.Down
+                          ? arrow_delta(e.Key.Key, jump_frames)
+                          : 0;
+        if (d == 0) { ++n; continue; }
+        total += d;
+        if (only_jumps && e.Key.Key != ImGuiKey_UpArrow &&
+            e.Key.Key != ImGuiKey_DownArrow)
+            *only_jumps = false;
+        q.erase(q.Data + n);
+    }
+    return total;
 }
 
 } // namespace keys
