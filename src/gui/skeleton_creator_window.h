@@ -61,7 +61,7 @@ struct SkeletonCreatorState {
     bool open_menu = false;
     // Height of the drawing pad (and the nodes table beside it). Dragging the
     // splitter under them sets it; double-click goes back to the default.
-    static constexpr float kDefaultEditorHeight = 520.0f;
+    static constexpr float kDefaultEditorHeight = 480.0f;
     float editor_height = kDefaultEditorHeight;
 };
 
@@ -477,5 +477,5 @@ inline void DrawSkeletonCreatorWindow(SkeletonCreatorState &st, AppContext &ctx)
             ImGuiFileDialog::Instance()->Close();
         }
         },
-        ImVec2(900, 780));
+        ImVec2(900, 740));
 }
