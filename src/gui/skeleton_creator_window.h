@@ -484,9 +484,9 @@ inline void DrawSkeletonCreatorWindow(SkeletonCreatorState &st, AppContext &ctx)
                                "(or to unjoin), Esc to cancel.");
 
         ImGui::SeparatorText("Help");
+        ImGui::BulletText("Scroll to zoom, right-drag to pan, Reset View to see it all");
         ImGui::BulletText("Click empty space to add a node");
         ImGui::BulletText("Drag a node to move it");
-        ImGui::BulletText("Scroll to zoom, right-drag to pan, Reset View to see it all");
         ImGui::BulletText("Right-click a node to rename, join, unjoin or delete it");
         ImGui::BulletText(RED_MOD_KEY "+Click two nodes to join or unjoin them");
         ImGui::BulletText("Esc cancels a pending join");
