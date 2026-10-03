@@ -14,6 +14,8 @@
 #include "gui/panel.h"
 #include "gui/gui_helpers.h"
 #include "gui/shortcuts.h"
+#include "image_texture.h"
+#include "video_files.h"
 #include "imgui.h"
 #include "implot.h"
 #include "json.hpp"
@@ -63,6 +65,10 @@ struct SkeletonCreatorState {
     // so none of it is pushed out of view. Dragging the splitter under them
     // sets a height; double-click goes back to 0.
     float editor_height = 0.0f;
+    // A picture to trace the skeleton over, drawn behind the nodes and
+    // scaled to fit the pad with its proportions kept.
+    ImageTexture background;
+    float background_opacity = 0.5f;
 };
 
 // The .json red loads: names and edges by index, plus positions so this window
@@ -165,6 +171,28 @@ inline void DrawSkeletonCreatorWindow(SkeletonCreatorState &st, AppContext &ctx)
                                                     "Save Skeleton", ".json", cfg);
         }
         ImGui::EndDisabled();
+        ImGui::SameLine();
+        if (ImGui::Button("Background Image...")) {
+            IGFD::FileDialogConfig cfg;
+            cfg.countSelectionMax = 1;
+            cfg.path = ctx.pm.media_folder.empty() ? skeleton_dir
+                                                   : ctx.pm.media_folder;
+            cfg.flags = ImGuiFileDialogFlags_Modal;
+            ImGuiFileDialog::Instance()->OpenDialog("LoadSkeletonBackground",
+                                                    "Background Image",
+                                                    image_ext_filter(), cfg);
+        }
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+            ImGui::SetTooltip("Show a picture behind the nodes to trace over. "
+                              "It is not saved with the skeleton.");
+        if (st.background.valid()) {
+            ImGui::SameLine();
+            if (ImGui::Button("Clear Image")) image_texture_free(&st.background);
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(120.0f);
+            ImGui::SliderFloat("Opacity", &st.background_opacity, 0.1f, 1.0f,
+                               "%.1f");
+        }
 
         // Editor on the left, its nodes on the right; drag the divider
         // between them to share the width.
@@ -210,6 +238,20 @@ inline void DrawSkeletonCreatorWindow(SkeletonCreatorState &st, AppContext &ctx)
 
             if (ImGui::IsKeyPressed(ImGuiKey_Escape) && !io.WantTextInput)
                 st.selected_for_edge = -1;
+
+            // Background picture: fit inside the unit square, centred, with
+            // its aspect ratio kept (the plot is ImPlotFlags_Equal).
+            if (st.background.valid() && st.background.height > 0) {
+                const double aspect = (double)st.background.width /
+                                      (double)st.background.height;
+                const double bw = aspect >= 1.0 ? 1.0 : aspect;
+                const double bh = aspect >= 1.0 ? 1.0 / aspect : 1.0;
+                ImPlot::PlotImage("##skel_background", st.background.id,
+                                  ImPlotPoint(0.5 - bw / 2, 0.5 - bh / 2),
+                                  ImPlotPoint(0.5 + bw / 2, 0.5 + bh / 2),
+                                  ImVec2(0, 0), ImVec2(1, 1),
+                                  ImVec4(1, 1, 1, st.background_opacity));
+            }
 
             if (st.nodes.empty()) {
                 ImPlot::PushStyleColor(ImPlotCol_InlayText,
@@ -304,6 +346,13 @@ inline void DrawSkeletonCreatorWindow(SkeletonCreatorState &st, AppContext &ctx)
                     ImGui::Text("%.3f, %.3f", st.nodes[i].position.x,
                                 st.nodes[i].position.y);
                 }
+                // Position: the header or any cell of the column.
+                if (ImGui::TableGetHoveredColumn() == 2 &&
+                    ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows))
+                    ImGui::SetTooltip(
+                        "Where the node sits on this pad (0-1). Saved only so "
+                        "the\neditor can reopen the layout; red does not use it "
+                        "for\nlabelling, export or anything else.");
                 if (st.nodes.empty()) {
                     ImGui::TableNextRow();
                     ImGui::TableSetColumnIndex(1);
@@ -412,6 +461,22 @@ inline void DrawSkeletonCreatorWindow(SkeletonCreatorState &st, AppContext &ctx)
         },
         [&]() {
         // Always: the dialogs have to be pumped whether the window is up.
+        if (ImGuiFileDialog::Instance()->Display("LoadSkeletonBackground",
+                                                 ImGuiWindowFlags_NoCollapse,
+                                                 ImVec2(680, 440))) {
+            if (ImGuiFileDialog::Instance()->IsOk()) {
+                const std::string path =
+                    ImGuiFileDialog::Instance()->GetFilePathName();
+                std::string err;
+                if (image_texture_load(path, &st.background, &err))
+                    st.status = "Background: " + path;
+                else {
+                    st.status = err;
+                    ctx.popups.pushError(err);
+                }
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
         if (ImGuiFileDialog::Instance()->Display("SaveSkeletonFromEdit",
                                                  ImGuiWindowFlags_NoCollapse,
                                                  ImVec2(680, 440))) {
