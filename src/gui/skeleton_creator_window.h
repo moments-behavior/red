@@ -72,10 +72,6 @@ struct SkeletonCreatorState {
     float background_opacity = 0.5f;
     // Show the whole pad (0..1) next frame -- on first open and on Reset View.
     bool reset_view = true;
-    // The "scroll to zoom, right-drag to pan" hint on the pad: shown while a
-    // background is loaded until the first zoom or pan, then not again this
-    // run -- by then you know.
-    bool zoom_hint_done = false;
 };
 
 // The .json red loads: names and edges by index, plus positions so this window
@@ -194,8 +190,7 @@ inline void DrawSkeletonCreatorWindow(SkeletonCreatorState &st, AppContext &ctx)
                                                     image_ext_filter(), cfg);
         }
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
-            ImGui::SetTooltip("Show a picture behind the nodes to trace over.\n"
-                              "Scroll to zoom, right-drag to pan.\n"
+            ImGui::SetTooltip("Show a picture behind the nodes to trace over. "
                               "It is not saved with the skeleton.");
         if (st.background.valid()) {
             ImGui::SameLine();
@@ -212,6 +207,10 @@ inline void DrawSkeletonCreatorWindow(SkeletonCreatorState &st, AppContext &ctx)
             ImGui::SetNextItemWidth(120.0f);
             ImGui::SliderFloat("Opacity", &st.background_opacity, 0.1f, 1.0f,
                                "%.1f");
+            // Zoom and pan only exist while there is a picture, so say how
+            // here, beside its other controls.
+            ImGui::SameLine();
+            ImGui::TextDisabled("Scroll to zoom, right-drag to pan");
         }
 
         // Editor on the left, its nodes on the right; drag the divider
@@ -305,32 +304,6 @@ inline void DrawSkeletonCreatorWindow(SkeletonCreatorState &st, AppContext &ctx)
                                        ImVec4(1.0f, 1.0f, 0.0f, 1.0f));
                 ImPlot::PlotText("Click here to add a node", 0.5, 0.5);
                 ImPlot::PopStyleColor();
-            }
-
-            // How to look closer, once there is something to look closer at.
-            // The first scroll or right-drag on the pad retires it.
-            if (can_zoom && !st.zoom_hint_done) {
-                if (ImPlot::IsPlotHovered() &&
-                    (io.MouseWheel != 0.0f ||
-                     ImGui::IsMouseDragging(ImGuiMouseButton_Right)))
-                    st.zoom_hint_done = true;
-                // Fixed to the pad's corner in pixels, not plot units, so it
-                // stays put while the picture moves; a dark backing keeps it
-                // readable over a busy photo.
-                const char *hint = "Scroll to zoom \xC2\xB7 right-drag to pan";
-                const ImVec2 pos = ImPlot::GetPlotPos();
-                const ImVec2 size = ImPlot::GetPlotSize();
-                const ImVec2 ts = ImGui::CalcTextSize(hint);
-                const ImVec2 pad(6.0f, 3.0f);
-                const ImVec2 tl(pos.x + 8.0f,
-                                pos.y + size.y - ts.y - 2.0f * pad.y - 8.0f);
-                ImDrawList *dl = ImPlot::GetPlotDrawList();
-                dl->AddRectFilled(tl,
-                                  ImVec2(tl.x + ts.x + 2.0f * pad.x,
-                                         tl.y + ts.y + 2.0f * pad.y),
-                                  IM_COL32(0, 0, 0, 170), 4.0f);
-                dl->AddText(ImVec2(tl.x + pad.x, tl.y + pad.y),
-                            IM_COL32(255, 255, 0, 255), hint);
             }
 
             for (const auto &e : st.edges) {
