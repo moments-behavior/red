@@ -54,7 +54,74 @@ struct SkeletonCreatorState {
     std::string name = "CustomSkeleton";
     bool has_bbox = false;
     std::string status;
+    // Right-click menu: the node it is for, and a request to open it raised
+    // inside the plot and acted on after EndPlot, where the popup lives.
+    int menu_node = -1;
+    bool open_menu = false;
 };
+
+// The .json red loads: names and edges by index, plus positions so this window
+// can reopen its own output with the layout intact.
+inline nlohmann::json skeleton_creator_to_json(const SkeletonCreatorState &st) {
+    nlohmann::json j;
+    j["name"] = st.name;
+    j["has_skeleton"] = true;
+    j["has_bbox"] = st.has_bbox;
+    j["num_nodes"] = (int)st.nodes.size();
+
+    std::vector<std::string> names;
+    std::vector<std::vector<double>> positions;
+    for (const auto &n : st.nodes) {
+        names.push_back(n.name);
+        positions.push_back({n.position.x, n.position.y});
+    }
+    j["node_names"] = names;
+    // Not read back by load_skeleton_json, which only wants names and edges --
+    // kept so this window can reopen its own output with the layout intact
+    // rather than restacking it in a line.
+    j["node_positions"] = positions;
+
+    std::vector<std::vector<int>> edges_out;
+    for (const auto &e : st.edges) {
+        int a = -1, b = -1;
+        for (size_t i = 0; i < st.nodes.size(); i++) {
+            if (st.nodes[i].id == e.node1_id) a = (int)i;
+            if (st.nodes[i].id == e.node2_id) b = (int)i;
+        }
+        if (a >= 0 && b >= 0) edges_out.push_back({a, b});
+    }
+    j["edges"] = edges_out;
+    j["num_edges"] = (int)edges_out.size();
+    return j;
+}
+
+inline void skeleton_creator_delete_node(SkeletonCreatorState &st, int id) {
+    st.nodes.erase(std::remove_if(st.nodes.begin(), st.nodes.end(),
+                                  [id](const SkeletonCreatorNode &n) {
+                                      return n.id == id;
+                                  }),
+                   st.nodes.end());
+    st.edges.erase(std::remove_if(st.edges.begin(), st.edges.end(),
+                                  [id](const SkeletonCreatorEdge &e) {
+                                      return e.node1_id == id || e.node2_id == id;
+                                  }),
+                   st.edges.end());
+    if (st.selected_for_edge == id) st.selected_for_edge = -1;
+}
+
+// Join a and b, or unjoin them if they already are.
+inline void skeleton_creator_toggle_edge(SkeletonCreatorState &st, int a, int b) {
+    auto joins = [a, b](const SkeletonCreatorEdge &e) {
+        return (e.node1_id == a && e.node2_id == b) ||
+               (e.node1_id == b && e.node2_id == a);
+    };
+    auto it = std::find_if(st.edges.begin(), st.edges.end(), joins);
+    if (it == st.edges.end())
+        st.edges.emplace_back(a, b);
+    else
+        st.edges.erase(std::remove_if(st.edges.begin(), st.edges.end(), joins),
+                       st.edges.end());
+}
 
 inline void DrawSkeletonCreatorWindow(SkeletonCreatorState &st, AppContext &ctx) {
     const auto &skeleton_dir = ctx.skeleton_dir;
@@ -68,7 +135,42 @@ inline void DrawSkeletonCreatorWindow(SkeletonCreatorState &st, AppContext &ctx)
         ImGui::Checkbox("Has bounding box", &st.has_bbox);
 
         ImGui::SeparatorText("Editor");
-        if (ImPlot::BeginPlot("##skelcreator", ImVec2(-1, 400), ImPlotFlags_Equal)) {
+        if (ImGui::Button("Clear All")) {
+            st.nodes.clear();
+            st.edges.clear();
+            st.next_node_id = 0;
+            st.selected_for_edge = -1;
+            st.menu_node = -1;
+            st.status.clear();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Load from JSON")) {
+            IGFD::FileDialogConfig cfg;
+            cfg.countSelectionMax = 1;
+            cfg.path = skeleton_dir;
+            cfg.flags = ImGuiFileDialogFlags_Modal;
+            ImGuiFileDialog::Instance()->OpenDialog("LoadSkeletonForEdit",
+                                                    "Load Skeleton", ".json", cfg);
+        }
+        ImGui::SameLine();
+        ImGui::BeginDisabled(st.nodes.empty() || st.name.empty());
+        if (ImGui::Button("Save to JSON")) {
+            // Ask where, starting in the skeleton folder with <name>.json.
+            IGFD::FileDialogConfig cfg;
+            cfg.path = skeleton_dir;
+            cfg.fileName = st.name + ".json";
+            cfg.flags = ImGuiFileDialogFlags_Modal |
+                        ImGuiFileDialogFlags_ConfirmOverwrite;
+            ImGuiFileDialog::Instance()->OpenDialog("SaveSkeletonFromEdit",
+                                                    "Save Skeleton", ".json", cfg);
+        }
+        ImGui::EndDisabled();
+
+        // NoMenus/NoBoxSelect: right-click belongs to the nodes here, not to
+        // ImPlot's own context menu and box zoom.
+        if (ImPlot::BeginPlot("##skelcreator", ImVec2(-1, 400),
+                              ImPlotFlags_Equal | ImPlotFlags_NoMenus |
+                                  ImPlotFlags_NoBoxSelect)) {
             ImPlot::SetupAxes("", "");
             ImPlot::SetupAxisLimits(ImAxis_X1, 0.0, 1.0, ImGuiCond_Always);
             ImPlot::SetupAxisLimits(ImAxis_Y1, 0.0, 1.0, ImGuiCond_Always);
@@ -87,6 +189,13 @@ inline void DrawSkeletonCreatorWindow(SkeletonCreatorState &st, AppContext &ctx)
 
             if (ImGui::IsKeyPressed(ImGuiKey_Escape) && !io.WantTextInput)
                 st.selected_for_edge = -1;
+
+            if (st.nodes.empty()) {
+                ImPlot::PushStyleColor(ImPlotCol_InlayText,
+                                       ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+                ImPlot::PlotText("Click here to add a node", 0.5, 0.5);
+                ImPlot::PopStyleColor();
+            }
 
             for (const auto &e : st.edges) {
                 const SkeletonCreatorNode *a = nullptr, *b = nullptr;
@@ -114,42 +223,31 @@ inline void DrawSkeletonCreatorWindow(SkeletonCreatorState &st, AppContext &ctx)
                                   col, 8.0f, ImPlotDragToolFlags_None, &clicked,
                                   &hovered);
 
-                if (hovered) {
-                    ImPlot::PlotText(node.name.c_str(), node.position.x,
-                                     node.position.y + 0.03);
-                    if (ImGui::IsKeyPressed(ImGuiKey_R, false) && !io.WantTextInput) {
-                        const int dead = node.id;
-                        st.nodes.erase(st.nodes.begin() + (long)i);
-                        st.edges.erase(
-                            std::remove_if(st.edges.begin(), st.edges.end(),
-                                           [dead](const SkeletonCreatorEdge &e) {
-                                               return e.node1_id == dead ||
-                                                      e.node2_id == dead;
-                                           }),
-                            st.edges.end());
-                        if (st.selected_for_edge == dead) st.selected_for_edge = -1;
-                        break;
-                    }
+                // Name to the right of the node, always. PlotText centres on
+                // the point, so shift it by half its width plus a gap.
+                const float half_w = ImGui::CalcTextSize(node.name.c_str()).x * 0.5f;
+                ImPlot::PlotText(node.name.c_str(), node.position.x,
+                                 node.position.y, ImVec2(half_w + 10.0f, 0.0f));
+
+                if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+                    st.menu_node = node.id;
+                    st.open_menu = true;
+                }
+                if (hovered && ImGui::IsKeyPressed(ImGuiKey_R, false) &&
+                    !io.WantTextInput) {
+                    skeleton_creator_delete_node(st, node.id);
+                    break;
                 }
 
-                // Ctrl+Click picks a node, then joins to the second -- or
-                // removes the edge if those two are already joined.
-                if (clicked && io.KeyCtrl) {
+                // Picking the second node of a join: a plain click once one
+                // is pending (Join... in the menu), or Ctrl+Click as before.
+                // Clicking the pending node itself cancels.
+                if (clicked && (io.KeyCtrl || st.selected_for_edge >= 0)) {
                     if (st.selected_for_edge < 0) {
                         st.selected_for_edge = node.id;
                     } else if (st.selected_for_edge != node.id) {
-                        const int a = st.selected_for_edge, b = node.id;
-                        auto joins = [a, b](const SkeletonCreatorEdge &e) {
-                            return (e.node1_id == a && e.node2_id == b) ||
-                                   (e.node1_id == b && e.node2_id == a);
-                        };
-                        auto it = std::find_if(st.edges.begin(), st.edges.end(), joins);
-                        if (it == st.edges.end())
-                            st.edges.emplace_back(a, b);
-                        else
-                            st.edges.erase(std::remove_if(st.edges.begin(),
-                                                          st.edges.end(), joins),
-                                           st.edges.end());
+                        skeleton_creator_toggle_edge(st, st.selected_for_edge,
+                                                     node.id);
                         st.selected_for_edge = -1;
                     } else {
                         st.selected_for_edge = -1;
@@ -159,80 +257,70 @@ inline void DrawSkeletonCreatorWindow(SkeletonCreatorState &st, AppContext &ctx)
             ImPlot::EndPlot();
         }
 
+        // Right-click menu for one node.
+        if (st.open_menu) {
+            ImGui::OpenPopup("##skel_node_menu");
+            st.open_menu = false;
+        }
+        if (ImGui::BeginPopup("##skel_node_menu")) {
+            auto it = std::find_if(st.nodes.begin(), st.nodes.end(),
+                                   [&](const SkeletonCreatorNode &n) {
+                                       return n.id == st.menu_node;
+                                   });
+            if (it == st.nodes.end()) {
+                ImGui::CloseCurrentPopup();
+            } else {
+                SkeletonCreatorNode &node = *it;
+                ImGui::TextDisabled("Node %d", node.id);
+                ImGui::SetNextItemWidth(200.0f);
+                if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
+                if (ImGui::InputText("Name", &node.name,
+                                     ImGuiInputTextFlags_EnterReturnsTrue))
+                    ImGui::CloseCurrentPopup();
+                ImGui::Separator();
+                if (ImGui::MenuItem("Join to another node...")) {
+                    st.selected_for_edge = node.id;
+                }
+                // Unjoin, one item per neighbour.
+                bool any_edge = false;
+                for (const auto &e : st.edges) {
+                    int other = e.node1_id == node.id   ? e.node2_id
+                                : e.node2_id == node.id ? e.node1_id
+                                                        : -1;
+                    if (other < 0) continue;
+                    auto o = std::find_if(st.nodes.begin(), st.nodes.end(),
+                                          [other](const SkeletonCreatorNode &n) {
+                                              return n.id == other;
+                                          });
+                    if (o == st.nodes.end()) continue;
+                    if (!any_edge) ImGui::Separator();
+                    any_edge = true;
+                    if (ImGui::MenuItem(("Unjoin from " + o->name).c_str())) {
+                        skeleton_creator_toggle_edge(st, node.id, other);
+                        break;
+                    }
+                }
+                ImGui::Separator();
+                if (ImGui::MenuItem("Delete node", "R")) {
+                    skeleton_creator_delete_node(st, node.id);
+                    st.menu_node = -1;
+                }
+            }
+            ImGui::EndPopup();
+        }
+
         if (st.selected_for_edge >= 0)
             ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f),
-                               "Node selected. Ctrl+Click another to join them "
+                               "Node selected. Click another to join them "
                                "(or to unjoin), Esc to cancel.");
 
         ImGui::SeparatorText("Help");
         ImGui::BulletText("Click empty space to add a node");
         ImGui::BulletText("Drag a node to move it");
+        ImGui::BulletText("Right-click a node to rename, join, unjoin or delete it");
         ImGui::BulletText("Ctrl+Click two nodes to join or unjoin them");
         ImGui::BulletText("Esc cancels a pending join");
         ImGui::BulletText("R while hovering a node deletes it and its edges");
-
-        ImGui::SeparatorText("Actions");
-        if (ImGui::Button("Clear All")) {
-            st.nodes.clear();
-            st.edges.clear();
-            st.next_node_id = 0;
-            st.selected_for_edge = -1;
-            st.status.clear();
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Load from JSON")) {
-            IGFD::FileDialogConfig cfg;
-            cfg.countSelectionMax = 1;
-            cfg.path = skeleton_dir;
-            cfg.flags = ImGuiFileDialogFlags_Modal;
-            ImGuiFileDialog::Instance()->OpenDialog("LoadSkeletonForEdit",
-                                                    "Load Skeleton", ".json", cfg);
-        }
-        ImGui::SameLine();
-        ImGui::BeginDisabled(st.nodes.empty() || st.name.empty());
-        if (ImGui::Button("Save to JSON")) {
-            nlohmann::json j;
-            j["name"] = st.name;
-            j["has_skeleton"] = true;
-            j["has_bbox"] = st.has_bbox;
-            j["num_nodes"] = (int)st.nodes.size();
-
-            std::vector<std::string> names;
-            std::vector<std::vector<double>> positions;
-            for (const auto &n : st.nodes) {
-                names.push_back(n.name);
-                positions.push_back({n.position.x, n.position.y});
-            }
-            j["node_names"] = names;
-            // Not read back by load_skeleton_json, which only wants names and
-            // edges -- kept so this window can reopen its own output with the
-            // layout intact rather than restacking it in a line.
-            j["node_positions"] = positions;
-
-            std::vector<std::vector<int>> edges_out;
-            for (const auto &e : st.edges) {
-                int a = -1, b = -1;
-                for (size_t i = 0; i < st.nodes.size(); i++) {
-                    if (st.nodes[i].id == e.node1_id) a = (int)i;
-                    if (st.nodes[i].id == e.node2_id) b = (int)i;
-                }
-                if (a >= 0 && b >= 0) edges_out.push_back({a, b});
-            }
-            j["edges"] = edges_out;
-            j["num_edges"] = (int)edges_out.size();
-
-            const std::string path = skeleton_dir + "/" + st.name + ".json";
-            std::ofstream f(path);
-            if (f) {
-                f << j.dump(4);
-                st.status = "Saved " + path;
-                ctx.toasts.pushSuccess("Saved skeleton " + st.name);
-            } else {
-                st.status = "Could not write " + path;
-                ctx.popups.pushError(st.status);
-            }
-        }
-        ImGui::EndDisabled();
 
         if (!st.nodes.empty()) {
             ImGui::SeparatorText("Nodes");
@@ -264,7 +352,25 @@ inline void DrawSkeletonCreatorWindow(SkeletonCreatorState &st, AppContext &ctx)
             ImGui::TextDisabled("%s", st.status.c_str());
         },
         [&]() {
-        // Always: the load dialog has to be pumped whether the window is up.
+        // Always: the dialogs have to be pumped whether the window is up.
+        if (ImGuiFileDialog::Instance()->Display("SaveSkeletonFromEdit",
+                                                 ImGuiWindowFlags_NoCollapse,
+                                                 ImVec2(680, 440))) {
+            if (ImGuiFileDialog::Instance()->IsOk()) {
+                const std::string path =
+                    ImGuiFileDialog::Instance()->GetFilePathName();
+                std::ofstream f(path);
+                if (f) {
+                    f << skeleton_creator_to_json(st).dump(4);
+                    st.status = "Saved " + path;
+                    ctx.toasts.pushSuccess("Saved skeleton " + st.name);
+                } else {
+                    st.status = "Could not write " + path;
+                    ctx.popups.pushError(st.status);
+                }
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
         if (ImGuiFileDialog::Instance()->Display("LoadSkeletonForEdit",
                                                  ImGuiWindowFlags_NoCollapse,
                                                  ImVec2(680, 440))) {
