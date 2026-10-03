@@ -890,36 +890,22 @@ int main(int argc, char **argv) {
             if (ps.pause_selected >= (int)scene->size_of_buffer)
                 ps.pause_selected = scene->size_of_buffer - 1;
 
-            if (keys::pressed(keys::Sc::BufferPrev)) {
-                if (ps.pause_selected > 0) {
-                    ps.pause_selected--;
-                    selection_changed = true;
-                }
-            }
-
-            // The last frame there is, when known. Neither key below may
-            // select past it: the ring has size_of_buffer slots whatever the
-            // timeline's length, and near the end the extra ones hold nothing.
+            // The last frame there is, when known. The arrow keys below may
+            // not select past it: the ring has size_of_buffer slots whatever
+            // the timeline's length, and near the end the extra ones hold
+            // nothing.
             const int last_frame =
                 dc_context->total_num_frame > 0 &&
                         dc_context->total_num_frame < INT_MAX
                     ? dc_context->total_num_frame - 1
                     : INT_MAX;
 
-            if (keys::pressed(keys::Sc::BufferNext)) {
-                if (ps.pause_selected < (int)scene->size_of_buffer - 1 &&
-                    ps.to_display_frame_number + ps.pause_selected < last_frame) {
-                    ps.pause_selected++;
-                    selection_changed = true;
-                }
-            }
-
             // Left / Right: one frame. Up / Down: a jump -- one keyframe
             // interval on video, landing on the keyframe, the cheapest place
             // to seek to; ten frames on images, which have no keyframes and
             // seek anywhere as cheaply. Paused only. Inside the decoded buffer
-            // a move is a selection change, as , and . are; past either end
-            // it is a seek, so stepping carries on beyond what is decoded.
+            // a move is a selection change; past either end it is a seek, so
+            // stepping carries on beyond what is decoded.
             const int jump_frames =
                 ctx.input_is_imgs ? 10 : std::max(1, dc_context->seek_interval);
             int step = 0;

@@ -54,10 +54,10 @@ inline void DrawFrameBufferWindow(AppContext &ctx, int select_corr_head) {
             const bool total_known = total > 0 && total < INT_MAX;
 
             // Keep the selected frame in view: centre its row whenever the
-            // selection moves from elsewhere -- the arrow keys, , and ., a
-            // seek, the timeline. Not after a click in this list: the row is
-            // already under the mouse, and scrolling it away from there would
-            // be the list moving under the click.
+            // selection moves from elsewhere -- the arrow keys, a seek, the
+            // timeline. Not after a click in this list: the row is already
+            // under the mouse, and scrolling it away from there would be the
+            // list moving under the click.
             static int last_selected_frame = -1;
             const int selected_frame =
                 ps.to_display_frame_number + ps.pause_selected;

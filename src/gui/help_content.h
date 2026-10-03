@@ -77,10 +77,6 @@ inline const std::vector<Group> &shortcut_groups() {
             {S::JumpFwd, nullptr, "Jump forward (paused)", Gate::Always, "One keyframe interval for video, ten frames for images"},
             {S::SaveLabels, nullptr, "Save labels (writes a new timestamped labeled_data folder)"},
         }},
-        {"When paused", "Stepping through the frame buffer", Gate::Always, {
-            {S::BufferPrev, nullptr, "Previous buffered frame"},
-            {S::BufferNext, nullptr, "Next buffered frame"},
-        }},
         {"Labeling \xE2\x80\x94 hovering an image", "With a skeleton loaded; hover a camera view", Gate::Always, {
             {S::CreateFrame, nullptr, "Create the keypoint set for this frame"},
             {S::MarkOccluded, nullptr, "Mark the keypoint under the cursor occluded, or the active one (then advance). Press again to take it back. The right-click menu has all three visibility states."},

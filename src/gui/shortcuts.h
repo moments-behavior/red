@@ -37,8 +37,6 @@ enum class Sc {
     JumpBack,       // a keyframe interval back (video), ten frames (images)
     JumpFwd,
     SaveLabels,
-    BufferPrev,
-    BufferNext,
     CreateFrame,
     PlaceKeypoint,
     MarkOccluded,
@@ -78,8 +76,6 @@ inline const Binding &binding(Sc s) {
         /* JumpBack       */ {ImGuiKey_UpArrow, false, false, true, false},
         /* JumpFwd        */ {ImGuiKey_DownArrow, false, false, true, false},
         /* SaveLabels     */ {ImGuiKey_S, true, false, false, false},
-        /* BufferPrev     */ {ImGuiKey_Comma, false, false, true, false},
-        /* BufferNext     */ {ImGuiKey_Period, false, false, true, false},
         /* CreateFrame    */ {ImGuiKey_B, false, false, false, false},
         /* PlaceKeypoint  */ {ImGuiKey_W, false, false, false, false},
         /* MarkOccluded   */ {ImGuiKey_M, false, false, false, false},
