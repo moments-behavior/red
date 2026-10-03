@@ -24,6 +24,7 @@
 #include <ImGuiFileDialog.h>
 
 #include <algorithm>
+#include <filesystem>
 #include <fstream>
 #include <string>
 #include <vector>
@@ -141,9 +142,6 @@ inline void DrawSkeletonCreatorWindow(SkeletonCreatorState &st, AppContext &ctx)
     ImGuiIO &io = ImGui::GetIO();
 
     DrawPanel("Skeleton Creator", st.show, [&]() {
-        ImGui::SetNextItemWidth(240.0f);
-        ImGui::InputText("Name", &st.name);
-
         if (ImGui::Button("Clear All")) {
             st.nodes.clear();
             st.edges.clear();
@@ -151,6 +149,8 @@ inline void DrawSkeletonCreatorWindow(SkeletonCreatorState &st, AppContext &ctx)
             st.selected_for_edge = -1;
             st.menu_node = -1;
             st.status.clear();
+            // A new skeleton: do not offer to save it over the last file.
+            st.name = "CustomSkeleton";
         }
         ImGui::SameLine();
         if (ImGui::Button("Load from JSON")) {
@@ -162,7 +162,7 @@ inline void DrawSkeletonCreatorWindow(SkeletonCreatorState &st, AppContext &ctx)
                                                     "Load Skeleton", ".json", cfg);
         }
         ImGui::SameLine();
-        ImGui::BeginDisabled(st.nodes.empty() || st.name.empty());
+        ImGui::BeginDisabled(st.nodes.empty());
         if (ImGui::Button("Save to JSON")) {
             // Ask where, starting in the skeleton folder with <name>.json.
             IGFD::FileDialogConfig cfg;
@@ -174,8 +174,14 @@ inline void DrawSkeletonCreatorWindow(SkeletonCreatorState &st, AppContext &ctx)
                                                     "Save Skeleton", ".json", cfg);
         }
         ImGui::EndDisabled();
-        // The skeleton file on the left of the line, the tracing picture on
-        // the right.
+        // The skeleton file | the view | the tracing picture.
+        ImGui::SameLine();
+        ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
+        ImGui::SameLine();
+        if (ImGui::Button("Reset View")) st.reset_view = true;
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+            ImGui::SetTooltip("Scroll on the pad to zoom, right-drag to pan;\n"
+                              "this shows the whole pad again.");
         ImGui::SameLine();
         ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
         ImGui::SameLine();
@@ -194,23 +200,11 @@ inline void DrawSkeletonCreatorWindow(SkeletonCreatorState &st, AppContext &ctx)
                               "It is not saved with the skeleton.");
         if (st.background.valid()) {
             ImGui::SameLine();
-            if (ImGui::Button("Clear Image")) {
-                image_texture_free(&st.background);
-                st.reset_view = true;
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("Reset View")) st.reset_view = true;
-            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
-                ImGui::SetTooltip("Show the whole pad again after zooming or "
-                                  "panning");
+            if (ImGui::Button("Clear Image")) image_texture_free(&st.background);
             ImGui::SameLine();
             ImGui::SetNextItemWidth(120.0f);
             ImGui::SliderFloat("Opacity", &st.background_opacity, 0.1f, 1.0f,
                                "%.1f");
-            // Zoom and pan only exist while there is a picture, so say how
-            // here, beside its other controls.
-            ImGui::SameLine();
-            ImGui::TextDisabled("Scroll to zoom, right-drag to pan");
         }
 
         // Editor on the left, its nodes on the right; drag the divider
@@ -242,17 +236,11 @@ inline void DrawSkeletonCreatorWindow(SkeletonCreatorState &st, AppContext &ctx)
         // the middle button so a double-click on the pad does not refit the
         // view under the node it just added. The input map is global to
         // ImPlot, so it is swapped in for this plot only and restored after.
-        //
-        // Only with a background image: there is nothing to look closer at on
-        // an empty pad, and the view stays pinned to 0..1 without one.
-        const bool can_zoom = st.background.valid();
-        if (!can_zoom) st.reset_view = true;
         ImPlotInputMap &input = ImPlot::GetInputMap();
         const ImPlotInputMap saved_input = input;
         input.Pan = ImGuiMouseButton_Right;
         input.PanMod = ImGuiMod_None;
         input.Fit = ImGuiMouseButton_Middle;
-        if (!can_zoom) input.ZoomRate = 0.0f;
         if (ImPlot::BeginPlot("##skelcreator", ImVec2(-1, editor_h),
                               ImPlotFlags_Equal | ImPlotFlags_NoMenus |
                                   ImPlotFlags_NoBoxSelect)) {
@@ -498,8 +486,7 @@ inline void DrawSkeletonCreatorWindow(SkeletonCreatorState &st, AppContext &ctx)
         ImGui::SeparatorText("Help");
         ImGui::BulletText("Click empty space to add a node");
         ImGui::BulletText("Drag a node to move it");
-        ImGui::BulletText("With a background image: scroll to zoom, right-drag "
-                          "to pan, Reset View to see it all");
+        ImGui::BulletText("Scroll to zoom, right-drag to pan, Reset View to see it all");
         ImGui::BulletText("Right-click a node to rename, join, unjoin or delete it");
         ImGui::BulletText(RED_MOD_KEY "+Click two nodes to join or unjoin them");
         ImGui::BulletText("Esc cancels a pending join");
@@ -534,6 +521,7 @@ inline void DrawSkeletonCreatorWindow(SkeletonCreatorState &st, AppContext &ctx)
                     ImGuiFileDialog::Instance()->GetFilePathName();
                 std::ofstream f(path);
                 if (f) {
+                    st.name = std::filesystem::path(path).stem().string();
                     f << skeleton_creator_to_json(st).dump(4);
                     st.status = "Saved " + path;
                     ctx.toasts.pushSuccess("Saved skeleton " + st.name);
@@ -562,7 +550,7 @@ inline void DrawSkeletonCreatorWindow(SkeletonCreatorState &st, AppContext &ctx)
                     st.edges.clear();
                     st.selected_for_edge = -1;
                     st.next_node_id = 0;
-                    if (j.contains("name")) st.name = j["name"].get<std::string>();
+                    st.name = std::filesystem::path(path).stem().string();
 
                     std::vector<std::string> names =
                         j.value("node_names", std::vector<std::string>{});
