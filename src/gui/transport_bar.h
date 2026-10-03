@@ -609,34 +609,68 @@ inline void DrawTransportBar(TransportBarState &state, AppContext &ctx) {
     // resolution above what NVDEC advertises -- drops the whole session to
     // software when the videos load. That used to happen with no sign of it.
     const char *val_dec = red::decode_backend_name();
-    const char *lbl_fr = "Recorded FR", *lbl_spd = "Play Speed",
-               *lbl_rr = "Render Rate", *lbl_dec = "Decode";
+    // Right-aligned when there is room. The block used to be placed at
+    // window width minus its own width whatever sat to its left, so on a
+    // narrow window it was drawn over the playback-speed controls. It now
+    // steps down instead: full labels, then short ones, then values alone
+    // (named on hover), then nothing.
+    struct Readout { const char *full, *brief, *value; };
+    const Readout items[] = {
+        {"Recorded FR", "FR", val_fr},
+        {"Play Speed", "Speed", val_spd},
+        {"Render Rate", "Render", val_rr},
+        {"Decode", "Decode", val_dec},
+    };
+    const int n_items = (int)(sizeof(items) / sizeof(items[0]));
+    enum Tier { Full, Brief, ValuesOnly, Hidden };
+    auto label_of = [&](const Readout &r, int tier) {
+        return tier == Full ? r.full : tier == Brief ? r.brief : nullptr;
+    };
+    auto width_of = [&](int tier, float g) {
+        float w = 0.0f;
+        for (int i = 0; i < n_items; ++i) {
+            if (i) w += g;
+            if (const char *l = label_of(items[i], tier))
+                w += ImGui::CalcTextSize(l).x + spacing;
+            w += ImGui::CalcTextSize(items[i].value).x;
+        }
+        return w;
+    };
+    // Where the controls to the left end, in window coordinates.
+    const float left_end = ImGui::GetItemRectMax().x - ImGui::GetWindowPos().x;
+    const float right_edge = ImGui::GetWindowWidth() - 12.0f;
+    int tier = Full;
     float gap = spacing * 3;
-    float total_w = ImGui::CalcTextSize(lbl_fr).x + spacing + ImGui::CalcTextSize(val_fr).x + gap
-                  + ImGui::CalcTextSize(lbl_spd).x + spacing + ImGui::CalcTextSize(val_spd).x + gap
-                  + ImGui::CalcTextSize(lbl_rr).x + spacing + ImGui::CalcTextSize(val_rr).x + gap
-                  + ImGui::CalcTextSize(lbl_dec).x + spacing + ImGui::CalcTextSize(val_dec).x;
-    ImGui::SameLine(ImGui::GetWindowWidth() - total_w - 12.0f);
+    for (; tier != Hidden; ++tier) {
+        gap = tier == Full ? spacing * 3 : spacing * 2;
+        if (left_end + gap + width_of(tier, gap) <= right_edge) break;
+    }
 
-    ImGui::TextColored(label_col, "%s", lbl_fr);
-    ImGui::SameLine(0, spacing); ImGui::TextDisabled("%s", val_fr);
-    if (!dc->fps_declared && ImGui::IsItemHovered())
-        ImGui::SetTooltip("This source declares no frame rate, so playback runs "
-                          "at an assumed %.1f fps. Change it next to Playback "
-                          "Speed.", dc->video_fps);
-    ImGui::SameLine(0, gap);
-    ImGui::TextColored(label_col, "%s", lbl_spd);
-    ImGui::SameLine(0, spacing); ImGui::TextDisabled("%s", val_spd);
-    ImGui::SameLine(0, gap);
-    ImGui::TextColored(label_col, "%s", lbl_rr);
-    ImGui::SameLine(0, spacing); ImGui::TextDisabled("%s", val_rr);
-    ImGui::SameLine(0, gap);
-    ImGui::TextColored(label_col, "%s", lbl_dec);
-    ImGui::SameLine(0, spacing); ImGui::TextDisabled("%s", val_dec);
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("%s decoding \xE2\x80\x94 %s.\n"
-                          "Override with RED_DECODE_BACKEND=hw or sw.",
-                          val_dec, red::decode_backend_reason());
+    if (tier != Hidden) {
+        ImGui::SameLine(right_edge - width_of(tier, gap));
+        for (int i = 0; i < n_items; ++i) {
+            if (i) ImGui::SameLine(0, gap);
+            const char *l = label_of(items[i], tier);
+            if (l) {
+                ImGui::TextColored(label_col, "%s", l);
+                ImGui::SameLine(0, spacing);
+            }
+            ImGui::TextDisabled("%s", items[i].value);
+            if (!ImGui::IsItemHovered()) continue;
+            if (i == 0 && !dc->fps_declared)
+                ImGui::SetTooltip("%sThis source declares no frame rate, so "
+                                  "playback runs at an assumed %.1f fps. Change "
+                                  "it next to Playback Speed.",
+                                  l ? "" : "Recorded FR\n", dc->video_fps);
+            else if (i == 3)
+                ImGui::SetTooltip("%s%s decoding \xE2\x80\x94 %s.\n"
+                                  "Override with RED_DECODE_BACKEND=hw or sw.",
+                                  l ? "" : "Decode: ", val_dec,
+                                  red::decode_backend_reason());
+            else if (!l || tier == Brief)
+                ImGui::SetTooltip("%s", items[i].full);
+        }
+    }
 
     ImGui::End();
 }
