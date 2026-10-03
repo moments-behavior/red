@@ -14,7 +14,19 @@
 #include <imgui.h>
 #include <string>
 
+// What to call the modifier ImGui reports as Ctrl. On macOS ImGui swaps Cmd
+// and Ctrl (io.ConfigMacOSXBehaviors, on by default under __APPLE__), so
+// io.KeyCtrl and every "Ctrl" binding fire on Command there. A macro so it
+// can join string literals in the help tables.
+#if defined(__APPLE__)
+#define RED_MOD_KEY "Cmd"
+#else
+#define RED_MOD_KEY "Ctrl"
+#endif
+
 namespace keys {
+
+inline const char *mod_name() { return RED_MOD_KEY; }
 
 enum class Sc {
     ToggleHelp,
@@ -145,7 +157,7 @@ inline std::string key_name(ImGuiKey k) {
 inline std::string display(Sc s) {
     const Binding &b = binding(s);
     std::string out;
-    if (b.ctrl)  out += "Ctrl + ";
+    if (b.ctrl)  out += RED_MOD_KEY " + ";
     if (b.shift) out += "Shift + ";
     out += key_name(b.key);
     if (b.hold)  out += "  (hold)";

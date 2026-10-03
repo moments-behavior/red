@@ -13,6 +13,7 @@
 #include "app_context.h"
 #include "gui/panel.h"
 #include "gui/gui_helpers.h"
+#include "gui/shortcuts.h"
 #include "imgui.h"
 #include "implot.h"
 #include "json.hpp"
@@ -240,7 +241,7 @@ inline void DrawSkeletonCreatorWindow(SkeletonCreatorState &st, AppContext &ctx)
                 }
 
                 // Picking the second node of a join: a plain click once one
-                // is pending (Join... in the menu), or Ctrl+Click as before.
+                // is pending (Join... in the menu), or Ctrl+Click (Cmd on macOS) as before.
                 // Clicking the pending node itself cancels.
                 if (clicked && (io.KeyCtrl || st.selected_for_edge >= 0)) {
                     if (st.selected_for_edge < 0) {
@@ -318,7 +319,7 @@ inline void DrawSkeletonCreatorWindow(SkeletonCreatorState &st, AppContext &ctx)
         ImGui::BulletText("Click empty space to add a node");
         ImGui::BulletText("Drag a node to move it");
         ImGui::BulletText("Right-click a node to rename, join, unjoin or delete it");
-        ImGui::BulletText("Ctrl+Click two nodes to join or unjoin them");
+        ImGui::BulletText(RED_MOD_KEY "+Click two nodes to join or unjoin them");
         ImGui::BulletText("Esc cancels a pending join");
         ImGui::BulletText("R while hovering a node deletes it and its edges");
 

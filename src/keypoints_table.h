@@ -561,14 +561,14 @@ inline void DrawKeypointsTable(AppContext &ctx, float height) {
                         if (kc.count() >= 2)
                             ImGui::SetTooltip(
                                 "%s\n"
-                                "Click: select   Shift/Ctrl: multi-select   "
+                                "Click: select   Shift/" RED_MOD_KEY ": multi-select   "
                                 "Delete: remove selected set (%d)",
                                 skeleton.node_names[hc - 1].c_str(),
                                 kc.count());
                         else
                             ImGui::SetTooltip(
                                 "%s\n"
-                                "Click: select   Shift/Ctrl: multi-select   "
+                                "Click: select   Shift/" RED_MOD_KEY ": multi-select   "
                                 "Delete: remove from all cameras",
                                 skeleton.node_names[hc - 1].c_str());
                     }
@@ -688,7 +688,7 @@ inline void DrawKeypointsTable(AppContext &ctx, float height) {
             if (keys::pressed(keys::Sc::PasteKeypoints)) {
                 if (!kc.has_clip()) {
                     ctx.toasts.push(
-                        "Clipboard is empty (copy with Ctrl+C first)",
+                        "Clipboard is empty (copy with " RED_MOD_KEY "+C first)",
                         Toast::Warning, 4.0f);
                 } else if (!paste_identity_ok(kc, skeleton.num_nodes,
                                               scene->num_cams, skeleton.name)) {

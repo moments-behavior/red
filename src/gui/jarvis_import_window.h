@@ -22,6 +22,7 @@
 #include "jarvis_import.h"
 #include "prediction_store.h"
 #include "gui/panel.h"
+#include "gui/shortcuts.h"
 #include <ImGuiFileDialog.h>
 #include <misc/cpp/imgui_stdlib.h>
 #include <chrono>
@@ -317,7 +318,7 @@ inline void DrawJarvisImportWindow(JarvisImportState &state, AppContext &ctx) {
                 ? "Open Pose Stats to review confidence; use \"Fix this frame\" "
                   "to promote a frame into the Labeling Tool."
                 : "These are normal editable labels — correct them in the "
-                  "Labeling Tool and Ctrl+S to save.");
+                  "Labeling Tool and " RED_MOD_KEY "+S to save.");
         }
         },
         // always_fn: the file dialog must be pumped even when the panel is hidden.

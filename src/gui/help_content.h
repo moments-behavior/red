@@ -105,9 +105,9 @@ inline const std::vector<Group> &shortcut_groups() {
         }},
         {"Keypoints table", "Selecting, copying & deleting keypoint columns", Gate::Always, {
             {S::COUNT, "Click a name", "Select that keypoint column (and set it active in all cameras)"},
-            {S::COUNT, "Shift / Ctrl + click", "Range-select / toggle keypoint columns in the set"},
+            {S::COUNT, "Shift / " RED_MOD_KEY " + click", "Range-select / toggle keypoint columns in the set"},
             {S::SelectAllKeypoints, nullptr, "Select all keypoint columns (press again to clear)", Gate::Always,
-                 "Then Ctrl+C copies the whole frame; Ctrl+V pastes it onto another"},
+                 "Then " RED_MOD_KEY "+C copies the whole frame; " RED_MOD_KEY "+V pastes it onto another"},
             {S::CopyKeypoints, nullptr, "Copy the selected keypoints from this frame"},
             {S::PasteKeypoints, nullptr, "Paste the copied keypoints onto this frame", Gate::Always,
                  "Overwrites those keypoints on the target frame"},
@@ -151,7 +151,7 @@ inline const std::vector<MouseGroup> &mouse_groups() {
             {"Drag", "Pan the plot"},
             {"Scroll", "Zoom"},
             {"Double-click", "Reset to the full range"},
-            {"Ctrl/Cmd + click the transport slider", "Type an exact frame number"},
+            {RED_MOD_KEY " + click the transport slider", "Type an exact frame number"},
         }},
     };
     return g;
@@ -213,7 +213,7 @@ inline const std::vector<Workflow> &workflows() {
             "Hover a camera view. Press W to place the active keypoint; A/D switch which node is active.",
             "Place the same keypoint in \xE2\x89\xA5 2 cameras, then press T (or Triangulate) for the 3D point.",
             "Prev/Next jump between labeled frames; Copy Prev seeds from the previous labeled frame.",
-            "Ctrl+S saves labels to a new timestamped labeled_data folder.",
+            RED_MOD_KEY "+S saves labels to a new timestamped labeled_data folder.",
         }},
         {"Export training data", {
             "Tools > Export Tool.",
