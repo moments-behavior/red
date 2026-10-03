@@ -223,10 +223,14 @@ inline void DrawFrameBufferWindow(AppContext &ctx, int select_corr_head) {
         if (ps.pending_seek >= 0) {
             const ImVec2 p0 = ImGui::GetWindowPos();
             const ImVec2 sz = ImGui::GetWindowSize();
-            ImGui::GetWindowDrawList()->AddRect(
-                ImVec2(p0.x + 1.5f, p0.y + 1.5f),
-                ImVec2(p0.x + sz.x - 1.5f, p0.y + sz.y - 1.5f),
-                IM_COL32(230, 50, 50, 255), 0.0f, 0, 3.0f);
+            // The window's draw list is clipped to its contents, which leaves
+            // out the title bar / tab strip -- and with it the top edge.
+            ImDrawList *dl = ImGui::GetWindowDrawList();
+            dl->PushClipRect(p0, ImVec2(p0.x + sz.x, p0.y + sz.y), false);
+            dl->AddRect(ImVec2(p0.x + 1.5f, p0.y + 1.5f),
+                        ImVec2(p0.x + sz.x - 1.5f, p0.y + sz.y - 1.5f),
+                        IM_COL32(230, 50, 50, 255), 0.0f, 0, 3.0f);
+            dl->PopClipRect();
         }
     }
     ImGui::End();
