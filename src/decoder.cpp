@@ -1,4 +1,5 @@
 #include "decoder.h"
+#include "fatal_handler.h"
 #include "decode_backend.h"
 #include "global.h"
 #include "sw_decoder.h"
@@ -953,6 +954,7 @@ void decoder_process(DecoderContext *dc_context, FFmpegDemuxer *demuxer,
                      int size_of_buffer, SeekInfo *seek_info,
                      bool use_cpu_buffer,
                      const sync_plan::SyncCam *sync_cam) {
+    install_fatal_handler();  // per thread on MSVC
 #if defined(RED_HAVE_CUDA) || defined(__APPLE__)
     if (red::decode_backend() == red::DecodeBackend::Hardware) {
 #if defined(RED_HAVE_CUDA)
@@ -1067,6 +1069,7 @@ void image_loader(DecoderContext *dc_context,
                   SeekInfo *seek_info, bool use_cpu_buffer,
                   std::string cam_name, std::string root_dir,
                   std::string file_ext, ImageLayout layout) {
+    install_fatal_handler();  // per thread on MSVC
     int buffer_head = 0;
     int frame_number = 0;
     // load_images initializes the shared frame count before starting one

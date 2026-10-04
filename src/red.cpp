@@ -1,5 +1,6 @@
 #define IMGUI_DEFINE_MATH_OPERATORS
 #include "imgui.h"
+#include "fatal_handler.h"
 #include "imgui_internal.h"
 #include "mac_modifier_fix.h"
 #include "IconsForkAwesome.h"
@@ -230,6 +231,7 @@ int main(int argc, char **argv) {
     // although red had crashed loading a video. Its volume is low enough
     // that unbuffered costs nothing that matters.
     setvbuf(stdout, nullptr, _IONBF, 0);
+    install_fatal_handler();
     // Print build timestamp so the user can verify they're running the latest
     // rebuild (debugging stale-binary issues during integration work).
     printf("red built %s %s\n", __DATE__, __TIME__);
