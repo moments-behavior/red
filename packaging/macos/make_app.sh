@@ -23,7 +23,13 @@ OUT="$REPO/${2:-dist}"
 EXE="$BUILD/red"
 [ -x "$EXE" ] || { echo "$EXE not found -- build first (./build.sh)" >&2; exit 1; }
 
-VERSION="$(git -C "$REPO" describe --tags --always --dirty)"
+# A release tag when building exactly at one (v1.2.0); otherwise the branch
+# and commit (multianimal-2b84530). `git describe` alone named builds after
+# the nearest tag anywhere in history, e.g. fetch_paper-snapshot-231-g2b84530.
+VERSION="$(git -C "$REPO" describe --tags --exact-match 2> /dev/null ||
+           echo "$(git -C "$REPO" rev-parse --abbrev-ref HEAD)-$(git -C "$REPO" rev-parse --short HEAD)")"
+VERSION="${VERSION//\//-}"   # a branch like feature/x must not make a path
+git -C "$REPO" diff --quiet HEAD -- || VERSION="$VERSION-dirty"
 APP="$OUT/red.app"
 CONTENTS="$APP/Contents"
 FW="$CONTENTS/Frameworks"
