@@ -70,11 +70,26 @@ echo "red $VERSION: collecting libraries..."
 missing="$(ldd "$EXE" | awk '/=> not found/ { print $1 }')"
 [ -z "$missing" ] || { echo "ldd cannot resolve on this machine: $missing" >&2; exit 1; }
 n=0
+: > "$OUT/.sources"
 while read -r soname path; do
     is_system "$soname" && continue
     cp -L "$path" "$STAGE/lib/$soname"
+    dirname "$(realpath "$path")" >> "$OUT/.sources"
     n=$((n + 1))
 done < <(ldd "$EXE" | awk '$2 == "=>" && $3 ~ /^\// { print $1, $3 }')
+
+# Where they came from. A release should carry the distribution's own
+# packages; a library from a conda environment, ~/ or another private build
+# was compiled for that setup and is not what the build box's OS provides.
+echo "  copied from:"
+sort "$OUT/.sources" | uniq -c | sed 's/^/    /'
+foreign="$(sort -u "$OUT/.sources" | grep -vE '^(/usr)?/lib(64)?(/|$)|^/usr/local/lib(/|$)' || true)"
+rm -f "$OUT/.sources"
+if [ -n "$foreign" ]; then
+    echo "WARNING: libraries from outside the system's folders:" >&2
+    echo "$foreign" | sed 's/^/    /' >&2
+    echo "  (a conda environment? run 'conda deactivate' and rebuild from a clean shell)" >&2
+fi
 
 # DT_RPATH (--force-rpath), not RUNPATH: it must reach the bundled libraries'
 # own dependencies too.
@@ -89,12 +104,14 @@ while read -r soname arrow path rest; do
         echo "  unresolved: $soname" >&2; bad=1; continue
     fi
     is_system "$soname" && continue
-    case "$path" in
-    "$STAGE/lib/"*) ;;
+    # ldd prints .../bin/../lib/x.so; compare the real path.
+    case "$(realpath -m "$path")" in
+    "$(realpath "$STAGE")/lib/"*) ;;
     *) echo "  not from the bundle: $soname -> $path" >&2; bad=1 ;;
     esac
 done < <(ldd "$STAGE/bin/red")
 [ "$bad" = 0 ] || { echo "the bundle is incomplete" >&2; exit 1; }
+[ -z "$foreign" ] || { echo "not packaging libraries from outside the system's folders (see above)" >&2; exit 1; }
 
 # One build in dist/ at a time.
 rm -f "$OUT"/red-*-linux-x64.tar.gz
