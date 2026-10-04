@@ -22,20 +22,32 @@ param(
 )
 $ErrorActionPreference = "Stop"
 
+# Run an external program with its stderr discarded. Windows PowerShell 5.1
+# turns a native command's stderr into a terminating error under
+# ErrorActionPreference=Stop, even when redirected -- so git's "no tag here",
+# or a line-ending warning, would end the script. Callers check
+# $LASTEXITCODE where the outcome matters.
+function Quiet([scriptblock]$Run) {
+    $eap = $ErrorActionPreference
+    $ErrorActionPreference = "SilentlyContinue"
+    try { & $Run 2>$null } finally { $ErrorActionPreference = $eap }
+}
+
 $Repo = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $BuildDir = Join-Path $Repo $Build
 $Exe = Join-Path $BuildDir "red.exe"
 if (-not (Test-Path $Exe)) { throw "$Exe not found -- build first: build.bat -DRED_ENABLE_CUDA=OFF" }
 
 # --- Version: a release tag when exactly at one, else branch-commit ---------
-$Version = (& git -C $Repo describe --tags --exact-match 2>$null)
+$Version = Quiet { git -C $Repo describe --tags --exact-match }
+if ($LASTEXITCODE -ne 0) { $Version = $null }
 if (-not $Version) {
-    $branch = (& git -C $Repo rev-parse --abbrev-ref HEAD).Trim()
-    $commit = (& git -C $Repo rev-parse --short HEAD).Trim()
+    $branch = (Quiet { git -C $Repo rev-parse --abbrev-ref HEAD }).Trim()
+    $commit = (Quiet { git -C $Repo rev-parse --short HEAD }).Trim()
     $Version = "$branch-$commit"
 }
 $Version = $Version.Trim().Replace("/", "-")
-& git -C $Repo diff --quiet HEAD --
+Quiet { git -C $Repo diff --quiet HEAD -- } | Out-Null
 if ($LASTEXITCODE -ne 0) { $Version = "$Version-dirty" }
 
 # --- Visual Studio: dumpbin and the C++ runtime -----------------------------
@@ -82,7 +94,7 @@ Copy-Item (Join-Path $Repo "default_imgui_layout.ini") $Stage
 $sys32 = Join-Path $env:WINDIR "System32"
 $missing = @()
 foreach ($f in Get-ChildItem $Bin -Include *.exe, *.dll -Recurse) {
-    $lines = & $dumpbin.FullName /nologo /dependents $f.FullName
+    $lines = Quiet { & $dumpbin.FullName /nologo /dependents $f.FullName }
     foreach ($line in $lines) {
         $name = $line.Trim()
         if ($name -notmatch '^[\w\.\-]+\.dll$') { continue }
