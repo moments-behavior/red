@@ -300,9 +300,12 @@ inline void switch_ini_to_project(AppContext &ctx) {
 }
 
 // Close project: auto-save, unload media, reset all project state.
-inline void close_project(AppContext &ctx) {
+// save_labels=false discards label edits since the last save -- for a reload
+// the user chose to make without saving (Tools > Camera Timestamps).
+inline void close_project(AppContext &ctx, bool save_labels = true) {
     // 1. Auto-save annotations if project is loaded
-    if (!ctx.pm.keypoints_root_folder.empty() && !ctx.annotations.empty()) {
+    if (save_labels && !ctx.pm.keypoints_root_folder.empty() &&
+        !ctx.annotations.empty()) {
         std::string save_err;
         AnnotationCSV::save_all(ctx.pm.keypoints_root_folder,
             ctx.skeleton.name, ctx.annotations,

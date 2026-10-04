@@ -66,7 +66,10 @@ inline void load_project_from_path(
         ctx.popups.pushError(err);
         return;
     }
-    close_project(ctx);
+    // Read before win.reset(), which clears it.
+    const bool save_labels = !win.load_project_discard_labels;
+    win.load_project_discard_labels = false;
+    close_project(ctx, save_labels);
     win.reset();
     if (nuke_inference_fn) nuke_inference_fn();
     pm = loaded;
@@ -160,21 +163,30 @@ inline void HandleMainMenuDialogs(
         ImGui::Text("Use the camera timestamps in:");
         ImGui::TextDisabled("%s", win.timestamps_pending.c_str());
         ImGui::Spacing();
-        ImGui::TextUnformatted("The project is reopened to apply it; your "
-                               "labels are saved first.");
+        ImGui::TextUnformatted("The project is reopened to apply it.");
+        ImGui::TextDisabled("Saving writes a new labeled_data folder, as "
+                            "%s+S does; without saving, edits since the "
+                            "last save are lost.", RED_MOD_KEY);
         ImGui::Spacing();
-        if (ImGui::Button("Save labels and reload")) {
+        // Both buttons record the folder in the .redproj and have the main
+        // loop reopen the project; they differ only in saving labels first.
+        auto apply = [&](bool save_labels) {
             pm.timestamps_folder = win.timestamps_pending;
             const std::string redproj =
                 pm.project_path + "/" + pm.project_name + ".redproj";
             std::string save_err;
-            if (save_project_manager_json(pm, redproj, &save_err))
+            if (save_project_manager_json(pm, redproj, &save_err)) {
                 win.load_project_request = redproj;  // main loop reopens it
-            else
+                win.load_project_discard_labels = !save_labels;
+            } else {
                 ctx.popups.pushError("Could not save the project: " + save_err);
+            }
             win.timestamps_pending.clear();
             ImGui::CloseCurrentPopup();
-        }
+        };
+        if (ImGui::Button("Save labels and reload")) apply(true);
+        ImGui::SameLine();
+        if (ImGui::Button("Reload without saving")) apply(false);
         ImGui::SameLine();
         if (ImGui::Button("Cancel")) {
             win.timestamps_pending.clear();
