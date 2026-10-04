@@ -141,10 +141,20 @@ inline void DrawFrameDropsWindow(FrameDropsState &st, AppContext &ctx) {
     DrawPanel("Frame Drops", st.show, [&]() {
         const sync_plan::SyncPlan &plan = g_sync_fix.plan;
         if (!plan.usable() || ctx.input_is_imgs || ctx.pm.camera_names.empty()) {
-            ImGui::TextDisabled("No sync metadata found for this recording.");
-            ImGui::TextWrapped(
-                "Frame drops are read from Cam<serial>_meta.csv timestamp "
-                "sidecars (or a cluster sync_plan.json) next to the videos.");
+            if (ctx.pm.timestamps_folder.empty()) {
+                ImGui::TextDisabled("No camera timestamps set for this project.");
+                ImGui::TextWrapped(
+                    "Frame drops are read from the cameras' timestamp files "
+                    "(Cam<serial>_meta.csv, cam<N>_timestamps_*.csv or a "
+                    "cluster sync_plan.json). Choose their folder in "
+                    "Tools > Camera Timestamps.");
+            } else {
+                ImGui::TextDisabled("No usable timestamps in the project's "
+                                    "timestamps folder.");
+                ImGui::TextWrapped("%s", ctx.pm.timestamps_folder.c_str());
+                if (!plan.error.empty())
+                    ImGui::TextWrapped("%s", plan.error.c_str());
+            }
             st.cached_key.clear();
             return;
         }

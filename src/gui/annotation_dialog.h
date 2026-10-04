@@ -84,6 +84,11 @@ inline void DrawAnnotationDialog(AnnotationDialogState &state,
             pm.calibration_folder = ImGuiFileDialog::Instance()->GetCurrentPath();
         ImGuiFileDialog::Instance()->Close();
     }
+    if (ImGuiFileDialog::Instance()->Display("ChooseAnnotTimestamps", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
+        if (ImGuiFileDialog::Instance()->IsOk())
+            pm.timestamps_folder = ImGuiFileDialog::Instance()->GetCurrentPath();
+        ImGuiFileDialog::Instance()->Close();
+    }
 
     // Seed the folder from whatever media is already open, the first frame
     // the dialog appears. Creating a project for footage you are looking at
@@ -140,6 +145,7 @@ inline void DrawAnnotationDialog(AnnotationDialogState &state,
             pm.skeleton_file.clear();
             pm.skeleton_name.clear();
             pm.calibration_folder.clear();
+            pm.timestamps_folder.clear();
             pm.camera_names.clear();
             pm.load_skeleton_from_json = false;
             pm.annotation_2d = false;
@@ -379,6 +385,40 @@ inline void DrawAnnotationDialog(AnnotationDialogState &state,
                     ImGuiFileDialog::Instance()->OpenDialog(
                         "ChooseAnnotCalib", "Select Calibration Folder", nullptr, cfg);
                 }
+                }
+
+                // Camera Timestamps (optional, several video cameras): where
+                // the per-camera timestamp files are, for the desync fix and
+                // Frame Drops. red does not look for them anywhere else.
+                if (n_sel > 1 && state.media_kind == MediaKind::Video) {
+                ImGui::TableNextRow();
+                LabelCell("Camera Timestamps");
+                ImGui::TableSetColumnIndex(1);
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                ImGui::InputTextWithHint("##annot_timestamps", "optional",
+                                         &pm.timestamps_folder);
+                if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+                    ImGui::SetTooltip(
+                        "Folder with the cameras' frame timestamps --\n"
+                        "sync_plan.json, Cam<name>_meta.csv or\n"
+                        "cam<N>_timestamps_*.csv. Enables the desync fix\n"
+                        "and Frame Drops for dropped frames. Leave empty\n"
+                        "if you have none; set it later in\n"
+                        "Tools > Camera Timestamps.");
+                ImGui::TableSetColumnIndex(2);
+                if (ImGui::Button("Browse##annot_timestamps")) {
+                    IGFD::FileDialogConfig cfg;
+                    cfg.countSelectionMax = 1;
+                    cfg.path = state.media_folder.empty()
+                                   ? default_browse_path
+                                   : state.media_folder;
+                    cfg.flags = ImGuiFileDialogFlags_Modal;
+                    ImGuiFileDialog::Instance()->OpenDialog(
+                        "ChooseAnnotTimestamps", "Select Camera Timestamps Folder",
+                        nullptr, cfg);
+                }
+                } else {
+                    pm.timestamps_folder.clear();
                 }
             }
 

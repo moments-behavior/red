@@ -443,10 +443,20 @@ inline void on_project_loaded(AppContext &ctx,
     // built/validated (load_videos already logged why) — playback continues
     // index-paired, which is exactly what the user asked to avoid.
     if (ctx.pm.sync_fix_enabled && !g_sync_fix.plan.usable()) {
-        ctx.toasts.push(
-            "Desync fix is enabled in this project but no usable sync plan "
-            "was found (" + g_sync_fix.plan.error + "). Cameras are "
-            "index-paired.", Toast::Warning, 10.0f);
+        // A project saved before timestamps became a project setting had them
+        // found by a search of the video folder and its parent, which red no
+        // longer does: say where to set them rather than just "not found".
+        if (ctx.pm.timestamps_folder.empty())
+            ctx.toasts.push(
+                "This project has the desync fix on, but no camera timestamps "
+                "folder is set -- red no longer searches for them. Set it in "
+                "Tools > Camera Timestamps. Cameras are index-paired until "
+                "then.", Toast::Warning, 15.0f);
+        else
+            ctx.toasts.push(
+                "Desync fix is enabled in this project but no usable sync "
+                "plan was found (" + g_sync_fix.plan.error + "). Cameras are "
+                "index-paired.", Toast::Warning, 10.0f);
     }
     int loaded_cameras = (int)ctx.pm.camera_names.size();
     if (loaded_cameras < expected_cameras) {

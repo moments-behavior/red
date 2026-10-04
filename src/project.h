@@ -61,6 +61,11 @@ struct ProjectManager {
     // changes what a frame index means: with the fix ON, labels/predictions
     // are keyed by canonical trigger slot, OFF by raw mp4 index.
     bool sync_fix_enabled = false;
+    // Where this project's per-camera timestamps are (sync_plan.json,
+    // Cam<name>_meta.csv or cam<N>_timestamps_*.csv). The desync fix and
+    // Frame Drops use only this folder; red never goes looking for them.
+    // Empty: no timestamps, so neither is available.
+    std::string timestamps_folder;
 
 
     // empty means "auto-discover in the recording folder", the normal case.
@@ -154,6 +159,7 @@ inline void to_json(nlohmann::json &j, const ProjectManager &p) {
                        {"telecentric", p.telecentric},
                        {"annotation_2d", p.annotation_2d},
                        {"sync_fix_enabled", p.sync_fix_enabled},
+                       {"timestamps_folder", p.timestamps_folder},
                        {"annotation_config", p.annotation_config},
                        {"jarvis_models", p.jarvis_models},
                        {"active_jarvis_model", p.active_jarvis_model},
@@ -177,6 +183,7 @@ inline void from_json(const nlohmann::json &j, ProjectManager &p) {
     p.telecentric = j.value("telecentric", false);
     p.annotation_2d = j.value("annotation_2d", false);
     p.sync_fix_enabled = j.value("sync_fix_enabled", false);
+    p.timestamps_folder = j.value("timestamps_folder", std::string{});
     if (j.contains("annotation_config"))
         p.annotation_config = j["annotation_config"].get<AnnotationConfig>();
     if (j.contains("jarvis_models"))

@@ -138,6 +138,51 @@ inline void HandleMainMenuDialogs(
         ImGuiFileDialog::Instance()->Close();
     }
 
+    // Tools > Camera Timestamps: pick a folder, confirm, then reopen the
+    // project with it. The decoders take their camera timings when the videos
+    // load, so the folder only applies on a reload -- and reopening goes
+    // through close_project(), which saves the labels first.
+    if (ImGuiFileDialog::Instance()->Display("ChooseProjectTimestamps",
+                                             ImGuiWindowFlags_NoCollapse,
+                                             ImVec2(680, 440))) {
+        if (ImGuiFileDialog::Instance()->IsOk()) {
+            win.timestamps_pending = ImGuiFileDialog::Instance()->GetCurrentPath();
+            win.timestamps_confirm = true;
+        }
+        ImGuiFileDialog::Instance()->Close();
+    }
+    if (win.timestamps_confirm) {
+        ImGui::OpenPopup("Camera Timestamps##confirm");
+        win.timestamps_confirm = false;
+    }
+    if (ImGui::BeginPopupModal("Camera Timestamps##confirm", nullptr,
+                               ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::Text("Use the camera timestamps in:");
+        ImGui::TextDisabled("%s", win.timestamps_pending.c_str());
+        ImGui::Spacing();
+        ImGui::TextUnformatted("The project is reopened to apply it; your "
+                               "labels are saved first.");
+        ImGui::Spacing();
+        if (ImGui::Button("Save labels and reload")) {
+            pm.timestamps_folder = win.timestamps_pending;
+            const std::string redproj =
+                pm.project_path + "/" + pm.project_name + ".redproj";
+            std::string save_err;
+            if (save_project_manager_json(pm, redproj, &save_err))
+                win.load_project_request = redproj;  // main loop reopens it
+            else
+                ctx.popups.pushError("Could not save the project: " + save_err);
+            win.timestamps_pending.clear();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel")) {
+            win.timestamps_pending.clear();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
     // ChooseMedia (Open Video)
     if (ImGuiFileDialog::Instance()->Display("ChooseMedia", ImGuiWindowFlags_NoCollapse, ImVec2(680, 440))) {
         if (ImGuiFileDialog::Instance()->IsOk()) {

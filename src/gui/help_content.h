@@ -185,7 +185,7 @@ inline const std::vector<Tool> &tools() {
             {"Pose Stats", "View > Pose Stats",
                 "Confidence over time for the active prediction store; promote a frame to fix it.", Gate::Always, "An active prediction store"},
             {"Frame Drops", "View > Frame Drops",
-                "Visualize dropped frames and the camera sync plan.", Gate::Always, "Sync metadata (Cam*_meta.csv)"},
+                "Visualize dropped frames and the camera sync plan.", Gate::Always, "Camera timestamps (Tools > Camera Timestamps)"},
             {"Triangulation Diagnostics", "Tools > Triangulation Diagnostics",
                 "Per-keypoint reprojection-error report (read-only).", Gate::Need3D, "Calibration + labeled frames"},
             // Settings
@@ -229,7 +229,7 @@ inline const std::vector<Concept> &concepts() {
         {"Triangulation",
             "A 3D point exists only once the same keypoint is labeled in \xE2\x89\xA5 2 cameras. Press T, or it auto-triangulates."},
         {"Camera alignment (desync fix)",
-            "Cameras are hardware-triggered off a shared clock; a dropped frame desyncs everything after it. The transport bar reports the condition \xE2\x80\x94 Aligned, Uneven Ends, or Dropped Frames \xE2\x80\x94 and its Realign checkbox remaps frame index i to the same trigger instant across all cameras."},
+            "Cameras are hardware-triggered off a shared clock; a dropped frame desyncs everything after it. The transport bar reports the condition \xE2\x80\x94 Aligned, Uneven Ends, or Dropped Frames \xE2\x80\x94 and its Realign checkbox remaps frame index i to the same trigger instant across all cameras. It needs the cameras' frame timestamps: set their folder when creating the project, or in Tools > Camera Timestamps."},
         {"Prediction stores (.rpred)",
             "Read-only, on-disk 3D + confidence, kept separate from manual labels so a whole-video import never floods the Labeling Tool. They power the overlay and Pose Stats; \"Fix this frame\" promotes one frame into editable labels."},
         {"Scale factor",

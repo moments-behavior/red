@@ -465,18 +465,27 @@ load_images(std::map<std::string, std::string> &selected_files,
 }
 
 // Build or import the desync-fix sync plan for the loaded videos into
-// g_sync_fix. Precedence: a cluster_pose sync_plan.json next to the videos,
-// else per-camera timestamp sidecars (Cam<cam>_meta.csv or lab ISO CSVs) in
-// the media folder or its parent. On any inconsistency the plan is left
-// invalid with plan.error set — the feature simply stays unavailable.
+// g_sync_fix, from the project's chosen timestamps folder and nowhere else.
+// Precedence: a cluster_pose sync_plan.json there, else per-camera timestamp
+// sidecars (Cam<cam>_meta.csv or lab ISO CSVs). With no folder chosen there is
+// no plan. On any inconsistency the plan is left invalid with plan.error set
+// -- the feature simply stays unavailable.
+//
+// It used to look in the video's folder and its parent on every load, listing
+// both: for a video in Downloads that was Downloads and the user's home, and
+// on Windows a single odd file name there crashed red.
 inline void
-sync_fix_load_plan(const std::string &media_folder,
+sync_fix_load_plan(const std::string &timestamps_folder,
                    const std::vector<std::string> &cam_names,
                    const std::vector<FFmpegDemuxer *> &demuxers) {
     namespace fs = std::filesystem;
     g_sync_fix = SyncFixState{};
     sync_plan::SyncPlan &plan = g_sync_fix.plan;
-    if (cam_names.empty() || media_folder.empty()) return;
+    if (cam_names.empty()) return;
+    if (timestamps_folder.empty()) {
+        plan.error = "no timestamps folder set for this project";
+        return;
+    }
 
     // Demuxed frame counts, for validating the plan against the actual mp4s
     // (0 = unknown, skipped by the check).
@@ -484,8 +493,9 @@ sync_fix_load_plan(const std::string &media_folder,
     for (size_t i = 0; i < cam_names.size() && i < demuxers.size(); ++i)
         counts[cam_names[i]] = (int)demuxers[i]->GetNumFrames();
 
-    fs::path plan_json = fs::path(media_folder) / "sync_plan.json";
-    if (fs::exists(plan_json)) {
+    fs::path plan_json = fs::path(timestamps_folder) / "sync_plan.json";
+    std::error_code ec;
+    if (fs::exists(plan_json, ec)) {
         plan = sync_plan::load_json(plan_json.string());
         // A loaded camera the plan cannot map would silently desync — the
         // exact failure mode this feature exists to fix. Refuse the plan.
@@ -506,15 +516,9 @@ sync_fix_load_plan(const std::string &media_folder,
         }
         const std::string lab_pattern = "cam{cam}_timestamps_*.csv";
         ct::CameraTimestamps ts =
-            ct::load(media_folder, tokens, lab_pattern, token_counts);
+            ct::load(timestamps_folder, tokens, lab_pattern, token_counts);
         if (ts.format == ct::Format::None) {
-            fs::path parent = fs::path(media_folder).parent_path();
-            if (!parent.empty())
-                ts = ct::load(parent.string(), tokens, lab_pattern,
-                              token_counts);
-        }
-        if (ts.format == ct::Format::None) {
-            plan.error = "no timestamp metadata found";
+            plan.error = "no timestamp files in " + timestamps_folder;
             std::cout << "[sync-fix] unavailable: " << plan.error << std::endl;
             return;
         }
@@ -704,7 +708,7 @@ load_videos(std::map<std::string, std::string> &selected_files,
     // A clean plan is an identity mapping — leave the fix off so playback
     // keeps fast (non-accurate) seeks.
     t_stage = load_timing::Clock::now();
-    sync_fix_load_plan(pm.media_folder, pm.camera_names, demuxers);
+    sync_fix_load_plan(pm.timestamps_folder, pm.camera_names, demuxers);
     t_sync = load_timing::ms(t_stage);
     const sync_plan::SyncPlan &splan = g_sync_fix.plan;
     bool sync_enable = pm.sync_fix_enabled && splan.usable() &&

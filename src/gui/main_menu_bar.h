@@ -142,6 +142,35 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
                               "frame's 3D keypoints (forward temporal "
                               "tracker).");
         ImGui::EndDisabled();
+        // Where this project's per-camera timestamps are, for the desync fix
+        // and Frame Drops. A project setting: red does not look for them.
+        ImGui::Separator();
+        const bool can_set_timestamps = !pm.project_path.empty() &&
+                                        ps.video_loaded && !ctx.input_is_imgs;
+        ImGui::BeginDisabled(!can_set_timestamps);
+        if (ImGui::MenuItem("Camera Timestamps...")) {
+            IGFD::FileDialogConfig config;
+            config.countSelectionMax = 1;
+            config.path = !pm.timestamps_folder.empty() ? pm.timestamps_folder
+                                                        : pm.media_folder;
+            config.flags = ImGuiFileDialogFlags_Modal;
+            ImGuiFileDialog::Instance()->OpenDialog(
+                "ChooseProjectTimestamps", "Select Camera Timestamps Folder",
+                nullptr, config);
+        }
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort |
+                                 ImGuiHoveredFlags_AllowWhenDisabled)) {
+            if (!can_set_timestamps)
+                ImGui::SetTooltip("Open a video project first.");
+            else if (pm.timestamps_folder.empty())
+                ImGui::SetTooltip("Choose the folder with the cameras' frame "
+                                  "timestamps, for the desync fix\nand Frame "
+                                  "Drops. None is set for this project.");
+            else
+                ImGui::SetTooltip("Timestamps from: %s",
+                                  pm.timestamps_folder.c_str());
+        }
         ImGui::EndMenu();
     }
 
