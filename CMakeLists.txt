@@ -596,7 +596,12 @@ elseif(WIN32)
 
 
 
-    target_compile_definitions(red PRIVATE NOMINMAX _USE_MATH_DEFINES)
+    # WIN32_LEAN_AND_MEAN: without it <windows.h> also includes the old
+    # <winsock.h>, which clashes with the <winsock2.h> cpp-httplib needs
+    # (redefinition of sockaddr, fd_set, accept, ...) wherever windows.h comes
+    # first -- red.cpp includes it directly. red uses nothing it leaves out;
+    # utils.cpp includes <shlobj.h> for SHGetKnownFolderPath itself.
+    target_compile_definitions(red PRIVATE NOMINMAX _USE_MATH_DEFINES WIN32_LEAN_AND_MEAN)
     if(NOT RED_CUDA)
         target_compile_definitions(red PRIVATE RED_NO_CUDA)
     endif()
@@ -682,7 +687,7 @@ elseif(WIN32)
             ${CUDA_SRC_FILES}
             tests/${TEST_NAME}.cpp
         )
-        target_compile_definitions(${TEST_NAME} PRIVATE NOMINMAX _USE_MATH_DEFINES)
+        target_compile_definitions(${TEST_NAME} PRIVATE NOMINMAX _USE_MATH_DEFINES WIN32_LEAN_AND_MEAN)
         if(NOT RED_CUDA)
             target_compile_definitions(${TEST_NAME} PRIVATE RED_NO_CUDA)
         endif()
