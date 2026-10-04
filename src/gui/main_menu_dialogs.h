@@ -146,9 +146,11 @@ inline void HandleMainMenuDialogs(
     if (win.show_about) {
         ImGui::OpenPopup("About red");
         win.show_about = false;
+        win.about_open = true;
     }
     ImGui::SetNextWindowSize(ImVec2(440, 0), ImGuiCond_Appearing);
-    if (ImGui::BeginPopupModal("About red", nullptr,
+    // Passing &about_open gives the title bar a close x.
+    if (ImGui::BeginPopupModal("About red", &win.about_open,
                                ImGuiWindowFlags_AlwaysAutoResize)) {
 #if defined(__APPLE__)
         const char *platform = "macOS, Apple Silicon";
@@ -175,8 +177,7 @@ inline void HandleMainMenuDialogs(
                                red::decode_backend_name() + " decoding)";
             ImGui::SetClipboardText(info.c_str());
         }
-        ImGui::SameLine();
-        if (ImGui::Button("Close") || ImGui::IsKeyPressed(ImGuiKey_Escape))
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape))
             ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
     }

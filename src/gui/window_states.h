@@ -41,6 +41,7 @@ struct WindowStates {
     TracktailWindowState tracktail;
     bool show_help = false;
     bool show_about = false;   // Help > About red (a modal, drawn by HandleMainMenuDialogs)
+    bool about_open = false;   // its title bar x: ImGui clears this to close it
     // Set by the Welcome window's Recent Projects list; consumed by the
     // main loop, which has the load callbacks in scope.
     std::string load_project_request;
