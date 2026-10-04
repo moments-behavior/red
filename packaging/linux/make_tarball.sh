@@ -88,7 +88,8 @@ rm -f "$OUT/.sources"
 if [ -n "$foreign" ]; then
     echo "WARNING: libraries from outside the system's folders:" >&2
     echo "$foreign" | sed 's/^/    /' >&2
-    echo "  (a conda environment? run 'conda deactivate' and rebuild from a clean shell)" >&2
+    echo "  (a private build such as ~/nvidia/ffmpeg, or a conda environment:" >&2
+    echo "   rebuild from a clean shell with CUDA off, which uses the system's)" >&2
 fi
 
 # DT_RPATH (--force-rpath), not RUNPATH: it must reach the bundled libraries'

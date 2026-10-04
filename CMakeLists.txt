@@ -836,9 +836,12 @@ else()
     message(STATUS "Using CBLAS provider: ${RED_CBLAS_LIB}")
 
     # FFmpeg via pkg-config — prefer the custom CUDA-enabled build at
-    # $HOME/nvidia/ffmpeg (shared with orange) over any system FFmpeg.
+    # $HOME/nvidia/ffmpeg (shared with orange) over any system FFmpeg, but
+    # only for a CUDA build: that is what it exists for. A software-decode
+    # build is what gets packaged for download, and must carry the system's
+    # FFmpeg, not a private one built for this machine.
     set(RED_FFMPEG_PKGCONFIG "$ENV{HOME}/nvidia/ffmpeg/build/lib/pkgconfig")
-    if(EXISTS "${RED_FFMPEG_PKGCONFIG}")
+    if(RED_CUDA AND EXISTS "${RED_FFMPEG_PKGCONFIG}")
         set(ENV{PKG_CONFIG_PATH} "${RED_FFMPEG_PKGCONFIG}:$ENV{PKG_CONFIG_PATH}")
         message(STATUS "Using custom FFmpeg from ${RED_FFMPEG_PKGCONFIG}")
     endif()
