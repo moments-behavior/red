@@ -224,6 +224,12 @@ static void print_project_summary(const ProjectManager &pm,
 }
 
 int main(int argc, char **argv) {
+    // Write stdout as it comes. Redirected to a file or pipe it is otherwise
+    // block-buffered, and a crash then loses exactly the lines before it --
+    // a Windows log captured with `red.exe | Tee-Object` ended at startup
+    // although red had crashed loading a video. Its volume is low enough
+    // that unbuffered costs nothing that matters.
+    setvbuf(stdout, nullptr, _IONBF, 0);
     // Print build timestamp so the user can verify they're running the latest
     // rebuild (debugging stale-binary issues during integration work).
     printf("red built %s %s\n", __DATE__, __TIME__);
