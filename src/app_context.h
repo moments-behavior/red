@@ -116,7 +116,8 @@ inline std::string resolve_project_layout_path(const AppContext &ctx,
         return in_project.string();
     if (created_fresh) *created_fresh = true;
 
-    const std::string src = ctx.window->exe_dir + "/../default_imgui_layout.ini";
+    const std::string src =
+        red_resource_dir(ctx.window->exe_dir) + "/default_imgui_layout.ini";
     const bool have_src = fs::exists(src, ec);
 
     if (have_src) {
