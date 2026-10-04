@@ -281,6 +281,19 @@ int main(int argc, char **argv) {
 #endif
 
     render_initialize_target(window);
+#if !defined(__APPLE__) && !defined(_WIN32)
+    // Linux: a window's title-bar / taskbar icon is whatever the program sets
+    // at run time (macOS takes the app's .icns, Windows the exe's resource).
+    {
+        const std::string icon = red_resource_dir(window->exe_dir) + "/icon.png";
+        int w = 0, h = 0, n = 0;
+        if (unsigned char *px = stbi_load(icon.c_str(), &w, &h, &n, 4)) {
+            GLFWimage img{w, h, px};
+            glfwSetWindowIcon(window->render_target, 1, &img);
+            stbi_image_free(px);
+        }
+    }
+#endif
     RenderScene *scene = (RenderScene *)malloc(sizeof(RenderScene));
     // scene is malloc'd uninitialized; explicitly set the bool fields we
     // read before buffer allocation so behavior is deterministic. Default
