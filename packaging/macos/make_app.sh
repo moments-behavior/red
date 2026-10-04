@@ -122,6 +122,18 @@ cp "$EXE" "$CONTENTS/MacOS/red"
 cp -R "$REPO/fonts" "$RES/fonts"
 cp "$REPO/default_imgui_layout.ini" "$RES/"
 
+# App icon from the repo's icon.png (512 px): every size macOS asks for, in
+# an .icns. No 512@2x -- that is 1024 px, and blowing 512 up would only blur.
+ICONSET="$WORK/red.iconset"
+mkdir -p "$ICONSET"
+for px in 16 32 128 256 512; do
+    sips -z $px $px "$REPO/icon.png" --out "$ICONSET/icon_${px}x${px}.png" > /dev/null
+    [ $px = 512 ] && continue
+    sips -z $((px * 2)) $((px * 2)) "$REPO/icon.png" \
+        --out "$ICONSET/icon_${px}x${px}@2x.png" > /dev/null
+done
+iconutil -c icns "$ICONSET" -o "$RES/red.icns"
+
 echo "  $nlibs dylibs; rewriting install names..."
 while IFS= read -r real; do
     base="$(basename "$real")"
@@ -154,6 +166,7 @@ cat > "$CONTENTS/Info.plist" <<EOF
     <key>CFBundleDisplayName</key>        <string>red</string>
     <key>CFBundleIdentifier</key>         <string>org.moments-behavior.red</string>
     <key>CFBundleExecutable</key>         <string>red</string>
+    <key>CFBundleIconFile</key>           <string>red</string>
     <key>CFBundlePackageType</key>        <string>APPL</string>
     <key>CFBundleShortVersionString</key> <string>$VERSION</string>
     <key>CFBundleVersion</key>            <string>$VERSION</string>
