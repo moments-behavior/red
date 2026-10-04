@@ -198,6 +198,13 @@ for f in "$CONTENTS/MacOS/red" "$FW"/*.dylib; do
 done
 [ "$bad" = 0 ] || exit 1
 
+# Finder caches an app's icon by path, and this script replaces red.app at the
+# same path -- so a build after an icon change kept showing the old (or no)
+# icon. Have Launch Services read this one afresh.
+touch "$APP"
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \
+    -f "$APP" 2> /dev/null || true
+
 ZIP="$OUT/red-$VERSION-macos$MINOS-arm64.zip"
 rm -f "$ZIP"
 ditto -c -k --sequesterRsrc --keepParent "$APP" "$ZIP"
