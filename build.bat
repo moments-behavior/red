@@ -42,13 +42,19 @@ set "VSCMAKE=%VSPATH%\Common7\IDE\CommonExtensions\Microsoft\CMake"
 if exist "%VSCMAKE%\CMake\bin\cmake.exe" set "PATH=%VSCMAKE%\CMake\bin;%VSCMAKE%\Ninja;%PATH%"
 
 rem --- CUDA: the installer sets CUDA_PATH; CMakeLists.txt reads it -------
-if not defined CUDA_PATH (
-    echo ERROR: CUDA_PATH is not set. Install the CUDA Toolkit ^(12.x^), or set
-    echo        it manually, e.g. set CUDA_PATH=C:\Program Files\NVIDIA GPU
-    echo        Computing Toolkit\CUDA\v12.6
-    exit /b 1
+rem Not needed for the software-decode build:  build.bat -DRED_ENABLE_CUDA=OFF
+set "RED_NO_CUDA_BUILD="
+echo %* | findstr /i /c:"RED_ENABLE_CUDA=OFF" >nul && set "RED_NO_CUDA_BUILD=1"
+if not defined RED_NO_CUDA_BUILD (
+    if not defined CUDA_PATH (
+        echo ERROR: CUDA_PATH is not set. Install the CUDA Toolkit ^(12.x^), or set
+        echo        it manually, e.g. set CUDA_PATH=C:\Program Files\NVIDIA GPU
+        echo        Computing Toolkit\CUDA\v12.6
+        echo        Or build without CUDA:  build.bat -DRED_ENABLE_CUDA=OFF
+        exit /b 1
+    )
+    set "PATH=!CUDA_PATH!\bin;!PATH!"
 )
-set "PATH=%CUDA_PATH%\bin;%PATH%"
 
 rem --- vcpkg: every Windows dependency comes from here ------------------
 rem Looked for as VCPKG_ROOT, then the vcpkg on PATH, then the usual clone
@@ -89,7 +95,7 @@ if not defined FFMPEG_ROOT (
 )
 
 echo Using vcpkg:  %VCPKG_ROOT%
-echo Using CUDA:   %CUDA_PATH%
+if defined RED_NO_CUDA_BUILD (echo Using CUDA:   no -- software decoding) else (echo Using CUDA:   %CUDA_PATH%)
 echo Using FFmpeg: %FFMPEG_ROOT%
 rem Each -D is quoted as one whole token. Without that a path containing a
 rem space -- Visual Studio's bundled vcpkg lives under "C:\Program Files" --
