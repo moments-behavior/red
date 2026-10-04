@@ -1,6 +1,5 @@
 #pragma once
 #include "app_context.h"
-#include "decode_backend.h"
 #include "IconsForkAwesome.h"
 #include "utils.h"
 #include <algorithm>
@@ -607,12 +606,9 @@ inline void DrawTransportBar(TransportBarState &state, AppContext &ctx) {
                  "\xE2\x80\x94 (assuming %.0f fps)", dc->video_fps);
     snprintf(val_spd, sizeof(val_spd), "%.2fx",    ps.inst_speed);
     snprintf(val_rr,  sizeof(val_rr),  "%.0f fps", ImGui::GetIO().Framerate);
-    // Which decoder is running. Worth showing because it is not always the
-    // one the machine picked at startup: a stream the GPU cannot take -- a
-    // codec VideoToolbox does not build a format description for, or a
-    // resolution above what NVDEC advertises -- drops the whole session to
-    // software when the videos load. That used to happen with no sign of it.
-    const char *val_dec = red::decode_backend_name();
+    // Which decoder is running (hardware/software, and why) is in
+    // Help > About red; it does not change during a session, so it does not
+    // need the transport bar's room.
     // Right-aligned when there is room. The block used to be placed at
     // window width minus its own width whatever sat to its left, so on a
     // narrow window it was drawn over the playback-speed controls. It now
@@ -623,7 +619,6 @@ inline void DrawTransportBar(TransportBarState &state, AppContext &ctx) {
         {"Recorded FR", "FR", val_fr},
         {"Play Speed", "Speed", val_spd},
         {"Render Rate", "Render", val_rr},
-        {"Decode", "Decode", val_dec},
     };
     const int n_items = (int)(sizeof(items) / sizeof(items[0]));
     enum Tier { Full, Brief, ValuesOnly, Hidden };
@@ -686,11 +681,6 @@ inline void DrawTransportBar(TransportBarState &state, AppContext &ctx) {
                                   "playback runs at an assumed %.1f fps. Change "
                                   "it next to Playback Speed.",
                                   l ? "" : "Recorded FR\n", dc->video_fps);
-            else if (i == 3)
-                ImGui::SetTooltip("%s%s decoding \xE2\x80\x94 %s.\n"
-                                  "Override with RED_DECODE_BACKEND=hw or sw.",
-                                  l ? "" : "Decode: ", val_dec,
-                                  red::decode_backend_reason());
             else if (!l || tier == Brief)
                 ImGui::SetTooltip("%s", items[i].full);
         }
