@@ -1,6 +1,7 @@
 *.exe
 *.o
 release
+release-linux
 .vscode
 .vs
 Debug
