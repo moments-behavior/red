@@ -11,8 +11,9 @@
 #
 # The app is arm64 only and needs the macOS version the Homebrew bottles were
 # built for (read from them into Info.plist). It is signed ad hoc, not with a
-# Developer ID, so the first launch on another Mac needs right-click > Open,
-# or: xattr -dr com.apple.quarantine red.app
+# Developer ID, so another Mac refuses the first launch; then System Settings >
+# Privacy & Security > Open Anyway (right-click > Open no longer bypasses this
+# since macOS 15), or: xattr -dr com.apple.quarantine red.app
 #
 # Written for the bash 3.2 macOS ships: no associative arrays.
 set -euo pipefail
