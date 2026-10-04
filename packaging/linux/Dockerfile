@@ -9,15 +9,18 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential cmake pkg-config git patchelf file \
-        ca-certificates lsb-release wget \
+        ca-certificates lsb-release wget gnupg \
         libeigen3-dev libceres-dev libglfw3-dev libglew-dev libopenblas-dev \
         libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
         libgtest-dev libgmock-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Apache Arrow + Parquet (tailcycle datasets) come from Apache's own apt
-# repository; Ubuntu does not package them.
-RUN wget -q https://apache.jfrog.io/artifactory/arrow/ubuntu/apache-arrow-apt-source-latest-jammy.deb \
+# repository; Ubuntu does not package them. apt-get update first: the layer
+# above cleared the package lists, and the repository package needs gnupg
+# resolved from them.
+RUN apt-get update \
+    && wget -q https://apache.jfrog.io/artifactory/arrow/ubuntu/apache-arrow-apt-source-latest-jammy.deb \
     && apt-get install -y ./apache-arrow-apt-source-latest-jammy.deb \
     && rm apache-arrow-apt-source-latest-jammy.deb \
     && apt-get update && apt-get install -y --no-install-recommends \
