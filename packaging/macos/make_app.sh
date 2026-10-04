@@ -205,8 +205,10 @@ touch "$APP"
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \
     -f "$APP" 2> /dev/null || true
 
+# One build in dist/ at a time: red.app is replaced above, so the zips of
+# earlier builds -- named after other commits -- go too rather than pile up.
 ZIP="$OUT/red-$VERSION-macos$MINOS-arm64.zip"
-rm -f "$ZIP"
+rm -f "$OUT"/red-*-macos*-arm64.zip
 ditto -c -k --sequesterRsrc --keepParent "$APP" "$ZIP"
 echo "done: $APP ($(du -sm "$APP" | cut -f1) MB)"
 echo "      $ZIP ($(du -m "$ZIP" | cut -f1) MB)"
