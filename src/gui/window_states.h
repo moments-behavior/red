@@ -40,6 +40,7 @@ struct WindowStates {
     SwitchSkeletonState switch_skeleton;
     TracktailWindowState tracktail;
     bool show_help = false;
+    bool show_about = false;   // Help > About red (a modal, drawn by HandleMainMenuDialogs)
     // Set by the Welcome window's Recent Projects list; consumed by the
     // main loop, which has the load callbacks in scope.
     std::string load_project_request;

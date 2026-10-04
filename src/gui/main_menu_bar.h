@@ -184,10 +184,6 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
         ImGui::Separator();
         ImGui::MenuItem("Show keypoint names", nullptr,
                         &display.show_keypoint_names);
-        ImGui::Separator();
-        if (ImGui::MenuItem("Help")) {
-            show_help_window = true;
-        }
         ImGui::EndMenu();
     }
 
@@ -195,7 +191,7 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
     // Export Tool's combo. Hidden entirely without Parquet: neither entry
     // could do anything, and there is nothing the user could do about that
     // from a menu.
-    if (TailcycleImport::available() && ImGui::BeginMenu("tailcycle")) {
+    if (TailcycleImport::available() && ImGui::BeginMenu("Tailcycle")) {
         if (ImGui::MenuItem("Open Dataset...")) {
             tailcycle_open_browse(win.tailcycle_open);
         }
@@ -212,6 +208,25 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
                                  ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("Write this project out as a tailcycle-dataset. "
                               "Opens the Export Tool with that format chosen.");
+        ImGui::EndMenu();
+    }
+
+    // Help: last, where both macOS and Windows put it.
+    if (ImGui::BeginMenu("Help")) {
+        if (ImGui::MenuItem("red Help", keys::display(keys::Sc::ToggleHelp).c_str()))
+            show_help_window = true;
+        ImGui::Separator();
+        if (ImGui::MenuItem("About red"))
+            win.show_about = true;
+        if (ImGui::MenuItem("Report an Issue...")) {
+            ImGuiPlatformIO &pio = ImGui::GetPlatformIO();
+            if (pio.Platform_OpenInShellFn)
+                pio.Platform_OpenInShellFn(ImGui::GetCurrentContext(),
+                                           "https://github.com/moments-behavior/red/issues");
+        }
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+            ImGui::SetTooltip("Opens red's GitHub issues page. Include the "
+                              "version from About red.");
         ImGui::EndMenu();
     }
 

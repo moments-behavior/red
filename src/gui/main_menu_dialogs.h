@@ -1,4 +1,5 @@
 #pragma once
+#include "decode_backend.h"
 #include "app_context.h"
 #include "gui/tailcycle_open_window.h"
 #include "gui/window_states.h"
@@ -139,6 +140,45 @@ inline void HandleMainMenuDialogs(
             save_user_settings(user_settings);
         }
         ImGuiFileDialog::Instance()->Close();
+    }
+
+    // Help > About red
+    if (win.show_about) {
+        ImGui::OpenPopup("About red");
+        win.show_about = false;
+    }
+    ImGui::SetNextWindowSize(ImVec2(440, 0), ImGuiCond_Appearing);
+    if (ImGui::BeginPopupModal("About red", nullptr,
+                               ImGuiWindowFlags_AlwaysAutoResize)) {
+#if defined(__APPLE__)
+        const char *platform = "macOS, Apple Silicon";
+#elif defined(_WIN32)
+        const char *platform = "Windows, x64";
+#else
+        const char *platform = "Linux, x64";
+#endif
+        ImGui::TextUnformatted("red -- multi-camera video labeling");
+        ImGui::Separator();
+        ImGui::Text("Version   %s", RED_VERSION);
+        ImGui::Text("Built     %s %s", __DATE__, __TIME__);
+        ImGui::Text("Platform  %s", platform);
+        ImGui::Text("Decoding  %s", red::decode_backend_name());
+        ImGui::TextDisabled("          %s", red::decode_backend_reason());
+        ImGui::Separator();
+        ImGui::TextLinkOpenURL("github.com/moments-behavior/red",
+                               "https://github.com/moments-behavior/red");
+        ImGui::TextDisabled("Quote the version above when reporting an issue.");
+        ImGui::Spacing();
+        if (ImGui::Button("Copy version info")) {
+            std::string info = std::string("red ") + RED_VERSION + " (" +
+                               platform + ", built " + __DATE__ + ", " +
+                               red::decode_backend_name() + " decoding)";
+            ImGui::SetClipboardText(info.c_str());
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Close") || ImGui::IsKeyPressed(ImGuiKey_Escape))
+            ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
     }
 
     // Tools > Camera Timestamps: pick a folder, confirm, then reopen the

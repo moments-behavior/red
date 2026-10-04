@@ -73,6 +73,43 @@ set(DIR_HTTPLIB "${CMAKE_SOURCE_DIR}/lib/httplib")
 set(DIR_MINIZ   "${CMAKE_SOURCE_DIR}/lib/miniz")
 set(MINIZ_SRC   "${DIR_MINIZ}/miniz.c")   # C source: project() lists C below
 
+# red's version, shown in Help > About: a release tag when the build is exactly
+# at one, else <branch>-<commit>, with -dirty for uncommitted changes -- the
+# same names the packaging scripts give their zips. Taken at configure time;
+# build.sh and build.bat configure on every run.
+set(RED_VERSION "unknown")
+find_program(RED_GIT git)
+if(RED_GIT)
+    execute_process(COMMAND ${RED_GIT} describe --tags --exact-match
+                    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+                    OUTPUT_VARIABLE _red_tag RESULT_VARIABLE _red_rc
+                    OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+    if(_red_rc EQUAL 0)
+        set(RED_VERSION "${_red_tag}")
+    else()
+        execute_process(COMMAND ${RED_GIT} rev-parse --abbrev-ref HEAD
+                        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+                        OUTPUT_VARIABLE _red_branch
+                        OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+        execute_process(COMMAND ${RED_GIT} rev-parse --short HEAD
+                        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+                        OUTPUT_VARIABLE _red_commit
+                        OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+        string(REPLACE "/" "-" _red_branch "${_red_branch}")
+        if(_red_commit)
+            set(RED_VERSION "${_red_branch}-${_red_commit}")
+        endif()
+    endif()
+    execute_process(COMMAND ${RED_GIT} diff --quiet HEAD --
+                    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+                    RESULT_VARIABLE _red_dirty ERROR_QUIET)
+    if(NOT _red_dirty EQUAL 0 AND NOT RED_VERSION STREQUAL "unknown")
+        set(RED_VERSION "${RED_VERSION}-dirty")
+    endif()
+endif()
+message(STATUS "red version: ${RED_VERSION}")
+add_compile_definitions("RED_VERSION=\"${RED_VERSION}\"")
+
 # Default to an optimized build. Without this the build type is empty and the
 # compiler runs at -O0, which cripples hot host loops (e.g. the HybridNet
 # reprojection: 3200ms at -O0 vs ~450ms at -O3). Respects an explicit
