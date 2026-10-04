@@ -117,3 +117,27 @@ $mb = [math]::Round(((Get-ChildItem $Stage -Recurse | Measure-Object Length -Sum
 Write-Host "done: $Stage ($dlls DLLs, $mb MB)"
 Write-Host "      $Zip ($([math]::Round((Get-Item $Zip).Length / 1MB)) MB)"
 Write-Host "      run: red\bin\red.exe"
+
+# --- Installer: Inno Setup, when it is installed ------------------------------
+# Same dist\red folder, wrapped by packaging\windows\red.iss into a setup.exe
+# with a Start menu entry and an uninstaller. Optional: without Inno Setup the
+# zip above is the whole release.
+$iscc = @(
+    (Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"),
+    (Join-Path $env:ProgramFiles "Inno Setup 6\ISCC.exe"),
+    (Join-Path $env:LOCALAPPDATA "Programs\Inno Setup 6\ISCC.exe")   # winget, per user
+) | Where-Object { Test-Path $_ } | Select-Object -First 1
+if (-not $iscc) {
+    Write-Host "      (no installer: Inno Setup 6 not found -- winget install JRSoftware.InnoSetup)"
+    return
+}
+Get-ChildItem $OutDir -Filter "red-*-windows-x64-setup.exe" -ErrorAction SilentlyContinue | Remove-Item -Force
+$iss = Join-Path $Repo "packaging\windows\red.iss"
+$isccOut = Quiet { & $iscc /Q "/DAppVersion=$Version" "/DStageDir=$Stage" "/DOutDir=$OutDir" $iss }
+if ($LASTEXITCODE -ne 0) {
+    # Run it again visibly so its error reaches the console.
+    & $iscc "/DAppVersion=$Version" "/DStageDir=$Stage" "/DOutDir=$OutDir" $iss
+    throw "Inno Setup failed (exit $LASTEXITCODE)"
+}
+$Setup = Join-Path $OutDir "red-$Version-windows-x64-setup.exe"
+Write-Host "      $Setup ($([math]::Round((Get-Item $Setup).Length / 1MB)) MB)"
