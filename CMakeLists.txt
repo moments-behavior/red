@@ -473,7 +473,8 @@ if(APPLE)
 
 elseif(WIN32)
     # Windows build with NVIDIA CUDA support (RTX 3090)
-    project(red LANGUAGES C CXX)
+    # RC: the resource compiler, for red.exe's icon (packaging/windows/red.rc).
+    project(red LANGUAGES C CXX RC)
     red_resolve_cuda()
     red_resolve_parquet()
     if(RED_CUDA)
@@ -592,6 +593,7 @@ elseif(WIN32)
         ${IMPLOT_SRC}
         ${CUDA_SRC_FILES}
         ${MINIZ_SRC}   # tracktail server NPZ decode
+        ${CMAKE_SOURCE_DIR}/packaging/windows/red.rc   # exe + window icon
     )
 
 
