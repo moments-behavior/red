@@ -1,4 +1,4 @@
-# red labeling 📍
+# <img src="icon.png" alt="" height="48"> red labeling 
 
 A 3D multi-camera labeling tool for fast review and triangulation across many synchronized video streams.
 
