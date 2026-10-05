@@ -24,14 +24,14 @@
 ; Fixed for every release: it is how a newer installer finds and replaces an
 ; installed red. Never change it.
 AppId={{8FC2728F-DD73-4AE3-97A6-BC5A2377519B}
-AppName=red
+AppName=Red
 AppVersion={#AppVersion}
-AppVerName=red {#AppVersion}
+AppVerName=Red {#AppVersion}
 AppPublisher=moments-behavior
 AppPublisherURL=https://github.com/moments-behavior/red
 AppSupportURL=https://github.com/moments-behavior/red/issues
 DefaultDirName={autopf}\red
-DefaultGroupName=red
+DefaultGroupName=Red
 DisableProgramGroupPage=yes
 ; Per user unless the user picks "all users" in the dialog.
 PrivilegesRequired=lowest
@@ -42,7 +42,7 @@ OutputDir={#OutDir}
 OutputBaseFilename=red-{#AppVersion}-windows-x64-setup
 SetupIconFile=red.ico
 UninstallDisplayIcon={app}\bin\red.exe
-UninstallDisplayName=red
+UninstallDisplayName=Red
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
@@ -60,10 +60,14 @@ Source: "{#StageDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdir
 ; An upgrade drops the previous version's DLLs first, so none that the new one
 ; no longer uses are left behind.
 Type: filesandordirs; Name: "{app}\bin"
+; Shortcuts from versions that named them "red": Windows matches names without
+; case, so overwriting would keep the old lowercase name. Remove, then recreate.
+Type: files; Name: "{autoprograms}\red.lnk"
+Type: files; Name: "{autodesktop}\red.lnk"
 
 [Icons]
-Name: "{autoprograms}\red"; Filename: "{app}\bin\red.exe"; WorkingDir: "{app}\bin"
-Name: "{autodesktop}\red"; Filename: "{app}\bin\red.exe"; WorkingDir: "{app}\bin"; Tasks: desktopicon
+Name: "{autoprograms}\Red"; Filename: "{app}\bin\red.exe"; WorkingDir: "{app}\bin"
+Name: "{autodesktop}\Red"; Filename: "{app}\bin\red.exe"; WorkingDir: "{app}\bin"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\bin\red.exe"; Description: "Launch red"; WorkingDir: "{app}\bin"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\bin\red.exe"; Description: "Launch Red"; WorkingDir: "{app}\bin"; Flags: nowait postinstall skipifsilent

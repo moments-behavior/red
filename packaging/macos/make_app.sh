@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Package a built red into a self-contained red.app and a zip to download.
+# Package a built red into a self-contained Red.app and a zip to download.
 #
 #     ./build.sh && packaging/macos/make_app.sh [build_dir] [out_dir]
 #
 # Takes <build_dir>/red (default: release), copies every non-system dylib it
 # needs -- FFmpeg, Arrow, Ceres and what they pull in -- into
-# red.app/Contents/Frameworks, rewrites the references so they load from there
+# Red.app/Contents/Frameworks, rewrites the references so they load from there
 # instead of /opt/homebrew, signs it all ad hoc, checks nothing still points
 # outside the app, and zips it into <out_dir> (default: dist).
 #
@@ -13,7 +13,7 @@
 # built for (read from them into Info.plist). It is signed ad hoc, not with a
 # Developer ID, so another Mac refuses the first launch; then System Settings >
 # Privacy & Security > Open Anyway (right-click > Open no longer bypasses this
-# since macOS 15), or: xattr -dr com.apple.quarantine red.app
+# since macOS 15), or: xattr -dr com.apple.quarantine Red.app
 #
 # Written for the bash 3.2 macOS ships: no associative arrays.
 set -euo pipefail
@@ -31,7 +31,8 @@ VERSION="$(git -C "$REPO" describe --tags --exact-match 2> /dev/null ||
            echo "$(git -C "$REPO" rev-parse --abbrev-ref HEAD)-$(git -C "$REPO" rev-parse --short HEAD)")"
 VERSION="${VERSION//\//-}"   # a branch like feature/x must not make a path
 git -C "$REPO" diff --quiet HEAD -- || VERSION="$VERSION-dirty"
-APP="$OUT/red.app"
+APP="$OUT/Red.app"   # what Finder and the Dock show; the binary inside stays red
+rm -rf "$OUT/red.app"   # the name builds before Red.app used
 CONTENTS="$APP/Contents"
 FW="$CONTENTS/Frameworks"
 RES="$CONTENTS/Resources"
@@ -163,8 +164,8 @@ cat > "$CONTENTS/Info.plist" <<EOF
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleName</key>               <string>red</string>
-    <key>CFBundleDisplayName</key>        <string>red</string>
+    <key>CFBundleName</key>               <string>Red</string>
+    <key>CFBundleDisplayName</key>        <string>Red</string>
     <key>CFBundleIdentifier</key>         <string>org.moments-behavior.red</string>
     <key>CFBundleExecutable</key>         <string>red</string>
     <key>CFBundleIconFile</key>           <string>red</string>
@@ -198,14 +199,14 @@ for f in "$CONTENTS/MacOS/red" "$FW"/*.dylib; do
 done
 [ "$bad" = 0 ] || exit 1
 
-# Finder caches an app's icon by path, and this script replaces red.app at the
+# Finder caches an app's icon by path, and this script replaces Red.app at the
 # same path -- so a build after an icon change kept showing the old (or no)
 # icon. Have Launch Services read this one afresh.
 touch "$APP"
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \
     -f "$APP" 2> /dev/null || true
 
-# One build in dist/ at a time: red.app is replaced above, so the zips of
+# One build in dist/ at a time: Red.app is replaced above, so the zips of
 # earlier builds -- named after other commits -- go too rather than pile up.
 ZIP="$OUT/red-$VERSION-macos$MINOS-arm64.zip"
 rm -f "$OUT"/red-*-macos*-arm64.zip

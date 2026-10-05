@@ -213,10 +213,10 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
 
     // Help: last, where both macOS and Windows put it.
     if (ImGui::BeginMenu("Help")) {
-        if (ImGui::MenuItem("red Help", keys::display(keys::Sc::ToggleHelp).c_str()))
+        if (ImGui::MenuItem("Red Help", keys::display(keys::Sc::ToggleHelp).c_str()))
             show_help_window = true;
         ImGui::Separator();
-        if (ImGui::MenuItem("About red"))
+        if (ImGui::MenuItem("About Red"))
             win.show_about = true;
         if (ImGui::MenuItem("Report an Issue...")) {
             ImGuiPlatformIO &pio = ImGui::GetPlatformIO();
@@ -226,7 +226,7 @@ inline void DrawMainMenuBar(AppContext &ctx, WindowStates &win) {
         }
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
             ImGui::SetTooltip("Opens red's GitHub issues page. Include the "
-                              "version from About red.");
+                              "version from About Red.");
         ImGui::EndMenu();
     }
 

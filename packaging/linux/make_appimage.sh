@@ -38,7 +38,7 @@ cp "$REPO/icon.png" "$APPDIR/.DirIcon"
 cat > "$APPDIR/red.desktop" <<'EOF'
 [Desktop Entry]
 Type=Application
-Name=red
+Name=Red
 Comment=Multi-camera video labeling
 Exec=red
 Icon=red

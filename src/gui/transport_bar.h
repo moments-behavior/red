@@ -607,7 +607,7 @@ inline void DrawTransportBar(TransportBarState &state, AppContext &ctx) {
     snprintf(val_spd, sizeof(val_spd), "%.2fx",    ps.inst_speed);
     snprintf(val_rr,  sizeof(val_rr),  "%.0f fps", ImGui::GetIO().Framerate);
     // Which decoder is running (hardware/software, and why) is in
-    // Help > About red; it does not change during a session, so it does not
+    // Help > About Red; it does not change during a session, so it does not
     // need the transport bar's room.
     // Right-aligned when there is room. The block used to be placed at
     // window width minus its own width whatever sat to its left, so on a

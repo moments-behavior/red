@@ -142,15 +142,15 @@ inline void HandleMainMenuDialogs(
         ImGuiFileDialog::Instance()->Close();
     }
 
-    // Help > About red
+    // Help > About Red
     if (win.show_about) {
-        ImGui::OpenPopup("About red");
+        ImGui::OpenPopup("About Red");
         win.show_about = false;
         win.about_open = true;
     }
     ImGui::SetNextWindowSize(ImVec2(440, 0), ImGuiCond_Appearing);
     // Passing &about_open gives the title bar a close x.
-    if (ImGui::BeginPopupModal("About red", &win.about_open,
+    if (ImGui::BeginPopupModal("About Red", &win.about_open,
                                ImGuiWindowFlags_AlwaysAutoResize)) {
 #if defined(__APPLE__)
         const char *platform = "macOS, Apple Silicon";
@@ -159,7 +159,7 @@ inline void HandleMainMenuDialogs(
 #else
         const char *platform = "Linux, x64";
 #endif
-        ImGui::TextUnformatted("red -- multi-camera video labeling");
+        ImGui::TextUnformatted("Red -- multi-camera video labeling");
         ImGui::Separator();
         ImGui::Text("Version   %s", RED_VERSION);
         ImGui::Text("Built     %s %s", __DATE__, __TIME__);
@@ -172,7 +172,7 @@ inline void HandleMainMenuDialogs(
         ImGui::TextDisabled("Quote the version above when reporting an issue.");
         ImGui::Spacing();
         if (ImGui::Button("Copy version info")) {
-            std::string info = std::string("red ") + RED_VERSION + " (" +
+            std::string info = std::string("Red ") + RED_VERSION + " (" +
                                platform + ", built " + __DATE__ + ", " +
                                red::decode_backend_name() + " decoding)";
             ImGui::SetClipboardText(info.c_str());
