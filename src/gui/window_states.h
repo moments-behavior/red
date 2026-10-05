@@ -200,13 +200,14 @@ struct WindowStates {
         bbox.show = false;
         bbox.enabled = false;
         bbox.drawing = false;
-        bbox.class_names.clear();
-        bbox.class_colors.clear();
         bbox.current_class = 0;
         bbox.current_instance = 0;
+        bbox.hovered_cam = bbox.hovered_idx = -1;
+        bbox.classes_dirty = false;
         obb.show = false;
         obb.enabled = false;
         obb.draw_state = OBBDrawState::Idle;
+        obb.hovered_cam = obb.hovered_idx = -1;
 #ifdef RED_HAS_MUJOCO
         if (body_model.renderer) {
             mujoco_renderer_destroy(body_model.renderer);

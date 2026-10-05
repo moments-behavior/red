@@ -587,7 +587,7 @@ int main(int argc, char **argv) {
                 [&]() { DrawBBoxToolWindow(win.bbox, ctx); },
                 nullptr});
     panels.add({"OBB Tool",
-                [&]() { DrawOBBToolWindow(win.obb, ctx); },
+                [&]() { DrawOBBToolWindow(win.obb, win.bbox, ctx); },
                 nullptr});
     panels.add({"SAM Assist",
                 [&]() { DrawSamToolWindow(win.sam_tool, sam_state, ctx); },
@@ -1247,26 +1247,24 @@ int main(int argc, char **argv) {
                             u32 frame = (u32)current_frame_num;
                             int nn = skeleton.num_nodes;
                             int nc = (int)scene->num_cams;
+                            auto &class_names = pm.annotation_config.class_names;
 
-                            // Bbox tool
-                            if (win.bbox.enabled) {
-                                bbox_handle_input(win.bbox, annotations,
-                                                  frame, j, nn, nc, iw, ih);
-                            }
+                            // Bbox tool (called even when disabled so it
+                            // clears its hover state)
+                            bbox_handle_input(win.bbox, annotations, class_names,
+                                              frame, j, nn, nc, iw, ih);
                             if (display.show_bboxes) {
                                 bbox_draw_overlays(win.bbox, annotations,
-                                                   frame, j, iw, ih);
+                                                   class_names, frame, j, iw, ih);
                             }
 
                             // OBB tool
-                            if (win.obb.enabled) {
-                                obb_handle_input(win.obb, win.bbox,
-                                                 annotations, frame, j,
-                                                 nn, nc, iw, ih);
-                            }
+                            obb_handle_input(win.obb, win.bbox, annotations,
+                                             class_names, frame, j,
+                                             nn, nc, iw, ih);
                             if (display.show_bboxes) {
-                                obb_draw_overlays(win.obb, win.bbox,
-                                                  annotations, frame, j, iw, ih);
+                                obb_draw_overlays(win.obb, win.bbox, annotations,
+                                                  class_names, frame, j, iw, ih);
                             }
 
                             // Accepted mask overlays (stored in AnnotationMap)

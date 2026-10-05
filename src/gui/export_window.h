@@ -25,7 +25,7 @@
 
 struct ExportWindowState {
     bool show = false;
-    int format_idx = 0; // 0=JARVIS, 1=COCO, 2=DLC, 3=YOLO Pose, 4=YOLO Detect, 5=Nerfstudio
+    int format_idx = 0; // 0=JARVIS, 1=COCO, 2=DLC, 3=YOLO Pose, 4=YOLO Detect, 5=Nerfstudio, 6=YOLO OBB
     bool include_video_index = false; // JARVIS: include video_index.json
     std::string output_dir;
     float margin = 50.0f;
@@ -76,7 +76,7 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
         static const char *format_labels[] = {
             "JARVIS", "COCO Keypoints",
             "DeepLabCut", "YOLO Pose", "YOLO Detection",
-            "Nerfstudio / 3DGS"
+            "Nerfstudio / 3DGS", "YOLO OBB"
         };
         ImGui::Combo("Export Format", &state.format_idx, format_labels,
                      IM_ARRAYSIZE(format_labels));
@@ -89,6 +89,7 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
             ExportFormats::YOLO_POSE,
             ExportFormats::YOLO_DETECT,
             ExportFormats::NERFSTUDIO,
+            ExportFormats::YOLO_OBB,
         };
         auto fmt = format_map[state.format_idx];
         bool is_jarvis = (fmt == ExportFormats::JARVIS);
@@ -130,13 +131,20 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
                     pm.media_folder.empty() ? "(none — images will not be extracted)" : pm.media_folder.c_str());
         ImGui::Text("Cameras:      %d", (int)pm.camera_names.size());
 
-        int kp_count = 0, mask_count = 0, total_count = 0;
+        int kp_count = 0, mask_count = 0, bbox_count = 0, obb_count = 0, total_count = 0;
         for (const auto &[f, fa] : amap) {
             bool has_kp = frame_has_any_keypoints(fa);
             bool has_mask = frame_has_any_masks(fa);
+            bool has_bbox = false, has_obb = false;
+            for (const auto &cam : fa.cameras) {
+                has_bbox = has_bbox || cam.has_bbox();
+                has_obb  = has_obb  || cam.has_obb();
+            }
             if (has_kp) ++kp_count;
             if (has_mask) ++mask_count;
-            if (has_kp || has_mask) ++total_count;
+            if (has_bbox) ++bbox_count;
+            if (has_obb) ++obb_count;
+            if (has_kp || has_mask || has_bbox || has_obb) ++total_count;
         }
         ImGui::Text("Annotated:    %d frames", total_count);
         if (kp_count > 0)
@@ -144,6 +152,10 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
         if (mask_count > 0)
             ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.3f, 1.0f),
                 "  Masks:      %d frames", mask_count);
+        if (bbox_count > 0)
+            ImGui::Text("  Bboxes:     %d frames", bbox_count);
+        if (obb_count > 0)
+            ImGui::Text("  OBBs:       %d frames", obb_count);
 
         ImGui::SeparatorText("Output");
 
@@ -198,7 +210,7 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
 
             if (ImGui::Button("Start Export")) {
                 if (state.label_folder.empty() && total_count == 0 && !is_nerfstudio) {
-                    validation_error = "No annotations found (keypoints or masks)";
+                    validation_error = "No annotations found (keypoints, masks or boxes)";
                 } else if (pm.calibration_folder.empty()) {
                     validation_error = "No calibration folder set";
                 } else if (is_jarvis && pm.media_folder.empty()) {
@@ -256,6 +268,7 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
                     ecfg.camera_params      = pm.camera_params;
                     ecfg.excluded_cameras   = pm.excluded_cameras;
                     ecfg.node_names         = skeleton.node_names;
+                    ecfg.class_names        = pm.annotation_config.class_names;
                     for (const auto &e : skeleton.edges)
                         ecfg.edges.push_back({e.x, e.y});
 

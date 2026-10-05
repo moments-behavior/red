@@ -36,6 +36,7 @@ enum Format {
     YOLO_POSE,
     YOLO_DETECT,
     NERFSTUDIO,
+    YOLO_OBB,
     FORMAT_COUNT
 };
 
@@ -48,6 +49,7 @@ inline const char *format_name(Format f) {
     case YOLO_POSE:   return "YOLO Pose";
     case YOLO_DETECT: return "YOLO Detection";
     case NERFSTUDIO:  return "Nerfstudio / 3DGS";
+    case YOLO_OBB:    return "YOLO OBB";
     default:          return "Unknown";
     }
 }
@@ -67,6 +69,10 @@ struct ExportConfig {
     std::vector<std::string> node_names;
     std::vector<std::pair<int, int>> edges;
     int num_keypoints = 0;
+
+    // Box classes (AnnotationConfig::class_names); BBox/OBB category_id
+    // indexes this. Empty → single class named skeleton_name.
+    std::vector<std::string> class_names;
 
     // Camera params (loaded from project, indexed parallel to camera_names)
     std::vector<CameraParams> camera_params;
@@ -137,6 +143,52 @@ inline std::vector<u32> get_keypoint_frames(const AnnotationMap &amap) {
     for (const auto &[f, fa] : amap)
         if (frame_has_any_keypoints(fa)) frames.push_back(f);
     return frames;
+}
+
+// ── Get frames with keypoints or bboxes (for detection exporters) ──
+inline std::vector<u32> get_keypoint_or_bbox_frames(const AnnotationMap &amap) {
+    std::vector<u32> frames;
+    for (const auto &[f, fa] : amap) {
+        bool any = frame_has_any_keypoints(fa);
+        for (const auto &cam : fa.cameras) any = any || cam.has_bbox();
+        if (any) frames.push_back(f);
+    }
+    return frames;
+}
+
+// ── Get frames with OBBs ──
+inline std::vector<u32> get_obb_frames(const AnnotationMap &amap) {
+    std::vector<u32> frames;
+    for (const auto &[f, fa] : amap)
+        for (const auto &cam : fa.cameras)
+            if (cam.has_obb()) { frames.push_back(f); break; }
+    return frames;
+}
+
+// Class list for exporters: the project's box classes, or the skeleton name.
+inline std::vector<std::string> export_class_names(const ExportConfig &cfg) {
+    if (!cfg.class_names.empty()) return cfg.class_names;
+    return {cfg.skeleton_name};
+}
+
+// Index of the bbox that contains the most labeled keypoints of this camera,
+// or -1 if no box contains any. The skeleton's keypoints are attached to that
+// box; every other box is exported as a keypoint-less detection.
+inline int bbox_owning_keypoints(const CameraAnnotation &cam, int img_h) {
+    if (!cam.has_bbox()) return -1;
+    const auto &boxes = cam.extras->bboxes;
+    int best = -1, best_n = 0;
+    for (int i = 0; i < (int)boxes.size(); ++i) {
+        const auto &b = boxes[i];
+        int n = 0;
+        for (const auto &kp : cam.keypoints) {
+            if (!kp.labeled) continue;
+            double y = img_h - kp.y; // ImPlot → image coords
+            if (kp.x >= b.x && kp.x <= b.x + b.w && y >= b.y && y <= b.y + b.h) ++n;
+        }
+        if (n > best_n) { best_n = n; best = i; }
+    }
+    return best;
 }
 
 // ── Shared image extraction for all exporters ──
@@ -213,89 +265,125 @@ inline nlohmann::json build_coco_json(
         for (size_t k = 0; k < cam.keypoints.size(); ++k)
             if (cam.keypoints[k].labeled) ++num_visible;
 
-        // Skip frames with no keypoints AND no masks
+        // Skip frames with no keypoints, masks or boxes
         bool has_mask = cam.has_mask() && !cam.extras->mask_polygons.empty();
-        if (num_visible == 0 && !has_mask) { img_id++; continue; }
+        bool has_boxes = cam.has_bbox();
+        if (num_visible == 0 && !has_mask && !has_boxes) { img_id++; continue; }
 
-        // Build flat keypoints array [x,y,v, x,y,v, ...]
-        nlohmann::json kp_flat = nlohmann::json::array();
-        double x_min = 1e9, x_max = -1e9, y_min = 1e9, y_max = -1e9;
-        for (size_t k = 0; k < cam.keypoints.size(); ++k) {
-            if (cam.keypoints[k].labeled) {
-                double x = cam.keypoints[k].x;
-                double y = img_h - cam.keypoints[k].y; // ImPlot Y-flip
-                kp_flat.push_back(x); kp_flat.push_back(y); kp_flat.push_back(2);
-                x_min = std::min(x_min, x); x_max = std::max(x_max, x);
-                y_min = std::min(y_min, y); y_max = std::max(y_max, y);
+        int owner = bbox_owning_keypoints(cam, img_h);
+
+        // Skeleton annotation (keypoints and/or mask)
+        if (num_visible > 0 || has_mask) {
+            // Build flat keypoints array [x,y,v, x,y,v, ...]
+            nlohmann::json kp_flat = nlohmann::json::array();
+            double x_min = 1e9, x_max = -1e9, y_min = 1e9, y_max = -1e9;
+            for (size_t k = 0; k < cam.keypoints.size(); ++k) {
+                if (cam.keypoints[k].labeled) {
+                    double x = cam.keypoints[k].x;
+                    double y = img_h - cam.keypoints[k].y; // ImPlot Y-flip
+                    kp_flat.push_back(x); kp_flat.push_back(y); kp_flat.push_back(2);
+                    x_min = std::min(x_min, x); x_max = std::max(x_max, x);
+                    y_min = std::min(y_min, y); y_max = std::max(y_max, y);
+                } else {
+                    kp_flat.push_back(0); kp_flat.push_back(0); kp_flat.push_back(0);
+                }
+            }
+
+            // Segmentation (mask polygons if available)
+            nlohmann::json seg = nlohmann::json::array();
+            if (has_mask) {
+                for (const auto &poly : cam.extras->mask_polygons) {
+                    nlohmann::json flat_poly = nlohmann::json::array();
+                    for (const auto &pt : poly) {
+                        flat_poly.push_back(pt.x);
+                        flat_poly.push_back(img_h - pt.y); // ImPlot → image coords
+                    }
+                    seg.push_back(flat_poly);
+                }
+            }
+
+            // Bbox: the drawn box holding the keypoints, else mask bounds,
+            // else keypoint bounds + margin
+            double bx, by, bw, bh;
+            int category_id = fa.category_id, instance_id = fa.instance_id;
+            if (owner >= 0) {
+                const auto &b = cam.extras->bboxes[owner];
+                bx = b.x; by = b.y; bw = b.w; bh = b.h;
+                category_id = b.category_id;
+                instance_id = b.instance_id;
+            } else if (has_mask && num_visible == 0) {
+                // Mask-only frame: derive bbox from mask polygon bounds
+                double mx_min = 1e9, mx_max = -1e9, my_min = 1e9, my_max = -1e9;
+                for (const auto &poly : cam.extras->mask_polygons)
+                    for (const auto &pt : poly) {
+                        double py = img_h - pt.y; // ImPlot → image
+                        mx_min = std::min(mx_min, pt.x); mx_max = std::max(mx_max, pt.x);
+                        my_min = std::min(my_min, py); my_max = std::max(my_max, py);
+                    }
+                bx = std::max(mx_min - cfg.bbox_margin, 0.0);
+                by = std::max(my_min - cfg.bbox_margin, 0.0);
+                bw = std::min(mx_max + cfg.bbox_margin, (double)img_w) - bx;
+                bh = std::min(my_max + cfg.bbox_margin, (double)img_h) - by;
             } else {
-                kp_flat.push_back(0); kp_flat.push_back(0); kp_flat.push_back(0);
+                bx = std::max(x_min - cfg.bbox_margin, 0.0);
+                by = std::max(y_min - cfg.bbox_margin, 0.0);
+                bw = std::min(x_max + cfg.bbox_margin, (double)img_w) - bx;
+                bh = std::min(y_max + cfg.bbox_margin, (double)img_h) - by;
+            }
+
+            // Compute area from mask polygon (shoelace formula) or bbox
+            double area = bw * bh;
+            if (has_mask) {
+                double poly_area = 0;
+                for (const auto &poly : cam.extras->mask_polygons) {
+                    double a = 0;
+                    for (size_t i = 0; i < poly.size(); ++i) {
+                        size_t j = (i + 1) % poly.size();
+                        a += poly[i].x * poly[j].y - poly[j].x * poly[i].y;
+                    }
+                    poly_area += std::abs(a) * 0.5;
+                }
+                if (poly_area > 0) area = poly_area;
+            }
+
+            nlohmann::json ann;
+            ann["id"] = ann_id++;
+            ann["image_id"] = img_id;
+            ann["category_id"] = category_id;
+            ann["instance_id"] = instance_id;
+            ann["segmentation"] = seg;
+            ann["bbox"] = {bx, by, bw, bh};
+            ann["area"] = area;
+            ann["iscrowd"] = 0;
+            ann["keypoints"] = kp_flat;
+            ann["num_keypoints"] = num_visible;
+            annotations.push_back(ann);
+        }
+
+        // Every other drawn box: a detection with no keypoints
+        if (has_boxes) {
+            const auto &boxes = cam.extras->bboxes;
+            for (int i = 0; i < (int)boxes.size(); ++i) {
+                if (i == owner && (num_visible > 0 || has_mask)) continue;
+                const auto &b = boxes[i];
+                nlohmann::json kp_zero = nlohmann::json::array();
+                for (size_t k = 0; k < cam.keypoints.size(); ++k) {
+                    kp_zero.push_back(0); kp_zero.push_back(0); kp_zero.push_back(0);
+                }
+                nlohmann::json ann;
+                ann["id"] = ann_id++;
+                ann["image_id"] = img_id;
+                ann["category_id"] = b.category_id;
+                ann["instance_id"] = b.instance_id;
+                ann["segmentation"] = nlohmann::json::array();
+                ann["bbox"] = {b.x, b.y, b.w, b.h};
+                ann["area"] = b.w * b.h;
+                ann["iscrowd"] = 0;
+                ann["keypoints"] = kp_zero;
+                ann["num_keypoints"] = 0;
+                annotations.push_back(ann);
             }
         }
-
-        // Segmentation (mask polygons if available)
-        nlohmann::json seg = nlohmann::json::array();
-        if (has_mask) {
-            for (const auto &poly : cam.extras->mask_polygons) {
-                nlohmann::json flat_poly = nlohmann::json::array();
-                for (const auto &pt : poly) {
-                    flat_poly.push_back(pt.x);
-                    flat_poly.push_back(img_h - pt.y); // ImPlot → image coords
-                }
-                seg.push_back(flat_poly);
-            }
-        }
-
-        // Bbox: from explicit bbox, mask bounds, or keypoint bounds + margin
-        double bx, by, bw, bh;
-        if (cam.has_bbox()) {
-            bx = cam.extras->bbox_x; by = cam.extras->bbox_y;
-            bw = cam.extras->bbox_w; bh = cam.extras->bbox_h;
-        } else if (has_mask && num_visible == 0) {
-            // Mask-only frame: derive bbox from mask polygon bounds
-            double mx_min = 1e9, mx_max = -1e9, my_min = 1e9, my_max = -1e9;
-            for (const auto &poly : cam.extras->mask_polygons)
-                for (const auto &pt : poly) {
-                    double py = img_h - pt.y; // ImPlot → image
-                    mx_min = std::min(mx_min, pt.x); mx_max = std::max(mx_max, pt.x);
-                    my_min = std::min(my_min, py); my_max = std::max(my_max, py);
-                }
-            bx = std::max(mx_min - cfg.bbox_margin, 0.0);
-            by = std::max(my_min - cfg.bbox_margin, 0.0);
-            bw = std::min(mx_max + cfg.bbox_margin, (double)img_w) - bx;
-            bh = std::min(my_max + cfg.bbox_margin, (double)img_h) - by;
-        } else {
-            bx = std::max(x_min - cfg.bbox_margin, 0.0);
-            by = std::max(y_min - cfg.bbox_margin, 0.0);
-            bw = std::min(x_max + cfg.bbox_margin, (double)img_w) - bx;
-            bh = std::min(y_max + cfg.bbox_margin, (double)img_h) - by;
-        }
-
-        // Compute area from mask polygon (shoelace formula) or bbox
-        double area = bw * bh;
-        if (has_mask && !cam.extras->mask_polygons.empty()) {
-            double poly_area = 0;
-            for (const auto &poly : cam.extras->mask_polygons) {
-                double a = 0;
-                for (size_t i = 0; i < poly.size(); ++i) {
-                    size_t j = (i + 1) % poly.size();
-                    a += poly[i].x * poly[j].y - poly[j].x * poly[i].y;
-                }
-                poly_area += std::abs(a) * 0.5;
-            }
-            if (poly_area > 0) area = poly_area;
-        }
-
-        nlohmann::json ann;
-        ann["id"] = ann_id++;
-        ann["image_id"] = img_id;
-        ann["category_id"] = fa.category_id;
-        ann["segmentation"] = seg;
-        ann["bbox"] = {bx, by, bw, bh};
-        ann["area"] = area;
-        ann["iscrowd"] = 0;
-        ann["keypoints"] = kp_flat;
-        ann["num_keypoints"] = num_visible;
-        annotations.push_back(ann);
 
         img_id++;
     }
@@ -305,14 +393,19 @@ inline nlohmann::json build_coco_json(
     for (const auto &[a, b] : cfg.edges)
         skel_arr.push_back({a + 1, b + 1}); // COCO uses 1-indexed
 
+    // One category per box class; each carries the skeleton definition
+    // (COCO keypoint categories), keypoint-less boxes have num_keypoints 0.
     nlohmann::json categories = nlohmann::json::array();
-    nlohmann::json cat;
-    cat["id"] = 0;
-    cat["name"] = cfg.skeleton_name;
-    cat["supercategory"] = "animal";
-    cat["keypoints"] = cfg.node_names;
-    cat["skeleton"] = skel_arr;
-    categories.push_back(cat);
+    auto class_names = export_class_names(cfg);
+    for (int i = 0; i < (int)class_names.size(); ++i) {
+        nlohmann::json cat;
+        cat["id"] = i;
+        cat["name"] = class_names[i];
+        cat["supercategory"] = "animal";
+        cat["keypoints"] = cfg.node_names;
+        cat["skeleton"] = skel_arr;
+        categories.push_back(cat);
+    }
 
     nlohmann::json root;
     root["images"] = images;
@@ -391,7 +484,9 @@ inline bool export_yolo(const ExportConfig &cfg, const AnnotationMap &amap,
                         bool include_keypoints, std::string *status,
                         std::atomic<int> *img_counter = nullptr) {
     namespace fs = std::filesystem;
-    auto labeled = get_keypoint_frames(amap);
+    // Pose needs keypoints; detection also takes box-only frames
+    auto labeled = include_keypoints ? get_keypoint_frames(amap)
+                                     : get_keypoint_or_bbox_frames(amap);
     if (labeled.empty()) {
         if (status) *status = "Error: No labeled frames found.";
         return false;
@@ -435,52 +530,56 @@ inline bool export_yolo(const ExportConfig &cfg, const AnnotationMap &amap,
                 std::string fname = "Frame_" + std::to_string(frame);
                 std::ofstream lbl(lbl_dir + "/" + fname + ".txt");
 
-                // Compute bbox (normalized)
-                double bx, by, bw, bh;
-                if (c2d.has_bbox()) {
-                    bx = c2d.extras->bbox_x; by = c2d.extras->bbox_y;
-                    bw = c2d.extras->bbox_w; bh = c2d.extras->bbox_h;
-                } else {
-                    // Derive from keypoints
-                    double xmin = 1e9, xmax = -1e9, ymin = 1e9, ymax = -1e9;
-                    bool any = false;
-                    for (size_t k = 0; k < c2d.keypoints.size(); ++k) {
-                        if (!c2d.keypoints[k].labeled) continue;
-                        double x = c2d.keypoints[k].x;
-                        double y = h - c2d.keypoints[k].y; // Y-flip
-                        xmin = std::min(xmin, x); xmax = std::max(xmax, x);
-                        ymin = std::min(ymin, y); ymax = std::max(ymax, y);
-                        any = true;
-                    }
-                    if (!any) continue;
-                    bx = std::max(xmin - cfg.bbox_margin, 0.0);
-                    by = std::max(ymin - cfg.bbox_margin, 0.0);
-                    bw = std::min(xmax + cfg.bbox_margin, (double)w) - bx;
-                    bh = std::min(ymax + cfg.bbox_margin, (double)h) - by;
-                }
-
-                // YOLO format: cx cy w h (all normalized 0-1)
-                double cx = (bx + bw / 2.0) / w;
-                double cy = (by + bh / 2.0) / h;
-                double nw = bw / w;
-                double nh = bh / h;
-
-                lbl << fa.category_id << " "
-                    << std::fixed << std::setprecision(6)
-                    << cx << " " << cy << " " << nw << " " << nh;
-
-                if (include_keypoints) {
-                    for (size_t k = 0; k < c2d.keypoints.size(); ++k) {
-                        if (c2d.keypoints[k].labeled) {
-                            double kx = c2d.keypoints[k].x / w;
-                            double ky = (h - c2d.keypoints[k].y) / h; // Y-flip
-                            lbl << " " << kx << " " << ky << " 2";
-                        } else {
-                            lbl << " 0 0 0";
+                // One line per object: <class> <cx> <cy> <w> <h> [kps...]
+                // (all normalized 0-1). Keypoints go to the box that holds
+                // them; other boxes get all-zero keypoints in pose mode.
+                auto write_line = [&](int cls, double bx, double by, double bw,
+                                      double bh, bool with_kps) {
+                    lbl << cls << " " << std::fixed << std::setprecision(6)
+                        << (bx + bw / 2.0) / w << " " << (by + bh / 2.0) / h
+                        << " " << bw / w << " " << bh / h;
+                    if (include_keypoints) {
+                        for (size_t k = 0; k < c2d.keypoints.size(); ++k) {
+                            if (with_kps && c2d.keypoints[k].labeled) {
+                                double kx = c2d.keypoints[k].x / w;
+                                double ky = (h - c2d.keypoints[k].y) / h; // Y-flip
+                                lbl << " " << kx << " " << ky << " 2";
+                            } else {
+                                lbl << " 0 0 0";
+                            }
                         }
                     }
+                    lbl << "\n";
+                };
+
+                // Keypoint bounds (image coords)
+                double xmin = 1e9, xmax = -1e9, ymin = 1e9, ymax = -1e9;
+                bool any_kp = false;
+                for (size_t k = 0; k < c2d.keypoints.size(); ++k) {
+                    if (!c2d.keypoints[k].labeled) continue;
+                    double x = c2d.keypoints[k].x;
+                    double y = h - c2d.keypoints[k].y; // Y-flip
+                    xmin = std::min(xmin, x); xmax = std::max(xmax, x);
+                    ymin = std::min(ymin, y); ymax = std::max(ymax, y);
+                    any_kp = true;
                 }
-                lbl << "\n";
+
+                int owner = bbox_owning_keypoints(c2d, h);
+                if (any_kp && owner < 0) {
+                    // No drawn box around the keypoints: derive one + margin
+                    double bx = std::max(xmin - cfg.bbox_margin, 0.0);
+                    double by = std::max(ymin - cfg.bbox_margin, 0.0);
+                    double bw = std::min(xmax + cfg.bbox_margin, (double)w) - bx;
+                    double bh = std::min(ymax + cfg.bbox_margin, (double)h) - by;
+                    write_line(fa.category_id, bx, by, bw, bh, true);
+                }
+                if (c2d.has_bbox()) {
+                    const auto &boxes = c2d.extras->bboxes;
+                    for (int i = 0; i < (int)boxes.size(); ++i) {
+                        const auto &b = boxes[i];
+                        write_line(b.category_id, b.x, b.y, b.w, b.h, i == owner);
+                    }
+                }
             }
         }
     };
@@ -494,8 +593,12 @@ inline bool export_yolo(const ExportConfig &cfg, const AnnotationMap &amap,
         f << "path: " << cfg.output_folder << "\n";
         f << "train: images/train\n";
         f << "val: images/val\n";
-        f << "nc: " << 1 << "\n"; // TODO: multi-class from AnnotationConfig
-        f << "names: ['" << cfg.skeleton_name << "']\n";
+        auto class_names = export_class_names(cfg);
+        f << "nc: " << class_names.size() << "\n";
+        f << "names: [";
+        for (size_t i = 0; i < class_names.size(); ++i)
+            f << (i ? ", " : "") << "'" << class_names[i] << "'";
+        f << "]\n";
         if (include_keypoints) {
             f << "kpt_shape: [" << cfg.num_keypoints << ", 3]\n";
         }
@@ -939,6 +1042,109 @@ inline bool export_nerfstudio(const ExportConfig &cfg, const AnnotationMap &amap
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// YOLO OBB export
+// ═══════════════════════════════════════════════════════════════════════════
+// Ultralytics OBB format: data.yaml + images/ + labels/ with .txt per image.
+// Each line: <class> <x1> <y1> <x2> <y2> <x3> <y3> <x4> <y4> (normalized
+// corner coordinates, image coords).
+
+inline bool export_yolo_obb(const ExportConfig &cfg, const AnnotationMap &amap,
+                            std::string *status,
+                            std::atomic<int> *img_counter = nullptr) {
+    namespace fs = std::filesystem;
+    auto labeled = get_obb_frames(amap);
+    if (labeled.empty()) {
+        if (status) *status = "Error: No frames with oriented bounding boxes found.";
+        return false;
+    }
+
+    std::vector<u32> train, val;
+    split_train_val(labeled, cfg.train_ratio, cfg.seed, train, val);
+
+    // Read image dims
+    std::map<std::string, int> img_w, img_h;
+    for (const auto &cam : cfg.camera_names) {
+        std::string path = cfg.calibration_folder + "/" + cam + ".yaml";
+        try {
+            auto yaml = opencv_yaml::read(path);
+            img_w[cam] = yaml.getInt("image_width");
+            img_h[cam] = yaml.getInt("image_height");
+        } catch (...) {
+            if (status) *status = "Error: Cannot read calibration: " + path;
+            return false;
+        }
+    }
+
+    auto write_split = [&](const std::vector<u32> &frames, const std::string &split) {
+        for (int ci = 0; ci < (int)cfg.camera_names.size(); ++ci) {
+            const auto &cam_name = cfg.camera_names[ci];
+            int w = img_w[cam_name], h = img_h[cam_name];
+
+            std::string lbl_dir = cfg.output_folder + "/labels/" + split + "/" + cam_name;
+            fs::create_directories(cfg.output_folder + "/images/" + split + "/" + cam_name);
+            fs::create_directories(lbl_dir);
+
+            for (u32 frame : frames) {
+                auto it = amap.find(frame);
+                if (it == amap.end()) continue;
+                const auto &fa = it->second;
+                if (ci >= (int)fa.cameras.size()) continue;
+                const auto &c2d = fa.cameras[ci];
+
+                std::ofstream lbl(lbl_dir + "/Frame_" + std::to_string(frame) + ".txt");
+                if (!c2d.has_obb()) continue; // empty label file = background
+
+                for (const auto &o : c2d.extras->obbs) {
+                    double ca = std::cos(o.angle), sa = std::sin(o.angle);
+                    double hw = o.w / 2.0, hh = o.h / 2.0;
+                    double lx[] = {-hw, hw, hw, -hw};
+                    double ly[] = {-hh, -hh, hh, hh};
+                    lbl << o.category_id << std::fixed << std::setprecision(6);
+                    for (int k = 0; k < 4; ++k) {
+                        double x = o.cx + lx[k] * ca - ly[k] * sa;
+                        double y = o.cy + lx[k] * sa + ly[k] * ca;
+                        lbl << " " << std::clamp(x / w, 0.0, 1.0)
+                            << " " << std::clamp(y / h, 0.0, 1.0);
+                    }
+                    lbl << "\n";
+                }
+            }
+        }
+    };
+
+    write_split(train, "train");
+    write_split(val, "val");
+
+    // Write data.yaml
+    {
+        std::ofstream f(cfg.output_folder + "/data.yaml");
+        f << "path: " << cfg.output_folder << "\n";
+        f << "train: images/train\n";
+        f << "val: images/val\n";
+        auto class_names = export_class_names(cfg);
+        f << "nc: " << class_names.size() << "\n";
+        f << "names: [";
+        for (size_t i = 0; i < class_names.size(); ++i)
+            f << (i ? ", " : "") << "'" << class_names[i] << "'";
+        f << "]\n";
+    }
+
+    // Extract images from video (if media_folder available)
+    if (!cfg.media_folder.empty()) {
+        if (status) *status = "Extracting images...";
+        ExportConfig img_cfg = cfg;
+        img_cfg.output_folder = cfg.output_folder + "/images";
+        if (!extract_images(img_cfg, train, val, "", status, img_counter))
+            return false;
+    }
+
+    if (status)
+        *status = "YOLO OBB export complete: " + std::to_string(train.size()) +
+                  " train, " + std::to_string(val.size()) + " val frames";
+    return true;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Main dispatch
 // ═══════════════════════════════════════════════════════════════════════════
 inline bool export_dataset(Format fmt, const ExportConfig &cfg,
@@ -962,6 +1168,7 @@ inline bool export_dataset(Format fmt, const ExportConfig &cfg,
     case YOLO_DETECT: return export_yolo(cfg, amap, false, status, img_counter);
     case DEEPLABCUT:  return export_deeplabcut(cfg, amap, status, img_counter);
     case NERFSTUDIO:  return export_nerfstudio(cfg, amap, status, img_counter);
+    case YOLO_OBB:    return export_yolo_obb(cfg, amap, status, img_counter);
     default:
         if (status) *status = "Error: Unknown export format";
         return false;

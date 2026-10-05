@@ -48,14 +48,25 @@ struct Keypoint3D {
 // ── Optional per-camera extras (bbox, OBB, mask) ──
 // Allocated on demand via unique_ptr in CameraAnnotation to keep the
 // common keypoint-only case lightweight.
-struct CameraExtras {
-    // Axis-aligned bounding box
-    double bbox_x = 0, bbox_y = 0, bbox_w = 0, bbox_h = 0;
-    bool has_bbox = false;
+// Axis-aligned bounding box, image coords (top-left origin, y-down).
+// Each box carries its own class + instance so one camera view can hold
+// several objects of different classes.
+struct BBox {
+    double x = 0, y = 0, w = 0, h = 0;  // top-left corner + size
+    int category_id = 0;                // index into AnnotationConfig::class_names
+    int instance_id = 0;
+};
 
-    // Oriented bounding box
-    double obb_cx = 0, obb_cy = 0, obb_w = 0, obb_h = 0, obb_angle = 0;
-    bool has_obb = false;
+// Oriented bounding box, image coords (y-down; angle in radians).
+struct OBB {
+    double cx = 0, cy = 0, w = 0, h = 0, angle = 0;
+    int category_id = 0;
+    int instance_id = 0;
+};
+
+struct CameraExtras {
+    std::vector<BBox> bboxes;
+    std::vector<OBB>  obbs;
 
     // Segmentation mask as polygon contours
     std::vector<std::vector<tuple_d>> mask_polygons;
@@ -98,16 +109,16 @@ struct CameraAnnotation {
     }
 
     // Convenience queries
-    bool has_bbox() const { return extras && extras->has_bbox; }
-    bool has_obb()  const { return extras && extras->has_obb;  }
+    bool has_bbox() const { return extras && !extras->bboxes.empty(); }
+    bool has_obb()  const { return extras && !extras->obbs.empty();   }
     bool has_mask() const { return extras && extras->has_mask;  }
 };
 
 // ── All annotations for one frame ──
 struct FrameAnnotation {
     u32 frame_number = 0;
-    int instance_id  = 0;   // object identity (for multi-animal tracking)
-    int category_id  = 0;   // class index
+    int instance_id  = 0;   // keypoint skeleton identity (boxes carry their own)
+    int category_id  = 0;   // keypoint skeleton class (boxes carry their own)
 
     // 3D keypoints (triangulated from multi-view)
     std::vector<Keypoint3D> kp3d;         // [num_nodes]
@@ -208,7 +219,7 @@ inline nlohmann::json annotations_to_json(
     const std::vector<std::string> &camera_names = {},
     const std::vector<std::string> &excluded = {}) {
     nlohmann::json root;
-    root["version"] = 2;
+    root["version"] = 3;  // v3: per-camera "bboxes"/"obbs" lists (v2: single "bbox"/"obb")
     nlohmann::json frames_arr = nlohmann::json::array();
 
     for (const auto &[fnum, fa] : amap) {
@@ -241,11 +252,21 @@ inline nlohmann::json annotations_to_json(
             jc["cam"] = (int)c;
             if (named) jc["cam_name"] = camera_names[c];
 
-            if (ext.has_bbox) {
-                jc["bbox"] = {ext.bbox_x, ext.bbox_y, ext.bbox_w, ext.bbox_h};
+            if (!ext.bboxes.empty()) {
+                nlohmann::json arr = nlohmann::json::array();
+                for (const auto &b : ext.bboxes)
+                    arr.push_back({{"xywh", {b.x, b.y, b.w, b.h}},
+                                   {"category_id", b.category_id},
+                                   {"instance_id", b.instance_id}});
+                jc["bboxes"] = arr;
             }
-            if (ext.has_obb) {
-                jc["obb"] = {ext.obb_cx, ext.obb_cy, ext.obb_w, ext.obb_h, ext.obb_angle};
+            if (!ext.obbs.empty()) {
+                nlohmann::json arr = nlohmann::json::array();
+                for (const auto &o : ext.obbs)
+                    arr.push_back({{"cxcywha", {o.cx, o.cy, o.w, o.h, o.angle}},
+                                   {"category_id", o.category_id},
+                                   {"instance_id", o.instance_id}});
+                jc["obbs"] = arr;
             }
             if (ext.has_mask) {
                 nlohmann::json polys = nlohmann::json::array();
@@ -302,17 +323,42 @@ inline void annotations_from_json(const nlohmann::json &root, AnnotationMap &ama
             if (c < 0 || c >= (int)fa.cameras.size()) continue;
             auto &ext = fa.cameras[c].get_extras();
 
-            if (jc.contains("bbox")) {
-                auto &b = jc["bbox"];
-                ext.bbox_x = b[0]; ext.bbox_y = b[1];
-                ext.bbox_w = b[2]; ext.bbox_h = b[3];
-                ext.has_bbox = true;
+            if (jc.contains("bboxes")) {
+                ext.bboxes.clear();
+                for (const auto &jb : jc["bboxes"]) {
+                    const auto &v = jb["xywh"];
+                    BBox b;
+                    b.x = v[0]; b.y = v[1]; b.w = v[2]; b.h = v[3];
+                    b.category_id = jb.value("category_id", 0);
+                    b.instance_id = jb.value("instance_id", 0);
+                    ext.bboxes.push_back(b);
+                }
+            } else if (jc.contains("bbox")) {
+                // v2: one box per camera, class/instance stored on the frame
+                const auto &v = jc["bbox"];
+                BBox b;
+                b.x = v[0]; b.y = v[1]; b.w = v[2]; b.h = v[3];
+                b.category_id = fa.category_id;
+                b.instance_id = fa.instance_id;
+                ext.bboxes = {b};
             }
-            if (jc.contains("obb")) {
-                auto &o = jc["obb"];
-                ext.obb_cx = o[0]; ext.obb_cy = o[1];
-                ext.obb_w = o[2]; ext.obb_h = o[3]; ext.obb_angle = o[4];
-                ext.has_obb = true;
+            if (jc.contains("obbs")) {
+                ext.obbs.clear();
+                for (const auto &jo : jc["obbs"]) {
+                    const auto &v = jo["cxcywha"];
+                    OBB o;
+                    o.cx = v[0]; o.cy = v[1]; o.w = v[2]; o.h = v[3]; o.angle = v[4];
+                    o.category_id = jo.value("category_id", 0);
+                    o.instance_id = jo.value("instance_id", 0);
+                    ext.obbs.push_back(o);
+                }
+            } else if (jc.contains("obb")) {
+                const auto &v = jc["obb"];
+                OBB o;
+                o.cx = v[0]; o.cy = v[1]; o.w = v[2]; o.h = v[3]; o.angle = v[4];
+                o.category_id = fa.category_id;
+                o.instance_id = fa.instance_id;
+                ext.obbs = {o};
             }
             if (jc.contains("mask")) {
                 ext.mask_polygons.clear();
