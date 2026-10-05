@@ -26,3 +26,13 @@ RUN apt-get update \
     && apt-get update && apt-get install -y --no-install-recommends \
         libarrow-dev libparquet-dev \
     && rm -rf /var/lib/apt/lists/*
+
+# appimagetool and the static type-2 runtime, for make_appimage.sh. The static
+# runtime carries FUSE itself, so the AppImage needs no libfuse2 on the
+# user's machine. (Continuous builds: the project publishes no other.)
+RUN mkdir -p /opt/appimage \
+    && wget -q -O /opt/appimage/appimagetool \
+        https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage \
+    && wget -q -O /opt/appimage/runtime-x86_64 \
+        https://github.com/AppImage/type2-runtime/releases/download/continuous/runtime-x86_64 \
+    && chmod +x /opt/appimage/appimagetool
