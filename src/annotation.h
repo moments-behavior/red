@@ -714,9 +714,14 @@ inline void annotations_from_json(const nlohmann::json &root, AnnotationMap &ama
 }
 
 // Save extended annotations to a JSON file alongside keypoint CSVs
-inline bool save_annotations_json(const AnnotationMap &amap, const std::string &folder) {
+inline bool save_annotations_json(const AnnotationMap &amap, const std::string &folder,
+                                  const std::vector<std::string> *class_names = nullptr) {
     auto j = annotations_to_json(amap);
-    if (j["frames"].empty()) return true; // nothing to save
+    // The box classes, by number: what each record's category_id means. Kept
+    // with the boxes so the labels say what they are on their own.
+    const bool have_classes = class_names && !class_names->empty();
+    if (have_classes) j["categories"] = *class_names;
+    if (j["frames"].empty() && !have_classes) return true; // nothing to save
     std::ofstream f(folder + "/annotations.json");
     if (!f) return false;
     f << j.dump(2);
@@ -724,7 +729,10 @@ inline bool save_annotations_json(const AnnotationMap &amap, const std::string &
 }
 
 // Load extended annotations from JSON (call after loading keypoint CSVs)
-inline bool load_annotations_json(AnnotationMap &amap, const std::string &folder) {
+// class_names, if given, gets the file's box classes -- left alone when the
+// file has none (labels from before they were kept here).
+inline bool load_annotations_json(AnnotationMap &amap, const std::string &folder,
+                                  std::vector<std::string> *class_names = nullptr) {
     std::string path = folder + "/annotations.json";
     if (!std::filesystem::exists(path)) return true; // no extended data, ok
     try {
@@ -732,6 +740,8 @@ inline bool load_annotations_json(AnnotationMap &amap, const std::string &folder
         nlohmann::json j;
         f >> j;
         annotations_from_json(j, amap);
+        if (class_names && j.contains("categories") && j["categories"].is_array())
+            *class_names = j["categories"].get<std::vector<std::string>>();
         return true;
     } catch (...) {
         return false;

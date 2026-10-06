@@ -112,7 +112,6 @@ struct WindowStates {
         bbox.drawing = false;
         bbox.drawing_cam = -1;
         bbox.current_class = 0;
-        bbox.classes_changed = false;
         obb.show = false;
         obb.enabled = false;
         obb.draw_state = OBBDrawState::Idle;

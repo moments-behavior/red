@@ -3,8 +3,8 @@
 //
 // Shift+drag draws a new bbox: press with Shift held, drag, let go. Bboxes are
 // stored in the unified AnnotationMap (CameraAnnotation extras), on the animal
-// being edited (active_instance; N picks the next). The class list is the
-// project's (pm.annotation_config.class_names), so it is saved with it.
+// being edited (active_instance; N picks the next). The class list is
+// pm.annotation_config.class_names, saved with the labels (annotations.json).
 
 #include "imgui.h"
 #include "implot.h"
@@ -23,8 +23,6 @@ struct BBoxToolState {
 
     int current_class = 0;      // index into the project's class list
     bool show_ids = true;
-    // Set when a class is added from the views; the caller saves the project.
-    bool classes_changed = false;
 
     // Drawing state
     bool drawing = false;       // currently dragging out a new bbox
@@ -60,10 +58,7 @@ inline void add_box_class(BBoxToolState &state, std::vector<std::string> &classe
 // The class a new box gets: the current one, after making Class_0 if the list
 // is empty (a new project's is).
 inline int box_class_for_new(BBoxToolState &state, std::vector<std::string> &classes) {
-    if (classes.empty()) {
-        add_box_class(state, classes);
-        state.classes_changed = true;
-    }
+    if (classes.empty()) add_box_class(state, classes);
     state.current_class = std::clamp(state.current_class, 0, (int)classes.size() - 1);
     return state.current_class;
 }
@@ -308,7 +303,7 @@ inline void DrawBBoxToolWindow(BBoxToolState &state, AppContext &ctx) {
         ImGui::TextWrapped("O: delete the hovered animal's box (all cameras)");
         ImGui::TextWrapped("Z/X: previous / next class");
 
-        // Class list: the project's, saved with it.
+        // Class list: saved with the labels.
         ImGui::SeparatorText("Classes");
         if (classes.empty())
             ImGui::TextDisabled("None yet -- the first box adds Class_0.");
@@ -320,14 +315,7 @@ inline void DrawBBoxToolWindow(BBoxToolState &state, AppContext &ctx) {
             if (ImGui::Selectable((classes[i] + "##cls" + std::to_string(i)).c_str(), sel))
                 state.current_class = i;
         }
-        if (ImGui::Button("+ Add Class")) {
-            add_box_class(state, classes);
-            state.classes_changed = true;
-        }
-        if (state.classes_changed) {
-            save_project_file(ctx.pm);
-            state.classes_changed = false;
-        }
+        if (ImGui::Button("+ Add Class")) add_box_class(state, classes);
         },
         nullptr, ImVec2(300, 350));
 }

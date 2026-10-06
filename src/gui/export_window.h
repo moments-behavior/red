@@ -390,7 +390,8 @@ inline void DrawExportWindow(ExportWindowState &state, AppContext &ctx,
                         std::string saved = AnnotationCSV::save_all(
                             pm.keypoints_root_folder, skeleton.name,
                             amap, ctx.scene ? (int)ctx.scene->num_cams : 0,
-                            skeleton.num_nodes, pm.camera_names, &save_err);
+                            skeleton.num_nodes, pm.camera_names, &save_err,
+                            &pm.annotation_config.class_names);
                         if (!saved.empty()) {
                             // Update label folder to the freshly saved one
                             state.label_folder = saved;

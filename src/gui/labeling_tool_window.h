@@ -948,7 +948,7 @@ inline void DrawLabelingToolWindow(
         std::string saved_folder = AnnotationCSV::save_all(
             pm.keypoints_root_folder, skeleton.name,
             annotations, scene->num_cams, skeleton.num_nodes,
-            pm.camera_names, &save_err);
+            pm.camera_names, &save_err, &pm.annotation_config.class_names);
         if (saved_folder.empty()) {
             toasts.pushError("Save failed: " + save_err);
         } else {

@@ -15,8 +15,10 @@ struct AnnotationConfig {
     bool enable_keypoints    = true;  // default on (existing behavior)
     bool enable_bboxes       = false;
     bool enable_obbs         = false;
-    // Box classes (bbox/OBB tools). Empty in a new project: the first box
-    // adds Class_0. Older projects saved {"animal"} and keep it.
+    // Box classes (bbox/OBB tools), by number. Saved with the labels
+    // (annotations.json "categories"), read from there on load; older
+    // projects kept them here, and are still read. Empty in a new project:
+    // the first box adds Class_0.
     std::vector<std::string> class_names;
 };
 
@@ -24,8 +26,9 @@ inline void to_json(nlohmann::json &j, const AnnotationConfig &a) {
     j = nlohmann::json{
         {"enable_keypoints", a.enable_keypoints},
         {"enable_bboxes", a.enable_bboxes},
-        {"enable_obbs", a.enable_obbs},
-        {"class_names", a.class_names}};
+        {"enable_obbs", a.enable_obbs}};
+    // class_names is not written: the box classes are saved with the boxes
+    // (labeled_data/.../annotations.json, "categories").
 }
 inline void from_json(const nlohmann::json &j, AnnotationConfig &a) {
     a.enable_keypoints    = j.value("enable_keypoints", true);

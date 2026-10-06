@@ -717,7 +717,6 @@ static void test_bbox_classes_and_target() {
     EXPECT_EQ(box_class_for_new(state, classes), 0);
     EXPECT_EQ((int)classes.size(), 1);
     EXPECT_TRUE(classes[0] == "Class_0");
-    EXPECT_TRUE(state.classes_changed);
     add_box_class(state, classes);
     EXPECT_TRUE(classes[1] == "Class_1");
     EXPECT_EQ(state.current_class, 1);
@@ -764,10 +763,46 @@ static void test_annotation_config_json_roundtrip() {
     EXPECT_TRUE(cfg2.enable_keypoints);
     EXPECT_TRUE(cfg2.enable_bboxes);
     EXPECT_TRUE(cfg2.enable_obbs);
-    EXPECT_EQ((int)cfg2.class_names.size(), 3);
-    EXPECT_TRUE(cfg2.class_names[0] == "rat");
-    EXPECT_TRUE(cfg2.class_names[1] == "mouse");
-    EXPECT_TRUE(cfg2.class_names[2] == "fly");
+    // Box classes are saved with the labels, not the project file ...
+    EXPECT_FALSE(j.contains("class_names"));
+    EXPECT_TRUE(cfg2.class_names.empty());
+    // ... but an older project's are still read.
+    j["class_names"] = {"animal"};
+    AnnotationConfig cfg3;
+    from_json(j, cfg3);
+    EXPECT_EQ((int)cfg3.class_names.size(), 1);
+}
+
+// Box class names round-trip through annotations.json with the boxes.
+static void test_annotations_json_class_names() {
+    printf("  test_annotations_json_class_names...\n");
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::temp_directory_path() / "red_test_box_classes";
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+
+    AnnotationMap amap;
+    auto &fa = get_or_create_frame(amap, 3, 2, 1, /*instance_id*/ 4);
+    fa.category_id = 1;
+    auto &e = fa.cameras[0].get_extras();
+    e.bbox_x = 1; e.bbox_y = 2; e.bbox_w = 30; e.bbox_h = 40; e.has_bbox = true;
+    const std::vector<std::string> classes = {"Class_0", "rat"};
+    EXPECT_TRUE(save_annotations_json(amap, dir.string(), &classes));
+
+    AnnotationMap back;
+    get_or_create_frame(back, 3, 2, 1, 4);   // as the CSV loader would
+    std::vector<std::string> names = {"old"};
+    EXPECT_TRUE(load_annotations_json(back, dir.string(), &names));
+    EXPECT_TRUE(names == classes);
+    EXPECT_EQ(back[3].front().category_id, 1);
+    EXPECT_TRUE(back[3].front().cameras[0].has_bbox());
+
+    // A file without categories leaves the caller's list alone.
+    std::vector<std::string> kept = {"animal"};
+    EXPECT_TRUE(save_annotations_json(amap, dir.string()));
+    EXPECT_TRUE(load_annotations_json(back, dir.string(), &kept));
+    EXPECT_TRUE(kept == std::vector<std::string>{"animal"});
+    fs::remove_all(dir);
 }
 
 static void test_annotation_config_backward_compat() {
@@ -2273,6 +2308,7 @@ int main() {
     printf("\n--- Bbox Tool ---\n");
     test_bbox_next_class_color();
     test_bbox_classes_and_target();
+    test_annotations_json_class_names();
 
     printf("\n--- AnnotationConfig ---\n");
     test_annotation_config_defaults();

@@ -109,14 +109,6 @@ inline void remember_skeleton_dir(AppContext &ctx, const std::string &file) {
     save_user_settings(ctx.user_settings);
 }
 
-// Writes the open project's .redproj after a project setting changes. An
-// Untitled project has no file yet; its first save writes everything.
-inline void save_project_file(const ProjectManager &pm) {
-    if (pm.untitled || pm.project_path.empty() || pm.project_name.empty()) return;
-    save_project_manager_json(
-        pm, std::filesystem::path(pm.project_path) / (pm.project_name + ".redproj"));
-}
-
 // Where Open Videos / Open Images / the Media Folder picker start: the media
 // open now, else the folder media was last opened from, else Settings' media
 // folder, else home -- never red's working directory (/ from Finder).
@@ -358,7 +350,8 @@ inline void close_project(AppContext &ctx, bool save_labels = true) {
         AnnotationCSV::save_all(ctx.pm.keypoints_root_folder,
             ctx.skeleton.name, ctx.annotations,
             ctx.scene->num_cams, ctx.skeleton.num_nodes,
-            ctx.pm.camera_names, &save_err);
+            ctx.pm.camera_names, &save_err,
+            &ctx.pm.annotation_config.class_names);
     }
 
     // 2. Save ImGui ini
@@ -541,7 +534,8 @@ inline void on_project_loaded(AppContext &ctx,
         if (AnnotationCSV::load_all(most_recent_folder, ctx.annotations,
                                       ctx.skeleton.name,
                                       ctx.skeleton.num_nodes, num_cameras,
-                                      ctx.pm.camera_names, label_err)) {
+                                      ctx.pm.camera_names, label_err,
+                                      &ctx.pm.annotation_config.class_names)) {
             ctx.popups.pushError(label_err);
             ctx.annotations.clear();
         }
@@ -657,7 +651,7 @@ inline bool save_untitled_project(AppContext &ctx, const std::string &name,
         const std::string saved = AnnotationCSV::save_all(
             pm.keypoints_root_folder, ctx.skeleton.name, ctx.annotations,
             ctx.scene ? (int)ctx.scene->num_cams : 0, ctx.skeleton.num_nodes,
-            pm.camera_names, &e);
+            pm.camera_names, &e, &pm.annotation_config.class_names);
         if (saved.empty()) return fail("Could not save the labels: " + e);
     }
 
