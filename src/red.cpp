@@ -1437,6 +1437,16 @@ int main(int argc, char **argv) {
                                     }
                                 }
 
+                                // The selected instance may be one the frame
+                                // does not hold yet (the Instances row lists
+                                // the project's roster): add those first, so
+                                // labelling lands on it, not on #0.
+                                if (keypoints_find &&
+                                    active_instance >=
+                                        (int)annotations.at(current_frame_num).size())
+                                    create_frame_instances(annotations, current_frame_num,
+                                                           skeleton.num_nodes,
+                                                           scene->num_cams);
                                 if (keypoints_find && skeleton.has_skeleton) {
                                     u32 *kp = &instance_or_first(
                                                    annotations.at(current_frame_num),

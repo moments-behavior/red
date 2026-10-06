@@ -108,20 +108,40 @@ inline void DrawLabelingToolWindow(
         {
             auto fit = annotations.find((u32)current_frame_num);
             const int n = fit == annotations.end() ? 0 : (int)fit->second.size();
-            if (ctx.active_instance >= n) ctx.active_instance = 0;
+            // The frame's instances, then the rest of the project's roster not
+            // on it yet -- in the order create_frame_instances would add them,
+            // so picking one here, then drawing or pressing B, edits that one.
+            struct Shown { int id; const FrameAnnotation *fa; };   // fa null: not on the frame yet
+            std::vector<Shown> shown_list;
+            if (fit != annotations.end())
+                for (const auto &fa : fit->second) shown_list.push_back({fa.instance_id, &fa});
+            for (const auto &[rid, rcat] : instance_roster(annotations)) {
+                bool here = false;
+                for (const auto &e : shown_list) here = here || e.id == rid;
+                if (!here) shown_list.push_back({rid, nullptr});
+            }
+            const int n_all = (int)shown_list.size();
+            if (ctx.active_instance >= n_all) ctx.active_instance = 0;
+            int focus_cam = 0;
+            for (int c = 0; c < (int)ctx.is_view_focused.size(); ++c)
+                if (ctx.is_view_focused[c]) { focus_cam = c; break; }
 
-            if (n >= 1) {
-                // One row per instance: click to edit it, double-click the
-                // name to rename it, double-click the colour to pick one.
-                // Names and colours are kept by id (saved with the labels).
-                // Side by side, wrapping only when the panel is too narrow.
+            if (n_all >= 1) {
+                // One per instance: click to edit it, double-click the name
+                // to rename it, double-click the colour to pick one. Names
+                // and colours are kept by id (saved with the labels). Side by
+                // side, wrapping only when the panel is too narrow. The square
+                // says where it stands in the camera in focus: filled =
+                // labelled there, a faint outline = not yet, crossed out =
+                // marked absent.
                 ImGui::SeparatorText("Instances");
                 auto &info = pm.annotation_config.label_info;
                 const ImGuiStyle &st = ImGui::GetStyle();
                 const float right_edge =
                     ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x;
-                for (int i = 0; i < n; i++) {
-                    const int id = fit->second[(size_t)i].instance_id;
+                for (int i = 0; i < n_all; i++) {
+                    const int id = shown_list[(size_t)i].id;
+                    const FrameAnnotation *fa_i = shown_list[(size_t)i].fa;
                     const std::string shown = info.instance_name(id);
                     const float name_w = state.editing_instance == id
                         ? 120.0f
@@ -136,21 +156,31 @@ inline void DrawLabelingToolWindow(
                     ImVec4 col = instance_color(info, id, i);
                     ImGui::ColorButton("##clr", col, ImGuiColorEditFlags_NoTooltip,
                                        ImVec2(14, 14));
-                    // Absent from the camera in focus: the square drawn
-                    // hollow, an outline in its colour.
                     {
-                        const auto &fa_i = fit->second[(size_t)i];
-                        int cam = 0;
-                        for (int c = 0; c < (int)ctx.is_view_focused.size(); ++c)
-                            if (ctx.is_view_focused[c]) { cam = c; break; }
-                        if (cam < (int)fa_i.cameras.size() &&
-                            fa_i.cameras[(size_t)cam].is_absent()) {
+                        const CameraAnnotation *cam =
+                            fa_i && focus_cam < (int)fa_i->cameras.size()
+                                ? &fa_i->cameras[(size_t)focus_cam] : nullptr;
+                        bool labelled = cam && cam->has_bbox();
+                        if (cam)
+                            for (const auto &kp : cam->keypoints)
+                                labelled = labelled || keypoint2d_assessed(kp);
+                        const bool absent = cam && cam->is_absent();
+                        if (!labelled) {
                             ImDrawList *dl = ImGui::GetWindowDrawList();
                             const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
                             dl->AddRectFilled(a, b, ImGui::GetColorU32(ImGuiCol_WindowBg));
-                            dl->AddRect(a, b, ImGui::GetColorU32(col), 0.0f, 0, 2.0f);
+                            if (absent) {
+                                dl->AddRect(a, b, ImGui::GetColorU32(col), 0.0f, 0, 2.0f);
+                                dl->AddLine(ImVec2(a.x + 2, b.y - 2), ImVec2(b.x - 2, a.y + 2),
+                                            ImGui::GetColorU32(col), 2.0f);
+                            } else {
+                                ImVec4 faint = col;
+                                faint.w = 0.55f;
+                                dl->AddRect(a, b, ImGui::GetColorU32(faint), 0.0f, 0, 1.0f);
+                            }
                             if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
-                                ImGui::SetTooltip("Absent from this camera");
+                                ImGui::SetTooltip(absent ? "Absent from this camera"
+                                                         : "Not labelled in this camera yet");
                         }
                     }
                     if (ImGui::IsItemHovered() &&
@@ -197,20 +227,22 @@ inline void DrawLabelingToolWindow(
                 }
             }
 
-            if (fit != annotations.end() && skeleton.has_skeleton) {
-                if (n >= 1) ImGui::SameLine(0, ImGui::GetStyle().ItemSpacing.x * 2);
+            if ((fit != annotations.end() || n_all >= 1) && skeleton.has_skeleton) {
+                if (n_all >= 1) ImGui::SameLine(0, ImGui::GetStyle().ItemSpacing.x * 2);
                 if (ImGui::SmallButton(ICON_FK_PLUS " Instance")) {
-                    // A new instance gets the next unused id, so ids stay
-                    // stable even after one is removed.
+                    // The frame gets the roster first (as B does); the new
+                    // instance the next unused id, so ids stay stable even
+                    // after one is removed.
+                    FrameInstances &fis = create_frame_instances(
+                        annotations, (u32)current_frame_num, skeleton.num_nodes,
+                        (int)scene->num_cams);
                     int next_id = 0;
-                    for (const auto &fa : fit->second)
-                        next_id = std::max(next_id, fa.instance_id + 1);
-                    get_or_create_frame(annotations, (u32)current_frame_num,
-                                        skeleton.num_nodes,
-                                        (int)scene->num_cams, next_id);
-                    ctx.active_instance = (int)fit->second.size() - 1;
+                    for (const auto &fa : fis) next_id = std::max(next_id, fa.instance_id + 1);
+                    fis.push_back(make_frame(skeleton.num_nodes, (int)scene->num_cams,
+                                             (u32)current_frame_num, next_id));
+                    ctx.active_instance = (int)fis.size() - 1;
                 }
-                if (n > 1) {
+                if (n > 1 && ctx.active_instance < n) {
                     ImGui::SameLine();
                     if (ImGui::SmallButton(ICON_FK_TRASH " Instance")) {
                         fit->second.erase(fit->second.begin() + ctx.active_instance);
