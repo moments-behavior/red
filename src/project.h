@@ -16,7 +16,7 @@ struct AnnotationConfig {
     bool enable_bboxes       = false;
     bool enable_obbs         = false;
     // Box classes (bbox/OBB tools). Empty in a new project: the first box
-    // adds Class_1. Older projects saved {"animal"} and keep it.
+    // adds Class_0. Older projects saved {"animal"} and keep it.
     std::vector<std::string> class_names;
 };
 

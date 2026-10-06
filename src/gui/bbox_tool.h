@@ -51,13 +51,13 @@ inline const char *box_class_name(const std::vector<std::string> &classes, int i
     return i >= 0 && i < (int)classes.size() ? classes[i].c_str() : "?";
 }
 
-// Adds Class_<n+1> to the list and makes it current.
+// Adds Class_<n>, n its index, to the list and makes it current.
 inline void add_box_class(BBoxToolState &state, std::vector<std::string> &classes) {
     state.current_class = (int)classes.size();
-    classes.push_back("Class_" + std::to_string(classes.size() + 1));
+    classes.push_back("Class_" + std::to_string(classes.size()));
 }
 
-// The class a new box gets: the current one, after making Class_1 if the list
+// The class a new box gets: the current one, after making Class_0 if the list
 // is empty (a new project's is).
 inline int box_class_for_new(BBoxToolState &state, std::vector<std::string> &classes) {
     if (classes.empty()) {
@@ -311,7 +311,7 @@ inline void DrawBBoxToolWindow(BBoxToolState &state, AppContext &ctx) {
         // Class list: the project's, saved with it.
         ImGui::SeparatorText("Classes");
         if (classes.empty())
-            ImGui::TextDisabled("None yet -- the first box adds Class_1.");
+            ImGui::TextDisabled("None yet -- the first box adds Class_0.");
         for (int i = 0; i < (int)classes.size(); ++i) {
             ImGui::ColorButton(("##clr" + std::to_string(i)).c_str(),
                                box_class_color(i), 0, ImVec2(14, 14));

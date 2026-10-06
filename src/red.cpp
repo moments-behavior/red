@@ -1644,7 +1644,7 @@ int main(int argc, char **argv) {
                                 obb_draw_overlays(win.obb, win.bbox, box_classes,
                                                   annotations, frame, j, iw, ih);
                             }
-                            // The first box of a new project added Class_1.
+                            // The first box of a new project added Class_0.
                             if (win.bbox.classes_changed) {
                                 save_project_file(pm);
                                 win.bbox.classes_changed = false;

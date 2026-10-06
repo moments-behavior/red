@@ -711,15 +711,15 @@ static void test_bbox_next_class_color() {
 static void test_bbox_classes_and_target() {
     printf("  test_bbox_classes_and_target...\n");
 
-    // The first box of a project with no classes makes Class_1.
+    // The first box of a project with no classes makes Class_0.
     BBoxToolState state;
     std::vector<std::string> classes;
     EXPECT_EQ(box_class_for_new(state, classes), 0);
     EXPECT_EQ((int)classes.size(), 1);
-    EXPECT_TRUE(classes[0] == "Class_1");
+    EXPECT_TRUE(classes[0] == "Class_0");
     EXPECT_TRUE(state.classes_changed);
     add_box_class(state, classes);
-    EXPECT_TRUE(classes[1] == "Class_2");
+    EXPECT_TRUE(classes[1] == "Class_1");
     EXPECT_EQ(state.current_class, 1);
 
     // A box goes on the animal being edited, not the frame's first.
@@ -744,7 +744,7 @@ static void test_annotation_config_defaults() {
     EXPECT_TRUE(cfg.enable_keypoints);
     EXPECT_FALSE(cfg.enable_bboxes);
     EXPECT_FALSE(cfg.enable_obbs);
-    EXPECT_TRUE(cfg.class_names.empty());   // the first box adds Class_1
+    EXPECT_TRUE(cfg.class_names.empty());   // the first box adds Class_0
 }
 
 static void test_annotation_config_json_roundtrip() {

@@ -121,7 +121,9 @@ inline void DrawLabelingToolWindow(
                     ImGui::PopID();
                 }
                 ImGui::SameLine();
-                ImGui::TextDisabled("(editing #%d)", ctx.active_instance);
+                // The animal's id, as on its button -- not its place in the list.
+                ImGui::TextDisabled("(editing #%d)",
+                                    fit->second[(size_t)ctx.active_instance].instance_id);
             }
 
             if (fit != annotations.end() && skeleton.has_skeleton) {
