@@ -43,10 +43,9 @@ inline void DrawWelcomeWindow(AppContext &ctx, WindowStates &win) {
         else ImGui::TextColored(col, "%s", text);
     };
 
-    // Title, what it is, and the version (what an issue report needs).
+    // Title and what it is (the version is in Help > About Red).
     centered_text("Red", false, ImVec4(0.4f, 0.7f, 1.0f, 1.0f));
     centered_text("Multi-Camera Keypoint Labeling Tool", true, ImVec4());
-    centered_text(RED_VERSION, true, ImVec4());
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
