@@ -365,7 +365,7 @@ inline void switch_ini_to_project(AppContext &ctx) {
 
 // Close project: auto-save, unload media, reset all project state.
 // save_labels=false discards label edits since the last save -- for a reload
-// the user chose to make without saving (Tools > Camera Timestamps).
+// the user chose to make without saving (Project > Camera Timestamps).
 inline void close_project(AppContext &ctx, bool save_labels = true) {
     // 1. Auto-save annotations if project is loaded
     if (save_labels && !ctx.pm.keypoints_root_folder.empty() &&
@@ -518,7 +518,7 @@ inline void on_project_loaded(AppContext &ctx,
             ctx.toasts.push(
                 "This project has the desync fix on, but no camera timestamps "
                 "folder is set -- red no longer searches for them. Set it in "
-                "Tools > Camera Timestamps. Cameras are index-paired until "
+                "Project > Camera Timestamps. Cameras are index-paired until "
                 "then.", Toast::Warning, 15.0f);
         else
             ctx.toasts.push(
@@ -595,7 +595,7 @@ inline void on_project_loaded(AppContext &ctx,
 
 // ---------------------------------------------------------------------------
 // Untitled projects. Create Annotation Project opens one with no name, folder
-// or .redproj; the first save (Cmd+S, File > Save Labels, the toolbar) opens
+// or .redproj; the first save (Cmd+S, File > Save, the toolbar) opens
 // Save Project, which names it and makes its folder. Its labels live only in
 // memory until then, and there is no auto-save, so nothing that replaces the
 // project may drop them without asking.

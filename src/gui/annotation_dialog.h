@@ -97,7 +97,7 @@ inline void DrawAnnotationDialog(AnnotationDialogState &state,
 
     // Seed the folder from whatever media is already open, the first frame
     // the dialog appears. Creating a project for footage you are looking at
-    // was the whole point of File > Create Project, which could only ever wrap
+    // was the whole point of File > Create Project (now File > New Project), which could only ever wrap
     // the open media and was greyed out otherwise; here it is a starting
     // value, and pointing the field somewhere else switches media instead of
     // being impossible. The empty check now only guards against re-seeding
@@ -412,7 +412,7 @@ inline void DrawAnnotationDialog(AnnotationDialogState &state,
                         "cam<N>_timestamps_*.csv. Enables the desync fix\n"
                         "and Frame Drops for dropped frames. Leave empty\n"
                         "if you have none; set it later in\n"
-                        "Tools > Camera Timestamps.");
+                        "Project > Camera Timestamps.");
                 ImGui::TableSetColumnIndex(2);
                 if (ImGui::Button("Browse##annot_timestamps")) {
                     IGFD::FileDialogConfig cfg;

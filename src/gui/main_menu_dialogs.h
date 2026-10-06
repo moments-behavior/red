@@ -296,7 +296,7 @@ inline void HandleMainMenuDialogs(
         ImGui::EndPopup();
     }
 
-    // Tools > Camera Timestamps: pick a folder, confirm, then reopen the
+    // Project > Camera Timestamps: pick a folder, confirm, then reopen the
     // project with it. The decoders take their camera timings when the videos
     // load, so the folder only applies on a reload -- and reopening goes
     // through close_project(), which saves the labels first.

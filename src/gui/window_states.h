@@ -47,7 +47,7 @@ struct WindowStates {
     std::string load_project_request;
     // With load_project_request: reopen WITHOUT saving labels first.
     bool load_project_discard_labels = false;
-    // Tools > Camera Timestamps: the folder picked, waiting for the user to
+    // Project > Camera Timestamps: the folder picked, waiting for the user to
     // confirm saving labels and reloading the project with it.
     std::string timestamps_pending;
     bool timestamps_confirm = false;

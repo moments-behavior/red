@@ -147,7 +147,7 @@ inline void DrawFrameDropsWindow(FrameDropsState &st, AppContext &ctx) {
                     "Frame drops are read from the cameras' timestamp files "
                     "(Cam<serial>_meta.csv, cam<N>_timestamps_*.csv or a "
                     "cluster sync_plan.json). Choose their folder in "
-                    "Tools > Camera Timestamps.");
+                    "Project > Camera Timestamps.");
             } else {
                 ImGui::TextDisabled("No usable timestamps in the project's "
                                     "timestamps folder.");

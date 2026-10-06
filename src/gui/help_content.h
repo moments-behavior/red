@@ -157,37 +157,37 @@ inline const std::vector<Tool> &tools() {
     static const std::vector<Tool> v = [] {
         std::vector<Tool> t = {
             // Projects
-            {"Create Annotation Project", "File menu / Welcome",
+            {"Create Annotation Project", "File > New Project / Welcome",
                 "Define a new project over per-camera videos: skeleton, camera model, calibration.", Gate::Always, "A loaded video/folder"},
-            {"Load Project", "File > Load Annotation Project / Welcome",
+            {"Load Project", "File > Open Project / Welcome",
                 "Open an annotation .redproj.", Gate::Always, "\xE2\x80\x94"},
-            {"Switch Skeleton", "File > Switch Skeleton\xE2\x80\xA6",
+            {"Switch Skeleton", "Project > Switch Skeleton\xE2\x80\xA6",
                 "Change an open project's skeleton.", Gate::Always, "No manual labels yet (re-indexes keypoints)"},
             // Annotation
             {"Labeling Tool", "Always-on panel",
                 "The core keypoint panel: save, triangulate, jump between labeled frames, copy previous.", Gate::Always, "An open project"},
-            {"Bbox Tool", "Tools > Bbox Tool",
+            {"Bbox Tool", "Label > Bbox Tool",
                 "Axis-aligned bounding boxes with multi-class and instance ids."},
-            {"OBB Tool", "Tools > OBB Tool",
+            {"OBB Tool", "Label > OBB Tool",
                 "Oriented (rotated) bounding boxes via 3-click construction."},
-            {"Midline Tool", "Tools > Midline Tool",
+            {"Midline Tool", "Label > Midline Tool",
                 "Reconstruct a midline (e.g. a proboscis) from one side camera + one line camera.", Gate::Need3D, "Calibrated project"},
             // Export
-            {"Export Tool", "Tools > Export Tool",
+            {"Export Tool", "File > Export > Export Tool",
                 "Export labels: JARVIS, COCO, DeepLabCut, YOLO Pose/Detection, Nerfstudio.", Gate::Always, "Labeled frames"},
-            {"Group JARVIS Export", "Tools > Group JARVIS Export",
+            {"Group JARVIS Export", "File > Export > Group JARVIS",
                 "Merge many projects/datasets into one JARVIS dataset (shared keypoints).", Gate::Always, "\xE2\x80\x94"},
-            {"Import JARVIS Predictions", "Tools > Import JARVIS Predictions",
+            {"Import JARVIS Predictions", "File > Import JARVIS Predictions",
                 "Read a JARVIS data3D.csv into a read-only prediction store, or straight into editable labels.", Gate::Need3D, "Calibrated project"},
             // Analysis
             {"Pose Stats", "View > Pose Stats",
                 "Confidence over time for the active prediction store; promote a frame to fix it.", Gate::Always, "An active prediction store"},
             {"Frame Drops", "View > Frame Drops",
-                "Visualize dropped frames and the camera sync plan.", Gate::Always, "Camera timestamps (Tools > Camera Timestamps)"},
-            {"Triangulation Diagnostics", "Tools > Triangulation Diagnostics",
+                "Visualize dropped frames and the camera sync plan.", Gate::Always, "Camera timestamps (Project > Camera Timestamps)"},
+            {"Triangulation Diagnostics", "View > Triangulation Diagnostics",
                 "Per-keypoint reprojection-error report (read-only).", Gate::Need3D, "Calibration + labeled frames"},
             // Settings
-            {"Settings", "View > Settings",
+            {"Settings", "File > Settings",
                 "Paths, display, keypoint colors, playback, hardware, and which annotation tools are enabled.", Gate::Always, "\xE2\x80\x94"},
         };
         return t;
@@ -198,7 +198,7 @@ inline const std::vector<Tool> &tools() {
 inline const std::vector<Workflow> &workflows() {
     static const std::vector<Workflow> w = {
         {"Create an annotation project", {
-            "Welcome or File > Create Annotation Project.",
+            "Welcome or File > New Project.",
             "Pick the video folder \xE2\x80\x94 RED auto-discovers one .mp4 or .avi per camera.",
             "Choose the skeleton (preset or a .json file).",
             "For several cameras: calibrated (camera model and calibration folder) or not calibrated (2D only).",
@@ -213,7 +213,7 @@ inline const std::vector<Workflow> &workflows() {
             RED_MOD_KEY "+S saves labels to a new timestamped labeled_data folder.",
         }},
         {"Export training data", {
-            "Tools > Export Tool.",
+            "File > Export > Export Tool.",
             "Pick a format (JARVIS, COCO, DeepLabCut, YOLO, Nerfstudio).",
             "Set the output directory and split options; Export (labels auto-save first).",
         }},
@@ -228,7 +228,7 @@ inline const std::vector<Concept> &concepts() {
         {"Triangulation",
             "A 3D point exists only once the same keypoint is labeled in \xE2\x89\xA5 2 cameras. Press T, or it auto-triangulates."},
         {"Camera alignment (desync fix)",
-            "Cameras are hardware-triggered off a shared clock; a dropped frame desyncs everything after it. The transport bar reports the condition \xE2\x80\x94 Aligned, Uneven Ends, or Dropped Frames \xE2\x80\x94 and its Realign checkbox remaps frame index i to the same trigger instant across all cameras. It needs the cameras' frame timestamps: set their folder when creating the project, or in Tools > Camera Timestamps."},
+            "Cameras are hardware-triggered off a shared clock; a dropped frame desyncs everything after it. The transport bar reports the condition \xE2\x80\x94 Aligned, Uneven Ends, or Dropped Frames \xE2\x80\x94 and its Realign checkbox remaps frame index i to the same trigger instant across all cameras. It needs the cameras' frame timestamps: set their folder when creating the project, or in Project > Camera Timestamps."},
         {"Prediction stores (.rpred)",
             "Read-only, on-disk 3D + confidence, kept separate from manual labels so a whole-video import never floods the Labeling Tool. They power the overlay and Pose Stats; \"Fix this frame\" promotes one frame into editable labels."},
         {"Scale factor",
