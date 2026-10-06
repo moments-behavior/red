@@ -1293,6 +1293,11 @@ int main(int argc, char **argv) {
                                           ImPlotFlags_Equal |
                                               ImPlotFlags_Crosshairs |
                                               ImPlotFlags_NoMenus)) {
+                        // Shift+drag draws a bbox; the image holds still.
+                        if (bbox_blocks_pan(win.bbox))
+                            ImPlot::SetupAxes(nullptr, nullptr,
+                                              ImPlotAxisFlags_Lock,
+                                              ImPlotAxisFlags_Lock);
                         ImPlot::SetupAxisLimits(
                             ImAxis_X1, 0, scene->image_width[j],
                             ImPlotCond_Once);

@@ -1,7 +1,7 @@
 #pragma once
 // bbox_tool.h — Axis-aligned bounding box labeling tool
 //
-// Shift+drag draws a new bbox. Bboxes are stored in the unified
+// Shift+drag draws a new bbox: press with Shift held, drag, let go. Bboxes are stored in the unified
 // AnnotationMap (CameraAnnotation extras). Class/ID selection,
 // keyboard shortcuts, and ImPlot interaction follow the original patterns.
 
@@ -28,6 +28,7 @@ struct BBoxToolState {
 
     // Drawing state
     bool drawing = false;       // currently dragging out a new bbox
+    int drawing_cam = -1;       // the camera view it is being drawn in
     double start_x = 0, start_y = 0;
 
     // Hover state
@@ -44,8 +45,8 @@ struct BBoxToolState {
 // Draw bbox rectangles on a camera's ImPlot view
 inline void bbox_draw_overlays(BBoxToolState &state, const AnnotationMap &amap,
                                 u32 frame, int cam_idx, int img_w, int img_h) {
-    // Draw in-progress bbox (while shift-dragging)
-    if (state.drawing) {
+    // Draw in-progress bbox (while shift-dragging), in its own view only
+    if (state.drawing && cam_idx == state.drawing_cam) {
         ImPlotPoint mouse = ImPlot::GetPlotMousePos();
         double dxs[] = {state.start_x, mouse.x, mouse.x, state.start_x, state.start_x};
         double dys[] = {state.start_y, state.start_y, mouse.y, mouse.y, state.start_y};
@@ -102,12 +103,21 @@ inline void bbox_draw_overlays(BBoxToolState &state, const AnnotationMap &amap,
     }
 }
 
+// True while the camera views must not pan: a left drag with Shift held is
+// drawing a box, not moving the image (ImPlot pans on left drag whatever the
+// modifiers).
+inline bool bbox_blocks_pan(const BBoxToolState &state) {
+    return state.enabled && (state.drawing || ImGui::GetIO().KeyShift);
+}
+
 // Handle bbox input on a focused camera view
 inline void bbox_handle_input(BBoxToolState &state, AnnotationMap &amap,
                                u32 frame, int cam_idx, int num_nodes,
                                int num_cameras, int img_w, int img_h) {
     if (!state.enabled) return;
-    if (!ImPlot::IsPlotHovered()) return;
+    // A drag belongs to the view it started in; the others leave it alone.
+    if (state.drawing && cam_idx != state.drawing_cam) return;
+    if (!state.drawing && !ImPlot::IsPlotHovered()) return;
 
     ImPlotPoint mouse = ImPlot::GetPlotMousePos();
 
@@ -115,18 +125,26 @@ inline void bbox_handle_input(BBoxToolState &state, AnnotationMap &amap,
     double mx = std::clamp(mouse.x, 0.0, (double)img_w);
     double my = std::clamp(mouse.y, 0.0, (double)img_h);
 
-    bool shift = ImGui::GetIO().KeyShift;
-
-    // Shift-down: start drawing
-    if (shift && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+    // Shift + press starts a box at the cursor ...
+    if (!state.drawing && ImGui::GetIO().KeyShift &&
+        ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
         state.drawing = true;
+        state.drawing_cam = cam_idx;
         state.start_x = mx;
         state.start_y = my;
+        return;
+    }
+    // ... Escape drops it ...
+    if (state.drawing && ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+        state.drawing = false;
+        state.drawing_cam = -1;
+        return;
     }
 
-    // Shift released while drawing: commit bbox
-    if (state.drawing && !shift) {
+    // ... and letting go of the mouse commits it, Shift still held or not.
+    if (state.drawing && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
         state.drawing = false;
+        state.drawing_cam = -1;
 
         // Normalize coords (ImPlot -> image space)
         double x1 = std::min(state.start_x, mx);
@@ -243,7 +261,7 @@ inline void DrawBBoxToolWindow(BBoxToolState &state, AppContext &ctx) {
         ImGui::Text("Instance: %d", state.current_instance);
 
         ImGui::Separator();
-        ImGui::TextWrapped("Shift+drag: draw bbox");
+        ImGui::TextWrapped("Shift+drag: draw bbox (Esc cancels)");
         ImGui::TextWrapped("F: delete hovered bbox (this camera)");
         ImGui::TextWrapped("O: delete hovered class (all cameras)");
         ImGui::TextWrapped("Z/X: prev/next class, N: new class");
