@@ -3,7 +3,7 @@
 //
 // 3-click construction: axis point 1, axis point 2, perpendicular corner.
 // OBBs are stored in AnnotationMap CameraAnnotation extras (cx, cy, w, h, angle).
-// Same classes as bbox_tool.h; an OBB goes on the animal being edited.
+// Same classes as bbox_tool.h; an OBB goes where a box would (box_target).
 
 #include "imgui.h"
 #include "implot.h"
@@ -198,7 +198,7 @@ inline void obb_draw_overlays(OBBToolState &state, const BBoxToolState &bbox_sta
 inline void obb_handle_input(OBBToolState &state, BBoxToolState &bbox_state,
                               std::vector<std::string> &classes,
                               AnnotationMap &amap, u32 frame, int cam_idx,
-                              int active_instance, int num_nodes, int num_cameras,
+                              int &active_instance, int num_nodes, int num_cameras,
                               int img_w, int img_h) {
     if (!state.enabled) return;
     if (!ImPlot::IsPlotHovered()) return;
@@ -235,9 +235,9 @@ inline void obb_handle_input(OBBToolState &state, BBoxToolState &bbox_state,
             double img_angle = -angle;
 
             // Store on the animal being edited
-            auto &fa = box_target(amap, frame, active_instance, num_nodes,
+            const int cat = box_class_for_new(bbox_state, classes);
+            auto &fa = box_target(amap, frame, cat, active_instance, num_nodes,
                                   num_cameras);
-            fa.category_id = box_class_for_new(bbox_state, classes);
 
             if (cam_idx < (int)fa.cameras.size()) {
                 auto &ext = fa.cameras[cam_idx].get_extras();

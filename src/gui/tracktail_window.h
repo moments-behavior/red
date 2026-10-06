@@ -85,7 +85,7 @@ inline void DrawTracktailWindow(TracktailWindowState &st, AppContext &ctx) {
                                    ctx.ps.video_loaded;
 
         // ── Seed status: what the current frame gives us ──
-        ImGui::SeparatorText("Seed (current frame, active animal)");
+        ImGui::SeparatorText("Seed (current frame, instance being edited)");
         int n_3d = 0, n_2d = 0, n_inst = 0, inst_id = -1;
         auto it = ctx.annotations.find((u32)ctx.current_frame_num);
         if (it != ctx.annotations.end() && !it->second.empty()) {
@@ -101,7 +101,7 @@ inline void DrawTracktailWindow(TracktailWindowState &st, AppContext &ctx) {
                                 k < ctx.skeleton.num_nodes; ++k)
                     if (cam.keypoints[k].usable()) { n_2d++; break; }
         }
-        ImGui::Text("Frame %d   animal %d/%d (id %d)", ctx.current_frame_num,
+        ImGui::Text("Frame %d   instance %d/%d (id %d)", ctx.current_frame_num,
                     n_inst ? ctx.active_instance + 1 : 0, n_inst, inst_id);
         ImGui::Text("3D keypoints: %d / %d   cameras with 2D labels: %d",
                     n_3d, ctx.skeleton.num_nodes, n_2d);

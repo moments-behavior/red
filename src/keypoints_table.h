@@ -489,7 +489,7 @@ inline void DrawKeypointsTable(AppContext &ctx, float height) {
                     ImGui::TextUnformatted("3D");
                     if (ImGui::IsItemHovered())
                         ImGui::SetTooltip(
-                            "Triangulated position per keypoint, for the animal "
+                            "Triangulated position per keypoint, for the instance "
                             "being edited.\nStrong = solved here, faint = "
                             "predicted by a model.");
 

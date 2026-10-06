@@ -81,8 +81,7 @@ inline const std::vector<Group> &shortcut_groups() {
             {S::CreateFrame, nullptr, "Create the keypoint set for this frame"},
             {S::MarkOccluded, nullptr, "Mark the keypoint under the cursor occluded, or the active one (then advance). Press again to take it back. The right-click menu has all three visibility states."},
             {S::PlaceKeypoint, nullptr, "Place the active keypoint at the cursor, then advance to the next node"},
-            {S::COUNT, "0-9", "Edit the animal with that id, as shown on the Animals buttons. The one being edited draws on top, so this is how you reach a keypoint stacked under another animal's"},
-            {S::NextInstance, nullptr, "Edit the next animal"},
+            {S::NextInstance, nullptr, "Edit the next instance (any class). The one being edited draws on top, so this is how you reach a keypoint stacked under another instance's"},
             {S::NextView, nullptr, "Bring the next camera view to the front (Shift for the previous one)"},
             {S::COUNT, "R", "Delete the active keypoint on this camera"},
             {S::ActivePrev, nullptr, "Previous active keypoint"},
@@ -113,9 +112,9 @@ inline const std::vector<Group> &shortcut_groups() {
                  "Over a cell: that camera. Over a name: all cameras. Otherwise: the whole selection, all cameras"},
         }},
         {"Bbox tool", "When the Bbox tool is enabled, over a camera view", Gate::ToolBbox, {
-            {S::COUNT, "Shift + drag", "Draw a box on the animal being edited: press with Shift held, drag, let go (Esc cancels)"},
+            {S::COUNT, "Shift + drag", "Draw a box of the selected class: press with Shift held, drag, let go (Esc cancels). It goes on the instance being edited if that is of this class"},
             {S::COUNT, "F", "Delete the hovered box on this camera (a hovered keypoint takes F first)"},
-            {S::COUNT, "O", "Delete the hovered animal's box on all cameras"},
+            {S::COUNT, "O", "Delete the hovered instance's box on all cameras"},
             {S::COUNT, "Z  /  X", "Previous / next class (classes are saved with the project)"},
         }},
         {"OBB tool", "When the OBB tool is enabled", Gate::ToolObb, {

@@ -10,7 +10,7 @@
 // (2D labels are triangulated first when the panel's checkbox is on). The
 // prediction for frames [current+1 .. current+N] (or [current-N .. current-1]
 // with Predict backwards) is written into that same animal's FrameAnnotation
-// (matched by instance_id, created if missing) as 3D + reprojected 2D, both
+// (matched by class and instance id, created if missing) as 3D + reprojected 2D, both
 // marked Predicted. Other animals in those frames are untouched, and so are
 // hand-placed keypoints unless the panel says to overwrite them.
 //
@@ -185,7 +185,7 @@ inline bool plan_clip(int anchor, int last_frame, int n_req, bool backwards,
 inline bool collect_seed(TracktailWindowState &st, AppContext &ctx,
                          std::vector<Eigen::Vector3d> &seed,
                          std::vector<int> &seed_node_idx, int &instance_id,
-                         std::string &why_not) {
+                         int &category_id, std::string &why_not) {
     seed.clear();
     seed_node_idx.clear();
     auto it = ctx.annotations.find((u32)ctx.current_frame_num);
@@ -195,6 +195,7 @@ inline bool collect_seed(TracktailWindowState &st, AppContext &ctx,
     }
     FrameAnnotation &fa = instance_or_first(it->second, ctx.active_instance);
     instance_id = fa.instance_id;
+    category_id = fa.category_id;
 
     auto count_3d = [&]() {
         int n = 0;
@@ -301,9 +302,10 @@ inline void tracktail_handle_requests(TracktailWindowState &st,
     }
     std::vector<Eigen::Vector3d> seed;
     std::vector<int> seed_node_idx;
-    int instance_id = 0;
+    int instance_id = 0, category_id = 0;
     std::string why_not;
-    if (!collect_seed(st, ctx, seed, seed_node_idx, instance_id, why_not)) {
+    if (!collect_seed(st, ctx, seed, seed_node_idx, instance_id, category_id,
+                      why_not)) {
         st.last_result = why_not;
         st.last_result_ok = false;
         ctx.toasts.push(why_not, Toast::Warning, 4.0f);
@@ -325,7 +327,8 @@ inline void tracktail_handle_requests(TracktailWindowState &st,
     const int anchor = ctx.current_frame_num;
     auto frame_at = [&](int offset) -> FrameAnnotation & {
         return get_or_create_frame(ctx.annotations, (u32)(anchor + offset),
-                                   joints_total, num_cams, instance_id);
+                                   joints_total, num_cams, instance_id,
+                                   category_id);
     };
 
     // ── One chunk of n_frames (the model's, from /info) ──

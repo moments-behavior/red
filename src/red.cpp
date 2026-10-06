@@ -1445,37 +1445,6 @@ int main(int argc, char **argv) {
                                         }
                                     }
 
-                                    // 0-9 pick which animal is being edited,
-                                    // by the id ON the radio button rather
-                                    // than by position: those labels are
-                                    // instance_id, which is 0-based because
-                                    // that is what the data carries (a00..a04
-                                    // in tailcycle), and they need not be
-                                    // contiguous. The animal being edited
-                                    // draws on top, so this is also how you
-                                    // reach a keypoint stacked under another
-                                    // animal's.
-                                    if (!ImGui::GetIO().WantTextInput &&
-                                        !ImGui::GetIO().KeyCtrl &&
-                                        !ImGui::GetIO().KeyAlt &&
-                                        !ImGui::GetIO().KeySuper) {
-                                        auto &fis =
-                                            annotations.at(current_frame_num);
-                                        for (int d = 0; d <= 9; ++d) {
-                                            if (!ImGui::IsKeyPressed(
-                                                    (ImGuiKey)(ImGuiKey_0 + d),
-                                                    false))
-                                                continue;
-                                            for (size_t i = 0; i < fis.size();
-                                                 ++i)
-                                                if (fis[i].instance_id == d) {
-                                                    active_instance = (int)i;
-                                                    break;
-                                                }
-                                            break;
-                                        }
-                                    }
-
                                     if (keys::pressed(keys::Sc::NextInstance)) {
                                         auto &fis =
                                             annotations.at(current_frame_num);
@@ -1528,8 +1497,8 @@ int main(int argc, char **argv) {
                                                     ": every keypoint on every "
                                                     "camera for " +
                                                     std::to_string(n_animals) +
-                                                    (n_animals == 1 ? " animal"
-                                                                    : " animals") +
+                                                    (n_animals == 1 ? " instance"
+                                                                    : " instances") +
                                                     " will be removed.",
                                                 [&annotations, frame]() {
                                                     annotations.erase(frame);

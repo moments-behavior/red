@@ -223,22 +223,27 @@ bool export_session(const ExportConfig &cfg, const AnnotationMap &amap,
     std::set<std::string> used_ids;
     for (const auto &id : cfg.animal_ids)
         if (!id.empty()) used_ids.insert(id);
-    std::map<int, std::string> made_ids;
-    auto animal_id_of = [&](int instance_id) -> std::string {
-        if (instance_id >= 0 && instance_id < (int)cfg.animal_ids.size() &&
+    // An instance is (class, id); tailcycle has one animal_id. Class 0 keeps
+    // the a00, a01, ... names a session's own ids map onto; other classes get
+    // c1a00, ... so instances of two classes with the same id stay apart.
+    std::map<std::pair<int, int>, std::string> made_ids;
+    auto animal_id_of = [&](const FrameAnnotation &fa) -> std::string {
+        const int instance_id = fa.instance_id, cat = fa.category_id;
+        if (cat == 0 && instance_id >= 0 && instance_id < (int)cfg.animal_ids.size() &&
             !cfg.animal_ids[(size_t)instance_id].empty())
             return cfg.animal_ids[(size_t)instance_id];
-        auto it = made_ids.find(instance_id);
+        auto it = made_ids.find({cat, instance_id});
         if (it != made_ids.end()) return it->second;
-        char buf[16];
-        snprintf(buf, sizeof(buf), "a%02d", instance_id < 0 ? 0 : instance_id);
-        std::string id = buf;
-        for (int n = 0; used_ids.count(id); n++) {
-            snprintf(buf, sizeof(buf), "a%02d", n);
-            id = buf;
-        }
+        char buf[32];
+        auto name = [&](int n) {
+            if (cat == 0) snprintf(buf, sizeof(buf), "a%02d", n);
+            else snprintf(buf, sizeof(buf), "c%da%02d", cat, n);
+            return std::string(buf);
+        };
+        std::string id = name(instance_id < 0 ? 0 : instance_id);
+        for (int n = 0; used_ids.count(id); n++) id = name(n);
         used_ids.insert(id);
-        made_ids.emplace(instance_id, id);
+        made_ids.emplace(std::make_pair(cat, instance_id), id);
         return id;
     };
 
@@ -454,7 +459,7 @@ bool export_session(const ExportConfig &cfg, const AnnotationMap &amap,
                         if (cfg.force_labels.empty() &&
                             bucket_2d(kp) != job.b) continue;
                         if (!g_b.Append(grp->id).ok() || !f_b.Append(frame).ok() ||
-                            !a_b.Append(animal_id_of(fa.instance_id)).ok() ||
+                            !a_b.Append(animal_id_of(fa)).ok() ||
                             !c_b.Append(cfg.camera_names[ci]).ok() ||
                             !p_b.Append(cfg.node_names[ni]).ok() ||
                             // The visibility CLAIM, which is its own field --
@@ -490,7 +495,7 @@ bool export_session(const ExportConfig &cfg, const AnnotationMap &amap,
                         if (!(scored ? sc_b.Append(kp.confidence) : sc_b.AppendNull()).ok())
                             return fail("keypoints.pq: score append failed.");
                         kp_keys.insert(row_key({grp->id, std::to_string(frame),
-                                                animal_id_of(fa.instance_id),
+                                                animal_id_of(fa),
                                                 cfg.camera_names[ci], cfg.node_names[ni]}));
                         rows++;
                     }
@@ -568,7 +573,7 @@ bool export_session(const ExportConfig &cfg, const AnnotationMap &amap,
                     if (cfg.force_labels.empty() &&
                         bucket_3d(k3) != job.b) continue;
                     if (!g_b.Append(grp->id).ok() || !f_b.Append(frame).ok() ||
-                        !a_b.Append(animal_id_of(fa.instance_id)).ok() ||
+                        !a_b.Append(animal_id_of(fa)).ok() ||
                         !p_b.Append(cfg.node_names[ni]).ok() ||
                         !s_b.Append(Tailcycle::status::kVisible).ok() ||
                         !x_b.Append((float)k3.x).ok() || !y_b.Append((float)k3.y).ok() ||
@@ -579,7 +584,7 @@ bool export_session(const ExportConfig &cfg, const AnnotationMap &amap,
                     if (!(scored ? sc_b.Append(k3.confidence) : sc_b.AppendNull()).ok())
                         return fail("points3d.pq: score append failed.");
                     p3_keys.insert(row_key({grp->id, std::to_string(frame),
-                                            animal_id_of(fa.instance_id), cfg.node_names[ni]}));
+                                            animal_id_of(fa), cfg.node_names[ni]}));
                     rows++;
                 }
             }
@@ -664,7 +669,7 @@ bool export_session(const ExportConfig &cfg, const AnnotationMap &amap,
                     if (box_job(fa, ci) != &job) continue;
                     const CameraExtras &e = *cam.extras;
                     if (!g_b.Append(grp->id).ok() || !f_b.Append(frame).ok() ||
-                        !a_b.Append(animal_id_of(fa.instance_id)).ok() ||
+                        !a_b.Append(animal_id_of(fa)).ok() ||
                         !c_b.Append(cfg.camera_names[ci]).ok() ||
                         !s_b.Append(Tailcycle::status::kLabeled).ok() ||
                         !n_b.AppendNull().ok() ||

@@ -97,9 +97,11 @@ inline void DrawLabelingToolWindow(
             ImGui::EndDisabled();
         };
 
-        // ─── Animals in this frame ───
-        // Only shown once a frame holds more than one, so a single-animal
-        // project sees nothing new. The selector picks which animal placing,
+        // ─── Instances in this frame ───
+        // An instance is one of its class (ids restart per class); "instance"
+        // rather than "animal", as the objects need not be animals.
+        // Only shown once a frame holds more than one, so a single-instance
+        // project sees nothing new. The selector picks which instance placing,
         // dragging and triangulating apply to; the others draw dimmed.
         {
             auto fit = annotations.find((u32)current_frame_num);
@@ -107,41 +109,47 @@ inline void DrawLabelingToolWindow(
             if (ctx.active_instance >= n) ctx.active_instance = 0;
 
             if (n > 1) {
-                ImGui::SeparatorText("Animals");
+                ImGui::SeparatorText("Instances");
                 for (int i = 0; i < n; i++) {
                     if (i) ImGui::SameLine();
                     ImGui::PushID(i);
                     const ImVec4 t = instance_tint(i);
                     ImGui::PushStyleColor(ImGuiCol_Text, t);
-                    char lbl[16];
-                    snprintf(lbl, sizeof(lbl), "%d", fit->second[(size_t)i].instance_id);
-                    if (ImGui::RadioButton(lbl, ctx.active_instance == i))
+                    const std::string lbl = instance_label(
+                        fit->second[(size_t)i], pm.annotation_config.class_names);
+                    if (ImGui::RadioButton(lbl.c_str(), ctx.active_instance == i))
                         ctx.active_instance = i;
                     ImGui::PopStyleColor();
                     ImGui::PopID();
                 }
                 ImGui::SameLine();
-                // The animal's id, as on its button -- not its place in the list.
-                ImGui::TextDisabled("(editing #%d)",
-                                    fit->second[(size_t)ctx.active_instance].instance_id);
+                // As on its button -- not its place in the list.
+                ImGui::TextDisabled(
+                    "(editing %s)",
+                    instance_label(fit->second[(size_t)ctx.active_instance],
+                                   pm.annotation_config.class_names).c_str());
             }
 
             if (fit != annotations.end() && skeleton.has_skeleton) {
                 if (n > 1) ImGui::SameLine();
-                if (ImGui::SmallButton(ICON_FK_PLUS " Animal")) {
-                    // A new animal gets the next unused id, so ids stay stable
-                    // even after one is removed.
+                if (ImGui::SmallButton(ICON_FK_PLUS " Instance")) {
+                    // Another of the class being edited, with the next unused
+                    // id in that class, so ids stay stable even after one is
+                    // removed.
+                    const int cat =
+                        n ? fit->second[(size_t)ctx.active_instance].category_id : 0;
                     int next_id = 0;
                     for (const auto &fa : fit->second)
-                        next_id = std::max(next_id, fa.instance_id + 1);
+                        if (fa.category_id == cat)
+                            next_id = std::max(next_id, fa.instance_id + 1);
                     get_or_create_frame(annotations, (u32)current_frame_num,
                                         skeleton.num_nodes,
-                                        (int)scene->num_cams, next_id);
+                                        (int)scene->num_cams, next_id, cat);
                     ctx.active_instance = (int)fit->second.size() - 1;
                 }
                 if (n > 1) {
                     ImGui::SameLine();
-                    if (ImGui::SmallButton(ICON_FK_TRASH " Animal")) {
+                    if (ImGui::SmallButton(ICON_FK_TRASH " Instance")) {
                         fit->second.erase(fit->second.begin() + ctx.active_instance);
                         ctx.active_instance = 0;
                     }

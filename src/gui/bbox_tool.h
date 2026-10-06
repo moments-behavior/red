@@ -2,8 +2,8 @@
 // bbox_tool.h — Axis-aligned bounding box labeling tool
 //
 // Shift+drag draws a new bbox: press with Shift held, drag, let go. Bboxes are
-// stored in the unified AnnotationMap (CameraAnnotation extras), on the animal
-// being edited (active_instance; N picks the next). The class list is
+// stored in the unified AnnotationMap (CameraAnnotation extras), on an
+// instance of the selected class (box_target). The class list is
 // pm.annotation_config.class_names, saved with the labels (annotations.json).
 
 #include "imgui.h"
@@ -63,15 +63,27 @@ inline int box_class_for_new(BBoxToolState &state, std::vector<std::string> &cla
     return state.current_class;
 }
 
-// The animal a new box or OBB goes on: the one being edited, or a new first
-// animal on a frame that has none.
-inline FrameAnnotation &box_target(AnnotationMap &amap, u32 frame,
-                                   int active_instance, int num_nodes,
+// The instance a new box or OBB of class `cat` goes on, made the one being
+// edited (active_instance, an index into the frame's instances):
+//   - the instance being edited, if it is of that class;
+//   - else that class's instance with the same id, if the frame has it;
+//   - else a new instance of that class, with its next free id.
+inline FrameAnnotation &box_target(AnnotationMap &amap, u32 frame, int cat,
+                                   int &active_instance, int num_nodes,
                                    int num_cameras) {
-    auto it = amap.find(frame);
-    if (it != amap.end() && !it->second.empty())
-        return instance_or_first(it->second, active_instance);
-    return get_or_create_frame(amap, frame, num_nodes, num_cameras);
+    FrameInstances &fis = amap[frame];
+    int id = 0;
+    if (!fis.empty()) {
+        FrameAnnotation &editing = instance_or_first(fis, active_instance);
+        if (editing.category_id == cat) return editing;
+        id = find_instance(fis, editing.instance_id, cat)
+                 ? editing.instance_id
+                 : next_free_instance_id(fis, cat);
+    }
+    FrameAnnotation &fa = get_or_create_frame(amap, frame, num_nodes,
+                                              num_cameras, id, cat);
+    active_instance = (int)(&fa - fis.data());
+    return fa;
 }
 
 // Keys for the box tools: plain presses only, so Cmd/Ctrl shortcuts that
@@ -175,12 +187,11 @@ inline void bbox_draw_cursor(const BBoxToolState &state, int cam_idx) {
     dl->PopClipRect();
 }
 
-// Handle bbox input on a focused camera view. Boxes go on the animal being
-// edited (active_instance).
+// Handle bbox input on a focused camera view. Where a box goes: box_target.
 inline void bbox_handle_input(BBoxToolState &state,
                               std::vector<std::string> &classes,
                               AnnotationMap &amap, u32 frame, int cam_idx,
-                              int active_instance, int num_nodes,
+                              int &active_instance, int num_nodes,
                               int num_cameras, int img_w, int img_h) {
     if (!state.enabled) return;
     // A drag belongs to the view it started in; the others leave it alone.
@@ -223,8 +234,9 @@ inline void bbox_handle_input(BBoxToolState &state,
         // Skip tiny accidental drags
         if (x2 - x1 < 3 || y2_plot - y1_plot < 3) return;
 
-        auto &fa = box_target(amap, frame, active_instance, num_nodes, num_cameras);
-        fa.category_id = box_class_for_new(state, classes);
+        const int cat = box_class_for_new(state, classes);
+        auto &fa = box_target(amap, frame, cat, active_instance, num_nodes,
+                              num_cameras);
         if (cam_idx < (int)fa.cameras.size()) {
             auto &ext = fa.cameras[cam_idx].get_extras();
             ext.bbox_x = x1;
@@ -298,10 +310,11 @@ inline void DrawBBoxToolWindow(BBoxToolState &state, AppContext &ctx) {
         ImGui::Checkbox("Show IDs", &state.show_ids);
 
         ImGui::Separator();
-        ImGui::TextWrapped("Shift+drag: draw a box on the animal being edited "
-                           "(N: next animal). Esc cancels.");
+        ImGui::TextWrapped("Shift+drag: draw a box of the selected class "
+                           "(on the instance being edited if it is of that "
+                           "class). Esc cancels.");
         ImGui::TextWrapped("F: delete the hovered box (this camera)");
-        ImGui::TextWrapped("O: delete the hovered animal's box (all cameras)");
+        ImGui::TextWrapped("O: delete the hovered instance's box (all cameras)");
         ImGui::TextWrapped("Z/X: previous / next class");
 
         // Class list: saved with the labels.

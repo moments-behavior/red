@@ -721,14 +721,28 @@ static void test_bbox_classes_and_target() {
     EXPECT_TRUE(classes[1] == "Class_1");
     EXPECT_EQ(state.current_class, 1);
 
-    // A box goes on the animal being edited, not the frame's first.
+    // A box goes on the instance being edited when it is of the box's class,
+    // not the frame's first.
     AnnotationMap amap;
-    get_or_create_frame(amap, 5, 3, 2, /*instance_id*/ 0);
-    get_or_create_frame(amap, 5, 3, 2, /*instance_id*/ 7);
-    EXPECT_EQ(box_target(amap, 5, 1, 3, 2).instance_id, 7);
-    EXPECT_EQ(box_target(amap, 5, 0, 3, 2).instance_id, 0);
-    // A frame with no animals gets a first one.
-    EXPECT_EQ(box_target(amap, 9, 1, 3, 2).instance_id, 0);
+    get_or_create_frame(amap, 5, 3, 2, /*id*/ 0, /*class*/ 0);
+    get_or_create_frame(amap, 5, 3, 2, /*id*/ 7, /*class*/ 0);
+    int active = 1;
+    EXPECT_EQ(box_target(amap, 5, 0, active, 3, 2).instance_id, 7);
+    EXPECT_EQ(active, 1);
+    // Another class: a new instance of it, numbered from 0 in that class,
+    // and it becomes the one being edited.
+    active = 0;
+    FrameAnnotation &rat = box_target(amap, 5, 1, active, 3, 2);
+    EXPECT_EQ(rat.category_id, 1);
+    EXPECT_EQ(rat.instance_id, 0);
+    EXPECT_EQ(active, 2);
+    EXPECT_EQ((int)amap[5].size(), 3);
+    // Class 1 #0 now exists: editing class 0 #0 and boxing class 1 finds it.
+    active = 0;
+    EXPECT_EQ(&box_target(amap, 5, 1, active, 3, 2), &amap[5][2]);
+    // A frame with no instances gets a first one, of the box's class.
+    active = 0;
+    EXPECT_EQ(box_target(amap, 9, 1, active, 3, 2).category_id, 1);
     EXPECT_EQ((int)amap[9].size(), 1);
 }
 
@@ -2266,6 +2280,55 @@ static void test_keypoint_clipboard_ops() {
     EXPECT_FALSE(kc.any());
 }
 
+// An instance is (class, id): "Class_0 #0" and "Class_1 #0" are two
+// instances, and the v4 CSVs keep them apart through a save and load.
+static void test_csv_class_and_instance() {
+    printf("  test_csv_class_and_instance...\n");
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "red_test_csv_v4";
+    fs::remove_all(root);
+    fs::create_directories(root);
+
+    AnnotationMap amap;
+    get_or_create_frame(amap, 2, 1, 1, /*id*/ 0, /*class*/ 0);
+    get_or_create_frame(amap, 2, 1, 1, /*id*/ 0, /*class*/ 1);
+    EXPECT_EQ((int)amap[2].size(), 2);
+    // (Looked up after both exist: adding one moves the others.)
+    auto &a = *find_instance(amap[2], 0, 0);
+    auto &b = *find_instance(amap[2], 0, 1);
+    a.cameras[0].keypoints[0].x = 10; a.cameras[0].keypoints[0].y = 11;
+    a.cameras[0].keypoints[0].has_pos = true; a.cameras[0].keypoints[0].set_manual();
+    b.cameras[0].keypoints[0].x = 20; b.cameras[0].keypoints[0].y = 21;
+    b.cameras[0].keypoints[0].has_pos = true; b.cameras[0].keypoints[0].set_manual();
+
+    std::string err;
+    const std::string folder = AnnotationCSV::save_all(
+        root.string(), "s", amap, 1, 1, {"Cam0"}, &err);
+    EXPECT_FALSE(folder.empty());
+
+    AnnotationMap back;
+    EXPECT_EQ(AnnotationCSV::load_all(folder, back, "s", 1, 1, {"Cam0"}, err), 0);
+    EXPECT_EQ((int)back[2].size(), 2);
+    const FrameAnnotation *ra = find_instance(back[2], 0, 0);
+    const FrameAnnotation *rb = find_instance(back[2], 0, 1);
+    EXPECT_TRUE(ra && rb);
+    if (ra && rb) {
+        EXPECT_NEAR(ra->cameras[0].keypoints[0].x, 10.0, 1e-9);
+        EXPECT_NEAR(rb->cameras[0].keypoints[0].x, 20.0, 1e-9);
+    }
+
+    // A v3 file (instance, no class) still loads, as class 0.
+    {
+        std::ofstream f(root / "v3.csv");
+        f << "#red_csv v3\n#skeleton s\nframe,instance,x0,y0,c0,s0\n4,3,5,6,,\n";
+    }
+    AnnotationMap v3;
+    EXPECT_TRUE(AnnotationCSV::load_2d_csv((root / "v3.csv").string(), v3, 0, 1, 1, err));
+    const FrameAnnotation *r3 = find_instance(v3[4], 3, 0);
+    EXPECT_TRUE(r3 && r3->cameras[0].keypoints[0].x == 5);
+    fs::remove_all(root);
+}
+
 int main() {
     printf("=== Annotation System Tests ===\n");
 
@@ -2314,6 +2377,7 @@ int main() {
     test_bbox_next_class_color();
     test_bbox_classes_and_target();
     test_annotations_json_class_names();
+    test_csv_class_and_instance();
 
     printf("\n--- AnnotationConfig ---\n");
     test_annotation_config_defaults();
